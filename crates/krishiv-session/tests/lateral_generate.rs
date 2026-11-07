@@ -96,3 +96,28 @@ fn only_aliases_before_the_reference_count() {
     let e = run("SELECT 1 AS a, explode(array(1)) AS a, explode(array(2)) AS a, a * 10");
     assert!(e.is_err(), "several generators are not supported here");
 }
+
+#[test]
+fn a_generator_reading_a_later_generators_alias_runs_after_it() {
+    // Spark 4.2.0 goldens `generators-resolution-edge-cases`: "generator LCA right-to-left".
+    assert_eq!(
+        ints(
+            "SELECT explode(arr) as col, explode(array(array(0), array(1), array(2))) as arr",
+            0
+        ),
+        [0, 1, 2]
+    );
+    // Left to right still works, and so does a read of an alias defined further right by a
+    // generator (the golden lists rows 2, 3, 4 despite its "should fail" comment).
+    assert_eq!(
+        ints(
+            "SELECT explode(array(array(0), array(1), array(2))) as arr, explode(arr) as col",
+            1
+        ),
+        [0, 1, 2]
+    );
+    assert_eq!(
+        ints("SELECT col + 1 as col2, explode(array(1, 2, 3)) as col", 0),
+        [2, 3, 4]
+    );
+}
