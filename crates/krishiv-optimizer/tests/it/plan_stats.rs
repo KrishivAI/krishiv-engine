@@ -398,16 +398,14 @@ fn distinct_counts_follow_the_filter_rules() {
     close(ndv("a > 49", "a").1, 100.0 * 50.0 / 99.0, "range");
     close(ndv("a > 98", "a").1, 100.0 / 99.0, "narrow range");
     assert_eq!(ndv("a > 99", "a").1, 1.0, "never below 1");
-    // Every other column scales by the fraction of rows kept (at least 1,
-    // at most the rows).
+    // Every other column keeps the distinct values the kept rows are
+    // expected to hold (Cardenas, at least 1, at most the rows): 1% of the
+    // rows stay, so `x` (500 values, 2 rows each) keeps
+    // 500 * (1 - 0.99^2) and `s` (50 values, 20 rows each) 50 * (1 - 0.99^20).
     let (rows, x) = ndv("a = 7", "x");
     close(rows, 10.0, "rows");
-    close(x, 5.0, "x scales by 1/100");
-    assert_eq!(
-        ndv("a = 7", "s").1,
-        1.0,
-        "50 values scaled by 1/100: at least 1"
-    );
+    close(x, 500.0 * (1.0 - 0.99_f64.powi(2)), "x");
+    close(ndv("a = 7", "s").1, 50.0 * (1.0 - 0.99_f64.powi(20)), "s");
     let (rows, x) = ndv("a > 98", "x");
     assert!(x <= rows, "{x} {rows}");
     // Other predicates keep `min(ndv, rows_out)` for the column they read.
@@ -451,10 +449,13 @@ fn an_inner_join_narrows_its_keys_and_scales_the_other_columns() {
         );
         assert_eq!(c.null_frac, 0.0, "{key}: an inner join's keys are not null");
     }
-    // 40 of `t.a`'s 100 values find a match: the other columns of `t`
-    // keep that fraction of their distinct values; `u` keeps all of its.
-    close(e.col("b").ndv, 4.0, "b");
-    close(e.col("x").ndv, 200.0, "x");
+    // 40 of `t.a`'s 100 values find a match, so 40% of `t`'s rows stay. A
+    // column of d values over n rows keeps d * (1 - (1 - 0.4)^(n / d)) of
+    // them (Cardenas): `b` (10 values, 100 rows each) keeps all ten, `x`
+    // (500 values, 2 rows each) 320, not the 40% a linear scaling gives;
+    // `u` keeps all of its.
+    close(e.col("b").ndv, 10.0, "b");
+    close(e.col("x").ndv, 320.0, "x");
     close(e.col("v").ndv, 20.0, "v");
     assert_eq!(e.col("v").max, Some(19.0), "other ranges stay");
 }

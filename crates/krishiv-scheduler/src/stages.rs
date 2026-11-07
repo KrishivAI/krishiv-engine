@@ -34,7 +34,7 @@ use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
 use krishiv_exec::exchange::reduce_partitions;
 use krishiv_exec::physical::{
     ExchangeInput, PhysicalPlan, ScanId, ScanSplits, TaskSpec, WorkerContext, exchange_schemas,
-    instantiate_task,
+    instantiate_task, planned_exchange_schemas,
 };
 use krishiv_exec::physical::{Partitioning, PhysNode};
 use krishiv_exec::values::{LocalValues, ValueService};
@@ -402,7 +402,11 @@ impl StageRunner {
             ),
             None => (worker, LocalShuffle::in_memory()),
         };
-        let schemas = {
+        // The plan's own schemas; a plan written without them is
+        // instantiated, unrun, to learn them.
+        let schemas = if let Some(s) = planned_exchange_schemas(&plan) {
+            s
+        } else {
             let (plan, worker) = (plan.clone(), worker.clone());
             let out = Arc::new(Mutex::new(None));
             let slot = Arc::clone(&out);
