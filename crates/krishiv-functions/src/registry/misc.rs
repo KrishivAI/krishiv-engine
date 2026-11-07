@@ -319,6 +319,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(scalar(&["monotonically_increasing_id"], &Inputs::Any, long));
     out.extend(scalar(&["spark_partition_id"], &Inputs::Any, int));
     out.extend(scalar(&["typeof"], &Inputs::Any, typeof_result));
+    out.extend(scalar(&["collation"], &Inputs::Any, typeof_result));
     out.extend(scalar(&["rand", "random"], &Inputs::Any, rand));
     out.extend(scalar(&["randn"], &Inputs::Any, randn));
     out.extend(scalar(&["uuid"], &Inputs::Any, uuid));

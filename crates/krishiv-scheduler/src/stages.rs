@@ -32,12 +32,14 @@ use futures::stream::BoxStream;
 use futures::stream::FuturesUnordered;
 use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
 use krishiv_exec::exchange::reduce_partitions;
-use krishiv_exec::physical::Partitioning;
 use krishiv_exec::physical::{
     ExchangeInput, PhysicalPlan, ScanId, ScanSplits, TaskSpec, WorkerContext, exchange_schemas,
     instantiate_task,
 };
-use krishiv_exec::{Executor, QueryContext, QueryId, QueryRunner, Scheduler};
+use krishiv_exec::physical::{Partitioning, PhysNode};
+use krishiv_exec::values::{LocalValues, ValueService};
+use krishiv_exec::{BroadcastTables, Executor, QueryContext, QueryId, QueryRunner, Scheduler};
+use krishiv_io::{FilterId, FilterSnapshot, KeyFilter};
 use krishiv_shuffle::LocalShuffle;
 use krishiv_types::batch::Batch;
 
@@ -81,7 +83,16 @@ pub struct StageRunner {
     roots: Arc<QueryRunner>,
     partitions: u32,
     splits: Option<Arc<dyn StageSplits>>,
+    /// The most the shared broadcast tables of one query may hold.
+    broadcast_limit: Option<usize>,
     next_task: Arc<AtomicU64>,
+    /// Broadcast builds shared by the map tasks of a query, summed.
+    shared_builds: Arc<AtomicU64>,
+    /// Shared broadcast builds that did not fit, so each task built its
+    /// own table (owner decision 2026-11-06), summed.
+    broadcast_fallbacks: Arc<AtomicU64>,
+    /// Filter values carried from one stage to a later one, summed.
+    cross_stage: Arc<AtomicU64>,
     /// The map tasks running for each query, cancelled with it.
     running: Arc<Running>,
 }
@@ -121,7 +132,11 @@ impl StageRunner {
             executor,
             partitions,
             splits: None,
+            broadcast_limit: None,
             next_task: Arc::default(),
+            shared_builds: Arc::default(),
+            broadcast_fallbacks: Arc::default(),
+            cross_stage: Arc::default(),
             running: Arc::default(),
         })
     }
@@ -130,6 +145,15 @@ impl StageRunner {
     #[must_use]
     pub fn with_splits(mut self, splits: Arc<dyn StageSplits>) -> Self {
         self.splits = Some(splits);
+        self
+    }
+
+    /// The same runner capping what the shared broadcast tables of one
+    /// query may hold at `bytes`: a build past it falls back to one build
+    /// per task, each spilling as needed (owner decision 2026-11-06).
+    #[must_use]
+    pub fn with_broadcast_limit(mut self, bytes: usize) -> Self {
+        self.broadcast_limit = Some(bytes);
         self
     }
 }
@@ -185,6 +209,16 @@ fn plans(stages: &[Stage], partitions: u32, splits: Option<&dyn StageSplits>) ->
                 && let Some(dealt) = splits.splits(&stage.plan, partitions)?
                 && !dealt.is_empty()
             {
+                if let Some(scan) = dealt
+                    .iter()
+                    .flat_map(BTreeMap::keys)
+                    .find(|id| !stage.dealable.contains(id))
+                {
+                    return Err(internal(format!(
+                        "stage {}: splits dealt for scan {}, which every task reads whole",
+                        stage.id, scan.0
+                    )));
+                }
                 let tasks = u32::try_from(dealt.len())
                     .map_err(|_| internal(format!("{} tasks", dealt.len())))?;
                 (tasks, dealt)
@@ -255,6 +289,7 @@ fn spec(stage: &Stage, plans: &[Plan], partition: u32) -> Result<TaskSpec> {
             .unwrap_or_default(),
         exchanges,
         output: stage.output.as_ref().map(|_| plan.writes),
+        filters: BTreeMap::new(),
     })
 }
 
@@ -290,7 +325,11 @@ impl StageRunner {
         worker: WorkerContext,
         spec: TaskSpec,
         query: &Arc<QueryContext>,
-    ) -> Result<()> {
+    ) -> Result<Partials> {
+        // The task's own values: its exchange's filter partials stay here
+        // for the runner to read once the task ended.
+        let values = Arc::new(LocalValues::new());
+        let worker = worker.with_values(Arc::clone(&values) as Arc<dyn ValueService>);
         query.check_cancelled()?;
         let name = format!("stage-{}-task-{}", spec.stage, spec.partition);
         let id = QueryId(self.next_task.fetch_add(1, Ordering::Relaxed));
@@ -333,7 +372,8 @@ impl StageRunner {
         // Its drivers have ended and its memory is back before it returns.
         task.finished().await;
         outcome?;
-        task.error().map_or(Ok(()), Err)
+        task.error().map_or(Ok(()), Err)?;
+        Ok(produced(&stage.plan, values.as_ref()))
     }
 
     async fn run(
@@ -369,7 +409,15 @@ impl StageRunner {
         };
         let stages = fragment(&plan, &schemas)?;
         let tasks = stage_tasks(&stages, self.partitions, self.splits.as_deref())?;
-        let worker = worker.with_exchange(Arc::new(shuffle));
+        // One worker: the query's broadcast builds are shared by all its
+        // tasks, reserving from its pool (design P2-T177 unit 3).
+        let broadcasts = Arc::new(BroadcastTables::new(
+            Arc::clone(&self.executor),
+            query.pool().child("broadcasts", self.broadcast_limit),
+        ));
+        let worker = worker
+            .with_exchange(Arc::new(shuffle))
+            .with_broadcasts(Arc::clone(&broadcasts));
         let (root, maps) = stages
             .split_last()
             .ok_or_else(|| internal("a plan without stages".to_owned()))?;
@@ -379,10 +427,13 @@ impl StageRunner {
                 .cloned()
                 .ok_or_else(|| internal("a stage without tasks".to_owned()))
         };
+        // The filters earlier stages collected (cross-stage filters).
+        let mut filters = BTreeMap::new();
         for stage in maps {
             let mut runs = specs(stage)?
                 .into_iter()
-                .map(|spec| {
+                .map(|mut spec| {
+                    spec.filters.clone_from(&filters);
                     let worker = worker.clone();
                     let query = &query;
                     async move { self.map_task(stage, worker, spec, query).await }
@@ -391,23 +442,39 @@ impl StageRunner {
             // The first failure fails the query, which ends the other tasks;
             // each returns only once its memory is released.
             let mut failed = None;
+            let mut partials = Vec::new();
             while let Some(outcome) = runs.next().await {
-                if let Err(e) = outcome
-                    && failed.is_none()
-                {
-                    query.fail(e.clone());
-                    failed = Some(e);
+                match outcome {
+                    Ok(p) => partials.push(p),
+                    Err(e) if failed.is_none() => {
+                        query.fail(e.clone());
+                        failed = Some(e);
+                    }
+                    Err(_) => {}
                 }
             }
             if let Some(e) = failed {
                 return Err(e);
             }
+            let values = merge_partials(&stage.plan, &partials);
+            self.cross_stage.fetch_add(
+                u64::try_from(values.len()).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
+            filters.extend(values);
             query.check_cancelled()?;
         }
-        let spec = specs(root)?
+        let built = u64::try_from(broadcasts.builds()).unwrap_or(u64::MAX);
+        self.shared_builds.fetch_add(built, Ordering::Relaxed);
+        let fell_back = u64::try_from(broadcasts.fallbacks()).unwrap_or(u64::MAX);
+        self.broadcast_fallbacks
+            .fetch_add(fell_back, Ordering::Relaxed);
+        drop(broadcasts);
+        let mut spec = specs(root)?
             .into_iter()
             .next()
             .ok_or_else(|| internal("a root stage without a task".to_owned()))?;
+        spec.filters = filters;
         let node = Self::instantiate(&self.executor, root.plan.clone(), worker, spec).await?;
         query.check_cancelled()?;
         self.roots.execute(node, query).await
@@ -423,6 +490,29 @@ impl StageRunner {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .len()
+    }
+
+    /// The broadcast builds the map stages of this runner's queries shared
+    /// among their tasks (design P2-T177 unit 3), summed over the queries.
+    #[must_use]
+    pub fn shared_builds(&self) -> u64 {
+        self.shared_builds.load(Ordering::Relaxed)
+    }
+
+    /// The shared broadcast builds that did not fit in memory, so each
+    /// task of the job built its own table instead (owner decision
+    /// 2026-11-06), summed over the queries.
+    #[must_use]
+    pub fn broadcast_fallbacks(&self) -> u64 {
+        self.broadcast_fallbacks.load(Ordering::Relaxed)
+    }
+
+    /// The runtime filter values an exchange collected in one stage and
+    /// later stages' scans read (design P2-T177, cross-stage filters),
+    /// summed over the queries.
+    #[must_use]
+    pub fn cross_stage_filters(&self) -> u64 {
+        self.cross_stage.load(Ordering::Relaxed)
     }
 }
 
@@ -469,7 +559,11 @@ impl Scheduler for StageRunner {
             roots: Arc::clone(&self.roots),
             partitions: self.partitions,
             splits: self.splits.clone(),
+            broadcast_limit: self.broadcast_limit,
             next_task: Arc::clone(&self.next_task),
+            shared_builds: Arc::clone(&self.shared_builds),
+            broadcast_fallbacks: Arc::clone(&self.broadcast_fallbacks),
+            cross_stage: Arc::clone(&self.cross_stage),
             running: Arc::clone(&self.running),
         };
         // The query itself first: a cancel before or between its stages
@@ -503,4 +597,67 @@ fn internal(message: String) -> KrishivError {
 
 fn canceled() -> KrishivError {
     OperationCanceled {}.into()
+}
+
+/// One map task's partials of the filters its exchange collects (design
+/// P2-T177, cross-stage filters).
+pub type Partials = BTreeMap<FilterId, FilterSnapshot>;
+
+/// The filters the root exchange of `fragment` collects, as one task
+/// published them into its `values` (a filter not published counts as
+/// lost).
+#[must_use]
+pub fn produced(fragment: &PhysicalPlan, values: &dyn ValueService) -> Partials {
+    let PhysNode::Exchange(e) = fragment.root() else {
+        return Partials::new();
+    };
+    e.filters
+        .iter()
+        .filter_map(|f| {
+            let cell = values.filter(f.id).ok()?;
+            Some((f.id, cell.published().snapshot.clone()))
+        })
+        .collect()
+}
+
+/// The values of the filters the root exchange of `fragment` collects,
+/// from the partials of every task of its stage (`partials`, one map per
+/// task), as
+/// `KeyFilter` v1 bytes: the merge of every task's partial within the
+/// filter's options. A filter some task lost (disabled, or not published)
+/// has no value: its scans apply nothing.
+#[must_use]
+pub fn merge_partials(
+    fragment: &PhysicalPlan,
+    partials: &[Partials],
+) -> BTreeMap<FilterId, Vec<u8>> {
+    let PhysNode::Exchange(e) = fragment.root() else {
+        return BTreeMap::new();
+    };
+    let mut out = BTreeMap::new();
+    for f in &e.filters {
+        let mut merged: Option<KeyFilter> = None;
+        let mut complete = !partials.is_empty();
+        for p in partials {
+            let Some(FilterSnapshot::Final(keys)) = p.get(&f.id) else {
+                complete = false;
+                break;
+            };
+            let next = match merged.take() {
+                None => Ok(KeyFilter::clone(keys)),
+                Some(m) => m.merge_into(keys, &f.options),
+            };
+            match next {
+                Ok(m) => merged = Some(m),
+                Err(_) => {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        if complete && let Some(m) = merged {
+            out.insert(f.id, m.encode());
+        }
+    }
+    out
 }

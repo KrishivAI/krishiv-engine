@@ -709,14 +709,9 @@ impl QueryCatalog {
         // cannot fail the conversion the `tasks` range would repeat.
         let mut specs: Vec<TaskSpec> = (0..partitions)
             .map(|partition| TaskSpec {
-                stage: 0,
-                stage_attempt: 0,
                 partition,
                 partitions,
-                attempt: 0,
-                scans: BTreeMap::new(),
-                exchanges: BTreeMap::new(),
-                output: None,
+                ..TaskSpec::whole()
             })
             .collect();
         for (id, kind) in assigned {

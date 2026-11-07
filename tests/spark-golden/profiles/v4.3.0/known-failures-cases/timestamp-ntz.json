@@ -1,0 +1,16 @@
+{
+  "cases": {
+    "query-features": [
+      5
+    ],
+    "s43-other": [
+      12,
+      13,
+      14,
+      18,
+      32
+    ]
+  },
+  "file": "timestamp-ntz",
+  "format_version": 1
+}

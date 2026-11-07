@@ -101,7 +101,9 @@ pub(super) struct Replay {
 }
 
 /// Runs `f` on the blocking pool with `headroom` lent as grant credit;
-/// takes back what the step left of it.
+/// takes back what the step left of it. The flush phase's batch read uses [`with_credit_keeping`] with `base`
+/// instead: the reader frees its previous batch into the credit while it reads, and the headroom must take those
+/// bytes back up to `base`, not only up to what it lent, or one frame larger than the last leaves it at 0 for good.
 async fn with_credit<T, F>(ctx: &TaskContext, headroom: &mut Reservation, f: F) -> Result<T>
 where
     T: Send + 'static,
@@ -341,7 +343,12 @@ impl Window {
                     .cursor
                     .take()
                     .ok_or_else(|| internal("window flush without its input".to_owned()))?;
-                let (cursor, next) = with_credit(ctx, &mut r.headroom, move || {
+                // The reader frees its previous batch's bytes into the credit while it reads the next one. The
+                // headroom takes them back up to `base` (not only up to what it lent: once a read leaves it at 0,
+                // that would hand every later read nothing, and the bytes would go to the pool, where buffered rows
+                // fill the limit, so the next read of a batch found no memory).
+                let keep = r.base;
+                let (cursor, next) = with_credit_keeping(ctx, &mut r.headroom, keep, move || {
                     let next = cursor.next()?;
                     Ok((cursor, next))
                 })
