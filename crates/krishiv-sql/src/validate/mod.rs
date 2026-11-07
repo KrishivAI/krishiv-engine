@@ -519,14 +519,30 @@ impl Checker<'_> {
         Err(at(LegacyErrorTemp0035 { message }, statement))
     }
 
-    /// `ROW FORMAT SERDE '...' WITH SERDEPROPERTIES (...)`: a property list whose missing values
-    /// Spark reports at the `ROW FORMAT` clause (`visitRowFormatSerde`).
+    /// The checks Spark makes visiting a `ROW FORMAT` clause: `SERDE '...' WITH SERDEPROPERTIES
+    /// (...)` is a property list whose missing values it reports at the clause
+    /// (`visitRowFormatSerde`); `DELIMITED ... LINES TERMINATED BY` takes only a newline
+    /// (`visitRowFormatDelimited`, `_LEGACY_ERROR_TEMP_0064` at the clause; probe13 d1-d3).
     fn serde_properties(&self, row_format: Option<&RowFormat>) -> R {
         match row_format {
             Some(RowFormat {
                 kind: RowFormatKind::Serde(serde),
                 span,
             }) => self.property_list(&serde.properties, true, *span),
+            Some(RowFormat {
+                kind: RowFormatKind::Delimited(d),
+                span,
+            }) => match d.lines_terminated_by.as_deref() {
+                Some(lines) if lines != "\n" => Err(at(
+                    LegacyErrorTemp0064 {
+                        msg: format!(
+                            "LINES TERMINATED BY only supports newline '\\n' right now: {lines}"
+                        ),
+                    },
+                    *span,
+                )),
+                _ => Ok(()),
+            },
             _ => Ok(()),
         }
     }

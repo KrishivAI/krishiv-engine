@@ -65,3 +65,38 @@ fn alter_namespace_unset_properties() {
         );
     }
 }
+
+/// d1-d3: `LINES TERMINATED BY` takes only a newline; anything else is `_LEGACY_ERROR_TEMP_0064` at the
+/// `ROW FORMAT` clause (`visitRowFormatDelimited`).
+#[test]
+fn lines_terminated_by_only_newline() {
+    ok(
+        "CREATE TABLE lt2 (a INT) ROW FORMAT DELIMITED LINES TERMINATED BY '\\n' STORED AS textfile",
+    );
+    for (sql, value) in [
+        (
+            "CREATE TABLE lt1 (a INT) ROW FORMAT DELIMITED LINES TERMINATED BY ';' STORED AS textfile",
+            ";",
+        ),
+        (
+            "CREATE TABLE lt3 (a INT) ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' LINES TERMINATED BY '\\r\\n'",
+            "\r\n",
+        ),
+    ] {
+        let e = err(sql);
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::LegacyErrorTemp0064,
+            "{sql}"
+        );
+        let msg = format!("LINES TERMINATED BY only supports newline '\\n' right now: {value}");
+        assert_eq!(e.error.message_parameters(), vec![("msg", msg)], "{sql}");
+        let at = sql.find("ROW FORMAT").unwrap();
+        let end = if sql.ends_with("textfile") {
+            sql.find(" STORED").unwrap()
+        } else {
+            sql.len()
+        };
+        assert_eq!(e.span.range(), at..end, "{sql}");
+    }
+}
