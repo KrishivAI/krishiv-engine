@@ -294,6 +294,25 @@ fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
     assert_eq!(one("SELECT upper('ab' COLLATE utf8_lcase)"), "AB");
 }
 
+/// `İ` (U+0130) lower-cases to `i` + U+0307 and Spark (`lowercaseMatchLengthFrom`,
+/// `lowercaseMatchUntil`) refuses a match that starts or ends inside the pair, so a pattern that
+/// could do that is not run on the lower-cased key (unit 5a review B1); a plain literal is.
+#[test]
+fn lcase_search_refuses_a_pattern_that_could_split_the_dotted_capital_i() {
+    for sql in [
+        "SELECT contains('\u{130}' COLLATE utf8_lcase, 'i')",
+        "SELECT startswith('\u{130}' COLLATE utf8_lcase, 'i')",
+        "SELECT endswith('\u{130}' COLLATE utf8_lcase, '\u{307}')",
+        "SELECT contains('Ab' COLLATE utf8_lcase, concat('a', ''))",
+    ] {
+        assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
+    }
+    assert_eq!(
+        one("SELECT CAST(contains('Ab' COLLATE utf8_lcase, 'a') AS STRING)"),
+        "true"
+    );
+}
+
 /// A collated string inside an array, map or struct would lose its collation (or be compared
 /// as bytes), so building or reading one is refused for now; counting and picking are fine.
 #[test]
