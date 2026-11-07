@@ -51,6 +51,7 @@ impl Column {
             ExprNode::Column(ColumnRef {
                 name: parts,
                 plan_id,
+                by_identifier: false,
             })
         };
         Self::new(Expr::new(node))

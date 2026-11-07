@@ -23,6 +23,7 @@ fn chain(depth: i64) -> Plan {
         let reference = Expr::new(ExprNode::Column(ColumnRef {
             name: vec!["a".to_owned()],
             plan_id: Some(PlanId(i - 1)),
+            by_identifier: false,
         }));
         plan = plan.filter(reference).with_origin(Origin::plan(PlanId(i)));
     }

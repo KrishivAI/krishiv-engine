@@ -74,6 +74,7 @@ impl Translator<'_> {
                 ExprNode::Column(ColumnRef {
                     name: parse_attribute_name(&a.unparsed_identifier)?,
                     plan_id: a.plan_id.map(PlanId),
+                    by_identifier: false,
                 })
             }
             ExprType::UnresolvedFunction(f) => self.function(f)?,
