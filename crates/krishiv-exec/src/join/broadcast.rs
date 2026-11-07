@@ -695,8 +695,23 @@ impl Sink for PrebuiltSink {
         })
     }
 
+    /// The own build's counters, plus which table the task probed:
+    /// `broadcast_shared` (the worker's) or `broadcast_fallback` (its own,
+    /// after the shared build did not fit), summed over tasks.
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
-        self.own.extra_metrics()
+        let mut m = self.own.extra_metrics();
+        let probed = match self.decision.chosen.get() {
+            Some(Ok(Choice::Shared(_))) => Some("broadcast_shared"),
+            Some(Ok(Choice::Own)) => Some("broadcast_fallback"),
+            Some(Err(_)) | None => None,
+        };
+        if let Some(name) = probed {
+            m.push((
+                std::borrow::Cow::Borrowed(name),
+                crate::metrics::Metric::Count(1),
+            ));
+        }
+        m
     }
 
     fn finalize<'a>(
@@ -881,6 +896,91 @@ mod tests {
         let other = query.register("other", None);
         query.try_reserve(other, 768 << 10).unwrap();
         (root, query, other)
+    }
+
+    /// A decision of a task over the slot `key` of `tables`, whose build
+    /// already ended with `outcome` (no job to hand over).
+    fn decided(
+        tables: &Arc<BroadcastTables>,
+        key: BroadcastKey,
+        outcome: Result<Arc<SharedBuild>>,
+    ) -> Arc<Decision> {
+        let slot = Arc::new(Slot::default());
+        slot.finish(outcome);
+        lock(&tables.builds).insert(key, slot);
+        Arc::new(Decision {
+            tables: Arc::clone(tables),
+            key,
+            job: std::sync::Mutex::new(None),
+            chosen: OnceLock::new(),
+        })
+    }
+
+    /// The three outcomes of a shared build as its tasks see them: a build
+    /// that did not fit is a fallback to the task's own build; any other
+    /// failure (here a reader's) fails the task with it, and the gate in
+    /// front of the task's rows returns that error; neither counts the
+    /// other. A task whose slot was superseded fails.
+    #[tokio::test]
+    async fn a_shared_build_that_failed_otherwise_fails_its_tasks() {
+        let (root, query, other) = crowded();
+        let exec = crate::TokioExecutor::new(&crate::ExecutorConfig::default()).unwrap();
+        let tables = Arc::new(BroadcastTables::new(
+            Arc::clone(&exec) as Arc<dyn Executor>,
+            query.child("broadcasts", None),
+        ));
+        let full = NoAbortPool(query.child("broadcast-0", None));
+        let b = full.register("build", None);
+        let oom = KrishivError::from(full.reserve(b, 512 << 10).await.unwrap_err());
+        full.unregister(b);
+        let key = |exchange| BroadcastKey {
+            exchange: ExchangeId(exchange),
+            stage_attempt: 0,
+        };
+        let task = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            query.child("task", None),
+        );
+
+        let fell_back = decided(&tables, key(1), Err(oom));
+        assert!(matches!(fell_back.choose(&task).await, Ok(Choice::Own)));
+        let broken = decided(&tables, key(2), Err(internal("a reader broke".to_owned())));
+        let e = broken.choose(&task).await.err().unwrap();
+        assert!(e.message().contains("a reader broke"), "{e}");
+        assert_eq!(tables.fallbacks(), 1);
+        assert_eq!(tables.builds(), 2);
+
+        // The rows gate after the choice: the error again, no rows read.
+        let rows = crate::testing::RangeSource::new(10);
+        let gate = SharedOrOwnRows::new(Arc::clone(&broken), Arc::clone(&rows) as _);
+        let ctx = TaskContext::new(
+            Arc::clone(&task),
+            Arc::clone(&exec) as Arc<dyn Executor>,
+            krishiv_memory::SpillOwner::new(),
+            crate::OperatorId(0),
+            "gate",
+        );
+        let global = gate.global_state(&ctx).unwrap();
+        let mut local = gate.local_state(&ctx, &global).unwrap();
+        let e = gate.get_data(&mut local, &global).await.unwrap_err();
+        assert!(e.message().contains("a reader broke"), "{e}");
+        assert_eq!(rows.produced.load(Ordering::Relaxed), 0);
+
+        // A newer attempt replaced the slot this task's job went to.
+        let gone = Decision {
+            tables: Arc::clone(&tables),
+            key: key(3),
+            job: std::sync::Mutex::new(None),
+            chosen: OnceLock::new(),
+        };
+        let e = gone.choose(&task).await.err().unwrap();
+        assert!(e.message().contains("superseded"), "{e}");
+
+        drop((gate, ctx, task, tables));
+        query.release(other, usize::MAX);
+        assert_eq!(root.reserved(), 0);
     }
 
     /// The shared build's pool refuses a request that does not fit

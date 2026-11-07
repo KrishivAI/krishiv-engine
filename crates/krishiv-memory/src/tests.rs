@@ -1548,6 +1548,58 @@ fn snapshots_show_the_tenant_level() {
     assert_eq!(t.parent.as_deref(), Some("process"));
 }
 
+/// Every pool of a query shares its cohorts; pools of other queries and
+/// the root have their own or none.
+#[test]
+fn a_query_shares_its_cohorts_across_its_pools() {
+    let root = root(Some(64 * Q), Q);
+    let q1 = root.child_pool("q1", Some(32 * Q));
+    let task = q1.child_pool("task", None);
+    let q2 = root.child_pool("q2", Some(32 * Q));
+    let (a, b) = (q1.cohort("c").unwrap(), task.cohort("c").unwrap());
+    assert!(Arc::ptr_eq(&a, &b));
+    assert!(!Arc::ptr_eq(&a, &q2.cohort("c").unwrap()));
+    assert!(!Arc::ptr_eq(&a, &task.cohort("other").unwrap()));
+    assert!(root.cohort("c").is_none());
+}
+
+/// Seats count members and active ones (reserving or holding); going idle
+/// or leaving wakes a waiter that listened first, and reserving -> holding
+/// does not.
+#[tokio::test]
+async fn a_cohort_wakes_waiters_when_a_member_goes_idle() {
+    use crate::SeatState::{Holding, Idle, Reserving};
+    let root = root(Some(64 * Q), Q);
+    let cohort = root.child_pool("q", Some(32 * Q)).cohort("c").unwrap();
+    let (mut a, mut b) = (cohort.join(), cohort.join());
+    assert_eq!(cohort.members(), 2);
+    assert!(!cohort.others_active(&b));
+    a.set(Reserving);
+    assert!(cohort.others_active(&b));
+    assert!(!cohort.others_active(&a));
+    b.set(Reserving);
+    assert!(cohort.others_active(&a));
+    b.set(Idle);
+    let mut changed = Box::pin(cohort.changed());
+    a.set(Holding);
+    let early = tokio::time::timeout(std::time::Duration::from_millis(20), changed.as_mut()).await;
+    assert!(early.is_err(), "reserving -> holding woke a waiter");
+    assert!(cohort.others_active(&b));
+    a.set(Idle);
+    tokio::time::timeout(std::time::Duration::from_secs(5), changed)
+        .await
+        .unwrap();
+    assert!(!cohort.others_active(&b));
+    a.set(Holding);
+    let changed = cohort.changed();
+    drop(a);
+    tokio::time::timeout(std::time::Duration::from_secs(5), changed)
+        .await
+        .unwrap();
+    assert_eq!(cohort.members(), 1);
+    assert!(!cohort.others_active(&b));
+}
+
 /// Another driver of the query was granted bytes for a retry it has not run
 /// yet (sync operator code returned `NeedMemory`): a request that needs those
 /// bytes waits for the retry, which uses part and returns the rest, instead

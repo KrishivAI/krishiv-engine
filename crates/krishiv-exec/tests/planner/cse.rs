@@ -57,6 +57,7 @@ fn make_db(rows: &[Row], batch: usize, ansi: bool) -> Db {
             name: f.name().clone(),
             data_type: krishiv_types::DataType::from_arrow(f.data_type()).unwrap(),
             nullable: true,
+            char_varchar: None,
         })
         .collect();
     let catalog = MemoryCatalog::new("spark_catalog").with_table(&["default"], "t", columns, None);

@@ -230,6 +230,22 @@ impl Resolver<'_> {
                 }
             }
         }
+        if matches!(op, Builtin::In) {
+            self.refuse_char_in(kids, origin)?;
+        }
+        // `ApplyCharTypePadding`: a bare `char(n)` operand of a comparison pads (see `char_varchar`).
+        let padded = matches!(
+            op,
+            Builtin::Eq
+                | Builtin::EqNullSafe
+                | Builtin::Lt
+                | Builtin::LtEq
+                | Builtin::Gt
+                | Builtin::GtEq
+        )
+        .then(|| self.pad_char_comparison(kids))
+        .flatten();
+        let kids = padded.as_deref().unwrap_or(kids);
         let args: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let conf = self.ctx.conf;
         let rules = coerce::Rules {
