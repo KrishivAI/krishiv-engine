@@ -31,6 +31,8 @@ fn content_type(path: &str) -> &'static str {
         Some("png") => "image/png",
         Some("ico") => "image/x-icon",
         Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        Some("txt") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -59,7 +61,90 @@ mod tests {
     }
 
     #[test]
+    fn fonts_are_served_with_their_type_and_the_licence_ships() {
+        let font = all().into_iter().find(|(p, _)| p.ends_with(".ttf"));
+        assert!(font.is_some(), "no self-hosted font in the bundle");
+        let name = font.map(|(p, _)| p).unwrap_or_default();
+        assert_eq!(get(&name).map(|a| a.content_type), Some("font/ttf"));
+        assert!(
+            get("fonts-LICENSE.txt").is_some(),
+            "the OFL text must ship with the fonts"
+        );
+        assert!(get("favicon.svg").is_some());
+    }
+
+    /// Nothing may load from another origin: fonts, scripts, styles and images are all in the bundle.
+    #[test]
+    fn nothing_is_loaded_from_another_origin() {
+        for (path, data) in all() {
+            if ["html", "css", "js"].iter().any(|e| path.ends_with(e)) {
+                let text = String::from_utf8_lossy(&data);
+                // Matches a URL that is loaded (src/href/url()/import), not the xmlns of an inline svg.
+                for needle in [
+                    "src=\"http",
+                    "href=\"http",
+                    "url(http",
+                    "url(\"http",
+                    "@import \"http",
+                    "from\"http",
+                ] {
+                    assert!(
+                        !text.contains(needle),
+                        "{path} loads from another origin: {needle}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn missing_is_none() {
         assert!(get("nope.js").is_none());
+    }
+
+    fn all() -> Vec<(String, Vec<u8>)> {
+        Assets::iter()
+            .filter_map(|p| Assets::get(&p).map(|f| (p.to_string(), f.data.into_owned())))
+            .collect()
+    }
+
+    /// Spec 09 section 5: the bundle stays within 3 MB brotli. The raw size is an upper bound of that, so a
+    /// bundle under it passes without a compressor in the build.
+    #[test]
+    fn the_bundle_is_within_the_size_budget() {
+        let total: usize = all().iter().map(|(_, d)| d.len()).sum();
+        assert!(total <= 3 * 1024 * 1024, "{total} bytes of embedded assets");
+    }
+
+    /// The server sends `script-src 'self'; style-src 'self'`: the page must not need inline script or style,
+    /// nor code built from strings.
+    #[test]
+    fn the_page_works_under_a_strict_content_security_policy() {
+        let files = all();
+        let index = files
+            .iter()
+            .find(|(p, _)| p == "index.html")
+            .map(|(_, d)| String::from_utf8_lossy(d).into_owned());
+        let index = index.unwrap_or_default();
+        assert!(index.contains("src=\"./assets/"), "{index}");
+        assert!(!index.contains("<style"), "inline style: {index}");
+        assert!(!index.contains(" style="), "style attribute: {index}");
+        for tag in index.split("<script").skip(1) {
+            let tag = tag.split('>').next().unwrap_or("");
+            assert!(tag.contains("src="), "an inline script: <script{tag}>");
+        }
+        for (path, data) in &files {
+            if std::path::Path::new(path)
+                .extension()
+                .is_some_and(|e| e == "js")
+            {
+                let js = String::from_utf8_lossy(data);
+                assert!(!js.contains("eval("), "{path} calls eval");
+                assert!(
+                    !js.contains("new Function("),
+                    "{path} builds code from a string"
+                );
+            }
+        }
     }
 }

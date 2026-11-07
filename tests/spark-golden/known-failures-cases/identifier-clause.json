@@ -1,14 +1,8 @@
 {
   "cases": {
-    "depends-on-command": [
-      177
-    ],
     "generators": [
       215,
       216
-    ],
-    "query-features": [
-      186
     ],
     "sql-commands": [
       48,

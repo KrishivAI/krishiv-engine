@@ -1,0 +1,116 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The write side of `CHAR(n)` / `VARCHAR(n)` columns (Spark's `CharVarcharUtils.stringLengthCheck`):
+//! a stored value longer than `n` code points loses trailing spaces down to `n`; if it is still
+//! longer the write fails with `EXCEED_LIMIT_LENGTH`. Nothing is padded on write (the read side
+//! pads, `krishiv-plan`'s `char_varchar`). The check is an `if(...)` over the value whose failing
+//! branch is a tagged `raise_error`, which [`map_error`] turns into the error class once the write
+//! has failed, so the check needs no kernel of its own.
+
+use krishiv_common::error::{
+    ErrorClass, ExceedLimitLength, KrishivError, KrishivUnsupportedFeature,
+};
+use krishiv_plan::analyzer::{AnalyzedPlan, ResolutionConf};
+
+use crate::column::Column;
+use crate::functions::{call_function, lit};
+use crate::store::StoreColumn;
+
+/// Marks the `raise_error` message of a failed check; the limit follows.
+const TAG: &str = "\u{1}krishiv.exceed_limit_length:";
+
+/// The `n` of a simple `char(n)` / `varchar(n)` catalog string (nested ones are not checked).
+fn limit(declared: &str) -> Option<i32> {
+    let d = declared.trim().to_ascii_lowercase();
+    let inner = d
+        .strip_prefix("char(")
+        .or_else(|| d.strip_prefix("varchar("))?
+        .strip_suffix(')')?;
+    inner.trim().parse().ok().filter(|n| *n >= 0)
+}
+
+/// `value` as stored in a column declared `declared`: trimmed to the limit or failing the write.
+pub(crate) fn checked(
+    value: Column,
+    column: &StoreColumn,
+    conf: &ResolutionConf,
+) -> Result<Column, KrishivError> {
+    let declared = column
+        .char_varchar
+        .as_deref()
+        .filter(|_| !conf.char_varchar_as_string);
+    let Some(n) = declared.and_then(limit) else {
+        // Spark checks inside arrays, maps and structs too; that recursion is not implemented, so a write to
+        // such a column is refused rather than stored unchecked.
+        return match declared {
+            Some(_) => Err(KrishivUnsupportedFeature {
+                feature: "writes to nested CHAR or VARCHAR columns".to_owned(),
+            }
+            .into()),
+            None => Ok(value),
+        };
+    };
+    // At the largest length no string can be longer (a value holds fewer than 2^31 characters).
+    let Some(past) = n.checked_add(1) else {
+        return Ok(value);
+    };
+    let tail = || call_function("substring", [value.clone(), lit(past)]);
+    let over = call_function("length", [tail()])
+        .gt(lit(0))
+        .and(call_function("trim", [tail()]).not_eq(lit("")));
+    Ok(call_function(
+        "if",
+        [
+            over,
+            call_function("raise_error", [lit(format!("{TAG}{n}"))]),
+            call_function("substring", [value, lit(1), lit(n)]),
+        ],
+    ))
+}
+
+/// The stored columns of a table or view made from a query: its output columns, each keeping the
+/// `CHAR(n)` / `VARCHAR(n)` it was declared with (Spark carries it on the attribute); `nullable`
+/// overrides the query's nullability (CTAS columns are nullable).
+pub(crate) fn output_columns(a: &AnalyzedPlan, nullable: Option<bool>) -> Vec<StoreColumn> {
+    a.output
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let mut column = StoreColumn::plain(
+                c.name.clone(),
+                krishiv_plan::without_generated_marker(&c.data_type),
+                nullable.unwrap_or(c.nullable),
+            );
+            column.char_varchar = a.output_declared.get(i).cloned().flatten();
+            column
+        })
+        .collect()
+}
+
+/// A failed check as `EXCEED_LIMIT_LENGTH`; any other error as it is.
+pub(crate) fn map_error(e: KrishivError) -> KrishivError {
+    if e.error_class() != ErrorClass::UserRaisedException {
+        return e;
+    }
+    let text = e.to_string();
+    match text.split_once(TAG).map(|(_, rest)| {
+        rest.chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+    }) {
+        Some(limit) if !limit.is_empty() => ExceedLimitLength { limit }.into(),
+        _ => e,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::limit;
+
+    #[test]
+    fn only_simple_char_and_varchar_have_a_limit() {
+        assert_eq!(limit("char(5)"), Some(5));
+        assert_eq!(limit("VARCHAR(10)"), Some(10));
+        assert_eq!(limit("array<varchar(2)>"), None);
+        assert_eq!(limit("string"), None);
+    }
+}

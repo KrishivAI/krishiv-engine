@@ -5,12 +5,14 @@
 //! [module docs](super)).
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::RecordBatch;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
-use krishiv_memory::{Reservation, SpillError, SpillFile, SpillReader, SpillSignal};
+use krishiv_memory::{
+    MemoryError, Reservation, Seat, SeatState, SpillError, SpillFile, SpillReader, SpillSignal,
+};
 use krishiv_types::batch::Batch;
 
 use super::build::{Ready, ready, write};
@@ -81,6 +83,12 @@ struct Disk {
     chunk: Vec<RecordBatch>,
     chunk_bases: Vec<u64>,
     chunk_memory: Reservation,
+    /// This driver's seat among the query's chunked nested loops from its
+    /// first chunk until it is done ([`CHUNK_COHORT`]): holding while its
+    /// chunk is reserved; with no chunk, a refused frame or batch waits for
+    /// other members (`reserve_in_cohort`). Declared after `chunk_memory`, so on a drop the chunk is
+    /// released before the seat wakes the members waiting for it.
+    seat: Option<Seat>,
     /// The probe rows being re-read: file, reader, the number of the next
     /// row, and the batch being joined with its first row's number.
     probe_file: usize,
@@ -113,6 +121,7 @@ impl Disk {
             chunk: Vec::new(),
             chunk_bases: Vec::new(),
             chunk_memory: memory.reservation(),
+            seat: None,
             probe_file: 0,
             probe_reader: None,
             probe_base: 0,
@@ -132,17 +141,86 @@ impl Disk {
         self.chunk_bases.clear();
         let held = self.chunk_memory.size();
         self.chunk_memory.shrink(held);
+        // After the release: waking members first would find no room.
+        if let Some(seat) = &mut self.seat {
+            seat.set(SeatState::Idle);
+        }
     }
 }
 
+/// Grows `r` by `bytes`, which a driver holding no chunk needs to go on.
+/// With no seat, as [`Reservation::grow`]. With one, the seat is
+/// [`SeatState::Reserving`] while it asks: arbitration spills without
+/// aborting; if that is not enough and another member of the cohort is
+/// active (holds a chunk, freed at the end of its pass, or is asking), the
+/// seat stands by ([`Seat::stand_by`]: idle without waking anyone, so two
+/// askers never wait for each other and waiters do not wake each other),
+/// waits for a member to go idle and asks again, counting the wait in
+/// `waits`. With no other member active, the full arbitration runs, which
+/// may fail the request or abort a query. The seat ends in `then` once
+/// granted, idle on an error or if the future is dropped (which wakes the
+/// cohort).
+async fn reserve_in_cohort(
+    r: &mut Reservation,
+    bytes: usize,
+    seat: Option<(&mut Seat, &AtomicU64)>,
+    then: SeatState,
+) -> Result<()> {
+    /// Leaves the seat idle (waking the cohort) unless it ended otherwise.
+    struct Asking<'a>(&'a mut Seat);
+    impl Drop for Asking<'_> {
+        fn drop(&mut self) {
+            if self.0.state() == SeatState::Reserving {
+                self.0.set(SeatState::Idle);
+            }
+        }
+    }
+    let Some((seat, waits)) = seat else {
+        return r.grow(bytes).await.map_err(KrishivError::from);
+    };
+    debug_assert_eq!(seat.state(), SeatState::Idle, "a seat asks from idle");
+    let cohort = Arc::clone(seat.cohort());
+    let asking = Asking(seat);
+    let out = loop {
+        asking.0.set(SeatState::Reserving);
+        match r.grow_without_abort(bytes).await {
+            Ok(()) => break Ok(()),
+            Err(MemoryError::Exhausted { .. }) => {}
+            Err(e) => break Err(e),
+        }
+        asking.0.stand_by();
+        // Listen before checking: a member going idle meanwhile wakes us.
+        let changed = cohort.changed();
+        if !cohort.others_active(asking.0) {
+            asking.0.set(SeatState::Reserving);
+            break r.grow(bytes).await;
+        }
+        waits.fetch_add(1, Ordering::Relaxed);
+        changed.await;
+    };
+    // Granted: `then`; failed: idle (the guard, waking the cohort).
+    if out.is_ok() {
+        asking.0.set(then);
+    }
+    drop(asking);
+    out.map_err(KrishivError::from)
+}
+
+/// The cohort of a query's chunked nested loops: their chunk budgets split
+/// one quarter of the limit, and a first batch that does not fit waits for
+/// another member's chunk.
+const CHUNK_COHORT: &str = "nested-loop chunks";
+
 /// The next batch of the reader in `slot` (opened on `file` when empty),
 /// opened and read on the blocking pool. A frame the pool refuses is waited
-/// for and read again. `None` at the end of the file, which closes the
-/// reader.
+/// for and read again: given `cohort` (a driver with no chunk reading the
+/// first batch of its next one), as [`reserve_in_cohort`] waits. `None` at
+/// the end of the file, which closes the reader.
 async fn next_batch(
     ctx: &TaskContext,
     slot: &mut Option<SpillReader>,
     file: &Arc<SpillFile>,
+    mut cohort: Option<(&mut Seat, &AtomicU64)>,
 ) -> Result<Option<RecordBatch>> {
     loop {
         let open = slot.take();
@@ -170,7 +248,8 @@ async fn next_batch(
                 // draws the bytes from the consumer's credit.
                 let bytes = file.max_read_reservation();
                 let mut topup = ctx.consumer().reservation();
-                topup.grow(bytes).await.map_err(KrishivError::from)?;
+                let seat = cohort.as_mut().map(|(s, w)| (&mut **s, *w));
+                reserve_in_cohort(&mut topup, bytes, seat, SeatState::Idle).await?;
                 topup.shrink_to_credit(bytes);
             }
             Some(Err(e)) => return Err(e.into()),
@@ -285,6 +364,11 @@ impl Operator for ProbeOp {
             ("build_spills", c.build_spills.load(Ordering::Relaxed)),
             ("probe_spills", c.probe_spills.load(Ordering::Relaxed)),
             ("build_chunks", c.chunks.load(Ordering::Relaxed)),
+            (
+                "build_chunks_capped",
+                c.capped_chunks.load(Ordering::Relaxed),
+            ),
+            ("build_chunk_waits", c.chunk_waits.load(Ordering::Relaxed)),
         ])
     }
 
@@ -367,12 +451,18 @@ impl ProbeOp {
             .ok_or_else(|| internal("nested-loop flush without its disk state".to_owned()))?;
         match d.phase {
             Phase::Start => {
-                d.budget = chunk_budget(ctx, ready.drivers.load(Ordering::Acquire));
                 d.phase = if d.rows == 0 {
                     Phase::Build
                 } else {
+                    d.seat = ctx
+                        .consumer()
+                        .consumer()
+                        .pool()
+                        .cohort(CHUNK_COHORT)
+                        .map(|c| c.join());
                     Phase::Load
                 };
+                d.budget = chunk_budget(ctx, &ready, d.seat.as_ref());
                 Ok(FlushOutput::Continue)
             }
             Phase::Load => {
@@ -384,6 +474,7 @@ impl ProbeOp {
                     let Some(file) = d.files.get(d.probe_file).cloned() else {
                         // The chunk met every probe row.
                         d.drop_chunk();
+                        d.budget = chunk_budget(ctx, &ready, d.seat.as_ref());
                         (d.probe_file, d.probe_base) = (0, 0);
                         d.phase = if d.build_read(&ready) {
                             Phase::Unmatched
@@ -392,7 +483,7 @@ impl ProbeOp {
                         };
                         return Ok(FlushOutput::Continue);
                     };
-                    match next_batch(ctx, &mut d.probe_reader, &file).await? {
+                    match next_batch(ctx, &mut d.probe_reader, &file, None).await? {
                         Some(b) => {
                             let rows = b.num_rows();
                             d.current = Some((b, d.probe_base));
@@ -440,7 +531,9 @@ impl ProbeOp {
                         return Ok(FlushOutput::Continue);
                     }
                 };
-                let Some(b) = next_batch(ctx, &mut d.probe_reader, &file).await? else {
+                // No chunk is held now: a refused frame waits in the cohort.
+                let cohort = d.seat.as_mut().map(|s| (s, &self.0.counters.chunk_waits));
+                let Some(b) = next_batch(ctx, &mut d.probe_reader, &file, cohort).await? else {
                     d.probe_file += 1;
                     return Ok(FlushOutput::Continue);
                 };
@@ -474,10 +567,7 @@ impl ProbeOp {
             }
         }
         if let Some((b, base)) = d.pending.take() {
-            d.chunk_memory
-                .grow(b.get_array_memory_size())
-                .await
-                .map_err(KrishivError::from)?;
+            self.first_batch(d, b.get_array_memory_size()).await?;
             d.chunk.push(b);
             d.chunk_bases.push(base);
         }
@@ -490,7 +580,15 @@ impl ProbeOp {
         if d.build_reader.is_none() {
             d.next_base = base;
         }
-        let Some(b) = next_batch(ctx, &mut d.build_reader, &file).await? else {
+        // A driver with no chunk waits for its first batch's frame as it
+        // waits for the batch (`reserve_in_cohort`); one holding a chunk
+        // must not wait on others (two holders would wait for each other).
+        let cohort = d
+            .seat
+            .as_mut()
+            .filter(|_| d.chunk.is_empty())
+            .map(|s| (s, &self.0.counters.chunk_waits));
+        let Some(b) = next_batch(ctx, &mut d.build_reader, &file, cohort).await? else {
             d.next_file += 1;
             if d.next_file >= ready.files.len() {
                 return self.start_probe(d);
@@ -500,10 +598,14 @@ impl ProbeOp {
         let (bytes, base) = (b.get_array_memory_size(), d.next_base);
         d.next_base += b.num_rows() as u64;
         if d.chunk.is_empty() {
-            d.chunk_memory
-                .grow(bytes)
-                .await
-                .map_err(KrishivError::from)?;
+            self.first_batch(d, bytes).await?;
+        } else if !leaves_room(ctx, bytes) {
+            self.0
+                .counters
+                .capped_chunks
+                .fetch_add(1, Ordering::Relaxed);
+            d.pending = Some((b, base));
+            return self.start_probe(d);
         } else if d.chunk_memory.try_grow(bytes).is_err() {
             d.pending = Some((b, base));
             return self.start_probe(d);
@@ -511,6 +613,13 @@ impl ProbeOp {
         d.chunk.push(b);
         d.chunk_bases.push(base);
         Ok(())
+    }
+
+    /// Reserves a chunk's first batch, which it needs to make progress, as
+    /// [`reserve_in_cohort`] does; the driver then holds a chunk.
+    async fn first_batch(&self, d: &mut Disk, bytes: usize) -> Result<()> {
+        let seat = d.seat.as_mut().map(|s| (s, &self.0.counters.chunk_waits));
+        reserve_in_cohort(&mut d.chunk_memory, bytes, seat, SeatState::Holding).await
     }
 
     fn start_probe(&self, d: &mut Disk) -> Result<()> {
@@ -530,11 +639,13 @@ impl ProbeOp {
     fn finish_chunks(d: &mut Disk, ready: &Ready) -> FlushOutput {
         if ready.marks.is_none() {
             d.phase = Phase::Done;
+            d.seat = None;
             return FlushOutput::Done;
         }
         let finished = ready.finished.fetch_add(1, Ordering::AcqRel) + 1;
         if finished < ready.drivers.load(Ordering::Acquire) {
             d.phase = Phase::Done;
+            d.seat = None;
             return FlushOutput::Done;
         }
         d.build_reader = None;
@@ -567,12 +678,14 @@ impl ProbeOp {
         }
         let Some((file, base)) = ready.files.get(d.next_file).cloned() else {
             d.phase = Phase::Done;
+            d.seat = None;
             return Ok(FlushOutput::Done);
         };
         if d.build_reader.is_none() {
             d.next_base = base;
         }
-        let Some(b) = next_batch(ctx, &mut d.build_reader, &file).await? else {
+        let cohort = d.seat.as_mut().map(|s| (s, &self.0.counters.chunk_waits));
+        let Some(b) = next_batch(ctx, &mut d.build_reader, &file, cohort).await? else {
             d.next_file += 1;
             return Ok(FlushOutput::Continue);
         };
@@ -582,12 +695,233 @@ impl ProbeOp {
     }
 }
 
+/// Whether a chunk may take `bytes` more past its first batch: a quarter of
+/// the pool's limit stays free for ordinary reservations after it, so nested
+/// loops (and everything else) sharing the limit keep room for their own
+/// first batches and buffers. Each chunk's budget counts only its own
+/// drivers, so without this the chunks of several instantiations together
+/// fill the pool. [`MemoryPool::available`] already leaves out the
+/// spill-scratch floor (and the resident-set guard's cut), so what stays
+/// unreserved is a quarter of the limit plus the floor: under a 4 MiB limit
+/// (floor 1/8) chunks stop growing once the pool is about 5/8 full. A chunk
+/// cut short costs another pass over the probe files (`build_chunks_capped`).
+///
+/// [`MemoryPool::available`]: krishiv_memory::MemoryPool::available
+fn leaves_room(ctx: &TaskContext, bytes: usize) -> bool {
+    let pool = ctx.consumer().consumer().pool();
+    match (pool.available(), pool.effective_limit()) {
+        (Some(free), Some(limit)) => free.saturating_sub(bytes) >= limit / 4,
+        _ => true,
+    }
+}
+
 /// The bytes of build rows one driver's chunk reserves: a quarter of the
-/// pool's limit shared by the drivers (at least one batch is always read).
-fn chunk_budget(ctx: &TaskContext, drivers: usize) -> usize {
+/// pool's limit shared by the drivers reading chunks, those of every
+/// nested loop of the query in its cohort, else this one's (at least one
+/// batch is always read). Taken again for every chunk, as loops come and go.
+fn chunk_budget(ctx: &TaskContext, ready: &Ready, seat: Option<&Seat>) -> usize {
+    let drivers = ready.drivers.load(Ordering::Acquire);
+    let sharing = seat.map_or(drivers, |s| s.cohort().members().max(drivers));
     ctx.consumer()
         .consumer()
         .pool()
         .effective_limit()
-        .map_or(usize::MAX, |l| (l / 4 / drivers.max(1)).max(1))
+        .map_or(usize::MAX, |l| (l / 4 / sharing.max(1)).max(1))
+}
+
+#[cfg(all(test, not(loom)))]
+mod tests {
+    #![expect(
+        clippy::unwrap_used,
+        clippy::disallowed_methods,
+        reason = "tests: #[tokio::test] blocks on its own runtime"
+    )]
+
+    use std::time::Duration;
+
+    use krishiv_common::error::ErrorClass;
+    use krishiv_memory::{
+        ConsumerId, MemoryConfig, MemoryPool, SpillSignal, Spillable as _, TreePool,
+    };
+
+    use super::*;
+
+    const KIB: usize = 1 << 10;
+
+    /// A query pool under a 256 KiB limit; a peer member of the chunk cohort
+    /// holding 240 KiB as its chunk (seat holding); the seat and an empty
+    /// reservation of another consumer of the query.
+    fn setup() -> (Arc<dyn MemoryPool>, ConsumerId, Seat, Seat, Reservation) {
+        let root = TreePool::new(&MemoryConfig {
+            limit: Some(256 * KIB),
+            quantum: 4 * KIB,
+            spill_scratch_reserve: 0,
+            ..MemoryConfig::default()
+        });
+        let q = root.child("q", None);
+        let cohort = q.cohort(CHUNK_COHORT).unwrap();
+        let mut peer = cohort.join();
+        peer.set(SeatState::Holding);
+        let held = q.register("peer", None);
+        q.try_reserve(held, 240 * KIB).unwrap();
+        let id = q.register("chunk", None);
+        let r = Reservation::new(Arc::clone(&q), id);
+        (q, held, peer, cohort.join(), r)
+    }
+
+    /// While another member holds its chunk, a batch that does not fit waits
+    /// (no failure, no abort) and is granted once the member frees its
+    /// chunk and goes idle; the seat then holds.
+    #[tokio::test]
+    async fn a_batch_waits_for_an_active_member() {
+        let (q, held, mut peer, mut seat, mut r) = setup();
+        let waits = AtomicU64::new(0);
+        {
+            let mut ask = Box::pin(reserve_in_cohort(
+                &mut r,
+                32 * KIB,
+                Some((&mut seat, &waits)),
+                SeatState::Holding,
+            ));
+            let early = tokio::time::timeout(Duration::from_millis(200), ask.as_mut()).await;
+            assert!(early.is_err(), "granted while the peer held its chunk");
+            // As `Disk::drop_chunk`: the memory goes, then the seat goes idle.
+            q.release(held, 240 * KIB);
+            peer.set(SeatState::Idle);
+            tokio::time::timeout(Duration::from_secs(10), ask)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert_eq!(seat.state(), SeatState::Holding);
+        assert_eq!(r.size(), 32 * KIB);
+        assert!(waits.load(Ordering::Relaxed) >= 1);
+        assert!(q.check_aborted().is_ok());
+        r.shrink(32 * KIB);
+        q.unregister(held);
+    }
+
+    /// Two batches waiting on one holder do not wake each other: each
+    /// waits a bounded number of times (backing off does not notify), and
+    /// both are granted once the holder lets go.
+    #[tokio::test]
+    async fn two_waiters_do_not_wake_each_other() {
+        let (q, held, mut peer, mut a, mut ra) = setup();
+        let mut b = a.cohort().join();
+        let mut rb = Reservation::new(Arc::clone(&q), q.register("chunk2", None));
+        let (wa, wb) = (AtomicU64::new(0), AtomicU64::new(0));
+        {
+            let ask_a =
+                reserve_in_cohort(&mut ra, 20 * KIB, Some((&mut a, &wa)), SeatState::Holding);
+            let ask_b =
+                reserve_in_cohort(&mut rb, 20 * KIB, Some((&mut b, &wb)), SeatState::Holding);
+            let both = async { tokio::join!(ask_a, ask_b) };
+            let mut both = Box::pin(both);
+            let early = tokio::time::timeout(Duration::from_millis(300), both.as_mut()).await;
+            assert!(early.is_err(), "granted while the peer held its chunk");
+            assert!(
+                wa.load(Ordering::Relaxed) <= 2 && wb.load(Ordering::Relaxed) <= 2,
+                "waiters woke each other: {wa:?} {wb:?}"
+            );
+            q.release(held, 240 * KIB);
+            peer.set(SeatState::Idle);
+            let (x, y) = tokio::time::timeout(Duration::from_secs(10), both)
+                .await
+                .unwrap();
+            x.unwrap();
+            y.unwrap();
+        }
+        assert!(wa.load(Ordering::Relaxed) <= 3 && wb.load(Ordering::Relaxed) <= 3);
+        assert_eq!(
+            (a.state(), b.state()),
+            (SeatState::Holding, SeatState::Holding)
+        );
+        ra.shrink(20 * KIB);
+        rb.shrink(20 * KIB);
+        q.unregister(held);
+    }
+
+    /// A request dropped while it waits leaves its seat idle.
+    #[tokio::test]
+    async fn a_dropped_request_leaves_its_seat_idle() {
+        let (q, held, _peer, mut seat, mut r) = setup();
+        let waits = AtomicU64::new(0);
+        {
+            let ask = reserve_in_cohort(
+                &mut r,
+                32 * KIB,
+                Some((&mut seat, &waits)),
+                SeatState::Holding,
+            );
+            let early = tokio::time::timeout(Duration::from_millis(200), ask).await;
+            assert!(early.is_err());
+        }
+        assert_eq!(seat.state(), SeatState::Idle);
+        q.release(held, 240 * KIB);
+        q.unregister(held);
+    }
+
+    /// A request dropped while it is still asking (its arbitration waits on
+    /// a spill nobody services) leaves its seat idle and wakes the cohort:
+    /// the seat would otherwise count as active for good.
+    #[tokio::test]
+    async fn a_request_dropped_while_asking_leaves_its_seat_idle() {
+        let (q, held, mut peer, mut seat, mut r) = setup();
+        // The peer's chunk is gone; a spillable consumer holds the memory
+        // instead, and its spill is requested but never serviced.
+        q.release(held, 240 * KIB);
+        q.unregister(held);
+        peer.set(SeatState::Idle);
+        let signal = Arc::new(SpillSignal::new());
+        signal.set_spillable_bytes(240 * KIB);
+        let victim = q.register("victim", Some(Arc::clone(&signal) as _));
+        q.try_reserve(victim, 240 * KIB).unwrap();
+        let waits = AtomicU64::new(0);
+        let woken = peer.cohort().changed();
+        {
+            let ask = reserve_in_cohort(
+                &mut r,
+                32 * KIB,
+                Some((&mut seat, &waits)),
+                SeatState::Holding,
+            );
+            let early = tokio::time::timeout(Duration::from_millis(200), ask).await;
+            assert!(early.is_err(), "the request did not wait on the spill");
+        }
+        assert!(signal.spill_requested().is_some(), "no spill was asked for");
+        assert_eq!(waits.load(Ordering::Relaxed), 0, "it stood by instead");
+        assert_eq!(seat.state(), SeatState::Idle);
+        assert!(!peer.cohort().others_active(&peer), "the seat still counts");
+        tokio::time::timeout(Duration::from_secs(1), woken)
+            .await
+            .expect("the drop did not wake the cohort");
+        q.release(victim, 240 * KIB);
+        q.unregister(victim);
+    }
+
+    /// With no other member active, nothing will free memory: the request
+    /// runs the full arbitration as before and fails, and the seat is idle.
+    #[tokio::test]
+    async fn with_no_active_member_a_batch_fails_as_before() {
+        let (q, held, mut peer, mut seat, mut r) = setup();
+        peer.set(SeatState::Idle);
+        let waits = AtomicU64::new(0);
+        let e = tokio::time::timeout(
+            Duration::from_secs(10),
+            reserve_in_cohort(
+                &mut r,
+                32 * KIB,
+                Some((&mut seat, &waits)),
+                SeatState::Holding,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+        assert_eq!(seat.state(), SeatState::Idle);
+        assert_eq!(waits.load(Ordering::Relaxed), 0);
+        q.release(held, 240 * KIB);
+        q.unregister(held);
+    }
 }

@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "other-version": [
+      4,
+      5
+    ]
+  },
+  "file": "binary_base64",
+  "format_version": 1
+}

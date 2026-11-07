@@ -101,6 +101,18 @@ impl Resolver<'_> {
                 // `INT` here (`CAST('NaN' AS DOUBLE)` is a valid value).
                 let folded = self.fold_array(&t.expr, ansi);
                 if folded.is_none() && !fold::is_literal(&t.expr) {
+                    // A typed literal that reads the query clock (`TIMESTAMP '11:00'`, `DATE 'today'`)
+                    // is a literal to Spark; it binds as a clock expression here, which is not a
+                    // pivot value yet, so say that rather than `NON_LITERAL_PIVOT_VALUES`.
+                    if v.exprs
+                        .iter()
+                        .any(|e| matches!(trim_value_alias(e).node, ExprNode::TypedLiteral { .. }))
+                    {
+                        return Err(unsupported(
+                            "a typed literal that needs the query clock as a pivot value",
+                            b.expr.origin,
+                        ));
+                    }
                     return Err(AnalysisError::new(
                         NonLiteralPivotValues {
                             expression: value_sql(&b.expr, &v.alias, self.ctx.conf.session_zone),
@@ -271,7 +283,7 @@ impl Resolver<'_> {
         let pivot_type = pivot.ty.data_type.clone().unwrap_or(DataType::Null);
         let profile = self.ctx.profile;
         let before_4_2 = profile < super::SparkProfile::V4_2;
-        if before_4_2 && matches!(pivot_type, DataType::CollatedString(_)) {
+        if before_4_2 && pivot_type.is_collated_string() {
             return Err(unsupported(
                 "PIVOT on a collated column before Spark 4.2",
                 origin,
@@ -283,7 +295,7 @@ impl Resolver<'_> {
         // A NULL value of a binary or collated pivot column: before 4.2 the
         // `HashMap` finds the NULL rows, in 4.2 the `TreeMap` compares the
         // NULL key with the others (and fails); neither is reproduced.
-        if matches!(pivot_type, DataType::Binary | DataType::CollatedString(_)) {
+        if matches!(pivot_type, DataType::Binary) || pivot_type.is_collated_string() {
             for (_, value) in casts {
                 let bound = self.bind(value, cx)?;
                 let null = matches!(bound.expr.node, ExprNode::Literal(Literal::Null(_)))

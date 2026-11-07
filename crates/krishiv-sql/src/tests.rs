@@ -1226,7 +1226,7 @@ fn expression_strings_lower_like_select_items() {
     };
     assert_eq!(name, "c");
     // Constructs the IR lacks fail while lowering.
-    let e = parse_and_lower_named_expression("a COLLATE UTF8_LCASE", &d, SourceId(0)).unwrap_err();
+    let e = parse_and_lower_named_expression("?", &d, SourceId(0)).unwrap_err();
     assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 
@@ -1981,7 +1981,7 @@ fn create_table_like_statements() {
     assert!(matches!(t.name, DdlName::Parts(_)));
     assert!(matches!(t.source, DdlName::Parts(_)));
     assert!(t.using.is_none() && t.location.is_none() && t.tblproperties.is_empty());
-    let sql = "CREATE TABLE t LIKE s ROW FORMAT SERDE 'x' STORED AS parquet \
+    let sql = "CREATE TABLE t LIKE s ROW FORMAT SERDE 'x' STORED AS textfile \
         LOCATION '/tmp/t' TBLPROPERTIES ('a' = '1')";
     let t = like(sql);
     assert!(t.using.is_none() && t.row_format.is_some() && t.file_format.is_some());
@@ -2422,7 +2422,7 @@ fn namespace_and_use_statements() {
     };
     let n = create(
         "CREATE DATABASE IF NOT EXISTS db COMMENT 'c' LOCATION '/tmp/db' \
-        DEFAULT COLLATION UTF8_LCASE WITH DBPROPERTIES ('k' = 'v', flag)",
+        DEFAULT COLLATION UTF8_LCASE WITH DBPROPERTIES ('k' = 'v', flag true)",
     );
     assert_eq!(n.kind, NamespaceKind::Database);
     assert!(n.if_not_exists);
@@ -2430,7 +2430,7 @@ fn namespace_and_use_statements() {
     assert_eq!(n.location.as_deref(), Some("/tmp/db"));
     assert!(n.collation.is_some());
     assert_eq!(n.properties.len(), 2);
-    assert!(n.properties[1].value.is_none());
+    assert!(n.properties[1].value.is_some());
     let n = create("CREATE SCHEMA s WITH PROPERTIES ('a' = 1)");
     assert_eq!(n.kind, NamespaceKind::Schema);
     assert_eq!(n.properties.len(), 1);
@@ -2481,9 +2481,10 @@ fn collate_types_and_nameless_aliases() {
     // `STRING COLLATE ...`, including in nested types.
     let t = parse_data_type("STRING COLLATE UTF8_LCASE", &d).unwrap();
     assert_eq!(t.to_string(), "string collate UTF8_LCASE");
+    let lcase = krishiv_types::Collation::parse("UTF8_LCASE").unwrap();
     assert_eq!(
-        t.to_data_type().unwrap_err().error_class().name(),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        t.to_data_type().unwrap(),
+        krishiv_types::DataType::collated_string(lcase)
     );
     let t = parse_data_type("STRUCT<a: STRING COLLATE x, b: INT>", &d).unwrap();
     assert_eq!(t.to_string(), "struct<`a`:string collate x,`b`:int>");
@@ -2498,11 +2499,10 @@ fn collate_types_and_nameless_aliases() {
     // `COLLATE` on any other type is a syntax error.
     let e = parse_data_type("INT COLLATE x", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    // A cast to a collated type parses, then fails to lower as
-    // unsupported, as in Spark (which analyzes it).
+    // A cast to a collated type lowers.
     let q = ok("SELECT CAST(a AS STRING COLLATE UTF8_LCASE) FROM t");
-    let e = crate::lower(&q, krishiv_plan::SourceId(0)).unwrap_err();
-    assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    let plan = crate::lower(&q, krishiv_plan::SourceId(0)).unwrap();
+    assert!(format!("{plan:?}").contains("CollatedString(Collation"));
     // `VALUES ... AS (columns)`: a column list without a table name.
     let q = ok("SELECT * FROM (VALUES (1), (2), (1) AS (my_col)) GROUP BY 1");
     let ast::SetExprKind::Select(s) = &q.body.kind else {

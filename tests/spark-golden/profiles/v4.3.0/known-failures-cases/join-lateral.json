@@ -1,0 +1,20 @@
+{
+  "cases": {
+    "depends-on-command": [
+      7,
+      28,
+      114,
+      115
+    ],
+    "s43-other": [
+      141
+    ],
+    "subqueries": [
+      39,
+      99,
+      101
+    ]
+  },
+  "file": "join-lateral",
+  "format_version": 1
+}

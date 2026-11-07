@@ -326,6 +326,28 @@ async fn a_victim_waiting_for_memory_is_released_by_the_abort() {
     assert!(start.elapsed() < 2 * TIMEOUT, "no second timeout");
 }
 
+/// `Reservation::grow_without_abort` is `grow` without the abort phase:
+/// where `grow` would abort the requester's own query, it fails with
+/// `Exhausted` and the query goes on (a sort merge then reads fewer runs).
+#[tokio::test(start_paused = true)]
+async fn grow_without_abort_fails_where_grow_would_abort() {
+    let root = new_root(8 * MIB);
+    let qa = root.child("query-a", None);
+    let qb = root.child("query-b", None);
+    let a = holder(&qa, "prefetch", MIB);
+    let mut b = holder(&qb, "agg", 6 * MIB);
+
+    let e = b.grow_without_abort(4 * MIB).await.unwrap_err();
+    assert!(matches!(e, MemoryError::Exhausted { .. }), "{e:?}");
+    assert!(qa.check_aborted().is_ok() && qb.check_aborted().is_ok());
+    assert_eq!((a.size(), b.size()), (MIB, 6 * MIB));
+    // One round ran to the spill-only exit: nothing to spill, no abort.
+    assert_eq!(root.stats(), stats(0, 0, 1));
+    // What fits is granted.
+    b.grow_without_abort(MIB).await.unwrap();
+    assert_eq!(b.size(), 7 * MIB);
+}
+
 #[tokio::test(start_paused = true)]
 async fn the_requester_is_aborted_when_it_holds_the_most() {
     let root = new_root(8 * MIB);

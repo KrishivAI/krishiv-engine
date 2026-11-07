@@ -1,0 +1,16 @@
+{
+  "cases": {
+    "fn-aggregate": [
+      11
+    ],
+    "query-features": [
+      45
+    ],
+    "subqueries": [
+      44,
+      48
+    ]
+  },
+  "file": "subquery/scalar-subquery/scalar-subquery-select",
+  "format_version": 1
+}
