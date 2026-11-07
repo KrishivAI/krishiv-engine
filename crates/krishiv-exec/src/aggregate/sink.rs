@@ -104,6 +104,10 @@ struct Counters {
     disk_tasks: AtomicU64,
     /// Most disk tasks running at once.
     disk_peak: AtomicU64,
+    /// Finalize spill writes running now, and the most at once (one per
+    /// table, design X2). Reported as `spill_writers_peak`.
+    spill_writers: AtomicU64,
+    spill_writers_peak: AtomicU64,
     /// Times a disk task was refused memory while others ran (it waited);
     /// a task refused several times counts each time, so this counts
     /// stalls, not tasks (review m5). Reported as `disk_stalls`.
@@ -156,6 +160,10 @@ pub struct HashAggregate {
     /// pool at that point).
     #[cfg(test)]
     disk_merged_gate: Option<Arc<crate::testing::BlockingGate>>,
+    /// A gate every finalize spill write waits at before it writes (tests:
+    /// the writes run at once).
+    #[cfg(test)]
+    free_gate: Option<Arc<crate::testing::BlockingGate>>,
 }
 
 impl HashAggregate {
@@ -178,6 +186,8 @@ impl HashAggregate {
             disk_gate: None,
             #[cfg(test)]
             disk_merged_gate: None,
+            #[cfg(test)]
+            free_gate: None,
         }))
     }
 
@@ -202,6 +212,8 @@ impl HashAggregate {
             disk_gate: None,
             #[cfg(test)]
             disk_merged_gate: None,
+            #[cfg(test)]
+            free_gate: None,
         }))
     }
 
@@ -227,6 +239,8 @@ impl HashAggregate {
             output_gate: None,
             disk_gate: None,
             disk_merged_gate: None,
+            #[cfg(test)]
+            free_gate: None,
         }))
     }
 
@@ -249,6 +263,8 @@ impl HashAggregate {
             output_gate: None,
             disk_gate: None,
             disk_merged_gate: None,
+            #[cfg(test)]
+            free_gate: None,
         }))
     }
 
@@ -269,6 +285,8 @@ impl HashAggregate {
             output_gate: Some(gate),
             disk_gate: None,
             disk_merged_gate: None,
+            #[cfg(test)]
+            free_gate: None,
         }))
     }
 
@@ -289,6 +307,8 @@ impl HashAggregate {
             output_gate: None,
             disk_gate: Some(gate),
             disk_merged_gate: None,
+            #[cfg(test)]
+            free_gate: None,
         }))
     }
 
@@ -311,7 +331,30 @@ impl HashAggregate {
             output_gate: None,
             disk_gate: Some(done),
             disk_merged_gate: Some(merged),
+            free_gate: None,
         }))
+    }
+
+    /// [`new`](Self::new) whose finalize spill writes wait at `gate` before
+    /// they write.
+    #[cfg(test)]
+    pub(crate) fn with_free_gate(
+        spec: AggregateSpec,
+        gate: Arc<crate::testing::BlockingGate>,
+    ) -> Result<Arc<Self>> {
+        let mut agg = Self::new(spec)?;
+        if let Some(a) = Arc::get_mut(&mut agg) {
+            a.free_gate = Some(gate);
+        }
+        Ok(agg)
+    }
+
+    /// The most finalize spill writes that ran at once.
+    #[cfg(test)]
+    pub(crate) fn spill_writers_peak(&self) -> u64 {
+        self.counters
+            .spill_writers_peak
+            .load(AtomicOrdering::Relaxed)
     }
 
     /// Merged disk tasks run to write their groups on a spill request
@@ -965,10 +1008,14 @@ fn no_memory(bytes: usize) -> KrishivError {
     .into()
 }
 
-/// Applies a finished blocking job's results to the finalize state.
-type Apply = Box<dyn FnOnce(&mut Inner) -> Result<()> + Send>;
-/// Blocking work of a finalize step (run outside the lock).
-type Job = Box<dyn FnOnce() -> Result<Apply> + Send>;
+/// One table's spill write (blocking I/O).
+type Write = Box<dyn FnOnce() -> Result<Run> + Send>;
+
+/// Spilling the finalize state's tables: one write per table, run
+/// concurrently (design X2), then applied in table order.
+struct FreeJob {
+    writes: Vec<Write>,
+}
 
 /// One finalize step's outcome.
 enum Step {
@@ -976,7 +1023,7 @@ enum Step {
     Yield,
     /// Await this many bytes from arbitration (unspillable merge).
     Grow(usize),
-    Job(Job),
+    Free(FreeJob),
 }
 
 /// Bytes the finalize state holds in tables.
@@ -1008,7 +1055,7 @@ fn tasks_of(mut runs: Vec<Run>, level: u32, tasks: &mut Vec<(u32, Vec<SpillFile>
 impl HashAggregate {
     /// A blocking job that frees the in-memory finalize state, if any: spill
     /// the tables (in-memory phase; the disk phase frees its own).
-    fn free_job(&self, inner: &mut Inner, ctx: &TaskContext) -> Option<Job> {
+    fn free_job(&self, inner: &mut Inner, ctx: &TaskContext) -> Option<FreeJob> {
         let s = self.spiller(ctx)?;
         if inner.disk {
             return None;
@@ -1016,29 +1063,95 @@ impl HashAggregate {
         inner.busy = true;
         let tables = std::mem::take(&mut inner.tables);
         let merged = std::mem::take(&mut inner.merged);
-        Some(Box::new(move || {
-            let mut runs = Vec::new();
-            for (i, (p, t, mut r)) in tables.into_iter().enumerate() {
-                lend_headroom(&mut r);
-                runs.push(s.write_run(&t, if i == 1 { merged } else { 0 }, 0, p)?);
+        #[cfg(test)]
+        let gate = self.free_gate.clone();
+        let writes = tables
+            .into_iter()
+            .enumerate()
+            .map(|(i, (p, t, mut r))| {
+                let s = s.clone();
+                let counters = Arc::clone(&self.counters);
+                #[cfg(test)]
+                let gate = gate.clone();
+                // The headroom goes to this consumer's credit, not the
+                // pool: the writer's scratch (same consumer) takes it
+                // before the drivers waiting on the pool can (with several
+                // writers at once, through the pool they could).
+                let lent = HEADROOM.min(r.size());
+                r.shrink_to_credit(lent);
+                Box::new(move || {
+                    let now = counters.spill_writers.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+                    counters
+                        .spill_writers_peak
+                        .fetch_max(now, AtomicOrdering::Relaxed);
+                    #[cfg(test)]
+                    if let Some(g) = &gate {
+                        g.pass();
+                    }
+                    let run = s.write_run(&t, if i == 1 { merged } else { 0 }, 0, p);
+                    counters.spill_writers.fetch_sub(1, AtomicOrdering::Relaxed);
+                    drop((t, r));
+                    run
+                }) as Write
+            })
+            .collect();
+        Some(FreeJob { writes })
+    }
+
+    /// Runs `job`'s writes concurrently (at most the executor's
+    /// parallelism, one under `deterministicOrder`, as the disk phase), waits
+    /// for every started write even after an error, then hands the tables'
+    /// runs to the disk phase after the drivers' earlier spills.
+    async fn run_free(&self, g: &Global, ctx: &TaskContext, job: FreeJob) -> Result<()> {
+        use futures::StreamExt as _;
+        let limit = if ctx.query().config().deterministic_order {
+            1
+        } else {
+            ctx.executor().parallelism().max(1)
+        };
+        let mut pending = job.writes.into_iter().enumerate();
+        let mut running = futures::stream::FuturesUnordered::new();
+        let mut runs: Vec<(usize, Run)> = Vec::new();
+        let mut first_error = None;
+        loop {
+            while first_error.is_none() && running.len() < limit {
+                let Some((i, w)) = pending.next() else {
+                    break;
+                };
+                running.push(async move { (i, ctx.run_blocking(w).await) });
             }
-            Ok(Box::new(move |inner: &mut Inner| {
-                inner.disk = true;
-                // Runs merge grouped by driver partition (stable, so
-                // each partition's runs stay in arrival order): the
-                // drivers' earlier spills, then the tables.
-                let mut all = std::mem::take(&mut inner.runs);
-                all.extend(runs);
-                tasks_of(all, 0, &mut inner.tasks);
-                Ok(())
-            }) as Apply)
-        }))
+            let Some((i, out)) = running.next().await else {
+                break;
+            };
+            match out {
+                Ok(run) => runs.push((i, run)),
+                Err(e) => {
+                    first_error.get_or_insert(e);
+                }
+            }
+        }
+        // What the writers left as credit goes back to the pool.
+        ctx.consumer().consumer().release_credit();
+        let mut inner = lock(&g.inner);
+        inner.busy = false;
+        if let Some(e) = first_error {
+            return Err(e);
+        }
+        runs.sort_by_key(|(i, _)| *i);
+        inner.disk = true;
+        // Runs merge grouped by driver partition (stable, so each
+        // partition's runs stay in arrival order): the drivers' earlier
+        // spills, then the tables.
+        let mut all = std::mem::take(&mut inner.runs);
+        all.extend(runs.into_iter().map(|(_, r)| r));
+        tasks_of(all, 0, &mut inner.tasks);
+        Ok(())
     }
 
     /// A job to free memory, or the error that none can be freed.
     fn must_free(&self, inner: &mut Inner, ctx: &TaskContext, want: usize) -> Result<Step> {
         self.free_job(inner, ctx)
-            .map(Step::Job)
+            .map(Step::Free)
             .ok_or_else(|| no_memory(want))
     }
 
@@ -1187,13 +1300,6 @@ impl HashAggregate {
         }
         let _ = g.done.set(Final { out, chunks: count });
         Ok(())
-    }
-
-    async fn run_job(&self, g: &Global, ctx: &TaskContext, job: Job) -> Result<()> {
-        let apply = ctx.run_blocking(job).await;
-        let mut inner = lock(&g.inner);
-        inner.busy = false;
-        apply?(&mut inner)
     }
 }
 
@@ -1354,7 +1460,7 @@ impl Sink for HashAggregate {
                         lock(&g.inner).granted.push(r);
                     }
                     Step::Yield => tokio::task::yield_now().await,
-                    Step::Job(job) => self.run_job(g, ctx, job).await?,
+                    Step::Free(job) => self.run_free(g, ctx, job).await?,
                 }
             }
         })
@@ -1449,7 +1555,7 @@ impl Sink for HashAggregate {
                     None => return Ok(0),
                 }
             };
-            self.run_job(g, ctx, job).await?;
+            self.run_free(g, ctx, job).await?;
             let after = held(&lock(&g.inner));
             ctx.consumer().signal().set_spillable_bytes(after);
             Ok(before.saturating_sub(after))
@@ -1505,6 +1611,13 @@ impl Sink for HashAggregate {
             out.push((
                 std::borrow::Cow::Borrowed("disk_peak_tasks"),
                 crate::metrics::Metric::Max(c.disk_peak.load(AtomicOrdering::Relaxed)),
+            ));
+        }
+        let writers = c.spill_writers_peak.load(AtomicOrdering::Relaxed);
+        if writers > 0 {
+            out.push((
+                std::borrow::Cow::Borrowed("spill_writers_peak"),
+                crate::metrics::Metric::Max(writers),
             ));
         }
         out.extend(crate::metrics::probe_metrics(&c.probes.get()));

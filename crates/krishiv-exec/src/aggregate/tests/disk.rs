@@ -769,3 +769,155 @@ fn corrupt_files(dir: &std::path::Path) -> usize {
     }
     n
 }
+
+/// Fills `agg` from three drivers under a pool large enough that nothing
+/// spills while sinking, so the finalize state holds three tables.
+async fn three_tables(
+    agg: &Arc<HashAggregate>,
+    q: &Arc<QueryContext>,
+    executor: &Arc<dyn Executor>,
+    s: &SchemaRef,
+    b: &[Vec<ArrayRef>],
+) -> (crate::operator::GlobalState, TaskContext) {
+    let sink_ctx = TaskContext::new(
+        Arc::clone(q),
+        Arc::clone(executor),
+        SpillOwner::new(),
+        OperatorId(0),
+        "agg",
+    );
+    let g = Sink::global_state(&**agg, &sink_ctx).unwrap();
+    for part in b.chunks(b.len().div_ceil(3)) {
+        let mut l = Sink::local_state(&**agg, &sink_ctx, &g).unwrap();
+        for cols in part {
+            let batch = Batch::new(RecordBatch::try_new(Arc::clone(s), cols.clone()).unwrap());
+            assert!(matches!(
+                agg.sink(batch, &mut l, &g).unwrap(),
+                crate::SinkStatus::NeedMoreInput
+            ));
+        }
+        agg.combine(l, &g).unwrap();
+    }
+    (g, sink_ctx)
+}
+
+fn real_threads() -> Arc<dyn Executor> {
+    TokioExecutor::new(&crate::ExecutorConfig {
+        compute_threads: 4,
+        io_threads: 1,
+        blocking_threads: 4,
+        io_blocking_threads: 2,
+    })
+    .unwrap()
+}
+
+/// A spill request on the combined finalize state writes the drivers'
+/// tables at once (design X2): two writers wait at the gate together,
+/// which one writer at a time never does. The result is the in-memory one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_finalize_tables_spill_at_once() {
+    let (_m, scope) = spill_dir();
+    let (s, b) = grouped_input(60_000, 20_000);
+    // The reference runs on the deterministic executor, which needs a
+    // current-thread runtime of its own (this test has real threads).
+    let expected = {
+        let (s, b) = (Arc::clone(&s), b.clone());
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(run_rows(single(&s, &b)))
+        })
+        .join()
+        .unwrap()
+    };
+    let mut sp = spec(&s, vec![0], disk_aggs(&s));
+    sp.spill = Some(scope);
+    let gate = BlockingGate::new();
+    let agg = HashAggregate::with_free_gate(sp, Arc::clone(&gate)).unwrap();
+    let executor = real_threads();
+    let _open = OpenOnDrop(vec![Arc::clone(&gate)]);
+    let limit = 256 << 20;
+    let root = pool(limit);
+    let q = QueryContext::new(
+        QueryId(21),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        root.child("q", Some(limit)),
+    );
+    let (g, sink_ctx) = three_tables(&agg, &q, &executor, &s, &b).await;
+    let (freed, ()) = tokio::join!(agg.spill_global(&g, 1, &sink_ctx), async {
+        wait_until("two writers at the gate", || agg.spill_writers_peak() >= 2).await;
+        gate.open();
+    });
+    assert!(freed.unwrap() > 0, "the tables were not written");
+    assert!(sink_metric(&agg, "spill_writers_peak") >= 2);
+    let ctx = |id, name| {
+        TaskContext::new(
+            Arc::clone(&q),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(id),
+            name,
+        )
+    };
+    let final_ctx = ctx(0, "agg");
+    bounded("finalize", agg.finalize(&g, &final_ctx))
+        .await
+        .unwrap();
+    let src = ctx(1, "src").with_dependency(Arc::clone(&g));
+    let out = read_all(&agg, &src).await;
+    let mut got: Vec<String> = rows(&out)
+        .iter()
+        .map(|r| without_list(r).to_owned())
+        .collect();
+    got.sort();
+    let mut expected = expected;
+    expected.sort();
+    assert_eq!(got, expected);
+    drop((src, final_ctx, g, sink_ctx));
+    assert_eq!(root.reserved(), 0, "memory left after the query");
+}
+
+/// A writer that fails (the spill directory turned read-only while the
+/// writers wait at the gate) fails the spill with its error; every writer
+/// is awaited, and once the state is dropped no spill file and no memory
+/// is left.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_finalize_write_fails_the_spill_and_frees_everything() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (spill, scope) = spill_dir();
+    let dir = scope.dir().to_owned();
+    let (s, b) = grouped_input(60_000, 20_000);
+    let mut sp = spec(&s, vec![0], disk_aggs(&s));
+    sp.spill = Some(scope);
+    let gate = BlockingGate::new();
+    let agg = HashAggregate::with_free_gate(sp, Arc::clone(&gate)).unwrap();
+    let executor = real_threads();
+    let _open = OpenOnDrop(vec![Arc::clone(&gate)]);
+    let limit = 256 << 20;
+    let root = pool(limit);
+    let q = QueryContext::new(
+        QueryId(22),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        root.child("q", Some(limit)),
+    );
+    let (g, sink_ctx) = three_tables(&agg, &q, &executor, &s, &b).await;
+    std::fs::create_dir_all(&dir).unwrap();
+    let (freed, ()) = tokio::join!(agg.spill_global(&g, 1, &sink_ctx), async {
+        wait_until("a writer at the gate", || gate.reached()).await;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        gate.open();
+    });
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        freed.is_err(),
+        "the spill succeeded without a writable directory"
+    );
+    assert_eq!(agg.metrics().spill_runs, 0, "a run was kept");
+    drop((g, sink_ctx));
+    assert_eq!(root.reserved(), 0, "memory left after the failed spill");
+    assert_eq!(spill.manager.used_bytes(), 0, "spill files left");
+}
