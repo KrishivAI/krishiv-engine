@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "other-version": [
+      80,
+      81
+    ]
+  },
+  "file": "nonansi/timestamp",
+  "format_version": 1
+}

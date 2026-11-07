@@ -25,11 +25,13 @@ fn ctx() -> AnalysisContext {
                 name: "s".to_owned(),
                 data_type: DataType::String,
                 nullable: true,
+                char_varchar: None,
             },
             TableColumn {
                 name: "a".to_owned(),
                 data_type: DataType::Integer,
                 nullable: false,
+                char_varchar: None,
             },
         ],
         None,

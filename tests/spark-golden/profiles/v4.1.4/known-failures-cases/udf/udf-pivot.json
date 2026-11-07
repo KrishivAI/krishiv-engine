@@ -1,0 +1,16 @@
+{
+  "cases": {
+    "test-udfs": [
+      18,
+      19,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28
+    ]
+  },
+  "file": "udf/udf-pivot",
+  "format_version": 1
+}

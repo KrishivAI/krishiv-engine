@@ -12,15 +12,16 @@ Paths are relative to this crate.
 - `src/lib.rs` `simulate` (the turmoil world: worker hosts + a coordinator client), `ClusterConfig`, `SimConfig`
 - `src/cluster.rs` `Coordinator`: a `krishiv_exec::Scheduler` that ships fragments and task descriptors to workers, retries a failed task as its next attempt, runs the root stage, records a trace, releases each job's map outputs
 - `src/worker.rs` `serve` (one worker host: own executor, pool, tables via `HostSetup`, one exchange and one
-  `BroadcastTables` per job, so a broadcast join's table is built once per host and job) and `HostSetup`
+  `BroadcastTables` per job, so a broadcast join's table is built once per host and job, capped by the task's
+  `krishiv.exec.join.sharedBroadcastBytes`) and `HostSetup`
 - `src/exchange.rs` `HostExchange` (writes to the host's `LocalShuffle`, reads map partition `m` from worker `m mod W`, remotely over TCP), `Fault`
 - `src/wire.rs` the length-prefixed request/reply messages; `src/task.rs` the `krishiv.task.v1alpha` task descriptor
   (with the file splits the coordinator dealt, `Coordinator::deal_scans`; relation batches are refused)
 - `tests/tpch_sim.rs` TPC-H on two workers with dealt scans equals one worker; same seed, same trace; a killed map
-  task reruns; a two-worker write names files as Spark does and commits once; a file changed after listing fails
+  task reruns; a two-worker write names files as Spark does and commits once; a file changed after listing fails; `krishiv.exec.join.sharedBroadcastBytes` reaches the workers (shared builds uncapped, every build falls back under a one-byte cap)
 
 ## Extension points
-- New scenario: a test calling `simulate` with its own `HostSetup` (which must share nothing between hosts but the object store).
+- New scenario: a test calling `simulate` with its own `HostSetup` (which must share nothing between hosts but the object store, and write-only observers such as a log `HostSetup::released` appends to: per released job and host, the broadcast builds and fallbacks).
 - New fault: a field of `ClusterConfig` honoured by `HostExchange` or the worker.
 
 ## Invariants

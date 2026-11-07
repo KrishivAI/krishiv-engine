@@ -1,0 +1,20 @@
+{
+  "category": "fn-array",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "family": [
+        "array",
+        "collection"
+      ],
+      "order": 430
+    },
+    {
+      "detail": "concat of non-string values",
+      "order": 580
+    }
+  ],
+  "summary": "array and collection functions",
+  "task": "P2-T028"
+}

@@ -87,12 +87,18 @@ fn data_type_at(proto: &Proto, depth: usize) -> Result<DataType, KrishivError> {
         Kind::Geometry(g) => DataType::geometry(Srid::from_i32(g.srid))?,
         Kind::Geography(g) => DataType::geography(Srid::from_i32(g.srid))?,
         Kind::String(s) => {
-            // An empty name or `UTF8_BINARY` is the plain `STRING`; any other is a collated string
-            // (`COLLATION_INVALID_NAME` for a name Spark does not know).
+            // An empty name or `UTF8_BINARY` is the plain `STRING`: PySpark sends the default
+            // string with the name `UTF8_BINARY`, so Connect cannot tell a written
+            // `COLLATE UTF8_BINARY` from it (the SQL path keeps that as the display-only marker).
+            // Any other name is a collated string (`COLLATION_INVALID_NAME` for a name Spark does
+            // not know).
             if s.collation.is_empty() {
                 DataType::String
             } else {
-                DataType::collated_string(Collation::parse(&s.collation)?)
+                match Collation::parse(&s.collation)? {
+                    c if c.is_utf8_binary() => DataType::String,
+                    c => DataType::collated_string(c),
+                }
             }
         }
         Kind::Array(a) => ArrayType::new(child(a.element_type.as_deref())?, a.contains_null).into(),

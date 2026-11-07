@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "query-features": [
+      4
+    ],
+    "subqueries": [
+      5,
+      6,
+      9
+    ]
+  },
+  "file": "subquery/negative-cases/invalid-correlation",
+  "format_version": 1
+}

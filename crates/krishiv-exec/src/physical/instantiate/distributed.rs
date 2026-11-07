@@ -45,6 +45,7 @@ impl Instantiation<'_> {
             }
         }
         let input = self.node(&e.input)?;
+        planned_schema_holds(e, &input.schema)?;
         let sink = Arc::new(
             ExchangeSink::new(
                 exchange,
@@ -122,17 +123,17 @@ impl Instantiation<'_> {
             .ok_or_else(|| internal("a task with exchanges on a worker without one".to_owned()))
     }
 
-    /// The input of the broadcast exchange `id`, published as this
+    /// The input of the broadcast exchange `e`, published as this
     /// producer's partial of its value: on one worker the join over it
     /// shares one build among its drivers.
-    pub(super) fn broadcast(
-        &mut self,
-        id: crate::physical::ExchangeId,
-        input: &PhysNode,
-    ) -> Result<Built> {
-        let input = self.node(input)?;
-        self.schemas.insert(id, Arc::clone(&input.schema));
-        self.publish_broadcast(id, input)
+    pub(super) fn broadcast(&mut self, e: &ExchangePlan) -> Result<Built> {
+        let input = self.node(&e.input)?;
+        // Unused on one worker: checked in debug builds (every test).
+        if cfg!(debug_assertions) {
+            planned_schema_holds(e, &input.schema)?;
+        }
+        self.schemas.insert(e.id, Arc::clone(&input.schema));
+        self.publish_broadcast(e.id, input)
     }
 
     /// `input` published as this producer's partial of the broadcast
@@ -247,5 +248,25 @@ impl Instantiation<'_> {
                 probe: probe.node,
             }),
         }))
+    }
+}
+
+/// The columns the planner wrote into `e` ([`ExchangePlan::schema`]) are
+/// `built`, its instantiated input's: a fragmenter hands the planned ones
+/// to the exchange's readers, which refuse batches of other columns. Always
+/// checked where a task writes the exchange; on one worker, where the planned
+/// columns are unused, only in debug builds, so every test checks the planner.
+///
+/// # Errors
+/// `INTERNAL_ERROR` when they differ.
+pub(super) fn planned_schema_holds(e: &ExchangePlan, built: &SchemaRef) -> Result<()> {
+    match &e.schema {
+        Some(planned) if planned.fields() != built.fields() => Err(internal(format!(
+            "exchange {} planned {:?} over an input of {:?}",
+            e.id.0,
+            planned.fields(),
+            built.fields()
+        ))),
+        _ => Ok(()),
     }
 }
