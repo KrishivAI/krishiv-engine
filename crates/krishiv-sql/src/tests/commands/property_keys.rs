@@ -110,6 +110,7 @@ fn a_repeated_property_key_is_duplicate_key() {
         "CREATE TABLE t (a INT) ROW FORMAT SERDE 'x' WITH SERDEPROPERTIES ('k'='1', 'k'='2') AS SELECT 1",
         "CREATE TABLE t (a INT) USING parquet ROW FORMAT SERDE 'x' WITH SERDEPROPERTIES ('k'='1', 'k'='2')",
         "CREATE TABLE t LIKE s ROW FORMAT SERDE 'x' WITH SERDEPROPERTIES ('k'='1', 'k'='2')",
+        "CREATE TABLE t LIKE s USING parquet ROW FORMAT SERDE 'x' WITH SERDEPROPERTIES ('k'='1', 'k'='2')",
     ] {
         assert_duplicate(sql, "`k`");
     }
@@ -476,6 +477,10 @@ fn misvalued_property_keys_follow_sparks_map_order() {
         ),
         (
             "CREATE TABLE t LIKE s TBLPROPERTIES (j=1, j=2) ROW FORMAT SERDE 'x' WITH SERDEPROPERTIES ('k')",
+            "Values must be specified for key(s): [k]",
+        ),
+        (
+            "CREATE TABLE t LIKE s USING parquet ROW FORMAT SERDE 'x' WITH SERDEPROPERTIES ('k')",
             "Values must be specified for key(s): [k]",
         ),
     ] {

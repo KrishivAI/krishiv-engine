@@ -428,14 +428,15 @@ impl Checker<'_> {
                 t.span,
             ));
         }
+        // `visitCreateTableLike` reads the SerDe's properties before it checks `USING` beside a
+        // serde clause, and the table's properties after.
+        self.serde_properties(t.row_format.as_ref())?;
         self.using_with_serde(
             "CREATE TABLE LIKE ... USING ...",
             t.using.as_ref(),
             (t.row_format.as_ref(), t.file_format.as_ref()),
             t.span,
         )?;
-        // `visitCreateTableLike` reads the SerDe's properties before the table's.
-        self.serde_properties(t.row_format.as_ref())?;
         self.property_list(&t.tblproperties, true, t.span)
     }
 
