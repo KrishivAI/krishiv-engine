@@ -90,18 +90,19 @@ fn integer(v: &ScalarValue, dt: &DataType, micros_per_unit: Option<i64>) -> Opti
 }
 
 /// The plain-encoded bytes of every literal of a conjunct, as the file
-/// stores them, hashed; `None` when any literal has no exact file value
-/// (the conjunct then stays unknown).
-pub(super) fn hashes(
+/// stores them; `None` when any literal has no exact file value (the
+/// conjunct then stays unknown). A dictionary entry (stage 2b) and a Bloom
+/// hash (stage 2a) both compare these bytes.
+pub(super) fn plain_values(
     values: &[&ScalarValue],
     physical: PhysicalType,
     dt: &DataType,
     micros_per_unit: Option<i64>,
-) -> Option<Vec<u64>> {
+) -> Option<Vec<Vec<u8>>> {
     values
         .iter()
         .map(|v| {
-            let bytes: Vec<u8> = match physical {
+            Some(match physical {
                 PhysicalType::INT32 => i32::try_from(integer(v, dt, micros_per_unit)?)
                     .ok()?
                     .to_le_bytes()
@@ -115,10 +116,20 @@ pub(super) fn hashes(
                     _ => return None,
                 },
                 _ => return None,
-            };
-            Some(xxh64(&bytes))
+            })
         })
         .collect()
+}
+
+/// [`plain_values`] hashed as Parquet's split-block filter hashes them.
+pub(super) fn hashes(
+    values: &[&ScalarValue],
+    physical: PhysicalType,
+    dt: &DataType,
+    micros_per_unit: Option<i64>,
+) -> Option<Vec<u64>> {
+    plain_values(values, physical, dt, micros_per_unit)
+        .map(|vs| vs.iter().map(|b| xxh64(b)).collect())
 }
 
 #[cfg(test)]

@@ -632,6 +632,11 @@ pub(super) struct Emit {
     consumer: Arc<ConsumerHandle>,
     counters: Arc<Counters>,
     query: Arc<QueryContext>,
+    /// The most rows one step evaluates: the file's batch rows, or fewer when the flush phase's headroom cannot
+    /// cover a whole batch's evaluation ([`super::disk::headroom`]).
+    eval_rows: usize,
+    /// The rows of the trail reader's last batch past `eval_rows`, evaluated by the next steps.
+    rest: Option<RecordBatch>,
 }
 
 impl Emit {
@@ -643,6 +648,7 @@ impl Emit {
         consumer: &Arc<ConsumerHandle>,
         counters: Arc<Counters>,
         query: Arc<QueryContext>,
+        eval_rows: usize,
     ) -> Result<Self> {
         let reader = || -> Result<SpillReader> {
             Ok(disk
@@ -710,15 +716,27 @@ impl Emit {
             consumer: Arc::clone(consumer),
             counters,
             query,
+            eval_rows: eval_rows.max(1),
+            rest: None,
         })
     }
 
     /// The next output batch, `None` at the partition's end. Blocking.
     pub(super) fn step(&mut self, env: &Env) -> Result<Option<RecordBatch>> {
-        let Some(b) = self.trail.next().transpose()? else {
-            return Ok(None);
+        let b = match self.rest.take() {
+            Some(b) => b,
+            None => match self.trail.next().transpose()? {
+                Some(b) => b.data().clone(),
+                None => return Ok(None),
+            },
         };
-        let b = b.data().clone();
+        // At most `eval_rows` rows per step: the rest waits for the next one.
+        let b = if b.num_rows() > self.eval_rows {
+            self.rest = Some(b.slice(self.eval_rows, b.num_rows() - self.eval_rows));
+            b.slice(0, self.eval_rows)
+        } else {
+            b
+        };
         let n = b.num_rows();
         let first = self.at == 0;
         let flags = peer_flags(env.order_keys.as_deref(), &b, &mut self.prev_order, first)?;
