@@ -43,6 +43,68 @@ pub(crate) struct StoreColumn {
     /// `INSERT` (Spark keeps column defaults as text).
     pub(crate) default: Option<String>,
     pub(crate) comment: Option<String>,
+    /// The Spark catalog string of a `CHAR(n)` / `VARCHAR(n)` column (`char(5)`, `array<varchar(2)>`; Spark's
+    /// `__CHAR_VARCHAR_TYPE_STRING` field metadata). The column's type is `string`: the length lives here only,
+    /// and the analyzer reads it for the write check and the padding rule (design P2-T001b).
+    pub(crate) char_varchar: Option<String>,
+}
+
+impl StoreColumn {
+    /// `NOT_SUPPORTED_CHANGE_COLUMN`: `CHANGE COLUMN .. TYPE` to a type other than this column's own (a session
+    /// catalog table takes only the identical type, a `CHAR(n)` length included). `to_declared` is the
+    /// `CHAR(n)` / `VARCHAR(n)` string the new type was written with.
+    pub(crate) fn change_type_error(
+        &self,
+        table: String,
+        to: &DataType,
+        to_declared: Option<&str>,
+    ) -> KrishivError {
+        let sql = |t: &DataType, declared: Option<&str>| {
+            format!(
+                "\"{}\"",
+                declared.map_or_else(|| t.sql(), str::to_uppercase)
+            )
+        };
+        let id = format!("`{}`", self.name.replace('`', "``"));
+        krishiv_common::error::NotSupportedChangeColumn {
+            table,
+            origin_name: id.clone(),
+            origin_type: sql(&self.data_type, self.char_varchar.as_deref()),
+            new_name: id,
+            new_type: sql(to, to_declared),
+        }
+        .into()
+    }
+
+    /// A nullable column as DDL declares it: `CHAR`/`VARCHAR` read as `STRING`, the length kept in `char_varchar`.
+    pub(crate) fn declared(
+        name: String,
+        spec: &krishiv_sql::ast::DataTypeSpec,
+        default: Option<String>,
+        comment: Option<String>,
+    ) -> Result<Self, KrishivError> {
+        let (data_type, char_varchar) = spec.to_column_type()?;
+        Ok(Self {
+            name,
+            data_type,
+            nullable: true,
+            default,
+            comment,
+            char_varchar,
+        })
+    }
+
+    /// A column with no default, comment or `CHAR`/`VARCHAR` length: what a query's output gives a table.
+    pub(crate) fn plain(name: String, data_type: DataType, nullable: bool) -> Self {
+        Self {
+            name,
+            data_type,
+            nullable,
+            default: None,
+            comment: None,
+            char_varchar: None,
+        }
+    }
 }
 
 /// A permanent view: its query as SQL text, parsed again at each read (so it follows the tables it reads), and the
@@ -121,6 +183,9 @@ pub(crate) struct CatalogTable {
     pub(crate) view: Option<ViewDef>,
     /// Partitioning, bucketing and the partitions the catalog tracks.
     pub(crate) layout: TableLayout,
+    /// `ANALYZE TABLE .. FOR COLUMNS` ran on it. The engine stores no column statistics, so
+    /// `DESCRIBE EXTENDED t col` refuses rather than print NULLs where Spark prints values.
+    pub(crate) column_stats_requested: bool,
 }
 
 impl CatalogTable {
@@ -618,6 +683,7 @@ mod tests {
                 nullable: true,
                 default: None,
                 comment: None,
+                char_varchar: None,
             }],
             options: BTreeMap::new(),
             properties: BTreeMap::new(),
@@ -626,6 +692,7 @@ mod tests {
             root: PathBuf::new(),
             view: None,
             layout: TableLayout::default(),
+            column_stats_requested: false,
         }
     }
 

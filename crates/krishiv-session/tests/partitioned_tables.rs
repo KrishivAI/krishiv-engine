@@ -803,16 +803,26 @@ fn add_partition_locations() {
         location("p = 'y'"),
         format!("Location\tfile:{}", other.display())
     );
-    // A relative location is refused, and nothing of the command is left behind.
-    assert_eq!(
-        class(
-            &s,
-            "ALTER TABLE t ADD PARTITION (p = 'z') PARTITION (p = 'w') LOCATION 'rel'"
-        ),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+    // A relative location is made absolute against the working directory (Spark's `makeQualified`). The
+    // directory `ADD PARTITION` creates there has a name of its own and is removed even if an assertion fails.
+    struct RemoveOnDrop(std::path::PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let rel = format!("krishiv-test-rel-{}", std::process::id());
+    let created = RemoveOnDrop(std::env::current_dir().unwrap().join(&rel));
+    run(
+        &s,
+        &format!("ALTER TABLE t ADD PARTITION (p = 'z') LOCATION '{rel}'"),
     );
-    assert!(!dir.path().join("t/p=z").exists());
-    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=x", "p=y"]);
+    assert_eq!(
+        location("p = 'z'"),
+        format!("Location\tfile:{}", created.0.display())
+    );
+    assert!(created.0.is_dir());
+    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=x", "p=y", "p=z"]);
 }
 
 /// Denies `CREATE` on any path with `outside` in it.
@@ -871,6 +881,34 @@ fn add_partition_outside_the_policy_is_denied() {
     );
     assert!(!outside.exists());
     assert!(rows(&s, "SHOW PARTITIONS t").is_empty());
+}
+
+#[test]
+fn msck_repair_of_a_denied_partition_directory_is_denied() {
+    // MSCK REPAIR registers each partition at its directory, so it asks the policy as ADD PARTITION does.
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let warehouse = dir.path().join("wh");
+    std::fs::create_dir_all(&warehouse).unwrap();
+    let s = Session::builder()
+        .access_policy(Arc::new(NoOutside))
+        .config("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+        .build()
+        .unwrap();
+    run(
+        &s,
+        "CREATE TABLE t (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    let root = warehouse.join("t");
+    std::fs::create_dir_all(root.join("p=inside")).unwrap();
+    run(&s, "MSCK REPAIR TABLE t");
+    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=inside"]);
+    std::fs::create_dir_all(root.join("p=outside")).unwrap();
+    assert_eq!(
+        class(&s, "MSCK REPAIR TABLE t"),
+        "KRISHIV_INSUFFICIENT_PERMISSIONS"
+    );
+    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=inside"]);
 }
 
 #[test]

@@ -66,6 +66,7 @@ fuzz_target!(|data: &[u8]| {
                     name: name.to_owned(),
                     data_type: krishiv_types::DataType::Integer,
                     nullable: true,
+                    char_varchar: None,
                 };
                 let catalog = MemoryCatalog::new("spark_catalog").with_table(
                     &["default"],
