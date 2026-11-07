@@ -854,6 +854,8 @@ fn in_subquery_compares_through_the_collation_keys() {
         ("'a' IN (SELECT 'A' COLLATE utf8_lcase)", "true"),
         ("'a ' COLLATE utf8_binary_rtrim IN (SELECT 'a')", "true"),
         ("'b' IN (SELECT 'A' COLLATE utf8_lcase)", "false"),
+        ("('a' COLLATE utf8_binary) IN (SELECT 'a')", "true"),
+        ("('a' COLLATE utf8_binary) IN (SELECT 'A')", "false"),
     ] {
         assert_eq!(
             one(&format!("SELECT CAST(({sql}) AS STRING)")),
