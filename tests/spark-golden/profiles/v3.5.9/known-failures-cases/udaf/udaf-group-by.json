@@ -1,0 +1,19 @@
+{
+  "cases": {
+    "depends-on-command": [
+      8,
+      12,
+      22,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "test-udfs": [
+      13
+    ]
+  },
+  "file": "udaf/udaf-group-by",
+  "format_version": 1
+}

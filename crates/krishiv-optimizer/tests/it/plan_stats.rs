@@ -27,6 +27,7 @@ fn column(name: &str, t: DataType) -> TableColumn {
         name: name.to_owned(),
         data_type: t,
         nullable: true,
+        char_varchar: None,
     }
 }
 

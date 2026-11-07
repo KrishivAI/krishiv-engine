@@ -257,6 +257,7 @@ fn ddl(s: &Session) -> Vec<(&'static str, String)> {
         ("CREATE DATABASE", sql("CREATE DATABASE d")),
         ("CREATE TABLE", sql("CREATE TABLE c (a INT)")),
         ("ALTER TABLE", sql("ALTER TABLE t ADD COLUMNS (b INT)")),
+        ("MSCK REPAIR TABLE", sql("MSCK REPAIR TABLE t")),
         ("CREATE VIEW", sql("CREATE VIEW default.pv AS SELECT 1")),
         (
             "CREATE GLOBAL TEMPORARY VIEW",
@@ -1694,5 +1695,51 @@ fn a_denied_ctas_creates_no_directories() {
     assert!(
         !tmp.path().join("outside").exists(),
         "no parent was created"
+    );
+}
+
+/// Whether writes under a `far_t` directory are denied (switched on once the tables exist).
+static DENY_FAR_T: AtomicBool = AtomicBool::new(false);
+
+/// Writes to a path under a `far_t` directory are denied once [`DENY_FAR_T`] is set.
+fn no_writes_under_far_t(securable: &Securable, _: Privilege) -> AccessDecision {
+    match securable {
+        Securable::Path(p)
+            if DENY_FAR_T.load(std::sync::atomic::Ordering::SeqCst)
+                && p.as_plain().is_some_and(|t| t.contains("far_t")) =>
+        {
+            deny()
+        }
+        _ => AccessDecision::Allow,
+    }
+}
+
+/// A multi-table `INSERT` whose later clause writes where the policy denies writes nothing: every clause's write is
+/// checked (the location's access check included) before the first one writes.
+#[test]
+fn a_multi_table_insert_denied_in_a_later_clause_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(no_writes_under_far_t));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE ok_t (a INT) USING parquet",
+        "CREATE TABLE far_t (a INT) USING parquet",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    DENY_FAR_T.store(true, std::sync::atomic::Ordering::SeqCst);
+    let result = block_on(async {
+        s.sql("FROM t INSERT INTO ok_t SELECT a INSERT INTO far_t SELECT a")
+            .await?
+            .collect()
+            .await
+    });
+    assert_eq!(class(result), DENIED);
+    assert_eq!(
+        rows(&s, "SELECT * FROM ok_t").unwrap(),
+        0,
+        "the first clause wrote nothing"
     );
 }

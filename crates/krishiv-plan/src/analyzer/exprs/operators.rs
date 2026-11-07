@@ -139,6 +139,25 @@ impl Resolver<'_> {
         origin: Origin,
         kids: &[Bound],
     ) -> Result<Bound, AnalysisError> {
+        // The execution guard of collations unit 2a: a comparison compares bytes, so it refuses
+        // a collated operand until unit 3a (collation keys) lifts this.
+        if matches!(
+            op,
+            Builtin::Eq
+                | Builtin::EqNullSafe
+                | Builtin::Lt
+                | Builtin::LtEq
+                | Builtin::Gt
+                | Builtin::GtEq
+                | Builtin::In
+                | Builtin::Between
+        ) && kids.iter().any(|k| {
+            k.ty.data_type
+                .as_ref()
+                .is_some_and(|t| t.any_type(&|t| matches!(t, DataType::CollatedString(_))))
+        }) {
+            return Err(unsupported("collated comparison", origin));
+        }
         if let (Builtin::Between, [v, lo, hi]) = (op, kids) {
             // The value is shared, as Spark's errors show it.
             let shared = Expr::function("commonexpressionref", Vec::new());
@@ -211,6 +230,22 @@ impl Resolver<'_> {
                 }
             }
         }
+        if matches!(op, Builtin::In) {
+            self.refuse_char_in(kids, origin)?;
+        }
+        // `ApplyCharTypePadding`: a bare `char(n)` operand of a comparison pads (see `char_varchar`).
+        let padded = matches!(
+            op,
+            Builtin::Eq
+                | Builtin::EqNullSafe
+                | Builtin::Lt
+                | Builtin::LtEq
+                | Builtin::Gt
+                | Builtin::GtEq
+        )
+        .then(|| self.pad_char_comparison(kids))
+        .flatten();
+        let kids = padded.as_deref().unwrap_or(kids);
         let args: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let conf = self.ctx.conf;
         let rules = coerce::Rules {

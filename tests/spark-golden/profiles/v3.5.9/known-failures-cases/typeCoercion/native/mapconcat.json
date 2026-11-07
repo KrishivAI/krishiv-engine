@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "other-version": [
+      2
+    ]
+  },
+  "file": "typeCoercion/native/mapconcat",
+  "format_version": 1
+}

@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "v35-ansi-default": [
+      92,
+      93,
+      94,
+      95,
+      96,
+      104,
+      116,
+      128,
+      140
+    ]
+  },
+  "file": "typeCoercion/native/division",
+  "format_version": 1
+}

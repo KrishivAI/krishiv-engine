@@ -79,7 +79,9 @@ pub(super) fn in_list(
 /// The canonical carrier when every non-`NULL` type is one Spark
 /// `STRING`/`BINARY` in some Arrow encoding: `None` otherwise (including
 /// all-`NULL`, for which no cast is needed).
-fn string_target<'a>(types: impl IntoIterator<Item = &'a ArrowType>) -> Option<ArrowType> {
+pub(super) fn string_target<'a>(
+    types: impl IntoIterator<Item = &'a ArrowType>,
+) -> Option<ArrowType> {
     let mut out: Option<ArrowType> = None;
     for t in types {
         if *t == ArrowType::Null {
@@ -526,133 +528,6 @@ impl PhysExpr for InList {
     }
 }
 
-/// `v BETWEEN lo AND hi` with `v` evaluated once: `v >= lo AND v <= hi`
-/// under Kleene logic. Operands of one Spark `STRING`/`BINARY` in
-/// different encodings meet in the canonical carrier; every other
-/// mismatch fails here exactly as the two comparisons do.
-pub(super) fn between(
-    v: Arc<dyn PhysExpr>,
-    lo: Arc<dyn PhysExpr>,
-    hi: Arc<dyn PhysExpr>,
-    env: &EvalEnv,
-) -> Result<Arc<dyn PhysExpr>> {
-    let (mut v, mut lo, mut hi) = (v, lo, hi);
-    if let Some(target) = string_target([v.data_type(), lo.data_type(), hi.data_type()]) {
-        for e in [&mut v, &mut lo, &mut hi] {
-            if e.data_type() != &target && *e.data_type() != ArrowType::Null {
-                *e = super::cast::coerce_to(Arc::clone(e), &target, env)?;
-            }
-        }
-    }
-    compare(Builtin::GtEq, Arc::clone(&v), Arc::clone(&lo), env)?;
-    compare(Builtin::LtEq, Arc::clone(&v), Arc::clone(&hi), env)?;
-    Ok(Arc::new(Between {
-        v,
-        lo,
-        hi,
-        kernels: env.kernels,
-    }))
-}
-
-/// `BETWEEN` over one evaluation of `v`: both bounds reuse the evaluated
-/// canonical `Value` instead of converting it once per bound. `hi` is
-/// evaluated only where `v >= lo` did not already decide `false`, as the
-/// `AND` it lowers to would.
-#[derive(Debug)]
-struct Between {
-    v: Arc<dyn PhysExpr>,
-    lo: Arc<dyn PhysExpr>,
-    hi: Arc<dyn PhysExpr>,
-    kernels: KernelCtx,
-}
-
-impl PhysExpr for Between {
-    fn data_type(&self) -> &ArrowType {
-        &ArrowType::Boolean
-    }
-
-    fn nullable(&self) -> bool {
-        self.v.nullable() || self.lo.nullable() || self.hi.nullable()
-    }
-
-    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
-        let v = self.v.eval(batch, partition)?;
-        let lo = self.lo.eval(batch, partition)?;
-        let rows = batch.num_rows();
-        if rows == 0 {
-            return Ok(Value::Array(Arc::new(BooleanArray::new(
-                BooleanBuffer::new_unset(0),
-                None,
-            ))));
-        }
-        let ge = cmp(CompareKind::GreaterEq, &v, &lo, &self.kernels)?;
-        let scalar_ge = ge.len() == 1 && rows != 1;
-        // `false AND _` is `false`: skip `hi` where every row decided.
-        let all_false = (0..ge.len()).all(|i| ge.is_valid(i) && !ge.value(i));
-        if all_false {
-            if ge.len() == 1 && v.is_scalar() && lo.is_scalar() {
-                let out: ArrayRef =
-                    Arc::new(BooleanArray::new(BooleanBuffer::from(vec![false]), None));
-                return Ok(Value::Scalar(out));
-            }
-            let out: ArrayRef = if scalar_ge {
-                Arc::new(BooleanArray::new(
-                    BooleanBuffer::from(vec![false; rows]),
-                    None,
-                ))
-            } else {
-                Arc::new(BooleanArray::new(
-                    BooleanBuffer::from(vec![false; ge.len()]),
-                    None,
-                ))
-            };
-            return Ok(Value::Array(out));
-        }
-        let hi = self.hi.eval(batch, partition)?;
-        let all_scalar = v.is_scalar() && lo.is_scalar() && hi.is_scalar();
-        let le = cmp(CompareKind::LessEq, &v, &hi, &self.kernels)?;
-        let n = if all_scalar { 1 } else { rows };
-        let mut values = Vec::with_capacity(n);
-        let mut valids = Vec::with_capacity(n);
-        for i in 0..n {
-            let gi = if ge.len() == 1 { 0 } else { i };
-            let li = if le.len() == 1 { 0 } else { i };
-            let (g_valid, l_valid) = (ge.is_valid(gi), le.is_valid(li));
-            let (g, l) = (g_valid && ge.value(gi), l_valid && le.value(li));
-            if (g_valid && !g) || (l_valid && !l) {
-                values.push(false);
-                valids.push(true);
-            } else if g_valid && l_valid {
-                values.push(true);
-                valids.push(true);
-            } else {
-                values.push(false);
-                valids.push(false);
-            }
-        }
-        let out: ArrayRef = Arc::new(BooleanArray::new(
-            BooleanBuffer::from(values),
-            Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valids))),
-        ));
-        if all_scalar {
-            return Ok(Value::Scalar(out));
-        }
-        if out.len() == 1 && rows != 1 {
-            let mut values = Vec::with_capacity(rows);
-            let mut valids = Vec::with_capacity(rows);
-            for _ in 0..rows {
-                values.push(out.as_boolean().value(0));
-                valids.push(out.is_valid(0));
-            }
-            return Ok(Value::Array(Arc::new(BooleanArray::new(
-                BooleanBuffer::from(values),
-                Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valids))),
-            ))));
-        }
-        Ok(Value::Array(out))
-    }
-}
-
 /// `CASE WHEN c1 THEN v1 ... [ELSE e] END`, lazily: each condition sees only
 /// the rows no earlier branch took, each value only the rows it takes.
 #[derive(Debug)]
@@ -1063,6 +938,7 @@ mod tests {
     use krishiv_types::{DataType, DecimalType};
 
     use super::*;
+    use crate::planner::eval::between::between;
 
     /// [`EvalEnv`] with `spark.sql.ansi.enabled = ansi`.
     fn env(ansi: bool) -> EvalEnv {
@@ -2226,6 +2102,7 @@ mod tests {
             column(0, ArrowType::Utf8, true),
             lit(&Literal::String("a".to_owned())),
             lit(&Literal::String("c".to_owned())),
+            [false; 2],
             &env,
         )
         .unwrap();
@@ -2251,6 +2128,7 @@ mod tests {
             column(0, ArrowType::Utf8View, true),
             column(1, ArrowType::Utf8, true),
             lit(&Literal::String("c".to_owned())),
+            [false; 2],
             &env,
         )
         .unwrap();
@@ -2269,6 +2147,7 @@ mod tests {
             column(0, ArrowType::Int32, true),
             lit(&Literal::String("a".to_owned())),
             lit(&Literal::String("c".to_owned())),
+            [false; 2],
             &env,
         )
         .unwrap_err();
@@ -2324,6 +2203,7 @@ mod tests {
             column(0, ArrowType::LargeUtf8, true),
             lit_s("a"),
             lit_s("c"),
+            [false; 2],
             &env,
         )
         .unwrap();
@@ -2334,7 +2214,16 @@ mod tests {
         let dictionary =
             ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
         assert!(in_list(vec![column(1, dictionary.clone(), true), lit_s("b")], &env).is_err());
-        assert!(between(column(1, dictionary, true), lit_s("a"), lit_s("c"), &env).is_err());
+        assert!(
+            between(
+                column(1, dictionary, true),
+                lit_s("a"),
+                lit_s("c"),
+                [false; 2],
+                &env
+            )
+            .is_err()
+        );
     }
 
     /// `BETWEEN` over a batch without rows answers an empty column.
@@ -2346,6 +2235,7 @@ mod tests {
             lit(&Literal::Integer(1)),
             lit(&Literal::Integer(0)),
             lit(&Literal::Integer(2)),
+            [false; 2],
             &env,
         )
         .unwrap();
@@ -2363,7 +2253,14 @@ mod tests {
             inner: lit(&Literal::Long(3)),
             n: Arc::clone(&n),
         });
-        let e = between(lit(&Literal::Long(1)), lit(&Literal::Long(5)), hi, &env).unwrap();
+        let e = between(
+            lit(&Literal::Long(1)),
+            lit(&Literal::Long(5)),
+            hi,
+            [false; 2],
+            &env,
+        )
+        .unwrap();
         match e.eval(&rows_batch(2), 0).unwrap() {
             Value::Scalar(a) => {
                 assert_eq!(a.as_boolean().iter().collect::<Vec<_>>(), [Some(false)]);
@@ -2387,6 +2284,7 @@ mod tests {
             column(0, ArrowType::Int32, true),
             lit(&Literal::Integer(5)),
             hi,
+            [false; 2],
             &env,
         )
         .unwrap();
@@ -2442,7 +2340,7 @@ mod tests {
                 Some(true),
             ),
         ] {
-            let e = between(lit(&v), lit(&lo), lit(&hi), &env).unwrap();
+            let e = between(lit(&v), lit(&lo), lit(&hi), [false; 2], &env).unwrap();
             assert_eq!(
                 values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
                 [want],
@@ -2462,7 +2360,14 @@ mod tests {
             inner: lit(&Literal::Long(1)),
             n: Arc::clone(&n),
         });
-        let e = between(value, lit(&Literal::Long(0)), lit(&Literal::Long(2)), &env).unwrap();
+        let e = between(
+            value,
+            lit(&Literal::Long(0)),
+            lit(&Literal::Long(2)),
+            [false; 2],
+            &env,
+        )
+        .unwrap();
         assert_eq!(
             values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
             [Some(true)]

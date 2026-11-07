@@ -619,13 +619,35 @@ fn dedupe_in(preds: Vec<Arc<Expr>>, defs: &HashMap<AttrId, Arc<Expr>>) -> Vec<Ar
         if is_deterministic(&p)
             && out
                 .iter()
-                .any(|q| same(&resolve_cse(q, defs), &resolve_cse(&p, defs)))
+                .any(|q| same_conjunct(&resolve_cse(q, defs), &resolve_cse(&p, defs)))
         {
             continue;
         }
         out.push(p);
     }
     out
+}
+
+/// Whether two conjuncts hold the same condition: [`same`], or one equality
+/// with its sides swapped (`a = b` and `b = a`). Join ordering derives a class
+/// equality in either order; pushed through a projection into a join that
+/// already holds it the other way round, the copy would only go on the next
+/// run, so the plan would not be a fixed point.
+fn same_conjunct(p: &Expr, q: &Expr) -> bool {
+    if same(p, q) {
+        return true;
+    }
+    match (builtin(p), builtin(q)) {
+        (Some((op, [a, b], f)), Some((other, [c, d], g))) => {
+            op == other
+                && matches!(op, Builtin::Eq | Builtin::EqNullSafe)
+                && f.filter.is_none()
+                && g.filter.is_none()
+                && same(a, d)
+                && same(b, c)
+        }
+        _ => false,
+    }
 }
 
 /// `plan` filtered by `preds` (none: `plan` itself), with `like`'s origin.

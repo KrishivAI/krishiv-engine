@@ -572,6 +572,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "hash_join_single_match"
             | "nested_loop_existence"
             | "exchange_hash_key_group"
+            | "exchange_filters"
             | "window_frames"
             | "window_offset_values"
             | "window_range_values"

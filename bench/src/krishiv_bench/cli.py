@@ -215,6 +215,28 @@ def main(argv=None) -> None:
     ed.add_argument("--out", default=None, help="report directory (default $KRISHIV_DATA/results/explain-diff)")
     ed.add_argument("--timeout", type=float, default=600, help="per-query Krishiv timeout seconds (0 = none)")
     ed.add_argument("--runner", help=RUNNER_HELP)
+    gd = sub.add_parser(
+        "gapdiff",
+        help="operator CPU by kind beside DuckDB, pipelines dominated by one driver, optional perf folded stacks",
+    )
+    gd.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    gd.add_argument("--sf", type=float, default=10)
+    gd.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
+    which = gd.add_mutually_exclusive_group(required=True)
+    which.add_argument("--query", help="one query, e.g. q18")
+    which.add_argument("--all", action="store_true", help="every query of the suite: summary table + JSON")
+    gd.add_argument("--threads", type=int, default=8, help="threads for both engines")
+    gd.add_argument("--memory-limit", default="12g", help="memory limit for both engines")
+    gd.add_argument("--out", default=None, help="result directory (default $KRISHIV_DATA/results/gapdiff/<ts>_...)")
+    gd.add_argument("--timeout", type=float, default=600, help="per-query Krishiv timeout seconds (0 = none)")
+    gd.add_argument("--busy-share", type=float, default=0.5, help="flag a pipeline whose busiest driver does more")
+    gd.add_argument("--min-cpu-share", type=float, default=0.02, help="...if it has at least this share of the CPU")
+    gd.add_argument(
+        "--perf", action="store_true", help="also sample the Krishiv run under perf record -g (folded stacks)"
+    )
+    gd.add_argument("--perf-runs", type=int, default=1, help="warm runs sampled per query with --perf")
+    gd.add_argument("--warmup", type=int, default=1, help="unprofiled runs of each engine before the profiled one")
+    gd.add_argument("--runner", help=RUNNER_HELP)
     xb = sub.add_parser(
         "ab",
         help="build-vs-build A/B: two runner binaries, or one binary with two --conf sets, interleaved ABBA",
@@ -505,6 +527,25 @@ def main(argv=None) -> None:
             a.runner,
             Path(a.out) if a.out else None,
             a.timeout,
+        )
+    elif a.cmd == "gapdiff":
+        from .gapdiff import run_gapdiff
+
+        run_gapdiff(
+            a.suite,
+            a.sf,
+            None if a.all else [a.query],
+            a.dataset or ABBA_DATASET[a.suite],
+            a.threads,
+            a.memory_limit,
+            a.runner,
+            Path(a.out) if a.out else None,
+            a.timeout,
+            a.min_cpu_share,
+            a.busy_share,
+            a.perf,
+            a.perf_runs,
+            a.warmup,
         )
     elif a.cmd == "ab":
         from .ab import parse_conf, run_ab

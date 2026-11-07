@@ -1119,6 +1119,7 @@ impl FileSchemaResolver for FileReads {
                         name: f.name().clone(),
                         data_type: DataType::from_arrow_field(f)?,
                         nullable: f.is_nullable(),
+                        char_varchar: None,
                     })
                 })
                 .collect()

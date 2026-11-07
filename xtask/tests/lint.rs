@@ -333,6 +333,13 @@ fn physical_plan_types_hold_no_live_handles() {
     // Comments may name them; instantiation and other files may use them.
     assert!(plan_handles_in("crates/krishiv-exec/src/physical/mod.rs", "// a Mutex\n").is_empty());
     assert!(plan_handles_in("crates/krishiv-exec/src/physical/instantiate.rs", node).is_empty());
+    assert!(
+        plan_handles_in(
+            "crates/krishiv-exec/src/physical/instantiate/distributed.rs",
+            node
+        )
+        .is_empty()
+    );
     assert!(plan_handles_in("crates/krishiv-exec/src/runner.rs", node).is_empty());
 }
 

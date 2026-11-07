@@ -125,6 +125,7 @@ fn analyze(case: &MatrixCase) -> Result<(String, bool), String> {
         name: "one_".to_owned(),
         data_type: DataType::Integer,
         nullable: false,
+        char_varchar: None,
     };
     let catalog =
         MemoryCatalog::new("spark_catalog").with_table(&["default"], "one", vec![one], None);
