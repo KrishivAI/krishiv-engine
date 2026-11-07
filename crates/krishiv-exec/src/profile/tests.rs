@@ -538,6 +538,12 @@ fn the_mean_reads_in_flight_is_reported() {
         text.contains("scan reads: 2.5 in flight on average"),
         "{text}"
     );
+    // Masked text hides the run-dependent mean.
+    let masked = p.to_text(TextOptions::masked());
+    assert!(
+        masked.contains("scan reads: <n> in flight on average"),
+        "{masked}"
+    );
     // Absent in a document written before the field existed: it still reads.
     let mut old = doc;
     old["query"]

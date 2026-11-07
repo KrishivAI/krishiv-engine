@@ -318,11 +318,9 @@ fn versions_are_checked_on_every_read() {
 
 #[test]
 fn fetch_runs_on_the_io_runtime_and_aborts_when_dropped() {
-    let io_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .unwrap();
+    // One paused runtime for the read and the caller: the durations are virtual,
+    // so a loaded host cannot stretch them.
+    let io_rt = rt();
     let inner = Arc::new(InMemory::new());
     let fault = FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
     let sched = IoScheduler::with_runtime(IoConfig::default(), io_rt.handle().clone());
@@ -361,11 +359,7 @@ fn fetch_timed_measures_the_read_not_the_wait_to_use_it() {
     let id = StoreId::new("memory://t");
     sched.register_store(id.clone(), Arc::clone(&fault) as Arc<dyn ObjectStore>);
     let io = sched.context();
-    let caller = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    caller.block_on(async {
+    io_rt.block_on(async {
         let path = Path::from("x");
         inner.put(&path, vec![7_u8; 64].into()).await.unwrap();
         let f = FileRef::from_meta(id, &inner.head(&path).await.unwrap());

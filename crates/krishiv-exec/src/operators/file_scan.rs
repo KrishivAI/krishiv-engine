@@ -455,7 +455,7 @@ pub struct FileScanSource {
     /// columns (the decoded batch is `mapped`).
     layout: Vec<Slot>,
     runtime: super::RuntimeFilters,
-    metrics: Mutex<FileScanMetrics>,
+    metrics: Arc<Mutex<FileScanMetrics>>,
     /// Whether the row id ends the output.
     row_id: bool,
 }
@@ -482,6 +482,13 @@ struct FileScanGlobal {
     partition_filters: Vec<(usize, ScanFilter)>,
     /// Rows returned by every driver (for a limit hint).
     returned: AtomicU64,
+}
+
+/// Adds what a finished (or abandoned) split cost to the scan's totals.
+fn record_split(metrics: &Mutex<FileScanMetrics>, current: &Current) {
+    let mut metrics = metrics.lock().unwrap_or_else(PoisonError::into_inner);
+    metrics.add(&current.stream.metrics(), current.stream.overcommitted());
+    metrics.add_reads(&current.stream.read_stats());
 }
 
 /// The piece being read.
@@ -516,6 +523,17 @@ struct FileScanLocal {
     /// again.
     row_filter: Option<(usize, bool)>,
     rows: super::RowStage,
+    /// The scan's totals, to record a split this driver abandons (a limit above
+    /// stopped it before the split's end): its reads were made and paid for.
+    totals: Arc<Mutex<FileScanMetrics>>,
+}
+
+impl Drop for FileScanLocal {
+    fn drop(&mut self) {
+        if let Some(current) = self.current.take() {
+            record_split(&self.totals, &current);
+        }
+    }
 }
 
 /// Rejects pushdowns the format cannot honour (`build` and
@@ -779,7 +797,7 @@ impl FileScanSource {
             layout,
             mapped,
             runtime: p.dynamic,
-            metrics: Mutex::new(FileScanMetrics::default()),
+            metrics: Arc::new(Mutex::new(FileScanMetrics::default())),
             row_id: p.row_id,
         })
     }
@@ -809,9 +827,7 @@ impl FileScanSource {
     }
 
     fn end_split(&self, current: &Current) {
-        let mut metrics = self.metrics.lock().unwrap_or_else(PoisonError::into_inner);
-        metrics.add(&current.stream.metrics(), current.stream.overcommitted());
-        metrics.add_reads(&current.stream.read_stats());
+        record_split(&self.metrics, current);
     }
 
     /// The morsels the drivers of `ctx`'s executor claim: whole splits
@@ -1480,6 +1496,7 @@ impl Source for FileScanSource {
             claimed: 0,
             row_filter: None,
             position: None,
+            totals: Arc::clone(&self.metrics),
         }))
     }
 

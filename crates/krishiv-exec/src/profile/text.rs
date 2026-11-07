@@ -85,7 +85,12 @@ impl QueryProfile {
             );
         }
         if let Some(mean) = m.scan_reads_in_flight_mean() {
-            let _ = writeln!(out, "scan reads: {mean:.1} in flight on average");
+            let mean = if opts.mask_volatile {
+                "<n>".to_owned()
+            } else {
+                format!("{mean:.1}")
+            };
+            let _ = writeln!(out, "scan reads: {mean} in flight on average");
         }
         if !self.detailed {
             out.push_str("(probe lengths not collected)\n");

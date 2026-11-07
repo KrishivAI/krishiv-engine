@@ -351,6 +351,33 @@ fn a_file_scan_reports_its_read_costs() {
     );
 }
 
+/// A limit that stops the scan before a split ends still reports the reads that
+/// split made: they were paid for.
+#[test]
+fn a_scan_a_limit_stops_early_still_reports_its_reads() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/tpch/q1-lineitem.parquet"
+    );
+    let s = session(2);
+    block_on(
+        s.read()
+            .parquet([path])
+            .create_or_replace_temp_view("lineitem"),
+    )
+    .unwrap();
+    let df = block_on(s.sql("SELECT l_quantity FROM lineitem LIMIT 1")).unwrap();
+    let (got, profile) = block_on(df.collect_with_profile()).unwrap();
+    assert_eq!(rows(&got), 1);
+    let reads: u64 = profile
+        .metrics
+        .operators
+        .values()
+        .filter_map(|e| e.extra("scan_reads").and_then(Metric::value))
+        .sum();
+    assert!(reads > 0, "the abandoned split's reads are reported");
+}
+
 #[test]
 fn row_layout_joins_report_their_index() {
     let s = session(2);
