@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "nested-interval-types": [
+      0
+    ]
+  },
+  "file": "extract-value-nulltype-single-pass",
+  "format_version": 1
+}

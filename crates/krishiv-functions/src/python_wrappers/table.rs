@@ -638,6 +638,7 @@ pub(super) fn rows() -> Vec<Row> {
             "length: int | Column, seed: int | Column = None",
         ),
         Row::new("typeof", "col: ColumnOrName"),
+        Row::new("collation", "col: ColumnOrName"),
         Row::new(
             "uniform",
             "min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column = None",

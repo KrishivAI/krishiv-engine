@@ -618,3 +618,18 @@ fn mask_classifies_like_spark_beyond_ascii() {
     .unwrap();
     assert_eq!(rows(&out), [Some("l\u{1F600}".to_owned())]);
 }
+
+#[test]
+fn mask_counts_the_last_bmp_scalar_as_one_utf16_unit() {
+    use krishiv_kernels::string::mask;
+    // U+FFFF is the last single-unit scalar (Java `char`); U+10000 is the first pair.
+    let out = mask(
+        S::Array(&strs(&[Some("\u{FFFF}"), Some("\u{10000}")])),
+        S::Scalar(Some("U")),
+        S::Scalar(Some("l")),
+        S::Scalar(Some("d")),
+        S::Scalar(Some("o")),
+    )
+    .unwrap();
+    assert_eq!(rows(&out), [Some("o".to_owned()), Some("oo".to_owned())]);
+}

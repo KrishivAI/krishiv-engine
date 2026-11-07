@@ -1,0 +1,20 @@
+{
+  "cases": {
+    "files": [
+      2,
+      7,
+      12,
+      17
+    ],
+    "s43-other": [
+      9,
+      22
+    ],
+    "sql-commands": [
+      6,
+      10
+    ]
+  },
+  "file": "sql-on-files",
+  "format_version": 1
+}

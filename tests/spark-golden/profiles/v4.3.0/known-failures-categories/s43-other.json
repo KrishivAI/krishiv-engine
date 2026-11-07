@@ -1,0 +1,8 @@
+{
+  "category": "s43-other",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [],
+  "summary": "failures on the Spark 4.3 goldens nobody has sorted yet; cases are listed here by hand (no rule, so a routine update cannot file a new failure here)",
+  "task": "P3-T090"
+}
