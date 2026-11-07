@@ -28,7 +28,6 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock, Weak};
 
-use arrow_array::RecordBatch;
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_memory::{
@@ -50,6 +49,7 @@ use crate::sync::{Event, Mutex, lock};
 
 mod disk;
 mod parallel;
+mod parts;
 
 /// Groups per state batch when spilling and merging (one finalize step).
 const CHUNK: usize = 1024;
@@ -104,6 +104,9 @@ struct Counters {
     disk_tasks: AtomicU64,
     /// Most disk tasks running at once.
     disk_peak: AtomicU64,
+    /// Most threads that wrote one run's partition files at once
+    /// (`sink/parts.rs`). Reported as `spill_writers` when above 1.
+    spill_writers: AtomicU64,
     /// Times a disk task was refused memory while others ran (it waited);
     /// a task refused several times counts each time, so this counts
     /// stalls, not tasks (review m5). Reported as `disk_stalls`.
@@ -426,7 +429,7 @@ impl Spiller {
         let parts = table.ids_by_partition(level, from);
         let chunk = spill_chunk(table.memory_size(), table.len());
         self.write_parts(
-            parts,
+            &parts,
             chunk,
             table,
             &|ids| table.state_batch(ids),
@@ -472,35 +475,6 @@ impl Spiller {
         }
         bump(&self.counters.spill_runs, 1);
         Ok(Run::new(files, u32::MAX))
-    }
-
-    /// Writes the state batches of the groups of each partition (`parts`,
-    /// in chunks of `chunk`, of one radix partition each for a row table)
-    /// as one run.
-    fn write_parts(
-        &self,
-        parts: Vec<Vec<u32>>,
-        chunk: usize,
-        table: &Table,
-        state: &dyn Fn(&[u32]) -> Result<RecordBatch>,
-        partition: u32,
-    ) -> Result<Run> {
-        let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
-        for (p, ids) in parts.into_iter().enumerate() {
-            if ids.is_empty() {
-                continue;
-            }
-            let mut writer = self.run_writer()?;
-            for chunk in chunks(&ids, chunk, table) {
-                self.query.check_cancelled()?;
-                writer
-                    .write(&Batch::new(state(chunk)?))
-                    .map_err(KrishivError::from)?;
-            }
-            files[p] = Some(self.finish(writer)?);
-        }
-        bump(&self.counters.spill_runs, 1);
-        Ok(Run::new(files, partition))
     }
 
     /// Writes `chunks` of an in-memory result to one output file
@@ -1492,6 +1466,13 @@ impl Sink for HashAggregate {
             out.push((
                 std::borrow::Cow::Borrowed("table_layout"),
                 crate::metrics::Metric::Text("rows".to_owned()),
+            ));
+        }
+        let writers = c.spill_writers.load(AtomicOrdering::Relaxed);
+        if writers > 1 {
+            out.push((
+                std::borrow::Cow::Borrowed("spill_writers"),
+                crate::metrics::Metric::Max(writers),
             ));
         }
         let disk_tasks = c.disk_tasks.load(AtomicOrdering::Relaxed);

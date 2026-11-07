@@ -987,6 +987,17 @@ async fn spill_global_during_finalize() {
         }
         assert!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap() > 0);
         assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
+        // With room in the pool, the run's partition files were written by
+        // several threads (`sink/parts.rs`); the result below is unchanged.
+        if std::thread::available_parallelism().map_or(1, std::num::NonZero::get) > 1 {
+            let writers = Sink::extra_metrics(&*agg)
+                .into_iter()
+                .find_map(|(k, v)| (k == "spill_writers").then_some(v));
+            assert!(
+                matches!(writers, Some(crate::metrics::Metric::Max(n)) if n > 1),
+                "{writers:?}"
+            );
+        }
         agg.finalize(&g, &sink_ctx).await.unwrap();
         assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
         let src = ctx(1, "src").with_dependency(Arc::clone(&g));
