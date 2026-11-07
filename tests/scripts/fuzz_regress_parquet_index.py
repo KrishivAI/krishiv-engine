@@ -7,7 +7,8 @@
 
 - `hand-column-index-count-2p31`: a column index whose `null_pages` list declares 2^31 entries;
 - `hand-offset-index-outside-chunk`: an offset index whose page location points far outside the column chunk;
-- `hand-offset-index-rows-decreasing`: an offset index whose `first_row_index` goes down;
+- `hand-offset-index-rows-not-increasing`: an offset index whose `first_row_index` does not go up (0, then 0:
+  the first page must start at row 0, or that check rejects it before the order is looked at);
 - `hand-bloom-bytes-2p31`: a Bloom filter header declaring a bitset of 2^31 - 1 bytes (`numBytes` is an i32).
 
 Each starts from one pyarrow file (page index on, a Bloom filter on column `a`) and replaces one structure in
@@ -214,7 +215,8 @@ def inputs(data: bytes) -> dict[str, bytes]:
 
     out["hand-offset-index-outside-chunk"] = patch(data, oi_off, oi_len, offset_index([page_location(1 << 40, 100, 0)]))
 
-    # Two pages inside the chunk's data, rows going down.
+    # Two pages inside the chunk's data, both starting at row 0: past the "first page starts at row 0" check,
+    # caught by the "first row indexes are not increasing" one (`index_guard.rs`).
     r = Reader(data, oi_off)
     first: list[int] = []
 
@@ -227,8 +229,8 @@ def inputs(data: bytes) -> dict[str, bytes]:
             r.skip(t)
 
     r.struct(locs)
-    out["hand-offset-index-rows-decreasing"] = patch(
-        data, oi_off, oi_len, offset_index([page_location(first[0], 64, 100), page_location(first[1], 64, 50)])
+    out["hand-offset-index-rows-not-increasing"] = patch(
+        data, oi_off, oi_len, offset_index([page_location(first[0], 64, 0), page_location(first[1], 64, 0)])
     )
 
     out["hand-bloom-bytes-2p31"] = bloom_patch(data)
