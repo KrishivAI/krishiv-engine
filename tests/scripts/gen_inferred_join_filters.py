@@ -521,6 +521,8 @@ def main() -> None:
                 merged["tpch_nonnull"].update(part["tpch_nonnull"])
                 merged["negative"].update(part["negative"])
                 merged["golden_join_files"].extend(part["golden_join_files"])
+        if merged is None:
+            raise SystemExit("--merge needs at least one fixture")
         merged["golden_join_files"].sort(
             key=lambda g: [Path(f).name for f in GOLDEN_FILES].index(g["file"].rsplit("/", 1)[1])
         )
