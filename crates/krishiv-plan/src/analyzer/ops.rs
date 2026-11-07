@@ -776,10 +776,16 @@ impl Resolver<'_> {
     /// With `bare` false (an item written `IDENTIFIER(..)`), a variable or a field of a dotted
     /// path is named by its full shown form (`variablereference(..)`, `c1.c2`).
     fn named(&mut self, b: Bound, bare: bool) -> Result<Bound, AnalysisError> {
-        if let ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::Alias { .. }) =
-            &b.expr.node
-        {
-            return Ok(b);
+        // A column names itself, unless it stands for a call written in its
+        // place (a SQL function whose body is its parameter, `f(c1)`).
+        let written_call = b
+            .shown
+            .as_ref()
+            .is_some_and(|s| matches!(s.node, ExprNode::Function(_)));
+        match &b.expr.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { .. }) => return Ok(b),
+            ExprNode::Resolved(ResolvedExpr::Column(_)) if !written_call => return Ok(b),
+            _ => {}
         }
         let shown = b.shown();
         let bare = super::exprs::bare_name(&shown).filter(|_| bare);
