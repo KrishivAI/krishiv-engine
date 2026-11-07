@@ -296,6 +296,22 @@ def error_class(e):
     return type(e).__name__
 
 
+def row_errors(spark, expr):
+    """The error class each row raises on its own, for an expression that errors.
+
+    With errors on several rows Spark reports whichever row its plan reaches first: over the
+    VALUES table it evaluates each projection over every row while optimizing, over a scan the
+    first task to fail wins and that varies between runs. The replay accepts any of these.
+    """
+    classes = set()
+    for row in range(12):
+        try:
+            spark.sql(f"SELECT {expr} AS c0 FROM t WHERE id = {row}").collect()
+        except Exception as e:
+            classes.add(error_class(e))
+    return sorted(classes)
+
+
 def run_batch(spark, hive, exprs):
     """{sql: (schema, rows) or ("error", class)} for the expressions, bisecting on failure."""
     out = {}
@@ -316,6 +332,9 @@ def run_batch(spark, hive, exprs):
     except Exception as e:
         if len(exprs) == 1:
             out[exprs[0]] = {"error": error_class(e)}
+            # An analysis error is the same for every row; only runtime errors differ by row.
+            if type(e).__name__ != "AnalysisException":
+                out[exprs[0]]["rowErrors"] = row_errors(spark, exprs[0])
             return out
     mid = len(exprs) // 2
     out.update(run_batch(spark, hive, exprs[:mid]))

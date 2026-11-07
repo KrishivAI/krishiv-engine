@@ -224,7 +224,7 @@ impl ExchangeReader for Remote {
                     Ok(ExchangeFrame::End)
                 }
                 Reply::Failed(message) => Err(internal(format!("{}: {message}", self.host))),
-                Reply::Done => Err(internal(format!("{}: a fetch answered Done", self.host))),
+                Reply::Done(_) => Err(internal(format!("{}: a fetch answered Done", self.host))),
             }
         })
     }
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn a_fetch_answered_done_is_refused() {
-        let message = fetch_error(|| Reply::Done);
+        let message = fetch_error(|| Reply::Done(Vec::new()));
         assert!(message.contains("a fetch answered Done"), "{message}");
     }
 }

@@ -275,6 +275,56 @@ lists flags, a join table, a scan table, the operators with the most time and bo
 Operator seconds are summed over threads in both engines; the Krishiv run has detailed metrics on, so use `abba` for
 timings. DuckDB's estimated cardinalities appear in its tree; Krishiv's profile has no per-operator estimates yet.
 
+## Time by operator kind against DuckDB (`gapdiff`)
+
+```bash
+uv run krishiv-bench gapdiff --suite tpch --sf 100 --query q18 --threads 12 --memory-limit 24g
+uv run krishiv-bench gapdiff --suite tpch --sf 100 --all --perf --runner /path/to/krishiv-bench-runner
+```
+
+Profiles the query on each engine (as `explain-diff` does: the runner's `PLAN` command and DuckDB's
+`EXPLAIN (ANALYZE, FORMAT json)`, same Parquet files, under the bench lock; one unprofiled `--warmup` run of each first,
+so neither reads a cache the other warmed) and maps both operator lists to common kinds: scan / decode, filter,
+project, join, aggregate, sort / top-n, exchange and other. The mapping table is in the module docstring
+(`gapdiff.py`); the operators that fell into `other` are listed by name. Krishiv also shows join build vs probe and
+partial vs final aggregate (a `HashAggregate` is partial when its plan node is named `Partial...`); those sub-rows have
+no DuckDB side.
+
+**What the seconds are.** Neither engine's operator time is CPU: Krishiv's `compute_time_ns` and DuckDB's operator
+timing are both wall time per thread summed over threads, and inflate under load. So each engine's *process CPU* is
+measured around the profiled run (the runner's `/proc` CPU, and the harness's for DuckDB), and the **CPU s** columns
+scale each kind's share of the operator seconds to it; the ratio, the gap (the kind with the largest one is marked)
+and the summary use those. The report prints the remainder as *not attributed to any operator*: work outside any
+operator call (DuckDB's sort merge and finalize events, Krishiv's output-spill tasks and prefetch). Scaling spreads it
+over the kinds by their operator seconds, which can put it on the wrong kind (most likely `sort`). Without a process
+CPU reading for both engines the report falls back to operator seconds and says so. Each query prints the load average
+at its start and end and is marked **INDICATIVE** above the harness bound (`abba.load_bound`). Krishiv's scan seconds
+exclude IO wait (printed beside the row); DuckDB's include it.
+
+**Rows.** Krishiv's rows in count the operators that consume and its rows out the ones that produce (not both halves
+of a breaker), summed over operators; DuckDB's are per node.
+
+**Parallelism.** Per Krishiv pipeline: drivers, threads, summed operator seconds, the busiest driver's bound (the sum of
+each operator's own busiest driver, an upper bound), its share, wall time, busiest / wall and parallel efficiency
+(seconds over drivers x wall). A pipeline with at least `--min-cpu-share` (default 0.02) of the query's operator seconds
+is flagged `serial` (one driver), `busy` (over 2 drivers and the busiest driver over `--busy-share`, default 0.5; with
+2 drivers the share is at least 0.5 by construction) or `skew` (the busiest driver fills the wall time while
+efficiency is under 50%: a serial merge inside a heavy parallel pipeline). A second table lists operators that ran on
+one driver inside a multi-driver pipeline, or whose busiest driver did twice its fair share.
+
+`--all` runs every query of the suite (a failing query is recorded and the run goes on) and writes a summary table with
+the geometric mean of the ratios. Output goes to `$KRISHIV_DATA/results/gapdiff/<ts>_<suite>_sf<N>/`: `summary.md`,
+`gapdiff.json`, one `<query>.md` per query. `--perf` also samples the Krishiv run under `perf record -g` once the
+profiling engines are shut down (build the runner with frame pointers, see `ledger`) and writes `perf/<query>.folded`
+(and `.svg` with `inferno-flamegraph`). Folded files of two runner builds go into `inferno-diff-folded`; `flamediff`
+runs both builds itself. The seconds are profile numbers, not benchmark timings: use `abba` for those.
+
+Not here yet: hardware counters per kind (`perf stat` events, IPC, instructions per input row) and the module split per
+kind from perf's leaf frames. Checks to run on the perf box before relying on the tool: the per-kind sums equal each
+profile's summed `compute_time_ns` and DuckDB's `query.cpu_time`; both against `perf stat -e task-clock` of the same
+run, at low and at the usual load; q13, q16 and q18 are flagged and q01 and q06 are not; every operator name in the 22
+profiles maps to a kind other than `other` (the report lists the ones that do not).
+
 ## Build vs build, interleaved ABBA (`ab`)
 Compares two Krishiv builds (for example `main` against a PR branch), or two configs of one build, with the `abba` protocol.
 `--runner PATH` (on `run`, `abba`, `reproduce`) picks the runner binary and wins over `$KRISHIV_BENCH_RUNNER`.
@@ -502,6 +552,14 @@ included (no root needed; only clean pages are dropped), and records `"cold": {"
 **Cold results are not comparable with warm ones**; SF10 and SF100 warm runs come from the page cache and hide
 I/O-bound gaps that show at SF1000. `reproduce` (the `ours` method) and `abba` take `--cold` too and evict before every
 timed run; `ab` and the `theirs` method of `reproduce` do not.
+
+**Memory guard (`krishiv-bench run`).** Before every run, warm-up included, the harness waits until `MemAvailable` in
+`/proc/meminfo` is at least `--min-mem-avail` of `MemTotal` (default 0.75; 0 turns it off; it gives up after 10
+minutes and fails the query). A sampler tracks the lowest `MemAvailable` during the run; if it dips below the
+threshold (a host balloon took the memory) the run is discarded, recorded under the query's `invalid_samples` with
+`"reason": "memory reclaimed"`, and retried up to `--mem-retries` times (default 2). If every attempt dips, the
+query fails. `report` lists the invalid runs in an "Invalid samples" section. The h2o suites, `ab`, `abba` and
+`reproduce` do not use the guard yet.
 
 `krishiv-bench report --suite tpch --ladder [result.json ...]` takes results at two or more scale factors (newest per
 scale factor and engine) and flags each query whose engine / `duckdb` ratio grows by more than 1.5x between

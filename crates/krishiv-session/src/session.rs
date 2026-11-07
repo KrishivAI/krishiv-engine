@@ -15,9 +15,10 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED, PARTITION_OVERWRITE_MODE};
 use krishiv_common::error::{
-    AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ErrorQueryContext, InternalError,
-    KrishivError, KrishivUnsupportedFeature, PartitionColumnNotFoundInSchema,
+    AllPartitionColumnsNotAllowed, ErrorQueryContext, InternalError, KrishivError,
+    KrishivUnsupportedFeature, PartitionColumnNotFoundInSchema,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::files::{FileReads, LocalPaths, ObjectPaths, PathLocator as _};
@@ -529,17 +530,15 @@ impl Session {
         env.row = row;
         let query = self.substituted(query);
         let query: &str = &query;
-        // `IDENTIFIER(expr)` names are evaluated first, so the statement is parsed, authorized and
-        // run with the names they stand for.
-        let resolved = self.resolve_identifier_clauses(query, &env.parser).await?;
+        // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
+        let resolved = self.identifier_clauses_into(query, &mut env).await?;
         let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
         let query: &str = &resolved;
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        // Spark refuses a database on a temporary function named by an
-        // `IDENTIFIER(...)` clause when it drops it; the parser sees only the
-        // evaluated name.
+        // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
+        // clause when it drops it; the parser sees only the evaluated name.
         if named_by_clause
             && let Statement::DropFunction(f) = &statement
             && f.temporary
@@ -567,11 +566,10 @@ impl Session {
         query: &str,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
+        crate::collation_defaults::refuse_unhonoured(&statement)?;
         match statement {
             Statement::Query(q) => {
-                let plan =
-                    krishiv_sql::lower_with(&q, SourceId(0), self.parser_options().case_sensitive)
-                        .map_err(|e| sql_context(e.error, redacted, e.span.start, e.span.end))?;
+                let plan = self.lower_identified(&q, &env, redacted)?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
@@ -826,7 +824,7 @@ impl Session {
             .map(|f| {
                 Ok(TableColumn {
                     name: f.name().clone(),
-                    data_type: DataType::from_arrow_field(f)?.refuse_collations()?,
+                    data_type: DataType::from_arrow_field(f)?,
                     nullable: f.is_nullable(),
                 })
             })
@@ -900,31 +898,31 @@ impl Session {
     /// ```
     ///
     /// # Errors
-    /// `FAILED_EXECUTE_UDF` when the UDF's `name` panics, is empty, or
-    /// contains a `.` or a backtick, since such a UDF can never be called
-    /// by name (the function name is `unknown` when there is none).
+    /// `FAILED_EXECUTE_UDF` (naming `unknown` if there is no name) when the
+    /// UDF's `name` panics, is empty, or holds a `.` or a backtick.
     pub fn register_udf(
         &self,
         udf: impl krishiv_udf_sdk::ScalarUdf,
     ) -> Result<(), krishiv_common::error::KrishivError> {
         let udf: Arc<dyn krishiv_udf_sdk::ScalarUdf> = Arc::new(udf);
-        if let Err(e) = self.state.udfs.register(Arc::clone(&udf)) {
-            let name = guard_call("unknown", "name", || udf.name().to_owned())
-                .map(|name| name.to_lowercase())
-                .unwrap_or_else(|_| "unknown".to_owned());
-            let name = if name.is_empty() {
-                "unknown".to_owned()
-            } else {
-                name
-            };
-            return Err(krishiv_functions::scalar::failed_execute(
-                &name,
-                "unknown",
-                "unknown",
-                e.message(),
-            ));
-        }
-        Ok(())
+        let named = || guard_call("unknown", "name", || udf.name().to_owned());
+        let done = self.state.udfs.register(Arc::clone(&udf));
+        done.map_err(|e| crate::udfs::registration_error(named(), &e))
+    }
+
+    /// Registers a native Rust aggregate UDF (ADR 0045), replacing any UDF
+    /// of its name, scalar or aggregate; otherwise as [`register_udf`](Self::register_udf).
+    ///
+    /// # Errors
+    /// As [`register_udf`](Self::register_udf).
+    pub fn register_udaf(
+        &self,
+        udaf: impl krishiv_udf_sdk::AggregateUdf,
+    ) -> Result<(), krishiv_common::error::KrishivError> {
+        let udaf: Arc<dyn krishiv_udf_sdk::AggregateUdf> = Arc::new(udaf);
+        let named = || guard_call("unknown", "name", || udaf.name().to_owned());
+        let done = self.state.udfs.register_aggregate(Arc::clone(&udaf));
+        done.map_err(|e| crate::udfs::registration_error(named(), &e))
     }
 
     /// The temporary tables and views, by name as registered.
@@ -1211,6 +1209,7 @@ impl Session {
             text: None,
             statement_class: None,
             row: Arc::default(),
+            identifier_spans: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1807,6 +1806,7 @@ impl Session {
         target: WriteTarget,
         types: &[DataType],
         pre: &mut Option<Admitted>,
+        dry: bool,
     ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
             format,
@@ -1854,6 +1854,10 @@ impl Session {
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
+        // Checked only (`dry`): nothing is admitted or replaced.
+        if dry {
+            return Ok(Vec::new());
+        }
         // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
         // an overwrite replaces, which a refused or cancelled query must not have done.
         // Admitted by the caller already (it changed something before this write), else here.
@@ -2268,9 +2272,10 @@ fn committed_files(
 }
 
 /// The `partitionBy` columns as `(index, name)` pairs in `partitionBy`
-/// order, deduplicated.
+/// order.
 ///
 /// # Errors
+/// `COLUMN_ALREADY_EXISTS` for a repeated name (checked first);
 /// `PARTITION_COLUMN_NOT_FOUND_IN_SCHEMA` for a name the schema has no
 /// column for.
 fn resolve_partitions(
@@ -2278,6 +2283,10 @@ fn resolve_partitions(
     partition_by: &[String],
     case_sensitive: bool,
 ) -> Result<Vec<(usize, String)>, KrishivError> {
+    // Spark rejects a repeated partition column before it looks any up
+    // (`PartitioningUtils.validatePartitionColumn`); distinct names then
+    // match distinct columns.
+    check_column_name_duplication(partition_by.iter().map(String::as_str), case_sensitive)?;
     let mut out = Vec::new();
     for name in partition_by {
         let mut matches = schema.fields().iter().enumerate().filter(|(_, f)| {
@@ -2298,14 +2307,6 @@ fn resolve_partitions(
             return Err(internal(format!(
                 "partition column `{name}` matches several columns"
             )));
-        }
-        // Spark rejects a repeated partition column
-        // (`checkColumnNameDuplication`).
-        if out.iter().any(|(i, _)| *i == index) {
-            return Err(ColumnAlreadyExists {
-                column_name: format!("`{}`", field.name().replace('`', "``")),
-            }
-            .into());
         }
         // Checked here so that nothing is started for a column type that
         // has no partition path text.
@@ -2406,24 +2407,12 @@ impl SpillScopes for QuerySpill {
 }
 
 /// Spark's `COLUMN_ALREADY_EXISTS` for a written schema with a repeated
-/// name (ignoring case unless `case_sensitive`, then named in lower case,
-/// as Spark 4.2 reports it).
+/// name (`check_column_name_duplication`).
 fn unique_columns(schema: &SchemaRef, case_sensitive: bool) -> Result<(), KrishivError> {
-    let mut seen = std::collections::HashSet::new();
-    for f in schema.fields() {
-        let name = if case_sensitive {
-            f.name().clone()
-        } else {
-            f.name().to_lowercase()
-        };
-        if !seen.insert(name.clone()) {
-            return Err(ColumnAlreadyExists {
-                column_name: format!("`{}`", name.replace('`', "``")),
-            }
-            .into());
-        }
-    }
-    Ok(())
+    check_column_name_duplication(
+        schema.fields().iter().map(|f| f.name().as_str()),
+        case_sensitive,
+    )
 }
 
 /// Where and how `df.write` writes.
@@ -2595,6 +2584,8 @@ pub(crate) struct QueryEnv {
     /// when a step after its run fails. Statement-local, so another statement of the same
     /// session cannot set or clear it.
     pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
+    /// The spans of the names substituted for `IDENTIFIER(..)` clauses (`lower_identified`).
+    pub(crate) identifier_spans: Arc<[krishiv_sql::ast::Span]>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

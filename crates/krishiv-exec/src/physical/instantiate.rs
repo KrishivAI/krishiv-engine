@@ -43,7 +43,8 @@ use arrow_schema::{Field, Schema, SchemaRef};
 use krishiv_common::config::Config;
 use krishiv_common::error::KrishivUnsupportedFeature;
 use krishiv_io::{
-    FormatRegistry, IoContext, StoreId, WriteOptions, effective_job_uuid, is_spark_file_source,
+    ColumnPath, FilterId, FilterSnapshot, FormatRegistry, IoContext, KeyFilter, StoreId,
+    WriteOptions, effective_job_uuid, is_spark_file_source,
 };
 use krishiv_memory::SpillScope;
 use krishiv_plan::{AttrId, Expr};
@@ -62,8 +63,9 @@ use crate::aggregate::{
 use crate::error::{Result, internal};
 use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
 use crate::join::{
-    HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, NestedLoopJoin, NestedLoopJoinNode,
-    NestedLoopSpec, SortMergeJoin, SortMergeJoinNode,
+    BroadcastKey, BroadcastTables, BuildJob, HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec,
+    NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec, PrebuiltSink, SharedBuildJoinNode,
+    SortMergeJoin, SortMergeJoinNode,
 };
 use crate::loops::UnionLoopSource;
 use crate::operator::{Operator, Sink, Source};
@@ -82,6 +84,8 @@ use crate::values::{
     BroadcastBuild, LocalValues, Partial, Producer, Publication, Value, ValueService,
 };
 use crate::window::{GroupLimitPlan, WindowGroupLimit};
+
+mod distributed;
 
 /// Creates the spill scope of one instantiation: the query's own spill
 /// directory on this worker, removed when the scope's last holder (the
@@ -116,6 +120,8 @@ pub struct WorkerContext {
     producer: Producer,
     /// Where exchanges between stages are written and read.
     exchange: Option<Arc<dyn Exchange>>,
+    /// The job's broadcast builds on this worker, shared by its tasks.
+    broadcasts: Option<Arc<BroadcastTables>>,
     /// Whether a partial and a final aggregate around an exchange run as one
     /// breaker (the default; see [`fused_aggregate`]).
     fuse_aggregates: bool,
@@ -150,6 +156,14 @@ pub struct TaskSpec {
     /// task is a map task of that exchange; `None` lowers a root exchange
     /// as on one worker.
     pub output: Option<u32>,
+    /// The runtime filters earlier stages computed for the fragment's
+    /// scans, as `KeyFilter` v1 bytes (design P2-T177, cross-stage
+    /// filters). A scan's filter without an entry stays pending and
+    /// applies nothing. Each value is complete (merged from every task of
+    /// the stage that collected it) and is published as the sole producer
+    /// partition of the task's value service, so that service must count
+    /// one producer for it (the default).
+    pub filters: BTreeMap<FilterId, Vec<u8>>,
 }
 
 /// What one task reads from one exchange of another stage.
@@ -177,6 +191,7 @@ impl TaskSpec {
             scans: BTreeMap::new(),
             exchanges: BTreeMap::new(),
             output: None,
+            filters: BTreeMap::new(),
         }
     }
 }
@@ -196,6 +211,7 @@ impl WorkerContext {
             values: None,
             producer: Producer::default(),
             exchange: None,
+            broadcasts: None,
             fuse_aggregates: true,
         }
     }
@@ -284,6 +300,15 @@ impl WorkerContext {
         self
     }
 
+    /// The same context building each broadcast hash join's table once per
+    /// job on this worker, in `broadcasts`, and sharing it among the job's
+    /// tasks here (design P2-T177 unit 3; see [`BroadcastTables`]).
+    #[must_use]
+    pub fn with_broadcasts(mut self, broadcasts: Arc<BroadcastTables>) -> Self {
+        self.broadcasts = Some(broadcasts);
+        self
+    }
+
     /// The same context running a partial aggregate, its exchange and its
     /// final aggregate as written (`false`) instead of as one breaker: the
     /// operators a worker runs on each side of a cut exchange, for tests.
@@ -332,6 +357,7 @@ impl fmt::Debug for WorkerContext {
             .field("values", &self.values.is_some())
             .field("producer", &self.producer)
             .field("exchange", &self.exchange.is_some())
+            .field("broadcasts", &self.broadcasts.is_some())
             .field("fuse_aggregates", &self.fuse_aggregates)
             .finish_non_exhaustive()
     }
@@ -401,6 +427,7 @@ fn instantiate_with_schemas(
         for root in plan.roots() {
             cx.declare_filters(root)?;
         }
+        cx.take_filters()?;
         cx.build_shared()?;
         let built = match (task.output, plan.root()) {
             (Some(partitions), PhysNode::Exchange(e)) => cx.exchange_write(e, partitions)?,
@@ -1260,81 +1287,6 @@ impl Instantiation<'_> {
         }
     }
 
-    /// The exchange `e` written as this map task's output, over
-    /// `partitions` reduce partitions.
-    fn exchange_write(&mut self, e: &ExchangePlan, partitions: u32) -> Result<Built> {
-        let exchange = self.exchange()?;
-        let input = self.node(&e.input)?;
-        let sink = Arc::new(ExchangeSink::new(
-            exchange,
-            MapOutputId {
-                exchange: e.id,
-                stage_attempt: self.task.stage_attempt,
-                map: self.task.partition,
-                attempt: self.task.attempt,
-            },
-            e.partitioning.clone(),
-            partitions,
-            Arc::clone(&input.schema),
-        )?);
-        Ok(Built {
-            schema: input.schema,
-            node: Arc::new(ExchangeWrite {
-                input: input.node,
-                sink,
-            }),
-        })
-    }
-
-    /// The rows this task reads from the exchange `id` of another stage
-    /// (its [`TaskSpec::exchanges`] entry). A gather is read by one driver
-    /// in map order; a broadcast is published as this producer's partial,
-    /// as on one worker.
-    fn exchange_source(
-        &mut self,
-        id: super::ExchangeId,
-        partitioning: &Partitioning,
-        schema: &SchemaRef,
-    ) -> Result<Built> {
-        let exchange = self.exchange()?;
-        let input = self.task.exchanges.get(&id).ok_or_else(|| {
-            internal(format!(
-                "exchange {} is read by a task that names no input of it",
-                id.0
-            ))
-        })?;
-        let ordered = *partitioning == Partitioning::Single;
-        let source = Arc::new(ExchangeRead::new(
-            exchange,
-            id,
-            input.stage_attempt,
-            &input.reduce,
-            input.maps,
-            Arc::clone(schema),
-            ordered,
-        ));
-        let node: Arc<dyn ExecNode> = Arc::new(SourceNode(source));
-        let built = Built {
-            schema: Arc::clone(schema),
-            node: if ordered {
-                Arc::new(OrderedNode { inner: node })
-            } else {
-                node
-            },
-        };
-        if *partitioning == Partitioning::Broadcast {
-            return self.publish_broadcast(id, built);
-        }
-        Ok(built)
-    }
-
-    fn exchange(&self) -> Result<Arc<dyn Exchange>> {
-        self.worker
-            .exchange
-            .clone()
-            .ok_or_else(|| internal("a task with exchanges on a worker without one".to_owned()))
-    }
-
     fn scan(&self, s: &ScanNode) -> Result<Built> {
         let factory = self.worker.tables.provider(&s.scan)?.scan()?;
         let factory = self.splits(s.id, factory)?;
@@ -1544,9 +1496,6 @@ impl Instantiation<'_> {
         })
     }
 
-    /// The input of the broadcast exchange `id`, published as this
-    /// producer's partial of its value: on one worker the join over it
-    /// shares one build among its drivers.
     /// The aggregation `fused` over `below` as one breaker (see
     /// [`fused_aggregate`]): its sink side reports under the partial node
     /// `partial`, its source side under the final one.
@@ -1565,35 +1514,6 @@ impl Instantiation<'_> {
             agg: HashAggregate::fused(spec)?,
         });
         Ok(Built { node, schema })
-    }
-
-    fn broadcast(&mut self, id: super::ExchangeId, input: &PhysNode) -> Result<Built> {
-        let input = self.node(input)?;
-        self.schemas.insert(id, Arc::clone(&input.schema));
-        self.publish_broadcast(id, input)
-    }
-
-    /// `input` published as this producer's partial of the broadcast
-    /// exchange `id`.
-    fn publish_broadcast(&mut self, id: super::ExchangeId, input: Built) -> Result<Built> {
-        let value = ValueId::Broadcast(id);
-        let published = self.values.publish(Partial {
-            value,
-            version: Version::BATCH,
-            producer: self.worker.producer,
-            payload: Value::Broadcast(BroadcastBuild::new(&input.node)),
-        })?;
-        if published != Publication::Complete {
-            // In one process every producer partition is this one: another
-            // partial (`Waiting`) or a second exchange of this id
-            // (`Ignored`) cannot be lowered.
-            return Err(internal(format!(
-                "{value} is {published:?} in this instantiation"
-            )));
-        }
-        // The value names this input without owning it (see
-        // `BroadcastBuild`): the plan holds it.
-        Ok(input)
     }
 
     fn merge_join(&mut self, j: &SortMergeJoinPlan) -> Result<Built> {
@@ -1617,6 +1537,9 @@ impl Instantiation<'_> {
     }
 
     fn hash_join(&mut self, j: &HashJoinPlan) -> Result<Built> {
+        if let Some(shared) = self.shared_broadcast_join(j)? {
+            return Ok(shared);
+        }
         let probe = self.node(&j.probe)?;
         let build = self.node(&j.build)?;
         let join = hash_join(
@@ -1898,6 +1821,7 @@ pub(crate) fn aggregate_spec(
         spill,
         require_unit_weights: false,
         legacy_statistical: env.legacy_statistical_aggregate,
+        udafs: crate::aggregate::UdafEnv::of(env.udfs.as_ref(), env.zone),
     }
 }
 
@@ -2144,6 +2068,7 @@ mod tests {
             id: ExchangeId(0),
             input: Box::new(first),
             partitioning: Partitioning::Single,
+            filters: Vec::new(),
         });
         let merge = PhysNode::Aggregate {
             input: Box::new(moved),

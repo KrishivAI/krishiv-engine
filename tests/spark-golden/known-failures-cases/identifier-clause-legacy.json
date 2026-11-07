@@ -1,33 +1,12 @@
 {
   "cases": {
-    "depends-on-command": [
-      177
-    ],
-    "parser-tail": [
-      1
-    ],
-    "query-features": [
-      103,
-      186,
-      235
-    ],
     "sql-commands": [
       48,
-      61,
-      63,
       70,
       71,
       73,
       75,
-      76,
-      157,
-      161,
-      162,
-      175,
-      178,
-      189,
-      208,
-      209
+      76
     ]
   },
   "file": "identifier-clause-legacy",

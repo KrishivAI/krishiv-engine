@@ -9,7 +9,9 @@ use std::sync::Arc;
 use arrow_schema::{DataType as ArrowType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::JoinType;
-use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
+use krishiv_exec::aggregate::{
+    AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
+};
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
@@ -864,6 +866,17 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "generate_variant_explode",
+            PhysNode::Generate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                kind: krishiv_plan::GeneratorKind::VariantExplode,
+                outer: true,
+                arg: col(2, "v", DataType::Variant),
+                subqueries: Vec::new(),
+            },
+        ),
+        (
             "generate_posexplode_outer",
             PhysNode::Generate {
                 input: boxed(scan()),
@@ -1370,6 +1383,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     keys: vec![0, 1],
                     scheme: HashScheme::Unpinned,
                 },
+                filters: Vec::new(),
             }),
         ),
         (
@@ -1381,6 +1395,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     keys: vec![1, 0],
                     scheme: HashScheme::KeyGroupV1,
                 },
+                filters: Vec::new(),
             }),
         ),
         (
@@ -1389,6 +1404,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 id: ExchangeId(12),
                 input: boxed(scan()),
                 partitioning: Partitioning::Single,
+                filters: Vec::new(),
             }),
         ),
         (
@@ -1397,6 +1413,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 id: ExchangeId(13),
                 input: boxed(scan()),
                 partitioning: Partitioning::Broadcast,
+                filters: Vec::new(),
             }),
         ),
         (
@@ -1405,6 +1422,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 id: ExchangeId(14),
                 input: boxed(scan()),
                 partitioning: Partitioning::RoundRobin,
+                filters: Vec::new(),
             }),
         ),
         (
@@ -1415,6 +1433,25 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 partitioning: Partitioning::Range {
                     keys: vec![SortKey::asc(0), SortKey::desc(1)],
                 },
+                filters: Vec::new(),
+            }),
+        ),
+        (
+            "exchange_filters",
+            PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(18),
+                input: boxed(scan()),
+                partitioning: Partitioning::Single,
+                filters: vec![krishiv_exec::physical::ExchangeFilterPlan {
+                    id: krishiv_io::FilterId(3),
+                    column: 0,
+                    key_type: arrow_schema::DataType::Int64,
+                    options: krishiv_io::KeyFilterOptions {
+                        bloom_bytes: Some(4096),
+                        ..krishiv_io::KeyFilterOptions::default()
+                    },
+                    null_safe: true,
+                }],
             }),
         ),
         (
@@ -1595,6 +1632,48 @@ pub(crate) fn udf_call() -> PhysNode {
     }
 }
 
+/// A call of a session-registered native Rust aggregate UDF
+/// (`rust_udaf`): by name and version, with the argument and state
+/// columns the planner fixed, in a final aggregate and the merge of its
+/// states (a filtered raw call, then the same call over its states).
+pub(crate) fn udaf_call() -> PhysNode {
+    let call = UdafCall {
+        name: "my_udaf".to_owned(),
+        version: 3,
+        args: vec![Field::new("arg0", ArrowType::Int32, true)],
+        result: DataType::Integer,
+        nullable: false,
+        state: vec![Field::new("count", ArrowType::Int64, false)],
+    };
+    let raw = AggregateExpr {
+        function: AggregateFunction::Udf(Box::new(call)),
+        args: vec![1],
+        input: AggInput::Raw,
+        arg_type: ArrowType::Null,
+        name: "my_udaf(a)".to_owned(),
+        mask: Some(2),
+        element: None,
+    };
+    let merged = raw.merging(1);
+    PhysNode::Aggregate {
+        input: boxed(PhysNode::Aggregate {
+            input: boxed(scan()),
+            aggregate: AggregatePlan {
+                group_by: vec![0],
+                distinct: vec![false],
+                aggregates: vec![raw],
+                output: AggregateOutput::Partial,
+            },
+        }),
+        aggregate: AggregatePlan {
+            group_by: vec![0],
+            distinct: vec![false],
+            aggregates: vec![merged],
+            output: AggregateOutput::Final,
+        },
+    }
+}
+
 /// Lambda expressions and variables: a `transform` over an array column
 /// (`transform(xs, x -> x * 2)`). The array type needs `nested_types` too.
 pub(crate) fn lambda_functions() -> PhysNode {
@@ -1703,6 +1782,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("rust_udf".to_owned(), plan_of(udf_call())));
+    out.push(("rust_udaf".to_owned(), plan_of(udaf_call())));
     // The expression environment flag the `legacy_statistical_aggregate`
     // feature is about: the same root as `one_row`, under a session with
     // `spark.sql.legacy.statisticalAggregate` set. With no moment aggregate

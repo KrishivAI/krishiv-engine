@@ -19,7 +19,7 @@ immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) 
 `hash.rs` shared hash-table blocks (seeded key hash, key normalization + row encoding, `KeyTable`, spill
 partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
 `accumulator.rs` per-group states, `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
-`spill_global`; `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION ·
+`spill_global`; `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
 (P2-T117b) `file_scan.rs` FileScan/FileScanSource over any `krishiv_io::FileFormat` (Spark partitions cut into
 about four morsels per driver, footer read-ahead, `_metadata` struct column; filters stay `Inexact`) · `file_write.rs` FileWriteSink
 (one writer task per driver behind a bounded channel; nothing visible after a failed or cancelled write) + FileWrite.
@@ -28,7 +28,12 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 `join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
-`probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join.
+`probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join · `broadcast.rs`
+(P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
+broadcast exchange builds its table once per job and worker (its own query over the resource's pool, no spill, its
+reservations never abort a query) and every task probes it through a `PrebuiltSink` that republishes its runtime
+filters. A shared build that does not fit (`UNABLE_TO_ACQUIRE_MEMORY`) falls back to one spilling build per task
+(`SharedOrOwnRows` then reads the broadcast for the task; owner decision 2026-11-06).
 `join/merge.rs` sort-merge join (P2-T056): `SortMergeJoin` is the source over two `Sort`s in hash buckets of the keys
 (`Sort::bucket_reader`, `PipelineBuilder::set_merge_source`), `Merge` the merge of one bucket pair; a key's right rows
 are the group, spilled past `krishiv.exec.join.smj.bufferBytes`; `join/fallback.rs` runs a grace partition that will not
@@ -69,7 +74,8 @@ round. Limits (`LoopLimits`) are plan data. Seeded random functions draw round `
 nondeterministic enclosing CTE is evaluated once per round. `EXPLAIN ANALYZE` reports the rounds, their rows and the folded compute time and spill bytes of every round, a LIMIT-stopped one included (`add_run_metrics`).
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
-worker that runs it; the planner validates nodes with the same builders). `PhysicalPlan::shared` (P2-T198): subplans
+worker that runs it; the planner validates nodes with the same builders). `instantiate/distributed.rs`: what only a task of a cut plan
+uses (exchange write with its collected filters, exchange reads, `TaskSpec::filters`, broadcasts shared per worker). `PhysicalPlan::shared` (P2-T198): subplans
 read by `PhysNode::SharedRead`; a walk over a plan starts at `PhysicalPlan::roots`. `shared.rs` runs them: `SharedSink`
 ends the body's pipeline (built once through `PipelineBuilder::shared_pipeline`, so pipeline dependencies are a DAG),
 keeps the batches as segments (memory or spill file) under a consumer of its own whose `OutputSpill` hook writes every

@@ -51,7 +51,7 @@ use krishiv_common::error::{
 };
 
 use super::bind::unsupported;
-use super::exprs::{Bound, Cx, WindowUse, pretty, semantic_key};
+use super::exprs::{Bound, Cx, WindowUse, builtin_name, pretty, semantic_key};
 use super::ops::col_expr;
 use super::resolve::{Attr, Rel, Resolver};
 use super::{AnalysisError, ArgType, Constant};
@@ -227,7 +227,8 @@ impl RangeValue {
     fn above(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a > b,
-            (Self::Float(a), Self::Float(b)) => a > b,
+            // Spark orders NaN above every other value (and equal to itself).
+            (Self::Float(a), Self::Float(b)) => (a.is_nan() && !b.is_nan()) || a > b,
             (Self::Months(a, ..), Self::Months(b, ..)) => a > b,
             (Self::DayTime(a, ..), Self::DayTime(b, ..)) => a > b,
             _ => false,
@@ -266,6 +267,43 @@ impl RangeValue {
     }
 }
 
+fn is_numeric_key(key: &krishiv_types::DataType) -> bool {
+    use krishiv_types::DataType as T;
+    matches!(
+        key,
+        T::Byte | T::Short | T::Integer | T::Long | T::Float | T::Double
+    )
+}
+
+/// The `CAST_INVALID_INPUT` Spark raises for a `RANGE` bound that is `CAST('x' AS DOUBLE)` (the analyzer's cast
+/// under a `PRECEDING` negation) of a string with no digit at all (`'x'`, `''`), under ANSI. Anything else stays
+/// unsupported rather than guessed: Java's double parser also accepts `'1d'`, `'1f'` and hexadecimal floats, a cast
+/// to a decimal accepts text this parser does not read, and with ANSI off a malformed string is a NULL bound.
+fn malformed_string_bound(
+    x: &Arc<Expr>,
+    ansi: bool,
+) -> Option<krishiv_common::error::CastInvalidInput> {
+    use krishiv_types::DataType as T;
+    let inner = crate::expr::negated(x).unwrap_or(x);
+    let ExprNode::Cast { expr, to, .. } = &inner.node else {
+        return None;
+    };
+    let ExprNode::Literal(Literal::String(raw)) = &expr.node else {
+        return None;
+    };
+    let hopeless = ansi
+        && matches!(to, T::Double)
+        && !raw
+            .bytes()
+            .any(|b| b.is_ascii_digit() || matches!(b, b'\'' | b'\\'))
+        && parse_float_text(raw, false).is_none();
+    hopeless.then(|| krishiv_common::error::CastInvalidInput {
+        expression: format!("'{raw}'"),
+        source_type: "\"STRING\"".to_owned(),
+        target_type: "\"DOUBLE\"".to_owned(),
+    })
+}
+
 /// The value of the `RANGE` frame bound `x` (a literal, or the negation of
 /// one for `PRECEDING`) cast to the type of the ordering key; `None` for
 /// anything but a literal, or a value the key's type cannot hold.
@@ -288,8 +326,30 @@ fn range_value_signed(
     if let Some(inner) = crate::expr::negated(x) {
         return range_value_signed(inner, key, !negate);
     }
-    let ExprNode::Literal(l) = &x.node else {
-        return None;
+    // `CAST('inf' AS FLOAT)` (written, or the analyzer's implicit cast of a string bound) is the string read as that
+    // float type, for a float or double key.
+    let cast_text;
+    let l = match &x.node {
+        ExprNode::Literal(l) => l,
+        // The analyzer's `CAST('1' AS DOUBLE)` under the `PRECEDING` negation, or a cast of a string to the key's
+        // type: the string read as that type.
+        ExprNode::Cast { expr, to, .. } => {
+            let ExprNode::Literal(Literal::String(text)) = &expr.node else {
+                return None;
+            };
+            cast_text = match to {
+                T::Float if matches!(key, T::Float | T::Double) => {
+                    Literal::Float(parse_float_text(text, true)? as f32)
+                }
+                T::Double if is_numeric_key(key) => Literal::Double(parse_float_text(text, false)?),
+                t if t == key && matches!(key, T::Byte | T::Short | T::Integer | T::Long) => {
+                    Literal::Long(text.trim().parse::<i64>().ok()?)
+                }
+                _ => return None,
+            };
+            &cast_text
+        }
+        _ => return None,
     };
     // A day-time interval bound over a date (ending in DAY, so whole days) or a timestamp key
     // (microseconds).
@@ -314,8 +374,34 @@ fn range_value_signed(
         } else {
             *months
         };
-        return matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
-            .then_some(RangeValue::Months(months, *start, *end));
+        // An integral or decimal key casts the interval to its own type: the count of its last field (`YEAR '1'`
+        // is 1, `MONTH '12'` is 12). `YEAR TO MONTH` is not matched yet.
+        let count = match (start, end) {
+            (krishiv_types::YearMonthField::Year, krishiv_types::YearMonthField::Year) => {
+                Some(months / 12)
+            }
+            (krishiv_types::YearMonthField::Month, krishiv_types::YearMonthField::Month) => {
+                Some(months)
+            }
+            _ => None,
+        };
+        return match key {
+            T::Date | T::Timestamp | T::TimestampNtz => {
+                Some(RangeValue::Months(months, *start, *end))
+            }
+            T::Byte => i8::try_from(count?).ok().map(|v| RangeValue::Int(v.into())),
+            T::Short => i16::try_from(count?)
+                .ok()
+                .map(|v| RangeValue::Int(v.into())),
+            T::Integer | T::Long => Some(RangeValue::Int(count?.into())),
+            T::Decimal(d) => {
+                let v =
+                    i128::from(count?).checked_mul(10_i128.checked_pow(u32::from(d.scale()))?)?;
+                let max = 10_i128.checked_pow(u32::from(d.precision()))? - 1;
+                (-max..=max).contains(&v).then_some(RangeValue::Int(v))
+            }
+            _ => None,
+        };
     }
     // The literal as an exact decimal `(unscaled, scale)` or a double.
     enum Lit {
@@ -323,6 +409,23 @@ fn range_value_signed(
         Double(f64),
     }
     let lit = match l {
+        // A string bound is cast to a FLOAT or DOUBLE key's type (Spark's `Cast` of the string: `'inf'` and `'NaN'`
+        // are values). Text this parser does not know stays unsupported rather than guessed.
+        Literal::String(text)
+            if matches!(
+                key,
+                T::Float | T::Double | T::Byte | T::Short | T::Integer | T::Long
+            ) =>
+        {
+            if !negate && !matches!(key, T::Float | T::Double) {
+                // A `FOLLOWING` bound is not negated: the string is cast straight to the key's type.
+                Lit::Exact(text.trim().parse::<i128>().ok()?, 0)
+            } else {
+                // A `PRECEDING` bound is negated, which reads the string as a DOUBLE first; the double is then
+                // cast to the key's type.
+                Lit::Double(parse_float_text(text, matches!(key, T::Float))?)
+            }
+        }
         Literal::Byte(v) => Lit::Exact(i128::from(*v), 0),
         Literal::Short(v) => Lit::Exact(i128::from(*v), 0),
         Literal::Integer(v) => Lit::Exact(i128::from(*v), 0),
@@ -374,6 +477,63 @@ fn range_value_signed(
         },
         _ => None,
     }
+}
+
+/// A string cast to `FLOAT` (`single`) or `DOUBLE` as Spark's cast reads it: surrounding whitespace is trimmed, `NaN`, `Inf`, `Infinity`
+/// (any case, optionally signed) are the special values, and plain decimal text parses. `None` for anything else
+/// (Java also accepts `1d`, `1f` and hexadecimal floats; those stay unsupported here).
+fn parse_float_text(text: &str, single: bool) -> Option<f64> {
+    let t = text.trim();
+    let (sign, body) = match t.strip_prefix('-') {
+        Some(rest) => (-1.0, rest),
+        None => (1.0, t.strip_prefix('+').unwrap_or(t)),
+    };
+    if body.eq_ignore_ascii_case("nan") {
+        return Some(f64::NAN);
+    }
+    if body.eq_ignore_ascii_case("inf") || body.eq_ignore_ascii_case("infinity") {
+        return Some(sign * f64::INFINITY);
+    }
+    // The unsigned text starts with a digit or a decimal point (a second sign is malformed), and holds only
+    // decimal-float characters.
+    if !body.starts_with(|c: char| c.is_ascii_digit() || c == '.')
+        || !body
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-'))
+    {
+        return None;
+    }
+    // A FLOAT target is parsed at single precision, not rounded twice through a double.
+    let v = if single {
+        f64::from(body.parse::<f32>().ok()?)
+    } else {
+        body.parse::<f64>().ok()?
+    };
+    Some(sign * v)
+}
+
+/// The signed value of a `RANGE` bound that is the analyzer's `CAST('1' AS DOUBLE)` (under the `PRECEDING`
+/// negation); `None` for anything else.
+fn range_double_of_cast(x: &Arc<Expr>) -> Option<f64> {
+    let (inner, sign) = match crate::expr::negated(x) {
+        Some(n) => (n, -1.0),
+        None => (x, 1.0),
+    };
+    let ExprNode::Cast { expr, to, .. } = &inner.node else {
+        return None;
+    };
+    match (&expr.node, to) {
+        (ExprNode::Literal(Literal::String(text)), krishiv_types::DataType::Double) => {
+            parse_float_text(text, false).map(|d| sign * d)
+        }
+        _ => None,
+    }
+}
+
+/// Whether the `RANGE` bound `x` (or the negation of one) is a string literal.
+fn is_string_bound(x: &Arc<Expr>) -> bool {
+    let x = crate::expr::negated(x).unwrap_or(x);
+    matches!(&x.node, ExprNode::Literal(Literal::String(_)))
 }
 
 /// The value of a frame offset: a constant, or the negation of one (`n
@@ -810,8 +970,10 @@ impl Resolver<'_> {
         // aggregate with its ordering as further arguments, as Spark's
         // `ListAgg.sql` does (the percentiles show the ordered value
         // first, then the percentage).
+        // A session UDF named like one of these is not restricted
+        // (`builtin_name` is empty for it).
         let name = call.id.name();
-        let whole_only = match name {
+        let whole_only = match builtin_name(&call) {
             "listagg" => !call.within_group.is_empty(),
             "median" | "percentile_cont" | "percentile_disc" => true,
             _ => false,
@@ -1196,9 +1358,25 @@ impl Resolver<'_> {
         // Both bounds are values of one type (`INTERVAL YEAR` and `INTERVAL MONTH` are two types); Spark checks
         // this before whether either type is valid for the key.
         // (Numeric keys cast both bounds to the key's type first, so only date and timestamp keys can differ.)
+        // A FLOAT or DOUBLE key cannot take an interval cast, so a frame mixing an interval and a number differs too
+        // (Spark 4.2.0: `INTERVAL '1' MONTH PRECEDING AND 1 FOLLOWING` over a DOUBLE key); an integral or decimal key
+        // casts the interval to its type, as the numeric bound is.
+        let is_interval =
+            |t: &T| matches!(t, T::YearMonthInterval { .. } | T::DayTimeInterval { .. });
+        // A number beside an interval is cast to the key's type, which is what the message names for it.
+        let as_cast = |t: &T| {
+            if matches!(key, T::Float | T::Double) && !is_interval(t) {
+                key.clone()
+            } else {
+                t.clone()
+            }
+        };
         if let [Some(lt), Some(ut)] = &bound_types[..]
-            && matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
-            && lt != ut
+            && matches!(
+                key,
+                T::Date | T::Timestamp | T::TimestampNtz | T::Float | T::Double
+            )
+            && as_cast(lt) != as_cast(ut)
             && let (Some(FrameBound::Offset(l)), Some(FrameBound::Offset(u))) = (
                 shown.frame.as_ref().map(|f| &f.lower),
                 shown.frame.as_ref().map(|f| &f.upper),
@@ -1209,8 +1387,8 @@ impl Resolver<'_> {
                     sql_expr: frame_sql(shown),
                     lower: bound_sql(l),
                     upper: bound_sql(u),
-                    lower_type: quoted(lt),
-                    upper_type: quoted(ut),
+                    lower_type: quoted(&as_cast(lt)),
+                    upper_type: quoted(&as_cast(ut)),
                 },
                 origin,
             ));
@@ -1257,12 +1435,64 @@ impl Resolver<'_> {
             };
             match &key {
                 t if numeric(t) => {
-                    if !numeric(&bt) {
-                        return Err(unsupported(
-                            "a non-numeric RANGE window frame bound",
-                            origin,
-                        ));
+                    if matches!(bt, T::YearMonthInterval { .. }) {
+                        // An integral or decimal key casts the interval to its type (months); a FLOAT or DOUBLE key
+                        // does not accept one.
+                        if matches!(key, T::Float | T::Double) {
+                            return Err(AnalysisError::new(
+                                DatatypeMismatchRangeFrameInvalidType {
+                                    sql_expr: spec_sql(shown),
+                                    order_spec_type: quoted(&key),
+                                    value_boundary_type: quoted(&bt),
+                                },
+                                origin,
+                            ));
+                        }
+                    } else if !numeric(&bt) {
+                        // A `FOLLOWING` string literal is cast straight to the key's type (`range_value` below reads
+                        // `'inf'`, `'NaN'` for a float key); an integral key raises what that cast raises.
+                        if !(matches!(bt, T::String) && is_string_bound(x)) {
+                            return Err(unsupported(
+                                "a non-numeric RANGE window frame bound",
+                                origin,
+                            ));
+                        }
+                        if !matches!(key, T::Float | T::Double) {
+                            if !matches!(key, T::Byte | T::Short | T::Integer | T::Long) {
+                                return Err(unsupported(
+                                    "a string RANGE window frame bound",
+                                    origin,
+                                ));
+                            }
+                            let to_key = Arc::new(Expr::new(ExprNode::Cast {
+                                expr: Arc::clone(x),
+                                to: key.clone(),
+                                mode: crate::expr::CastMode::Default,
+                            }));
+                            if let Some(Constant::Error(e)) = self.fold(&to_key, self.ctx.conf.ansi)
+                            {
+                                return Err(AnalysisError::new(e, origin));
+                            }
+                        }
                     }
+                }
+                // A numeric bound beside an interval on a BOOLEAN key is the one Spark reports
+                // (`SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE`, with its own location), so this interval bound waits.
+                T::Boolean
+                    if matches!(bt, T::YearMonthInterval { .. })
+                        && bound_types.iter().flatten().any(|t| !is_interval(t)) =>
+                {
+                    continue;
+                }
+                T::Boolean if matches!(bt, T::YearMonthInterval { .. }) => {
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchRangeFrameInvalidType {
+                            sql_expr: spec_sql(shown),
+                            order_spec_type: quoted(&key),
+                            value_boundary_type: quoted(&bt),
+                        },
+                        origin,
+                    ));
                 }
                 T::String | T::Boolean => {
                     // The bound is cast to the key's type, which is not a
@@ -1329,6 +1559,20 @@ impl Resolver<'_> {
                 }
             }
             values[k] = Some(range_value(x, &key).ok_or_else(|| {
+                if let Some(e) = malformed_string_bound(x, self.ctx.conf.ansi) {
+                    return AnalysisError::new(e, origin);
+                }
+                // A bound the key's type cannot hold raises the cast's overflow (`'999'` on a TINYINT key).
+                if let Some(d) = range_double_of_cast(x) {
+                    let to_key = Arc::new(Expr::new(ExprNode::Cast {
+                        expr: Arc::new(Expr::literal(Literal::Double(d))),
+                        to: key.clone(),
+                        mode: crate::expr::CastMode::Default,
+                    }));
+                    if let Some(Constant::Error(e)) = self.fold(&to_key, self.ctx.conf.ansi) {
+                        return AnalysisError::new(e, origin);
+                    }
+                }
                 unsupported("RANGE window frame bounds other than literals", origin)
             })?);
         }
@@ -1530,8 +1774,15 @@ impl Resolver<'_> {
                 order_by,
             };
             // No widening through a window: the select list above it sees
-            // every column of its input already.
-            cur = self.make(Origin::UNKNOWN, node, out, &[&cur]);
+            // every column of its input already. Only the columns a `USING`
+            // join merged away come back through it (Spark's `Window` keeps
+            // its child's hidden output).
+            let below = cur;
+            cur = self.make(Origin::UNKNOWN, node, out, &[&below]);
+            if !below.hidden.is_empty() && below.widen.is_some() {
+                cur.hidden = Arc::clone(&below.hidden);
+                cur.widen = Some(Arc::new(super::resolve::Widen::Hidden { child: below }));
+            }
         }
         // The select list over the windows' columns.
         let mut out = Vec::with_capacity(exprs.len());

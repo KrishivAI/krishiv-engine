@@ -1,0 +1,21 @@
+{
+  "cases": {
+    "subqueries": [
+      18,
+      19,
+      27,
+      28,
+      29,
+      30,
+      31,
+      33,
+      36,
+      37,
+      38,
+      58,
+      59
+    ]
+  },
+  "file": "subquery/scalar-subquery/scalar-subquery-predicate",
+  "format_version": 1
+}

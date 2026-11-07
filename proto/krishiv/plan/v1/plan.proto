@@ -340,6 +340,8 @@ enum GeneratorKind {
   GENERATOR_KIND_EXPLODE = 1;
   GENERATOR_KIND_POS_EXPLODE = 2;
   GENERATOR_KIND_INLINE = 3;
+  // feature: variant_explode
+  GENERATOR_KIND_VARIANT_EXPLODE = 4;
 }
 
 // feature: expand
@@ -592,6 +594,9 @@ enum AggregateFunction {
   AGGREGATE_FUNCTION_MAX_BY = 44;
   // feature: any_value_by_aggregates
   AGGREGATE_FUNCTION_MIN_BY = 45;
+  // A session aggregate UDF, by name and version (`AggregateExpr.udaf`).
+  // feature: rust_udaf
+  AGGREGATE_FUNCTION_UDF = 46;
 }
 
 enum AggregateInput {
@@ -644,6 +649,23 @@ message AggregateExpr {
   // IPC `Schema` flatbuffer of its element field, whose metadata holds the
   // interval's fields; empty otherwise).
   bytes result_element = 17;
+  // feature: rust_udaf (`AGGREGATE_FUNCTION_UDF` only: the call).
+  UdafCall udaf = 18;
+}
+
+// The call of a session aggregate UDF: its implementation by name and
+// version, and the columns the planner fixed for it. A worker must hold
+// the same version, declaring the same state, to run the plan.
+// feature: rust_udaf
+message UdafCall {
+  string name = 1;
+  uint64 version = 2;
+  // Arrow IPC `Schema` flatbuffer of the argument fields, in order.
+  bytes args = 3;
+  DataType result = 4;
+  bool nullable = 5;
+  // Arrow IPC `Schema` flatbuffer of the declared state fields, in order.
+  bytes state = 6;
 }
 
 enum JoinType {
@@ -788,6 +810,18 @@ message ExchangeNode {
   uint64 id = 1;
   uint32 input = 2;
   Partitioning partitioning = 3;
+  // feature: exchange_filters
+  repeated ExchangeFilter filters = 4;
+}
+
+// feature: exchange_filters
+message ExchangeFilter {
+  uint64 id = 1;
+  uint64 column = 2;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes key_type = 3;
+  KeyFilterOptions options = 4;
+  bool null_safe = 5;
 }
 
 message Partitioning {

@@ -56,6 +56,25 @@ pub struct Case {
     pub kids: Vec<String>,
     /// Spark's answer.
     pub expect: Expect,
+    /// When the expression errors: the error class each erroring row raises on its own
+    /// (`rowErrors`). With errors on several rows Spark reports whichever its plan reaches
+    /// first: all rows of one projection over a `VALUES` table while optimizing, the first
+    /// task to fail over a scan, which varies between runs. So the engine's error agrees when
+    /// it is any of these (Spark 4.2.0, checked 2026-11-06).
+    pub row_errors: Vec<String>,
+}
+
+impl Case {
+    /// Whether `got` is Spark's answer: the same rows or error class, or the error class of
+    /// one of the erroring rows ([`Self::row_errors`]).
+    #[must_use]
+    pub fn agrees(&self, got: &Expect) -> bool {
+        *got == self.expect
+            || matches!(
+                (&self.expect, got),
+                (Expect::Error(_), Expect::Error(class)) if self.row_errors.contains(class)
+            )
+    }
 }
 
 /// A parsed fixture.
@@ -114,11 +133,22 @@ impl Fixture {
                         .collect()
                 })
                 .unwrap_or_default();
+            let row_errors = c
+                .get("rowErrors")
+                .and_then(Value::as_array)
+                .map(|k| {
+                    k.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
             cases.push(Case {
                 sql: str_field(c, "sql")?.to_owned(),
                 ansi: c.get("ansi").and_then(Value::as_bool).unwrap_or(true),
                 kids,
                 expect,
+                row_errors,
             });
         }
         let time_zone = v.get("timeZone").and_then(Value::as_str).map(str::to_owned);
@@ -204,7 +234,7 @@ pub fn run(fixture: &Fixture, ev: &mut dyn Evaluator) -> Vec<Mismatch> {
     let mut bad: BTreeMap<(&str, bool), Option<Expect>> = BTreeMap::new();
     for c in &fixture.cases {
         let got = ev.eval(&c.sql, c.ansi);
-        bad.insert((&c.sql, c.ansi), (got != c.expect).then_some(got));
+        bad.insert((&c.sql, c.ansi), (!c.agrees(&got)).then_some(got));
     }
     let mut out: Vec<Mismatch> = fixture
         .cases

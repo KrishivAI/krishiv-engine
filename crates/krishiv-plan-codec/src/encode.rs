@@ -9,12 +9,14 @@ use std::sync::Arc;
 
 use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
-use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
+use krishiv_exec::aggregate::{
+    AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
+};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
-    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryPlan,
-    SubqueryValueKind, WritePlan,
+    AggregatePlan, ExchangeFilterPlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme,
+    JoinDistribution, JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
+    ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan,
+    SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
@@ -328,6 +330,9 @@ impl Encoder {
                     krishiv_plan::GeneratorKind::Explode => pb::GeneratorKind::Explode,
                     krishiv_plan::GeneratorKind::PosExplode => pb::GeneratorKind::PosExplode,
                     krishiv_plan::GeneratorKind::Inline => pb::GeneratorKind::Inline,
+                    krishiv_plan::GeneratorKind::VariantExplode => {
+                        pb::GeneratorKind::VariantExplode
+                    }
                 }
                 .into(),
                 outer: *outer,
@@ -518,6 +523,11 @@ impl Encoder {
             id: exchange.id.0,
             input: self.node_index(&exchange.input)?,
             partitioning: Some(partitioning(&exchange.partitioning)),
+            filters: exchange
+                .filters
+                .iter()
+                .map(|f| exchange_filter(f, &self.nested))
+                .collect(),
         })
     }
 
@@ -800,6 +810,21 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
     }
 }
 
+fn exchange_filter(f: &ExchangeFilterPlan, nested: &Cell<bool>) -> pb::ExchangeFilter {
+    pb::ExchangeFilter {
+        id: f.id.0,
+        column: u64::try_from(f.column).unwrap_or(u64::MAX),
+        key_type: arrow_bytes(&f.key_type, nested),
+        options: join_filter(&JoinFilterPlan {
+            id: f.id,
+            key: 0,
+            options: f.options,
+        })
+        .options,
+        null_safe: f.null_safe,
+    }
+}
+
 fn scan_filter(f: &ScanRuntimeFilter, nested: &Cell<bool>) -> pb::ScanRuntimeFilter {
     pb::ScanRuntimeFilter {
         id: f.id.0,
@@ -1061,6 +1086,21 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         }
         AggregateFunction::MaxBy => (pb::AggregateFunction::MaxBy, false),
         AggregateFunction::MinBy => (pb::AggregateFunction::MinBy, false),
+        AggregateFunction::Udf(call) => {
+            return Ok(pb::AggregateExpr {
+                function: pb::AggregateFunction::Udf as i32,
+                args: indexes(&a.args),
+                input: match a.input {
+                    AggInput::Raw => pb::AggregateInput::Raw,
+                    AggInput::State => pb::AggregateInput::State,
+                } as i32,
+                arg_type: arrow_bytes(&a.arg_type, nested),
+                name: a.name.clone(),
+                mask: a.mask.map(|m| m as u64),
+                udaf: Some(Box::new(udaf_call(call, nested)?)),
+                ..Default::default()
+            });
+        }
     };
     Ok(pb::AggregateExpr {
         function: function as i32,
@@ -1074,6 +1114,25 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         name: a.name.clone(),
         mask: a.mask.map(|m| m as u64),
         ..Default::default()
+    })
+}
+
+/// The call of an aggregate UDF; `nested` is set when an argument, state
+/// or result type is an array, map or struct.
+fn udaf_call(call: &UdafCall, nested: &Cell<bool>) -> Result<pb::UdafCall> {
+    let fields = |fs: &[arrow_schema::Field]| {
+        if fs.iter().any(|f| arrow_type_is_nested(f.data_type())) {
+            nested.set(true);
+        }
+        schema_bytes(&arrow_schema::Schema::new(fs.to_vec()))
+    };
+    Ok(pb::UdafCall {
+        name: call.name.clone(),
+        version: u64::from(call.version),
+        args: fields(&call.args),
+        result: Some(spark_type(&call.result, nested)?),
+        nullable: call.nullable,
+        state: fields(&call.state),
     })
 }
 
