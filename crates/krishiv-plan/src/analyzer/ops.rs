@@ -3912,26 +3912,14 @@ impl Resolver<'_> {
         if bounds.iter().any(|b| b.agg.is_some())
             && (Self::holds_generator(&c.plan) || over_windows)
         {
-            let calls: Vec<String> = if Self::holds_generator(&c.plan) {
-                bounds
-                    .iter()
-                    .flat_map(|b| {
-                        super::aggregate_text::aggregate_sql(&b.shown(), &below.out)
-                            .split(", ")
-                            .filter(|c| !c.is_empty())
-                            .map(|c| format!("\"{c}\""))
-                            .collect::<Vec<_>>()
-                    })
-                    .collect()
-            } else {
-                // Over windows, each call as written (columns unqualified, a call with several arguments whole),
-                // in the order the sort keys read them (Spark 4.2.0, `window-with-aggregates`).
-                bounds
-                    .iter()
-                    .flat_map(|b| super::aggregate_text::aggregate_calls(&b.shown()))
-                    .map(|c| format!("\"{c}\""))
-                    .collect()
-            };
+            // Each call as Spark prints it: unqualified (`sum(col1)`), in the order the sort keys read them, a call
+            // of several arguments whole (`max_by(b, c)`, `count(DISTINCT b)`), a repeated call listed twice
+            // (Spark 4.2.0, `window-with-aggregates` and a local run over a generator).
+            let calls: Vec<String> = bounds
+                .iter()
+                .flat_map(|b| super::aggregate_text::aggregate_calls(&b.shown()))
+                .map(|c| format!("\"{c}\""))
+                .collect();
             if !calls.is_empty() {
                 return Err(AnalysisError::new(
                     UnsupportedExprForOperator {
