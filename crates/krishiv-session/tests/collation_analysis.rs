@@ -843,3 +843,22 @@ fn the_implicit_collation_cast_quotes_a_literal_in_the_name() {
         ["contains(collate(Ab, UTF8_LCASE), 'a' collate UTF8_LCASE)"]
     );
 }
+
+/// `x IN (subquery)` compares in the collated side's collation; values are those of a real
+/// Spark 4.2.0 run (`ops/scripts/spark-local.sh`, 2026-11-07).
+#[test]
+fn in_subquery_compares_through_the_collation_keys() {
+    for (sql, want) in [
+        ("('a' COLLATE utf8_lcase) IN (SELECT 'A')", "true"),
+        ("('b' COLLATE utf8_lcase) IN (SELECT 'A')", "false"),
+        ("'a' IN (SELECT 'A' COLLATE utf8_lcase)", "true"),
+        ("'a ' COLLATE utf8_binary_rtrim IN (SELECT 'a')", "true"),
+        ("'b' IN (SELECT 'A' COLLATE utf8_lcase)", "false"),
+    ] {
+        assert_eq!(
+            one(&format!("SELECT CAST(({sql}) AS STRING)")),
+            want,
+            "{sql}"
+        );
+    }
+}

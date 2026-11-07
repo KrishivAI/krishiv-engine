@@ -192,7 +192,7 @@ const BINARY_RESULT: &[&str] = &[
 const INSPECTS: &[&str] = &["collation", "typeof"];
 
 /// The comparison key of `x` under `c`, as an expression over plain strings.
-fn key_of(x: &Arc<Expr>, c: Collation, origin: crate::Origin) -> Expr {
+pub(super) fn key_of(x: &Arc<Expr>, c: Collation, origin: crate::Origin) -> Expr {
     let lit =
         |t: &str| Expr::new(ExprNode::Literal(Literal::String(t.to_owned()))).with_origin(origin);
     let mut key = Expr::new(ExprNode::Cast {
@@ -216,6 +216,25 @@ fn key_of(x: &Arc<Expr>, c: Collation, origin: crate::Origin) -> Expr {
         .with_origin(origin);
     }
     key
+}
+
+/// The collation whose key an `IN (subquery)` pair compares through: the collated side of a
+/// string pair when it is `UTF8_LCASE` or `_RTRIM` (Spark compares the pair in that collation).
+pub(super) fn subquery_key_collation(
+    left: Option<&DataType>,
+    right: &DataType,
+) -> Option<Collation> {
+    if !is_string(left) || !is_string(Some(right)) {
+        return None;
+    }
+    [left, Some(right)].into_iter().find_map(|t| match t {
+        Some(DataType::CollatedString(c))
+            if c.rtrim() || matches!(c.family(), CollationFamily::Utf8Lcase) =>
+        {
+            Some(*c)
+        }
+        _ => None,
+    })
 }
 
 /// How many leading arguments of `name` only select (a null test) and so take no part in the
