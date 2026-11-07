@@ -18,7 +18,8 @@
 # +14: nth_value refuses an interval or timestamp offset as UNEXPECTED_INPUT_TYPE before its value check (T025 rest)
 2098 crates/krishiv-functions/src/registry/defs.rs
 3340 crates/krishiv-functions/src/registry/tests.rs
-4186 crates/krishiv-io/src/avro/tests.rs
+# +2 lines over main: WriteOptions.zone_name (region session zones for timestamp partitions, row 36)
+4188 crates/krishiv-io/src/avro/tests.rs
 2215 crates/krishiv-kernels/src/csv.rs
 2429 crates/krishiv-kernels/src/map.rs
 # +2 over main: the implicit cast of a string to TIME(6) for the AnyTimeOrString parameter of time_trunc (T025 rest)
@@ -46,5 +47,6 @@
 5274 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
-2153 crates/krishiv-testkit/src/file_format/mod.rs
+# +2 lines over main: WriteOptions.zone_name (region session zones for timestamp partitions, row 36)
+2155 crates/krishiv-testkit/src/file_format/mod.rs
 2535 crates/krishiv-testkit/src/kernel_eval.rs

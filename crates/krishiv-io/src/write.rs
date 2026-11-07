@@ -22,12 +22,15 @@ use arrow_schema::SchemaRef;
 use krishiv_memory::Reservation;
 use object_store::path::Path;
 
+use krishiv_kernels::cast::{FixedOffset, TimeZoneRules};
+use krishiv_kernels::datetime::{ZoneRef, resolve_zone};
+
 use crate::error::{Result, internal, unsupported};
 use crate::format::{Encoder, FileFormat};
 use crate::io::{IoContext, PinnedStore, StoreId, Upload};
 use crate::options::FormatOptions;
 use crate::partition::{
-    check_partition_column, partition_dir_name, partition_segment, partition_texts,
+    check_partition_column, partition_dir_name, partition_segment, partition_texts_in,
     spark_partitioned_file_name,
 };
 use crate::stats::FileStatistics;
@@ -77,6 +80,9 @@ pub struct WriteOptions {
     /// The session time zone as a fixed offset in seconds, which renders
     /// timestamp partition values; `None` when it is not a fixed offset.
     pub zone: Option<i32>,
+    /// The session time zone's id when [`Self::zone`] is `None` (a region such as `America/Los_Angeles`): timestamp
+    /// partition values render in its rules, as Spark renders them in the session zone. A set `zone` wins.
+    pub zone_name: Option<Arc<str>>,
 }
 
 /// One file written.
@@ -301,6 +307,12 @@ impl FileWriter {
 
     /// The text of every row of `batch` for each partition column.
     fn partition_texts(&self, batch: &RecordBatch) -> Result<Vec<Vec<Option<String>>>> {
+        let zone: Option<ZoneRef> = match (self.options.zone, &self.options.zone_name) {
+            (Some(offset), _) => Some(ZoneRef::Fixed(FixedOffset(offset))),
+            (None, Some(name)) => Some(resolve_zone(name)?),
+            (None, None) => None,
+        };
+        let rules = zone.as_ref().map(|z| z as &dyn TimeZoneRules);
         self.options
             .partition_by
             .iter()
@@ -309,7 +321,7 @@ impl FileWriter {
                     .columns()
                     .get(c)
                     .ok_or_else(|| internal(format!("partition column {c} is out of range")))?;
-                partition_texts(column, self.options.zone)
+                partition_texts_in(column, rules)
             })
             .collect()
     }
