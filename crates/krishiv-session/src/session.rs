@@ -595,6 +595,7 @@ impl Session {
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
             Statement::AlterNamespace(a) => self.exec_alter_namespace(&a, query).await,
+            Statement::Repair(r) => self.exec_repair(&r).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
             Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
@@ -822,11 +823,11 @@ impl Session {
             .fields()
             .iter()
             .map(|f| {
-                Ok(TableColumn {
-                    name: f.name().clone(),
-                    data_type: DataType::from_arrow_field(f)?,
-                    nullable: f.is_nullable(),
-                })
+                Ok(TableColumn::new(
+                    f.name().clone(),
+                    DataType::from_arrow_field(f)?,
+                    f.is_nullable(),
+                ))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
         if let Some(b) = batches.iter().find(|b| b.schema() != schema) {

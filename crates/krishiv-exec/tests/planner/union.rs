@@ -39,6 +39,7 @@ fn carriers() -> Env {
                 name: f.name().clone(),
                 data_type: DataType::from_arrow(f.data_type()).unwrap(),
                 nullable: f.is_nullable(),
+                char_varchar: None,
             })
             .collect()
     };
@@ -153,6 +154,7 @@ fn mixed_string_carriers() -> Env {
                 name: f.name().clone(),
                 data_type: DataType::from_arrow_field(f).unwrap(),
                 nullable: f.is_nullable(),
+                char_varchar: None,
             })
             .collect()
     };
