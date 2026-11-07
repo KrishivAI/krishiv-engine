@@ -340,6 +340,8 @@ fn an_integral_or_decimal_bound_the_key_cannot_hold_raises_under_ansi() {
     for sql in [
         "create table ek (id int, t tinyint, k decimal(3,0)) using parquet",
         "insert into ek values (1,1,1),(2,2,2)",
+        "create table ei (i int) using parquet",
+        "insert into ei values (1),(2)",
     ] {
         block_on(async { s.sql(sql).await?.collect().await }).unwrap();
     }
@@ -350,11 +352,39 @@ fn an_integral_or_decimal_bound_the_key_cannot_hold_raises_under_ansi() {
             "1000 preceding and current row",
             "NUMERIC_VALUE_OUT_OF_RANGE",
         ),
+        ("i", "current row and 2147483648 following", "CAST_OVERFLOW"),
     ] {
-        let sql = format!("select count(*) over (order by {key} range between {bounds}) from ek");
+        let table = if key == "i" { "ei" } else { "ek" };
+        let sql =
+            format!("select count(*) over (order by {key} range between {bounds}) from {table}");
         let err = block_on(async { s.sql(&sql).await?.collect().await })
             .unwrap_err()
             .to_string();
         assert!(err.contains(class), "{key} {bounds}: {err}");
     }
+}
+
+#[test]
+fn an_out_of_range_bound_stays_refused_with_ansi_off() {
+    // Spark gives a NULL bound here (empty frames); Krishiv does not match that yet and refuses.
+    let d = tempfile::tempdir().unwrap();
+    let s = session(d.path());
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    for sql in [
+        "create table eo (t tinyint) using parquet",
+        "insert into eo values (1),(2)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let err = block_on(async {
+        s.sql(
+            "select count(*) over (order by t range between 129 preceding and current row) from eo",
+        )
+        .await?
+        .collect()
+        .await
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("UNSUPPORTED_FEATURE"), "{err}");
 }
