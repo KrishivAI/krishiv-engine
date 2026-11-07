@@ -20,6 +20,12 @@ use crate::tpcds;
 
 const BYTES: &[(&str, &str)] = &[("krishiv.optimizer.joinCost", "bytes")];
 
+/// The queries whose plans with a session configuration are not fixed
+/// points costed by rows either (`ShareCte`'s shared CTE plans); every
+/// other plan must be one.
+const TPCH_SHARED: &[usize] = &[15];
+const TPCDS_SHARED: &[usize] = &[1, 23, 64, 81, 95];
+
 const GREEDY_BYTES: &[(&str, &str)] = &[
     ("krishiv.optimizer.joinCost", "bytes"),
     ("krishiv.optimizer.joinEnumerator", "greedy"),
@@ -56,17 +62,19 @@ fn invariants(
     stats: &dyn Statistics,
     conf: &[(&str, &str)],
     what: &str,
+    exempt: bool,
 ) {
     assert_eq!(
         optimized.root().resolved_output(),
         plan.root().resolved_output(),
         "{what}"
     );
-    // A fixed point wherever the same settings costed by rows give one
-    // (with a session configuration, `ShareCte` runs too, and its plans are
-    // not all fixed points: TPC-H q15's shared view, on main as here).
+    // A fixed point, but for the listed queries (`TPCH_SHARED`,
+    // `TPCDS_SHARED`), which are not one costed by rows either: with a
+    // session configuration `ShareCte` runs too (on main as here).
     let (again, _) = plan_with(optimized, stats, conf);
     if !again.structurally_eq(optimized) {
+        assert!(exempt, "{what} is not a fixed point:\n{}", again.root());
         let by_rows: Vec<(&str, &str)> = conf
             .iter()
             .copied()
@@ -146,14 +154,17 @@ fn tpch_bytes_plans_return_the_same_rows() {
         let (rows, rows_steps) = plan_with(&plan, &stats, &[]);
         let (bytes, bytes_steps) = plan_with(&plan, &stats, BYTES);
         let (greedy, _) = plan_with(&plan, &stats, GREEDY_BYTES);
-        invariants(&plan, &bytes, &stats, BYTES, &format!("q{q:02} bytes"));
+        let exempt = TPCH_SHARED.contains(&q);
         invariants(
             &plan,
-            &greedy,
+            &bytes,
             &stats,
-            GREEDY_BYTES,
-            &format!("q{q:02} greedy bytes"),
+            BYTES,
+            &format!("q{q:02} bytes"),
+            exempt,
         );
+        let what = format!("q{q:02} greedy bytes");
+        invariants(&plan, &greedy, &stats, GREEDY_BYTES, &what, exempt);
         assert!(measures(&rows_steps).iter().all(|m| m == "rows"), "q{q:02}");
         let m = measures(&bytes_steps);
         assert_eq!(m.len(), measures(&rows_steps).len(), "q{q:02}");
@@ -213,13 +224,9 @@ fn tpcds_bytes_plans_keep_the_invariants() {
         };
         for conf in [BYTES, GREEDY_BYTES] {
             let (bytes, _) = plan_with(&plan, &NoStatistics, conf);
-            invariants(
-                &plan,
-                &bytes,
-                &NoStatistics,
-                conf,
-                &format!("q{q:02} {conf:?}"),
-            );
+            let what = format!("q{q:02} {conf:?}");
+            let exempt = TPCDS_SHARED.contains(&q);
+            invariants(&plan, &bytes, &NoStatistics, conf, &what, exempt);
         }
         planned += 1;
     }
