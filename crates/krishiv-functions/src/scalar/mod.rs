@@ -46,6 +46,7 @@ mod json;
 mod json_tuple;
 mod map;
 mod math;
+mod mersenne;
 mod misc;
 mod number;
 mod predicate;

@@ -1976,6 +1976,22 @@ impl Resolver<'_> {
         self.check_star_ordinals(keys, aggregates)?;
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
+        // Spark wraps a pipe item in `pipeexpression(..)`, so a generator
+        // with several names (`AS (p, y)`) is nested in it there (4.2.0).
+        for e in aggregates {
+            if let ExprNode::Pipe { expr, .. } = &e.node
+                && let ExprNode::MultiAlias { expr: g, .. } = &expr.node
+                && matches!(&g.node, ExprNode::Function(f) if super::generate::is_generator_name(&f.name))
+            {
+                let zone = self.ctx.conf.session_zone;
+                return Err(AnalysisError::new(
+                    UnsupportedGeneratorNestedInExpressions {
+                        expression: format!("\"pipeexpression(multialias({}))\"", pretty(g, zone)),
+                    },
+                    e.origin,
+                ));
+            }
+        }
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
         // The declared `CHAR`/`VARCHAR` types follow the aliases of an explicit `GROUP BY` too.
         self.carry_declared(&items, aggregates);
@@ -1983,9 +1999,14 @@ impl Resolver<'_> {
         // item's place in the aggregate, the generator runs above it.
         // A written alias of the generator (the analyzer names every item,
         // so the written one is read from the unresolved list).
+        // A pipe `AGGREGATE` item is wrapped (`Alias(Pipe(generator))`).
+        let unpiped = |e: &Arc<Expr>| match &e.node {
+            ExprNode::Pipe { expr, .. } => Arc::clone(expr),
+            _ => Arc::clone(e),
+        };
         if let Some(name) = aggregates.iter().find_map(|e| match &e.node {
             ExprNode::Alias { name, expr }
-                if matches!(&expr.node, ExprNode::Function(f)
+                if matches!(&unpiped(expr).node, ExprNode::Function(f)
                 if super::generate::is_generator_name(&f.name)) =>
             {
                 Some(name.clone())
@@ -3805,6 +3826,7 @@ impl Resolver<'_> {
                 })
                 .unwrap_or(e)
         };
+        let mut no_aggregate = false;
         let (bounds, below, extended) = if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
             // The grouping attributes resolve a name the aggregate outputs
             // twice (Spark 4.2.0: `SELECT 1 AS a, 2 AS a FROM t(a) GROUP BY a
@@ -3819,6 +3841,11 @@ impl Resolver<'_> {
             // as Spark does.
             match self.bind_missing(&c, &exprs, env, "Sort", true) {
                 Ok((bounds, wide)) => {
+                    // No aggregate below to run a call in (Spark 4.2.0:
+                    // `SELECT x FROM t ORDER BY sum(x)` and a sort over
+                    // `DISTRIBUTE BY` over an aggregate): refused after the
+                    // ordering-type check below, which Spark makes first.
+                    no_aggregate = c.agg.is_none();
                     let extended = wide.out.len() > c.out.len();
                     (bounds, wide, extended)
                 }
@@ -3884,6 +3911,9 @@ impl Resolver<'_> {
                     o.expr.origin,
                 ));
             }
+        }
+        if no_aggregate && let Some(e) = self.misplaced_aggregates(&bounds, p.origin) {
+            return Err(e);
         }
         // A generator between the sort and the aggregate: the aggregate
         // cannot grow through it, so Spark leaves the call in the sort and
@@ -4271,7 +4301,7 @@ fn is_generator(e: &Arc<Expr>) -> bool {
 fn is_json_tuple_call(e: &Arc<Expr>) -> bool {
     match &e.node {
         ExprNode::Function(f) => f.name.eq_ignore_ascii_case("json_tuple"),
-        ExprNode::Alias { expr, .. } => is_json_tuple_call(expr),
+        ExprNode::Alias { expr, .. } | ExprNode::Pipe { expr, .. } => is_json_tuple_call(expr),
         _ => false,
     }
 }
