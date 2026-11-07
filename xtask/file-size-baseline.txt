@@ -29,15 +29,18 @@
 3096 crates/krishiv-plan/src/analyzer/subquery.rs
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
-2902 crates/krishiv-session/src/catalog.rs
+# +7 lines: a file table's registered partitions (`TempTable::Files::partitions`, reading partitioned tables)
+2909 crates/krishiv-session/src/catalog.rs
 2251 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
-2640 crates/krishiv-session/src/dataframe.rs
+# +1 line: the file view's `partitions` field (reading partitioned tables)
+2641 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
 2781 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
-3373 crates/krishiv-session/src/table_commands.rs
+# +1 line: the temporary table's `partitions` field (reading partitioned tables)
+3374 crates/krishiv-session/src/table_commands.rs
 # +6 lines over main: CREATE NAMESPACE records a clause written twice and PROPERTIES with DBPROPERTIES (DUPLICATE_CLAUSES, PR #572)
 3875 crates/krishiv-sql/src/ast.rs
 2732 crates/krishiv-sql/src/lower.rs
