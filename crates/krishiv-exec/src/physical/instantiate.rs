@@ -86,6 +86,7 @@ use crate::values::{
 use crate::window::{GroupLimitPlan, WindowGroupLimit};
 
 mod distributed;
+use distributed::planned_schema_holds;
 
 /// Creates the spill scope of one instantiation: the query's own spill
 /// directory on this worker, removed when the scope's last holder (the
@@ -1288,11 +1289,13 @@ impl Instantiation<'_> {
             PhysNode::WriteFiles { input, write } => self.write_files(input, write),
             // See the module docs: the operators around an exchange
             // implement it on one worker.
-            PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => {
-                self.broadcast(e.id, &e.input)
-            }
+            PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => self.broadcast(e),
             PhysNode::Exchange(e) => {
                 let input = self.node(&e.input)?;
+                // Unused on one worker: checked in debug builds (every test).
+                if cfg!(debug_assertions) {
+                    planned_schema_holds(e, &input.schema)?;
+                }
                 self.schemas.insert(e.id, Arc::clone(&input.schema));
                 Ok(input)
             }
@@ -2002,6 +2005,8 @@ impl ExecNode for Unbuilt {
 mod tests {
     use std::sync::Arc;
 
+    use arrow_schema::SchemaRef;
+
     use super::Unbuilt;
     use crate::pipeline::{ExecNode as _, PipelineBuilder};
 
@@ -2055,6 +2060,54 @@ mod tests {
             limit: 5,
         };
         assert_eq!(driver_orders(limited), [true]);
+    }
+
+    /// An exchange's planned columns must be its built input's, on one
+    /// worker too (the fragmenter hands the planned ones to its readers).
+    #[test]
+    fn an_exchange_planned_with_other_columns_fails_to_instantiate() {
+        use arrow_schema::{DataType, Field, Schema};
+
+        use crate::physical::{ExchangeId, ExchangePlan, Partitioning, PhysNode, PhysicalPlan};
+
+        let id = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let plan = |schema| {
+            let root = PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(0),
+                input: Box::new(range(1)),
+                partitioning: Partitioning::Single,
+                filters: Vec::new(),
+                schema,
+            });
+            PhysicalPlan::new(
+                root,
+                Arc::clone(&id),
+                crate::planner::ExplainNode::leaf("Range", ""),
+                crate::physical::ExprEnv {
+                    ansi: true,
+                    legacy_statistical_aggregate: false,
+                    zone: Some(0),
+                    zone_name: None,
+                    query_start_micros: 0,
+                    user: Arc::from("u"),
+                    map_key_dedup_last_win: false,
+                    legacy_java_charsets: false,
+                    legacy_coding_error_action: false,
+                    legacy_time_parser: false,
+                },
+            )
+        };
+        let worker = super::WorkerContext::new(Arc::new(crate::planner::MemoryTables::new()));
+        let built = super::exchange_schemas(&plan(None), &worker).unwrap();
+        let fine = plan(Some(SchemaRef::clone(&built[&ExchangeId(0)])));
+        assert!(super::instantiate(&fine, &worker).is_ok());
+        assert_eq!(super::planned_exchange_schemas(&fine), Some(built));
+        assert_eq!(super::planned_exchange_schemas(&plan(None)), None);
+        let other = Arc::new(Schema::new(vec![Field::new("x", DataType::Utf8, true)]));
+        let Err(e) = super::instantiate(&plan(Some(other)), &worker) else {
+            panic!("a wrong planned schema instantiated");
+        };
+        assert!(e.to_string().contains("exchange 0 planned"), "{e}");
     }
 
     #[test]

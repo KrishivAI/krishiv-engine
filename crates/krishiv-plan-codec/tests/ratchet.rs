@@ -78,6 +78,7 @@ fn tpch_plans_round_trip_and_instantiate() {
         // The worker side: the decoded plan instantiates against the
         // worker's own tables.
         let worker = WorkerContext::new(suite.tables());
+        assert_planned_schemas(&format!("tpch {name}"), &back, &worker);
         instantiate(&back, &worker).unwrap_or_else(|e| panic!("tpch {name}: instantiate: {e}"));
     }
 }
