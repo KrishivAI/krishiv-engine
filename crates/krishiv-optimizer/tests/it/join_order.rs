@@ -1107,3 +1107,77 @@ fn a_restriction_domain_does_not_follow_an_outer_join_equality() {
         eval::rows(&db, plan.root())
     );
 }
+
+/// The scans of `text`, in plan order (a join's build side prints after its
+/// probe side).
+fn scans(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter_map(|l| l.split("Scan ").nth(1))
+        .map(|s| s.split(' ').next().unwrap_or(""))
+        .collect()
+}
+
+/// E5a (`research/perf-parity/05-q10-join-order-range-estimate.md` section 3,
+/// variant v6): a one-day `o_orderdate` range keeps ~1/2,400 of orders at SF10.
+/// Estimated per bound against the unnarrowed orders it was about a quarter,
+/// and customer (1.5M rows) became the build side; estimated together the
+/// filtered orders is the build, whichever way the bounds are written.
+#[test]
+fn a_two_sided_range_is_estimated_between_its_bounds() {
+    let ctx = support::ctx();
+    let sql = |a: &str, b: &str| {
+        format!(
+            "SELECT c_name, o_totalprice FROM customer JOIN orders ON c_custkey = o_custkey \
+             WHERE {a} AND {b}"
+        )
+    };
+    let (lo, hi) = (
+        "o_orderdate >= DATE '1995-03-01'",
+        "o_orderdate < DATE '1995-03-02'",
+    );
+    let mut plans = Vec::new();
+    for q in [sql(lo, hi), sql(hi, lo)] {
+        let optimized = optimize_with(&support::resolve(&q, &ctx), &fixture()).unwrap();
+        let text = optimized.root().to_string();
+        let order = scans(&text);
+        assert_eq!(
+            order,
+            [
+                "spark_catalog.default.customer",
+                "spark_catalog.default.orders"
+            ],
+            "orders is the build side: {text}"
+        );
+        plans.push(order.join(","));
+    }
+    assert_eq!(plans[0], plans[1]);
+}
+
+/// The estimate of an input's conjuncts does not depend on their written order,
+/// even where one changes what the next keeps (a null-rejecting conjunct before
+/// a range; an `IN` list before a bound on the same column).
+#[test]
+fn conjunct_order_does_not_change_the_join_order() {
+    let ctx = support::ctx();
+    for (a, b) in [
+        ("o_totalprice IS NOT NULL", "o_totalprice > 3000"),
+        ("o_orderkey IN (1, 2, 3)", "o_orderkey > 2"),
+        (
+            "o_orderdate >= DATE '1995-03-01'",
+            "o_orderdate < DATE '1995-03-02'",
+        ),
+    ] {
+        let plan = |x: &str, y: &str| {
+            let q = format!(
+                "SELECT c_name FROM customer JOIN orders ON c_custkey = o_custkey \
+                 JOIN nation ON c_nationkey = n_nationkey WHERE {x} AND {y}"
+            );
+            let optimized = optimize_with(&support::resolve(&q, &ctx), &fixture()).unwrap();
+            scans(&optimized.root().to_string())
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(plan(a, b), plan(b, a), "{a} AND {b}");
+    }
+}

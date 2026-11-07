@@ -34,6 +34,7 @@ use krishiv_common::error::{
     UnsupportedFeatureDropDatabase, UnsupportedFeatureTableOperation, UnsupportedOverwriteTable,
     WrongCommandForObjectType,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
 use krishiv_sql::StatementClass;
@@ -567,22 +568,8 @@ impl Session {
                 column.comment.clone_from(&alias.comment);
             }
         }
-        // Spark checks the names after the aliases: a repeated one is `COLUMN_ALREADY_EXISTS`, ignoring case
-        // unless `caseSensitive` (then as written, else in lower case).
-        let mut seen = std::collections::BTreeSet::new();
-        for c in &columns {
-            let key = if case_sensitive {
-                c.name.clone()
-            } else {
-                c.name.to_lowercase()
-            };
-            if !seen.insert(key.clone()) {
-                return Err(krishiv_common::error::ColumnAlreadyExists {
-                    column_name: format!("`{key}`"),
-                }
-                .into());
-            }
-        }
+        // Spark checks the names after the aliases: a repeated one is `COLUMN_ALREADY_EXISTS`.
+        check_column_name_duplication(columns.iter().map(|c| c.name.as_str()), case_sensitive)?;
         let view = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -993,20 +980,23 @@ impl Session {
         let mut changed = (*table).clone();
         match &a.action {
             AlterTableAction::AddColumns(defs) => {
+                let mut added = Vec::with_capacity(defs.len());
                 for def in defs {
                     let ColumnName::Ident(ident) = &def.name else {
                         return Err(unsupported("IDENTIFIER() column names"));
                     };
-                    if changed
+                    added.push(ident);
+                }
+                // Spark checks the new and the existing names together (`AlterTableAddColumnsCommand`).
+                check_column_name_duplication(
+                    changed
                         .columns
                         .iter()
-                        .any(|c| c.name.eq_ignore_ascii_case(&ident.value))
-                    {
-                        return Err(krishiv_common::error::ColumnAlreadyExists {
-                            column_name: format!("`{}`", ident.value.to_lowercase()),
-                        }
-                        .into());
-                    }
+                        .map(|c| c.name.as_str())
+                        .chain(added.iter().map(|i| i.value.as_str())),
+                    env.analysis.conf.case_sensitive,
+                )?;
+                for (def, ident) in defs.iter().zip(added) {
                     // Spark alters the data schema: new columns go before the partition columns.
                     let at = changed.data_columns().count();
                     // Existing files have no such column: it reads as NULL.
@@ -1377,20 +1367,23 @@ impl Session {
             Some(query) => self.create_table_as(table, query, mode, &layout).await?,
             None => {
                 table.columns = self.columns_of(t, original)?;
+                let mut typed = Vec::with_capacity(typed_partitions.len());
                 for c in &typed_partitions {
                     let ColumnName::Ident(ident) = &c.name else {
                         return Err(unsupported("IDENTIFIER() column names"));
                     };
-                    if table
+                    typed.push(ident);
+                }
+                // A typed partition column is a column of the table's schema: checked with the others.
+                check_column_name_duplication(
+                    table
                         .columns
                         .iter()
-                        .any(|t| t.name.eq_ignore_ascii_case(&ident.value))
-                    {
-                        return Err(krishiv_common::error::ColumnAlreadyExists {
-                            column_name: format!("`{}`", ident.value.to_lowercase()),
-                        }
-                        .into());
-                    }
+                        .map(|c| c.name.as_str())
+                        .chain(typed.iter().map(|i| i.value.as_str())),
+                    self.query_env().analysis.conf.case_sensitive,
+                )?;
+                for (c, ident) in typed_partitions.iter().zip(typed) {
                     table.columns.push(StoreColumn::declared(
                         ident.value.clone(),
                         &c.data_type,
@@ -1472,15 +1465,6 @@ impl Session {
             let ColumnName::Ident(ident) = &def.name else {
                 return Err(unsupported("IDENTIFIER() column names"));
             };
-            if columns
-                .iter()
-                .any(|c| c.name.eq_ignore_ascii_case(&ident.value))
-            {
-                return Err(krishiv_common::error::ColumnAlreadyExists {
-                    column_name: format!("`{}`", ident.value.to_lowercase()),
-                }
-                .into());
-            }
             if def.generated.is_some() {
                 return Err(unsupported("generated columns"));
             }
@@ -1499,6 +1483,10 @@ impl Session {
                 def.comment.clone(),
             )?);
         }
+        check_column_name_duplication(
+            columns.iter().map(|c| c.name.as_str()),
+            self.query_env().analysis.conf.case_sensitive,
+        )?;
         Ok(columns)
     }
 

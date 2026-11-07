@@ -20,12 +20,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ColumnNotDefinedInTable,
-    ForbiddenOperation, InternalError, InvalidPartitionColumnDataType,
-    InvalidPartitionOperationPartitionSchemaIsEmpty, KrishivError, KrishivUnsupportedFeature,
-    LegacyErrorTemp1166, LegacyErrorTemp1167, LegacyErrorTemp1169, LegacyErrorTemp1232,
-    LegacyErrorTemp1237, LegacyErrorTemp1251, PartitionsAlreadyExist, PartitionsNotFound,
+    AllPartitionColumnsNotAllowed, ColumnNotDefinedInTable, ForbiddenOperation, InternalError,
+    InvalidPartitionColumnDataType, InvalidPartitionOperationPartitionSchemaIsEmpty, KrishivError,
+    KrishivUnsupportedFeature, LegacyErrorTemp1166, LegacyErrorTemp1167, LegacyErrorTemp1169,
+    LegacyErrorTemp1232, LegacyErrorTemp1237, LegacyErrorTemp1251, PartitionsAlreadyExist,
+    PartitionsNotFound,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::Literal;
 use krishiv_plan::analyzer::{Privilege, Securable, authorize};
 use krishiv_sql::StatementClass;
@@ -154,20 +155,7 @@ fn can_partition_on(t: &DataType) -> bool {
 
 /// `COLUMN_ALREADY_EXISTS` when `names` repeat one (`SchemaUtils.checkColumnNameDuplication`).
 fn check_duplicates(names: &[String], case_sensitive: bool) -> Result<(), KrishivError> {
-    for (i, a) in names.iter().enumerate() {
-        if names[..i].iter().any(|b| same_name(a, b, case_sensitive)) {
-            let shown = if case_sensitive {
-                a.clone()
-            } else {
-                a.to_lowercase()
-            };
-            return Err(ColumnAlreadyExists {
-                column_name: quote_identifier(&shown),
-            }
-            .into());
-        }
-    }
-    Ok(())
+    check_column_name_duplication(names.iter().map(String::as_str), case_sensitive)
 }
 
 /// The table's layout from `PARTITIONED BY` names and `CLUSTERED BY`, checked against `columns`, which are

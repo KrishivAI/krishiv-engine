@@ -383,6 +383,22 @@ pub(crate) fn selectivity(pred: &Expr, est: &RelStats, narrow: bool) -> f64 {
     apply(pred, &mut View::new(&est.cols, narrow))
 }
 
+/// The selectivity of each of `preds` over `est`, in order, where each sees
+/// the columns the ones before it narrowed, as within one `AND`: for
+/// `a >= lo AND a < hi` their product is the fraction of the range between
+/// the bounds, not the product of each bound's own fraction. A conjunct over
+/// columns nothing before it narrowed has the selectivity it has alone. The
+/// result can depend on the order (`x IS NOT NULL AND x > 3`: the comparison
+/// ignores nulls), so callers pass a canonical order.
+pub(crate) fn conjunct_selectivities<'e>(
+    preds: impl IntoIterator<Item = &'e Expr>,
+    est: &RelStats,
+    narrow: bool,
+) -> Vec<f64> {
+    let mut v = View::new(&est.cols, narrow);
+    preds.into_iter().map(|p| apply(p, &mut v)).collect()
+}
+
 /// The two columns of an equality between columns, with their distinct
 /// counts.
 pub(crate) fn equi_columns(pred: &Expr, est: &RelStats) -> Option<[(AttrId, f64); 2]> {
