@@ -287,6 +287,21 @@ async fn a_call_reading_one_side_of_an_outer_join_is_evaluated_below_it() {
 }
 
 #[tokio::test]
+async fn a_call_over_a_call_on_each_side_of_an_outer_join_is_evaluated_below_it() {
+    // The outer call reads the inner call's column, in neither side's layout
+    // (review H1); each side's nest is still one-sided, so Spark accepts it.
+    let (s, _) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    let got = longs(
+        &s,
+        "SELECT b.id FROM range(3) a LEFT JOIN range(5) b \
+         ON py_plus(py_plus(a.id)) = py_plus(py_plus(b.id)) - 1 ORDER BY a.id",
+    )
+    .await;
+    assert_eq!(got, vec![Some(1), Some(2), Some(3)]);
+}
+
+#[tokio::test]
 async fn a_call_reading_both_sides_of_an_outer_join_is_refused_with_its_join_type() {
     let (s, _) = session(None);
     s.register_python_udf(add_def());

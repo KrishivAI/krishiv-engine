@@ -4,15 +4,15 @@
 - At interpreter exit the pool is stopped and joined (at most 5 s, the GIL released) before finalization
   starts, so its threads release their Python thread states; a thread still inside a UDF is left running
   and reported here.
-- In a forked child the inherited pool does not exist (its threads stayed in the parent): the child marks
-  it gone and starts its own on its first UDF call.
+- In a forked child the inherited pool does not exist (its threads stayed in the parent): the native side
+  sees the pool was started in another process, leaves it alone and starts the child's own on its first
+  UDF call (no fork hook is needed).
 """
 
 from __future__ import annotations
 
 import atexit
 import logging
-import os
 
 from krishiv import _native
 
@@ -27,10 +27,9 @@ def _shutdown() -> None:
 
 
 def register() -> None:
-    """Registers the hooks once per process."""
+    """Registers the hook once per process."""
     global _registered
     if _registered:
         return
     _registered = True
     atexit.register(_shutdown)
-    os.register_at_fork(after_in_child=_native._udf_pool_forked)

@@ -5,7 +5,8 @@
 //! A registered UDF is its Python wrapper (built by `krishiv.sql`: one
 //! `pyarrow.Array` per argument in, one `pyarrow.Array` of the declared type
 //! out), keyed by `(name, version)` as plans name it. A call is one job on
-//! the [`Pool`]: the arguments cross as Arrow capsules (`export_column`), the
+//! the process's current pool ([`super::current`], fetched per call so a
+//! forked child uses its own): the arguments cross as Arrow capsules (`export_column`), the
 //! wrapper runs, and its result comes back through `import_column`, checked
 //! against the declared type and the row count while its capsules are
 //! alive. The engine side only awaits the job's result.
@@ -22,6 +23,7 @@ use futures::future::BoxFuture;
 use krishiv_common::error::{InternalError, KrishivError, KrishivUdfNotAvailable, PythonException};
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use pyo3::prelude::*;
+use pyo3::sync::MutexExt;
 use pyo3::types::{PyCapsule, PyTuple};
 
 use super::pool::Pool;
@@ -44,10 +46,34 @@ struct Registered {
     lock: Option<Arc<Mutex<()>>>,
 }
 
-/// The Python UDFs of one session and the pool their calls run on.
+/// The Python UDFs of one session and the size of the pool their calls run
+/// on.
 pub(crate) struct PyUdfRuntime {
     udfs: RwLock<HashMap<(String, u32), Arc<Registered>>>,
-    pool: Arc<Pool>,
+    pool: Arc<PoolCache>,
+}
+
+/// The pool this runtime's calls last used, so a call takes the process's
+/// pool lock only when there is none yet or it is a fork's copy (review N1:
+/// that lock, inherited held by a fork, would hang the child; and every
+/// batch would wait on it).
+struct PoolCache {
+    size: usize,
+    cached: Mutex<Option<Arc<Pool>>>,
+}
+
+impl PoolCache {
+    fn get(&self) -> Result<Arc<Pool>, KrishivError> {
+        let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(p) = cached.as_ref()
+            && p.is_local()
+        {
+            return Ok(Arc::clone(p));
+        }
+        let p = super::current(self.size)?;
+        *cached = Some(Arc::clone(&p));
+        Ok(p)
+    }
 }
 
 impl fmt::Debug for PyUdfRuntime {
@@ -57,11 +83,15 @@ impl fmt::Debug for PyUdfRuntime {
 }
 
 impl PyUdfRuntime {
-    /// A runtime whose calls run on `pool`.
-    pub(crate) fn new(pool: Arc<Pool>) -> Self {
+    /// A runtime whose calls run on the process's pool, started with
+    /// `pool_size` threads when there is none.
+    pub(crate) fn new(pool_size: usize) -> Self {
         Self {
             udfs: RwLock::new(HashMap::new()),
-            pool,
+            pool: Arc::new(PoolCache {
+                size: pool_size,
+                cached: Mutex::new(None),
+            }),
         }
     }
 
@@ -102,15 +132,19 @@ impl UdfRuntime for PyUdfRuntime {
 struct Prepared {
     registered: Arc<Registered>,
     declared: DataType,
-    pool: Arc<Pool>,
+    pool: Arc<PoolCache>,
 }
 
 impl PreparedUdf for Prepared {
     fn call(&self, args: RecordBatch) -> BoxFuture<'static, krishiv_exec::Result<ArrayRef>> {
+        let pool = match self.pool.get() {
+            Ok(p) => p,
+            Err(e) => return Box::pin(std::future::ready(Err(e))),
+        };
         let (done, result) = oneshot::channel();
         let registered = Arc::clone(&self.registered);
         let declared = self.declared.clone();
-        self.pool.submit(Box::new(move |py| {
+        pool.submit(Box::new(move |py| {
             let _ = done.send(invoke(py, &registered, &args, &declared));
         }));
         Box::pin(async move {
@@ -149,10 +183,12 @@ fn invoke(
     }
     let call_args = PyTuple::new(py, columns).map_err(|e| python_error(py, &e))?;
     let returned = {
-        let _serial = registered
-            .lock
-            .as_ref()
-            .map(|l| l.lock().unwrap_or_else(PoisonError::into_inner));
+        // Waited for detached (review B1): the holder needs the GIL to
+        // finish its call.
+        let _serial = registered.lock.as_ref().map(|l| {
+            l.lock_py_attached(py)
+                .unwrap_or_else(PoisonError::into_inner)
+        });
         IN_UDF.with(|f| f.set(true));
         let r = registered.wrapper.bind(py).call1(call_args);
         IN_UDF.with(|f| f.set(false));

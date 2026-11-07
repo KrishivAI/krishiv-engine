@@ -258,11 +258,14 @@ impl Planner<'_> {
                 join_type: spark_join_type(kind).to_owned(),
             }));
         }
-        // A call with no column read is evaluated with the left side.
-        let on_left = |e: &Expr| reads_of(e).iter().all(|i| lids.contains(i));
+        // A side's calls are those reading nothing of the other side: a call
+        // over an inner one already extracted reads that call's new column,
+        // in neither layout (review H1). A call with no column read is
+        // evaluated with the left side.
+        let on_left = |e: &Expr| !reads_of(e).iter().any(|i| rids.contains(i));
         let on_right = |e: &Expr| {
             let ids = reads_of(e);
-            !ids.is_empty() && ids.iter().all(|i| rids.contains(i))
+            !ids.is_empty() && !ids.iter().any(|i| lids.contains(i))
         };
         let (lp, exprs) = self.extract_python_where(lp, std::slice::from_ref(on), &on_left)?;
         let (rp, exprs) = self.extract_python_where(rp, &exprs, &on_right)?;

@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Embedded Python UDFs (design P2-T059 §2.5, unit 2b): the process's pool
 //! of pinned threads, the per-session [`runtime::PyUdfRuntime`], and the
-//! hooks `krishiv.sql` registers at import (`atexit`, `os.register_at_fork`).
+//! exit hook `krishiv` registers at import (`atexit`).
 //!
-//! One pool per process, started by the first call that needs it and sized
-//! then (`krishiv.python.udf.threads`; 0 is the machine's thread count on a
-//! free-threaded Python, else 1). After `os.fork` the child marks the pool it
-//! inherited as gone and starts its own on first use: the inherited threads
-//! and pins do not exist in the child and are never touched.
+//! One pool per process, started by the first UDF call and sized by the
+//! session making it (`krishiv.python.udf.threads`, read when the session
+//! registers its first UDF; 0 is the machine's thread count on a
+//! free-threaded Python, else 1). A call asks for the current pool
+//! ([`current`]) when its runtime has none or holds a fork's copy: after `os.fork` the child's copy of the parent's pool has
+//! no threads (they stayed in the parent), so it is left alone, never
+//! stopped or joined, and the child starts a pool of its own of the same
+//! size (review B2). After the exit hook ran no pool starts again, so no
+//! Python runs during finalization (review M2).
 
 pub(crate) mod pool;
 pub(crate) mod runtime;
@@ -16,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use krishiv_common::error::{InternalError, KrishivError};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
@@ -24,36 +29,58 @@ use pool::Pool;
 /// The process's pool, once started.
 static POOL: Mutex<Option<Arc<Pool>>> = Mutex::new(None);
 
-/// Set in a forked child: the pool in [`POOL`] is the parent's.
-static FORKED: AtomicBool = AtomicBool::new(false);
+/// Set by the exit hook: no pool starts after it.
+static SHUT: AtomicBool = AtomicBool::new(false);
 
 /// How long the exit hook waits for the pool's threads.
 const STOP_LIMIT: Duration = Duration::from_secs(5);
 
-/// The pool, started with `threads` threads (0: chosen as above) if there
-/// is none yet.
-pub(crate) fn pool(py: Python<'_>, threads: usize) -> PyResult<Arc<Pool>> {
-    let mut slot = POOL.lock().unwrap_or_else(PoisonError::into_inner);
-    if FORKED.swap(false, Ordering::SeqCst)
-        && let Some(inherited) = slot.take()
-    {
-        // The parent's threads do not exist here: never stop or join them.
-        let _leaked = std::mem::ManuallyDrop::new(inherited);
+/// The size of the pool for `threads` (0: chosen as above). Raises after
+/// the exit hook ran.
+pub(crate) fn pool_size(py: Python<'_>, threads: usize) -> PyResult<usize> {
+    if SHUT.load(Ordering::SeqCst) {
+        return Err(PyRuntimeError::new_err(
+            "Python UDFs cannot be registered while the interpreter exits",
+        ));
     }
-    if let Some(p) = slot.as_ref() {
-        return Ok(Arc::clone(p));
+    if threads > 0 {
+        return Ok(threads);
     }
-    let size = if threads > 0 {
-        threads
-    } else if gil_enabled(py)? {
+    Ok(if gil_enabled(py)? {
         1
     } else {
         std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
-    };
-    let started =
-        Arc::new(Pool::start(size).map_err(|e| {
-            PyRuntimeError::new_err(format!("cannot start the Python UDF pool: {e}"))
-        })?);
+    })
+}
+
+/// This process's pool, started with `size` threads if there is none (or
+/// only the copy a fork left).
+///
+/// # Errors
+/// After the exit hook ran, or when a thread cannot be spawned.
+pub(crate) fn current(size: usize) -> Result<Arc<Pool>, KrishivError> {
+    let unavailable = |message: String| -> KrishivError { InternalError { message }.into() };
+    let mut slot = POOL.lock().unwrap_or_else(PoisonError::into_inner);
+    // Read under the lock the exit hook takes: no pool starts after it.
+    if SHUT.load(Ordering::SeqCst) {
+        return Err(unavailable(
+            "the Python UDF pool has stopped: the interpreter is exiting".to_owned(),
+        ));
+    }
+    if let Some(p) = slot.as_ref()
+        && p.is_local()
+    {
+        return Ok(Arc::clone(p));
+    }
+    if let Some(inherited) = slot.take() {
+        // A fork's copy: its handles name the parent's threads. Never stop
+        // or join it; leak it.
+        let _leaked = std::mem::ManuallyDrop::new(inherited);
+    }
+    let started = Arc::new(
+        Pool::start(size)
+            .map_err(|e| unavailable(format!("cannot start the Python UDF pool: {e}")))?,
+    );
     *slot = Some(Arc::clone(&started));
     Ok(started)
 }
@@ -68,21 +95,24 @@ fn gil_enabled(py: Python<'_>) -> PyResult<bool> {
     sys.call_method0("_is_gil_enabled")?.extract()
 }
 
-/// The `atexit` hook: stops the pool (waiting at most 5 s, with this thread
-/// detached so the pool threads can release their pins) and returns how
-/// many threads were still inside a UDF (left running, logged by the
-/// caller).
+/// The `atexit` hook: stops this process's pool (waiting at most 5 s, with
+/// this thread detached so the pool threads can release their pins) and
+/// returns how many threads were still inside a UDF (left running, their
+/// pins leaked, logged by the caller). A fork's copy is left alone. Later
+/// calls fail instead of running Python during finalization.
 #[pyfunction]
 pub(crate) fn _udf_pool_shutdown(py: Python<'_>) -> usize {
-    let taken = POOL.lock().unwrap_or_else(PoisonError::into_inner).take();
-    let Some(pool) = taken else { return 0 };
-    // Sessions alive at exit still hold the pool; stopping it makes their
-    // later calls fail instead of running Python during finalization.
-    py.detach(|| pool.stop(STOP_LIMIT))
-}
-
-/// The `os.register_at_fork(after_in_child=...)` hook.
-#[pyfunction]
-pub(crate) fn _udf_pool_forked() {
-    FORKED.store(true, Ordering::SeqCst);
+    let taken = {
+        let mut slot = POOL.lock().unwrap_or_else(PoisonError::into_inner);
+        SHUT.store(true, Ordering::SeqCst);
+        slot.take()
+    };
+    match taken {
+        Some(pool) if pool.is_local() => py.detach(|| pool.stop(STOP_LIMIT)),
+        Some(inherited) => {
+            let _leaked = std::mem::ManuallyDrop::new(inherited);
+            0
+        }
+        None => 0,
+    }
 }

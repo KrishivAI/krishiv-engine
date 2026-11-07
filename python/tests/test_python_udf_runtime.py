@@ -27,7 +27,7 @@ def _spark() -> SparkSession:
 
 
 def _plus_one(x: pa.Array) -> pa.Array:
-    return pc.add(x, 1)
+    return pc.call_function("add", [x, 1])
 
 
 def _ids(rows) -> list:
@@ -70,13 +70,21 @@ def test_thread_safe_false_never_runs_two_calls_at_once(thread_safe: bool) -> No
         time.sleep(0.02)
         with lock:
             state["active"] -= 1
-        return pc.add(x, 1)
+        return pc.call_function("add", [x, 1])
 
     spark = _spark()
     spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "10")
     spark._native.register_python_udf("py_counted", ARROW_BATCHED, "bigint", True, thread_safe, counted)
-    rows = spark.sql("SELECT py_counted(id) FROM range(0, 400, 1, 8)").collect()
-    assert sorted(_ids(rows)) == list(range(1, 401))
+    # Run on a daemon thread, bounded: a lock waited for while holding the GIL would hang (review B1).
+    out: dict = {}
+    runner = threading.Thread(
+        target=lambda: out.setdefault("rows", spark.sql("SELECT py_counted(id) FROM range(0, 400, 1, 8)").collect()),
+        daemon=True,
+    )
+    runner.start()
+    runner.join(60)
+    assert not runner.is_alive(), "the query did not finish within 60 s (deadlock?)"
+    assert sorted(_ids(out["rows"])) == list(range(1, 401))
     if not thread_safe:
         assert state["peak"] == 1, state
     else:
@@ -92,6 +100,38 @@ def test_a_result_of_another_type_is_refused() -> None:
     )
     with pytest.raises(Exception, match="was declared"):
         spark.sql("SELECT py_wrong(id) FROM range(3)").collect()
+
+
+@pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
+def test_a_forked_child_runs_udfs_on_a_pool_of_its_own() -> None:
+    # The child's copy of the parent's pool has no threads (review B2): its call must not hang. The child
+    # uses a session of its own: a parent's session does not run queries after a fork even without UDFs
+    # (its executor's threads stayed in the parent).
+    import os
+
+    spark = _spark()
+    spark._native.register_python_udf("py_plus_fork", ARROW_BATCHED, "bigint", True, True, _plus_one)
+    assert _ids(spark.sql("SELECT py_plus_fork(id) FROM range(2) ORDER BY 1").collect()) == [1, 2]
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            child = _spark()
+            child._native.register_python_udf("py_plus_fork", ARROW_BATCHED, "bigint", True, True, _plus_one)
+            got = _ids(child.sql("SELECT py_plus_fork(id) FROM range(3) ORDER BY 1").collect())
+            code = 0 if got == [1, 2, 3] else 2
+        finally:
+            os._exit(code)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            assert os.waitstatus_to_exitcode(status) == 0
+            return
+        time.sleep(0.05)
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+    pytest.fail("the forked child's UDF call did not finish within 60 s")
 
 
 def test_a_wrapper_returning_no_pyarrow_array_is_refused() -> None:

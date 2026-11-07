@@ -18,6 +18,7 @@
 
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
@@ -78,24 +79,31 @@ pub(crate) struct Pool {
     jobs: Sender<Message>,
     /// Taken by [`Pool::stop`].
     threads: Mutex<Vec<JoinHandle<()>>>,
+    /// The process the threads run in: after `os.fork` the child's copy of
+    /// this pool has no threads (review B2).
+    pid: u32,
+    /// Set by [`Pool::stop`] when a thread did not stop in time: it then
+    /// keeps its pin instead of releasing it, because the interpreter may be
+    /// finalizing by the time it gets there (review M1).
+    abandoned: Arc<AtomicBool>,
 }
 
 impl Pool {
-    /// Starts `size` pinned threads (at least one). Called with the caller
-    /// attached to Python; the new threads wait for the caller to detach
-    /// before they can pin.
+    /// Starts `size` pinned threads (at least one). Called attached or not;
+    /// a new thread pins once the GIL (if any) is free.
     ///
     /// # Errors
     /// A thread that cannot be spawned (the pool started so far is stopped).
     pub(crate) fn start(size: usize) -> std::io::Result<Self> {
         let (jobs, queue) = channel::<Message>();
         let queue = Arc::new(Mutex::new(queue));
+        let abandoned = Arc::new(AtomicBool::new(false));
         let mut threads = Vec::with_capacity(size.max(1));
         for i in 0..size.max(1) {
-            let queue = Arc::clone(&queue);
+            let (queue, abandoned) = (Arc::clone(&queue), Arc::clone(&abandoned));
             let spawned = std::thread::Builder::new()
                 .name(format!("krishiv-python-udf-{i}"))
-                .spawn(move || worker(&queue));
+                .spawn(move || worker(&queue, &abandoned));
             match spawned {
                 Ok(t) => threads.push(t),
                 Err(e) => {
@@ -110,7 +118,15 @@ impl Pool {
         Ok(Self {
             jobs,
             threads: Mutex::new(threads),
+            pid: std::process::id(),
+            abandoned,
         })
+    }
+
+    /// Whether this pool's threads exist in the calling process (false in a
+    /// forked child).
+    pub(crate) fn is_local(&self) -> bool {
+        self.pid == std::process::id()
     }
 
     /// Queues `job`. A pool that has stopped drops it (its result channel
@@ -139,7 +155,14 @@ impl Pool {
             if t.is_finished() {
                 let _ = t.join();
             } else {
-                stuck += 1;
+                // Tell it to keep its pin; set before the next check so a
+                // thread finishing now still sees it.
+                self.abandoned.store(true, Ordering::SeqCst);
+                if t.is_finished() {
+                    let _ = t.join();
+                } else {
+                    stuck += 1;
+                }
             }
         }
         stuck
@@ -147,7 +170,7 @@ impl Pool {
 }
 
 /// A pool thread: pins, runs jobs until told to stop, releases the pin.
-fn worker(queue: &Mutex<Receiver<Message>>) {
+fn worker(queue: &Mutex<Receiver<Message>>, abandoned: &AtomicBool) {
     let pin = Pin::new();
     loop {
         let next = queue.lock().unwrap_or_else(PoisonError::into_inner).recv();
@@ -159,5 +182,13 @@ fn worker(queue: &Mutex<Receiver<Message>>) {
             Ok(Message::Stop) | Err(_) => break,
         }
     }
-    pin.release();
+    if abandoned.load(Ordering::SeqCst) {
+        // Past the exit deadline the interpreter may be finalizing: keep the
+        // thread state (leaked) rather than touch it. A thread that read the
+        // flag just before it was set can still release after finalization
+        // began: the window is the release's two calls (review M1, narrowed).
+        let _kept = std::mem::ManuallyDrop::new(pin);
+    } else {
+        pin.release();
+    }
 }

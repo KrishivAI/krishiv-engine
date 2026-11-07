@@ -264,8 +264,8 @@ impl PySession {
             .get("krishiv.python.udf.threads")
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(0);
-        let pool = crate::udf::pool(py, threads)?;
-        let made = std::sync::Arc::new(crate::udf::runtime::PyUdfRuntime::new(pool));
+        let size = crate::udf::pool_size(py, threads)?;
+        let made = std::sync::Arc::new(crate::udf::runtime::PyUdfRuntime::new(size));
         let runtime = std::sync::Arc::clone(self.udfs.get_or_init(|| made));
         self.inner
             .set_python_udf_runtime(std::sync::Arc::clone(&runtime)

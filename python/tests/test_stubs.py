@@ -108,6 +108,7 @@ def test_native_stub_matches_runtime() -> None:
         "call_function",
         "count_star",
         "count_distinct",
+        "_udf_pool_shutdown",
     }
     for name, fn in stub_fns.items():
         assert callable(getattr(krishiv_native, name)), f"{name} is in the stub but missing at runtime"
