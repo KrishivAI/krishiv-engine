@@ -74,10 +74,16 @@ pub struct ExecConfig {
     /// query's memory). A build past it falls back to one per task.
     pub shared_broadcast_bytes: Option<usize>,
     /// Every pipeline runs on one driver, so the order of merges and of the
-    /// output rows does not depend on how the drivers interleave
-    /// (`krishiv.deterministicOrder`).
+    /// output rows does not depend on how the drivers interleave, and the key
+    /// hashes take a fixed seed (a constant unless
+    /// `krishiv.exec.seed` names one) (`krishiv.deterministicOrder`).
     pub deterministic_order: bool,
 }
+
+/// The key-hash seed of `krishiv.deterministicOrder` when `krishiv.exec.seed`
+/// is not set: any fixed value; it is never observable (Spark's observable
+/// hash is Murmur3, in the kernels).
+pub(crate) const DETERMINISTIC_SEED: u64 = 0x6b72_6973_6869_7601;
 
 impl Default for ExecConfig {
     fn default() -> Self {
@@ -136,14 +142,19 @@ impl ExecConfig {
             .and_then(krishiv_common::config::ConfigValue::as_size)
             .and_then(|n| usize::try_from(n).ok())
             .filter(|n| *n > 0);
-        let seed = config
-            .get(&EXEC_SEED)
-            .and_then(krishiv_common::config::ConfigValue::as_int)
-            .map(i64::cast_unsigned);
         let deterministic_order = config
             .get(&krishiv_common::config::DETERMINISTIC_ORDER)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(false);
+        // Under `krishiv.deterministicOrder` the key hashes are seeded too
+        // (`krishiv.exec.seed` when set, else a fixed seed): spill partitions
+        // follow the seeded hash, so a random seed per query would order the
+        // groups of a spilled aggregation differently on every run.
+        let seed = config
+            .get(&EXEC_SEED)
+            .and_then(krishiv_common::config::ConfigValue::as_int)
+            .map(i64::cast_unsigned)
+            .or(deterministic_order.then_some(DETERMINISTIC_SEED));
         Self {
             batch_size,
             seed,

@@ -53,3 +53,70 @@ fn the_setting_is_off_by_default_and_a_session_setting() {
     s.conf().set("krishiv.deterministicOrder", "true").unwrap();
     assert!(get(&s).contains("true"));
 }
+
+/// Enough groups that a partial table fills and flushes into its radix
+/// partitions, whose order follows the per-query hash seed: the order of
+/// the groups is still the same on every run.
+#[test]
+fn many_groups_come_out_in_the_same_order_on_every_run() {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.deterministicOrder", "true").unwrap();
+    run(
+        &s,
+        "CREATE TABLE w USING parquet AS \
+         SELECT id, id % 200003 AS k, CAST(id AS DOUBLE) / 7 AS x FROM range(1000000)",
+    );
+    for sql in [
+        "SELECT k, count(*), sum(x) FROM w GROUP BY k",
+        "SELECT DISTINCT k FROM w",
+    ] {
+        let first = shape(&run(&s, sql));
+        for i in 1..4 {
+            assert!(first == shape(&run(&s, sql)), "run {i} of `{sql}` differs");
+        }
+    }
+}
+
+/// A `UNION ALL` whose branches feed a partial aggregation (a fan-in the
+/// runner may start together) and a grouped float `sum` that spills under
+/// a small memory limit: still the same bytes on every run.
+#[test]
+fn fan_ins_and_spills_give_the_same_bytes_on_every_run() {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.deterministicOrder", "true").unwrap();
+    run(
+        &s,
+        "CREATE TABLE f USING parquet AS \
+         SELECT id, id % 50021 AS k, CAST(id AS DOUBLE) / 3 AS x FROM range(400000)",
+    );
+    let union = "SELECT k, sum(x), count(*) FROM \
+                 (SELECT k, x FROM f WHERE id % 2 = 0 UNION ALL SELECT k, x * 1.5 FROM f WHERE id % 3 = 0) \
+                 GROUP BY k";
+    let first = shape(&run(&s, union));
+    for i in 1..4 {
+        assert!(
+            first == shape(&run(&s, union)),
+            "run {i} of the union differs"
+        );
+    }
+    let spill = Session::builder()
+        .config("krishiv.memory.limit", "8m")
+        .build()
+        .unwrap();
+    spill
+        .conf()
+        .set("krishiv.deterministicOrder", "true")
+        .unwrap();
+    run(
+        &spill,
+        "CREATE TEMPORARY VIEW g AS SELECT id % 150001 AS k, CAST(id AS DOUBLE) / 7 AS x FROM range(600000)",
+    );
+    let grouped = "SELECT k, sum(x), avg(x) FROM g GROUP BY k";
+    let first = shape(&run(&spill, grouped));
+    for i in 1..3 {
+        assert!(
+            first == shape(&run(&spill, grouped)),
+            "run {i} under spill differs"
+        );
+    }
+}
