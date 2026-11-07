@@ -406,7 +406,7 @@ impl BuildSink {
 
 /// What indexing a partition's in-memory rows reserves: `(index, copy)`,
 /// its [`JoinTable`] index (and match bitmap when `marks`) and its
-/// transient concatenation copy (none for a single chunk); `None` if no
+/// concatenation copy (always 0: the arena reads its chunks in place); `None` if no
 /// rows are in memory.
 fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize)> {
     if part.chunks.is_empty() {
@@ -418,12 +418,8 @@ fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usiz
     if marks {
         index = index.saturating_add(JoinTable::marks_bytes(rows));
     }
-    let copy = if part.chunks.len() > 1 {
-        part.bytes()
-    } else {
-        0
-    };
-    Some((index, copy))
+    // The arena reads the chunks in place (`RowArena::concat` copies nothing): no concatenation copy to fund.
+    Some((index, 0))
 }
 
 /// A duration in whole nanoseconds, saturating.

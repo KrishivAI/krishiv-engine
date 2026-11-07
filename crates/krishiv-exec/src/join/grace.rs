@@ -1228,9 +1228,9 @@ impl Loading {
                 Some(b) => self.pending = Some(b?),
             }
         }
-        // Every row read: the table's index, the concatenated copy of the
-        // rows and the probe rows' read-back headroom (exact, so a
-        // partition that loads can always be joined).
+        // Every row read: the table's index and the probe rows' read-back
+        // headroom (exact, so a partition that loads can always be joined).
+        // The arena reads the chunks in place: no concatenated copy.
         let chunks: Vec<Batch> = self
             .task
             .build
@@ -1240,11 +1240,7 @@ impl Loading {
             .cloned()
             .collect();
         let rows = chunks.iter().map(Batch::num_rows).sum();
-        let concat = if chunks.len() > 1 {
-            self.memory.size() + self.task.build.bytes()
-        } else {
-            0
-        };
+        let concat = 0;
         let headroom = self.task.probe.read_headroom();
         let marks = if shared.join_type.builds_preserved() {
             JoinTable::marks_bytes(rows)
