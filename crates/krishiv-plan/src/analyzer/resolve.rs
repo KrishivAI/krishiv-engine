@@ -220,6 +220,9 @@ pub(super) struct Resolver<'a> {
     /// The first aggregate over a nondeterministic argument: Spark checks
     /// it after the operators' other rules, so any other error wins.
     pub(super) pending_nondeterministic: Option<AnalysisError>,
+    /// The attributes that hold a `CHAR(n)` / `VARCHAR(n)` column, by id, with the catalog string they were
+    /// declared with (see `char_varchar`).
+    pub(super) declared: HashMap<AttrId, Arc<str>>,
 }
 
 type Resolved = (
@@ -227,6 +230,7 @@ type Resolved = (
     Vec<BoundColumn>,
     Vec<SecurableUse>,
     Vec<String>,
+    Vec<Option<String>>,
 );
 
 pub(super) fn resolve(
@@ -259,6 +263,7 @@ pub(super) fn resolve(
         fn_path: Vec::new(),
         sql_calls: 0,
         pending_nondeterministic: None,
+        declared: HashMap::new(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -280,6 +285,15 @@ pub(super) fn resolve(
         &ctx.conf,
     )?;
     let output = rel.out.iter().map(|a| a.col.clone()).collect();
+    // The output columns that are `CHAR(n)` / `VARCHAR(n)` columns (none under `charVarcharAsString`).
+    let declared = rel
+        .out
+        .iter()
+        .map(|a| {
+            let kept = (!ctx.conf.char_varchar_as_string).then(|| r.declared.get(&a.col.id));
+            kept.flatten().map(ToString::to_string)
+        })
+        .collect();
     let uses = b
         .securables
         .iter()
@@ -290,7 +304,7 @@ pub(super) fn resolve(
             columns,
         })
         .collect();
-    Ok((root, output, uses, warnings))
+    Ok((root, output, uses, warnings, declared))
 }
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its
@@ -875,6 +889,13 @@ impl Resolver<'_> {
                 if matches!(s.source, ReadSource::Table { .. }) && source.is_none() {
                     return Err(unsupported("a scan of an unchecked table", o));
                 }
+                if let Some(declared) = self.b.scan_declared.get(&name) {
+                    for c in &s.output {
+                        if let Some(d) = declared.get(&c.name) {
+                            self.declared.insert(c.id, Arc::clone(d));
+                        }
+                    }
+                }
                 let qual: Arc<[String]> = name.into();
                 let out = s
                     .output
@@ -889,6 +910,13 @@ impl Resolver<'_> {
                 Ok(self.wrap(Arc::clone(p), o.plan_id, out, &[]))
             }
             PlanNode::CteRef(r) => {
+                // A reference in a stored analyzed plan (a DataFrame's temporary view) holds the declared
+                // `CHAR`/`VARCHAR` types of its definition's columns, as a fresh reference does.
+                for (source, out) in r.source.iter().zip(&r.output) {
+                    if let Some(d) = self.declared.get(source).cloned() {
+                        self.declared.insert(out.id, d);
+                    }
+                }
                 let qual: Arc<[String]> = vec![r.name.clone()].into();
                 let out = r
                     .output

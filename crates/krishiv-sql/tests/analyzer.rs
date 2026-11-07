@@ -57,6 +57,7 @@ fn catalog(g: &Value) -> MemoryCatalog {
                 name: f["name"].as_str().unwrap().to_owned(),
                 data_type: krishiv_types::parse_data_type(f["type"].as_str().unwrap()).unwrap(),
                 nullable: f["nullable"].as_bool().unwrap(),
+                char_varchar: None,
             })
             .collect();
         c = c.with_table(&["default"], name, columns, None);
@@ -819,6 +820,7 @@ fn window_goldens_resolve_to_a_fixed_point() {
                 name: f["name"].as_str().unwrap().to_owned(),
                 data_type: krishiv_types::parse_data_type(f["type"].as_str().unwrap()).unwrap(),
                 nullable: f["nullable"].as_bool().unwrap(),
+                char_varchar: None,
             })
             .collect();
         c = c.with_table(&["default"], name, columns, None);

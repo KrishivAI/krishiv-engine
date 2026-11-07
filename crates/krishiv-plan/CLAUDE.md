@@ -19,6 +19,7 @@ Paths are relative to this crate.
 - `src/analyzer/mod.rs` analyzer entry; `src/analyzer/bind.rs` Bind stage (async, catalog and access policy)
 - `src/analyzer/windows.rs` window binding and extraction into `Window` relations
 - `src/analyzer/repartition.rs` `DISTRIBUTE BY` (`PlanNode::Repartition`): expressions checked as Spark checks `RepartitionByExpression`, then the node is dropped (one node has no partitions; run-time errors of the expressions are not raised)
+- `src/analyzer/char_varchar.rs` `CHAR(n)` / `VARCHAR(n)` (design P2-T001b): `Resolver::declared` maps attributes to the catalog string; read-side padding of `char(n)` scans (pads, never cuts), comparison padding (`ApplyCharTypePadding`; `IN` over a char column is refused), `AnalyzedPlan::output_declared`; the declared type follows bare-column aliases, CTE references, `shifted` instances and `SubqueryAlias` column lists
 - `src/analyzer/suggest.rs` the edit-distance ranking of `UNRESOLVED_COLUMN` proposals (only classes whose Spark message proposes names use it)
 - `src/analyzer/access.rs` `authorize` (the one privilege check: fail closed, filtered readers never change a securable), `table_ident` / `namespace_parts`
 - `src/analyzer/resolve.rs` Resolve stage (sync); `src/analyzer/builtins.rs` `BuiltinFunctions`; `src/analyzer/coerce.rs` implicit coercion

@@ -104,6 +104,12 @@ impl Resolver<'_> {
                     ..a.col.clone()
                 })
                 .collect();
+            // Each reference to a CTE holds the declared `CHAR`/`VARCHAR` types of its definition.
+            for (a, c) in def.out.iter().zip(&output) {
+                if let Some(d) = self.declared.get(&a.col.id).cloned() {
+                    self.declared.insert(c.id, d);
+                }
+            }
             let qual: Arc<[String]> = Arc::from(vec![n.clone()]);
             let out = output
                 .iter()
@@ -148,6 +154,9 @@ impl Resolver<'_> {
                 data_type: c.data_type.clone(),
                 nullable: c.nullable,
             };
+            if let Some(declared) = &c.char_varchar {
+                self.declared.insert(col.id, Arc::from(declared.as_str()));
+            }
             out.push(Attr {
                 col,
                 qual: Arc::clone(&qual),
@@ -165,7 +174,7 @@ impl Resolver<'_> {
         });
         let mut rel = self.make(p.origin, node, out, &[]);
         self.with_metadata_column(&mut rel, meta.file_metadata, &qual);
-        Ok(rel)
+        self.pad_char_columns(rel, p.origin)
     }
 
     /// `rel`, a scan of a file source, with the hidden `_metadata` column of
@@ -239,7 +248,7 @@ impl Resolver<'_> {
     /// the `Shift` node when it exists already. Ids past `MAX_ID` are an
     /// error, never an overflow.
     pub(super) fn shifted(
-        &self,
+        &mut self,
         c: &Rel,
         offset: u64,
         plan: Option<Arc<LogicalPlan>>,
@@ -250,6 +259,12 @@ impl Resolver<'_> {
                 FailedToParseTooComplex {},
                 c.plan.origin,
             ));
+        }
+        // The declared `CHAR`/`VARCHAR` types follow the shifted ids.
+        for a in c.out.iter().chain(c.hidden.iter()) {
+            if let Some(d) = self.declared.get(&a.col.id).cloned() {
+                self.declared.insert(AttrId(a.col.id.0 + offset), d);
+            }
         }
         let sh = |a: &Attr| Attr {
             col: BoundColumn {
@@ -330,6 +345,8 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let items = self.select_items(c, exprs, env, "Aggregate")?;
+        // The declared `CHAR`/`VARCHAR` types follow the aliases whichever projection is built below.
+        self.carry_declared(&items, exprs);
         let c = &self.reveal(c, &items)?;
         if items.iter().any(|b| has_generator(&b.expr)) {
             return self.generator_project(p.origin, c, exprs, &items);
@@ -704,6 +721,8 @@ impl Resolver<'_> {
             };
             let written_identifier = matches!(&e.node, ExprNode::Column(c) if c.by_identifier);
             let b = self.named(b, !written_identifier)?;
+            // Before the next item binds: it may read this alias (a lateral column alias).
+            self.carry_declared_item(&b, Some(e));
             if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &b.expr.node {
                 lateral.push(Attr {
                     col: output.clone(),
@@ -1974,6 +1993,8 @@ impl Resolver<'_> {
             }
         }
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
+        // The declared `CHAR`/`VARCHAR` types follow the aliases of an explicit `GROUP BY` too.
+        self.carry_declared(&items, aggregates);
         // Spark's `ExtractGenerator`: the generator's argument takes the
         // item's place in the aggregate, the generator runs above it.
         // A written alias of the generator (the analyzer names every item,
@@ -3979,6 +4000,9 @@ impl Resolver<'_> {
                     name: name.clone(),
                     ..a.col.clone()
                 };
+                if let Some(d) = self.declared.get(&a.col.id).cloned() {
+                    self.declared.insert(output.id, d);
+                }
                 exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                     ResolvedExpr::Alias {
                         expr: col_expr(&a.col, Origin::UNKNOWN),

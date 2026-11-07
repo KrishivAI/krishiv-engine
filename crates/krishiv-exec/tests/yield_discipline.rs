@@ -642,6 +642,7 @@ fn tpch_session() -> Result<(MemoryCatalog, Arc<MemoryTables>)> {
                     data_type: krishiv_types::DataType::from_arrow_field(f)
                         .map_err(|e| internal(&e.to_string()))?,
                     nullable: f.is_nullable(),
+                    char_varchar: None,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
