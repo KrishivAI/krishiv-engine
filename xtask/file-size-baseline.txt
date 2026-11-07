@@ -26,7 +26,8 @@
 3096 crates/krishiv-plan/src/analyzer/subquery.rs
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
-3009 crates/krishiv-session/src/catalog.rs
+# +6 lines over main: a stored table's column comments reach the analyzer (TableMeta.column_comments, row 14)
+3015 crates/krishiv-session/src/catalog.rs
 2251 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 2640 crates/krishiv-session/src/dataframe.rs
@@ -34,7 +35,8 @@
 2781 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
-3373 crates/krishiv-session/src/table_commands.rs
+# +4 lines over main: a view column list without a comment keeps the query column's comment (Spark's aliasPlan, row 14)
+3377 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 2732 crates/krishiv-sql/src/lower.rs
 # +21 lines over main: WITH ctes FROM source INSERT ... parses as a multi-table insert (P2b row 11)

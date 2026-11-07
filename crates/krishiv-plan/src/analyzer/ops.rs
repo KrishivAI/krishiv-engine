@@ -106,9 +106,7 @@ impl Resolver<'_> {
                 .collect();
             // Each reference to a CTE holds the declared `CHAR`/`VARCHAR` types of its definition.
             for (a, c) in def.out.iter().zip(&output) {
-                if let Some(d) = self.declared.get(&a.col.id).cloned() {
-                    self.declared.insert(c.id, d);
-                }
+                self.carry_column_meta(a.col.id, c.id);
             }
             let qual: Arc<[String]> = Arc::from(vec![n.clone()]);
             let out = output
@@ -156,6 +154,9 @@ impl Resolver<'_> {
             };
             if let Some(declared) = &c.char_varchar {
                 self.declared.insert(col.id, Arc::from(declared.as_str()));
+            }
+            if let Some(comment) = meta.column_comments.get(&c.name) {
+                self.comments.insert(col.id, Arc::from(comment.as_str()));
             }
             out.push(Attr {
                 col,
@@ -262,9 +263,7 @@ impl Resolver<'_> {
         }
         // The declared `CHAR`/`VARCHAR` types follow the shifted ids.
         for a in c.out.iter().chain(c.hidden.iter()) {
-            if let Some(d) = self.declared.get(&a.col.id).cloned() {
-                self.declared.insert(AttrId(a.col.id.0 + offset), d);
-            }
+            self.carry_column_meta(a.col.id, AttrId(a.col.id.0 + offset));
         }
         let sh = |a: &Attr| Attr {
             col: BoundColumn {
@@ -3970,9 +3969,7 @@ impl Resolver<'_> {
                     name: name.clone(),
                     ..a.col.clone()
                 };
-                if let Some(d) = self.declared.get(&a.col.id).cloned() {
-                    self.declared.insert(output.id, d);
-                }
+                self.carry_column_meta(a.col.id, output.id);
                 exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                     ResolvedExpr::Alias {
                         expr: col_expr(&a.col, Origin::UNKNOWN),
