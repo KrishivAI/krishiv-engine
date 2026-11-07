@@ -584,3 +584,25 @@ fn a_last_resort_victim_funds_a_request_without_an_abort() {
         assert_eq!(root.reserved(), 0);
     });
 }
+
+/// A cohort member going idle always wakes a member waiting for it: the
+/// waiter takes the listener, checks `others_active`, then waits, and the
+/// other member's `set(Idle)` races any of those steps.
+#[test]
+fn a_cohort_member_going_idle_wakes_a_waiter() {
+    model(|| {
+        let cohort = Arc::new(crate::Cohort::default());
+        let mut holder = cohort.join();
+        holder.set(crate::SeatState::Holding);
+        let waiter = cohort.join();
+        let t = thread::spawn(move || holder.set(crate::SeatState::Idle));
+        loop {
+            let listener = cohort.changed();
+            if !cohort.others_active(&waiter) {
+                break;
+            }
+            block_on(listener);
+        }
+        t.join().unwrap();
+    });
+}

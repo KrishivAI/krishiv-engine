@@ -141,19 +141,7 @@ impl Reservation {
     /// # Errors
     /// [`MemoryError`] if arbitration could not make room or aborted the query.
     pub async fn grow(&mut self, bytes: usize) -> Result<(), MemoryError> {
-        let (rest, credit) = self.draw_credit(bytes);
-        // Cancel-safe: dropping this future mid-wait puts the credit back.
-        let mut drawn = Drawn {
-            handle: self.handle.as_ref(),
-            credit,
-        };
-        if rest > 0 {
-            self.pool.reserve(self.id, rest).await?;
-        }
-        drawn.credit = 0;
-        drop(drawn);
-        self.added(bytes);
-        Ok(())
+        self.grow_with(bytes, true).await
     }
 
     /// [`grow`](Self::grow) without the abort phase: arbitration reclaims
@@ -164,13 +152,22 @@ impl Reservation {
     /// # Errors
     /// [`MemoryError`] if reclaiming and spilling did not make room.
     pub async fn grow_without_abort(&mut self, bytes: usize) -> Result<(), MemoryError> {
+        self.grow_with(bytes, false).await
+    }
+
+    async fn grow_with(&mut self, bytes: usize, abort: bool) -> Result<(), MemoryError> {
         let (rest, credit) = self.draw_credit(bytes);
+        // Cancel-safe: dropping this future mid-wait puts the credit back.
         let mut drawn = Drawn {
             handle: self.handle.as_ref(),
             credit,
         };
         if rest > 0 {
-            self.pool.reserve_without_abort(self.id, rest).await?;
+            if abort {
+                self.pool.reserve(self.id, rest).await?;
+            } else {
+                self.pool.reserve_without_abort(self.id, rest).await?;
+            }
         }
         drawn.credit = 0;
         drop(drawn);

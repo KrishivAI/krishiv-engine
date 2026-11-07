@@ -1563,31 +1563,39 @@ fn a_query_shares_its_cohorts_across_its_pools() {
     assert!(root.cohort("c").is_none());
 }
 
-/// Seats count members and holders; a holder clearing its mark or leaving
-/// wakes a waiter that listened first.
+/// Seats count members and active ones (reserving or holding); going idle
+/// or leaving wakes a waiter that listened first, and reserving -> holding
+/// does not.
 #[tokio::test]
-async fn a_cohort_wakes_waiters_when_a_holder_lets_go() {
+async fn a_cohort_wakes_waiters_when_a_member_goes_idle() {
+    use crate::SeatState::{Holding, Idle, Reserving};
     let root = root(Some(64 * Q), Q);
     let cohort = root.child_pool("q", Some(32 * Q)).cohort("c").unwrap();
-    let (mut a, b) = (cohort.join(), cohort.join());
+    let (mut a, mut b) = (cohort.join(), cohort.join());
     assert_eq!(cohort.members(), 2);
-    assert!(!cohort.others_holding(&b));
-    a.set_holding(true);
-    a.set_holding(true);
-    assert!(cohort.others_holding(&b));
-    assert!(!cohort.others_holding(&a));
-    let changed = cohort.changed();
-    a.set_holding(false);
+    assert!(!cohort.others_active(&b));
+    a.set(Reserving);
+    assert!(cohort.others_active(&b));
+    assert!(!cohort.others_active(&a));
+    b.set(Reserving);
+    assert!(cohort.others_active(&a));
+    b.set(Idle);
+    let mut changed = Box::pin(cohort.changed());
+    a.set(Holding);
+    let early = tokio::time::timeout(std::time::Duration::from_millis(20), changed.as_mut()).await;
+    assert!(early.is_err(), "reserving -> holding woke a waiter");
+    assert!(cohort.others_active(&b));
+    a.set(Idle);
     tokio::time::timeout(std::time::Duration::from_secs(5), changed)
         .await
         .unwrap();
-    assert!(!cohort.others_holding(&b));
-    a.set_holding(true);
+    assert!(!cohort.others_active(&b));
+    a.set(Holding);
     let changed = cohort.changed();
     drop(a);
     tokio::time::timeout(std::time::Duration::from_secs(5), changed)
         .await
         .unwrap();
     assert_eq!(cohort.members(), 1);
-    assert!(!cohort.others_holding(&b));
+    assert!(!cohort.others_active(&b));
 }
