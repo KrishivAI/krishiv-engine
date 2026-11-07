@@ -463,7 +463,7 @@ def analyze_query(spark, jv: Jvm, sql: str) -> dict:
 
 
 def run_golden_file(spark, jv: Jvm, path: Path, tag: str, idx: int) -> dict:
-    """Execute a SQLQueryTestSuite input; plan every SELECT. INSERTs are skipped (plans need no data)."""
+    """Execute a SQLQueryTestSuite input; plan every SELECT. INSERT statements are skipped (plans need no data)."""
     for t in list(spark.catalog.listTables()):
         if t.isTemporary:
             spark.catalog.dropTempView(t.name)
@@ -503,9 +503,10 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument(
         "--parts",
-        default="tpch,negative,golden",
-        help="comma list of: tpch, negative, golden (all golden files) or golden:<i> (index into "
-        "GOLDEN_FILES); partial outputs are merged with --merge",
+        default="tpch,tpch_nn,negative,golden",
+        help="comma list of: tpch, tpch_nn (the TPC-H queries over non-nullable relations), negative, "
+        "golden (all golden files) or golden:<i> (index into GOLDEN_FILES); partial outputs are merged "
+        "with --merge",
     )
     ap.add_argument("--merge", nargs="*", help="merge these partial fixtures into --out and exit")
     args = ap.parse_args()
@@ -563,8 +564,6 @@ def main() -> None:
         "negative": {},
         "golden_join_files": [],
     }
-    if "golden" not in parts and not any(x.startswith("golden:") for x in parts):
-        pass
     for i in range(1, 23) if "tpch" in parts else []:
         sql = (root / f"bench/queries/tpch/q{i:02d}.sql").read_text().strip().rstrip(";")
         fixture["tpch"][f"q{i:02d}"] = analyze_query(spark, jv, sql)
