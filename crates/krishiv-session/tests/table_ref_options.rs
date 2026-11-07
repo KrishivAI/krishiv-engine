@@ -76,7 +76,12 @@ fn an_empty_table_still_reads_with_reference_options() {
 }
 
 #[test]
-fn reference_option_keys_override_the_tables_whatever_their_case() {
+fn a_reference_option_that_contradicts_the_tables_is_refused() {
+    // Spark's `DataSourceUtils.generateDatasourceOptions` (v3.5.0 to v4.3.0): the same key in any
+    // case with another value is `_LEGACY_ERROR_TEMP_1151`; the same value keeps the table's.
+    // Checked on a Spark 4.2.0 local run (2026-11-07): `header`/`HEADER` = 'true' over a table
+    // with `header` = 'false' fails, `HEADER` = 'false' reads `[1, a]`, and the options of a
+    // reference to a DataFrame temp view are ignored (`[1, a]` with or without them).
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("f.csv"), "a,b\n1,2\n").unwrap();
     let s = Session::new().unwrap();
@@ -86,9 +91,45 @@ fn reference_option_keys_override_the_tables_whatever_their_case() {
     )))
     .unwrap();
     assert_eq!(column(&s, "SELECT a FROM h ORDER BY a"), ["1", "a"]);
+    for key in ["header", "HEADER"] {
+        let e = block_on(async {
+            s.sql(&format!("SELECT a FROM h WITH ('{key}' = 'true')"))
+                .await?
+                .collect()
+                .await
+        })
+        .unwrap_err();
+        assert!(
+            e.to_string().contains("duplicated key header "),
+            "{key}: {e}"
+        );
+    }
+    // The same value, in another case of the key, is fine and reads as the table does.
     assert_eq!(
-        column(&s, "SELECT a FROM h WITH ('HEADER' = 'true')"),
-        ["1"]
+        column(&s, "SELECT a FROM h WITH ('HEADER' = 'false') ORDER BY a"),
+        ["1", "a"]
+    );
+}
+
+#[test]
+fn a_file_views_reference_options_are_ignored() {
+    // Spark's `resolveTempView` drops the options of a reference to a view.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.csv"), "a,b\n1,2\n").unwrap();
+    let s = Session::new().unwrap();
+    block_on(
+        s.read()
+            .format("csv")
+            .option("header", "false")
+            .load([dir.path().to_str().unwrap()])
+            .create_or_replace_temp_view("v"),
+    )
+    .unwrap();
+    let plain = column(&s, "SELECT _c0 FROM v ORDER BY 1");
+    assert_eq!(plain, ["1", "a"]);
+    assert_eq!(
+        column(&s, "SELECT _c0 FROM v WITH ('header' = 'true') ORDER BY 1"),
+        plain
     );
 }
 

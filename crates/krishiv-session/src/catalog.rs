@@ -377,13 +377,16 @@ fn reference_key(
     source: &ReadSource,
     options: &BTreeMap<String, krishiv_common::secret::OptionValue>,
 ) -> (FilesKey, ReadSource) {
-    if let (false, ReadSource::Files { .. }) = (options.is_empty(), source) {
+    // Spark applies a reference's options to a catalog table's scan only (`resolveTempView`
+    // drops them for a temporary view), and a key the table already stores keeps the table's
+    // spelling and value: a different value is an error (`check_reference_options`).
+    if let (false, true, ReadSource::Files { .. }) = (options.is_empty(), known, source) {
         let mut merged = source.clone();
         if let ReadSource::Files { options: base, .. } = &mut merged {
             for (k, v) in options {
-                // Option keys are case-insensitive: the reference's spelling replaces the table's.
-                base.retain(|b, _| !b.eq_ignore_ascii_case(k));
-                base.insert(k.clone(), v.clone());
+                if !base.keys().any(|b| b.eq_ignore_ascii_case(k)) {
+                    base.insert(k.clone(), v.clone());
+                }
             }
         }
         let key = FilesKey::Reference {
@@ -527,6 +530,7 @@ impl QueryCatalog {
     /// Listing errors (`PATH_NOT_FOUND` once a view's files are gone, ...)
     /// and errors reading the files' footers.
     pub(crate) async fn open_files(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
+        self.check_reference_options(plan)?;
         for (key, source, table) in self.file_scans(plan) {
             if self.opened(&key).is_some() {
                 continue;
@@ -560,6 +564,54 @@ impl QueryCatalog {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push((key, Arc::new(opened)));
+        }
+        Ok(())
+    }
+
+    /// Refuses a reference whose option has the key (any case) of one the catalog table stores
+    /// with another value, as Spark's `DataSourceUtils.generateDatasourceOptions` does
+    /// (`_LEGACY_ERROR_TEMP_1151`); the same value is accepted and the table's own is kept.
+    fn check_reference_options(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
+        let mut scans = Vec::new();
+        collect_scans(plan, &mut scans);
+        for scan in scans {
+            let ReadSource::Table { name, options } = &scan.source else {
+                continue;
+            };
+            let Some((_, table)) = self.entry_of(name) else {
+                continue;
+            };
+            let TempTable::Files {
+                source:
+                    ReadSource::Files {
+                        options: stored, ..
+                    },
+                known: true,
+                ..
+            } = &*table
+            else {
+                continue;
+            };
+            for (k, v) in options {
+                let clash = stored
+                    .iter()
+                    .find(|(b, bv)| b.eq_ignore_ascii_case(k) && *bv != v);
+                // Spark names the table's spelling of the key.
+                if let Some((stored_key, _)) = clash {
+                    return Err(krishiv_common::error::LegacyErrorTemp1151 {
+                        table: format!(
+                            "`{}`",
+                            name.iter()
+                                .map(String::as_str)
+                                .collect::<Vec<_>>()
+                                .join("`.`")
+                        ),
+                        key: stored_key.clone(),
+                        config: "spark.sql.legacy.extraOptionsBehavior.enabled".to_owned(),
+                    }
+                    .into());
+                }
+            }
         }
         Ok(())
     }
