@@ -382,7 +382,8 @@ pub(crate) enum Counter {
     /// What the build's in-memory partitions keep reserved for their rows
     /// once finalized (the chunks' reservations, which the probe lives with).
     SteadyReservedBytes,
-    /// The exact buffer bytes of the finalized arenas (all columns).
+    /// The finalized arenas' bytes (all columns), as Arrow's `get_array_memory_size` counts them: buffer
+    /// capacities and the arrays' own structs, the measure the build's reservations use.
     ArenaBytes,
     /// Of those, the `hash` column's.
     ArenaHashBytes,

@@ -213,7 +213,7 @@ impl Cols {
     }
 }
 
-/// An arena's buffer bytes by part ([`RowArena::memory_split`]).
+/// An arena's bytes by part ([`RowArena::memory_split`]), as `get_array_memory_size` counts them.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct ArenaBytes {
     pub(crate) hash: usize,
@@ -269,7 +269,7 @@ impl RowArena {
         self.batch.num_rows()
     }
 
-    /// The arena's buffer bytes by part: the `hash` column, the key
+    /// The arena's bytes by part (`get_array_memory_size`, the measure its reservation uses): the `hash` column, the key
     /// columns (`key*`), and everything else (payload, NULL-key flags).
     pub(crate) fn memory_split(&self) -> ArenaBytes {
         let data = self.batch.data();

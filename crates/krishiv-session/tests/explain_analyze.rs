@@ -399,9 +399,13 @@ fn row_layout_joins_report_their_index() {
     // Its memory once finalized: one 8-byte hash per row, key and payload
     // columns, an index, and the reservation the probe lives with.
     let count = |name| build.extra(name).and_then(Metric::value).unwrap_or(0);
+    // The build side is the 4 customers (`hash_entries` above: 4 distinct keys).
     let rows_built = count("build_rows");
-    assert!(rows_built > 0, "{build:?}");
-    assert!(count("arena_hash_bytes") >= 8 * rows_built, "{build:?}");
+    assert_eq!(rows_built, 4, "{build:?}");
+    // `get_array_memory_size`: 8 bytes per row in a 64-byte-aligned buffer plus the array's own struct, never
+    // more than a kilobyte for 4 rows (an inflated count fails here).
+    let hash = count("arena_hash_bytes");
+    assert!((8 * rows_built..=1024).contains(&hash), "{build:?}");
     assert!(count("arena_key_bytes") > 0, "{build:?}");
     assert!(
         count("arena_bytes") >= count("arena_hash_bytes") + count("arena_key_bytes"),
