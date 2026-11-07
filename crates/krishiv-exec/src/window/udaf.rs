@@ -58,11 +58,12 @@ pub(super) fn cost(
 pub(super) struct Charge<'a> {
     pool: Option<&'a mut Reservation>,
     held: usize,
-    /// The state the pool may refuse without failing the query: what the
-    /// window already reserved for this evaluation. A refusal of more is a
-    /// memory error; a refusal of less is the pool being briefly full (the
-    /// rows leave with the output), and the state runs unaccounted, as it
-    /// did before it was charged.
+    /// The state the pool may refuse without failing the query: the whole
+    /// reservation the driver holds when the charge starts (pending batches
+    /// and queued output, not only this evaluation's share; an exception to
+    /// ADR 0045 section 4 that is bounded by the pool limit). A refusal of
+    /// more is a memory error; a refusal of less is the pool being briefly
+    /// full, and the state runs unaccounted, as it did before it was charged.
     slack: usize,
 }
 
@@ -78,7 +79,7 @@ impl<'a> Charge<'a> {
     }
 
     /// A charge that lets the state of the in-memory evaluation overshoot a
-    /// briefly full pool by what the window already reserved for it.
+    /// briefly full pool by the reservation the driver already holds.
     pub(super) fn with_slack(pool: Option<&'a mut Reservation>) -> Self {
         let slack = pool.as_deref().map_or(0, Reservation::size);
         Self {
