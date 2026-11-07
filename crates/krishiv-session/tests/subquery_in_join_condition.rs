@@ -289,6 +289,33 @@ fn a_constant_in_under_a_full_join_is_one_value_for_every_pair() -> R {
     let all = rows(&["1|1", "1|4", "3|1", "3|4", "5|1", "5|4"]);
     let q = "select f1.id, f2.id from f1 full outer join f2 on (5 not in (select id from f_in))";
     assert_eq!(run(&s, q)?, all, "{q}");
+    // The same constant under the other join kinds.
+    for (kind, want) in [
+        (
+            "left join",
+            rows(&["1|1", "1|4", "3|1", "3|4", "5|1", "5|4"]),
+        ),
+        (
+            "right join",
+            rows(&["1|1", "1|4", "3|1", "3|4", "5|1", "5|4"]),
+        ),
+        ("left anti join", rows(&[])),
+    ] {
+        let cols = if kind == "left anti join" {
+            "f1.id"
+        } else {
+            "f1.id, f2.id"
+        };
+        let q = format!("select {cols} from f1 {kind} f2 on (5 not in (select id from f_in))");
+        let got = run(&s, &q)?;
+        if kind == "left anti join" {
+            assert_eq!(got, rows(&[]), "{q}");
+        } else {
+            assert_eq!(got, want, "{q}");
+        }
+    }
+    let q = "select f1.id, f2.id from f1 left join f2 on (5 not in (select id from f_null))";
+    assert_eq!(run(&s, q)?, rows(&["1|NULL", "3|NULL", "5|NULL"]), "{q}");
     // With a key beside it.
     let keyed = rows(&["1|1", "3|NULL", "5|NULL", "NULL|4"]);
     let q = "select f1.id, f2.id from f1 full outer join f2 \

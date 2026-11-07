@@ -941,7 +941,7 @@ impl Rewriter {
                 }
                 let column = JoinKind::existence_column(self.fresh());
                 lifted.push(alias(Arc::clone(&sub), &column));
-                columns_of.insert(addr(&*sub), col_expr(&column, Origin::UNKNOWN));
+                columns_of.insert(addr(&*sub), col_expr(&column, sub.origin));
             }
         }
         if lifted.is_empty() {
