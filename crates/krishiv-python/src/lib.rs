@@ -10,6 +10,7 @@ mod dataframe;
 mod errors;
 mod session;
 mod stream;
+mod udf;
 mod window;
 
 #[cfg(feature = "mimalloc")]
@@ -31,6 +32,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__allocator__", ALLOCATOR)?;
     m.add_class::<stream::ArrowStream>()?;
+    m.add_function(wrap_pyfunction!(udf::_udf_pool_shutdown, m)?)?;
+    m.add_function(wrap_pyfunction!(udf::_udf_pool_forked, m)?)?;
     m.add_class::<session::PySession>()?;
     m.add_class::<dataframe::PyDataFrame>()?;
     m.add_class::<dataframe::PyGroupedData>()?;

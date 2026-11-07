@@ -8,12 +8,7 @@
 //! DuckDB read it without copying. The C-level work is in [`ffi`], which has
 //! no pyo3 dependency so that it can be tested under Miri.
 
-#[expect(
-    dead_code,
-    reason = "export_column and import_column are for the Python UDF runtime (P2-T059 unit 2b); tested on \
-              their own in stream_ffi until then"
-)]
-mod ffi;
+pub(crate) mod ffi;
 mod query;
 
 pub(crate) use self::query::{ErrorSlot, QueryReader};
@@ -41,7 +36,10 @@ fn value_error(e: &KrishivError) -> PyErr {
 }
 
 /// The pointer of `capsule`, which must be a PyCapsule named `name`.
-fn capsule_pointer(capsule: &Bound<'_, PyAny>, name: &CStr) -> PyResult<*mut std::ffi::c_void> {
+pub(crate) fn capsule_pointer(
+    capsule: &Bound<'_, PyAny>,
+    name: &CStr,
+) -> PyResult<*mut std::ffi::c_void> {
     let wanted = name.to_string_lossy();
     let capsule = capsule
         .cast::<PyCapsule>()

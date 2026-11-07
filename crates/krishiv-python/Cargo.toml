@@ -39,6 +39,8 @@ arrow-array = { workspace = true, features = ["ffi"] }
 arrow-data = { workspace = true, features = ["ffi"] }
 arrow-schema = { workspace = true, features = ["ffi"] }
 krishiv-common = { path = "../krishiv-common" }
+krishiv-exec = { path = "../krishiv-exec" }
+krishiv-plan = { path = "../krishiv-plan" }
 krishiv-session = { path = "../krishiv-session" }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-types = { path = "../krishiv-types" }
