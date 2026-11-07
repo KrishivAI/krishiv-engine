@@ -221,8 +221,8 @@ fn legacy_null_in_an_empty_list_is_null_where_the_in_stays() -> R {
 
 /// A neither-side `IN` that is a conjunct of its own keeps a row only when it
 /// is true, so NULL and false agree and it stays a plain join, whatever its
-/// width or the legacy flag; nested under `NOT` or `IS NULL` the two differ
-/// and the multi-value and legacy forms stay refused. The answers follow from
+/// width or the legacy flag; nested under `NOT` (several values, or the legacy
+/// flag) or `IS NULL` the two differ and it stays refused. The answers follow from
 /// `5 IN (5, NULL)` being true (hand-worked; Spark runs are requested).
 #[test]
 fn a_neither_side_in_conjunct_stays_a_join_in_every_width_and_mode() -> R {
@@ -238,16 +238,25 @@ fn a_neither_side_in_conjunct_stays_a_join_in_every_width_and_mode() -> R {
         let q = "select count(*) from t join t2 on 3 in (select e from t3)";
         assert_eq!(run(&s, q)?, rows(&["0"]), "legacy {legacy}: {q}");
     }
-    // A `NOT (multi-value IN)` conjunct is a null-aware anti join: (5, 5) matches a `t3` row, so
-    // NOT IN is false; (5, 6) matches none but meets the all-NULL row, so IN is NULL and NOT IN
-    // is not TRUE either (a plain anti join would keep the pairs and count 2).
-    for q in [
-        "select count(*) from t join t2 on not ((5, 5) in (select e, e from t3))",
-        "select count(*) from t join t2 on not ((5, 6) in (select e, e from t3))",
-    ] {
-        assert_eq!(run(&s, q)?, rows(&["0"]), "{q}");
+    // `NOT (IN)` of several values, or under the legacy flag (where `NOT IN` over no rows is
+    // NULL), is not the plain anti join: it is refused as before, never answered.
+    for legacy in [false, true] {
+        set(&s, LEGACY, legacy)?;
+        let q = "select count(*) from t join t2 on not ((5, 5) in (select e, e from t3))";
+        let e = error_class(&s, q);
+        assert!(
+            e.contains("KRISHIV_UNSUPPORTED_FEATURE"),
+            "legacy {legacy}: {q}: {e}"
+        );
     }
-    // Nested under `IS NULL` NULL and false differ, and the rewrite is still refused.
+    let q = "select count(*) from t join t2 on not (5 in (select e from t3))";
+    let e = error_class(&s, q);
+    assert!(
+        e.contains("KRISHIV_UNSUPPORTED_FEATURE"),
+        "legacy: {q}: {e}"
+    );
+    // Nested under `IS NULL` NULL and false differ, and under the legacy flag (still on) the
+    // three-valued rewrite is refused.
     let q = "select count(*) from t join t2 on (5 in (select e from t3)) is null";
     let e = error_class(&s, q);
     assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{q}: {e}");
@@ -295,8 +304,41 @@ fn a_not_in_conjunct_that_reads_neither_side_plans_in_a_full_outer_join() -> R {
     // TRUE: every pair matches.
     let cond = "7 not in (select e from t_empty)";
     assert_eq!(run(&s, &full(cond))?, rows(&["1|2", "NULL|2"]), "{cond}");
-    // The same conjunct beside an equality, and as a left join.
+    // As a left join, and in an inner join beside an equality on the other side.
     let q = "select t.c, t2.d from t left join t2 on (7 not in (select e from t_empty))";
     assert_eq!(run(&s, q)?, rows(&["1|2", "NULL|2"]), "{q}");
+    let q = "select t.c, t2.d from t join t2 on t2.d = 2 and 7 not in (select e from t_empty)";
+    assert_eq!(run(&s, q)?, rows(&["1|2", "NULL|2"]), "{q}");
+    Ok(())
+}
+
+/// With `optimizeUncorrelatedInSubqueriesInJoinCondition` off, Spark evaluates a neither-side
+/// conjunct of an outer join as an expression, which this engine cannot plan in a FULL OUTER
+/// join: that case is refused, never answered. An inner or left join evaluates it per row and
+/// answers the three-valued result (`7 NOT IN` an empty set is TRUE, with a NULL in the set it
+/// is NULL). Rows are worked out from the data in `session()`.
+#[test]
+fn with_the_join_rewrite_off_a_not_in_conjunct_is_refused_or_exact() -> R {
+    let s = session()?;
+    set(&s, AS_JOIN, false)?;
+    let q = "select t.c, t2.d from t full outer join t2 on (5 not in (select e from t3))";
+    let e = error_class(&s, q);
+    assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{q}: {e}");
+    for (q, want) in [
+        (
+            "select t.c, t2.d from t left join t2 on (7 not in (select e from t_empty))",
+            rows(&["1|2", "NULL|2"]),
+        ),
+        (
+            "select t.c, t2.d from t join t2 on (7 not in (select e from t_empty))",
+            rows(&["1|2", "NULL|2"]),
+        ),
+        (
+            "select t.c, t2.d from t join t2 on (7 not in (select e from t3))",
+            rows(&[]),
+        ),
+    ] {
+        assert_eq!(run(&s, q)?, want, "{q}");
+    }
     Ok(())
 }

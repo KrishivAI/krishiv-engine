@@ -834,7 +834,7 @@ impl Rewriter {
         let out = output(p)?;
         let left_ids: HashSet<AttrId> = output(left)?.iter().map(|c| c.id).collect();
         let right_ids: HashSet<AttrId> = output(right)?.iter().map(|c| c.id).collect();
-        let on = &three_valued_ins(on, self.legacy_null_in_empty)?;
+        let on = &three_valued_ins(on, self.legacy_null_in_empty, self.in_join_as_join)?;
         let flags = (self.in_join_as_join, self.legacy_null_in_empty);
         let on = &in_join_condition_ins(on, *kind, [&left_ids, &right_ids], flags, &mut || {
             self.fresh()

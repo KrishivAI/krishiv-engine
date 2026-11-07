@@ -218,18 +218,21 @@ fn in_reads(s: &Arc<Expr>, values: &[Arc<Expr>]) -> HashSet<AttrId> {
 /// multi-value `IN` of this kind, or one under
 /// `spark.sql.legacy.nullInEmptyListBehavior` (NULL over no rows), is
 /// refused where NULL and false differ (below `NOT`, `OR` and the like); as a
-/// conjunct of its own it is a plain join. A NULL literal value is left to
+/// conjunct of its own an `IN` is a plain join, and so is `NOT (v IN q)` of one
+/// value (`keep_not_in`: the join rewrite is on, and the legacy flag off, where
+/// `NOT IN` over no rows is NULL, not TRUE). A NULL literal value is left to
 /// [`check_in`].
-pub(super) fn three_valued_ins(on: &Arc<Expr>, legacy: bool) -> R<Arc<Expr>> {
-    // A conjunct that is itself such an `IN`, or `NOT` of one, keeps a row only
-    // when it is true, so NULL and false agree: it stays an existence join
-    // (`NOT IN` the null-aware anti join, which is true only when no value
-    // matches and none is NULL), as any join type can plan. Only an `IN` under
-    // `OR`, `IS NULL` and the like tells NULL and false apart.
+pub(super) fn three_valued_ins(on: &Arc<Expr>, legacy: bool, keep_not_in: bool) -> R<Arc<Expr>> {
+    // A conjunct that is itself such an `IN` keeps a row only when it is true, so
+    // NULL and false agree: it stays an existence join. So does `NOT IN` of one
+    // value, the null-aware anti join (true only when no value matches and none
+    // is NULL), which every join type plans. Only an `IN` under `OR`, `IS NULL`
+    // and the like tells NULL and false apart.
+    let keep_not = keep_not_in && !legacy;
     let kept: Vec<Arc<Expr>> = super::subquery::conjuncts(on)
         .into_iter()
         .map(|c| {
-            if is_in(&c) || is_not_of_in(&c) {
+            if is_in(&c) || (keep_not && is_not_of_single_in(&c)) {
                 Ok(c)
             } else {
                 three_valued_nested(&c, legacy)
@@ -250,10 +253,14 @@ fn is_in(e: &Arc<Expr>) -> bool {
     )
 }
 
-/// Whether `e` is `NOT` of an `IN` subquery.
-fn is_not_of_in(e: &Arc<Expr>) -> bool {
-    matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Function(f))
-        if f.id == crate::FunctionId::Builtin(Builtin::Not) && f.args.len() == 1 && is_in(&f.args[0]))
+/// Whether `e` is `NOT` of an `IN` subquery with one value.
+fn is_not_of_single_in(e: &Arc<Expr>) -> bool {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return false;
+    };
+    f.id == crate::FunctionId::Builtin(Builtin::Not)
+        && f.args.len() == 1
+        && matches!(&f.args[0].node, ExprNode::Subquery { kind: SubqueryKind::In(values), .. } if values.len() == 1)
 }
 
 /// [`three_valued_ins`] for every `IN` in `on`, whatever its position.
