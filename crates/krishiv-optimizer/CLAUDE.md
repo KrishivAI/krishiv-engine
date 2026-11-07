@@ -17,7 +17,7 @@ Paths are relative to this crate.
 - `src/inline_cte.rs` CTE inlining (a nondeterministic definition read twice stays a `CteRef`); `src/share_cte.rs` `ShareCte` (P2-T198): equal deterministic instances with a pipeline breaker become one `WITH` definition, only when a session configuration is given and `krishiv.sql.optimizer.shareCteInstances` is on
 - `src/eager.rs` `EagerAggregate` (P2-T167): an aggregate's calls run below a join and merge above it, gated on statistics; `krishiv.optimizer.eagerAggregation`, `Options::eager_aggregation`
 - `src/join_order.rs` inner-join ordering; `src/stats.rs` `Statistics` it reads and the estimate types (`RelStats`, `AttrStats`, `StatSource`)
-- `src/estimate.rs` the `Estimator`: what each operator leaves known of its columns; `src/narrow.rs` predicates over estimates (selectivity and narrowed ranges); `src/plan_stats.rs` `PlanStats`, one pass over an optimized plan (physical planner, `EXPLAIN COST`)
+- `src/estimate.rs` the `Estimator`: what each operator leaves known of its columns (a column a filter or join does not read keeps the distinct values the kept rows are expected to hold, `kept_distinct`, Cardenas); `src/narrow.rs` predicates over estimates (selectivity and narrowed ranges); `src/plan_stats.rs` `PlanStats`, one pass over an optimized plan (physical planner, `EXPLAIN COST`)
 - `tests/it/plan_stats.rs` one test per propagation rule; `tests/it/qerror.rs` the q-error report (`cargo xtask qerror`)
 - `tests/it/rules.rs` per-rule snapshots; `tests/it/join_order.rs` ordering snapshots; `tests/it/support/eval.rs` reference interpreter
 
@@ -54,7 +54,7 @@ Paths are relative to this crate.
   ranges alone, so a range only stays or widens (the proptest in `plan_stats.rs` holds it to that). An equality with
   a literal outside `[min, max]` estimates 0 rows and removes nothing. A join's keys take the smaller distinct count
   (inner: the ranges intersect, no nulls); an outer join's null-supplying side gains the unmatched fraction as nulls.
-  `col = col` keeps `1 / max(NDV)` with an unknown count read as the rows (T166 note, section 2); only `col = literal` over an unknown count takes the default selectivity. Statistics never change results;
+  `col = col` keeps `1 / max(NDV)` with an unknown count read as the rows (T166 note, section 2); only `col = literal` over an unknown count takes the default selectivity. A count from `StatSource::Sampled` (P2-T164 U6: the session samples file columns an equality or `IN` reads before optimizing) is known like any other. Statistics never change results;
   `Options::stats_propagation` switches the propagation off for the differential tests.
 - Per-rule and TPC-H plan snapshots live in `tests/it/snapshots/`; differential tests run optimised and
   unoptimised plans through the reference interpreter in `tests/it/support/eval.rs`.
