@@ -29,7 +29,8 @@
 //!   `decimal(15,2)` / `decimal(32,4)` / `decimal(38,6)` columns, as the
 //!   query's projection hands them to the aggregate. `AGG_BENCH_Q01_REPS=N`
 //!   runs it `N` times outside criterion and exits (for `perf stat`:
-//!   instructions per row = instructions / (N * 2^20)).
+//!   instructions per row = instructions / (N * 2^20)); `AGG_BENCH_REPS_CASE=few|many`
+//!   runs `grouped_sum_{64,262144}_keys_rows` instead.
 //!
 //! `AGG_BENCH_THREADS=N` runs them (but the spill one) on `N` worker
 //! threads in the shipped (non-deterministic) mode instead: thread-local
@@ -520,8 +521,25 @@ fn bench(c: &mut Criterion) {
     let q01 = q01_input();
     if let Ok(reps) = std::env::var("AGG_BENCH_Q01_REPS") {
         let mode = Mode { rows: true, seeded };
+        // `AGG_BENCH_REPS_CASE`: `q01` (default), or `grouped_sum_{64,262144}_keys_rows`
+        // as `few` / `many`, for instruction counts of the other shapes.
+        let case = std::env::var("AGG_BENCH_REPS_CASE").unwrap_or_default();
+        let grouped = match case.as_str() {
+            "few" => Some(input(64)),
+            "many" => Some(input(1 << 18)),
+            other => {
+                assert!(
+                    matches!(other, "" | "q01"),
+                    "AGG_BENCH_REPS_CASE: q01, few or many, not {other}"
+                );
+                None
+            }
+        };
         for _ in 0..reps.parse::<usize>().expect("AGG_BENCH_Q01_REPS: a count") {
-            black_box(run(&runner, &caller, q01_plan(&q01), 1 << 30, mode));
+            let p = grouped
+                .as_ref()
+                .map_or_else(|| q01_plan(&q01), |b| plan(b, None));
+            black_box(run(&runner, &caller, p, 1 << 30, mode));
         }
         std::process::exit(0);
     }
