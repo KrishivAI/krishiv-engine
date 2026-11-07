@@ -116,17 +116,18 @@ impl Resolver<'_> {
                 .iter()
                 .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
         };
-        let scope: Vec<Attr> = c
-            .out
-            .iter()
-            .filter(|a| {
-                !generated(a)
-                    || !c.out.iter().any(|i| {
-                        !generated(i) && super::bind::same(&i.col.name, &a.col.name, false)
-                    })
-            })
-            .cloned()
-            .collect();
+        let cs = self.ctx.conf.case_sensitive;
+        let scope: Vec<Attr> =
+            c.out
+                .iter()
+                .filter(|a| {
+                    !generated(a)
+                        || !c.out.iter().any(|i| {
+                            !generated(i) && super::bind::same(&i.col.name, &a.col.name, cs)
+                        })
+                })
+                .cloned()
+                .collect();
         let cx = Self::cx(&scope, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
         let mut b = self.bind(arg, &cx)?;

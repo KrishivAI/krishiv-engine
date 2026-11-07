@@ -144,3 +144,30 @@ fn generators_read_input_columns_before_later_generator_aliases() {
         .to_string();
     assert!(e.contains("UNRESOLVED_COLUMN"), "{e}");
 }
+
+#[test]
+fn the_input_column_match_follows_spark_sql_case_sensitive() {
+    // Spark 4.2.0 (local run, 2026-11-07): with `spark.sql.caseSensitive=true`, input `ARR` and
+    // the alias `arr` are two names, so the first generator reads the alias (rows 0, 1) and does
+    // not read the input; the mirrored case is the same.
+    for (input, alias) in [("ARR", "arr"), ("arr", "ARR")] {
+        let s = Session::new().unwrap();
+        s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+        let q = format!(
+            "SELECT explode({alias}) AS col, explode(array(array(0), array(1))) AS {alias} \
+             FROM VALUES (array(9, 8)) AS t({input})"
+        );
+        let rows: Vec<i32> = block_on(async { s.sql(&q).await?.collect().await })
+            .unwrap()
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_primitive::<Int32Type>()
+                    .iter()
+                    .map(|v| v.unwrap_or(i32::MIN))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(rows, [0, 1], "{input}/{alias}");
+    }
+}
