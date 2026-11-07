@@ -191,3 +191,93 @@ fn the_marker_equals_string_inside_nested_types_and_no_collation_does() {
         assert_eq!(t(ty), t(ty), "{ty}");
     }
 }
+
+#[test]
+fn hashing_agrees_with_equality_for_every_payload_type() {
+    let equal_pairs = [
+        ("decimal(10,2)", "decimal(10,2)"),
+        ("time(3)", "time(3)"),
+        ("geometry(4326)", "geometry(4326)"),
+        ("geography(4326)", "geography(4326)"),
+        ("interval year to month", "interval year to month"),
+        ("interval day to second", "interval day to second"),
+        ("array<int>", "array<int>"),
+        ("map<string, int>", "map<string collate utf8_binary, int>"),
+        (
+            "struct<a: int, b: string>",
+            "struct<a: int, b: string collate utf8_binary>",
+        ),
+        ("string collate utf8_lcase", "string collate utf8_lcase"),
+    ];
+    for (a, b) in equal_pairs {
+        let (x, y) = (t(a), t(b));
+        assert_eq!(x, y, "{a} / {b}");
+        assert_eq!(hash_of(&x), hash_of(&y), "{a} / {b}");
+    }
+    assert_ne!(t("time(3)"), t("time(4)"));
+    assert_ne!(t("geometry(4326)"), t("geography(4326)"));
+    assert_ne!(t("interval year to month"), t("interval day to second"));
+}
+
+#[test]
+fn without_the_marker_a_type_is_the_plain_type_at_any_depth() {
+    for (marked, plain) in [
+        ("string collate utf8_binary", "string"),
+        ("array<string collate utf8_binary>", "array<string>"),
+        (
+            "map<string collate utf8_binary, array<string collate utf8_binary>>",
+            "map<string, array<string>>",
+        ),
+        (
+            "struct<a: string collate utf8_binary, b: int>",
+            "struct<a: string, b: int>",
+        ),
+        (
+            "array<string collate utf8_lcase>",
+            "array<string collate utf8_lcase>",
+        ),
+        ("int", "int"),
+    ] {
+        let stripped = t(marked).without_binary_marker();
+        assert_eq!(
+            stripped.simple_string(),
+            t(plain).simple_string(),
+            "{marked}"
+        );
+        assert!(
+            !stripped.any_type(&krishiv_types::DataType::is_binary_marker),
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn the_marker_accepts_the_storage_a_plain_string_does() {
+    use arrow_schema::DataType as Arrow;
+    let marker = t("string collate utf8_binary");
+    for storage in [
+        Arrow::Utf8,
+        Arrow::LargeUtf8,
+        Arrow::Utf8View,
+        Arrow::BinaryView,
+        Arrow::Binary,
+    ] {
+        assert!(
+            marker
+                .to_arrow_field_with_storage("c", storage.clone(), true)
+                .is_ok(),
+            "{storage}"
+        );
+    }
+    let lcase = t("string collate utf8_lcase");
+    assert!(
+        lcase
+            .to_arrow_field_with_storage("c", Arrow::Utf8, true)
+            .is_ok()
+    );
+    assert!(
+        lcase
+            .to_arrow_field_with_storage("c", Arrow::BinaryView, true)
+            .is_err()
+    );
+}
