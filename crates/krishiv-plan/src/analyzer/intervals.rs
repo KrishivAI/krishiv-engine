@@ -295,6 +295,9 @@ impl Resolver<'_> {
         cx: &Cx<'_>,
         exact: bool,
     ) -> Result<Option<Bound>, AnalysisError> {
+        if let Some(b) = self.time_arithmetic(origin, l, r, cx, exact, false)? {
+            return Ok(Some(b));
+        }
         Ok(Some(match (kind(l), kind(r)) {
             (Kind::Calendar, Kind::Calendar) => {
                 self.calendar_pair(Builtin::CalendarAdd, Builtin::Add, origin, l, r, exact)
@@ -355,6 +358,9 @@ impl Resolver<'_> {
         cx: &Cx<'_>,
         exact: bool,
     ) -> Result<Option<Bound>, AnalysisError> {
+        if let Some(b) = self.time_arithmetic(origin, l, r, cx, exact, true)? {
+            return Ok(Some(b));
+        }
         let (lk, rk) = (kind(l), kind(r));
         Ok(Some(match (lk, rk) {
             (Kind::Calendar, Kind::Calendar | Kind::Null) => self.calendar_pair(
@@ -435,7 +441,7 @@ impl Resolver<'_> {
                 return Err(self.string_days("date_sub", origin, l, r));
             }
             (_, Kind::Date) | (Kind::Date, Kind::Null | Kind::String) => {
-                self.date_difference(origin, l, r)?
+                self.date_difference(origin, l, r, cx)?
             }
             _ => return Ok(None),
         }))
@@ -722,13 +728,16 @@ impl Resolver<'_> {
         origin: Origin,
         l: &Bound,
         r: &Bound,
+        cx: &Cx<'_>,
     ) -> Result<Bound, AnalysisError> {
-        if self.ctx.conf.legacy_interval {
-            return Err(legacy_difference(origin));
-        }
-        let out = DataType::DayTimeInterval {
-            start: DayTimeField::Day,
-            end: DayTimeField::Day,
+        let legacy = self.ctx.conf.legacy_interval;
+        let out = if legacy {
+            DataType::CalendarInterval
+        } else {
+            DataType::DayTimeInterval {
+                start: DayTimeField::Day,
+                end: DayTimeField::Day,
+            }
         };
         let kids = [l.clone(), r.clone()];
         let name = shown(Builtin::Subtract, out.clone(), [l, r], origin);
@@ -749,6 +758,19 @@ impl Resolver<'_> {
         );
         // With ANSI off, a string that doesn't read as a date is NULL.
         let nullable = a.ty.nullable || b.ty.nullable;
+        if legacy {
+            // The rewrite reads each operand several times (year, month, day,
+            // `datediff`, `last_day`); Spark evaluates each once, so a
+            // non-deterministic operand could mix parts of different dates.
+            if !super::sqlfn::is_deterministic(&a.expr) || !super::sqlfn::is_deterministic(&b.expr)
+            {
+                return Err(legacy_difference(origin));
+            }
+            let between = self.bind(&legacy_date_difference(&a.expr, &b.expr, origin), cx)?;
+            let mut difference = bound(between.expr, out, name, &kids);
+            difference.ty.nullable = nullable;
+            return Ok(difference);
+        }
         let expr = call(
             Builtin::SubtractDates,
             vec![Arc::clone(&a.expr), Arc::clone(&b.expr)],
@@ -759,6 +781,104 @@ impl Resolver<'_> {
         let mut difference = bound(expr, out, name, &kids);
         difference.ty.nullable = nullable;
         Ok(difference)
+    }
+
+    /// `TIME` arithmetic (Spark 4.2 `BinaryArithmeticWithDatetimeResolver`): `time + interval` and
+    /// `interval + time` are `TimeAddInterval(time, interval)` (shown time first), `time - interval` adds the
+    /// negated interval (shown as written), `time - time` is `SubtractTimes` (an `INTERVAL HOUR TO SECOND`); a NULL
+    /// beside a time is a day-time interval in `+` and a time in `-`, a string beside a time in `-` reads as
+    /// `TIME(6)`. `None` when no operand is a time, or for a pairing these rules leave to the others (`time + 1`,
+    /// `time - INTERVAL '1' MONTH`, which stay type mismatches).
+    fn time_arithmetic(
+        &mut self,
+        origin: Origin,
+        l: &Bound,
+        r: &Bound,
+        cx: &Cx<'_>,
+        exact: bool,
+        subtract: bool,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        let is_time = |b: &Bound| matches!(b.ty.data_type, Some(DataType::Time { .. }));
+        if !is_time(l) && !is_time(r) {
+            return Ok(None);
+        }
+        let day_time = |b: &Bound| matches!(kind(b), Kind::DayTime | Kind::Days);
+        let null = |b: &Bound| kind(b) == Kind::Null;
+        let kids = [l.clone(), r.clone()];
+        if !subtract || (is_time(l) && day_time(r)) {
+            let (time, interval) = if is_time(l) && (day_time(r) || null(r)) {
+                (l, r)
+            } else if (day_time(l) || null(l)) && is_time(r) && !subtract {
+                (r, l)
+            } else {
+                return Ok(None);
+            };
+            let typed = if null(interval) {
+                self.implicit_cast(interval, Some(DataType::DEFAULT_DAY_TIME_INTERVAL))
+            } else {
+                interval.clone()
+            };
+            let end = match typed.ty.data_type {
+                Some(DataType::DayTimeInterval { end, .. }) => end,
+                _ => DayTimeField::Second,
+            };
+            let end_index = match end {
+                DayTimeField::Day => 0,
+                DayTimeField::Hour => 1,
+                DayTimeField::Minute => 2,
+                DayTimeField::Second => 3,
+            };
+            let added = if subtract {
+                negative(&typed, exact, origin)
+            } else {
+                Arc::clone(&typed.expr)
+            };
+            let call = registry_call(
+                "__time_add_interval",
+                vec![
+                    Arc::clone(&time.expr),
+                    added,
+                    Arc::new(Expr::literal(Literal::Integer(end_index))),
+                ],
+                origin,
+            );
+            let b = self.bind(&call, cx)?;
+            let t = b.ty.data_type.clone().unwrap_or(DataType::Null);
+            let name = if subtract {
+                registry_call("__time_minus", vec![l.shown(), r.shown()], origin)
+            } else {
+                registry_call("__time_plus", vec![time.shown(), interval.shown()], origin)
+            };
+            let mut out = bound(b.expr, t, name, &kids);
+            out.ty.nullable = b.ty.nullable;
+            return Ok(Some(out));
+        }
+        let operand = |b: &Bound| is_time(b) || matches!(kind(b), Kind::Null | Kind::String);
+        if !(operand(l) && operand(r)) {
+            return Ok(None);
+        }
+        let as_time = |me: &Self, b: &Bound| {
+            if is_time(b) {
+                b.clone()
+            } else {
+                me.implicit_cast(b, Some(DataType::Time { precision: 6 }))
+            }
+        };
+        let (a, b) = (as_time(self, l), as_time(self, r));
+        let call = registry_call(
+            "__subtract_times",
+            vec![Arc::clone(&a.expr), Arc::clone(&b.expr)],
+            origin,
+        );
+        let diff = self.bind(&call, cx)?;
+        let t = DataType::DayTimeInterval {
+            start: DayTimeField::Hour,
+            end: DayTimeField::Second,
+        };
+        let name = registry_call("__time_minus", vec![l.shown(), r.shown()], origin);
+        let mut out = bound(diff.expr, t, name, &kids);
+        out.ty.nullable = diff.ty.nullable;
+        Ok(Some(out))
     }
 
     /// `l op r` of calendar intervals, shown as `shown_id`; a NULL takes the type.
@@ -935,6 +1055,121 @@ fn legacy_difference(origin: Origin) -> AnalysisError {
     unsupported(
         "a date or timestamp difference with spark.sql.legacy.interval.enabled",
         origin,
+    )
+}
+
+/// An unresolved call of the registry function `name` over already-resolved `args`, to bind in place.
+fn registry_call(name: &str, args: Vec<Arc<Expr>>, origin: Origin) -> Arc<Expr> {
+    Arc::new(
+        Expr::new(ExprNode::Function(crate::FunctionCall {
+            name: name.to_owned(),
+            qualifier: Vec::new(),
+            args,
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+        }))
+        .with_origin(origin),
+    )
+}
+
+/// `end - start` of dates under `spark.sql.legacy.interval.enabled`: Spark's `subtractDates`, a calendar
+/// interval of `java.time.Period.between(start, end)`'s whole months and remaining days (no microseconds):
+///
+/// ```text
+/// months = month index of end - month index of start;  days = day(end) - day(start)
+/// months > 0 and days < 0:  months - 1, days = datediff(end, add_months(start, months - 1))
+/// months < 0 and days > 0:  months + 1, days = days - day(last_day(end))
+/// ```
+///
+/// built from the registry's functions (`add_months` clamps to the month's end as `plusMonths` does).
+fn legacy_date_difference(end: &Arc<Expr>, start: &Arc<Expr>, origin: Origin) -> Arc<Expr> {
+    let f = |name: &str, args: Vec<Arc<Expr>>| {
+        Arc::new(
+            Expr::new(ExprNode::Function(crate::FunctionCall {
+                name: name.to_owned(),
+                qualifier: Vec::new(),
+                args,
+                arg_names: Vec::new(),
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+            }))
+            .with_origin(origin),
+        )
+    };
+    let int = |n: i32| Arc::new(Expr::literal(Literal::Integer(n)));
+    let op = |b: Builtin, x: Arc<Expr>, y: Arc<Expr>| f(b.name(), vec![x, y]);
+    let month_index = |d: &Arc<Expr>| {
+        op(
+            Builtin::Add,
+            op(Builtin::Multiply, f("year", vec![Arc::clone(d)]), int(12)),
+            f("month", vec![Arc::clone(d)]),
+        )
+    };
+    let months = op(Builtin::Subtract, month_index(end), month_index(start));
+    let days = op(
+        Builtin::Subtract,
+        f("day", vec![Arc::clone(end)]),
+        f("day", vec![Arc::clone(start)]),
+    );
+    let gt0 = |x: &Arc<Expr>| op(Builtin::Gt, Arc::clone(x), int(0));
+    let lt0 = |x: &Arc<Expr>| op(Builtin::Lt, Arc::clone(x), int(0));
+    let forward = op(Builtin::And, gt0(&months), lt0(&days));
+    let backward = op(Builtin::And, lt0(&months), gt0(&days));
+    let months_less = op(Builtin::Subtract, Arc::clone(&months), int(1));
+    let whole_months = f(
+        "if",
+        vec![
+            Arc::clone(&forward),
+            Arc::clone(&months_less),
+            f(
+                "if",
+                vec![
+                    Arc::clone(&backward),
+                    op(Builtin::Add, Arc::clone(&months), int(1)),
+                    months,
+                ],
+            ),
+        ],
+    );
+    let rest_days = f(
+        "if",
+        vec![
+            forward,
+            f(
+                "datediff",
+                vec![
+                    Arc::clone(end),
+                    f("add_months", vec![Arc::clone(start), months_less]),
+                ],
+            ),
+            f(
+                "if",
+                vec![
+                    backward,
+                    op(
+                        Builtin::Subtract,
+                        Arc::clone(&days),
+                        f("day", vec![f("last_day", vec![Arc::clone(end)])]),
+                    ),
+                    days,
+                ],
+            ),
+        ],
+    );
+    f(
+        "make_interval",
+        vec![
+            int(0),
+            whole_months,
+            int(0),
+            rest_days,
+            int(0),
+            int(0),
+            int(0),
+        ],
     )
 }
 

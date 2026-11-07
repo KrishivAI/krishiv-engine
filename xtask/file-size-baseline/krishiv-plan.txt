@@ -1,7 +1,9 @@
 # Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
 # (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
-2468 crates/krishiv-plan/src/analyzer/coerce.rs
+# +2 over main: the implicit cast of a string to TIME(6) for the AnyTimeOrString parameter of time_trunc (T025 rest)
+2470 crates/krishiv-plan/src/analyzer/coerce.rs
 # over main: a cast of an alias keeps the alias's name (T001c, PR #491); USING-join keys (P2b row 11); char comparison padding and declared types through GROUP BY and lateral aliases (T001b)
-4622 crates/krishiv-plan/src/analyzer/ops.rs
+# +14: not_constant walks distinct nodes (review of #529)
+4636 crates/krishiv-plan/src/analyzer/ops.rs
 3096 crates/krishiv-plan/src/analyzer/subquery.rs
 5384 crates/krishiv-plan/src/tests/analyzer.rs
