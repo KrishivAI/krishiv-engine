@@ -175,7 +175,7 @@ impl Gen<'_> {
             0 => ExprNode::Column(ColumnRef {
                 name: self.many(1, 2, Gen::name),
                 plan_id: self.plan_ref(),
-                by_identifier: false,
+                by_identifier: self.flag(),
             }),
             1 => ExprNode::Literal(self.literal()),
             2 => ExprNode::Star(Star {

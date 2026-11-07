@@ -784,6 +784,7 @@ impl Session {
         &self,
         d: &Describe,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         match &d.kind {
@@ -914,10 +915,11 @@ impl Session {
                     .await
             }
             DescribeKind::Query { query, .. } => {
-                let plan = krishiv_sql::lower_with(
+                let plan = krishiv_sql::lower_identified(
                     query,
                     self.next_source_id(),
                     self.parser_options().case_sensitive,
+                    ids,
                 )
                 .map_err(|e| e.error)?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));

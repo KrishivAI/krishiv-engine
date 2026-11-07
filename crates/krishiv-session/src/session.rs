@@ -515,24 +515,44 @@ impl Session {
         }
     }
 
-    pub(crate) async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
-        self.sql_here_marked(query, Arc::default()).await
+    /// Runs `query` on the calling task as `sql` would, for text the session built from a
+    /// statement it already substituted (`CACHE TABLE t AS query`): `spans` are the substituted
+    /// names in `query`, kept while substituting again leaves the text as it is.
+    pub(crate) async fn sql_here_spanned(
+        &self,
+        query: &str,
+        spans: Vec<krishiv_sql::ast::Span>,
+    ) -> Result<DataFrame, KrishivError> {
+        self.sql_here_inner(query, Arc::default(), spans).await
     }
 
-    /// [`Self::sql_here`], with `row` as the statement's slot for the id of the `system.queries`
-    /// row a query of it began.
+    /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
+    /// the id of the `system.queries` row a query of it began.
     pub(crate) async fn sql_here_marked(
         &self,
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
     ) -> Result<DataFrame, KrishivError> {
+        self.sql_here_inner(query, row, Vec::new()).await
+    }
+
+    async fn sql_here_inner(
+        &self,
+        query: &str,
+        row: Arc<std::sync::Mutex<Option<String>>>,
+        spans: Vec<krishiv_sql::ast::Span>,
+    ) -> Result<DataFrame, KrishivError> {
         let mut env = self.query_env();
         env.row = row;
+        let written = query;
         let query = self.substituted(query);
         let query: &str = &query;
         // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
         let resolved = self.identifier_clauses_into(query, &mut env).await?;
         let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
+        if !spans.is_empty() && !named_by_clause && query == written {
+            env.identifier_spans = spans.into();
+        }
         let query: &str = &resolved;
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
@@ -577,9 +597,11 @@ impl Session {
             Statement::Explain(e) => self.explain_statement(&e, env, redacted).await,
             Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
-            Statement::CreateView(v) => self.exec_create_view(&v).await,
+            Statement::CreateView(v) => self.exec_create_view(&v, &env.identifier_spans).await,
             Statement::DropView(v) => self.exec_drop_view(&v).await,
-            Statement::Cache(c) => Box::pin(self.exec_cache(&c, query)).await,
+            Statement::Cache(c) => {
+                Box::pin(self.exec_cache(&c, query, &env.identifier_spans)).await
+            }
             Statement::Refresh(r) => self.exec_refresh(&r).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
@@ -589,7 +611,9 @@ impl Session {
             }
             Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
-            Statement::CreateTable(t) => Box::pin(self.exec_create_table(&t, query)).await,
+            Statement::CreateTable(t) => {
+                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans)).await
+            }
             Statement::CreateTableLike(t) => Box::pin(self.exec_create_table_like(&t, query)).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
@@ -598,12 +622,19 @@ impl Session {
             Statement::Repair(r) => self.exec_repair(&r).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
-            Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
-            Statement::CreatePermanentView(v) => self.exec_create_permanent_view(&v, query).await,
+            Statement::Describe(d) => {
+                Box::pin(self.exec_describe(&d, query, &env.identifier_spans)).await
+            }
+            Statement::CreatePermanentView(v) => {
+                self.exec_create_permanent_view(&v, query, &env.identifier_spans)
+                    .await
+            }
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
-            Statement::AlterView(a) => self.exec_alter_view(&a, query).await,
+            Statement::AlterView(a) => self.exec_alter_view(&a, query, &env.identifier_spans).await,
             Statement::AlterTable(a) => Box::pin(self.exec_alter_table(&a, query)).await,
-            Statement::Insert(i) => Box::pin(self.exec_insert(&i, query)).await,
+            Statement::Insert(i) => {
+                Box::pin(self.exec_insert(&i, query, &env.identifier_spans)).await
+            }
             Statement::Truncate(t) => self.exec_truncate(&t).await,
             Statement::Script(c) => {
                 let off =
