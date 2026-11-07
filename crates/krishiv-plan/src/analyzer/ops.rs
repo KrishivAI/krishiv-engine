@@ -720,7 +720,7 @@ impl Resolver<'_> {
                 self.bind(e, &cx)?
             };
             let written_identifier = matches!(&e.node, ExprNode::Column(c) if c.by_identifier);
-            let b = self.named(b, !written_identifier)?;
+            let b = Self::without_internal_identity_cast(self.named(b, !written_identifier)?, e);
             // Before the next item binds: it may read this alias (a lateral column alias).
             self.carry_declared_item(&b, Some(e));
             if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &b.expr.node {
