@@ -231,7 +231,7 @@ impl Encoder {
             } => Kind::ExchangeSource(pb::ExchangeSourceNode {
                 id: id.0,
                 partitioning: Some(partitioning(p)),
-                schema: schema_bytes(schema),
+                schema: flagged_schema_bytes(schema, &self.nested),
             }),
             PhysNode::SharedRead { id, layout } => Kind::SharedRead(pb::SharedReadNode {
                 id: id.0,
@@ -528,17 +528,10 @@ impl Encoder {
                 .iter()
                 .map(|f| exchange_filter(f, &self.nested))
                 .collect(),
-            schema: exchange.schema.as_deref().map(|schema| {
-                // The feature walk classifies this schema field by field: the flag follows.
-                if schema
-                    .fields()
-                    .iter()
-                    .any(|f| arrow_type_is_nested(f.data_type()))
-                {
-                    self.nested.set(true);
-                }
-                schema_bytes(schema)
-            }),
+            schema: exchange
+                .schema
+                .as_deref()
+                .map(|schema| flagged_schema_bytes(schema, &self.nested)),
         })
     }
 
@@ -940,10 +933,24 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
     }
 }
 
+/// `schema` as Arrow IPC bytes. The feature walk classifies a schema field by field, so the
+/// encoder's nested-types flag follows its fields too.
+fn flagged_schema_bytes(schema: &arrow_schema::Schema, nested: &Cell<bool>) -> Vec<u8> {
+    if schema
+        .fields()
+        .iter()
+        .any(|f| arrow_type_is_nested(f.data_type()))
+    {
+        nested.set(true);
+    }
+    schema_bytes(schema)
+}
+
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
     let mut expr = aggregate_function(a, nested)?;
     if let Some(f) = &a.element {
-        expr.result_element = schema_bytes(&arrow_schema::Schema::new(vec![Arc::clone(f)]));
+        expr.result_element =
+            flagged_schema_bytes(&arrow_schema::Schema::new(vec![Arc::clone(f)]), nested);
     }
     Ok(expr)
 }
