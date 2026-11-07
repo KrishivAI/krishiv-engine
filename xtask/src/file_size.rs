@@ -37,7 +37,13 @@ fn crate_of(path: &str) -> &str {
 /// listed twice.
 pub fn load_baseline(dir: &Path) -> Result<BTreeMap<String, usize>, String> {
     let mut out = BTreeMap::new();
-    for entry in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+    // Git does not track an empty directory: no baseline files means nothing is over the limit.
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+    };
+    for entry in entries {
         let path = entry.map_err(|e| e.to_string())?.path();
         if path.extension().is_none_or(|e| e != "txt") {
             continue;
@@ -583,5 +589,9 @@ mod tests {
             "2100 crates/b/src/y.rs\n",
         );
         assert!(run(root, &[]).is_err());
+        // No baseline directory at all is an empty baseline: only the files over the limit fail.
+        std::fs::remove_dir_all(root.join(BASELINE)).unwrap();
+        put("crates/b/src/y.rs", &lines(10));
+        run(root, &[]).unwrap();
     }
 }
