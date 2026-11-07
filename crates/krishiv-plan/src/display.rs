@@ -839,6 +839,10 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS {})", to.sql())));
         }
+        ExprNode::Collate { expr, name, .. } => {
+            out.push(Piece::Expr(expr));
+            out.push(Piece::Owned(format!(" COLLATE {name}")));
+        }
         ExprNode::Alias { expr, name } => {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(

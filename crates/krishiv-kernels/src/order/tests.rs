@@ -294,3 +294,20 @@ fn lists_differing_only_in_element_nullability_compare() {
         Ordering::Less
     );
 }
+
+#[test]
+fn a_struct_renders_bracketed_and_comma_joined() {
+    let a: ArrayRef = Arc::new(StructArray::new(
+        Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]),
+        vec![
+            i32s(vec![Some(1), Some(2)]),
+            Arc::new(StringArray::from(vec![Some("x"), Some("y")])),
+        ],
+        None,
+    ));
+    assert_eq!(render_value(a.as_ref(), 0), "[1,x]");
+    assert_eq!(render_value(a.as_ref(), 1), "[2,y]");
+}

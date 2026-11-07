@@ -10,7 +10,7 @@ Admin and UI API server (REST, OpenAPI), serves the web UI. Today: `/api/v1/vers
 Paths are relative to this crate.
 - `src/lib.rs` `router()`, `serve` and `run_blocking`
 - `src/internal.rs` the UI backend (P2-T133 part a): `router_with_ui(source, token)`, the `UiSource` trait (system-table rows as JSON, cancel), `/api/internal/{health,queries,queries/{id},queries/{id}/cancel,history,compare,resources,events}`; every route needs the token (Bearer, `krishiv_ui_token` cookie or `?token=`), every response of that router carries the CSP / `frame-ancestors 'none'` headers, columns are allowlisted per endpoint, `events` is SSE at one event a second
-- `src/metrics.rs` `router_with_metrics` and `render` (feature `metrics-prometheus` only)
+- `src/metrics.rs` `router_with_metrics`, `router_with_metrics_auth` (with a token, `/metrics` needs `Authorization: Bearer <token>`, compared in constant time; a refusal is a JSON 401 and takes no snapshot; an empty token refuses everyone; a disabled `/metrics` stays a 404 for every caller) and `render` (feature `metrics-prometheus` only). Not wired into `serve`/`krishiv server` yet: where the token comes from and which snapshot a bare `krishiv server` serves are open (`ops/pr-plan-p2b.md` row 45)
 - `tests/serve.rs` server tests
 - `tests/metrics.rs` `/metrics` exposition tests (feature `metrics-prometheus` only)
 

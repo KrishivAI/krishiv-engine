@@ -425,6 +425,37 @@ fn fold_cast(
     if inner.data_type() == &fold_type(to) {
         return Some(Ok(inner));
     }
+    // A cast to a timestamp reads the session time zone, so a valid string stays unfolded; a string
+    // that is not a timestamp at all fails whatever the zone, and ANSI mode raises it here (an inline
+    // table cell `CAST('1 year' AS TIMESTAMP)` is then a failed cell, not a failure of the query).
+    if matches!(to, DataType::Timestamp | DataType::TimestampNtz) {
+        let kernel_mode = match m {
+            CastMode::Ansi => KernelMode::Ansi,
+            CastMode::Default if conf.ansi => KernelMode::Ansi,
+            _ => return None,
+        };
+        let malformed = {
+            use arrow_array::cast::AsArray as _;
+            inner.data_type() == &ArrowType::Utf8
+                && inner.len() == 1
+                && krishiv_kernels::cast::timestamp_text(inner.as_string::<i32>().value(0))
+                    == krishiv_kernels::cast::TimestampText::Malformed
+        };
+        if !malformed {
+            return None;
+        }
+        return match cast(
+            inner.as_ref(),
+            &fold_type(to),
+            &options(kernel_mode, &FixedOffset(0)),
+        ) {
+            Err(err) => {
+                let err = KrishivError::from(err);
+                (err.error_class() != ErrorClass::KrishivUnsupportedFeature).then_some(Err(err))
+            }
+            Ok(_) => None,
+        };
+    }
     // The kernels' targets: booleans, numbers, strings and dates (no
     // timestamp: it reads the session time zone, so a cast to one stays
     // unfolded).
@@ -1023,10 +1054,9 @@ mod tests {
     #[test]
     fn other_expressions_are_not_constants() {
         let ansi = true;
-        let col = Expr::new(ExprNode::Column(crate::ColumnRef {
-            name: vec!["a".to_owned()],
-            plan_id: None,
-        }));
+        let col = Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+            "a".to_owned(),
+        ])));
         assert_eq!(constant(&col, ansi), None);
         assert_eq!(constant(&cast_of(col, DataType::Float), ansi), None);
     }
@@ -1228,10 +1258,9 @@ mod tests {
             Some(ErrorClass::FailedExecuteUdf)
         );
         // A non-literal argument never folds.
-        let col = Expr::new(ExprNode::Column(crate::ColumnRef {
-            name: vec!["a".to_owned()],
-            plan_id: None,
-        }));
+        let col = Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+            "a".to_owned(),
+        ])));
         assert_eq!(
             super::constant(
                 &Arc::new(udf("test_udf", 2, vec![col], true)),
@@ -1587,10 +1616,9 @@ mod tests {
             n(2)
         );
         // One argument that is not foldable keeps the call from folding.
-        let col = Expr::new(ExprNode::Column(crate::ColumnRef {
-            name: vec!["a".to_owned()],
-            plan_id: None,
-        }));
+        let col = Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+            "a".to_owned(),
+        ])));
         assert_eq!(constant(&iff(truth(true), int(1), col), true), None);
     }
 

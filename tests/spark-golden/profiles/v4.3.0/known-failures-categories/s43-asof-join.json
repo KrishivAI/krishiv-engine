@@ -1,0 +1,13 @@
+{
+  "category": "s43-asof-join",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "file": "^join-asof",
+      "order": 9010
+    }
+  ],
+  "summary": "Spark 4.3 ASOF JOIN",
+  "task": "P3-T090"
+}

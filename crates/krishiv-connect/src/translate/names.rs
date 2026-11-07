@@ -2,68 +2,8 @@
 //! The two name syntaxes of Connect: attribute names (`UnresolvedAttribute`,
 //! the target of a star) and multipart identifiers (table names).
 
-use krishiv_common::error::{InvalidAttributeNameSyntax, KrishivError, ParseSyntaxError};
-
-/// Splits an attribute name at its dots, as Spark's
-/// `AttributeNameParser.parseAttributeName` does. A name part may be quoted
-/// with backticks, inside which a dot is part of the name and ` `` ` is one
-/// backtick: ``a.`b.c` `` is `["a", "b.c"]`. A quoted part must be a whole
-/// part, and a backtick may only appear inside one.
-///
-/// # Errors
-/// `INVALID_ATTRIBUTE_NAME_SYNTAX` for unpaired backticks, a quoted part
-/// followed or preceded by other text, an empty part between dots, or a
-/// leading or trailing dot.
-pub(crate) fn parse_attribute_name(name: &str) -> Result<Vec<String>, KrishivError> {
-    let bad = || {
-        KrishivError::from(InvalidAttributeNameSyntax {
-            name: name.to_owned(),
-        })
-    };
-    let chars: Vec<char> = name.chars().collect();
-    let mut parts = Vec::new();
-    let mut part = String::new();
-    let mut in_backtick = false;
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        let next = chars.get(i + 1).copied();
-        if in_backtick {
-            if c == '`' {
-                if next == Some('`') {
-                    part.push('`');
-                    i += 1;
-                } else {
-                    in_backtick = false;
-                    if next.is_some_and(|n| n != '.') {
-                        return Err(bad());
-                    }
-                }
-            } else {
-                part.push(c);
-            }
-        } else if c == '`' {
-            if !part.is_empty() {
-                return Err(bad());
-            }
-            in_backtick = true;
-        } else if c == '.' {
-            let after_dot = i > 0 && chars[i - 1] == '.';
-            if i == 0 || after_dot || next.is_none() {
-                return Err(bad());
-            }
-            parts.push(std::mem::take(&mut part));
-        } else {
-            part.push(c);
-        }
-        i += 1;
-    }
-    if in_backtick {
-        return Err(bad());
-    }
-    parts.push(part);
-    Ok(parts)
-}
+use krishiv_common::error::{KrishivError, ParseSyntaxError};
+pub(crate) use krishiv_common::names::parse_attribute_name;
 
 /// Splits a table name such as ``db.`my table` `` into its parts, as Spark's
 /// `parseMultipartIdentifier` does: parts are unquoted words of letters,

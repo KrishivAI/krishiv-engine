@@ -630,6 +630,31 @@ fn pipe_operators_lower_left_to_right() {
     ]));
 }
 
+/// `lower_identified` marks exactly the columns at the given spans (the names a session
+/// substituted for `IDENTIFIER(..)`), compared by position: the same name elsewhere is unmarked.
+#[test]
+fn columns_at_identifier_spans_are_marked() {
+    let sql = "SELECT `c1`.`c2`, c1.c2, `c1`.`c2` + 1 FROM t";
+    let query = krishiv_sql::parse_query(sql, &ParserOptions::default()).unwrap();
+    let span = krishiv_sql::ast::Span::new(7, 16);
+    let plan = krishiv_sql::lower_identified(&query, SourceId(0), false, &[span]).unwrap();
+    let PlanNode::Project { exprs, .. } = &plan.root().node else {
+        panic!("expected a Project, got {}", plan.root());
+    };
+    let marked = |e: &krishiv_plan::Expr| match &e.node {
+        ExprNode::Column(c) => Some(c.by_identifier),
+        _ => None,
+    };
+    assert_eq!(marked(&exprs[0]), Some(true));
+    assert_eq!(marked(&exprs[1]), Some(false));
+    assert_eq!(marked(&exprs[2]), None);
+    let plain = krishiv_sql::lower_with(&query, SourceId(0), false).unwrap();
+    let PlanNode::Project { exprs, .. } = &plain.root().node else {
+        panic!("expected a Project, got {}", plain.root());
+    };
+    assert_eq!(marked(&exprs[0]), Some(false));
+}
+
 /// The plan line of `sql`, or its error, for exact comparisons.
 fn line(sql: &str) -> String {
     match lower(sql) {
