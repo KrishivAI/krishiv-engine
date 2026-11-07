@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `min`/`max` over an array column: Spark orders arrays element by element, a NULL element
 //! before any value, NaN after every number, a shorter array before a longer one it starts.
-//! The group, merge and spill paths must agree with the in-memory run.
+//! The expected rows follow Spark's array ordering rules (`interpretedOrdering`); no Spark run
+//! backs them yet.
 #![forbid(unsafe_code)]
 #![cfg(test)]
 
@@ -74,18 +75,23 @@ fn min_and_max_of_an_empty_or_all_null_input_are_null() {
 }
 
 #[test]
-fn an_array_of_intervals_is_refused_in_sql_types() {
+fn an_array_with_an_element_the_comparator_does_not_take_is_refused_by_name() {
+    // Spark orders these (year-month and day-time intervals are atomic types); the engine's
+    // comparator does not take them yet, so the refusal is explicit and names the SQL type.
     let s = Session::new().unwrap();
-    let err = block_on(s.sql("SELECT min(a) FROM VALUES (array(INTERVAL '1' YEAR)) t(a)"))
-        .map(|_| ())
-        .unwrap_err()
-        .to_string();
-    assert!(
-        err.contains("KRISHIV_UNSUPPORTED_FEATURE") || err.contains("not supported"),
-        "{err}"
-    );
-    assert!(
-        !err.contains("Interval("),
-        "a raw Arrow type in the message: {err}"
-    );
+    for v in [
+        "array(INTERVAL '1' YEAR)",
+        "array(INTERVAL '1' DAY)",
+        "array(struct(INTERVAL '1' YEAR))",
+    ] {
+        let err = match block_on(s.sql(&format!("SELECT min(a) FROM VALUES ({v}) t(a)"))) {
+            Err(e) => e.to_string(),
+            Ok(df) => block_on(df.collect()).unwrap_err().to_string(),
+        };
+        assert!(err.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{v}: {err}");
+        assert!(
+            !err.contains("Interval("),
+            "{v}: a raw Arrow type in the message: {err}"
+        );
+    }
 }
