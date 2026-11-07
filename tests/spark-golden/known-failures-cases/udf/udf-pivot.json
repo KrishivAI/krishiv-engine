@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "depends-on-command": [
-      24
-    ]
-  },
-  "file": "udf/udf-pivot",
-  "format_version": 1
-}
