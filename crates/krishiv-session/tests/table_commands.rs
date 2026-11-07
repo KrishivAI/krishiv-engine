@@ -793,12 +793,16 @@ fn insert_column_lists_by_name_and_conflicts() {
         class(&s, "INSERT INTO t REPLACE WHERE a = 1 VALUES (1, 'x')"),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
+    // The multi-table insert writes one row per clause (`tests/multi_insert.rs`).
+    let before = col0(&s, "SELECT CAST(count(*) AS STRING) FROM t");
+    run(
+        &s,
+        "FROM (SELECT 1 AS a, 'x' AS b) s INSERT INTO t SELECT a, b INSERT INTO t SELECT a, b",
+    );
+    let after = col0(&s, "SELECT CAST(count(*) AS STRING) FROM t");
     assert_eq!(
-        class(
-            &s,
-            "FROM (SELECT 1 AS a, 'x' AS b) s INSERT INTO t SELECT a, b INSERT INTO t SELECT a, b"
-        ),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        after[0].parse::<i64>().unwrap(),
+        before[0].parse::<i64>().unwrap() + 2
     );
     // A string literal cannot be stored into an INT column under ANSI store assignment; a wider integer can.
     run(&s, "INSERT INTO t VALUES (CAST(5 AS BIGINT), 7)");
