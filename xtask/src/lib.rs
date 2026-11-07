@@ -11,6 +11,7 @@ pub mod console;
 pub mod coverage;
 pub mod dev;
 pub mod docs;
+pub mod docs_ext;
 pub mod docs_sql;
 pub mod file_size;
 pub mod format_neutral;
