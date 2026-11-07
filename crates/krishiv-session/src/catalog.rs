@@ -1020,6 +1020,11 @@ impl QueryCatalog {
             version: None,
             kind: TableKind::Table,
             file_metadata: file_metadata(&table.provider),
+            column_comments: table
+                .columns
+                .iter()
+                .filter_map(|c| Some((c.name.clone(), c.comment.clone()?)))
+                .collect(),
         })
     }
 }
@@ -1122,6 +1127,7 @@ impl Catalog for QueryCatalog {
                 version: None,
                 kind,
                 file_metadata,
+                column_comments: BTreeMap::new(),
             }))
         })
     }

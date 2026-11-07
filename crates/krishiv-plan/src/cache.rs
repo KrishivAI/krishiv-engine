@@ -1678,6 +1678,7 @@ mod tests {
             plan: plan.clone(),
             output: vec![bound(1, "a")],
             output_declared: Vec::new(),
+            output_comments: Vec::new(),
             pins: BTreeMap::new(),
             securables: Vec::new(),
             input_key: plan.structural_hash(),

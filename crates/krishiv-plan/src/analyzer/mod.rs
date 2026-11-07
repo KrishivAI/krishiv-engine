@@ -764,8 +764,8 @@ pub struct AnalysisTimings {
 }
 
 /// A resolved plan and what a cache, the policy layer and EXPLAIN need.
-/// Equality ignores [`Self::timings`] and [`Self::output_declared`] (which follows from the plan, the catalog and
-/// `spark.sql.legacy.charVarcharAsString`, all in the fingerprint).
+/// Equality ignores [`Self::timings`], [`Self::output_declared`] and [`Self::output_comments`] (which follow from
+/// the plan, the catalog and `spark.sql.legacy.charVarcharAsString`, all in the fingerprint).
 #[derive(Debug, Clone)]
 pub struct AnalyzedPlan {
     /// The resolved plan.
@@ -774,6 +774,9 @@ pub struct AnalyzedPlan {
     pub output: Vec<BoundColumn>,
     /// Per output column, the `CHAR(n)` / `VARCHAR(n)` string it was declared with (see `char_varchar`).
     pub output_declared: Vec<Option<String>>,
+    /// Per output column, its comment (Spark's `comment` field metadata: it follows a column through bare-column
+    /// aliases, `*`, grouping keys and CTE references; any other expression has none).
+    pub output_comments: Vec<Option<String>>,
     /// The version pinned per table.
     pub pins: BTreeMap<TableIdent, TableVersion>,
     /// The securables read, in first-use order.
@@ -962,7 +965,7 @@ impl Analyzer for DefaultAnalyzer {
             let bindings = bind::bind(plan, ctx).await?;
             let metadata = started.elapsed();
             let resolving = std::time::Instant::now();
-            let (root, output, securables, warnings, output_declared) =
+            let (root, output, securables, warnings, output_declared, output_comments) =
                 resolve::resolve(plan, ctx, &bindings)?;
             unexecutable::check(&root, ctx.conf.time_type)?;
             let resolved =
@@ -978,6 +981,7 @@ impl Analyzer for DefaultAnalyzer {
                 plan: resolved,
                 output,
                 output_declared,
+                output_comments,
                 pins,
                 securables,
                 input_key: input.structural_hash(),
