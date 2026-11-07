@@ -481,6 +481,14 @@ impl DecFold<'_> {
             && self.mask.is_none_or(|m| m.is_valid(i) && m.value(i))
     }
 
+    /// Raw rows (not partial states) with unit weights, no NULL value and
+    /// no `FILTER` mask: every row adds its value once.
+    fn dense_unit(&self) -> bool {
+        matches!(self.w, Some(Weights::Const(1)))
+            && self.mask.is_none()
+            && self.nulls.is_none_or(|n| n.null_count() == 0)
+    }
+
     fn fits(&self, s: i128) -> bool {
         self.bound.is_none_or(|b| s.unsigned_abs() < b)
     }
@@ -500,6 +508,18 @@ impl DecFold<'_> {
         nonempty: Option<&BooleanArray>,
     ) {
         let fast = self.proven(v);
+        if fast && self.dense_unit() {
+            // Raw rows, all valid, unit weights, no overflow possible in this
+            // batch: a plain add per row (an overflowed group stays NULL).
+            for (&g, x) in self.groups.iter().zip(v) {
+                let g = g as usize;
+                if st[g] != 2 {
+                    sum[g] = sum[g].wrapping_add(x.wide());
+                    st[g] = 1;
+                }
+            }
+            return;
+        }
         for (i, &g) in self.groups.iter().enumerate() {
             let g = g as usize;
             let x = v[i].wide();
@@ -551,6 +571,15 @@ impl DecFold<'_> {
         counts: Option<&[i64]>,
     ) {
         let fast = self.proven(v);
+        if fast && counts.is_none() && self.dense_unit() {
+            // As in `sum`: raw rows, all valid, unit weights, proven.
+            for (&g, x) in self.groups.iter().zip(v) {
+                let g = g as usize;
+                sum[g] = sum[g].wrapping_add(x.wide());
+                count[g] = count[g].wrapping_add(1);
+            }
+            return;
+        }
         for (i, &g) in self.groups.iter().enumerate() {
             let g = g as usize;
             let x = v[i].wide();

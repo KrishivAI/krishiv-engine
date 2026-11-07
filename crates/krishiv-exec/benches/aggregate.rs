@@ -23,6 +23,14 @@
 //!   UDF boundary (guarded calls, the engine's null and filter handling, the
 //!   state checks). The ADR's target is within 1.5x of `count`.
 //!
+//! - `aggregate/q01_shape_rows`: TPC-H q01's aggregate (P2b E2): two
+//!   one-character string keys (`l_returnflag`, `l_linestatus`: 4 groups),
+//!   four decimal sums, three averages and `count(*)` over 1 Mi rows of
+//!   `decimal(15,2)` / `decimal(32,4)` / `decimal(38,6)` columns, as the
+//!   query's projection hands them to the aggregate. `AGG_BENCH_Q01_REPS=N`
+//!   runs it `N` times outside criterion and exits (for `perf stat`:
+//!   instructions per row = instructions / (N * 2^20)).
+//!
 //! `AGG_BENCH_THREADS=N` runs them (but the spill one) on `N` worker
 //! threads in the shipped (non-deterministic) mode instead: thread-local
 //! tables that abandon, and the parallel final phase.
@@ -312,6 +320,95 @@ fn wide_input() -> Vec<Batch> {
         .collect()
 }
 
+/// TPC-H q01's aggregate input: `(flag, status, qty, price, disc_price,
+/// charge, discount)`, 4 key pairs.
+fn q01_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("flag", DataType::Utf8View, false),
+        Field::new("status", DataType::Utf8View, false),
+        Field::new("qty", DECIMAL, false),
+        Field::new("price", DECIMAL, false),
+        Field::new("disc_price", DataType::Decimal128(32, 4), false),
+        Field::new("charge", DataType::Decimal128(38, 6), false),
+        Field::new("discount", DECIMAL, false),
+    ]))
+}
+
+fn q01_input() -> Vec<Batch> {
+    (0..ROWS)
+        .step_by(DEFAULT_BATCH_SIZE)
+        .map(|start| {
+            let r = start as u64..(start + DEFAULT_BATCH_SIZE).min(ROWS) as u64;
+            let mix = |i: u64| i.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 11;
+            let flag = StringViewArray::from_iter_values(
+                r.clone()
+                    .map(|i| ["A", "N", "N", "R"][(mix(i) % 4) as usize]),
+            );
+            let status = StringViewArray::from_iter_values(
+                r.clone()
+                    .map(|i| ["F", "F", "O", "F"][(mix(i) % 4) as usize]),
+            );
+            let dec = |f: &dyn Fn(u64) -> i128, t: DataType| -> ArrayRef {
+                Arc::new(Decimal128Array::from_iter_values(r.clone().map(f)).with_data_type(t))
+            };
+            let qty = |i: u64| i128::from(100 + (mix(i) >> 3) % 5_000);
+            let price = |i: u64| i128::from(90_000 + (mix(i) >> 5) % 10_410_000);
+            let disc = |i: u64| i128::from((mix(i) >> 7) % 11);
+            let cols: Vec<ArrayRef> = vec![
+                Arc::new(flag),
+                Arc::new(status),
+                dec(&qty, DECIMAL),
+                dec(&price, DECIMAL),
+                dec(&|i| price(i) * (100 - disc(i)), DataType::Decimal128(32, 4)),
+                dec(
+                    &|i| price(i) * (100 - disc(i)) * (100 + i128::from((mix(i) >> 9) % 9)),
+                    DataType::Decimal128(38, 6),
+                ),
+                dec(&disc, DECIMAL),
+            ];
+            Batch::new(RecordBatch::try_new(q01_schema(), cols).expect("batch"))
+        })
+        .collect()
+}
+
+/// q01's `group by flag, status` with its eight aggregates.
+fn q01_plan(batches: &[Batch]) -> Arc<dyn ExecNode> {
+    let s = q01_schema();
+    let d2 = DECIMAL;
+    let spec = AggregateSpec {
+        input: Arc::clone(&s),
+        group_by: vec![0, 1],
+        aggregates: vec![
+            AggregateExpr::new(AggregateFunction::Sum, 2, d2.clone(), "sum_qty"),
+            AggregateExpr::new(AggregateFunction::Sum, 3, d2.clone(), "sum_base_price"),
+            AggregateExpr::new(
+                AggregateFunction::Sum,
+                4,
+                DataType::Decimal128(32, 4),
+                "sum_disc_price",
+            ),
+            AggregateExpr::new(
+                AggregateFunction::Sum,
+                5,
+                DataType::Decimal128(38, 6),
+                "sum_charge",
+            ),
+            AggregateExpr::new(AggregateFunction::Avg, 2, d2.clone(), "avg_qty"),
+            AggregateExpr::new(AggregateFunction::Avg, 3, d2.clone(), "avg_price"),
+            AggregateExpr::new(AggregateFunction::Avg, 6, d2, "avg_disc"),
+            AggregateExpr::count_star("count_order"),
+        ],
+        output: AggregateOutput::Final,
+        ansi: true,
+        spill: None,
+        require_unit_weights: false,
+        legacy_statistical: false,
+        udafs: None,
+    };
+    let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
+    AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"))
+}
+
 /// `group by <group_by>` computing `aggregates` over `wide_input` batches.
 fn wide_plan(
     batches: &[Batch],
@@ -420,6 +517,14 @@ fn bench(c: &mut Criterion) {
         QueryRunner::new(executor.expect("executor"))
     };
     let seeded = threads.is_none();
+    let q01 = q01_input();
+    if let Ok(reps) = std::env::var("AGG_BENCH_Q01_REPS") {
+        let mode = Mode { rows: true, seeded };
+        for _ in 0..reps.parse::<usize>().expect("AGG_BENCH_Q01_REPS: a count") {
+            black_box(run(&runner, &caller, q01_plan(&q01), 1 << 30, mode));
+        }
+        std::process::exit(0);
+    }
     let modes =
         [("", false), ("_rows", true)].map(|(suffix, rows)| (suffix, Mode { rows, seeded }));
     let mut g = c.benchmark_group("aggregate");
@@ -482,6 +587,10 @@ fn bench(c: &mut Criterion) {
             });
         }
     }
+    g.bench_function("q01_shape_rows", |b| {
+        let mode = Mode { rows: true, seeded };
+        b.iter(|| black_box(run(&runner, &caller, q01_plan(&q01), 1 << 30, mode)));
+    });
     for keys in [1u64, 64, 1 << 18] {
         let batches = decimal_input(keys);
         for (name, f) in [
