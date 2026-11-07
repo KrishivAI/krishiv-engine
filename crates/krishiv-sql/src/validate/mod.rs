@@ -388,6 +388,9 @@ impl Checker<'_> {
         self.expression_options(&t.options, t.span)?;
         self.option_values(&t.tblproperties)?;
         self.row_format_file_format(t.row_format.as_ref(), t.file_format.as_ref(), t.span)?;
+        if t.using.is_none() {
+            stored_by(t.file_format.as_ref())?;
+        }
         self.serde_properties(t.row_format.as_ref())?;
         self.using_with_serde(
             "CREATE TABLE ... USING ...",
@@ -437,6 +440,9 @@ impl Checker<'_> {
         // `visitCreateTableLike` checks the ROW FORMAT against the file format and reads the SerDe's
         // properties before it checks `USING` beside a serde clause, and the table's properties after.
         self.row_format_file_format(t.row_format.as_ref(), t.file_format.as_ref(), t.span)?;
+        if t.using.is_none() {
+            stored_by(t.file_format.as_ref())?;
+        }
         self.serde_properties(t.row_format.as_ref())?;
         self.using_with_serde(
             "CREATE TABLE LIKE ... USING ...",
@@ -2029,4 +2035,23 @@ fn script(c: &crate::ast::Compound, sql: &str, opts: ParserOptions) -> R {
         }
     }
     list(&c.body, sql, opts)
+}
+
+/// `STORED BY 'handler' [WITH SERDEPROPERTIES (...)]` with no `ROW FORMAT` and no `USING` beside it (both are checked
+/// elsewhere) (that pair is
+/// `validateRowFormatFileFormat`'s, checked before): Spark's `visitCreateFileFormat` refuses the clause,
+/// `INVALID_STATEMENT_OR_CLAUSE` `STORED BY` at it (probe13 b1, b2), before the row format is visited.
+fn stored_by(file_format: Option<&FileFormat>) -> R {
+    match file_format {
+        Some(FileFormat {
+            kind: FileFormatKind::StoredBy(_),
+            span,
+        }) => Err(at(
+            InvalidStatementOrClause {
+                operation: "STORED BY".to_owned(),
+            },
+            *span,
+        )),
+        _ => Ok(()),
+    }
 }

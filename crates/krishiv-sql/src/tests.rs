@@ -1960,11 +1960,7 @@ fn create_table_storage_clauses() {
         t.file_format.as_ref().unwrap().kind,
         FileFormatKind::StoredAs(_)
     ));
-    let t = create("CREATE TABLE t (a INT) STORED BY 'com.example.Storage'");
-    let FileFormatKind::StoredBy(h) = &t.file_format.as_ref().unwrap().kind else {
-        panic!("{:?}", t.file_format);
-    };
-    assert_eq!(h, "com.example.Storage");
+    // `STORED BY` alone is refused at the clause, as Spark does (`parse_leftovers`).
 }
 
 /// `CREATE TABLE ... LIKE ...`.

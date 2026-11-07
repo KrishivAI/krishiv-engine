@@ -3459,7 +3459,14 @@ impl<'s> Parser<'s> {
         let kind = if self.eat_kw("AS") {
             FileFormatKind::StoredAs(self.table_name()?)
         } else if self.eat_kw("BY") {
-            FileFormatKind::StoredBy(self.string_after()?)
+            // `storageHandler`: a string, then `WITH SERDEPROPERTIES (...)` (Spark refuses the clause
+            // either way, at the clause; the span covers the list).
+            let handler = self.string_after()?;
+            if self.kw_at(0, "WITH") && self.kw_at(1, "SERDEPROPERTIES") {
+                self.pos += 2;
+                self.property_list(false)?;
+            }
+            FileFormatKind::StoredBy(handler)
         } else {
             return self.fail();
         };

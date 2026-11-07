@@ -100,3 +100,47 @@ fn lines_terminated_by_only_newline() {
         assert_eq!(e.span.range(), at..end, "{sql}");
     }
 }
+
+/// b1-b3: `STORED BY` (with or without `WITH SERDEPROPERTIES`) is `INVALID_STATEMENT_OR_CLAUSE` at the
+/// clause; beside `ROW FORMAT` it is `validateRowFormatFileFormat`'s combination error, first.
+#[test]
+fn stored_by_is_refused_at_the_clause() {
+    for (sql, clause) in [
+        ("CREATE TABLE sb5 (a INT) STORED BY 'h'", "STORED BY 'h'"),
+        (
+            "CREATE TABLE sb11 (a INT) STORED BY 'h' WITH SERDEPROPERTIES ('k'='v')",
+            "STORED BY 'h' WITH SERDEPROPERTIES ('k'='v')",
+        ),
+    ] {
+        let e = err(sql);
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidStatementOrClause,
+            "{sql}"
+        );
+        assert_eq!(
+            e.error.message_parameters(),
+            vec![("operation", "STORED BY".to_owned())],
+            "{sql}"
+        );
+        let at = sql.find(clause).unwrap();
+        assert_eq!(e.span.range(), at..at + clause.len(), "{sql}");
+    }
+    let sql = "CREATE TABLE sb12 (a INT) ROW FORMAT SERDE 'x' STORED BY 'h' WITH SERDEPROPERTIES ('k'='v')";
+    let e = err(sql);
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::LegacyErrorTemp0035,
+        "{sql}"
+    );
+    assert_eq!(
+        e.error.message_parameters(),
+        vec![(
+            "message",
+            "Unexpected combination of ROW FORMAT SERDE 'x' and STORED BY 'h'WITHSERDEPROPERTIES('k'='v')"
+                .to_owned()
+        )],
+        "{sql}"
+    );
+    assert_eq!(e.span.range(), 0..sql.len(), "{sql}");
+}
