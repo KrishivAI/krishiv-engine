@@ -627,14 +627,9 @@ impl QueryCatalog {
         // cannot fail the conversion the `tasks` range would repeat.
         let mut specs: Vec<TaskSpec> = (0..partitions)
             .map(|partition| TaskSpec {
-                stage: 0,
-                stage_attempt: 0,
                 partition,
                 partitions,
-                attempt: 0,
-                scans: BTreeMap::new(),
-                exchanges: BTreeMap::new(),
-                output: None,
+                ..TaskSpec::whole()
             })
             .collect();
         for (id, kind) in assigned {
@@ -890,6 +885,7 @@ impl QueryCatalog {
                 name: c.name.clone(),
                 data_type: c.data_type.clone(),
                 nullable: c.nullable,
+                char_varchar: c.char_varchar.clone(),
             })
             .collect();
         let entry = Arc::new(TempTable::Files {
@@ -1546,10 +1542,7 @@ impl Expander<'_> {
                 .map(|(q, c)| {
                     // The name is one part: `col(q)` would split a dot or read a trailing `*`.
                     let stored = crate::column::Column::new(Expr::new(ExprNode::Column(
-                        krishiv_plan::ColumnRef {
-                            name: vec![q.clone()],
-                            plan_id: None,
-                        },
+                        krishiv_plan::ColumnRef::new(vec![q.clone()]),
                     )));
                     let typed = if projection == crate::view_schema::ReadProjection::Cast {
                         stored.cast_ansi(c.data_type.clone())
@@ -2062,11 +2055,7 @@ mod tests {
                 paths: vec![],
                 options: Default::default(),
             },
-            columns: vec![TableColumn {
-                name: col.to_owned(),
-                data_type: DataType::Integer,
-                nullable: false,
-            }],
+            columns: vec![TableColumn::new(col.to_owned(), DataType::Integer, false)],
         }
     }
 

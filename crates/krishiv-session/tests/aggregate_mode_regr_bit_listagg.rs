@@ -986,11 +986,11 @@ fn window_forms_match_spark() -> R {
     test_regression(&s)?;
     let err = block_on(async {
         let df = s
-            .sql("SELECT regr_slope(y, x) OVER () FROM testRegression")
+            .sql("SELECT approx_count_distinct(y) OVER () FROM testRegression")
             .await?;
         df.collect().await.map(|_| ())
     })
-    .expect_err("regr_slope has no window form");
+    .expect_err("approx_count_distinct has no window form");
     assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
     Ok(())
 }

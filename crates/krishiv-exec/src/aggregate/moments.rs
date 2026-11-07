@@ -268,6 +268,11 @@ fn merge(family: Family, a: &mut Row, b: &Row) {
 /// division by zero whatever `legacy` says, `DIVIDE_BY_ZERO` with `ansi` and
 /// NULL without. Spark's `evaluateExpression`.
 ///
+/// `regr_avgx`/`regr_avgy` are planned as a plain average now (Spark's
+/// `RuntimeReplaceableAggregate`), so the two arms below run only for a plan
+/// decoded from an older codec version: they keep the running-mean form the
+/// engine used then, which can differ from Spark in the last bit.
+///
 /// The pair buffer's slots hold `x` (the first argument) in `xAvg`/`xMk`
 /// and `y` (the second) in `yAvg`/`yMk`, as `update` folds them; the
 /// regression aggregates read them as `regr_*(y, x)` documents them (so
@@ -410,6 +415,7 @@ impl Moments {
         groups: &[u32],
         args: &[&[f64]],
         valid: impl Fn(usize) -> bool,
+        run: Option<&super::accumulator::Running<'_>>,
     ) -> Result<()> {
         let (Some(x), y) = (args.first(), args.get(1)) else {
             return Err(internal("a moment aggregate without arguments".to_owned()));
@@ -427,6 +433,14 @@ impl Moments {
                 let mut s = self.load(g)?;
                 update(self.family, &mut s, x[i], y.map_or(0.0, |y| y[i]));
                 self.store(g, &s)?;
+            }
+            // A running fold keeps the partition's state after this row.
+            if let Some(r) = run {
+                let (to, from) = (r.snapshots[i], r.parts[i]);
+                if to != super::accumulator::Running::NONE {
+                    let row = self.load(from)?;
+                    self.store(to, &row)?;
+                }
             }
         }
         Ok(())

@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "sql-commands": [
+      33,
+      37
+    ]
+  },
+  "file": "view-schema-type-evolution",
+  "format_version": 1
+}

@@ -35,6 +35,49 @@ pub(crate) struct ConfStore {
     local_zone: Arc<str>,
 }
 
+/// Fails when `key` is one of the switches the engine refuses and `value` sets it to the refused value.
+fn refuse_unsupported_switch(key: &str, value: &str) -> Result<(), KrishivError> {
+    let refused = UNSUPPORTED_COLLATION_SWITCHES
+        .iter()
+        .map(|k| (*k, "true"))
+        .chain(UNSUPPORTED_CHAR_VARCHAR_SWITCHES.iter().copied())
+        .find(|(k, v)| k.eq_ignore_ascii_case(key) && value.trim().eq_ignore_ascii_case(v));
+    if let Some((_, v)) = refused {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!("{key} = {v}"),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// CHAR/VARCHAR switches the engine does not implement, with the value that leaves Spark's default
+/// (design `P2-T001b-char-varchar.md`, point (b); ADR 0008: refused, not ignored). `readSideCharPadding`
+/// off moves the padding to the write side, which Krishiv does not do, and `noCharPaddingInPredicate`
+/// only matters with it off.
+const UNSUPPORTED_CHAR_VARCHAR_SWITCHES: &[(&str, &str)] = &[
+    ("spark.sql.charAsVarchar", "true"),
+    ("spark.sql.preserveCharVarcharTypeInfo", "true"),
+    ("spark.sql.readSideCharPadding", "false"),
+    ("spark.sql.legacy.noCharPaddingInPredicate", "true"),
+];
+
+/// The builder's initial settings, checked as `SET` checks a runtime one.
+pub(crate) fn check_pairs(pairs: &[(String, String)]) -> Result<(), KrishivError> {
+    pairs
+        .iter()
+        .try_for_each(|(k, v)| refuse_unsupported_switch(k, v))
+}
+
+/// Spark switches for collation features the engine refuses (ADR 0043 Decision 7 and 9): the
+/// collation-aware hash functions, collated map keys and schema-level default collations.
+const UNSUPPORTED_COLLATION_SWITCHES: &[&str] = &[
+    "spark.sql.legacy.collationAwareHashFunctions",
+    "spark.sql.collation.allowInMapKeys",
+    "spark.sql.collation.schemaLevel.enabled",
+    "spark.sql.schemaLevelCollations.enabled",
+];
+
 impl ConfStore {
     pub(crate) fn new(config: Config) -> Self {
         Self::with_local_zone(config, &local_zone())
@@ -290,6 +333,9 @@ impl RuntimeConf {
             }
             .into());
         }
+        // Collation switches the engine does not honour yet (ADR 0043): turning one on would
+        // change results silently, so it is refused.
+        refuse_unsupported_switch(key, value)?;
         // A time zone setting (under its canonical key or the Spark alias)
         // is resolved against the time zone database, which `krishiv-common`
         // has not: the text as given, as Spark's `ZoneId.of` takes it.

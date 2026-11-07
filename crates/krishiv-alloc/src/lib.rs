@@ -36,6 +36,10 @@
 //! (musl, macOS) there is no constructor: set the `MIMALLOC_*` variables of
 //! [`LIMITED_OPTIONS`] in the environment instead. [`release`] is the
 //! pressure release hook (`mi_collect(true)`).
+//!
+//! **glibc, at every other limit.** The C libraries the engine links
+//! allocate with glibc's malloc, not mimalloc; [`GLIBC_OPTIONS`] raises its
+//! mmap and trim thresholds so their per-chunk blocks stay in the heap.
 
 #[cfg(feature = "heap-stats")]
 pub mod heap;
@@ -51,6 +55,23 @@ pub const LIMITED_OPTIONS: [(&CStr, c_int, c_long); 3] = [
     (c"MIMALLOC_PURGE_DELAY", 15, 10),
     (c"MIMALLOC_ALLOW_THP", 43, 0),
     (c"MIMALLOC_MINIMAL_PURGE_SIZE", 44, 64),
+];
+
+/// `(environment variable, mallopt parameter, value)` set for glibc's
+/// malloc unless a limit below [`GENEROUS_MIN`] applies (the bounded path
+/// keeps glibc's defaults, as it trims mimalloc too). The C libraries the
+/// engine links allocate with glibc, not mimalloc: zstd's decompression
+/// context (about 160 KiB, one per Parquet column chunk) lies above glibc's
+/// default mmap threshold, so each chunk mapped and unmapped it, or trimmed
+/// it off the heap top with `madvise`, and faulted it back in (TPC-H SF10,
+/// 12 threads: FileScan CPU -26% on q12 and -33% on q14 with these values).
+/// The parameter numbers are glibc's `M_MMAP_THRESHOLD` (-3) and
+/// `M_TRIM_THRESHOLD` (-1); the values are 4 MiB and 64 MiB. Setting either
+/// turns off glibc's dynamic thresholds. What stays resident is bounded by
+/// each arena's peak of live C allocations, not by the trim threshold.
+pub const GLIBC_OPTIONS: [(&CStr, c_int, c_int); 2] = [
+    (c"MALLOC_MMAP_THRESHOLD_", -3, 4 << 20),
+    (c"MALLOC_TRIM_THRESHOLD_", -1, 64 << 20),
 ];
 
 /// The smallest memory limit that keeps mimalloc's defaults (4 GiB).
@@ -182,6 +203,36 @@ mod init {
 
     unsafe extern "C" {
         fn getenv(name: *const c_char) -> *const c_char;
+        fn mallopt(param: c_int, value: c_int) -> c_int;
+    }
+
+    /// Applies [`super::GLIBC_OPTIONS`] unless the environment already sets
+    /// glibc's malloc: its `MALLOC_*_` variable, or any `glibc.malloc.`
+    /// tunable in `GLIBC_TUNABLES`.
+    ///
+    /// The decision is taken once, at process start, from the limit the
+    /// process starts with. A tighter limit set later (a session setting)
+    /// does not undo it: freed C memory up to the trim threshold (64 MiB) can
+    /// then stay with each glibc arena, outside the memory pools' accounting.
+    fn keep_freed_c_memory() {
+        let tuned = with_var(c"GLIBC_TUNABLES", |v| {
+            v.is_some_and(|v| v.windows(13).any(|w| w == b"glibc.malloc."))
+        });
+        if tuned {
+            return;
+        }
+        for &(var, param, value) in &super::GLIBC_OPTIONS {
+            if !is_set(var) {
+                // SAFETY: `mallopt` takes glibc's arena lock and only stores
+                // the value in its malloc parameters (it initialises malloc
+                // first if needed, and may run `malloc_consolidate` on the
+                // main arena, which only merges free chunks); it may run on
+                // any thread. Its result is
+                // ignored: both values are within glibc's bounds (the mmap
+                // threshold's cap is 32 MiB on 64-bit targets).
+                unsafe { mallopt(param, value) };
+            }
+        }
     }
 
     /// Calls `f` with the value of `var` if it is set to anything
@@ -224,11 +275,11 @@ mod init {
             (Some(a), Some(b)) => a.min(b),
             (a, b) => match a.or(b) {
                 Some(l) => l,
-                None => return,
+                None => return keep_freed_c_memory(),
             },
         };
         if is_generous(limit) {
-            return;
+            return keep_freed_c_memory();
         }
         super::BOUNDED.store(true, std::sync::atomic::Ordering::Relaxed);
         for &(var, option, value) in &LIMITED_OPTIONS {
@@ -251,7 +302,7 @@ mod init {
         /// Without arguments (a null `argv`) and without the variable, the
         /// constructor sets nothing and does not read `argv`.
         #[test]
-        fn a_null_argv_sets_nothing() {
+        fn a_null_argv_sets_no_mimalloc_option() {
             // (The test process has no `KRISHIV_MEMORY_LIMIT`, as the other
             // tests that read mimalloc's defaults assume.)
             super::init(0, std::ptr::null(), std::ptr::null());
@@ -418,7 +469,51 @@ mod tests {
             // `PR_SET_THP_DISABLE` at its own initialisation, so this shows
             // the constructor ran before it (not only that the option is set).
             println!("OPTIONS {:?} THP {}", read(), thp_enabled());
+            println!("MAPPED {}", a_mib_is_mapped());
         }
+    }
+
+    /// glibc's `struct mallinfo2` (glibc 2.33 and later; tests only).
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[repr(C)]
+    struct MallInfo2 {
+        arena: usize,
+        ordblks: usize,
+        smblks: usize,
+        hblks: usize,
+        hblkhd: usize,
+        usmblks: usize,
+        fsmblks: usize,
+        uordblks: usize,
+        fordblks: usize,
+        keepcost: usize,
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe extern "C" {
+        fn mallinfo2() -> MallInfo2;
+        fn malloc(size: usize) -> *mut std::ffi::c_void;
+        fn free(ptr: *mut std::ffi::c_void);
+    }
+
+    /// Whether glibc maps a fresh 1 MiB C block on its own (glibc's default
+    /// mmap threshold is 128 KiB) rather than taking it from its heap.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn a_mib_is_mapped() -> bool {
+        // SAFETY: plain libc calls; the block is freed once.
+        unsafe {
+            let before = mallinfo2().hblkhd;
+            let p = malloc(1 << 20);
+            assert!(!p.is_null());
+            let during = mallinfo2().hblkhd;
+            free(p);
+            during != before
+        }
+    }
+
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    fn a_mib_is_mapped() -> bool {
+        false
     }
 
     /// `THP_enabled` of this process (`?` if the kernel does not report it).
@@ -433,6 +528,11 @@ mod tests {
 
     /// Runs `child_reports_options` in a child process with `arg` and `env`.
     fn child(arg: Option<&str>, env: &[(&str, &str)]) -> String {
+        report(arg, env, "OPTIONS ")
+    }
+
+    /// The `prefix` line of `child_reports_options` in a child process.
+    fn report(arg: Option<&str>, env: &[(&str, &str)], prefix: &str) -> String {
         let mut c = std::process::Command::new(std::env::current_exe().unwrap());
         c.args(["tests::child_reports_options", "--exact", "--nocapture"])
             .env("KRISHIV_ALLOC_CHILD", "1")
@@ -440,6 +540,10 @@ mod tests {
         for (k, ..) in LIMITED_OPTIONS {
             c.env_remove(k.to_str().unwrap());
         }
+        for (k, ..) in GLIBC_OPTIONS {
+            c.env_remove(k.to_str().unwrap());
+        }
+        c.env_remove("GLIBC_TUNABLES");
         // A second filter: libtest runs tests matching either; the
         // constructor sees it in `argv`.
         c.args(arg);
@@ -448,7 +552,7 @@ mod tests {
         assert!(out.status.success(), "{out:?}");
         let text = String::from_utf8(out.stdout).unwrap();
         text.lines()
-            .find_map(|l| l.strip_prefix("OPTIONS "))
+            .find_map(|l| l.strip_prefix(prefix))
             .unwrap()
             .to_owned()
     }
@@ -507,5 +611,36 @@ mod tests {
         assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "4095m")]), limited);
         // A limit that is not a size counts as 0.
         assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "lots")]), limited);
+    }
+
+    /// With no limit or a generous one, glibc keeps a freed 1 MiB C block in
+    /// its heap; under a tight limit, or when the environment sets glibc's
+    /// malloc itself, its defaults stay (the block is mapped).
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn glibc_keeps_c_blocks_unless_bounded_or_configured() {
+        let mapped = |arg, env| report(arg, env, "MAPPED ");
+        assert_eq!(mapped(None, &[]), "false");
+        assert_eq!(mapped(Some("krishiv.memory.limit=24g"), &[]), "false");
+        assert_eq!(mapped(Some("krishiv.memory.limit=1g"), &[]), "true");
+        assert_eq!(
+            mapped(None, &[("MALLOC_MMAP_THRESHOLD_", "131072")]),
+            "true"
+        );
+        assert_eq!(
+            mapped(
+                None,
+                &[("GLIBC_TUNABLES", "glibc.malloc.trim_threshold=131072")]
+            ),
+            "true"
+        );
+        // A tunable of another glibc part leaves the policy on.
+        assert_eq!(
+            mapped(
+                None,
+                &[("GLIBC_TUNABLES", "glibc.rtld.optional_static_tls=512")]
+            ),
+            "false"
+        );
     }
 }

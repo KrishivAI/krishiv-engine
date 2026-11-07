@@ -473,3 +473,87 @@ fn a_reader_takes_every_pair_and_refuses_another_schema() {
             .is_err()
     );
 }
+
+/// Runs a sink collecting a filter on `k` over one batch and finalizes it
+/// under a pool of `finalize_limit` bytes; returns the published filter's form and what the
+/// sink's state held of that pool until it was dropped.
+fn published_filter_form(finalize_limit: Option<usize>) -> (krishiv_io::FilterForm, usize) {
+    use crate::operator::Sink as _;
+    use crate::values::{LocalValues, Producer, ValueId, ValueService as _};
+    use futures::FutureExt as _;
+    use krishiv_io::{ColumnPath, FilterId, FilterSnapshot, KeyFilterOptions};
+    use krishiv_memory::MemoryPool as _;
+    let (_root, ctx) = sink_ctx(None);
+    let (finalize_root, finalize_ctx) = sink_ctx_quantum(finalize_limit, 1);
+    let values = Arc::new(
+        LocalValues::with_producers([(ValueId::Filter(FilterId(1)), 1)].into_iter().collect())
+            .unwrap(),
+    );
+    values
+        .declare_filter(FilterId(1), ColumnPath::new("k"), DataType::Int64)
+        .unwrap();
+    let recorded = Arc::new(Recorded::default());
+    // Sparse keys: a dense integer range would already be exact as a range.
+    let b = batch(100);
+    let sparse: Vec<i64> = (0..100).map(|i| (i % 37) * 1000).collect();
+    let b = RecordBatch::try_new(
+        b.schema(),
+        vec![Arc::new(Int64Array::from(sparse)), Arc::clone(b.column(1))],
+    )
+    .unwrap();
+    let sink = sink_of(&recorded, &b).with_filters(
+        vec![crate::physical::ExchangeFilterPlan {
+            id: FilterId(1),
+            column: 0,
+            key_type: DataType::Int64,
+            options: KeyFilterOptions::default(),
+            null_safe: false,
+        }],
+        Arc::clone(&values) as Arc<dyn crate::values::ValueService>,
+        Producer {
+            partition: 0,
+            attempt: 0,
+        },
+    );
+    let global = sink.global_state(&ctx).unwrap();
+    let mut local = sink.local_state(&ctx, &global).unwrap();
+    sink.sink(krishiv_types::batch::Batch::new(b), &mut local, &global)
+        .unwrap();
+    sink.combine(local, &global).unwrap();
+    sink.finalize(&global, &finalize_ctx)
+        .now_or_never()
+        .unwrap()
+        .unwrap();
+    let held = finalize_root.reserved();
+    let FilterSnapshot::Final(f) = values
+        .filter(FilterId(1))
+        .unwrap()
+        .published()
+        .snapshot
+        .clone()
+    else {
+        panic!("filter not published")
+    };
+    drop(global);
+    assert_eq!(finalize_root.reserved(), 0);
+    (f.form(), held)
+}
+
+#[test]
+fn an_exchange_filter_that_does_not_fit_is_published_as_its_range() {
+    // Room for it: the 37 distinct sparse keys stay a set, reserved with the
+    // sink's state until the state is dropped.
+    let (form, held) = published_filter_form(None);
+    assert!(
+        matches!(
+            form,
+            krishiv_io::FilterForm::SmallSet(37) | krishiv_io::FilterForm::HashSet(37)
+        ),
+        "{form:?}"
+    );
+    assert!(held > 0);
+    // No room at finalize: only the min/max range, which holds nothing.
+    let (form, held) = published_filter_form(Some(1));
+    assert_eq!(form, krishiv_io::FilterForm::Range);
+    assert_eq!(held, 0);
+}

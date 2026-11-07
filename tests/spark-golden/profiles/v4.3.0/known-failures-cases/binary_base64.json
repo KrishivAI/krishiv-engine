@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "s43-other": [
+      4,
+      5,
+      6,
+      7
+    ]
+  },
+  "file": "binary_base64",
+  "format_version": 1
+}

@@ -51,6 +51,7 @@ pub(super) const NAMES: &[&str] = &[
     "monotonically_increasing_id",
     "spark_partition_id",
     "typeof",
+    "collation",
 ];
 
 /// The engine's single namespace and catalog (the only values
@@ -149,7 +150,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
     }
     // `typeof` never reaches execution: the analyzer rewrites it to a
     // string literal, so a call that arrives here is an analyzer bug.
-    if listed == "typeof" || listed == "current_path" {
+    if listed == "typeof" || listed == "collation" || listed == "current_path" {
         return Some((
             listed,
             Err(unsupported(

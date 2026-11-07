@@ -48,6 +48,8 @@ mod cache;
 mod cancel;
 mod carrier;
 mod catalog;
+mod char_write;
+mod collation_defaults;
 mod column;
 mod command;
 mod conf;
