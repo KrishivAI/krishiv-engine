@@ -1,12 +1,14 @@
 {
   "cases": {
+    "explain-plan-text": [
+      15,
+      16
+    ],
     "sql-commands": [
       2,
       4,
       8,
-      10,
-      15,
-      16
+      10
     ]
   },
   "file": "describe-query",
