@@ -7,7 +7,7 @@ import pytest
 from krishiv_bench import cli, join_trees
 
 NOTE = (
-    "tree inputs=12 edges=11 hyperedges=1 enumerator=dpsub fallback=inputs pairs=0 considered=0 "
+    "tree inputs=12 edges=11 hyperedges=1 enumerator=dpsub fallback=inputs pairs=0 considered=0 measure=rows "
     "cost=1.250000e6 shape=((0 1) (2 3))"
 )
 
@@ -31,6 +31,7 @@ def test_a_tree_note_parses() -> None:
         "fallback": "inputs",
         "pairs": 0,
         "considered": 0,
+        "measure": "rows",
         "cost": 1.25e6,
         "shape": "((0 1) (2 3))",
     }

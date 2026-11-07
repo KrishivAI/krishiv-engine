@@ -54,11 +54,14 @@ fn connected(masks: &[Set], a: Set, b: Set) -> bool {
 }
 
 /// Dynamic programming over every split of every subset of `n` inputs:
-/// the table of cheapest plans and the work done. `n` is below 64.
+/// the table of cheapest plans and the work done. `n` is below 64. A
+/// set's join costs `rows_of` of the set plus `split_of` of its two halves
+/// (the build of a hash join; zero for `C_out` by rows).
 pub(super) fn dpsub(
     n: usize,
     masks: &[Set],
     rows_of: &dyn Fn(Set) -> f64,
+    split_of: &dyn Fn(Set, Set) -> f64,
 ) -> (HashMap<Set, Best>, Work) {
     let full: Set = (1 << n) - 1;
     let mut best: HashMap<Set, Best> = singletons(n).collect();
@@ -80,7 +83,7 @@ pub(super) fn dpsub(
                 && connected(masks, a, b)
             {
                 work.pairs += 1;
-                let cost = x.cost + y.cost;
+                let cost = x.cost + y.cost + split_of(a, b);
                 // The first of equal splits wins: they come largest `a` first.
                 if found.is_none_or(|f| cost < f.cost) {
                     found = Some(Best {
@@ -126,7 +129,7 @@ mod tests {
         let n = 10;
         let masks: Vec<Set> = (1..n).map(|i| (1 << (i - 1)) | (1 << i)).collect();
         let rows_of = estimator(vec![100.0; n], masks.iter().map(|&m| (m, 0.01)).collect());
-        let (best, work) = dpsub(n, &masks, &rows_of);
+        let (best, work) = dpsub(n, &masks, &rows_of, &|_, _| 0.0);
         // (n³ − n) / 6 connected pairs of a chain, among every split of
         // every subset: (3^n + 1) / 2 − 2^n.
         assert_eq!(work.pairs, 165);
@@ -140,7 +143,7 @@ mod tests {
         // Inputs 0, 1 and 2 meet only in one condition over all three.
         let masks = vec![0b111];
         let rows_of = estimator(vec![10.0; 3], vec![(0b111, 0.5)]);
-        let (best, work) = dpsub(3, &masks, &rows_of);
+        let (best, work) = dpsub(3, &masks, &rows_of, &|_, _| 0.0);
         assert!(!best.contains_key(&0b111));
         assert_eq!(work.pairs, 0);
     }
@@ -150,7 +153,7 @@ mod tests {
         // 0-1 joined; the hyperedge {0, 1, 2} then joins {0, 1} and {2}.
         let masks = vec![0b011, 0b111];
         let rows_of = estimator(vec![10.0; 3], vec![(0b011, 0.1), (0b111, 0.5)]);
-        let (best, _) = dpsub(3, &masks, &rows_of);
+        let (best, _) = dpsub(3, &masks, &rows_of, &|_, _| 0.0);
         assert_eq!(
             best.get(&0b111).map(|b| (b.left, b.right)),
             Some((0b011, 0b100))
@@ -163,7 +166,7 @@ mod tests {
         // same, and the largest half holding input 0 wins.
         let masks = vec![0b011, 0b110, 0b101];
         let rows_of = estimator(vec![10.0; 3], masks.iter().map(|&m| (m, 0.1)).collect());
-        let (best, work) = dpsub(3, &masks, &rows_of);
+        let (best, work) = dpsub(3, &masks, &rows_of, &|_, _| 0.0);
         assert_eq!(work.pairs, 6);
         assert_eq!(
             best.get(&0b111).map(|b| (b.left, b.right)),
