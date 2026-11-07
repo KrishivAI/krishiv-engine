@@ -218,6 +218,10 @@ fn positions_that_take_no_clause_are_refused_as_spark_refuses_them() {
         "SELECT row_number() OVER IDENTIFIER('x.win') FROM VALUES (1) AS T(c1) WINDOW win AS (ORDER BY c1)",
         "SELECT * FROM VALUES (1, 2) AS IDENTIFIER('schema.table')(c1, c2)",
         "SELECT 1 AS IDENTIFIER('col1.col2')",
+        // A column list without `AS`, and a CTE's, take one part per name too.
+        "SELECT * FROM VALUES (1) t(IDENTIFIER('a.b'))",
+        "SELECT * FROM (SELECT 1) t(c, IDENTIFIER('a.b'))",
+        "WITH t(IDENTIFIER('a.b')) AS (SELECT 1) SELECT * FROM t",
     ] {
         assert_eq!(class(&s, q), "IDENTIFIER_TOO_MANY_NAME_PARTS", "{q}");
     }
@@ -323,4 +327,16 @@ fn a_select_item_written_identifier_is_named_by_what_it_resolves_to() {
         ),
         ["c1.c2"]
     );
+}
+
+#[test]
+fn a_function_call_or_window_clause_with_a_dotted_clause_is_not_a_column_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    for q in [
+        "SELECT upper(IDENTIFIER('a.b')) FROM VALUES (1) AS T(c)",
+        "SELECT count(1) OVER (PARTITION BY IDENTIFIER('a.b')) FROM VALUES (1) AS T(c)",
+    ] {
+        assert_ne!(class(&s, q), "IDENTIFIER_TOO_MANY_NAME_PARTS", "{q}");
+    }
 }

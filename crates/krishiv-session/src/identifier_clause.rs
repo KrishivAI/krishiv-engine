@@ -372,6 +372,52 @@ fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usiz
     {
         return true;
     }
+    // A column list without `AS`, which Spark reads the same way: `... t(a, IDENTIFIER(..))`
+    // after a relation (a `VALUES` or subquery `)`, or `FROM`/`JOIN` and a table name), and a CTE's
+    // `WITH t(IDENTIFIER(..)) AS (`. A word before `(` is otherwise a function call, so only these
+    // shapes count.
+    if tokens
+        .get(before)
+        .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+    {
+        // The list's own `)`, then `AS (`: a CTE column list.
+        let mut depth = 0_usize;
+        let mut k = open;
+        let close = loop {
+            if is(k, Sym::LParen) {
+                depth += 1;
+            } else if is(k, Sym::RParen) {
+                depth -= 1;
+                if depth == 0 {
+                    break Some(k);
+                }
+            }
+            k += 1;
+            if k >= tokens.len() {
+                break None;
+            }
+        };
+        if close.is_some_and(|c| is_word(c + 1, "AS") && is(c + 2, Sym::LParen)) {
+            return true;
+        }
+        let relation_before = match before.checked_sub(1) {
+            Some(b) if is(b, Sym::RParen) => {
+                !["OVER", "FILTER", "GROUP", "WITHIN", "IGNORE", "RESPECT"]
+                    .iter()
+                    .any(|w| is_word(before, w))
+            }
+            Some(b) => {
+                b >= 1
+                    && (is_word(b - 1, "FROM") || is_word(b - 1, "JOIN"))
+                    && !is_word(b, "AS")
+                    && matches!(tokens[b].kind, TokenKind::Word | TokenKind::QuotedIdent)
+            }
+            None => false,
+        };
+        if relation_before {
+            return true;
+        }
+    }
     // `AS IDENTIFIER(...) (`: back to the clause's `(`.
     if !is(before, Sym::RParen) {
         return false;
