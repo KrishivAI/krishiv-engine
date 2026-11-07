@@ -5,8 +5,9 @@
 # The baselines list the statements that fail on each Spark version's goldens (P3-T090). The nightly
 # `golden-profiles` job fails only on a statement that newly fails, so as the engine improves the lists go
 # stale: statements that now pass stay listed until a refresh. Run this, review `git diff --stat`, and open
-# the PR (a refresh is data only; a statement that newly failed is a regression to fix, not to list: the
-# update refuses to write while any failure matches no category rule).
+# the PR. A refresh is data only: a statement that newly fails is a regression to fix, not to list, so the
+# script stops before writing anything for a tag when the run has an unlisted failure (set
+# ALLOW_NEW_FAILURES=1 only for a failure that is understood and given a category on purpose).
 #
 #   tests/scripts/refresh_golden_profiles.sh [tag ...]      # default: every directory under profiles/
 #
@@ -37,10 +38,20 @@ echo "== building golden-report"
 cargo build --release -p krishiv-testkit --bin golden-report
 BIN="${CARGO_TARGET_DIR:-target}/release/golden-report"
 
+export TZ=UTC  # the cargo test environment forces it; the binary is run directly here
+
 for tag in "${TAGS[@]}"; do
+  KF="tests/spark-golden/profiles/$tag/known-failures.json"
   echo "== $tag"
-  "$BIN" --engine session --tag "$tag" --ratchet update \
-    --known-failures "tests/spark-golden/profiles/$tag/known-failures.json"
+  # `check` exits non-zero when a listed statement now passes (the expected drift), so only its text is used:
+  # an unlisted failure is a regression, and it must not be written into the baseline.
+  CHECK="$("$BIN" --engine session --tag "$tag" --ratchet check --known-failures "$KF" 2>&1 || true)"
+  if grep -q 'fail that the baseline does not list' <<<"$CHECK" && [ "${ALLOW_NEW_FAILURES:-0}" != 1 ]; then
+    echo "$tag: statements fail that the baseline does not list (regressions, not refreshed):" >&2
+    sed -n '/fail that the baseline does not list/,/now pass/p' <<<"$CHECK" | grep -v 'now pass' | head -40 >&2
+    exit 1
+  fi
+  "$BIN" --engine session --tag "$tag" --ratchet update --known-failures "$KF"
 done
 
 echo "== done; review and commit:"
