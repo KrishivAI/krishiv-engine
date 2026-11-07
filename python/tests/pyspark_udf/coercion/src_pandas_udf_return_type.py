@@ -94,7 +94,9 @@ class PandasUDFReturnTypeTests(GoldenFileTestMixin, ReusedSQLTestCase):
             np.arange(1, 3).astype("complex128"),
             [np.array([1, 2, 3], dtype=np.int32), np.array([1, 2, 3], dtype=np.int32)],
             pd.date_range("19700101", periods=2).values,
-            pd.date_range("19700101", periods=2, tz="US/Eastern").values,
+            # Krishiv: "US/Eastern" in Spark 4.2.0; the same zone by its canonical name (the legacy US/* links are
+            # not installed on every system, e.g. Ubuntu without tzdata-legacy).
+            pd.date_range("19700101", periods=2, tz="America/New_York").values,
             [pd.Timedelta("1 day"), pd.Timedelta("2 days")],
             pd.Categorical(["A", "B"]),
             pd.DataFrame({"_1": [1, 2]}),
