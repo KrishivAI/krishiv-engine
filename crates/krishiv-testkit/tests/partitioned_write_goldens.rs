@@ -66,3 +66,40 @@ fn spark_reads_krishiv_partitioned_writes() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// The `write-partition-cases` command the fixture generator runs: a usage error without its two arguments, and one
+/// directory per case written (through the library entry and through the binary).
+#[test]
+fn the_case_writer_command_writes_one_directory_per_case() {
+    use krishiv_testkit::partitioned_writes::cli;
+    assert!(cli(&[]).unwrap_err().starts_with("usage:"));
+    // A case file of the first case alone.
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(cases_path()).unwrap()).unwrap();
+    let first = doc["cases"][0].clone();
+    let id = first["id"].as_str().unwrap().to_owned();
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("cases.json");
+    std::fs::write(&file, serde_json::json!({ "cases": [first] }).to_string()).unwrap();
+    let out = tmp.path().join("out");
+    let args = [file.display().to_string(), out.display().to_string()];
+    let dirs = cli(&args).unwrap();
+    assert_eq!(dirs, [out.join(&id).display().to_string()]);
+    assert!(!partition_dirs(&out.join(&id)).unwrap().is_empty());
+    // The binary: a usage error fails, a run prints the directory it wrote.
+    let bin = env!("CARGO_BIN_EXE_write-partition-cases");
+    assert!(!std::process::Command::new(bin).status().unwrap().success());
+    let out2 = tmp.path().join("out2");
+    let run = std::process::Command::new(bin)
+        .args([file.display().to_string(), out2.display().to_string()])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        out2.join(&id).display().to_string()
+    );
+}
