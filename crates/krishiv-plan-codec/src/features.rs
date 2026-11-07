@@ -360,6 +360,8 @@ fn arrow_nested(t: &arrow_schema::DataType) -> bool {
 
 /// Whether the encoder must list the nested-types feature for an Arrow type
 /// it writes (kept in step with [`feature_of`] for [`Construct::ArrowType`]).
+/// The calendar interval's struct carrier is not nested: `arrow_nested`
+/// excludes it (it is `calendar_struct`).
 pub(crate) fn arrow_type_is_nested(t: &arrow_schema::DataType) -> bool {
     // A variant's carrier is one value, not a struct: it needs `variant_type`, not `nested_types`.
     !krishiv_types::arrow::is_variant_struct(t) && arrow_nested(t)
