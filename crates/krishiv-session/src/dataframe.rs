@@ -1840,6 +1840,7 @@ impl DataFrame {
                     source: source.clone(),
                     columns,
                     known: false,
+                    partition_columns: Vec::new(),
                 },
             );
             self.session.state.cache.invalidate_table(name);

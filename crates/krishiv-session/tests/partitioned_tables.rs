@@ -1239,3 +1239,59 @@ fn describe_as_json_of_bucketed_tables_statistics_and_refusals() {
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
 }
+
+/// A partitioned table's rows read back with their partition values: the `name=value` directories above its files
+/// are its declared partition columns, last and typed as declared (Spark reads a catalog table's partition values
+/// with its partition schema, never inferring them). NULL is the default partition; values come back unescaped.
+#[test]
+fn reading_a_partitioned_table_returns_its_partition_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE g (a INT, b STRING) USING parquet PARTITIONED BY (b)",
+    );
+    // Empty: no files, no partitions.
+    assert!(rows(&s, "SELECT CAST(a AS STRING), b FROM g").is_empty());
+    run(&s, "INSERT INTO g VALUES (1, 'x'), (2, NULL), (3, 'a/b')");
+    assert_eq!(
+        rows(&s, "SELECT CAST(a AS STRING), b FROM g ORDER BY a"),
+        ["1\tx", "2", "3\ta/b"]
+    );
+    assert_eq!(
+        rows(&s, "SELECT CAST(a AS STRING) FROM g WHERE b = 'x'"),
+        ["1"]
+    );
+    // Two levels, an integer one: typed as declared (`q + 1` is integer arithmetic), and filterable.
+    run(
+        &s,
+        "CREATE TABLE h (v STRING, p STRING, q INT) USING parquet PARTITIONED BY (p, q)",
+    );
+    run(
+        &s,
+        "INSERT INTO h VALUES ('r1', 'a', 1), ('r2', 'a', 2), ('r3', 'b', 2)",
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT v, p, CAST(q + 1 AS STRING), typeof(q) FROM h ORDER BY v"
+        ),
+        ["r1\ta\t2\tint", "r2\ta\t3\tint", "r3\tb\t3\tint"]
+    );
+    assert_eq!(
+        rows(&s, "SELECT v FROM h WHERE q = 2 ORDER BY v"),
+        ["r2", "r3"]
+    );
+    assert_eq!(rows(&s, "SELECT CAST(count(*) AS STRING) FROM h"), ["3"]);
+    // A timestamp partition value is local time in the session zone, which the scan does not have yet: refused,
+    // never read in another zone.
+    run(
+        &s,
+        "CREATE TABLE z (a INT, t TIMESTAMP) USING parquet PARTITIONED BY (t)",
+    );
+    run(
+        &s,
+        "INSERT INTO z VALUES (1, TIMESTAMP'2024-01-02 03:04:05')",
+    );
+    assert_eq!(class(&s, "SELECT a FROM z"), "KRISHIV_UNSUPPORTED_FEATURE");
+}

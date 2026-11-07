@@ -16,7 +16,10 @@
 //! `name=value` directories under a path are partition columns (Spark's
 //! partition discovery, `krishiv_io::partition_columns`): typed by
 //! inference, appended after the data columns, read from the path of each
-//! file. A table with a known schema does not discover them yet.
+//! file. A table with a known schema (a permanent catalog table) takes
+//! them from its declared partition columns instead: the directories must
+//! name exactly those columns, in order, and each value is read as the
+//! column's declared type, never inferred.
 //!
 //! A name is hidden when it starts with `.`, or with `_` without a `=` in
 //! it, or ends with `._COPYING_`; hidden directories are skipped whole.
@@ -361,22 +364,32 @@ impl FileReads {
 
     /// The listing of a table whose columns are known: the files under
     /// `paths` (none is fine: the table is empty), with `schema` as their
-    /// schema. Nothing is inferred and nothing is cached, so every query
-    /// lists the table afresh.
+    /// schema. `partitions` names the table's partition columns (the last
+    /// columns of `schema`, in this order): the `name=value` directories
+    /// above its files must name exactly those, and their values are read
+    /// as the columns' declared types. Nothing is inferred and nothing is
+    /// cached, so every query lists the table afresh.
     ///
     /// # Errors
     /// The listing errors of [`Self::listing`], except that no files is not
-    /// an error.
+    /// an error; `KRISHIV_UNSUPPORTED_FEATURE` when the directories do not
+    /// match the declared partition columns, or a partition column is a
+    /// timestamp with a time zone.
     pub async fn listing_known(
         &self,
         format: &str,
         paths: &[OptionValue],
         options: &BTreeMap<String, OptionValue>,
         schema: SchemaRef,
+        partitions: &[String],
     ) -> Result<Arc<FileListing>> {
-        let listing =
-            Box::pin(self.list_with(&format.to_ascii_lowercase(), paths, options, Some(schema)))
-                .await?;
+        let listing = Box::pin(self.list_with(
+            &format.to_ascii_lowercase(),
+            paths,
+            options,
+            Some((schema, partitions)),
+        ))
+        .await?;
         Ok(Arc::new(listing))
     }
 
@@ -397,13 +410,14 @@ impl FileReads {
         Box::pin(self.list_with(format, paths, options, None)).await
     }
 
-    /// [`Self::list`]; with `known` the schema is given, not inferred.
+    /// [`Self::list`]; with `known` the schema and the partition columns
+    /// are given, not inferred.
     async fn list_with(
         &self,
         format: &str,
         paths: &[OptionValue],
         options: &BTreeMap<String, OptionValue>,
-        known: Option<SchemaRef>,
+        known: Option<(SchemaRef, &[String])>,
     ) -> Result<FileListing> {
         let mode = self.list_mode(options)?;
         // Spark checks the paths before the format.
@@ -451,13 +465,12 @@ impl FileReads {
             .map(|(f, segs)| (f.display_path(), segs.clone()))
             .collect();
         let files: Vec<FileRef> = listed.into_iter().map(|(f, _)| f).collect();
-        let partition_columns = partition_columns(&discovered, self.infers_partition_types())?;
-        if let Some(schema) = known {
-            if !partition_columns.is_empty() {
-                return Err(unsupported(
-                    "reading the subdirectory of a table (partition discovery)".to_owned(),
-                ));
-            }
+        // A known table's partition values take its declared types: they
+        // are never inferred (nor refused for looking like timestamps).
+        let infer = known.is_none() && self.infers_partition_types();
+        let partition_columns = partition_columns(&discovered, infer)?;
+        if let Some((schema, declared)) = known {
+            let partition_columns = declared_partitions(&schema, declared, &partition_columns)?;
             return Ok(FileListing {
                 format,
                 files: files.into(),
@@ -1040,6 +1053,51 @@ struct ListMode {
         usize,
         Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
     )>,
+}
+
+/// The partition columns of a known table: its declared `declared`
+/// columns, the last of `schema`, typed as declared, when the directories
+/// above its files name exactly those (`discovered`, in order, names
+/// compared case-insensitively as Spark's resolution does); none when
+/// there are no partition directories (an empty or unpartitioned table).
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` when the directories name other columns
+/// than the declared ones (or the table declares none), or a partition
+/// column is a timestamp with a time zone: its directory value is local
+/// time in the session zone, which the scan does not have.
+fn declared_partitions(
+    schema: &SchemaRef,
+    declared: &[String],
+    discovered: &[FieldRef],
+) -> Result<Vec<FieldRef>> {
+    if discovered.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mismatch =
+        || unsupported("reading the subdirectory of a table (partition discovery)".to_owned());
+    let fields = schema.fields();
+    if declared.len() != discovered.len() || declared.len() > fields.len() {
+        return Err(mismatch());
+    }
+    let tail = &fields[fields.len() - declared.len()..];
+    let mut out = Vec::with_capacity(tail.len());
+    for ((field, name), found) in tail.iter().zip(declared).zip(discovered) {
+        if !field.name().eq_ignore_ascii_case(name) || !name.eq_ignore_ascii_case(found.name()) {
+            return Err(mismatch());
+        }
+        if matches!(
+            field.data_type(),
+            arrow_schema::DataType::Timestamp(_, Some(_))
+        ) {
+            return Err(unsupported(format!(
+                "reading the timestamp partition column {} of a table",
+                field.name()
+            )));
+        }
+        out.push(Arc::clone(field));
+    }
+    Ok(out)
 }
 
 /// `schema` followed by `partitions`.

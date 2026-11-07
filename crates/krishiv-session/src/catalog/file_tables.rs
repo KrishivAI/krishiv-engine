@@ -13,13 +13,15 @@ use krishiv_plan::{LogicalPlan, ReadSource};
 
 use super::{FileScans, FilesKey, QueryCatalog, TempTable, collect_scans, run_on};
 
-/// A scan of files in an analyzed plan: what it reads, the table's columns
-/// and the scan's column ids with their names.
+/// A scan of files in an analyzed plan: what it reads, the table's columns,
+/// the scan's column ids with their names, and a permanent table's
+/// partition columns.
 pub(super) type FileScanOf = (
     FilesKey,
     ReadSource,
     SchemaRef,
     Vec<(krishiv_plan::AttrId, String)>,
+    Vec<String>,
 );
 
 impl QueryCatalog {
@@ -33,7 +35,7 @@ impl QueryCatalog {
     /// and errors reading the files' footers.
     pub(crate) async fn open_files(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
         let scans = self.file_scans(plan);
-        for (key, source, table, _) in &scans {
+        for (key, source, table, _, partitions) in &scans {
             if self.opened(key).is_some() {
                 continue;
             }
@@ -48,7 +50,7 @@ impl QueryCatalog {
             let listing = match key {
                 FilesKey::Table(_) => {
                     self.files
-                        .listing_known(format, paths, options, Arc::clone(table))
+                        .listing_known(format, paths, options, Arc::clone(table), partitions)
                         .await?
                 }
                 _ => self.files.listing(format, paths, options).await?,
@@ -82,10 +84,16 @@ impl QueryCatalog {
         scans
             .into_iter()
             .filter_map(|scan| {
-                let (key, source) = match &scan.source {
+                let (key, source, partitions) = match &scan.source {
                     ReadSource::Table { name, .. } => {
                         let (key, table) = self.entry_of(name)?;
-                        let TempTable::Files { source, known, .. } = &*table else {
+                        let TempTable::Files {
+                            source,
+                            known,
+                            partition_columns,
+                            ..
+                        } = &*table
+                        else {
                             return None;
                         };
                         let key = if *known {
@@ -93,10 +101,10 @@ impl QueryCatalog {
                         } else {
                             FilesKey::View(key)
                         };
-                        (key, source.clone())
+                        (key, source.clone(), partition_columns.clone())
                     }
                     source @ ReadSource::Files { .. } => {
-                        (FilesKey::Read(source.clone()), source.clone())
+                        (FilesKey::Read(source.clone()), source.clone(), Vec::new())
                     }
                     _ => return None,
                 };
@@ -112,7 +120,7 @@ impl QueryCatalog {
                     .iter()
                     .map(|c| (c.id, c.name.clone()))
                     .collect();
-                Some((key, source, table, ids))
+                Some((key, source, table, ids, partitions))
             })
             .collect()
     }

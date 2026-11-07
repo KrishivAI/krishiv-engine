@@ -79,6 +79,10 @@ pub(crate) enum TempTable {
         /// it lists its files without inferring a schema, and a table with
         /// no files is empty.
         known: bool,
+        /// The partition columns of a permanent table (its last columns, in
+        /// `PARTITIONED BY` order): their values are the `name=value`
+        /// directories above its files. Empty otherwise.
+        partition_columns: Vec<String>,
     },
     /// A view over a query: the unresolved plan and the output columns it
     /// had when it was created (renamed when the view declares aliases).
@@ -892,6 +896,7 @@ impl QueryCatalog {
             source: table_source(&table),
             columns: columns.clone(),
             known: true,
+            partition_columns: table.layout.partition_columns.clone(),
         });
         let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         // Keys are lower case whatever the session's case sensitivity: `entry_key` spells scans that way.
@@ -2050,6 +2055,7 @@ mod tests {
     fn files(col: &str) -> TempTable {
         TempTable::Files {
             known: false,
+            partition_columns: Vec::new(),
             source: ReadSource::Files {
                 format: "parquet".to_owned(),
                 paths: vec![],
