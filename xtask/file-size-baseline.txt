@@ -20,21 +20,23 @@
 2429 crates/krishiv-kernels/src/map.rs
 2468 crates/krishiv-plan/src/analyzer/coerce.rs
 # over main: a cast of an alias keeps the alias's name (T001c, PR #491); USING-join keys (P2b row 11); char comparison padding and declared types through GROUP BY and lateral aliases (T001b)
-4679 crates/krishiv-plan/src/analyzer/ops.rs
-3098 crates/krishiv-plan/src/analyzer/subquery.rs
-5392 crates/krishiv-plan/src/tests/analyzer.rs
+4622 crates/krishiv-plan/src/analyzer/ops.rs
+3096 crates/krishiv-plan/src/analyzer/subquery.rs
+5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
-3020 crates/krishiv-session/src/catalog.rs
-2286 crates/krishiv-session/src/command.rs
-2630 crates/krishiv-session/src/dataframe.rs
-2790 crates/krishiv-session/src/session.rs
+3009 crates/krishiv-session/src/catalog.rs
+2251 crates/krishiv-session/src/command.rs
+# +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
+2640 crates/krishiv-session/src/dataframe.rs
+# +5 lines over main: write_files' dry flag (multi-table INSERT)
+2781 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-# the two-step INSERT projection that checks each CHAR/VARCHAR value once, net of the moved CTAS/view column lists (T001b)
-# +4 lines: ANALYZE .. FOR COLUMNS marks the table so DESCRIBE EXTENDED t col refuses (review of #496 M2)
-3282 crates/krishiv-session/src/table_commands.rs
+# +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
+3373 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
-2760 crates/krishiv-sql/src/lower.rs
-5225 crates/krishiv-sql/src/parser.rs
+2732 crates/krishiv-sql/src/lower.rs
+# +21 lines over main: WITH ctes FROM source INSERT ... parses as a multi-table insert (P2b row 11)
+5246 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
 2153 crates/krishiv-testkit/src/file_format/mod.rs

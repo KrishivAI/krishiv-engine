@@ -2,10 +2,6 @@
   "cases": {
     "generators": [
       24
-    ],
-    "window": [
-      6,
-      8
     ]
   },
   "file": "postgreSQL/window_part3",

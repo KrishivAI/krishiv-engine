@@ -7,6 +7,16 @@
 
 use super::*;
 
+/// A correlated conjunct that reads only the enclosing query (`WHERE t1a IS NOT
+/// NULL` in the subquery): it keeps or drops the whole subquery for an outer
+/// row, so it stays a join condition and needs no partitioning or grouping.
+/// Deterministic only: the join evaluates it once per outer row.
+pub(super) fn outer_only(c: &Arc<Expr>) -> bool {
+    has_outer(Node::Expr(c))
+        && inner_columns(c).is_empty()
+        && crate::analyzer::sqlfn::is_deterministic(c)
+}
+
 impl Rewriter {
     /// `LIMIT limit` over `input` (a subquery read for its values) with
     /// its correlation lifted out: the rows ranked up to `limit` within
@@ -22,6 +32,9 @@ impl Rewriter {
         let (inner, corr) = self.pull(&below, true)?;
         let mut partition_by = Vec::new();
         for c in &corr {
+            if outer_only(c) {
+                continue;
+            }
             let ExprNode::Resolved(ResolvedExpr::Function(f)) = &c.node else {
                 return Err(unsupported_limit());
             };

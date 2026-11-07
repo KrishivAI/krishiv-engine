@@ -23,8 +23,12 @@
 //!    Last-resort victims not reached by then (a pass that freed nothing
 //!    ends the spilling) are asked once more before anything else.
 //! 3. **Abort.** While pending releases cover the shortfall, wait for them
-//!    (no new abort). Otherwise abort the query furthest above its fair
-//!    share. The requester's own query fails the request with
+//!    (no new abort). The same while they and other drivers' unsettled grants
+//!    ([`crate::GrantCredit::unsettled`]: granted for a retry that has not
+//!    ended, so about to be used or returned) cover it, re-planning whenever
+//!    memory is released or a grant settles: a consumer whose driver waits in
+//!    a round of its own, and the requester's own driver, do not count.
+//!    Otherwise abort the query furthest above its fair share. The requester's own query fails the request with
 //!    `UNABLE_TO_ACQUIRE_MEMORY` and its other tasks see
 //!    `KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY`; another victim is aborted and
 //!    the round waits for its release. The phase is bounded by
@@ -66,6 +70,7 @@ pub(crate) async fn reserve(
     escalation: Escalation,
 ) -> Result<(), MemoryError> {
     let consumer = node.consumer(id)?;
+    let _waiting = Waiting::enter(Arc::clone(&consumer), &node.shared);
     let round = Round {
         node,
         consumer,
@@ -96,6 +101,27 @@ pub(crate) async fn reserve(
             Step::Granted => return Ok(()),
             Step::Rebind(b) | Step::Short(b, _) => binding = b,
         }
+    }
+}
+
+/// Marks a consumer as waiting in arbitration while it lives: its unsettled
+/// grant is not counted as in flight, since its driver is blocked here.
+/// Entering wakes rounds that may be waiting for that grant.
+struct Waiting(Arc<Consumer>);
+
+impl Waiting {
+    fn enter(consumer: Arc<Consumer>, shared: &crate::pool::Shared) -> Self {
+        consumer.waiting.store(true, Ordering::Release);
+        if consumer.unsettled() > 0 {
+            shared.release.released();
+        }
+        Self(consumer)
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.0.waiting.store(false, Ordering::Release);
     }
 }
 
@@ -136,8 +162,22 @@ enum Step {
 /// How a wait ended, short of a grant.
 enum Waited {
     Step(Step),
+    /// All tickets completed ([`Until::Tickets`]), or something changed
+    /// ([`Until::Change`]): re-plan.
     TicketsDone,
     Deadline,
+}
+
+/// When a [`Round::wait`] ends, short of a grant or its deadline.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Until {
+    /// Once every ticket completed.
+    Tickets,
+    /// Only on a grant or the deadline.
+    Grant,
+    /// At the first release, credit taken, ticket or abort: the caller
+    /// re-plans.
+    Change,
 }
 
 /// The groups (queries, external pools) involved in a round and their fair
@@ -147,9 +187,18 @@ struct Plan {
     fair_share: usize,
     /// Bytes held by aborted queries in the subtree: they will be released.
     pending: usize,
+    /// Unsettled grants of other drivers' consumers in the subtree (see
+    /// [`Consumer::unsettled`]): about to be used or returned.
+    credit: usize,
 }
 
 impl Plan {
+    /// Pending releases plus unsettled grants cover `shortfall`, and some
+    /// of it is grants (a wait for pending releases alone is the abort
+    /// phase's own).
+    fn covered_by_grants(&self, shortfall: usize) -> bool {
+        self.credit > 0 && self.pending.saturating_add(self.credit) >= shortfall
+    }
     fn excess(&self, group: Option<&Arc<Node>>) -> usize {
         group.map_or(0, |g| g.reserved().saturating_sub(self.fair_share))
     }
@@ -239,7 +288,19 @@ impl Round {
             .filter(|g| !aborted(g) && g.reserved() > 0)
             .count()
             .max(1);
+        let me = &self.consumer;
+        let credit = consumers
+            .iter()
+            .filter(|(c, n)| {
+                c.id != me.id
+                    && !(c.owner.is_some() && c.owner == me.owner)
+                    && !c.waiting.load(Ordering::Acquire)
+                    && !aborted(n)
+            })
+            .map(|(c, _)| c.unsettled())
+            .sum();
         Plan {
+            credit,
             fair_share: binding.limit().unwrap_or(usize::MAX) / active,
             pending: groups
                 .iter()
@@ -282,7 +343,7 @@ impl Round {
             }
             let all: Vec<SpillTicket> = tickets.iter().map(|(t, ..)| t.clone()).collect();
             let deadline = shared.clock.now() + shared.spill_wait_timeout;
-            if let Waited::Step(s) = self.wait(slot, deadline, tickets, true).await? {
+            if let Waited::Step(s) = self.wait(slot, deadline, tickets, Until::Tickets).await? {
                 return Ok(s);
             }
             if all.iter().filter_map(SpillTicket::try_get).sum::<usize>() == 0 {
@@ -305,7 +366,7 @@ impl Round {
         let tickets = self.request_spills(&consumers, &plan, shortfall, true);
         if !tickets.is_empty() {
             let deadline = shared.clock.now() + shared.spill_wait_timeout;
-            if let Waited::Step(s) = self.wait(slot, deadline, tickets, true).await? {
+            if let Waited::Step(s) = self.wait(slot, deadline, tickets, Until::Tickets).await? {
                 return Ok(s);
             }
         }
@@ -332,7 +393,17 @@ impl Round {
             let plan = self.plan(&binding, &consumers);
             let shortfall = binding.shortfall(need, self.class());
             if plan.pending > 0 && plan.pending >= shortfall {
-                match self.wait(slot, deadline, Vec::new(), false).await? {
+                match self.wait(slot, deadline, Vec::new(), Until::Grant).await? {
+                    Waited::Step(s) => return Ok(s),
+                    Waited::Deadline => return Err(self.exhausted(&binding)),
+                    Waited::TicketsDone => continue,
+                }
+            }
+            // Other drivers' grants are about to be used or returned: wait
+            // for their retries, re-planning on every change, rather than
+            // fail or abort while a retry is about to free them.
+            if plan.covered_by_grants(shortfall) {
+                match self.wait(slot, deadline, Vec::new(), Until::Change).await? {
                     Waited::Step(s) => return Ok(s),
                     Waited::Deadline => return Err(self.exhausted(&binding)),
                     Waited::TicketsDone => continue,
@@ -421,8 +492,8 @@ impl Round {
     }
 
     /// Retries on every release, ticket completion or abort until granted,
-    /// `deadline`, or (with `until_tickets_done`) all tickets completed. The
-    /// deadline only stops waiting for victims that have not begun their
+    /// `deadline`, or as `until` says (all tickets completed, or any
+    /// change). The deadline only stops waiting for victims that have not begun their
     /// spill ([`SpillTicket::started`]): at the deadline those tickets are
     /// dropped, and the round keeps waiting, with no deadline, for the
     /// spills already in progress.
@@ -431,17 +502,27 @@ impl Round {
         slot: &Node,
         deadline: Instant,
         mut tickets: Vec<(SpillTicket, Arc<Consumer>, Arc<Node>)>,
-        until_tickets_done: bool,
+        until: Until,
     ) -> Result<Waited, MemoryError> {
+        let until_tickets_done = until == Until::Tickets;
         let shared = &self.node.shared;
         let waiter = shared.release.wait();
         let mut sleep = Some(shared.clock.sleep_until(deadline)?);
         loop {
             let mut released = waiter.listen();
             let mut aborted = self.group().map(|g| g.abort_event.listen());
-            match self.step(slot)? {
-                Step::Short(..) => {}
+            let short = match self.step(slot)? {
+                Step::Short(b, need) => (b, need),
                 s => return Ok(Waited::Step(s)),
+            };
+            // The caller planned before this listener existed: a grant
+            // settled in between notified no one, so check it again now.
+            if until == Until::Change {
+                let (binding, need) = short;
+                let plan = self.plan(&binding, &self.consumers_within(&binding));
+                if !plan.covered_by_grants(binding.shortfall(need, self.class())) {
+                    return Ok(Waited::TicketsDone);
+                }
             }
             if until_tickets_done && tickets.is_empty() {
                 return Ok(Waited::TicketsDone);
@@ -472,6 +553,12 @@ impl Round {
                 }
             })
             .await;
+            if woke && until == Until::Change {
+                return Ok(match self.step(slot)? {
+                    Step::Short(..) => Waited::TicketsDone,
+                    s => Waited::Step(s),
+                });
+            }
             if woke {
                 continue;
             }
