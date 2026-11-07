@@ -149,6 +149,7 @@ pub(crate) fn parquet_files_with(
                 name: f.name().clone(),
                 data_type,
                 nullable: f.is_nullable(),
+                char_varchar: None,
             });
         }
         catalog = catalog.with_table(&["default"], t, columns, None);
