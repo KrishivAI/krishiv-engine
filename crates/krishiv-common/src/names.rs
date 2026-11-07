@@ -67,11 +67,20 @@ pub fn parse_attribute_name(name: &str) -> Result<Vec<String>, KrishivError> {
 
 /// `parts` quoted as Spark's `toSQLId(Seq[String])` does: each part in backticks, a backtick doubled,
 /// joined with dots (`` `a`.`b` ``).
+/// A leading `__auto_generated_subquery_name` part (the alias Spark gives an unnamed subquery) is left out
+/// when more parts follow, as Spark does.
 #[must_use]
 pub fn quote_parts(parts: &[String]) -> String {
+    let parts = match parts {
+        [first, rest @ ..] if first == AUTO_GENERATED_SUBQUERY_NAME && !rest.is_empty() => rest,
+        all => all,
+    };
     let quote = |p: &String| format!("`{}`", p.replace('`', "``"));
     parts.iter().map(quote).collect::<Vec<_>>().join(".")
 }
+
+/// The alias Spark gives a subquery written without one (`SubqueryAlias.generateSubqueryName`).
+const AUTO_GENERATED_SUBQUERY_NAME: &str = "__auto_generated_subquery_name";
 
 /// `name` quoted as Spark's `toSQLId(String)` does: split as an attribute name, then each part quoted
 /// (`a.b` is `` `a`.`b` ``, `a b` is `` `a b` ``).
@@ -92,6 +101,33 @@ pub fn column_already_exists(name: &str) -> KrishivError {
     match to_sql_id(name) {
         Ok(column_name) => ColumnAlreadyExists { column_name }.into(),
         Err(e) => e,
+    }
+}
+
+/// Spark's `SchemaUtils.checkColumnNameDuplication`: when a name of `names` repeats (compared in lower case
+/// unless `case_sensitive`), the [`column_already_exists`] error for the smallest repeated name in Scala's
+/// string order (UTF-16 code units), whatever order the names come in.
+///
+/// # Errors
+/// `COLUMN_ALREADY_EXISTS`, or `INVALID_ATTRIBUTE_NAME_SYNTAX` when that name is not an attribute name.
+pub fn check_column_name_duplication<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    case_sensitive: bool,
+) -> Result<(), KrishivError> {
+    let mut folded: Vec<String> = names
+        .into_iter()
+        .map(|n| {
+            if case_sensitive {
+                n.to_owned()
+            } else {
+                n.to_lowercase()
+            }
+        })
+        .collect();
+    folded.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+    match folded.windows(2).find(|w| w[0] == w[1]) {
+        Some(w) => Err(column_already_exists(&w[0])),
+        None => Ok(()),
     }
 }
 

@@ -17,13 +17,13 @@
 //! session analyzes each inlined view query once more ([`check_read`]) before the whole query is analyzed, and
 //! stores the evolved schemas once that analysis succeeded (Spark's `ViewSyncSchemaToMetaStore`).
 
-use krishiv_common::names::column_already_exists;
 use std::sync::Arc;
 
 use krishiv_common::config::{
     Config, ConfigValue, LEGACY_VIEW_SCHEMA_BINDING_MODE, LEGACY_VIEW_SCHEMA_COMPENSATION,
 };
 use krishiv_common::error::{CannotUpCastDatatype, IncompatibleViewSchemaChange, KrishivError};
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::analyzer::AnalyzedPlan;
 use krishiv_plan::{AttrId, BoundColumn, LogicalPlan, PlanNode, ReadSource};
 use krishiv_sql::ast::SchemaBinding;
@@ -151,13 +151,7 @@ pub(crate) fn check_read(
         if !redo {
             return Ok(None);
         }
-        let mut seen = std::collections::BTreeSet::new();
-        for o in output {
-            let key = fold(&o.name);
-            if !seen.insert(key.clone()) {
-                return Err(column_already_exists(&key));
-            }
-        }
+        check_column_name_duplication(output.iter().map(|o| o.name.as_str()), case_sensitive)?;
         let mut changed = (**entry).clone();
         changed.columns = output
             .iter()

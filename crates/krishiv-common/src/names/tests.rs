@@ -91,3 +91,48 @@ fn a_repeated_name_that_is_not_an_attribute_name_is_a_syntax_error() {
         );
     }
 }
+
+#[test]
+fn the_smallest_repeated_name_is_reported() {
+    let check = |names: &[&str], cs| {
+        check_column_name_duplication(names.iter().copied(), cs)
+            .err()
+            .map(|e| e.message().to_owned())
+    };
+    // Spark 4.2.0: `SELECT 1 AS z, 2 AS z, 3 AS a, 4 AS a` reports `a`.
+    let a = Some(
+        "The column `a` already exists. Choose another name or rename the existing column."
+            .to_owned(),
+    );
+    assert_eq!(check(&["z", "z", "a", "a"], false), a);
+    assert_eq!(check(&["z", "A", "z", "a"], false), a);
+    // ... and a `z` repeat with a bad name still reports `a` (smaller); `a``b` twice is the syntax error.
+    assert_eq!(check(&["z`b", "z`b", "a", "a"], false), a);
+    assert!(
+        check(&["z", "z", "a`b", "a`b"], false).is_some_and(|m| m.contains("attribute name: a`b."))
+    );
+    // Case-sensitive, `A` and `a` are two names and `A` keeps its case.
+    assert_eq!(check(&["A", "a"], true), None);
+    assert!(check(&["A", "a", "A"], true).is_some_and(|m| m.contains("`A`")));
+    assert_eq!(check(&["a", "b"], false), None);
+    assert_eq!(check(&[], false), None);
+    // Scala orders strings by UTF-16 code units: U+FF5A sorts after U+1F600 (a surrogate pair).
+    assert!(
+        check(&["\u{ff5a}", "\u{ff5a}", "\u{1f600}", "\u{1f600}"], true)
+            .is_some_and(|m| m.contains('\u{1f600}'))
+    );
+}
+
+#[test]
+fn an_auto_generated_subquery_alias_is_left_out() {
+    let parts = |p: &[&str]| quote_parts(&p.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+    assert_eq!(parts(&["__auto_generated_subquery_name", "x"]), "`x`");
+    assert_eq!(
+        parts(&["__auto_generated_subquery_name"]),
+        "`__auto_generated_subquery_name`"
+    );
+    assert_eq!(
+        parts(&["a", "__auto_generated_subquery_name", "x"]),
+        "`a`.`__auto_generated_subquery_name`.`x`"
+    );
+}

@@ -1144,3 +1144,69 @@ fn a_repeated_column_is_named_by_its_parts_on_dataframe_paths() {
     let got = format!("{}: {}", e.error_class().name(), e.message());
     assert!(got.starts_with(want), "evolution: {got}");
 }
+
+/// Spark 4.2.0 (local run, 2026-11-07) reports the smallest repeated name, not the first one met, and folds
+/// case only without `spark.sql.caseSensitive`, at every check.
+#[test]
+fn the_smallest_repeated_column_is_reported_and_case_follows_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let shown = |sql: &str| {
+        let e = err(&s, sql);
+        format!("{}: {}", e.error_class().name(), e.message())
+    };
+    let a = "COLUMN_ALREADY_EXISTS: The column `a` already exists";
+    for sql in [
+        "CREATE TABLE o1 USING parquet AS SELECT 1 AS z, 2 AS z, 3 AS a, 4 AS a",
+        "CREATE TABLE o3 USING parquet AS SELECT 1 AS `z``b`, 2 AS `z``b`, 3 AS a, 4 AS a",
+        "CREATE TABLE o4 (z INT, z INT, a INT, a INT) USING parquet",
+        "CREATE VIEW o5 AS SELECT 1 AS z, 2 AS z, 3 AS a, 4 AS a",
+        "CREATE TABLE o6 (z INT, a INT, y INT) USING parquet PARTITIONED BY (z, z, a, a)",
+        "CREATE TABLE o7 (z INT) USING parquet PARTITIONED BY (a INT, z INT, A INT)",
+    ] {
+        assert!(shown(sql).starts_with(a), "{sql}: {}", shown(sql));
+    }
+    let got =
+        shown("CREATE TABLE o2 USING parquet AS SELECT 1 AS z, 2 AS z, 3 AS `a``b`, 4 AS `a``b`");
+    assert!(
+        got.starts_with("INVALID_ATTRIBUTE_NAME_SYNTAX: Syntax error in the attribute name: a`b."),
+        "{got}"
+    );
+    for (sql, name) in [
+        ("CREATE TABLE d1 (`.a` INT, `.a` INT) USING parquet", ".a"),
+        (
+            "CREATE TABLE d2 USING parquet AS SELECT 1 AS `a.`, 2 AS `a.`",
+            "a.",
+        ),
+    ] {
+        let got = shown(sql);
+        let want =
+            format!("INVALID_ATTRIBUTE_NAME_SYNTAX: Syntax error in the attribute name: {name}.");
+        assert!(got.starts_with(&want), "{sql}: {got}");
+    }
+    // A repeat in `partitionBy` is found before a missing column is.
+    let df = block_on(s.sql("SELECT 1 AS a, 2 AS z, 3 AS y")).unwrap();
+    let out = dir.path().join("out");
+    for cols in [["missing", "a", "a"], ["a", "a", "missing"]] {
+        let e = block_on(df.write().partition_by(cols).parquet(out.to_str().unwrap())).unwrap_err();
+        let got = format!("{}: {}", e.error_class().name(), e.message());
+        assert!(got.starts_with(a), "{cols:?}: {got}");
+    }
+
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    run(&s, "CREATE TABLE c1 (A INT, a INT) USING parquet");
+    run(&s, "CREATE TABLE c3 (A INT) USING parquet");
+    run(&s, "ALTER TABLE c3 ADD COLUMNS (a INT)");
+    run(
+        &s,
+        "CREATE TABLE c4 (A INT) USING parquet PARTITIONED BY (a INT)",
+    );
+    let upper = "COLUMN_ALREADY_EXISTS: The column `A` already exists";
+    for sql in [
+        "CREATE TABLE c2 (A INT, A INT) USING parquet",
+        "ALTER TABLE c3 ADD COLUMNS (A INT)",
+        "CREATE TABLE c5 (A INT) USING parquet PARTITIONED BY (A INT)",
+    ] {
+        assert!(shown(sql).starts_with(upper), "{sql}: {}", shown(sql));
+    }
+}
