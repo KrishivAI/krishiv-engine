@@ -106,6 +106,7 @@ mod sqlfn;
 mod subquery;
 mod subquery_cte;
 mod subquery_legacy;
+mod subquery_lift;
 mod subquery_shapes;
 mod suggest;
 pub mod table_functions;

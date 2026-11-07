@@ -10,7 +10,7 @@ use krishiv_common::error::KrishivError;
 
 use crate::collation::Collation;
 use crate::error::{self, Result};
-use crate::nested::{ArrayType, MapType, StructType};
+use crate::nested::{ArrayType, MapType, StructField, StructType};
 
 /// A Spark SQL data type.
 ///
@@ -20,7 +20,12 @@ use crate::nested::{ArrayType, MapType, StructType};
 ///
 /// Build `Time`, `Geometry` and `Geography` with [`Self::time`],
 /// [`Self::geometry`] and [`Self::geography`], which check Spark's bounds.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Equality follows Spark's `StringType.equals`, which ignores whether the
+/// `UTF8_BINARY` collation was written: [`Self::String`] equals the
+/// display-only marker `CollatedString(UTF8_BINARY)` (ADR 0043, update
+/// 2026-11-07), also inside nested types, and `Hash` agrees.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum DataType {
     /// `VOID`: the type of an untyped `NULL`; every value is null.
@@ -41,9 +46,12 @@ pub enum DataType {
     Double,
     /// `STRING`: binary-safe, may hold bytes that are not valid UTF-8.
     String,
-    /// `STRING COLLATE x`: a string compared under a collation other than
-    /// `UTF8_BINARY` (which is plain [`Self::String`]). The values are the
-    /// same UTF-8 text; the collation is part of the type (ADR 0043).
+    /// `STRING COLLATE x`: a string compared under collation `x` (ADR 0043).
+    /// The values are the same UTF-8 text; the collation is part of the type.
+    /// With `UTF8_BINARY` it is a display-only marker (ADR 0043, update
+    /// 2026-11-07): Spark keeps a written `COLLATE UTF8_BINARY` in the schema
+    /// line, and the type behaves as plain [`Self::String`] everywhere else
+    /// (see [`Self::contains_collation`]).
     CollatedString(Collation),
     /// `BINARY`.
     Binary,
@@ -102,6 +110,98 @@ pub enum DataType {
     /// Variant v1 encoding (`crate::variant`), held unshredded in memory as
     /// a `(metadata, value)` byte pair. Not orderable and not hashable.
     Variant,
+}
+
+impl PartialEq for DataType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::CollatedString(a), Self::CollatedString(b)) => a == b,
+            (Self::CollatedString(c), Self::String) | (Self::String, Self::CollatedString(c)) => {
+                c.is_utf8_binary()
+            }
+            (Self::Decimal(a), Self::Decimal(b)) => a == b,
+            (Self::Time { precision: a }, Self::Time { precision: b }) => a == b,
+            (Self::Geometry { srid: a }, Self::Geometry { srid: b })
+            | (Self::Geography { srid: a }, Self::Geography { srid: b }) => a == b,
+            (
+                Self::YearMonthInterval { start: a, end: b },
+                Self::YearMonthInterval { start: c, end: d },
+            ) => a == c && b == d,
+            (
+                Self::DayTimeInterval { start: a, end: b },
+                Self::DayTimeInterval { start: c, end: d },
+            ) => a == c && b == d,
+            (Self::Array(a), Self::Array(b)) => a == b,
+            (Self::Map(a), Self::Map(b)) => a == b,
+            (Self::Struct(a), Self::Struct(b)) => a == b,
+            (a, b) => a.is_payload_free() && std::mem::discriminant(a) == std::mem::discriminant(b),
+        }
+    }
+}
+
+impl Eq for DataType {}
+
+impl std::hash::Hash for DataType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // The marker hashes as `String`, which it equals.
+        let this = match self {
+            Self::CollatedString(c) if c.is_utf8_binary() => &Self::String,
+            other => other,
+        };
+        std::mem::discriminant(this).hash(state);
+        match this {
+            Self::CollatedString(c) => c.hash(state),
+            Self::Decimal(d) => d.hash(state),
+            Self::Time { precision } => precision.hash(state),
+            Self::Geometry { srid } | Self::Geography { srid } => srid.hash(state),
+            Self::YearMonthInterval { start, end } => {
+                start.hash(state);
+                end.hash(state);
+            }
+            Self::DayTimeInterval { start, end } => {
+                start.hash(state);
+                end.hash(state);
+            }
+            Self::Array(a) => a.hash(state),
+            Self::Map(m) => m.hash(state),
+            Self::Struct(st) => st.hash(state),
+            _ => {}
+        }
+    }
+}
+
+impl DataType {
+    /// The types that carry no value besides their kind: equal to themselves by kind alone. The
+    /// match is exhaustive, so a new variant must be placed here to compile.
+    const fn is_payload_free(&self) -> bool {
+        match self {
+            Self::Null
+            | Self::Boolean
+            | Self::Byte
+            | Self::Short
+            | Self::Integer
+            | Self::Long
+            | Self::Float
+            | Self::Double
+            | Self::String
+            | Self::Binary
+            | Self::Date
+            | Self::Timestamp
+            | Self::TimestampNtz
+            | Self::CalendarInterval
+            | Self::Variant => true,
+            Self::CollatedString(_)
+            | Self::Decimal(_)
+            | Self::Time { .. }
+            | Self::Geometry { .. }
+            | Self::Geography { .. }
+            | Self::YearMonthInterval { .. }
+            | Self::DayTimeInterval { .. }
+            | Self::Array(_)
+            | Self::Map(_)
+            | Self::Struct(_) => false,
+        }
+    }
 }
 
 /// A field of a year-month interval type (Spark's `YearMonthIntervalType`).
@@ -269,11 +369,13 @@ impl DataType {
         Ok(Self::DayTimeInterval { start, end })
     }
 
-    /// Whether a collated string occurs in this type, at any depth.
+    /// Whether a string with a collation other than `UTF8_BINARY` occurs in
+    /// this type, at any depth. The display-only `UTF8_BINARY` marker does not
+    /// count: it behaves as plain `STRING`.
     #[must_use]
     pub fn contains_collation(&self) -> bool {
         match self {
-            Self::CollatedString(_) => true,
+            Self::CollatedString(c) => !c.is_utf8_binary(),
             Self::Array(a) => a.element_type().contains_collation(),
             Self::Map(m) => {
                 m.key_type().contains_collation() || m.value_type().contains_collation()
@@ -303,15 +405,72 @@ impl DataType {
         Ok(self)
     }
 
-    /// `STRING COLLATE collation`: [`Self::String`] for `UTF8_BINARY`, else
-    /// [`Self::CollatedString`].
+    /// `STRING COLLATE collation`. A written `UTF8_BINARY` stays a
+    /// [`Self::CollatedString`] (the display-only marker, ADR 0043 update
+    /// 2026-11-07); plain `STRING` is [`Self::String`].
     #[must_use]
     pub fn collated_string(collation: Collation) -> Self {
-        if collation.is_utf8_binary() {
-            Self::String
-        } else {
-            Self::CollatedString(collation)
+        Self::CollatedString(collation)
+    }
+
+    /// Whether this is a string type of either form, including the
+    /// display-only `UTF8_BINARY` marker.
+    #[must_use]
+    pub fn is_string_type(&self) -> bool {
+        matches!(self, Self::String | Self::CollatedString(_))
+    }
+
+    /// `self` with the display-only `UTF8_BINARY` marker replaced by plain [`Self::String`] at
+    /// any depth: what type unification (set operations, `IN (subquery)`, `UNPIVOT`) works on.
+    #[must_use]
+    pub fn without_binary_marker(&self) -> Self {
+        match self {
+            Self::CollatedString(c) if c.is_utf8_binary() => Self::String,
+            Self::Array(a) if a.element_type().any_type(&Self::is_binary_marker) => {
+                Self::Array(Arc::new(ArrayType::new(
+                    a.element_type().without_binary_marker(),
+                    a.contains_null(),
+                )))
+            }
+            Self::Map(m)
+                if m.key_type().any_type(&Self::is_binary_marker)
+                    || m.value_type().any_type(&Self::is_binary_marker) =>
+            {
+                Self::Map(Arc::new(MapType::new(
+                    m.key_type().without_binary_marker(),
+                    m.value_type().without_binary_marker(),
+                    m.value_contains_null(),
+                )))
+            }
+            Self::Struct(s)
+                if s.fields()
+                    .iter()
+                    .any(|f| f.data_type().any_type(&Self::is_binary_marker)) =>
+            {
+                Self::Struct(StructType::new(s.fields().iter().map(|f| {
+                    StructField::new(
+                        f.name(),
+                        f.data_type().without_binary_marker(),
+                        f.nullable(),
+                    )
+                    .with_metadata(f.metadata().clone())
+                })))
+            }
+            other => other.clone(),
         }
+    }
+
+    /// Whether this is the display-only `UTF8_BINARY` marker itself.
+    #[must_use]
+    pub fn is_binary_marker(&self) -> bool {
+        matches!(self, Self::CollatedString(c) if c.is_utf8_binary())
+    }
+
+    /// Whether this is a collated string that is more than the display-only
+    /// `UTF8_BINARY` marker.
+    #[must_use]
+    pub fn is_collated_string(&self) -> bool {
+        matches!(self, Self::CollatedString(c) if !c.is_utf8_binary())
     }
 
     /// `TIME(precision)`.

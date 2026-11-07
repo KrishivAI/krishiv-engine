@@ -205,6 +205,29 @@ impl Tpch {
 /// Each host opens its own tables over the shared store.
 struct Setup(Arc<dyn ObjectStore>);
 
+/// One `HostSetup::released` call: host, job, builds, fallbacks.
+type Released = (usize, u64, usize, usize);
+
+/// `Setup` that also keeps, per released job and host, the broadcast
+/// builds the host started and how many fell back to per-task tables.
+struct Counting {
+    store: Arc<dyn ObjectStore>,
+    released: Arc<Mutex<Vec<Released>>>,
+}
+
+impl HostSetup for Counting {
+    fn worker(&self) -> BoxFuture<'static, Result<WorkerContext, KrishivError>> {
+        Setup(Arc::clone(&self.store)).worker()
+    }
+
+    fn released(&self, host: usize, job: u64, builds: usize, fallbacks: usize) {
+        self.released
+            .lock()
+            .unwrap()
+            .push((host, job, builds, fallbacks));
+    }
+}
+
 impl HostSetup for Setup {
     fn worker(&self) -> BoxFuture<'static, Result<WorkerContext, KrishivError>> {
         let store = Arc::clone(&self.0);
@@ -272,13 +295,26 @@ async fn rows(
     pool: &Arc<dyn MemoryPool>,
     id: u64,
 ) -> Result<Vec<String>, KrishivError> {
+    let config = ExecConfig {
+        seed: Some(seed),
+        ..ExecConfig::default()
+    };
+    rows_with(config, scheduler, plan, worker, pool, id).await
+}
+
+/// `plan`'s rows through `scheduler` under `config`, as text, sorted.
+async fn rows_with(
+    config: ExecConfig,
+    scheduler: &dyn Scheduler,
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    pool: &Arc<dyn MemoryPool>,
+    id: u64,
+) -> Result<Vec<String>, KrishivError> {
     let query = QueryContext::new(
         QueryId(id),
         WorkloadClass::Interactive,
-        ExecConfig {
-            seed: Some(seed),
-            ..ExecConfig::default()
-        },
+        config,
         pool.child(&format!("q{id}"), None),
     );
     let mut stream = scheduler
@@ -807,4 +843,83 @@ fn full_outer_nested_loop(n: &krishiv_exec::physical::PhysNode) -> bool {
         krishiv_exec::physical::PhysNode::NestedLoopJoin(j)
             if j.join_type == krishiv_exec::JoinType::FullOuter
     ) || n.children().into_iter().any(full_outer_nested_loop)
+}
+
+/// `krishiv.exec.join.sharedBroadcastBytes` travels in the task descriptor
+/// to each worker's `BroadcastTables` (row 30c review n4): with no cap the
+/// workers share their broadcast builds; with a one-byte cap every shared
+/// build falls back to one per task, and the rows stay one worker's.
+#[test]
+fn a_shared_broadcast_cap_on_the_wire_makes_the_tasks_build_their_own() {
+    let store = store();
+    let config = ClusterConfig {
+        sim: SimConfig::with_seed(3),
+        workers: 2,
+        partitions: 4,
+        slots: 2,
+        fault: None,
+    };
+    let released = Arc::new(Mutex::new(Vec::new()));
+    let setup = Counting {
+        store: Arc::clone(&store),
+        released: Arc::clone(&released),
+    };
+    // Per cap: (want, got) rows.
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let out = Arc::clone(&results);
+    let client_store = Arc::clone(&store);
+    simulate(
+        config,
+        Arc::new(setup),
+        move |coordinator: Coordinator, worker: WorkerContext| async move {
+            let tpch = open(client_store).await?;
+            coordinator.deal_scans(dealer(&tpch, 256 << 10));
+            let executor: Arc<dyn Executor> = TokioExecutor::deterministic(config.slots)?;
+            let plain = QueryRunner::new(executor);
+            let pool: Arc<dyn MemoryPool> =
+                TreePool::with_clock(&MemoryConfig::default(), Arc::new(TokioClock));
+            let plan = tpch.plan(3).await?;
+            for (i, cap) in [None, Some(1)].into_iter().enumerate() {
+                let exec = ExecConfig {
+                    seed: Some(3),
+                    shared_broadcast_bytes: cap,
+                    ..ExecConfig::default()
+                };
+                let id = 2 * i as u64;
+                let want = rows_with(exec.clone(), &plain, &plan, &worker, &pool, id).await?;
+                let got = rows_with(exec, &coordinator, &plan, &worker, &pool, id + 1).await?;
+                out.lock().unwrap().push((want, got));
+            }
+            // `Release` is sent from a spawned task once a job's rows end:
+            // give the last one simulated time to reach the workers.
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            Ok(())
+        },
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let results = std::mem::take(&mut *results.lock().unwrap());
+    assert_eq!(results.len(), 2);
+    for (want, got) in &results {
+        assert!(!want.is_empty());
+        assert_eq!(got, want);
+    }
+    // The two cluster queries are the coordinator's first and second jobs
+    // in submission order; each host reports each job once.
+    let released = released.lock().unwrap().clone();
+    let mut jobs: Vec<u64> = released.iter().map(|r| r.1).collect();
+    jobs.sort_unstable();
+    jobs.dedup();
+    assert_eq!(jobs.len(), 2, "{released:?}");
+    let per_job = |job: u64| {
+        released
+            .iter()
+            .filter(|r| r.1 == job)
+            .fold((0, 0), |(b, f), r| (b + r.2, f + r.3))
+    };
+    let (shared_builds, shared_fallbacks) = per_job(jobs[0]);
+    assert!(shared_builds > 0, "{released:?}");
+    assert_eq!(shared_fallbacks, 0, "{released:?}");
+    let (capped_builds, capped_fallbacks) = per_job(jobs[1]);
+    assert!(capped_builds > 0, "{released:?}");
+    assert_eq!(capped_fallbacks, capped_builds, "{released:?}");
 }
