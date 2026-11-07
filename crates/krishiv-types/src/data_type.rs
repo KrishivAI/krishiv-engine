@@ -171,27 +171,36 @@ impl std::hash::Hash for DataType {
 }
 
 impl DataType {
-    /// The types that carry no value besides their kind. A listed type is equal to itself by
-    /// kind alone; a new variant is unequal to itself until it is listed here (the tests catch it).
+    /// The types that carry no value besides their kind: equal to themselves by kind alone. The
+    /// match is exhaustive, so a new variant must be placed here to compile.
     const fn is_payload_free(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Null
-                | Self::Boolean
-                | Self::Byte
-                | Self::Short
-                | Self::Integer
-                | Self::Long
-                | Self::Float
-                | Self::Double
-                | Self::String
-                | Self::Binary
-                | Self::Date
-                | Self::Timestamp
-                | Self::TimestampNtz
-                | Self::CalendarInterval
-                | Self::Variant
-        )
+            | Self::Boolean
+            | Self::Byte
+            | Self::Short
+            | Self::Integer
+            | Self::Long
+            | Self::Float
+            | Self::Double
+            | Self::String
+            | Self::Binary
+            | Self::Date
+            | Self::Timestamp
+            | Self::TimestampNtz
+            | Self::CalendarInterval
+            | Self::Variant => true,
+            Self::CollatedString(_)
+            | Self::Decimal(_)
+            | Self::Time { .. }
+            | Self::Geometry { .. }
+            | Self::Geography { .. }
+            | Self::YearMonthInterval { .. }
+            | Self::DayTimeInterval { .. }
+            | Self::Array(_)
+            | Self::Map(_)
+            | Self::Struct(_) => false,
+        }
     }
 }
 

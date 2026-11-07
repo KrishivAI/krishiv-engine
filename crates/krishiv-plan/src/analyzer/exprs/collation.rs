@@ -547,33 +547,17 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        // The result is re-tagged with the chosen collation. For `UTF8_BINARY` that is the
+        // display-only marker (Spark prints `upper(c)` of a `STRING COLLATE UTF8_BINARY` column
+        // that way), kept only when `marked` and outside windows and the inspecting functions.
         if let Some(c) = chosen
-            && !c.is_utf8_binary()
             && bound.ty.data_type == Some(DataType::String)
             && !BINARY_RESULT.contains(&name.as_str())
-        {
-            let to = DataType::collated_string(c);
-            let shown = bound.shown();
-            bound.expr = Arc::new(
-                Expr::new(ExprNode::Cast {
-                    expr: Arc::clone(&bound.expr),
-                    to: to.clone(),
-                    mode: CastMode::Ansi,
-                })
-                .with_origin(e.origin),
-            );
-            bound.shown = Some(shown);
-            bound.ty.data_type = Some(to);
-        }
-        // A string call over an explicit `UTF8_BINARY` operand keeps the display-only marker
-        // (Spark prints `upper(c)` of a `STRING COLLATE UTF8_BINARY` column that way).
-        if let Some(c) = chosen
-            && c.is_utf8_binary()
-            && marked
-            && !window_fn
-            && bound.ty.data_type == Some(DataType::String)
-            && !BINARY_RESULT.contains(&name.as_str())
-            && !INSPECTS.contains(&name.as_str())
+            && if c.is_utf8_binary() {
+                marked && !window_fn && !INSPECTS.contains(&name.as_str())
+            } else {
+                true
+            }
         {
             let to = DataType::collated_string(c);
             let shown = bound.shown();
