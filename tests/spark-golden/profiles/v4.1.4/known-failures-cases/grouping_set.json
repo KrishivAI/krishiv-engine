@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      5
+    ],
+    "other-version": [
+      16
+    ]
+  },
+  "file": "grouping_set",
+  "format_version": 1
+}

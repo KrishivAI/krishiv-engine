@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "depends-on-command": [
+      3
+    ]
+  },
+  "file": "subquery/in-subquery/in-set-operations",
+  "format_version": 1
+}
