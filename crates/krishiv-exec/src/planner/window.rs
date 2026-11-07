@@ -15,7 +15,6 @@ use super::aggregate::{aggregate_expr, lower, udaf_state};
 use super::build::{OrderKey, Planned, Planner, internal, list, orders, unsupported};
 use super::properties::Distribution;
 use crate::aggregate::AggregateFunction;
-use crate::aggregate::is_moment;
 use crate::error::Result;
 use crate::operator::Source;
 use crate::operators::SortKey;
@@ -301,13 +300,6 @@ impl Planner<'_> {
         }
         let lowered =
             lower(c.f).ok_or_else(|| unsupported(&format!("the window aggregate {name}")))?;
-        // The moment aggregates have no window form yet: refused, never
-        // computed as another function. The percentile family and
-        // `approx_count_distinct` have none either: the frame evaluator
-        // only runs the aggregates it knows.
-        if is_moment(&lowered.function) {
-            return Err(unsupported(&format!("the window aggregate {name}")));
-        }
         if matches!(
             lowered.function,
             AggregateFunction::PercentileApprox { .. }

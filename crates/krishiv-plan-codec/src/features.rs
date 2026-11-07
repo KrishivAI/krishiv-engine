@@ -122,6 +122,7 @@ registry! {
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
     (collated_strings, CollatedStrings, POST_MIGRATION_READER_VERSION, Semantic, "STRING types with a collation other than UTF8_BINARY, by canonical name."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
+    (exchange_filters, ExchangeFilters, POST_MIGRATION_READER_VERSION, Optimization, "Runtime filters an exchange collects from the rows it writes, for scans of other stages (`ExchangePlan.filters`, distributed stages); without them the fragmenter drops the filters, which never changes rows."),
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
@@ -155,6 +156,7 @@ registry! {
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
+    (variant_explode, VariantExplode, POST_MIGRATION_READER_VERSION, Semantic, "The `variant_explode` generator (and `variant_explode_outer`): the fields of a variant object or the elements of a variant array."),
     (variant_type, VariantType, POST_MIGRATION_READER_VERSION, Semantic, "The `VARIANT` type (Parquet Variant v1 values, unshredded in memory)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
@@ -224,6 +226,8 @@ pub enum Construct<'a> {
     Lambda,
     /// A `WritePlan` naming the Spark types of input columns.
     WriteColumnTypes,
+    /// A `Generate` node's generator.
+    Generator(krishiv_plan::GeneratorKind),
 }
 
 /// The feature a type needs on its own. The walk reports a type inside an
@@ -351,7 +355,8 @@ fn arrow_nested(t: &arrow_schema::DataType) -> bool {
 /// Whether the encoder must list the nested-types feature for an Arrow type
 /// it writes (kept in step with [`feature_of`] for [`Construct::ArrowType`]).
 pub(crate) fn arrow_type_is_nested(t: &arrow_schema::DataType) -> bool {
-    arrow_nested(t)
+    // A variant's carrier is one value, not a struct: it needs `variant_type`, not `nested_types`.
+    !krishiv_types::arrow::is_variant_struct(t) && arrow_nested(t)
 }
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
@@ -394,8 +399,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::TopN { .. }
             | PhysNode::Aggregate { .. }
             | PhysNode::NestedLoopJoin(_)
-            | PhysNode::Union { .. }
-            | PhysNode::Exchange(_) => None,
+            | PhysNode::Union { .. } => None,
+            PhysNode::Exchange(e) if !e.filters.is_empty() => Some(Feature::ExchangeFilters),
+            PhysNode::Exchange(_) => None,
         },
         Construct::Item(item) => match item {
             ProjectItemPlan::Column { .. } | ProjectItemPlan::Expr { .. } => None,
@@ -440,6 +446,12 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // it misreads the higher-order call's argument.
         Construct::Lambda => Some(Feature::LambdaFunctions),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
+        Construct::Generator(kind) => match kind {
+            krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
+            krishiv_plan::GeneratorKind::Explode
+            | krishiv_plan::GeneratorKind::PosExplode
+            | krishiv_plan::GeneratorKind::Inline => None,
+        },
         // A type Krishiv does not know cannot be encoded at all. A later
         // feature for a type that can sit inside an array, map or struct
         // (variant, char/varchar, intervals) must look through them: its
@@ -604,6 +616,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::HashJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::SortMergeJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
+        PhysNode::Generate { kind, .. } => f(Construct::Generator(*kind)),
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
         // A reduce fragment may name a type only in the schema it reads
         // (a sort by column index above it), so the schema is classified
@@ -629,7 +642,6 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
         | PhysNode::ReplicateRows { .. }
-        | PhysNode::Generate { .. }
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
@@ -692,6 +704,7 @@ fn arrow_types_of(node: &PhysNode) -> Vec<&arrow_schema::DataType> {
             out.extend(aggregate.aggregates.iter().map(|a| &a.arg_type));
         }
         PhysNode::Scan(scan) => out.extend(scan.runtime_filters.iter().map(|f| &f.key_type)),
+        PhysNode::Exchange(e) => out.extend(e.filters.iter().map(|f| &f.key_type)),
         _ => {}
     }
     out.extend(subqueries.into_iter().flatten().map(|s| &s.data_type));
@@ -915,5 +928,40 @@ impl ReaderFeatures {
             .filter(|id| Feature::from_id(id).is_none_or(|f| !self.contains(f)))
             .map(str::to_owned)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType as A, Field};
+    use krishiv_types::DataType;
+
+    use super::*;
+
+    #[test]
+    fn the_encoders_nested_flag_agrees_with_the_feature_walk_for_a_variant_carrier() {
+        let carrier = DataType::Variant.to_arrow();
+        // The walk names `variant_type` only; the encoder must not also demand `nested_types`.
+        assert_eq!(
+            feature_of(Construct::ArrowType(&carrier)),
+            Some(Feature::VariantType)
+        );
+        assert!(!arrow_type_is_nested(&carrier));
+        // A list of variants is nested (and the element is a construct of its own).
+        let list = A::List(Arc::new(Field::new("item", carrier, true)));
+        assert_eq!(
+            feature_of(Construct::ArrowType(&list)),
+            Some(Feature::NestedTypes)
+        );
+        assert!(arrow_type_is_nested(&list));
+        // A plain struct stays nested.
+        let plain = A::Struct(vec![Field::new("a", A::Int32, true)].into());
+        assert!(arrow_type_is_nested(&plain));
+        assert_eq!(
+            feature_of(Construct::ArrowType(&plain)),
+            Some(Feature::NestedTypes)
+        );
     }
 }

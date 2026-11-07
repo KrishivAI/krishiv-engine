@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
-    Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, NullOrdering, PlanId,
+    Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, Literal, NullOrdering, PlanId,
     SortDirection, SortOrder, Star,
 };
 
@@ -74,6 +74,7 @@ impl Translator<'_> {
                 ExprNode::Column(ColumnRef {
                     name: parse_attribute_name(&a.unparsed_identifier)?,
                     plan_id: a.plan_id.map(PlanId),
+                    by_identifier: false,
                 })
             }
             ExprType::UnresolvedFunction(f) => self.function(f)?,
@@ -104,7 +105,7 @@ impl Translator<'_> {
             }
             ExprType::Cast(c) => {
                 let to = match &c.cast_to_type {
-                    Some(CastToType::Type(t)) => data_type(t)?,
+                    Some(CastToType::Type(t)) => data_type(t)?.refuse_collations()?,
                     Some(CastToType::TypeStr(s)) => {
                         krishiv_types::parse_data_type(s)?.refuse_collations()?
                     }
@@ -186,6 +187,18 @@ impl Translator<'_> {
                     vec![Arc::new(equal)],
                     f.is_distinct,
                 ))
+            }
+            // `F.collate(col, "name")` / `Column.collate`: the function form of `expr COLLATE name`.
+            _ if name.eq_ignore_ascii_case("collate")
+                && !f.is_distinct
+                && let [value, collation] = args.as_slice()
+                && let ExprNode::Literal(Literal::String(text)) = &collation.node =>
+            {
+                ExprNode::Collate {
+                    expr: Arc::clone(value),
+                    collation: krishiv_types::Collation::parse(text)?,
+                    name: text.clone(),
+                }
             }
             _ => {
                 let canonical = Builtin::from_name(name)

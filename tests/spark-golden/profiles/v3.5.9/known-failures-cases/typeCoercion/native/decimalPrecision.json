@@ -1,0 +1,20 @@
+{
+  "cases": {
+    "v35-ansi-default": [
+      605,
+      606,
+      607,
+      608,
+      693,
+      694,
+      695,
+      696,
+      1133,
+      1134,
+      1135,
+      1136
+    ]
+  },
+  "file": "typeCoercion/native/decimalPrecision",
+  "format_version": 1
+}

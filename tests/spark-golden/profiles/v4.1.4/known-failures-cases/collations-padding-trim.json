@@ -1,0 +1,34 @@
+{
+  "cases": {
+    "depends-on-command": [
+      16,
+      22,
+      24,
+      30,
+      39,
+      48,
+      57,
+      66
+    ],
+    "parser-pipe-collate": [
+      36,
+      37,
+      38,
+      40,
+      45,
+      46,
+      47,
+      49,
+      54,
+      55,
+      56,
+      58,
+      63,
+      64,
+      65,
+      67
+    ]
+  },
+  "file": "collations-padding-trim",
+  "format_version": 1
+}
