@@ -952,7 +952,7 @@ impl Session {
             env.sql_functions = Arc::clone(&candidate);
             env.functions_version = krishiv_plan::analyzer::FunctionRegistry::version(&*candidate);
             let output = self.probe(&entry.def, &[], env, redacted).await?;
-            crate::sql_functions::check_return_names(f, &name, ids)?;
+            crate::sql_functions::check_return_names(f, &part.value, ids)?;
             let mut entry = entry.clone();
             if entry.def.returns.is_none() {
                 let def = SqlFunction {
@@ -1353,6 +1353,10 @@ impl Session {
             namespace.to_owned(),
             part.value.clone(),
         ];
+        // Spark names the missing columns before a reference to the session's objects (its
+        // analysis sees them; the probe below cannot, so a body that also fails analysis is
+        // refused here first).
+        crate::sql_functions::check_return_names(f, &part.value, ids)?;
         // A stored function may not depend on an object of the session; Spark
         // names the function by namespace and name, and the object by kind.
         let object = format!("`{namespace}`.{}", quote(&entry.def.name));
@@ -1411,7 +1415,6 @@ impl Session {
             let output = self
                 .probe(&entry.def, &entry.def.qualifier, env, redacted)
                 .await?;
-            crate::sql_functions::check_return_names(f, &entry.def.name, ids)?;
             let mut entry = entry.clone();
             if entry.def.returns.is_none() {
                 entry.def = Arc::new(SqlFunction {

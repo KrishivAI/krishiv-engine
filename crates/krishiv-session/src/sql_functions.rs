@@ -686,8 +686,10 @@ mod tests {
 /// body analyzed): a table function without a column list (`RETURNS TABLE`) takes its columns'
 /// names from the body. Spark checks the parsed body only: a bare `SELECT` (a `Project`) may not
 /// hold an item it would name itself (`x + 1`, `IDENTIFIER('x')`, `m['k']`); any other shape
-/// (`ORDER BY`, `LIMIT`, `GROUP BY`, `DISTINCT`, `WITH`, `WINDOW`, `QUALIFY`, a set operation)
-/// is not checked and names its columns as a query does. `ids` are the spans of the names the
+/// (`ORDER BY`, `LIMIT`, `GROUP BY`, `DISTINCT`, `WITH`, `WINDOW`, `QUALIFY`, a hint, a set
+/// operation) is not checked and names its columns as a query does. A pipe is checked at its last
+/// operator: `|> SELECT` and `|> EXTEND` are `Project`s too. `name` is the function's name as
+/// written (Spark keeps its case there). `ids` are the spans of the names the
 /// session substituted for `IDENTIFIER(..)` clauses, which Spark reads as unnamed expressions.
 pub(crate) fn check_return_names(
     f: &krishiv_sql::ast::CreateFunction,
@@ -717,7 +719,7 @@ pub(crate) fn check_return_names(
 /// Whether `q` parses to Spark's `Project` with an `UnresolvedAlias` item (see
 /// [`check_return_names`]).
 fn lacks_column_names(q: &krishiv_sql::ast::Query, ids: &[krishiv_sql::ast::Span]) -> bool {
-    use krishiv_sql::ast::SetExprKind;
+    use krishiv_sql::ast::{PipeOpKind, SetExprKind};
     // Each of these wraps the `Project` in another node (`Sort`, `Limit`, `WithCTE`, ...).
     let organized = q.with.is_some()
         || !q.order_by.is_empty()
@@ -732,7 +734,9 @@ fn lacks_column_names(q: &krishiv_sql::ast::Query, ids: &[krishiv_sql::ast::Span
     }
     match &q.body.kind {
         SetExprKind::Select(s) => {
-            let projected = s.group_by.is_none()
+            // A hint is an `UnresolvedHint` over the `Project`.
+            let projected = s.hints.is_empty()
+                && s.group_by.is_none()
                 && s.having.is_none()
                 && s.windows.is_empty()
                 && s.qualify.is_none()
@@ -740,10 +744,7 @@ fn lacks_column_names(q: &krishiv_sql::ast::Query, ids: &[krishiv_sql::ast::Span
                     s.quantifier,
                     Some(krishiv_sql::ast::SetQuantifier::Distinct)
                 );
-            projected
-                && s.projection
-                    .iter()
-                    .any(|item| item.alias.is_none() && !named(&item.expr, ids))
+            projected && unnamed_item(&s.projection, ids)
         }
         // `(query)` is the query; `FROM t SELECT ...` with one body is that body over `t`.
         SetExprKind::Query(inner) => lacks_column_names(inner, ids),
@@ -751,8 +752,29 @@ fn lacks_column_names(q: &krishiv_sql::ast::Query, ids: &[krishiv_sql::ast::Span
             [body] => lacks_column_names(body, ids),
             _ => false,
         },
+        SetExprKind::Pipe(pipe) => match pipe.ops.last().map(|op| &op.kind) {
+            Some(PipeOpKind::Select(s)) => {
+                s.hints.is_empty()
+                    && s.group_by.is_none()
+                    && s.windows.is_empty()
+                    && !matches!(
+                        s.quantifier,
+                        Some(krishiv_sql::ast::SetQuantifier::Distinct)
+                    )
+                    && unnamed_item(&s.projection, ids)
+            }
+            Some(PipeOpKind::Extend(items)) => unnamed_item(items, ids),
+            _ => false,
+        },
         _ => false,
     }
+}
+
+/// Whether an item of `items` has no alias and is not a named expression.
+fn unnamed_item(items: &[krishiv_sql::ast::SelectItem], ids: &[krishiv_sql::ast::Span]) -> bool {
+    items
+        .iter()
+        .any(|item| item.alias.is_none() && !named(&item.expr, ids))
 }
 
 /// Whether Spark's parser makes `e` a named expression (an attribute or a star), which a

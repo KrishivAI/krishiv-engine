@@ -532,6 +532,9 @@ fn a_table_function_body_names_its_columns() {
         "SELECT x AS a, x + 1 FROM t",
         "SELECT x + 1 FROM t LATERAL VIEW explode(array(1)) e AS y",
         "FROM t SELECT x + 1",
+        "FROM t |> SELECT x + 1",
+        "FROM t |> SELECT IDENTIFIER('x')",
+        "TABLE t |> EXTEND x + 1",
     ];
     for (i, body) in refused.iter().enumerate() {
         let sql = format!("CREATE TEMPORARY FUNCTION r{i}() RETURNS TABLE RETURN {body}");
@@ -547,6 +550,34 @@ fn a_table_function_body_names_its_columns() {
     assert_eq!(err.error_class().name(), missing);
     assert_eq!(err.sql_state(), Some("42601"));
     assert!(err.to_string().contains("statement for `pz` with"), "{err}");
+    // The function is named as written.
+    let err = block_on(async {
+        s.sql("CREATE TEMPORARY FUNCTION MixedF() RETURNS TABLE RETURN SELECT x + 1 FROM t")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("statement for `MixedF` with"),
+        "{err}"
+    );
+    // A stored function over a temporary view: its column names are checked first.
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT * FROM t");
+    assert_eq!(
+        class(
+            &s,
+            "CREATE FUNCTION pt() RETURNS TABLE RETURN SELECT x + 1 FROM tv"
+        ),
+        missing
+    );
+    assert_eq!(
+        class(
+            &s,
+            "CREATE FUNCTION pt() RETURNS TABLE RETURN SELECT x FROM tv"
+        ),
+        "INVALID_TEMP_OBJ_REFERENCE"
+    );
     let accepted = [
         ("SELECT IDENTIFIER('c1.c2') AS a FROM t", vec!["a"]),
         ("SELECT IDENTIFIER('c1').c2 AS a FROM t", vec!["a"]),
@@ -577,6 +608,23 @@ fn a_table_function_body_names_its_columns() {
         ),
         ("SELECT t.* FROM t", vec!["c1", "x", "m"]),
         ("VALUES (1)", vec!["col1"]),
+        ("SELECT /*+ REPARTITION(2) */ x + 1 FROM t", vec!["(x + 1)"]),
+        (
+            "SELECT /*+ BROADCAST(t) */ IDENTIFIER('x') FROM t",
+            vec!["x"],
+        ),
+        ("FROM t |> SELECT x", vec!["x"]),
+        ("FROM t |> SELECT DISTINCT x + 1", vec!["(x + 1)"]),
+        ("FROM t |> SELECT x + 1 |> WHERE true", vec!["(x + 1)"]),
+        (
+            "FROM t |> SELECT x + 1 |> EXTEND 1 AS b",
+            vec!["(x + 1)", "b"],
+        ),
+        ("TABLE t |> EXTEND x + 1 AS a", vec!["c1", "x", "m", "a"]),
+        ("FROM t |> DROP x", vec!["c1", "m"]),
+        // `RETURN (query)` is the query, in as many brackets as written.
+        ("(SELECT x FROM t)", vec!["x"]),
+        ("((SELECT x AS a FROM t))", vec!["a"]),
     ];
     for (i, (body, columns)) in accepted.iter().enumerate() {
         run(
@@ -601,6 +649,12 @@ fn a_table_function_body_names_its_columns() {
         "CREATE TEMPORARY FUNCTION s1() RETURN SELECT IDENTIFIER('x') FROM t",
     );
     assert_eq!(first(&s, "SELECT s1()"), "2");
+    // A scalar function's bracketed subquery is its value, as before.
+    run(
+        &s,
+        "CREATE TEMPORARY FUNCTION s2() RETURN (SELECT max(x) FROM t)",
+    );
+    assert_eq!(first(&s, "SELECT s2()"), "2");
     // Both modes read the clause as an expression.
     run(&s, "SET spark.sql.legacy.identifierClause=true");
     assert_eq!(
