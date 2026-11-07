@@ -101,14 +101,6 @@ fn interval_functions_match_spark() -> R {
     matches_spark("interval-functions.json")
 }
 
-/// Saturated to Spark's `long` of microseconds, which the nanosecond field of
-/// `Interval(MonthDayNano)` can't hold: a named refusal, tracked in the design
-/// note's as-built section.
-const PAST_THE_NANOSECOND_FIELD: [&str; 2] = [
-    "cast('2147483647 days' as interval) * 2",
-    "cast('1 month 2 days 3 seconds' as interval) * cast('Infinity' as double)",
-];
-
 /// Casts between an interval and a number or string inside an array, map or
 /// struct: a named refusal, tracked in the design note's as-built section. The
 /// nested cast takes a leaf's type from the Arrow carrier, which holds no fields.
@@ -149,9 +141,7 @@ fn matches_spark(file: &str) -> R {
             value: text("value"),
             error_class: text("error_class").or_else(|| text("value_error_class")),
         };
-        if (!ansi && PAST_THE_NANOSECOND_FIELD.contains(&expr))
-            || NESTED_INTERVAL_CASTS.contains(&expr)
-        {
+        if NESTED_INTERVAL_CASTS.contains(&expr) {
             want.value = None;
             want.error_class = Some("KRISHIV_UNSUPPORTED_FEATURE".to_owned());
         }
@@ -443,23 +433,100 @@ fn interval_constructors_read_columns_row_by_row() -> R {
     Ok(())
 }
 
-/// Spark answers these; NULL would be a wrong result.
+/// Spark holds a `long` of microseconds; so does the engine's calendar carrier
+/// (ADR 0009 update 2026-11-06), so these are values in every mode.
 #[test]
-fn a_constructed_calendar_interval_past_the_nanosecond_field_is_refused() -> R {
+fn a_constructed_calendar_interval_past_the_old_nanosecond_field_is_a_value() -> R {
     let session = Session::new()?;
     for ansi in [true, false] {
         block_on(session.sql(&format!("SET spark.sql.ansi.enabled = {ansi}")))?;
-        for expr in [
-            "make_interval(0, 0, 0, 0, 0, 0, 999999999999.999999)",
-            "try_make_interval(0, 0, 0, 0, 2147483647)",
+        for (expr, want) in [
+            (
+                "make_interval(0, 0, 0, 0, 0, 0, 999999999999.999999)",
+                "277777777 hours 46 minutes 39.999999 seconds",
+            ),
+            (
+                "try_make_interval(0, 0, 0, 0, 2147483647)",
+                "2147483647 hours",
+            ),
         ] {
-            assert_eq!(
-                answer(&session, expr).error_class.as_deref(),
-                Some("KRISHIV_UNSUPPORTED_FEATURE"),
-                "{expr}"
-            );
+            let got = answer(&session, expr);
+            assert_eq!(got.error_class, None, "{expr}");
+            assert_eq!(got.value.as_deref(), Some(want), "{expr}");
         }
     }
+    Ok(())
+}
+
+/// The session edge reads a calendar interval as `Interval(MonthDayNano)`, whose
+/// nanoseconds cannot hold every `long` of microseconds: there `collect` raises
+/// `ARITHMETIC_OVERFLOW`, as Spark's `ArrowWriter` does (`Math.multiplyExact`).
+#[test]
+fn a_calendar_interval_past_the_nanosecond_field_overflows_at_the_edge() -> R {
+    let session = Session::new()?;
+    for ansi in [true, false] {
+        block_on(session.sql(&format!("SET spark.sql.ansi.enabled = {ansi}")))?;
+        let df = block_on(session.sql("SELECT try_make_interval(0, 0, 0, 0, 2147483647) AS i"))?;
+        let Err(e) = block_on(df.collect()) else {
+            return Err("collect should overflow".into());
+        };
+        assert_eq!(e.error_class().name(), "ARITHMETIC_OVERFLOW");
+    }
+    Ok(())
+}
+
+/// A registered `Interval(MonthDayNano)` column enters as the calendar carrier
+/// and leaves as `Interval(MonthDayNano)`; nanoseconds below a microsecond are
+/// dropped toward zero, as Spark's `ArrowColumnVector` reads them.
+#[test]
+fn a_registered_month_day_nano_column_reads_back_at_the_edge() -> R {
+    use std::sync::Arc;
+
+    use arrow_array::types::IntervalMonthDayNanoType;
+    use arrow_array::{IntervalMonthDayNanoArray, RecordBatch};
+    use arrow_buffer::IntervalMonthDayNano;
+    use arrow_schema::{DataType as A, Field, IntervalUnit, Schema};
+
+    let session = Session::new()?;
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "i",
+        A::Interval(IntervalUnit::MonthDayNano),
+        true,
+    )]));
+    let col = IntervalMonthDayNanoArray::from(vec![
+        Some(IntervalMonthDayNano::new(14, 25, 3_000_001_999)),
+        None,
+        Some(IntervalMonthDayNano::new(-1, -2, -1_999)),
+    ]);
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(col)])?;
+    session.register_batches("t", schema, vec![batch])?;
+    assert_eq!(
+        rows(&session, "SELECT i FROM t")?,
+        [
+            "1 years 2 months 25 days 3.000001 seconds",
+            "NULL",
+            "-1 months -2 days -0.000001 seconds"
+        ]
+    );
+    let df = block_on(session.sql("SELECT i FROM t"))?;
+    let out = block_on(df.collect())?;
+    let got: Vec<Option<IntervalMonthDayNano>> = out
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_primitive::<IntervalMonthDayNanoType>()
+                .iter()
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            Some(IntervalMonthDayNano::new(14, 25, 3_000_001_000)),
+            None,
+            Some(IntervalMonthDayNano::new(-1, -2, -1_000)),
+        ]
+    );
     Ok(())
 }
 
@@ -506,21 +573,18 @@ fn a_mixed_timestamp_difference_reads_both_sides_without_a_zone() -> R {
     Ok(())
 }
 
-/// Spark holds a `long` of microseconds and answers these; the Arrow carrier
-/// holds nanoseconds in an `i64`. A named refusal in every mode, never a wrong
-/// value (design note, "Known limit, calendar carrier").
+/// Spark holds a `long` of microseconds and answers these; so does the engine's
+/// calendar carrier.
 #[test]
-fn a_string_past_the_nanosecond_field_is_refused_by_name() -> R {
+fn a_string_past_the_old_nanosecond_field_is_a_value() -> R {
     let s = Session::new()?;
     for expr in [
         "cast('1000000000 hours' as interval)",
         "try_cast('1000000000 hours' as interval)",
     ] {
-        assert_eq!(
-            answer(&s, expr).error_class.as_deref(),
-            Some("KRISHIV_UNSUPPORTED_FEATURE"),
-            "{expr}"
-        );
+        let got = answer(&s, expr);
+        assert_eq!(got.error_class, None, "{expr}");
+        assert_eq!(got.value.as_deref(), Some("1000000000 hours"), "{expr}");
     }
     Ok(())
 }
@@ -646,6 +710,11 @@ fn from_csv_reads_intervals_by_their_fields() -> R {
             "{INTERVAL '1' DAY}",
         ),
         ("from_csv('1', 'a interval day')", "{INTERVAL '1' DAY}"),
+        // Past the old nanosecond carrier: a value, as in Spark.
+        (
+            "from_csv('1000000000 hours', 'a interval')",
+            "{1000000000 hours}",
+        ),
         (
             "from_csv('1 12', 'a interval day to hour')",
             "{INTERVAL '1 12' DAY TO HOUR}",
@@ -678,6 +747,10 @@ fn from_csv_reads_intervals_by_their_fields() -> R {
             "{null}",
         ),
         ("from_csv('999999999999', 'a interval day')", "{null}"),
+        (
+            r#"from_json('{"a":"1000000000 hours"}', 'a interval')"#,
+            "{1000000000 hours}",
+        ),
         // A calendar value is read as far as it parses, and never malformed.
         ("from_csv('1 day', 'a interval')", "{1 days}"),
         ("from_csv('x', 'a interval')", "{null}"),
@@ -720,11 +793,6 @@ fn from_csv_reads_intervals_by_their_fields() -> R {
         ),
         ("from_csv('1', 'a array<int>')", "UNSUPPORTED_DATATYPE"),
         ("from_csv('1', 'a struct<b: int>')", "UNSUPPORTED_DATATYPE"),
-        // The carrier's limit, refused by name where Spark answers.
-        (
-            "from_csv('1000000000 hours', 'a interval')",
-            "KRISHIV_UNSUPPORTED_FEATURE",
-        ),
     ] {
         assert_eq!(
             answer(&session, expr).error_class.as_deref(),
@@ -858,10 +926,6 @@ fn from_json_reads_intervals_by_their_fields_at_any_depth() -> R {
         (
             r#"from_json('{"k":{"1":1}}', 'map<string, map<int, int>>')"#,
             "DATATYPE_MISMATCH.INVALID_JSON_MAP_KEY_TYPE",
-        ),
-        (
-            r#"from_json('{"a":"1000000000 hours"}', 'a interval')"#,
-            "KRISHIV_UNSUPPORTED_FEATURE",
         ),
     ] {
         assert_eq!(

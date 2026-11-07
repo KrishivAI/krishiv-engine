@@ -595,7 +595,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
                 || n.starts_with("geo_")
                 || n.starts_with("interval_")
                 || n.starts_with("collated_")
-                || n.starts_with("variant_") =>
+                || n.starts_with("variant_")
+                || n.starts_with("calendar_") =>
             {
                 6
             }

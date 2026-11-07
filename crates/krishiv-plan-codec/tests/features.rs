@@ -1464,10 +1464,13 @@ fn interval_types_and_literals_need_their_feature() {
             Some(Feature::IntervalTypes)
         );
         let arrow = t.to_arrow();
-        assert_eq!(
-            feature_of(Construct::ArrowType(&arrow)),
-            Some(Feature::IntervalTypes)
-        );
+        // A calendar interval rides the struct carrier, its own feature.
+        let want = if t == DataType::CalendarInterval {
+            Feature::CalendarStruct
+        } else {
+            Feature::IntervalTypes
+        };
+        assert_eq!(feature_of(Construct::ArrowType(&arrow)), Some(want));
     }
     // The bare literal predates the feature (`base/expressions` holds one);
     // as an argument it needs it, since nothing else then names the type.

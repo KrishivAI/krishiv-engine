@@ -120,6 +120,7 @@ macro_rules! registry {
 registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
+    (calendar_struct, CalendarStruct, POST_MIGRATION_READER_VERSION, Semantic, "CALENDAR INTERVAL columns on the struct carrier (months, days, microseconds, each child marked `krishiv.calendar`; ADR 0009 update 2026-11-06). A reader without it would read the column as a plain STRUCT."),
     (collated_strings, CollatedStrings, POST_MIGRATION_READER_VERSION, Semantic, "STRING types with a collation other than UTF8_BINARY, by canonical name."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
     (exchange_filters, ExchangeFilters, POST_MIGRATION_READER_VERSION, Optimization, "Runtime filters an exchange collects from the rows it writes, for scans of other stages (`ExchangePlan.filters`, distributed stages); without them the fragmenter drops the filters, which never changes rows."),
@@ -338,6 +339,11 @@ fn arrow_interval(t: &arrow_schema::DataType) -> bool {
 /// Whether an Arrow type is or contains an array, map or struct.
 fn arrow_nested(t: &arrow_schema::DataType) -> bool {
     use arrow_schema::DataType as A;
+    // A calendar interval's struct is one value, classified as
+    // `calendar_struct` by `feature_of`; a list of them is still nested.
+    if krishiv_types::arrow::is_calendar_struct(t) {
+        return false;
+    }
     match t {
         A::List(_)
         | A::LargeList(_)
@@ -464,6 +470,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                 Some(Feature::TimeType)
             } else if arrow_interval(t) {
                 Some(Feature::IntervalTypes)
+            } else if krishiv_types::arrow::is_calendar_struct(t) {
+                // A calendar interval's carrier is one value, not a struct.
+                Some(Feature::CalendarStruct)
             } else if krishiv_types::arrow::is_variant_struct(t) {
                 // A variant's carrier is one value, not a struct.
                 Some(Feature::VariantType)
