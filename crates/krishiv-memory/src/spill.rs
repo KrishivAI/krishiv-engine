@@ -391,6 +391,7 @@ impl SpillOwner {
         self.reserve_with(pool, id, bytes, Escalation::Abort, service)
             .await?;
         consumer.add_credit(bytes);
+        consumer.add_unsettled(bytes);
         Ok(())
     }
 

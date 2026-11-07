@@ -14,9 +14,9 @@
 //! root stage runs on the caller's context with it, and map tasks derive
 //! theirs from it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::task::{Context, Poll};
 
@@ -29,12 +29,12 @@ use krishiv_exec::physical::{
     PhysicalPlan, TaskSpec, WorkerContext, exchange_schemas, instantiate_task,
 };
 use krishiv_exec::{ExecConfig, Executor, QueryContext, QueryId, QueryRunner, Scheduler};
-use krishiv_scheduler::{fragment, stage_tasks};
+use krishiv_scheduler::{Partials, StageSplits, fragment, merge_partials, stage_tasks};
 use krishiv_types::batch::Batch;
 use turmoil::net::TcpStream;
 
 use crate::exchange::{HostExchange, Workers};
-use crate::task::encode_task;
+use crate::task::{decode_partials, encode_task};
 use crate::wire::{Reply, Request};
 
 type Result<T> = std::result::Result<T, KrishivError>;
@@ -59,6 +59,12 @@ struct Inner {
     /// The queries whose submission runs, so a cancel reaches their map
     /// stages too (checked between stages; a running stage's tasks finish).
     running: Mutex<HashMap<QueryId, Weak<QueryContext>>>,
+    /// Deals each stage's scans to its tasks (P2-T178); `None` runs every
+    /// scanning stage as one task.
+    splits: Mutex<Option<Arc<dyn StageSplits>>>,
+    /// The highest task attempt any submission started: a write's commit
+    /// sweeps the files of failed attempts only when one above 0 ran.
+    max_attempt: AtomicU32,
 }
 
 impl std::fmt::Debug for Coordinator {
@@ -86,8 +92,31 @@ impl Coordinator {
                 trace: Mutex::default(),
                 next_job: AtomicU64::new(0),
                 running: Mutex::default(),
+                splits: Mutex::default(),
+                max_attempt: AtomicU32::new(0),
             }),
         }
+    }
+
+    /// Deals the scans of each stage to its tasks through `splits` from the
+    /// next submission on: the tasks' file splits travel in their
+    /// descriptors to the workers that read them (P2-T178).
+    pub fn deal_scans(&self, splits: Arc<dyn StageSplits>) {
+        *self
+            .inner
+            .splits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(splits);
+    }
+
+    /// The highest task attempt any submission so far started (0 when no
+    /// task was retried). A file write run here passes it to
+    /// `DirectoryWrite::note_attempt` before its commit, so the files a
+    /// failed attempt left are swept instead of committed next to the
+    /// retry's.
+    #[must_use]
+    pub fn max_attempt(&self) -> u32 {
+        self.inner.max_attempt.load(Ordering::Relaxed)
     }
 
     /// The events so far: each task shipped and its outcome, in order.
@@ -109,14 +138,15 @@ impl Inner {
             .push(event);
     }
 
-    /// Runs `task` of a stage on its worker until an attempt succeeds.
+    /// Runs `task` of a stage on its worker until an attempt succeeds; the
+    /// filter partials of the attempt that did (I10: one per partition).
     async fn run_task(
         &self,
         job: u64,
         fragment: Arc<[u8]>,
         mut task: TaskSpec,
         settings: &ExecConfig,
-    ) -> Result<()> {
+    ) -> Result<Partials> {
         let owner = self.workers.owner(task.partition)?;
         let host = self
             .workers
@@ -144,9 +174,9 @@ impl Inner {
             }
             .await;
             match reply {
-                Ok(Reply::Done) => {
+                Ok(Reply::Done(partials)) => {
                     self.record(format!("{event}: done"));
-                    return Ok(());
+                    return decode_partials(&partials);
                 }
                 Ok(Reply::Failed(message)) => {
                     self.record(format!("{event}: failed: {message}"));
@@ -154,6 +184,7 @@ impl Inner {
                         return Err(internal(format!("{event}: {message}")));
                     }
                     task.attempt += 1;
+                    self.max_attempt.fetch_max(task.attempt, Ordering::Relaxed);
                 }
                 Ok(other) => return Err(internal(format!("{event}: answered {other:?}"))),
                 Err(e) => return Err(e),
@@ -182,10 +213,18 @@ impl Inner {
         };
         let schemas = exchange_schemas(&plan, &worker)?;
         let stages = fragment(&plan, &schemas)?;
-        let tasks = stage_tasks(&stages, self.partitions, None)?;
+        let splits = self
+            .splits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let tasks = stage_tasks(&stages, self.partitions, splits.as_deref())?;
         let (root, maps) = stages
             .split_last()
             .ok_or_else(|| internal("a plan without stages".to_owned()))?;
+        // The filters earlier stages collected (cross-stage filters), merged
+        // here and shipped in the later tasks' descriptors.
+        let mut filters = BTreeMap::new();
         for stage in maps {
             let bytes: Arc<[u8]> = krishiv_plan_codec::encode(&stage.plan)
                 .map_err(|e| internal(format!("stage {}: {e}", stage.id)))?
@@ -193,24 +232,33 @@ impl Inner {
             let specs = tasks.get(stage.id).cloned().unwrap_or_default();
             let mut runs: FuturesUnordered<_> = specs
                 .into_iter()
-                .map(|spec| self.run_task(job, Arc::clone(&bytes), spec, query.config()))
+                .map(|mut spec| {
+                    spec.filters.clone_from(&filters);
+                    self.run_task(job, Arc::clone(&bytes), spec, query.config())
+                })
                 .collect();
             let mut failed = None;
+            let mut partials = Vec::new();
             while let Some(outcome) = runs.next().await {
-                if let Err(e) = outcome {
-                    failed.get_or_insert(e);
+                match outcome {
+                    Ok(p) => partials.push(p),
+                    Err(e) => {
+                        failed.get_or_insert(e);
+                    }
                 }
             }
             if let Some(e) = failed {
                 return Err(e);
             }
+            filters.extend(merge_partials(&stage.plan, &partials));
             query.check_cancelled()?;
         }
-        let spec = tasks
+        let mut spec = tasks
             .get(root.id)
             .and_then(|t| t.first())
             .cloned()
             .ok_or_else(|| internal("a root stage without a task".to_owned()))?;
+        spec.filters = filters;
         let worker = worker.with_exchange(Arc::new(HostExchange::coordinator(
             job,
             self.workers.clone(),
@@ -219,7 +267,7 @@ impl Inner {
         let inner = self.roots.execute(node, query).await?;
         Ok(Box::pin(Releasing {
             inner,
-            _release: release,
+            release: Some(release),
         }))
     }
 }
@@ -290,17 +338,24 @@ impl Drop for Release {
     }
 }
 
-/// The root stage's rows, releasing the job once dropped.
+/// The root stage's rows, releasing the job as soon as they end (the workers
+/// drop its map outputs while the caller may still hold the stream), or once
+/// dropped before that.
 struct Releasing {
     inner: BoxStream<'static, Result<Batch>>,
-    _release: Release,
+    release: Option<Release>,
 }
 
 impl Stream for Releasing {
     type Item = Result<Batch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.inner.as_mut().poll_next(cx)
+        let next = self.inner.as_mut().poll_next(cx);
+        if matches!(next, Poll::Ready(None)) {
+            // `Release` sends from its `Drop`, on this host's runtime.
+            self.release = None;
+        }
+        next
     }
 }
 
@@ -363,7 +418,7 @@ mod tests {
 
     #[test]
     fn an_unreachable_worker_fails_the_task() {
-        let (message, trace) = run_one(|| Reply::Done, "ghost");
+        let (message, trace) = run_one(|| Reply::Done(Vec::new()), "ghost");
         assert!(message.contains("connect to ghost"), "{message}");
         assert!(trace.is_empty(), "{trace:?}");
     }

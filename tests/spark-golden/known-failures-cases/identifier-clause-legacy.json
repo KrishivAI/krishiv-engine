@@ -1,11 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      177
-    ],
-    "query-features": [
-      186
-    ],
     "sql-commands": [
       48,
       70,

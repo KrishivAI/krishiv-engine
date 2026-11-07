@@ -21,7 +21,7 @@ use crate::error::Result;
 
 /// Maximum nesting depth of arrays and objects, matching Spark 4.2.0's
 /// `parse_json` (depth 1000 succeeds, depth 1001 fails).
-const MAX_NESTING_DEPTH: usize = 1000;
+pub(super) const MAX_NESTING_DEPTH: usize = 1000;
 
 /// Maximum decoded string value length in UTF-16 code units, matching Spark
 /// 4.2.0's `parse_json` (20,000,000 parses, 20,000,001 is malformed). A char

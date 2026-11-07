@@ -30,9 +30,11 @@ pub const PROFILE_FORMAT: &str = "krishiv.query-profile";
 /// change that removes or retypes a member bumps it.
 pub const PROFILE_VERSION: u64 = 1;
 /// The minor version this build writes: it counts additive changes within
-/// [`PROFILE_VERSION`] (0 or absent: the first v1; 1: `usage`). A reader
-/// ignores members it does not know, so a later minor still loads.
-pub const PROFILE_MINOR: u64 = 1;
+/// [`PROFILE_VERSION`] (0 or absent: the first v1; 1: `usage`; 2: the scan read
+/// costs, `query.scan_reads_in_flight_mean` and the `scan_read*` operator
+/// extras). A reader ignores members it does not know, so a later minor
+/// still loads.
+pub const PROFILE_MINOR: u64 = 2;
 
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
 #[derive(Clone, Debug, PartialEq, Eq)]

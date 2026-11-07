@@ -27,13 +27,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    ColumnAlreadyExists, IncompatibleColumnType,
-    InvalidInlineTableCannotEvaluateExpressionInInlineTable,
+    IncompatibleColumnType, InvalidInlineTableCannotEvaluateExpressionInInlineTable,
     InvalidInlineTableFailedSqlExpressionEvaluation,
     InvalidInlineTableIncompatibleTypesInInlineTable, KrishivInvalidPartitionNumber,
     LegacyErrorTemp1047, LegacyErrorTemp1048, NumColumnsMismatch, UnresolvedColumnAmongFieldNames,
     UnsupportedFeatureSetOperationOnMapType,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_functions::signature::Constant;
 use krishiv_types::DataType;
 
@@ -580,10 +580,11 @@ impl Resolver<'_> {
             && a.0 <= b.1
             && b.0 <= a.1
         {
-            if r.outer.is_some_and(|k| k < env.outer.len()) {
-                return Err(unsupported("a self-join of a correlated subtree", o));
-            }
-            r = self.instance(&r)?;
+            r = if r.outer.is_some_and(|k| k < env.outer.len()) {
+                self.correlated_instance(&r)?
+            } else {
+                self.instance(&r)?
+            };
         }
         let kids = self.widen_inputs(&[l, r], op.sql(all), o)?;
         let (l, r) = (&kids[0], &kids[1]);
@@ -961,10 +962,9 @@ impl Resolver<'_> {
         let column = |e: &Expr| match &e.node {
             ExprNode::Column(_) => Some(Arc::new(e.clone())),
             ExprNode::Literal(Literal::String(s)) => Some(Arc::new(
-                Expr::new(ExprNode::Column(ColumnRef {
-                    name: s.split('.').map(str::to_owned).collect(),
-                    plan_id: None,
-                }))
+                Expr::new(ExprNode::Column(ColumnRef::new(
+                    s.split('.').map(str::to_owned).collect(),
+                )))
                 .with_origin(e.origin),
             )),
             _ => None,
@@ -1101,23 +1101,6 @@ fn mark_repeats(input: &LogicalPlan, k: &mut Rel) {
 }
 
 fn no_duplicates(k: &Rel, cs: bool) -> Result<(), AnalysisError> {
-    for (i, a) in k.out.iter().enumerate() {
-        if k.out[..i]
-            .iter()
-            .any(|b| same(&b.col.name, &a.col.name, cs))
-        {
-            let name = if cs {
-                a.col.name.clone()
-            } else {
-                a.col.name.to_lowercase()
-            };
-            return Err(AnalysisError::new(
-                ColumnAlreadyExists {
-                    column_name: quoted(&[name]),
-                },
-                Origin::UNKNOWN,
-            ));
-        }
-    }
-    Ok(())
+    check_column_name_duplication(k.out.iter().map(|a| a.col.name.as_str()), cs)
+        .map_err(|e| AnalysisError::new(e, Origin::UNKNOWN))
 }
