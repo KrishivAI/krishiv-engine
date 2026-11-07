@@ -2,7 +2,8 @@
 # (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 2902 crates/krishiv-session/src/catalog.rs
-2251 crates/krishiv-session/src/command.rs
+# +43 lines over main: nested session and script variables (T196, PR #505)
+2294 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 2640 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
