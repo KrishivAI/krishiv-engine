@@ -7,7 +7,7 @@
 //!   enough to stay in a core's own cache, where its lower instruction count
 //!   wins;
 //! - **salted**: a power-of-two directory of `u64` slots, each a 16-bit
-//!   salt plus `row id + 1`, probed linearly at load ≤ 1/2 (DuckDB's
+//!   salt plus `row id + 1`, probed linearly at load ≤ 3/4 (DuckDB's, which keeps ≤ 1/2;
 //!   `ht_entry_t`, with row ids instead of pointers), above that size,
 //!   where a probe costs one directory miss and reads a row only when its
 //!   salt matches. Its lookups prefetch each chunk's slots, then its first
@@ -123,9 +123,11 @@ pub fn flat_bytes(n: usize) -> usize {
         .saturating_add(16)
 }
 
-/// Slots of a salted directory for `n` keys at load ≤ 1/2.
+/// Slots of a salted directory for `n` keys at load ≤ 3/4 (experiment for q21 SF1000 build memory; DuckDB
+/// sizes at load ≤ 1/2: `research/bench/q21-q18-predictions-2026-11-06.md` §1.8).
 fn salted_slots(n: usize) -> usize {
-    n.saturating_mul(2)
+    n.saturating_mul(4)
+        .div_ceil(3)
         .checked_next_power_of_two()
         .unwrap_or(usize::MAX)
         .max(MIN_SLOTS)
@@ -244,7 +246,7 @@ impl JoinIndex {
             slots.resize(len, 0);
             let mut mask = len - 1;
             for id in (0..n).filter(|&id| src.indexed(id)) {
-                if (keys + 1) * 2 > slots.len() {
+                if (keys + 1) * 4 > slots.len() * 3 {
                     slots = grow_salted(&slots, g_of)?;
                     mask = slots.len() - 1;
                 }
