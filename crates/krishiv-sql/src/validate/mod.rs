@@ -51,8 +51,9 @@ mod types;
 
 use std::collections::HashSet;
 
+use self::keys::{duplicate_key, key_text, misvalued_keys, reserved_namespace_properties};
 use krishiv_common::error::{
-    CreateTableColumnDescriptorDuplicate, DescribeJsonNotExtended, DuplicateClauses, DuplicateKey,
+    CreateTableColumnDescriptorDuplicate, DescribeJsonNotExtended, DuplicateClauses,
     DuplicatedCteNames, FeatureNotEnabled, IdentityColumnsDuplicatedSequenceGeneratorOption,
     IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceWhereTableAliasNotAllowed,
     InvalidBucketCount, InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit,
@@ -65,10 +66,9 @@ use krishiv_common::error::{
     LegacyErrorTemp0064, LegacyErrorTemp1292, UnsupportedFeatureContinueExceptionHandler,
     UnsupportedFeatureDescTableColumnJson, UnsupportedFeatureDescTableColumnPartition,
     UnsupportedFeatureLateralJoinUsing, UnsupportedFeatureSchemaLevelCollations,
-    UnsupportedFeatureSetNamespaceProperty, UnsupportedFeatureSetPropertiesAndDbproperties,
-    UnsupportedFeatureSqlCursor, UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
+    UnsupportedFeatureSetPropertiesAndDbproperties, UnsupportedFeatureSqlCursor,
+    UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
 };
-use krishiv_common::names::to_sql_id;
 
 pub(crate) use self::types::data_type;
 use crate::ParserOptions;
@@ -79,7 +79,7 @@ use crate::ast::{
     Delete, Describe, DescribeKind, Expr, ExprKind, FileFormat, FileFormatKind, FrameBoundKind,
     FromClause, Function, FunctionBodyKind, FunctionReturnsKind, GeneratedKind, GroupBy, GroupItem,
     GroupItemKind, GroupWith, GroupingSet, Insert, InsertClause, Join, JoinConstraint, Literal,
-    Merge, MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName, OptionKey,
+    Merge, MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName,
     PartitionFieldKind, PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat,
     RowFormatKind, SchemaBindingClause, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind,
     Show, ShowKind, SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind,
@@ -1788,34 +1788,6 @@ fn foldable(e: &Expr) -> bool {
     }
 }
 
-/// Spark's `cleanNamespaceProperties` (with `spark.sql.legacy.notReserveProperties` off, its
-/// default): the keys `location`, `collation` and `owner` (exact case) are refused with
-/// `UNSUPPORTED_FEATURE.SET_NAMESPACE_PROPERTY` at `statement`, the first `filter` reaches over
-/// the property map ([`keys::filter_visit_order`]). The keys must be distinct.
-fn reserved_namespace_properties(properties: &[TableOption], statement: Span) -> R {
-    let keys: Vec<String> = properties.iter().map(|o| key_text(&o.key)).collect();
-    let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-    let reserved = |k: &str| matches!(k, "location" | "collation" | "owner");
-    let Some(property) = keys::filter_visit_order(&refs)
-        .into_iter()
-        .find(|k| reserved(k))
-    else {
-        return Ok(());
-    };
-    let msg = match property {
-        "location" => "please use the LOCATION clause to specify it",
-        "collation" => "please use the DEFAULT COLLATION clause to specify it",
-        _ => "it will be set to the current user",
-    };
-    Err(at(
-        UnsupportedFeatureSetNamespaceProperty {
-            property: property.to_owned(),
-            msg: msg.to_owned(),
-        },
-        statement,
-    ))
-}
-
 /// The clause at `span` as Spark's `validateRowFormatFileFormat` prints a context: its children's
 /// `getText` joined by spaces. The first `tokens` tokens are children of their own, as is each
 /// token after them outside brackets (`ROW FORMAT SERDE 'x'`, `FIELDS TERMINATED BY ','`); a
@@ -1843,51 +1815,6 @@ fn context_children_text(sql: &str, span: Span, tokens: usize) -> String {
         }
     }
     children.join(" ")
-}
-
-/// A property key as Spark's `visitPropertyKey` reads it: the dotted parts, unquoted (Spark 4.2.0:
-/// `` `a`.b ``, `` `a.b` `` and `'a.b'` are the same key), or a string key's text.
-fn key_text(key: &OptionKey) -> String {
-    key.parts
-        .iter()
-        .map(|p| p.value.as_str())
-        .collect::<Vec<_>>()
-        .join(".")
-}
-
-/// The keys of `properties` (non-empty only when a key is set or missing a value) whose value is
-/// missing (`set`) or given (`!set`), in the order Spark lists them (see [`keys::collected_order`],
-/// [`keys::filtered_order`]). The keys must be distinct, as they are once [`Checker::property_keys`]
-/// passes.
-fn misvalued_keys(properties: &[TableOption], set: bool) -> Vec<String> {
-    let keys: Vec<String> = properties.iter().map(|o| key_text(&o.key)).collect();
-    let bad: HashSet<&str> = properties
-        .iter()
-        .zip(&keys)
-        .filter(|(o, _)| o.value.is_some() != set)
-        .map(|(_, k)| k.as_str())
-        .collect();
-    if bad.is_empty() {
-        return Vec::new();
-    }
-    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
-    let pick = |k: &str| bad.contains(k);
-    let ordered = if set {
-        keys::collected_order(&keys, pick)
-    } else {
-        keys::filtered_order(&keys, pick)
-    };
-    ordered.into_iter().map(str::to_owned).collect()
-}
-
-/// Spark's `DUPLICATE_KEY` for `key`, quoted by `toSQLId` (`INVALID_ATTRIBUTE_NAME_SYNTAX` when
-/// the key is not an attribute name, as `` a`b `` or `.a`, because Spark quotes it that way while
-/// building the message).
-fn duplicate_key(key: &str) -> KrishivError {
-    match to_sql_id(key) {
-        Ok(key_column) => DuplicateKey { key_column }.into(),
-        Err(e) => e,
-    }
 }
 
 /// The parenthesized list from `first` to `last` (the first and last options of a property list):

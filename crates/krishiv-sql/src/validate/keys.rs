@@ -7,6 +7,14 @@
 //! then the sub-tries, by fragment. The hash is `Hashing.improve(key.hashCode)`. Checked against
 //! Spark 4.2.0 on 403 random key lists (`research/spark/partition-spec-duplicate-key.md`).
 
+use std::collections::HashSet;
+
+use krishiv_common::error::{DuplicateKey, KrishivError, UnsupportedFeatureSetNamespaceProperty};
+use krishiv_common::names::to_sql_id;
+
+use super::{R, at};
+use crate::ast::{OptionKey, Span, TableOption};
+
 /// Java's `String.hashCode` (UTF-16 code units), as an unsigned word.
 fn java_hash(s: &str) -> u32 {
     s.encode_utf16()
@@ -131,6 +139,76 @@ pub(super) fn filtered_order<'a>(keys: &[&'a str], pick: impl Fn(&str) -> bool) 
         picked
     } else {
         hash_map_order(&picked)
+    }
+}
+
+/// Spark's `cleanNamespaceProperties` (with `spark.sql.legacy.notReserveProperties` off, its
+/// default): the keys `location`, `collation` and `owner` (exact case) are refused with
+/// `UNSUPPORTED_FEATURE.SET_NAMESPACE_PROPERTY` at `statement`, the first `filter` reaches over
+/// the property map ([`filter_visit_order`]). The keys must be distinct.
+pub(super) fn reserved_namespace_properties(properties: &[TableOption], statement: Span) -> R {
+    let keys: Vec<String> = properties.iter().map(|o| key_text(&o.key)).collect();
+    let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let reserved = |k: &str| matches!(k, "location" | "collation" | "owner");
+    let Some(property) = filter_visit_order(&refs).into_iter().find(|k| reserved(k)) else {
+        return Ok(());
+    };
+    let msg = match property {
+        "location" => "please use the LOCATION clause to specify it",
+        "collation" => "please use the DEFAULT COLLATION clause to specify it",
+        _ => "it will be set to the current user",
+    };
+    Err(at(
+        UnsupportedFeatureSetNamespaceProperty {
+            property: property.to_owned(),
+            msg: msg.to_owned(),
+        },
+        statement,
+    ))
+}
+
+/// A property key as Spark's `visitPropertyKey` reads it: the dotted parts, unquoted (Spark 4.2.0:
+/// `` `a`.b ``, `` `a.b` `` and `'a.b'` are the same key), or a string key's text.
+pub(super) fn key_text(key: &OptionKey) -> String {
+    key.parts
+        .iter()
+        .map(|p| p.value.as_str())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// The keys of `properties` (non-empty only when a key is set or missing a value) whose value is
+/// missing (`set`) or given (`!set`), in the order Spark lists them (see [`collected_order`],
+/// [`filtered_order`]). The keys must be distinct, as they are once [`super::Checker::property_keys`]
+/// passes.
+pub(super) fn misvalued_keys(properties: &[TableOption], set: bool) -> Vec<String> {
+    let keys: Vec<String> = properties.iter().map(|o| key_text(&o.key)).collect();
+    let bad: HashSet<&str> = properties
+        .iter()
+        .zip(&keys)
+        .filter(|(o, _)| o.value.is_some() != set)
+        .map(|(_, k)| k.as_str())
+        .collect();
+    if bad.is_empty() {
+        return Vec::new();
+    }
+    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let pick = |k: &str| bad.contains(k);
+    let ordered = if set {
+        collected_order(&keys, pick)
+    } else {
+        filtered_order(&keys, pick)
+    };
+    ordered.into_iter().map(str::to_owned).collect()
+}
+
+/// Spark's `DUPLICATE_KEY` for `key`, quoted by `toSQLId` (`INVALID_ATTRIBUTE_NAME_SYNTAX` when
+/// the key is not an attribute name, as `` a`b `` or `.a`, because Spark quotes it that way while
+/// building the message).
+pub(super) fn duplicate_key(key: &str) -> KrishivError {
+    match to_sql_id(key) {
+        Ok(key_column) => DuplicateKey { key_column }.into(),
+        Err(e) => e,
     }
 }
 

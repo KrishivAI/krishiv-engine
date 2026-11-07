@@ -28,6 +28,7 @@ extend-ignore-re = [
     '"Bash\([^"]*\)"',     # command patterns in agent permission rules (bundled git options like -nam)
     # the zone name in LEGACY parser docs and tests
     '(`IST`|\d\d:\d\d (IST|ist)")',
+    '"abd"', # a probed property key in the krishiv-sql map-order tests (its hash fixes the order)
 ]
 
 [default.extend-identifiers]
