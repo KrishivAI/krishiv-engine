@@ -27,6 +27,38 @@ fn baseline_path(tag: &str) -> std::path::PathBuf {
         .join("known-failures.json")
 }
 
+/// A passing test's output is hidden in CI, so the improvement is written where a person looks: the job summary
+/// (`$GITHUB_STEP_SUMMARY`, when set) with the statements, and stderr for a local run.
+#[expect(
+    clippy::print_stderr,
+    reason = "a local run's note; CI reads the job summary"
+)]
+fn report_newly_passing(tag: &str, ratchet: &krishiv_testkit::golden::known_failures::Ratchet) {
+    use std::io::Write;
+    let refresh = format!(
+        "golden-report --engine session --tag {tag} --ratchet update --known-failures \
+         tests/spark-golden/profiles/{tag}/known-failures.json"
+    );
+    let n = ratchet.newly_passing.len();
+    eprintln!(
+        "note: {n} listed statement(s) of {tag} now pass; refresh the baseline with `{refresh}`"
+    );
+    if let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY")
+        && let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(path)
+    {
+        let _ = writeln!(
+            f,
+            "### Spark {tag}: {n} baseline statement(s) now pass\n\nRefresh: `{refresh}`\n"
+        );
+        for d in ratchet.newly_passing.iter().take(60) {
+            let _ = writeln!(f, "- `{}#{}`", d.file, d.index);
+        }
+        if n > 60 {
+            let _ = writeln!(f, "- ... and {} more", n - 60);
+        }
+    }
+}
+
 fn matches_the_baseline(tag: &str) -> R {
     let dir = GoldenSet::tag_dir(tag);
     assert!(
@@ -62,11 +94,7 @@ fn matches_the_baseline(tag: &str) -> R {
     // its ratchet runs in PR CI). So a listed statement that now passes is a note here, not a failure; a
     // statement that newly fails, or a listed file that did not run, is a regression and fails.
     if !ratchet.newly_passing.is_empty() {
-        eprintln!(
-            "note: {} listed statement(s) of {tag} now pass; refresh the baseline with `golden-report --engine session \
-             --tag {tag} --ratchet update --known-failures tests/spark-golden/profiles/{tag}/known-failures.json`",
-            ratchet.newly_passing.len()
-        );
+        report_newly_passing(tag, &ratchet);
     }
     assert!(
         ratchet.newly_failing.is_empty() && ratchet.missing_files.is_empty(),
