@@ -27,13 +27,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    ColumnAlreadyExists, IncompatibleColumnType,
-    InvalidInlineTableCannotEvaluateExpressionInInlineTable,
+    IncompatibleColumnType, InvalidInlineTableCannotEvaluateExpressionInInlineTable,
     InvalidInlineTableFailedSqlExpressionEvaluation,
     InvalidInlineTableIncompatibleTypesInInlineTable, KrishivInvalidPartitionNumber,
     LegacyErrorTemp1047, LegacyErrorTemp1048, NumColumnsMismatch, UnresolvedColumnAmongFieldNames,
     UnsupportedFeatureSetOperationOnMapType,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_functions::signature::Constant;
 use krishiv_types::DataType;
 
@@ -580,10 +580,11 @@ impl Resolver<'_> {
             && a.0 <= b.1
             && b.0 <= a.1
         {
-            if r.outer.is_some_and(|k| k < env.outer.len()) {
-                return Err(unsupported("a self-join of a correlated subtree", o));
-            }
-            r = self.instance(&r)?;
+            r = if r.outer.is_some_and(|k| k < env.outer.len()) {
+                self.correlated_instance(&r)?
+            } else {
+                self.instance(&r)?
+            };
         }
         let kids = self.widen_inputs(&[l, r], op.sql(all), o)?;
         let (l, r) = (&kids[0], &kids[1]);
@@ -898,11 +899,13 @@ impl Resolver<'_> {
         let mut c = self.child(input, env)?;
         // An aggregate below is no aggregate to a filter above: its `WHERE
         // sum(..)` is not a `HAVING`.
-        // Past a `USING` join the merged-away columns stay reachable (its projection is the only
-        // thing below, and it drops nothing else), so the widening stays for them.
-        if c.hidden.is_empty() {
-            c.widen = None;
-        }
+        // Past the boundary only hidden columns come back (a `USING` join's merged-away keys, a
+        // file table's `_metadata`), never a column an earlier step dropped.
+        c.widen = if c.hidden.is_empty() || c.widen.is_none() {
+            None
+        } else {
+            Some(Arc::new(Widen::Hidden { child: c.clone() }))
+        };
         c.agg = None;
         c.generated_from = None;
         Ok(c)
@@ -1099,23 +1102,6 @@ fn mark_repeats(input: &LogicalPlan, k: &mut Rel) {
 }
 
 fn no_duplicates(k: &Rel, cs: bool) -> Result<(), AnalysisError> {
-    for (i, a) in k.out.iter().enumerate() {
-        if k.out[..i]
-            .iter()
-            .any(|b| same(&b.col.name, &a.col.name, cs))
-        {
-            let name = if cs {
-                a.col.name.clone()
-            } else {
-                a.col.name.to_lowercase()
-            };
-            return Err(AnalysisError::new(
-                ColumnAlreadyExists {
-                    column_name: quoted(&[name]),
-                },
-                Origin::UNKNOWN,
-            ));
-        }
-    }
-    Ok(())
+    check_column_name_duplication(k.out.iter().map(|a| a.col.name.as_str()), cs)
+        .map_err(|e| AnalysisError::new(e, Origin::UNKNOWN))
 }

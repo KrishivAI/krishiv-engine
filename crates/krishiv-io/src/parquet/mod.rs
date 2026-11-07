@@ -39,6 +39,7 @@
 
 mod bloom_probe;
 mod calendar;
+mod collation;
 mod decode;
 #[cfg_attr(
     not(test),

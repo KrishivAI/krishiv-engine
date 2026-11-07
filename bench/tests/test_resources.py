@@ -441,3 +441,26 @@ def test_report_shows_the_cache_mode_and_warns_on_a_mix():
     assert mixed[0] == "- Page cache: duckdb warm, krishiv cold"
     assert any("not comparable" in line for line in mixed)
     assert cache_mode_lines({"old": {}}) == ["- Page cache: old warm"]  # results from before --cold
+
+
+def test_a_cpu_delta_needs_a_reading_taken_after_the_baseline():
+    """When every read after the baseline fails the window has no CPU figure, not a made-up 0."""
+    import subprocess
+    import sys
+
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        tree = TreeProc(p.pid, interval_s=0.01)
+        tree.start()
+        tree._cpu_fresh = False  # the reads after the baseline are the ones that failed
+        tree.stop()
+        assert tree.cpu_seconds is not None  # stop() itself reads the live process
+        tree2 = TreeProc(p.pid, sample=False)
+        tree2.start()
+        p.kill()
+        p.wait()
+        tree2.stop()
+        assert tree2.cpu_seconds is None  # the process was gone for every later read
+    finally:
+        p.kill()
+        p.wait()

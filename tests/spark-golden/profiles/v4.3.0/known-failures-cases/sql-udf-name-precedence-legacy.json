@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "depends-on-command": [
+      25
+    ]
+  },
+  "file": "sql-udf-name-precedence-legacy",
+  "format_version": 1
+}

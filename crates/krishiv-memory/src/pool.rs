@@ -1159,6 +1159,19 @@ impl MemoryPool for TreePool {
         limit
     }
 
+    fn available(&self) -> Option<usize> {
+        let mut free: Option<usize> = None;
+        let mut cur = Some(&self.node);
+        while let Some(node) = cur {
+            if node.limit().is_some() {
+                let a = node.available();
+                free = Some(free.map_or(a, |f| f.min(a)));
+            }
+            cur = node.parent.as_ref();
+        }
+        free
+    }
+
     fn check_aborted(&self) -> Result<(), MemoryError> {
         self.node.group.as_ref().map_or(Ok(()), |g| g.check())
     }

@@ -241,6 +241,16 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     fn effective_limit(&self) -> Option<usize> {
         self.limit()
     }
+    /// The bytes an ordinary reservation of this pool could still take
+    /// now: the least free space under a limit on the path to the root
+    /// (`None`: no pool on the path has a limit), not counting the
+    /// spill-scratch floor or the resident-set guard's cut, which ordinary
+    /// reservations cannot use. A snapshot, for sizing optional memory (a
+    /// nested loop's build chunk) so that other consumers sharing the limit
+    /// keep room. Defaults to this pool's own limit minus what it holds.
+    fn available(&self) -> Option<usize> {
+        self.limit().map(|l| l.saturating_sub(self.reserved()))
+    }
     /// `Err` once the arbitrator has aborted this pool's query: drivers call
     /// it at every batch boundary (one atomic load while not aborted). From
     /// the abort on, no reservation of the query succeeds and its held

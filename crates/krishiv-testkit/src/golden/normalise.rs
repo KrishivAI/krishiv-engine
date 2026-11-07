@@ -144,9 +144,49 @@ pub fn normalize_test_results(output: &str) -> String {
     trim_trailing_space(&kept.join("\n"))
 }
 
+/// Krishiv's step after [`normalize_test_results`], on both sides: the padding after a masked
+/// `Partition Statistics` value goes. `DESCRIBE` pads that cell to 20 characters before Spark masks
+/// its byte count, so the padding left follows the digits of a size the comparison ignores, and an
+/// engine writing files of another size can't match it.
+#[must_use]
+pub fn unpad_masked_statistics(output: &str) -> String {
+    let marker = format!("Partition Statistics\t{MSG} bytes, ");
+    output
+        .split('\n')
+        .map(|line| match line.strip_prefix(marker.as_str()) {
+            Some(rest) => match rest.split_once('\t') {
+                Some((value, tail)) => format!("{marker}{}\t{tail}", value.trim_end_matches(' ')),
+                None => line.to_owned(),
+            },
+            None => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn masked_statistics_padding_is_ignored() {
+        let spark = format!("a\nPartition Statistics\t{MSG} bytes, 3 rows  \t    \nb");
+        let engine = format!("a\nPartition Statistics\t{MSG} bytes, 3 rows   \t    \nb");
+        assert_eq!(
+            unpad_masked_statistics(&spark),
+            unpad_masked_statistics(&engine)
+        );
+        assert_eq!(
+            unpad_masked_statistics(&spark),
+            format!("a\nPartition Statistics\t{MSG} bytes, 3 rows\t    \nb")
+        );
+        // The row count still counts, and other rows keep their padding.
+        assert_ne!(
+            unpad_masked_statistics(&spark),
+            unpad_masked_statistics(&spark.replace("3 rows", "4 rows"))
+        );
+        assert_eq!(unpad_masked_statistics("x  \ty"), "x  \ty");
+    }
 
     type R = Result<(), Box<dyn std::error::Error>>;
 

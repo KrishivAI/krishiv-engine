@@ -88,6 +88,10 @@ pub(super) enum Widen {
     Project { input: Rel, exprs: Vec<Arc<Expr>> },
     /// A filter, sort or limit over `child`: its columns pass through.
     Through { child: Rel },
+    /// A pipe boundary over `child` (the same plan): only `child`'s hidden
+    /// columns (a `USING` join's merged keys, a `_metadata`) come back
+    /// through it, never a column a projection below dropped.
+    Hidden { child: Rel },
     /// An aggregate (under the projections of its lateral aliases): it
     /// adds grouping attributes to its output.
     Aggregate(Arc<AggInfo>),
@@ -147,6 +151,10 @@ pub(super) struct Level {
     /// output does not carry, searched first: Spark binds an outer name to the
     /// aggregate input before an output alias of the same name.
     pub(super) fallback: Arc<[Attr]>,
+    /// The input of the aggregate whose `HAVING` the subquery sits in: an
+    /// aggregate call of the subquery's `WHERE` over only these columns is
+    /// that aggregate's (Spark's outer aggregate), not the subquery's.
+    pub(super) having: Option<Arc<[Attr]>>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.

@@ -10,7 +10,9 @@ use krishiv_common::error::{
     ExpectPermanentViewNotTemp, KrishivError, KrishivUnsupportedFeature, SchemaNotFound,
     ShowColumnsWithConflictNamespace, UnresolvedColumnWithSuggestion,
 };
-use krishiv_sql::ast::{DdlName, Describe, DescribeKind, Show, ShowKind, ShowPattern};
+use krishiv_sql::ast::{
+    DdlName, Describe, DescribeKind, PartitionSpec, Show, ShowKind, ShowPattern,
+};
 use krishiv_types::DataType;
 
 use crate::dataframe::DataFrame;
@@ -60,6 +62,77 @@ fn matches(pattern: &str, name: &str) -> bool {
             &name,
         )
     })
+}
+
+/// `CatalogTable.simpleString`: `key: value` lines, a bare key when the value is empty.
+fn simple_string(entries: &[(String, String)]) -> String {
+    entries
+        .iter()
+        .map(|(k, v)| {
+            if v.is_empty() {
+                k.clone()
+            } else {
+                format!("{k}: {v}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `StructType.treeString` of `fields` (name, type, nullable), as `printSchema` prints it.
+fn tree_string(fields: &[(&str, &DataType, bool)]) -> String {
+    let mut out = String::from("root\n");
+    for (name, ty, nullable) in fields {
+        tree_field(
+            &mut out,
+            " |",
+            name,
+            ty,
+            &format!("(nullable = {nullable})"),
+        );
+    }
+    out
+}
+
+fn tree_field(out: &mut String, prefix: &str, name: &str, ty: &DataType, note: &str) {
+    out.push_str(&format!("{prefix}-- {name}: {} {note}\n", ty.type_name()));
+    tree_children(out, &format!("{prefix}    |"), ty);
+}
+
+/// `buildFormattedString` of a nested type: its element, key and value, or fields.
+fn tree_children(out: &mut String, prefix: &str, ty: &DataType) {
+    match ty {
+        DataType::Array(a) => tree_field(
+            out,
+            prefix,
+            "element",
+            a.element_type(),
+            &format!("(containsNull = {})", a.contains_null()),
+        ),
+        DataType::Map(m) => {
+            out.push_str(&format!("{prefix}-- key: {}\n", m.key_type().type_name()));
+            tree_children(out, &format!("{prefix}    |"), m.key_type());
+            tree_field(
+                out,
+                prefix,
+                "value",
+                m.value_type(),
+                &format!("(valueContainsNull = {})", m.value_contains_null()),
+            );
+        }
+        DataType::Struct(st) => {
+            for f in st.fields() {
+                tree_field(
+                    out,
+                    prefix,
+                    f.name(),
+                    f.data_type(),
+                    &format!("(nullable = {})", f.nullable()),
+                );
+            }
+        }
+        _ => {}
+    }
 }
 
 fn keep(pattern: Option<&ShowPattern>, name: &str) -> bool {
@@ -307,6 +380,15 @@ impl Session {
                 )
                 .await
             }
+            ShowKind::TableExtended {
+                namespace,
+                pattern,
+                partition,
+                ..
+            } => {
+                self.show_table_extended(namespace.as_ref(), pattern, partition.as_ref(), original)
+                    .await
+            }
             ShowKind::Views {
                 namespace, pattern, ..
             } => {
@@ -451,6 +533,118 @@ impl Session {
     }
 
     /// Temporary views matching `pattern`, by name.
+    /// `SHOW TABLE EXTENDED [IN ns] LIKE pattern [PARTITION (...)]` (Spark's `ShowTablesCommand`): one row per
+    /// table or temporary view the pattern keeps, its `information` the relation's `simpleString`; with a
+    /// partition, the pattern is the one table's name and the row describes that partition.
+    async fn show_table_extended(
+        &self,
+        namespace: Option<&DdlName>,
+        pattern: &ShowPattern,
+        partition: Option<&PartitionSpec>,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        const COLUMNS: [&str; 4] = ["namespace", "tableName", "isTemporary", "information"];
+        self.require_current_profile("SHOW TABLE EXTENDED")?;
+        let ns = self.show_namespace(namespace)?;
+        if is_global_namespace(&ns) {
+            return Err(unsupported("SHOW TABLE EXTENDED IN global_temp"));
+        }
+        if let Some(spec) = partition {
+            let env = self.query_env();
+            let name = TableName::resolve(std::slice::from_ref(&pattern.pattern), &ns, &env)?;
+            let p = self
+                .described_partition(&name, false, spec, original, "SHOW TABLE EXTENDED")
+                .await?;
+            let t = self.stored_relation(&name)?;
+            // `CatalogTablePartition.simpleString`: the partition's own entries.
+            let entries: Vec<(String, String)> = partition_details(&t, &p)
+                .into_iter()
+                .skip(4)
+                .take_while(|(k, _)| !k.is_empty())
+                .collect();
+            let rows = vec![vec![
+                s(&t.namespace),
+                s(&t.name),
+                s("false"),
+                s(format!("{}\n", simple_string(&entries))),
+            ]];
+            return self.ordered_frame(&COLUMNS, &["isTemporary"], rows).await;
+        }
+        let mut rows: Vec<Vec<Cell>> = Vec::new();
+        for t in self.state.catalog.store.tables_in(&ns) {
+            if !keep(Some(pattern), &t.name) {
+                continue;
+            }
+            if t.view.is_some() {
+                // The information holds the view's text, as SHOW CREATE TABLE does.
+                self.authorize_view_select(&ns, &t.name, &self.query_env())
+                    .await?;
+            }
+            let mut entries = self.table_information(&t);
+            if t.is_partitioned() {
+                entries.push((
+                    "Partition Columns".to_owned(),
+                    format!(
+                        "[{}]",
+                        t.layout
+                            .partition_columns
+                            .iter()
+                            .map(|c| format!("`{}`", c.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            }
+            let fields: Vec<(&str, &DataType, bool)> = t
+                .columns
+                .iter()
+                .map(|c| (c.name.as_str(), &c.data_type, c.nullable))
+                .collect();
+            entries.push(("Schema".to_owned(), tree_string(&fields)));
+            rows.push(vec![
+                s(&ns),
+                s(&t.name),
+                s("false"),
+                s(format!("{}\n", simple_string(&entries))),
+            ]);
+        }
+        let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+        for name in self.temp_view_names(Some(pattern)) {
+            let Some(entry) = self.state.catalog.get(&name, case_sensitive) else {
+                continue;
+            };
+            // A data source view: its columns are all it has. A query view would print its text, which
+            // the session does not keep.
+            let crate::catalog::TempTable::Files { columns, .. } = &*entry else {
+                return Err(unsupported(
+                    "SHOW TABLE EXTENDED of a temporary view over a query or DataFrame",
+                ));
+            };
+            let mut entries = vec![
+                ("Table".to_owned(), name.clone()),
+                ("Created Time".to_owned(), created_time(0)),
+                ("Last Access".to_owned(), "UNKNOWN".to_owned()),
+                ("Created By".to_owned(), "Spark 4.2.0".to_owned()),
+                ("Type".to_owned(), "VIEW".to_owned()),
+            ];
+            if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
+                entries.push(("View Schema Mode".to_owned(), "BINDING".to_owned()));
+            }
+            let fields: Vec<(&str, &DataType, bool)> = columns
+                .iter()
+                .map(|c| (c.name.as_str(), &c.data_type, c.nullable))
+                .collect();
+            entries.push(("Schema".to_owned(), tree_string(&fields)));
+            rows.push(vec![
+                s(""),
+                s(&name),
+                s("true"),
+                s(format!("{}\n", simple_string(&entries))),
+            ]);
+        }
+        self.ordered_frame(&COLUMNS, &["isTemporary"], rows).await
+    }
+
     fn temp_view_names(&self, pattern: Option<&ShowPattern>) -> Vec<String> {
         let mut names: Vec<String> = self
             .state
@@ -552,7 +746,7 @@ impl Session {
                         ));
                 let described = match partition {
                     Some(spec) => Some(
-                        self.described_partition(&name, temp, spec, original)
+                        self.described_partition(&name, temp, spec, original, "DESC PARTITION")
                             .await?,
                     ),
                     None => None,
@@ -616,6 +810,22 @@ impl Session {
                     rows.push(vec![s("# Detailed Table Information"), s(""), s("")]);
                     let info = self.detailed_information(&name)?;
                     rows.extend(info.into_iter().map(|(k, v)| vec![s(k), s(v), s("")]));
+                }
+                // `ResolveDefaultColumns.getDescribeMetadata`: the columns' `DEFAULT` texts, last.
+                if let Some(t) = &stored
+                    && t.columns.iter().any(|c| c.default.is_some())
+                {
+                    rows.push(vec![s(""), s(""), s("")]);
+                    rows.push(vec![s("# Column Default Values"), s(""), s("")]);
+                    rows.extend(t.columns.iter().filter_map(|c| {
+                        let default = c.default.as_ref()?;
+                        Some(vec![
+                            s(&c.name),
+                            // `getDescribeMetadata`: `dataType.simpleString`.
+                            s(c.data_type.simple_string()),
+                            s(default),
+                        ])
+                    }));
                 }
                 self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
                     .await
@@ -738,6 +948,12 @@ impl Session {
     ) -> Result<Vec<(String, String)>, KrishivError> {
         self.require_current_profile("DESCRIBE EXTENDED")?;
         let t = self.stored_relation(name)?;
+        Ok(self.table_information(&t))
+    }
+
+    /// A stored table's or view's `CatalogTable.toLinkedHashMap` entries, without the
+    /// `Partition Columns` and `Schema` that `DESCRIBE` leaves out.
+    fn table_information(&self, t: &CatalogTable) -> Vec<(String, String)> {
         let mut rows = vec![
             ("Catalog".to_owned(), crate::catalog::CATALOG.to_owned()),
             ("Database".to_owned(), t.namespace.clone()),
@@ -786,8 +1002,8 @@ impl Session {
                 "Type".to_owned(),
                 if t.managed { "MANAGED" } else { "EXTERNAL" }.to_owned(),
             ));
-            rows.push(("Provider".to_owned(), t.provider.clone()));
-            rows.extend(bucket_rows(&t));
+            rows.push(("Provider".to_owned(), t.provider_written.clone()));
+            rows.extend(bucket_rows(t));
             if let Some(c) = &t.comment {
                 rows.push(("Comment".to_owned(), c.clone()));
             }
@@ -806,12 +1022,12 @@ impl Session {
             ));
         }
         if t.view.is_none() {
-            rows.extend(storage_rows(&t, &t.location));
+            rows.extend(storage_rows(t, &t.location));
             if t.is_partitioned() {
                 rows.push(("Partition Provider".to_owned(), "Catalog".to_owned()));
             }
         }
-        Ok(rows)
+        rows
     }
 }
 
@@ -976,7 +1192,7 @@ fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<Strin
         r#""type":"{}""#,
         if t.managed { "MANAGED" } else { "EXTERNAL" }
     ));
-    f.push(format!(r#""provider":{}"#, json_str(&t.provider)));
+    f.push(format!(r#""provider":{}"#, json_str(&t.provider_written)));
     if p.is_some() {
         f.extend(buckets.iter().flatten().cloned());
     }
@@ -1150,7 +1366,10 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
         .map(column)
         .collect::<Result<Vec<_>, _>>()?
         .join(",\n");
-    let mut out = format!("CREATE TABLE {name} (\n{cols})\nUSING {}\n", t.provider);
+    let mut out = format!(
+        "CREATE TABLE {name} (\n{cols})\nUSING {}\n",
+        t.provider_written
+    );
     let partitioning = |out: &mut String| {
         if t.is_partitioned() {
             out.push_str(&format!(
@@ -1200,6 +1419,41 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_string_prints_nested_types_as_print_schema() {
+        use krishiv_types::{ArrayType, MapType, StructField, StructType};
+        let array = DataType::Array(Arc::new(ArrayType::new(DataType::Integer, true)));
+        let inner = DataType::Struct(StructType::new([StructField::new(
+            "x",
+            DataType::Long,
+            false,
+        )]));
+        let map = DataType::Map(Arc::new(MapType::new(DataType::String, inner, true)));
+        let tree = tree_string(&[
+            ("a", &array, false),
+            ("m", &map, true),
+            ("s", &DataType::String, true),
+        ]);
+        assert_eq!(
+            tree,
+            "root\n \
+             |-- a: array (nullable = false)\n \
+             |    |-- element: integer (containsNull = true)\n \
+             |-- m: map (nullable = true)\n \
+             |    |-- key: string\n \
+             |    |-- value: struct (valueContainsNull = true)\n \
+             |    |    |-- x: long (nullable = false)\n \
+             |-- s: string (nullable = true)\n"
+        );
+        assert_eq!(
+            simple_string(&[
+                ("Table".to_owned(), "t".to_owned()),
+                ("Bare".to_owned(), String::new())
+            ]),
+            "Table: t\nBare"
+        );
+    }
 
     #[test]
     fn patterns_follow_spark() {
