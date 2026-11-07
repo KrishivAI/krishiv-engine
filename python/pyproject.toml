@@ -59,6 +59,8 @@ parallel = true
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+# The excludes below hold for files named on the command line too (the pre-push hook names them).
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT"]
