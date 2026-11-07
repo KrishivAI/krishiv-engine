@@ -1981,7 +1981,7 @@ fn create_table_like_statements() {
     assert!(matches!(t.name, DdlName::Parts(_)));
     assert!(matches!(t.source, DdlName::Parts(_)));
     assert!(t.using.is_none() && t.location.is_none() && t.tblproperties.is_empty());
-    let sql = "CREATE TABLE t LIKE s ROW FORMAT SERDE 'x' STORED AS parquet \
+    let sql = "CREATE TABLE t LIKE s ROW FORMAT SERDE 'x' STORED AS textfile \
         LOCATION '/tmp/t' TBLPROPERTIES ('a' = '1')";
     let t = like(sql);
     assert!(t.using.is_none() && t.row_format.is_some() && t.file_format.is_some());

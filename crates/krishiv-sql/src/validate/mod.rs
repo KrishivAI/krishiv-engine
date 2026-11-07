@@ -378,10 +378,12 @@ impl Checker<'_> {
                 b.span,
             ));
         }
-        // `visitCreateTableClauses`: the properties, the options, then the SerDe's properties.
+        // `visitCreateTableClauses`: the properties, the options, the ROW FORMAT against the file
+        // format, then the SerDe's properties.
         self.property_list(&t.tblproperties, true, t.span)?;
         self.expression_options(&t.options, t.span)?;
         self.option_values(&t.tblproperties)?;
+        self.row_format_file_format(t.row_format.as_ref(), t.file_format.as_ref(), t.span)?;
         self.serde_properties(t.row_format.as_ref())?;
         self.using_with_serde(
             "CREATE TABLE ... USING ...",
@@ -428,8 +430,9 @@ impl Checker<'_> {
                 t.span,
             ));
         }
-        // `visitCreateTableLike` reads the SerDe's properties before it checks `USING` beside a
-        // serde clause, and the table's properties after.
+        // `visitCreateTableLike` checks the ROW FORMAT against the file format and reads the SerDe's
+        // properties before it checks `USING` beside a serde clause, and the table's properties after.
+        self.row_format_file_format(t.row_format.as_ref(), t.file_format.as_ref(), t.span)?;
         self.serde_properties(t.row_format.as_ref())?;
         self.using_with_serde(
             "CREATE TABLE LIKE ... USING ...",
@@ -438,6 +441,55 @@ impl Checker<'_> {
             t.span,
         )?;
         self.property_list(&t.tblproperties, true, t.span)
+    }
+
+    /// Spark's `validateRowFormatFileFormat`, when both a `ROW FORMAT` and a `STORED AS|BY` are
+    /// written: `ROW FORMAT SERDE` only with `STORED AS` `sequencefile`, `textfile` or `rcfile`,
+    /// `ROW FORMAT DELIMITED` only with `textfile` (any case, unquoted; the name lower-cased in the
+    /// message, unknown names included), and `STORED BY` with neither; else
+    /// `_LEGACY_ERROR_TEMP_0035` at `statement`. `STORED AS INPUTFORMAT .. OUTPUTFORMAT ..`, which
+    /// takes any row format, does not parse here.
+    fn row_format_file_format(
+        &self,
+        row_format: Option<&RowFormat>,
+        file_format: Option<&FileFormat>,
+        statement: Span,
+    ) -> R {
+        let (Some(row_format), Some(file_format)) = (row_format, file_format) else {
+            return Ok(());
+        };
+        let message = match (&row_format.kind, &file_format.kind) {
+            (kind, FileFormatKind::StoredAs(name)) => {
+                let format = name
+                    .parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".")
+                    .to_lowercase();
+                match kind {
+                    RowFormatKind::Serde(_)
+                        if !matches!(&*format, "sequencefile" | "textfile" | "rcfile") =>
+                    {
+                        format!(
+                            "ROW FORMAT SERDE is incompatible with format '{format}', which also \
+                             specifies a serde"
+                        )
+                    }
+                    RowFormatKind::Delimited(_) if format != "textfile" => format!(
+                        "ROW FORMAT DELIMITED is only compatible with 'textfile', not '{format}'"
+                    ),
+                    _ => return Ok(()),
+                }
+            }
+            // Spark's "should never happen" arm, reached by `STORED BY`.
+            (_, FileFormatKind::StoredBy(_)) => format!(
+                "Unexpected combination of {} and {}",
+                context_children_text(self.sql, row_format.span, usize::MAX),
+                context_children_text(self.sql, file_format.span, 2),
+            ),
+        };
+        Err(at(LegacyErrorTemp0035 { message }, statement))
     }
 
     /// `ROW FORMAT SERDE '...' WITH SERDEPROPERTIES (...)`: a property list whose missing values
@@ -1713,6 +1765,35 @@ fn foldable(e: &Expr) -> bool {
         }
         _ => false,
     }
+}
+
+/// The clause at `span` as Spark's `validateRowFormatFileFormat` prints a context: its children's
+/// `getText` joined by spaces. The first `tokens` tokens are children of their own, as is each
+/// token after them outside brackets (`ROW FORMAT SERDE 'x'`, `FIELDS TERMINATED BY ','`); a
+/// bracketed list (`SERDEPROPERTIES (...)`'s), or with `tokens` set everything after the first
+/// `tokens` (a `STORED BY` storage handler), is one child whose text drops the whitespace.
+fn context_children_text(sql: &str, span: Span, tokens: usize) -> String {
+    let text = span.text(sql);
+    let mut children: Vec<String> = Vec::new();
+    let mut depth = 0_usize;
+    for (i, t) in tokenize(text)
+        .iter()
+        .filter(|t| !t.kind.is_trivia())
+        .enumerate()
+    {
+        let token = t.span.text(text);
+        let glued = i > tokens || depth > 0;
+        match t.kind {
+            TokenKind::Sym(Sym::LParen) => depth += 1,
+            TokenKind::Sym(Sym::RParen) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        match children.last_mut() {
+            Some(last) if glued => last.push_str(token),
+            _ => children.push(token.to_owned()),
+        }
+    }
+    children.join(" ")
 }
 
 /// A property key as Spark's `visitPropertyKey` reads it: the dotted parts, unquoted (Spark 4.2.0:
