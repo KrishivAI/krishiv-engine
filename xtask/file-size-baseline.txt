@@ -18,8 +18,8 @@
 2215 crates/krishiv-kernels/src/csv.rs
 2429 crates/krishiv-kernels/src/map.rs
 2468 crates/krishiv-plan/src/analyzer/coerce.rs
-# over main: a cast of an alias keeps the alias's name (T001c, PR #491); char comparison padding and declared types through GROUP BY and lateral aliases (T001b)
-4612 crates/krishiv-plan/src/analyzer/ops.rs
+# over main: a cast of an alias keeps the alias's name (T001c, PR #491); USING-join keys (P2b row 11); char comparison padding and declared types through GROUP BY and lateral aliases (T001b)
+4679 crates/krishiv-plan/src/analyzer/ops.rs
 3098 crates/krishiv-plan/src/analyzer/subquery.rs
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
@@ -28,11 +28,10 @@
 2630 crates/krishiv-session/src/dataframe.rs
 2790 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-# +1 over main: the two-step INSERT projection that checks each CHAR/VARCHAR value once, net of the moved CTAS/view column lists (T001b)
-3269 crates/krishiv-session/src/table_commands.rs
+# the two-step INSERT projection that checks each CHAR/VARCHAR value once, net of the moved CTAS/view column lists (T001b)
+3278 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
-# +1: CAST(x AS CHAR(n)) lowers as a string cast (T001b)
-2775 crates/krishiv-sql/src/lower.rs
+2760 crates/krishiv-sql/src/lower.rs
 5225 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs

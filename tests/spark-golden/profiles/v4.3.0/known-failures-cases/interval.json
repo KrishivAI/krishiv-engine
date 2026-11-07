@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "s43-other": [
+      7,
+      8,
+      72,
+      121,
+      285
+    ]
+  },
+  "file": "interval",
+  "format_version": 1
+}

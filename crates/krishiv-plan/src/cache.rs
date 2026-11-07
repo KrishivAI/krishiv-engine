@@ -388,6 +388,16 @@ impl Encoder {
                 self.debug(to);
                 self.debug(mode);
             }
+            ExprNode::Collate {
+                expr,
+                collation,
+                name,
+            } => {
+                self.tag("collate");
+                self.expr(expr, bias);
+                self.debug(collation);
+                self.text(name);
+            }
             ExprNode::Alias { expr, name } => {
                 self.tag("alias");
                 self.expr(expr, bias);

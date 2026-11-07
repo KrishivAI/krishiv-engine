@@ -144,6 +144,9 @@ pub fn parse_and_lower_named_expression(
         .map_err(|e| e.redacted_in(sql))
 }
 
+mod identifier;
+use identifier::multipart_identifier;
+
 fn err(e: impl Into<KrishivError>, span: Span) -> ParseError {
     ParseError {
         error: e.into(),
@@ -320,6 +323,25 @@ impl Lowerer {
             }),
             span,
         )
+    }
+
+    /// `expr COLLATE name`: an unknown name is `COLLATION_INVALID_NAME` (with Spark's proposals).
+    fn collate(
+        &self,
+        expr: Arc<IrExpr>,
+        name: &str,
+        name_span: Span,
+        span: Span,
+    ) -> Result<IrExpr, ParseError> {
+        let collation = krishiv_types::Collation::parse(name).map_err(|e| err(e, name_span))?;
+        Ok(self.ex(
+            ExprNode::Collate {
+                expr,
+                collation,
+                name: name.to_owned(),
+            },
+            span,
+        ))
     }
 
     fn op(&self, b: Builtin, args: Vec<IrExpr>, span: Span) -> IrExpr {
@@ -2346,6 +2368,21 @@ impl Lowerer {
                     }
                     [] => return Err(unsupported("a function name", f.name.span)),
                 };
+                // `collate(expr, 'name')` is the function form of `expr COLLATE name`.
+                if qualifier.is_empty()
+                    && !name.quoted
+                    && name.value.eq_ignore_ascii_case("collate")
+                    && f.args.len() == 2
+                    && f.quantifier.is_none()
+                    && f.within_group.is_empty()
+                    && f.filter.is_none()
+                    && f.null_treatment.is_none()
+                    && f.over.is_none()
+                    && let ExprKind::Literal(Literal::String(text)) = &f.args[1].expr.kind
+                {
+                    let expr = self.arg(&f.args[0].expr)?;
+                    return self.collate(expr, text, f.args[1].expr.span, sp);
+                }
                 // With `spark.sql.legacy.identifierClause` on, `IDENTIFIER('a.b')`
                 // is an ordinary call (the parser builds `dynamic_name` only
                 // otherwise): Spark resolves a constant string argument to the
@@ -2524,7 +2561,16 @@ impl Lowerer {
                 let args = vec![self.arg(base)?, self.arg(index)?];
                 self.call("__subscript", args, sp)
             }
-            ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
+            ExprKind::Collate(inner, name) => {
+                let text = name
+                    .parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                let expr = self.arg(inner)?;
+                self.collate(expr, &text, name.span, sp)?
+            }
             ExprKind::VariantGet(base, path) => self.variant_get(base, path, sp)?,
             ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),
             ExprKind::Lambda { params, body } => {
@@ -2711,65 +2757,4 @@ fn number(text: &str, kind: NumKind, sp: Span) -> R<IrLiteral> {
             data_type: DecimalType::try_new(precision, scale).map_err(|e| err(e, sp))?,
         },
     })
-}
-
-/// Spark's `parseMultipartIdentifier`: dot-separated parts, each bare or in
-/// backticks (a doubled backtick is one). `None` for an empty or malformed
-/// string, which stays an unresolved call.
-fn multipart_identifier(text: &str) -> Option<Vec<String>> {
-    let mut parts = Vec::new();
-    let mut chars = text.chars().peekable();
-    loop {
-        let mut part = String::new();
-        if chars.peek() == Some(&'`') {
-            chars.next();
-            loop {
-                match chars.next()? {
-                    '`' if chars.peek() == Some(&'`') => {
-                        chars.next();
-                        part.push('`');
-                    }
-                    '`' => break,
-                    c => part.push(c),
-                }
-            }
-        } else {
-            while let Some(&c) = chars.peek() {
-                if !(c.is_ascii_alphanumeric() || c == '_') {
-                    break;
-                }
-                part.push(c);
-                chars.next();
-            }
-            if part.is_empty() {
-                return None;
-            }
-        }
-        parts.push(part);
-        match chars.next() {
-            None => return Some(parts),
-            Some('.') => {}
-            Some(_) => return None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod identifier_tests {
-    use super::multipart_identifier;
-
-    #[test]
-    fn multipart_identifiers_split_like_spark() {
-        let parts = |t| multipart_identifier(t);
-        assert_eq!(parts("a"), Some(vec!["a".to_owned()]));
-        assert_eq!(parts("t.c1"), Some(vec!["t".to_owned(), "c1".to_owned()]));
-        assert_eq!(
-            parts("`a.b`.c"),
-            Some(vec!["a.b".to_owned(), "c".to_owned()])
-        );
-        assert_eq!(parts("`a``b`"), Some(vec!["a`b".to_owned()]));
-        for bad in ["", ".a", "a.", "a..b", "`a", "`a`b", "c 1", "a-b"] {
-            assert_eq!(parts(bad), None, "{bad}");
-        }
-    }
 }

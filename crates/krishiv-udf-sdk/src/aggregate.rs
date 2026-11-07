@@ -248,5 +248,12 @@ mod tests {
     fn retract_defaults_to_unsupported() {
         let mut a = Nothing;
         assert_eq!(a.retract(&[], &[]), Ok(false));
+        // The double is otherwise a no-op accumulator.
+        a.resize(2);
+        assert_eq!(a.update(&[], &[]), Ok(()));
+        assert_eq!(a.merge(&[], &[]), Ok(()));
+        assert!(a.state(&[]).unwrap().is_empty());
+        assert!(a.evaluate(&[]).is_err());
+        assert_eq!(a.size(), 0);
     }
 }
