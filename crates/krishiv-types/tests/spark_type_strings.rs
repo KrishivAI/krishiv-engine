@@ -17,9 +17,9 @@ use serde_json::Value;
 const OUT_OF_SCOPE: &[&str] = &["char(5)", "varchar(10)", "array<char(3)>"];
 
 /// An explicit `UTF8_BINARY` is Spark's `StringType` with an explicit
-/// collation: it prints `string collate UTF8_BINARY`. Krishiv's type is the
-/// plain `STRING` (design/P2-collations.md section 3.1); the analyzer keeps
-/// the explicit strength, so only this rendering differs.
+/// collation: it prints `string collate UTF8_BINARY`. Krishiv keeps it as the
+/// display-only marker `CollatedString(UTF8_BINARY)` (ADR 0043, update
+/// 2026-11-07), which is no collation anywhere else.
 const EXPLICIT_UTF8_BINARY: &str = "string collate utf8_binary";
 
 /// Inputs Spark parses that nest deeper than `DataType::MAX_NESTING_DEPTH`;
@@ -137,7 +137,8 @@ fn ddl_strings_match_spark() {
         let spark_class = case.get("error_class").and_then(Value::as_str);
         match (spark_class, &ours) {
             (None, Ok(t)) if input == EXPLICIT_UTF8_BINARY => {
-                assert_eq!(t, &DataType::String);
+                assert_eq!(t.simple_string(), "string collate UTF8_BINARY");
+                assert!(!t.contains_collation());
             }
             (None, Ok(t)) => {
                 assert_renders(t, case);
