@@ -553,18 +553,24 @@ impl Session {
             let env = self.query_env();
             let name = TableName::resolve(std::slice::from_ref(&pattern.pattern), &ns, &env)?;
             // Spark resolves the name as an `UnresolvedTable("SHOW TABLE EXTENDED ... PARTITION
-            // ...")`: any view, temporary or not, is `EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE`.
-            let view = self.temp_entry_of(&name, &env)
-                || self
-                    .state
-                    .catalog
-                    .store
-                    .table(&name.namespace, &name.name)
-                    .is_some_and(|t| t.view.is_some());
-            if view {
+            // ...")` of `ns :+ pattern` with an `IN`, else of the pattern alone: any view found is
+            // `EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE`. Only the bare form can name a temporary
+            // view, which prints as written; a permanent view prints with its catalog and namespace.
+            let temp = namespace.is_none() && self.temp_entry_of(&name, &env);
+            let permanent = self
+                .state
+                .catalog
+                .store
+                .table(&name.namespace, &name.name)
+                .is_some_and(|t| t.view.is_some());
+            if temp || permanent {
                 return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                     operation: "SHOW TABLE EXTENDED ... PARTITION ...".to_owned(),
-                    view_name: name.quoted(),
+                    view_name: if temp {
+                        name.written.clone()
+                    } else {
+                        name.quoted()
+                    },
                 }
                 .into());
             }
