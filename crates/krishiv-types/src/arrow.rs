@@ -15,7 +15,7 @@
 //! | `time(p)` | `Time64(Nanosecond)`, tagged when `p < 6` | |
 //! | `interval year to month` | `Interval(YearMonth)`, tagged for other fields | |
 //! | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
-//! | `interval` | `Interval(MonthDayNano)` | |
+//! | `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`; ADR 0009 update 2026-11-06) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
 //! | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
 //! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
 //! | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
@@ -133,6 +133,39 @@ fn variant_struct() -> ArrowType {
     ]))
 }
 
+/// The child marker of a calendar interval's struct (its value is the child's name).
+pub const CALENDAR_CHILD_METADATA_KEY: &str = "krishiv.calendar";
+/// The months child of a calendar interval's struct.
+pub const CALENDAR_MONTHS_FIELD: &str = "months";
+/// The days child of a calendar interval's struct.
+pub const CALENDAR_DAYS_FIELD: &str = "days";
+/// The microseconds child of a calendar interval's struct.
+pub const CALENDAR_MICROS_FIELD: &str = "microseconds";
+
+/// The Arrow carrier of `CALENDAR INTERVAL`: Spark's `CalendarInterval` layout, so microseconds past the `i64`
+/// nanoseconds of `Interval(MonthDayNano)` are representable. The children are marked, so a user struct with the
+/// same names is never read as an interval.
+#[must_use]
+pub fn calendar_struct() -> ArrowType {
+    let child = |name: &str, t: ArrowType| {
+        Field::new(name, t, false).with_metadata(HashMap::from([(
+            CALENDAR_CHILD_METADATA_KEY.to_owned(),
+            name.to_owned(),
+        )]))
+    };
+    ArrowType::Struct(Fields::from(vec![
+        child(CALENDAR_MONTHS_FIELD, ArrowType::Int32),
+        child(CALENDAR_DAYS_FIELD, ArrowType::Int32),
+        child(CALENDAR_MICROS_FIELD, ArrowType::Int64),
+    ]))
+}
+
+/// Whether `arrow` is the struct of a calendar interval.
+#[must_use]
+pub fn is_calendar_struct(arrow: &ArrowType) -> bool {
+    *arrow == calendar_struct()
+}
+
 /// Whether `arrow` is the struct of a variant value.
 #[must_use]
 pub fn is_variant_struct(arrow: &ArrowType) -> bool {
@@ -167,11 +200,12 @@ fn map_decimals(arrow: &ArrowType, to: fn(u8, i8) -> ArrowType) -> ArrowType {
     }
 }
 
-/// `arrow` with each decimal on the canonical carrier of its precision: what an
-/// Arrow value of any carrier becomes when it enters a query.
+/// `arrow` with each decimal on the canonical carrier of its precision and each calendar interval on its struct:
+/// what an Arrow value of any carrier becomes when it enters a query.
 #[must_use]
 pub fn canonical_arrow_type(arrow: &ArrowType) -> ArrowType {
-    map_decimals(arrow, |p, s| {
+    let arrow = map_calendar(arrow, false);
+    map_decimals(&arrow, |p, s| {
         if p <= DECIMAL64_MAX_PRECISION {
             ArrowType::Decimal64(p, s)
         } else {
@@ -184,6 +218,35 @@ pub fn canonical_arrow_type(arrow: &ArrowType) -> ArrowType {
 #[must_use]
 pub fn client_arrow_type(arrow: &ArrowType) -> ArrowType {
     map_decimals(arrow, ArrowType::Decimal128)
+}
+
+/// `arrow` as a caller outside the engine reads it: [`client_arrow_type`], and each calendar interval as Arrow's
+/// `Interval(MonthDayNano)` (Spark's own Arrow form of it; ADR 0009 update 2026-11-06).
+#[must_use]
+pub fn edge_arrow_type(arrow: &ArrowType) -> ArrowType {
+    map_calendar(&client_arrow_type(arrow), true)
+}
+
+/// `arrow` with each calendar interval on the struct carrier (`to_edge == false`) or on `Interval(MonthDayNano)`.
+fn map_calendar(arrow: &ArrowType, to_edge: bool) -> ArrowType {
+    let field = |f: &Field| {
+        f.clone()
+            .with_data_type(map_calendar(f.data_type(), to_edge))
+    };
+    match arrow {
+        ArrowType::Struct(_) if to_edge && is_calendar_struct(arrow) => {
+            ArrowType::Interval(IntervalUnit::MonthDayNano)
+        }
+        ArrowType::Interval(IntervalUnit::MonthDayNano) if !to_edge => calendar_struct(),
+        ArrowType::List(f) => ArrowType::List(Arc::new(field(f))),
+        ArrowType::LargeList(f) => ArrowType::LargeList(Arc::new(field(f))),
+        ArrowType::FixedSizeList(f, n) => ArrowType::FixedSizeList(Arc::new(field(f)), *n),
+        ArrowType::Map(f, sorted) => ArrowType::Map(Arc::new(field(f)), *sorted),
+        ArrowType::Struct(fields) => {
+            ArrowType::Struct(fields.iter().map(|f| field(f)).collect::<Fields>())
+        }
+        other => other.clone(),
+    }
 }
 
 impl DataType {
@@ -213,7 +276,7 @@ impl DataType {
             Self::Time { .. } => ArrowType::Time64(TimeUnit::Nanosecond),
             Self::YearMonthInterval { .. } => ArrowType::Interval(IntervalUnit::YearMonth),
             Self::DayTimeInterval { .. } => ArrowType::Duration(TimeUnit::Microsecond),
-            Self::CalendarInterval => ArrowType::Interval(IntervalUnit::MonthDayNano),
+            Self::CalendarInterval => calendar_struct(),
             Self::Geometry { .. } | Self::Geography { .. } => spatial_struct(),
             Self::Variant => variant_struct(),
             Self::Array(a) => ArrowType::List(Arc::new(
@@ -297,6 +360,7 @@ impl DataType {
                 other => return Err(error::unsupported(format!("Arrow map entries {other}"))),
             },
             ArrowType::Struct(_) if is_variant_struct(arrow) => Self::Variant,
+            ArrowType::Struct(_) if is_calendar_struct(arrow) => Self::CalendarInterval,
             ArrowType::Struct(fields) => StructType::new(
                 fields
                     .iter()

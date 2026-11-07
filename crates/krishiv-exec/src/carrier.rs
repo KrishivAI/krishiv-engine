@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Moving a value between decimal carriers (design P2-T160).
+//! Moving a value between decimal carriers (design P2-T160), and a calendar interval between its internal struct
+//! and Arrow's `Interval(MonthDayNano)` at the session edges (ADR 0009 update 2026-11-06).
 
 use std::sync::Arc;
 
@@ -38,6 +39,17 @@ fn structure(a: &StructArray, fields: &arrow_schema::Fields) -> Result<StructArr
         .map(|(c, f)| recarried_array(c, f.data_type()))
         .collect::<Result<Vec<_>, _>>()?;
     StructArray::try_new(fields.clone(), columns, a.nulls().cloned()).map_err(|e| arrow_error(&e))
+}
+
+/// A calendar interval whose microseconds overflow `i64` nanoseconds at the edge: Spark's `ArrowWriter` fails there
+/// with `Math.multiplyExact`'s `ArithmeticException` ("long overflow").
+fn calendar_overflow() -> KrishivError {
+    krishiv_common::error::ArithmeticOverflow {
+        message: "long overflow".to_owned(),
+        alternative: String::new(),
+        config: "\"spark.sql.ansi.enabled\"".to_owned(),
+    }
+    .into()
 }
 
 /// `a` on the decimal carrier `(p, s)` of `to`.
@@ -84,6 +96,23 @@ fn decimal(a: &ArrayRef, to: &DataType, p: u8, s: i8) -> Result<ArrayRef, Krishi
 pub fn recarried_array(a: &ArrayRef, to: &DataType) -> Result<ArrayRef, KrishivError> {
     if a.data_type() == to {
         return Ok(Arc::clone(a));
+    }
+    // A calendar interval at the session edges (ADR 0009 update 2026-11-06): the internal struct of
+    // microseconds becomes Arrow's `Interval(MonthDayNano)` and back.
+    if let Some(c) = krishiv_types::calendar::Calendars::of(a.as_ref())
+        && matches!(
+            to,
+            DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano)
+        )
+    {
+        return krishiv_types::calendar::to_month_day_nano(&c)
+            .map(|m| Arc::new(m) as ArrayRef)
+            .map_err(|_| calendar_overflow());
+    }
+    if krishiv_types::arrow::is_calendar_struct(to)
+        && let Some(m) = a.as_primitive_opt::<arrow_array::types::IntervalMonthDayNanoType>()
+    {
+        return Ok(krishiv_types::calendar::from_month_day_nano(m));
     }
     Ok(match to {
         DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => decimal(a, to, *p, *s)?,

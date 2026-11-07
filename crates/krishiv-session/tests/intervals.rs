@@ -101,14 +101,6 @@ fn interval_functions_match_spark() -> R {
     matches_spark("interval-functions.json")
 }
 
-/// Saturated to Spark's `long` of microseconds, which the nanosecond field of
-/// `Interval(MonthDayNano)` can't hold: a named refusal, tracked in the design
-/// note's as-built section.
-const PAST_THE_NANOSECOND_FIELD: [&str; 2] = [
-    "cast('2147483647 days' as interval) * 2",
-    "cast('1 month 2 days 3 seconds' as interval) * cast('Infinity' as double)",
-];
-
 /// Casts between an interval and a number or string inside an array, map or
 /// struct: a named refusal, tracked in the design note's as-built section. The
 /// nested cast takes a leaf's type from the Arrow carrier, which holds no fields.
@@ -149,9 +141,7 @@ fn matches_spark(file: &str) -> R {
             value: text("value"),
             error_class: text("error_class").or_else(|| text("value_error_class")),
         };
-        if (!ansi && PAST_THE_NANOSECOND_FIELD.contains(&expr))
-            || NESTED_INTERVAL_CASTS.contains(&expr)
-        {
+        if NESTED_INTERVAL_CASTS.contains(&expr) {
             want.value = None;
             want.error_class = Some("KRISHIV_UNSUPPORTED_FEATURE".to_owned());
         }

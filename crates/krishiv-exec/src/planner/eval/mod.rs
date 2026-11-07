@@ -884,18 +884,9 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
             months,
             days,
             micros,
-        } => Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
-            arrow_buffer::IntervalMonthDayNano::new(
-                *months,
-                *days,
-                micros.checked_mul(1000).ok_or_else(|| {
-                    unsupported(
-                        "a calendar interval whose microseconds overflow the nanosecond \
-                             field of its Arrow type",
-                    )
-                })?,
-            ),
-        ])),
+        } => krishiv_types::calendar::calendar_array([Some(
+            krishiv_types::calendar::CalendarValue::new(*months, *days, *micros),
+        )]),
         // A one-row string map, as the JSON options bind.
         Literal::Map(pairs) => {
             let keys: ArrayRef = Arc::new(StringArray::from(

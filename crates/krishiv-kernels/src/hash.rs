@@ -33,8 +33,8 @@ mod xxh64;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
-    Int8Type, Int16Type, Int32Type, Int64Type, IntervalMonthDayNano, IntervalMonthDayNanoType,
-    IntervalYearMonthType, Time64NanosecondType, TimestampMicrosecondType,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, Time64NanosecondType,
+    TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrowPrimitiveType, Int32Array, Int64Array};
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
@@ -132,7 +132,8 @@ enum Col<'a> {
     Int32(Prim<'a, i32>),
     Int64(Prim<'a, i64>),
     /// A calendar interval: months, days and nanoseconds.
-    Calendar(Prim<'a, IntervalMonthDayNano>),
+    /// A calendar interval's struct: its months and microseconds, under the struct's nulls.
+    Calendar(Prim<'a, i32>, Prim<'a, i64>, Option<&'a NullBuffer>),
     Float32(Prim<'a, f32>),
     Float64(Prim<'a, f64>),
     /// `decimal(p <= 18, s)`: the unscaled value as a `long`.
@@ -193,8 +194,13 @@ impl<'a> Col<'a> {
             DataType::Duration(TimeUnit::Microsecond) => {
                 Self::Int64(Prim::of::<DurationMicrosecondType>(a))
             }
-            DataType::Interval(IntervalUnit::MonthDayNano) => {
-                Self::Calendar(Prim::of::<IntervalMonthDayNanoType>(a))
+            t if krishiv_types::arrow::is_calendar_struct(t) => {
+                let s = a.as_struct();
+                Self::Calendar(
+                    Prim::of::<Int32Type>(s.column(0).as_ref()),
+                    Prim::of::<Int64Type>(s.column(2).as_ref()),
+                    s.nulls(),
+                )
             }
             // TIME: Spark hashes the nanoseconds since midnight as a long.
             DataType::Time64(TimeUnit::Nanosecond) => {
@@ -273,9 +279,14 @@ impl<'a> Col<'a> {
             // microseconds, then the months; the days are not hashed (design
             // P2-T001b Q3). Spark's interpreted path, which it uses for a
             // folded or `VALUES` input, hashes them too.
-            Self::Calendar(p) => p.fold(i, s, |v, s| {
-                H::hash_int(v.months, H::hash_long(v.nanoseconds / 1_000, s))
-            }),
+            Self::Calendar(months, micros, nulls) => {
+                if nulls.is_some_and(|n| n.is_null(i)) {
+                    s
+                } else {
+                    let s = micros.fold(i, s, |v, s| H::hash_long(v, s));
+                    months.fold(i, s, |v, s| H::hash_int(v, s))
+                }
+            }
             Self::Float32(p) => p.fold(i, s, |v, s| H::hash_int(float_bits(v), s)),
             Self::Float64(p) => p.fold(i, s, |v, s| H::hash_long(double_bits(v), s)),
             // At most 18 digits fit a long; the fallback is never taken.
