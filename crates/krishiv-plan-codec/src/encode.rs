@@ -1130,6 +1130,11 @@ fn udaf_call(call: &UdafCall, nested: &Cell<bool>) -> Result<pb::UdafCall> {
         name: call.name.clone(),
         version: u64::from(call.version),
         args: fields(&call.args),
+        arg_types: call
+            .arg_types
+            .iter()
+            .map(|t| spark_type(t, nested))
+            .collect::<Result<_>>()?,
         result: Some(spark_type(&call.result, nested)?),
         nullable: call.nullable,
         state: fields(&call.state),
