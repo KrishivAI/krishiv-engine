@@ -1441,6 +1441,7 @@ impl Instantiation<'_> {
                 target_file_bytes: write.target_file_bytes,
                 partition_by: write.partition_by.clone(),
                 zone: self.env.zone,
+                zone_name: self.env.zone_name.clone(),
                 partition_names: write
                     .partition_by
                     .iter()

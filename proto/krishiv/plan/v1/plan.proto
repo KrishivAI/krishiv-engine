@@ -671,6 +671,9 @@ message UdafCall {
   bool nullable = 5;
   // Arrow IPC `Schema` flatbuffer of the declared state fields, in order.
   bytes state = 6;
+  // The Spark type of each argument, in order (`KIND_NULL` for an untyped
+  // NULL): the Arrow fields in `args` carry only the carrier type.
+  repeated DataType arg_types = 7;
 }
 
 enum JoinType {

@@ -1645,10 +1645,16 @@ pub(crate) fn udf_call() -> PhysNode {
 /// columns the planner fixed, in a final aggregate and the merge of its
 /// states (a filtered raw call, then the same call over its states).
 pub(crate) fn udaf_call() -> PhysNode {
+    udaf_call_typed(vec![DataType::Integer])
+}
+
+/// [`udaf_call`] with these Spark argument types (one argument column).
+pub(crate) fn udaf_call_typed(arg_types: Vec<DataType>) -> PhysNode {
     let call = UdafCall {
         name: "my_udaf".to_owned(),
         version: 3,
         args: vec![Field::new("arg0", ArrowType::Int32, true)],
+        arg_types,
         result: DataType::Integer,
         nullable: false,
         state: vec![Field::new("count", ArrowType::Int64, false)],

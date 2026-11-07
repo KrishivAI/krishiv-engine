@@ -589,6 +589,7 @@ fn aggregate_constructs<'a>(a: &'a AggregateExpr, f: &mut impl FnMut(Construct<'
             .chain(&call.state)
             .for_each(|x| visit_arrow_field(x, f));
         visit_type(&call.result, f);
+        call.arg_types.iter().for_each(|t| visit_type(t, f));
     }
 }
 

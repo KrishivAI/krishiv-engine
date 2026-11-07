@@ -716,7 +716,7 @@ pub struct AggregateExpr {
 /// version, and the columns the planner fixed for it. A worker must hold
 /// the same version, declaring the same state, to run the plan.
 /// feature: rust_udaf
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UdafCall {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
@@ -732,6 +732,10 @@ pub struct UdafCall {
     /// Arrow IPC `Schema` flatbuffer of the declared state fields, in order.
     #[prost(bytes = "vec", tag = "6")]
     pub state: ::prost::alloc::vec::Vec<u8>,
+    /// The Spark type of each argument, in order (`KIND_NULL` for an untyped
+    /// NULL): the Arrow fields in `args` carry only the carrier type.
+    #[prost(message, repeated, tag = "7")]
+    pub arg_types: ::prost::alloc::vec::Vec<DataType>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {
