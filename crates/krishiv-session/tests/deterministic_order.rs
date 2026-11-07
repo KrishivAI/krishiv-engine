@@ -120,3 +120,29 @@ fn fan_ins_and_spills_give_the_same_bytes_on_every_run() {
         );
     }
 }
+
+/// A hash join probing a `UNION ALL`: its probe operator needs a flush, so
+/// the runner starts the branches together; the rows still come out in the
+/// same order on every run.
+#[test]
+#[ignore = "T094 G3 (design/P2-T094-deterministic-order.md): a fan-in with a flush barrier still starts its branches together"]
+fn a_join_probing_a_union_gives_the_same_order_on_every_run() {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.deterministicOrder", "true").unwrap();
+    run(
+        &s,
+        "CREATE TABLE p USING parquet AS \
+         SELECT id, id % 1000 AS k, CAST(id AS DOUBLE) / 3 AS x FROM range(300000)",
+    );
+    run(
+        &s,
+        "CREATE TABLE q USING parquet AS SELECT id AS k, id * 2 AS v FROM range(1000)",
+    );
+    let sql = "SELECT u.id, u.x, q.v FROM \
+               (SELECT id, k, x FROM p WHERE id % 2 = 0 UNION ALL SELECT id, k, x FROM p WHERE id % 3 = 0) u \
+               LEFT JOIN q ON u.k = q.k";
+    let first = shape(&run(&s, sql));
+    for i in 1..5 {
+        assert!(first == shape(&run(&s, sql)), "run {i} differs");
+    }
+}
