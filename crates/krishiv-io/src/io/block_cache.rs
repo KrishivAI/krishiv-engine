@@ -350,15 +350,37 @@ impl BlockCache {
     }
 
     /// Reserves `bytes` for a fetch in flight; `false` when an attached pool refuses.
-    fn reserve_fetch(&self, bytes: usize) -> bool {
+    pub(super) fn reserve_fetch(&self, bytes: usize) -> bool {
         match lock(&self.fetch_memory).as_mut() {
             Some(r) => r.try_grow(bytes).is_ok(),
             None => true,
         }
     }
 
+    /// Reserves `bytes` for blocks a read holds; while an attached pool refuses, the least recently
+    /// used blocks of the memory tier leave to make room, and `false` only when none is left.
+    pub(super) fn reserve_held(&self, bytes: usize) -> bool {
+        loop {
+            if self.reserve_fetch(bytes) {
+                return true;
+            }
+            let mut st = lock(&self.state);
+            // Evicting the whole tier cannot make room for more than it holds: a smaller tier means
+            // the read falls back to the plain read with the hot set kept.
+            if st.memory.used < bytes as u64 {
+                return false;
+            }
+            let Some((_, old)) = st.memory.pop_oldest() else {
+                return false;
+            };
+            bump(&self.counters.evictions, 1);
+            st.memory.used = st.memory.used.saturating_sub(old.len() as u64);
+            Self::release(&mut st, old.len());
+        }
+    }
+
     /// Returns the bytes reserved by [`Self::reserve_fetch`].
-    fn release_fetch(&self, bytes: usize) {
+    pub(super) fn release_fetch(&self, bytes: usize) {
         if let Some(r) = lock(&self.fetch_memory).as_mut() {
             r.shrink(bytes.min(r.size()));
         }
@@ -386,14 +408,14 @@ impl BlockCache {
         state.tick
     }
 
-    /// The block `key` (named `name`), from memory or disk.
-    async fn lookup(self: &Arc<Self>, name: u128, key: &str) -> Option<Bytes> {
+    /// The block `key` (named `name`), from memory or disk; `true` when it was read back from disk.
+    async fn lookup(self: &Arc<Self>, name: u128, key: &str) -> Option<(Bytes, bool)> {
         {
             let mut st = lock(&self.state);
             let tick = Self::next_tick(&mut st);
             if let Some(b) = st.memory.touch(name, tick) {
                 bump(&self.counters.memory_hits, 1);
-                return Some(b.clone());
+                return Some((b.clone(), false));
             }
             let tick = Self::next_tick(&mut st);
             st.disk.touch(name, tick)?;
@@ -403,8 +425,10 @@ impl BlockCache {
         match read {
             Ok(Ok(bytes)) => {
                 bump(&self.counters.disk_hits, 1);
-                self.remember(name, &bytes);
-                Some(bytes)
+                // A block the memory tier keeps is charged there; only one it does not keep is
+                // charged to the read that holds it.
+                let kept = self.remember(name, &bytes);
+                Some((bytes, !kept))
             }
             _ => {
                 // Unreadable or not the block we asked for: forget it.
@@ -427,12 +451,13 @@ impl BlockCache {
         let _ = std::fs::remove_file(self.file(name));
     }
 
-    /// Puts `bytes` in the memory tier (least recently used blocks leave).
-    fn remember(&self, name: u128, bytes: &Bytes) {
+    /// Puts `bytes` in the memory tier (least recently used blocks leave); `false` when the block
+    /// was not kept there (no tier, too large, or the pool granted no room).
+    pub(super) fn remember(&self, name: u128, bytes: &Bytes) -> bool {
         let cap = self.cfg.memory_bytes;
         let size = bytes.len() as u64;
         if cap == 0 || size > cap {
-            return;
+            return false;
         }
         let mut st = lock(&self.state);
         let tick = Self::next_tick(&mut st);
@@ -454,21 +479,22 @@ impl BlockCache {
                     st.memory.used = st.memory.used.saturating_sub(old.len() as u64);
                     Self::release(&mut st, old.len());
                     if key == name {
-                        return;
+                        return false;
                     }
                 }
             }
         }
+        // The block is no larger than the tier (checked above) and the newest, so trimming to the
+        // cap removes older blocks only and the block stays.
         while st.memory.used > cap {
-            let Some((key, old)) = st.memory.pop_oldest() else {
+            let Some((_, old)) = st.memory.pop_oldest() else {
                 break;
             };
-            if key != name {
-                bump(&self.counters.evictions, 1);
-            }
+            bump(&self.counters.evictions, 1);
             st.memory.used = st.memory.used.saturating_sub(old.len() as u64);
             Self::release(&mut st, old.len());
         }
+        true
     }
 
     /// Writes the block to disk, removing the least recently used ones to stay under the cap.
@@ -637,6 +663,30 @@ fn write_block(
 /// listing. The cache aligns blocks against it, so it needs no metadata request of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectSize(pub u64);
+
+/// Bytes reserved from the pool for blocks a range read holds while it assembles its output
+/// (blocks read back from the disk tier); returned when the read ends, however it ends.
+struct HeldBlocks {
+    cache: Arc<BlockCache>,
+    bytes: usize,
+}
+
+impl HeldBlocks {
+    /// Reserves `bytes` more; `false` (nothing added) when an attached pool refuses.
+    fn hold(&mut self, bytes: usize) -> bool {
+        let granted = self.cache.reserve_held(bytes);
+        if granted {
+            self.bytes += bytes;
+        }
+        granted
+    }
+}
+
+impl Drop for HeldBlocks {
+    fn drop(&mut self) {
+        self.cache.release_fetch(self.bytes);
+    }
+}
 
 /// A store whose bounded range reads go through a [`BlockCache`].
 pub struct CachingStore {
@@ -857,10 +907,24 @@ impl CachingStore {
         let (first, last) = (range.start / bs, (range.end - 1) / bs);
         let mut parts: Vec<Option<Bytes>> = vec![None; at(last - first + 1)];
         let mut missing: Vec<u64> = Vec::new();
+        // A block read back from disk is held until the output is assembled: it is reserved from
+        // the pool like a fetch's buffer, and a refusal ends the read (the plain read answers it).
+        let mut held = HeldBlocks {
+            cache: Arc::clone(&self.cache),
+            bytes: 0,
+        };
         for b in first..=last {
             let key = self.block_key(location, &version, b);
             match self.cache.lookup(name_of(&key), &key).await {
-                Some(bytes) => parts[at(b - first)] = Some(bytes),
+                Some((bytes, from_disk)) => {
+                    if from_disk && !held.hold(bytes.len()) {
+                        return Err(object_store::Error::Generic {
+                            store: "block cache",
+                            source: "no memory for the blocks of a read".into(),
+                        });
+                    }
+                    parts[at(b - first)] = Some(bytes);
+                }
                 None => missing.push(b),
             }
         }
