@@ -130,11 +130,11 @@ impl Session {
             env0.parser.double_quoted_identifiers,
         )?;
         // The text of a dynamic statement does not see a running script's locals.
-        let bound = self
+        let (bound, identifier_spans) = self
             .with_locals(Vec::new())
-            .resolve_identifier_clauses(&bound, &env0.parser)
-            .await?
-            .into_owned();
+            .substitute_identifier_clauses(&bound, &env0.parser)
+            .await?;
+        let bound = bound.into_owned();
         let inner_text = krishiv_sql::redact_sql(&bound);
         let env = self.query_env();
         let statement = krishiv_sql::parse_statement(&bound, &env.parser)
@@ -173,7 +173,8 @@ impl Session {
                 // The text of the statement does not see a running script's locals (Spark's
                 // `EXECUTE IMMEDIATE` runs it apart from the script); its arguments did.
                 let plain = self.with_locals(Vec::new());
-                let env = plain.query_env();
+                let mut env = plain.query_env();
+                env.identifier_spans = identifier_spans.into();
                 plain.authorize_statement(&statement, class, &env).await?;
                 Box::pin(plain.run_statement(statement, env, &bound, &inner_text)).await?
             }

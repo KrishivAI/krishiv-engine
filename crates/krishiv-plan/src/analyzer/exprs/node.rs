@@ -816,10 +816,9 @@ impl Resolver<'_> {
                     let sorted = if kids[0].ty.data_type.as_ref().is_some_and(holds_map) {
                         let var = |name: &str| {
                             Arc::new(
-                                Expr::new(ExprNode::Column(crate::ColumnRef {
-                                    name: vec![name.to_owned()],
-                                    plan_id: None,
-                                }))
+                                Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+                                    name.to_owned(),
+                                ])))
                                 .with_origin(origin),
                             )
                         };
@@ -1227,10 +1226,9 @@ impl Resolver<'_> {
                             e.origin,
                         ));
                     };
-                    let element = Expr::new(ExprNode::Column(ColumnRef {
-                        name: vec!["__subscript_element".to_owned()],
-                        plan_id: None,
-                    }))
+                    let element = Expr::new(ExprNode::Column(ColumnRef::new(vec![
+                        "__subscript_element".to_owned(),
+                    ])))
                     .with_origin(e.origin);
                     let body = Expr::new(ExprNode::Field {
                         base: Arc::new(element),

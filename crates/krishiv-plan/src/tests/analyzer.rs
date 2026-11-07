@@ -170,8 +170,8 @@ fn df(table: &str, id: i64) -> LogicalPlan {
 
 fn col(name: &str, id: i64) -> Expr {
     Expr::new(ExprNode::Column(ColumnRef {
-        name: vec![name.to_owned()],
         plan_id: Some(PlanId(id)),
+        ..ColumnRef::new(vec![name.to_owned()])
     }))
 }
 
@@ -3458,8 +3458,8 @@ fn inline_table_of_ragged_rows_fails() {
 fn inline_table_of_dataframe_reference_fails() {
     let ctx = ctx();
     let cell = Expr::new(ExprNode::Column(ColumnRef {
-        name: vec!["a".to_owned()],
         plan_id: Some(PlanId(1)),
+        ..ColumnRef::new(vec!["a".to_owned()])
     }));
     let r = run(inline_table(vec![vec![cell]], &["a"]), &ctx);
     assert_eq!(
@@ -3517,7 +3517,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 28);
+    assert_eq!(ResolutionConf::KEYS.len(), 33);
     let charsets = conf(&[
         ("spark.sql.legacy.javaCharsets", "true"),
         ("spark.sql.legacy.codingErrorAction", "TRUE"),

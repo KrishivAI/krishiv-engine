@@ -1,45 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Tests of the name syntaxes. The attribute-name cases are what Spark 4.2.0's
-//! `UnresolvedAttribute.parseAttributeName` returns for them (run in the
-//! pinned Spark container).
+//! Tests of the multipart-identifier syntax (the attribute-name syntax is
+//! tested with its parser in `krishiv_common::names`).
 
 use krishiv_common::error::ErrorClass;
 
 use super::*;
-
-fn parts(name: &str) -> Vec<String> {
-    parse_attribute_name(name).expect("parses")
-}
-
-#[test]
-fn attribute_names_split_at_unquoted_dots() {
-    assert_eq!(parts("a"), ["a"]);
-    assert_eq!(parts("a.b"), ["a", "b"]);
-    assert_eq!(parts("a.`b.c`"), ["a", "b.c"]);
-    assert_eq!(parts("`a`.b"), ["a", "b"]);
-    assert_eq!(parts("`a``b`"), ["a`b"]);
-    assert_eq!(parts("a.`b`.c"), ["a", "b", "c"]);
-    assert_eq!(parts("`a`.`b`"), ["a", "b"]);
-    assert_eq!(parts("x.*"), ["x", "*"]);
-    assert_eq!(parts("``"), [""], "an empty quoted name is one empty part");
-    assert_eq!(parts("h\u{e9}llo.w\u{f6}rld"), ["h\u{e9}llo", "w\u{f6}rld"]);
-}
-
-#[test]
-fn malformed_attribute_names_are_syntax_errors() {
-    for bad in ["a.", ".a", "a..b", "`a`b", "a`b", "`a", "`a`.", "a.`b", "."] {
-        let e = parse_attribute_name(bad).expect_err(bad);
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::InvalidAttributeNameSyntax,
-            "{bad}"
-        );
-        assert_eq!(e.sql_state(), Some("42601"));
-        assert!(e.message().contains(bad), "{bad}: {}", e.message());
-    }
-    // Spark indexes before the start for ".a"; here it is the same error.
-    assert!(parse_attribute_name("").is_ok_and(|p| p == [""]));
-}
 
 fn ident(text: &str) -> Vec<String> {
     parse_multipart_identifier(text).expect("parses")

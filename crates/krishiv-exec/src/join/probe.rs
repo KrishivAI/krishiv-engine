@@ -583,9 +583,7 @@ impl Operator for ProbeOp {
         let dep = ctx
             .dependency()
             .ok_or_else(|| internal("hash join probe without its build".to_owned()))?;
-        let build = Arc::clone(dep)
-            .downcast::<BuildGlobal>()
-            .map_err(|_| internal("wrong build state for the hash join probe".to_owned()))?;
+        let build = super::broadcast::build_of(dep)?;
         let memory = ctx.consumer();
         let fanout = build.hashing.fanout0();
         Ok(Box::new(ProbeLocal {
