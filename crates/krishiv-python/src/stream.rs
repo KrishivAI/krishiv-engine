@@ -8,6 +8,11 @@
 //! DuckDB read it without copying. The C-level work is in [`ffi`], which has
 //! no pyo3 dependency so that it can be tested under Miri.
 
+#[expect(
+    dead_code,
+    reason = "export_column and import_column are for the Python UDF runtime (P2-T059 unit 2b); tested on \
+              their own in stream_ffi until then"
+)]
 mod ffi;
 mod query;
 

@@ -1148,3 +1148,91 @@ fn misaligned_pointers_are_rejected() {
     assert!(!array_c.is_released(), "the array was not moved out");
     drop(unaligned_schema.take());
 }
+
+// --- One column across the boundary (Python UDF arguments and results, P2-T059 unit 2a) ---
+
+/// Exports `column` and imports it back as `declared` with `rows` values.
+fn column_round_trip(
+    column: &ArrayRef,
+    declared: &DataType,
+    rows: usize,
+) -> Result<ArrayRef, krishiv_common::error::KrishivError> {
+    let (schema, mut array) = ffi::export_column(column)?;
+    // SAFETY: both are the live structs `export_column` just built; the
+    // array is moved out of once.
+    unsafe { ffi::import_column(&raw const schema, &raw mut array, declared, rows) }
+}
+
+#[test]
+fn a_sliced_column_round_trips_with_its_offset() {
+    let full: ArrayRef = Arc::new(Int64Array::from(vec![
+        Some(1),
+        None,
+        Some(3),
+        Some(4),
+        Some(5),
+    ]));
+    let sliced = full.slice(1, 3);
+    let back = column_round_trip(&sliced, &DataType::Int64, 3).unwrap();
+    assert_eq!(back.as_ref(), sliced.as_ref());
+}
+
+#[test]
+fn a_string_view_column_round_trips() {
+    let column: ArrayRef = Arc::new(arrow_array::StringViewArray::from(vec![
+        Some("a string longer than twelve bytes"),
+        None,
+        Some("short"),
+    ]));
+    let back = column_round_trip(&column, &DataType::Utf8View, 3).unwrap();
+    assert_eq!(back.as_ref(), column.as_ref());
+}
+
+#[test]
+fn a_result_of_another_type_is_rejected() {
+    let column: ArrayRef = Arc::new(StringArray::from(vec!["x", "y"]));
+    let err = column_round_trip(&column, &DataType::Utf8View, 2).unwrap_err();
+    assert!(
+        err.to_string().contains("where Utf8View was declared"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_result_of_another_length_is_rejected() {
+    let column: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+    let err = column_round_trip(&column, &DataType::Int64, 2).unwrap_err();
+    assert!(err.to_string().contains("3 rows for 2"), "{err}");
+}
+
+#[test]
+fn a_dictionary_of_the_declared_type_is_rejected_not_reinterpreted() {
+    let dict: arrow_array::DictionaryArray<arrow_array::types::Int32Type> =
+        vec!["a", "b", "a"].into_iter().collect();
+    let column: ArrayRef = Arc::new(dict);
+    assert!(column_round_trip(&column, &DataType::Utf8, 3).is_err());
+}
+
+#[test]
+fn an_array_is_consumed_once() {
+    let column: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+    let (schema, mut array) = ffi::export_column(&column).unwrap();
+    // SAFETY: live structs from `export_column`; the second call sees the
+    // released array the first left behind.
+    let first =
+        unsafe { ffi::import_column(&raw const schema, &raw mut array, &DataType::Int64, 2) };
+    assert!(first.is_ok());
+    // SAFETY: as above.
+    let second =
+        unsafe { ffi::import_column(&raw const schema, &raw mut array, &DataType::Int64, 2) };
+    assert!(second.unwrap_err().to_string().contains("already consumed"));
+}
+
+#[test]
+fn an_exported_column_not_imported_releases_on_drop() {
+    // Miri reports a leak or a double free if `release` is not run once.
+    let column: ArrayRef = Arc::new(StringArray::from(vec![Some("kept"), None]));
+    let (schema, array) = ffi::export_column(&column).unwrap();
+    drop((schema, array));
+    assert_eq!(column.len(), 2);
+}

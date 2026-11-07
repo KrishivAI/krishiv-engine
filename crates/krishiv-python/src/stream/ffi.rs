@@ -709,6 +709,96 @@ pub(crate) unsafe fn import_array(
     validated_batch(table, &data)
 }
 
+/// Exports one column (a Python UDF's argument) as a C schema and array
+/// pair for the `arrow_schema` and `arrow_array` capsules. The array keeps
+/// the column's buffers alive until its `release` runs; a sliced column
+/// keeps its offset.
+///
+/// # Errors
+/// [`KrishivInvalidArrowData`] for a type the C data interface cannot
+/// carry.
+pub(crate) fn export_column(
+    column: &arrow_array::ArrayRef,
+) -> Result<(FFI_ArrowSchema, FFI_ArrowArray), KrishivError> {
+    let field = Field::new("", column.data_type().clone(), true);
+    let schema = FFI_ArrowSchema::try_from(&field).map_err(|e| invalid(arrow_message(&e)))?;
+    let data = column.to_data();
+    let array = catch_panic(|| FFI_ArrowArray::new(&data))?;
+    Ok((schema, array))
+}
+
+/// Imports one `ArrowArray` + `ArrowSchema` pair (a Python UDF's result) as
+/// one column of exactly `declared` with `rows` values. Imports are
+/// untrusted: the header is checked, the data validated in full and arrow-rs
+/// panics contained before anything reads a value. A different type (a
+/// dictionary or run-end encoding of `declared` included) is rejected, never
+/// reinterpreted: the converters cast a result to the declared type before
+/// they export it (design P2-T059 §7 item 9).
+///
+/// # Safety
+///
+/// As [`import_array`]: `schema` is only borrowed, `array` is moved out of.
+///
+/// # Errors
+/// [`KrishivInvalidArrowData`] for a consumed, malformed or invalid array,
+/// another type than `declared`, or another length than `rows`.
+pub(crate) unsafe fn import_column(
+    schema: *const FFI_ArrowSchema,
+    array: *mut FFI_ArrowArray,
+    declared: &DataType,
+    rows: usize,
+) -> Result<arrow_array::ArrayRef, KrishivError> {
+    aligned(schema, "schema")?;
+    aligned(array, "array")?;
+    // SAFETY: the caller guarantees `array` is a valid, initialized C array
+    // we may move out of, and it is aligned (checked); `from_raw` leaves a
+    // released one behind.
+    let array = unsafe { FFI_ArrowArray::from_raw(array) };
+    if array.is_released() {
+        return Err(invalid("the Arrow array was already consumed"));
+    }
+    // SAFETY: the caller guarantees `schema` points to a C schema.
+    unsafe { check_schema(schema) }?;
+    // SAFETY: checked above; it is borrowed, never moved or released.
+    let schema = unsafe { &*schema };
+    let field = catch_panic(|| Field::try_from(schema))?.map_err(|e| {
+        invalid(format!(
+            "the result's schema is invalid: {}",
+            arrow_message(&e)
+        ))
+    })?;
+    if field.data_type() != declared {
+        return Err(invalid(format!(
+            "a Python UDF returned {} where {declared} was declared",
+            field.data_type()
+        )));
+    }
+    // SAFETY: `array` is the producer's C array of `declared`, read from its
+    // own schema (equal, checked above).
+    unsafe { check_array(&raw const array, declared) }?;
+    let data = catch_panic(|| {
+        // SAFETY: `array` is the producer's C array of `declared`, its
+        // header checked above (only its pointers and the sizes they point to
+        // are trusted); the values are validated in full before anything
+        // reads them.
+        unsafe { arrow_array::ffi::from_ffi_and_data_type(array, declared.clone()) }
+    })?
+    .map_err(|e| {
+        invalid(format!(
+            "importing the result failed: {}",
+            arrow_message(&e)
+        ))
+    })?;
+    catch_panic(|| data.validate_full())?.map_err(|e| invalid(arrow_message(&e)))?;
+    if data.len() != rows {
+        return Err(invalid(format!(
+            "a Python UDF returned {} rows for {rows}",
+            data.len()
+        )));
+    }
+    catch_panic(|| arrow_array::make_array(data))
+}
+
 /// A reader over batches already in memory.
 #[derive(Debug)]
 pub(crate) struct MemoryReader {
