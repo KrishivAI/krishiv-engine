@@ -1829,11 +1829,7 @@ impl DataFrame {
             .analyzed
             .output
             .iter()
-            .map(|c| TableColumn {
-                name: c.name.clone(),
-                data_type: c.data_type.clone(),
-                nullable: c.nullable,
-            })
+            .map(|c| TableColumn::new(c.name.clone(), c.data_type.clone(), c.nullable))
             .collect();
         // A view over files keeps listing them: files added or changed
         // later show up in the next query.

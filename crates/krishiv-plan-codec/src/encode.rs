@@ -528,6 +528,7 @@ impl Encoder {
                 .iter()
                 .map(|f| exchange_filter(f, &self.nested))
                 .collect(),
+            schema: exchange.schema.as_deref().map(schema_bytes),
         })
     }
 

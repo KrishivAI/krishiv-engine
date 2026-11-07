@@ -305,3 +305,49 @@ fn an_expression_key_and_an_unknown_legacy_value_are_refused() -> R {
     );
     Ok(())
 }
+
+/// `SELECT DISTINCT u.k` where `u.k = t.k`: the value is the correlated key
+/// itself, so the grouping column is also the join key. Rows are worked out from
+/// the data (t.k is 1, 2, 3, NULL; u.k is 1, 1, 2, NULL, and the NULL key never
+/// matches an outer row) and match the explicit form. The column's type and
+/// nullability are not checked here.
+#[test]
+fn a_distinct_of_the_correlated_key_is_the_key_or_null() -> R {
+    let s = session()?;
+    let sub = "select k, (select distinct u.k from u where u.k = t.k) from t";
+    let join = "select t.k, m.k from t left join (select distinct k from u) m on t.k = m.k";
+    assert_eq!(run(&s, sub)?, run(&s, join)?, "{sub}");
+    assert_eq!(
+        run(&s, sub)?,
+        rows(&["1|1", "2|2", "3|NULL", "NULL|NULL"]),
+        "{sub}"
+    );
+    Ok(())
+}
+
+/// KNOWN GAP, not Spark behaviour: under the legacy count flag Spark most likely
+/// answers a bare grouping column (NULL over an empty group, as the other
+/// non-count values), but the value over no rows of a bare column is not worked
+/// out here, so Krishiv refuses it rather than guess. Without the flag it is
+/// answered. A Spark run should decide whether the refusal can go.
+#[test]
+fn the_legacy_flag_refuses_a_bare_column_value() -> R {
+    let s = session()?;
+    let q = "select k, (select distinct y from u where u.k = t.k and y > 6) from t";
+    assert_eq!(
+        run(&s, q)?,
+        rows(&["1|7", "2|9", "3|NULL", "NULL|NULL"]),
+        "{q}"
+    );
+    run(
+        &s,
+        "set spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled=true",
+    )?;
+    let e = run(&s, q).expect_err(q).to_string();
+    assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{q}: {e}");
+    assert!(
+        e.contains("whose value over no rows is not NULL or a count"),
+        "{q}: {e}"
+    );
+    Ok(())
+}
