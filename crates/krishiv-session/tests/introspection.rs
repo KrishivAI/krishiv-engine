@@ -460,6 +460,12 @@ fn column_comments_follow_columns_through_queries() {
         comments("SELECT * FROM v2"),
         pairs(&[("x", "ca"), ("y", "cb")])
     );
+    // A DataFrame's temporary view holds its analyzed plan: a read of it keeps the scan's comments.
+    block_on(s.table("t").create_or_replace_temp_view("dv")).unwrap();
+    assert_eq!(
+        comments("SELECT a, c FROM dv"),
+        pairs(&[("a", "ca"), ("c", "NULL")])
+    );
     // A changed comment is not served from a cached analysis (the catalog epoch is in its fingerprint).
     assert_eq!(comments("SELECT a FROM t"), pairs(&[("a", "ca")]));
     run(&s, "ALTER TABLE t ALTER COLUMN a COMMENT 'new'");
