@@ -525,3 +525,6 @@ pub(crate) fn store_state(global: &GlobalState) -> Result<GlobalState> {
         &global_ref::<EvalGlobal>(global, "PythonEval")?.store,
     ))
 }
+
+#[cfg(test)]
+mod tests;
