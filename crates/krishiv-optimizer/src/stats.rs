@@ -103,6 +103,10 @@ pub enum StatSource {
     /// Bounded by an integral column's exact range (`c_nationkey` in
     /// `0..=24` has at most 25 values), from the table's bounds.
     IntegralRange,
+    /// Estimated from the first rows of the table's files, read when the
+    /// query was planned (P2-T164 U6): exact for a table the sample read
+    /// whole, else extrapolated (GEE).
+    Sampled,
     /// Reported by the table provider (Parquet footers, table-format
     /// metadata) or supplied with the table.
     #[default]

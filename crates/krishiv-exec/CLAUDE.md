@@ -19,7 +19,7 @@ immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) 
 `hash.rs` shared hash-table blocks (seeded key hash, key normalization + row encoding, `KeyTable`, spill
 partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
 `accumulator.rs` per-group states, `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
-`spill_global`), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
+`spill_global`; `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
 (P2-T117b) `file_scan.rs` FileScan/FileScanSource over any `krishiv_io::FileFormat` (Spark partitions cut into
 about four morsels per driver, footer read-ahead, `_metadata` struct column; filters stay `Inexact`) · `file_write.rs` FileWriteSink
 (one writer task per driver behind a bounded channel; nothing visible after a failed or cancelled write) + FileWrite.
@@ -32,8 +32,9 @@ sink (also the runtime filter producer, P2-T163: per-driver partials, published 
 (P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
 broadcast exchange builds its table once per job and worker (its own query over the resource's pool, no spill, its
 reservations never abort a query) and every task probes it through a `PrebuiltSink` that republishes its runtime
-filters. A shared build that does not fit (`UNABLE_TO_ACQUIRE_MEMORY`) falls back to one spilling build per task
-(`SharedOrOwnRows` then reads the broadcast for the task; owner decision 2026-11-06).
+filters. A shared build that does not fit (`UNABLE_TO_ACQUIRE_MEMORY`, or past `krishiv.exec.join.sharedBroadcastBytes`, the
+worker's cap per query) falls back to one spilling build per task (`SharedOrOwnRows` then reads the broadcast for the
+task; owner decision 2026-11-06); each task's build reports `broadcast_shared` or `broadcast_fallback` (count 1).
 `join/merge.rs` sort-merge join (P2-T056): `SortMergeJoin` is the source over two `Sort`s in hash buckets of the keys
 (`Sort::bucket_reader`, `PipelineBuilder::set_merge_source`), `Merge` the merge of one bucket pair; a key's right rows
 are the group, spilled past `krishiv.exec.join.smj.bufferBytes`; `join/fallback.rs` runs a grace partition that will not
@@ -118,6 +119,7 @@ Paths are relative to this crate.
   tables place rows by the seeded `g = finalize(h, seed)`; `rows/flooding_tests.rs` bounds probe runs under crafted and forged `h` collisions
 - `src/window/mod.rs` window operator and plan types; `src/window/eval.rs` frames, ranking and frame aggregates; `src/planner/window.rs` plans it over sorted input
 - `src/operators/file_scan.rs` and `file_write.rs` file scan and write operators over `krishiv-io`
+- `src/planner/ndv_sample.rs` (P2-T164 U6) `FileTable::sample_distinct`: plan-time distinct-value samples of the file columns an equality or `IN` compares (first rows in file order through `ScanStream`, `krishiv.optimizer.ndvSampling.*`), exact for a table the sample read whole, else GEE (`estimate`); cached in `krishiv_io::DistinctSamples`; `FileTable::statistics` reports them as `StatSource::Sampled`
 
 ## Extension points
 - New operator: follow skill `krishiv-operator`; stateless ones go in `src/operators/`, stateful ones next to aggregate or join.
