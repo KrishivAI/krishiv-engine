@@ -9,25 +9,72 @@ use std::sync::Arc;
 
 use super::bind::addr;
 use super::ops::col_expr;
-use super::subquery::{R, Rewriter, alias, inner_columns, node, output, reads_left, subqueries};
+use super::subquery::{
+    R, Rewriter, alias, conjuncts, inner_columns, node, output, reads_left, subqueries,
+};
 use crate::{
-    AttrId, BoundColumn, Expr, ExprNode, JoinKind, LogicalPlan, Origin, PlanNode, SubqueryKind,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, JoinKind, LogicalPlan, Origin,
+    PlanNode, ResolvedExpr, SubqueryKind,
 };
 
 /// The conjuncts of a join condition after the lift, and the join's left and right inputs.
 type Lifted = (Vec<Arc<Expr>>, Arc<LogicalPlan>, Arc<LogicalPlan>);
 
 impl Rewriter {
-    /// Whether a join with condition `on` is rewritten by `join()`: it holds a subquery that
-    /// becomes a join or a lifted column, and its right side is not a LATERAL one (which reads
-    /// the left and keeps the lateral rewrite).
+    /// Whether a join of `kind` with condition `on` is rewritten by `join()`: it holds a subquery
+    /// that becomes a join, or one whose lift the join needs (see [`Self::needs_lift`]), and its
+    /// right side is not a LATERAL one (which reads the left and keeps the lateral rewrite).
     pub(super) fn joins_here(
         &mut self,
         on: &Arc<Expr>,
+        kind: &JoinKind,
         left: &Arc<LogicalPlan>,
         right: &Arc<LogicalPlan>,
     ) -> bool {
-        self.existential(on) || (self.liftable(on) && !reads_left(left, right))
+        if self.existential(on) {
+            return true;
+        }
+        if reads_left(left, right) {
+            return false;
+        }
+        let (Ok(l), Ok(r)) = (output(left), output(right)) else {
+            return false;
+        };
+        let ids = [
+            l.iter().map(|c| c.id).collect::<HashSet<_>>(),
+            r.iter().map(|c| c.id).collect::<HashSet<_>>(),
+        ];
+        conjuncts(on)
+            .iter()
+            .any(|c| self.needs_lift(c, kind, &ids[0], &ids[1]))
+    }
+
+    /// Whether the conjunct `c` of a join of `kind` holds an uncorrelated `EXISTS` or scalar
+    /// subquery that the join cannot evaluate where it stands, so it must be lifted. A subquery
+    /// the planner already pushes into one input as a filter is left alone, so those plans do not
+    /// change: a FULL OUTER join takes none in its condition; any join takes none under an `OR`;
+    /// a LEFT join takes none in a condition on the left (preserved) input alone, a RIGHT join
+    /// none on the right alone.
+    fn needs_lift(
+        &mut self,
+        c: &Arc<Expr>,
+        kind: &JoinKind,
+        left_ids: &HashSet<AttrId>,
+        right_ids: &HashSet<AttrId>,
+    ) -> bool {
+        if !self.liftable(c) {
+            return false;
+        }
+        let cols = inner_columns(c);
+        let on_side =
+            |ids: &HashSet<AttrId>| !cols.is_empty() && cols.iter().all(|x| ids.contains(&x.id));
+        match kind {
+            JoinKind::FullOuter => true,
+            _ if has_or(c) => true,
+            JoinKind::LeftOuter => on_side(left_ids),
+            JoinKind::RightOuter => on_side(right_ids),
+            _ => false,
+        }
     }
 
     /// Whether `e` holds an uncorrelated `EXISTS` or scalar subquery: what a join condition
@@ -72,23 +119,36 @@ impl Rewriter {
         })
     }
 
-    /// [`Self::lift_exists`] for both inputs of a join: a conjunct that reads only `right`'s
-    /// columns lifts onto the right input (so it can still be pushed into it as a filter), every
-    /// other onto the left. Returns the conjuncts and the two inputs.
+    /// [`Self::lift_exists`] for both inputs of a join, for the conjuncts that need it (see
+    /// [`Self::needs_lift`]): one that reads only `right`'s columns lifts onto the right input (so
+    /// it can still be pushed into it as a filter), every other onto the left. Returns the
+    /// conjuncts and the two inputs.
     pub(super) fn lift_sides(
         &mut self,
         conds: Vec<Arc<Expr>>,
+        kind: &JoinKind,
         left: Arc<LogicalPlan>,
         right: Arc<LogicalPlan>,
-        right_ids: &HashSet<AttrId>,
+        ids: [&HashSet<AttrId>; 2],
     ) -> R<Lifted> {
-        let (to_right, to_left): (Vec<_>, Vec<_>) = conds.into_iter().partition(|c| {
-            let cols = inner_columns(c);
-            !cols.is_empty() && cols.iter().all(|x| right_ids.contains(&x.id))
-        });
+        let (mut keep, mut to_left, mut to_right) = (Vec::new(), Vec::new(), Vec::new());
+        for c in conds {
+            if !self.needs_lift(&c, kind, ids[0], ids[1]) {
+                keep.push(c);
+                continue;
+            }
+            let cols = inner_columns(&c);
+            if !cols.is_empty() && cols.iter().all(|x| ids[1].contains(&x.id)) {
+                to_right.push(c);
+            } else {
+                to_left.push(c);
+            }
+        }
         let (to_left, left) = self.lift_exists(to_left, left)?;
         let (to_right, right) = self.lift_exists(to_right, right)?;
-        Ok((to_left.into_iter().chain(to_right).collect(), left, right))
+        keep.extend(to_left);
+        keep.extend(to_right);
+        Ok((keep, left, right))
     }
 
     /// `conds` with each uncorrelated `EXISTS` or scalar subquery replaced by a column that
@@ -138,4 +198,22 @@ impl Rewriter {
             node(PlanNode::Project { input: side, exprs }, origin),
         ))
     }
+}
+
+/// Whether `e` has an `OR` anywhere in it.
+fn has_or(e: &Arc<Expr>) -> bool {
+    let mut seen = HashSet::new();
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(x) = stack.pop() {
+        if !seen.insert(addr(&*x)) {
+            continue;
+        }
+        if matches!(&x.node, ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.id == FunctionId::Builtin(Builtin::Or))
+        {
+            return true;
+        }
+        x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+    }
+    false
 }

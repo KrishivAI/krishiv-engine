@@ -577,7 +577,7 @@ impl Rewriter {
                 right,
                 kind,
                 condition: JoinCondition::On(on),
-            } if self.joins_here(on, left, right) => self.join(&p, left, right, kind, on),
+            } if self.joins_here(on, kind, left, right) => self.join(&p, left, right, kind, on),
             PlanNode::Join {
                 left,
                 right,
@@ -891,7 +891,7 @@ impl Rewriter {
             r = joined;
             plain.extend(conds);
         }
-        let (plain, l, r) = self.lift_sides(plain, l, r, &right_ids)?;
+        let (plain, l, r) = self.lift_sides(plain, kind, l, r, [&left_ids, &right_ids])?;
         if plain.iter().any(|c| self.reads_correlated(c)) {
             return Err(unsupported(
                 "correlated subqueries outside a filter or a projection",
