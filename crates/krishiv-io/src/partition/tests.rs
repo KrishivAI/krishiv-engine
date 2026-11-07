@@ -5,13 +5,13 @@
 use std::sync::Arc;
 
 use arrow_array::{
-    ArrayRef, BooleanArray, Date32Array, Decimal128Array, Int32Array, Int64Array, StringArray,
-    StringViewArray, TimestampMicrosecondArray,
+    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Decimal128Array, Int32Array,
+    Int64Array, LargeBinaryArray, StringArray, StringViewArray, TimestampMicrosecondArray,
 };
 
 use super::{
-    DEFAULT_PARTITION, escape_partition_value, partition_dir_name, partition_segments,
-    partition_texts, spark_partitioned_file_name,
+    DEFAULT_PARTITION, check_partition_column, escape_partition_value, partition_dir_name,
+    partition_segments, partition_texts, spark_partitioned_file_name,
 };
 
 /// Every ASCII code point against the expected table, written out: the
@@ -143,9 +143,19 @@ fn timestamps_render_in_the_session_zone() {
         partition_texts(&ts, Some(19_800)).unwrap(),
         [Some("1970-01-01 05:30:00".to_owned())]
     );
-    // A session zone that is not a fixed offset cannot render them.
+    // A region zone renders them in its rules (Spark 4.2.0: the epoch in Los Angeles is 16:00 the day before).
+    let la = krishiv_kernels::datetime::resolve_zone("America/Los_Angeles").unwrap();
+    assert_eq!(
+        super::partition_texts_in(&ts, Some(&la)).unwrap(),
+        [Some("1969-12-31 16:00:00".to_owned())]
+    );
+    // Without a known session zone they cannot be rendered.
     let e = partition_texts(&ts, None).unwrap_err();
-    assert!(e.to_string().contains("fixed offset"), "{e}");
+    assert!(
+        e.to_string()
+            .contains("session time zone that is not known"),
+        "{e}"
+    );
     // Other types do not depend on the zone.
     let ints: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![7]));
     assert_eq!(
@@ -191,4 +201,37 @@ fn repeated_brace_groups_are_bounded() {
     assert!(err.contains("alternatives"), "{err}");
     // A reasonable number still works.
     assert!(crate::partition::glob::Glob::parse(&"{a,b}".repeat(8)).is_ok());
+}
+
+/// A binary value renders as its bytes' UTF-8 text (Spark 4.2.0 `B=SPARK`, `b=é`), a malformed sequence as U+FFFD,
+/// on every binary carrier; NULL stays NULL and the empty value is the default partition.
+#[test]
+fn binary_values_render_as_their_utf8_text() {
+    let values: Vec<Option<&[u8]>> = vec![
+        Some(b"SPARK"),
+        Some("é".as_bytes()),
+        Some(&[0xFF, b'a']),
+        None,
+        Some(b""),
+    ];
+    let want = vec![
+        Some("SPARK".to_owned()),
+        Some("é".to_owned()),
+        Some("\u{FFFD}a".to_owned()),
+        None,
+        Some(String::new()),
+    ];
+    let columns: [ArrayRef; 3] = [
+        Arc::new(BinaryArray::from(values.clone())),
+        Arc::new(LargeBinaryArray::from(values.clone())),
+        Arc::new(BinaryViewArray::from(values)),
+    ];
+    for column in &columns {
+        assert_eq!(partition_texts(column, None).unwrap(), want);
+        check_partition_column("b", column.data_type()).unwrap();
+        assert_eq!(
+            partition_segments(&[Arc::clone(column)], None).unwrap()[4],
+            [DEFAULT_PARTITION]
+        );
+    }
 }

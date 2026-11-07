@@ -21,7 +21,7 @@
 use arrow_array::ArrayRef;
 use arrow_array::cast::AsArray;
 use arrow_schema::DataType;
-use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, cast};
+use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, TimeZoneRules, cast};
 
 use crate::error::{Result, internal, unsupported};
 
@@ -122,6 +122,22 @@ pub fn partition_dir_name(names: &[String], segments: &[String]) -> String {
 /// cannot render as a string, and for a timestamp column when the session
 /// time zone is not a fixed offset (`zone` is `None`).
 pub fn partition_texts(column: &ArrayRef, zone: Option<i32>) -> Result<Vec<Option<String>>> {
+    match zone {
+        Some(offset) => partition_texts_in(column, Some(&FixedOffset(offset))),
+        None => partition_texts_in(column, None),
+    }
+}
+
+/// [`partition_texts`] in the session zone's rules `zone` (a fixed offset or a region such as
+/// `America/Los_Angeles`, as Spark renders a timestamp partition value in the session zone); `None` when the
+/// session zone is unknown, which refuses a zoned timestamp column.
+///
+/// # Errors
+/// As [`partition_texts`].
+pub fn partition_texts_in(
+    column: &ArrayRef,
+    zone: Option<&dyn TimeZoneRules>,
+) -> Result<Vec<Option<String>>> {
     match column.data_type() {
         DataType::Utf8 => Ok(column
             .as_string::<i32>()
@@ -138,26 +154,39 @@ pub fn partition_texts(column: &ArrayRef, zone: Option<i32>) -> Result<Vec<Optio
             .iter()
             .map(|v| v.map(str::to_owned))
             .collect()),
+        // Spark's `CAST(binary AS STRING)` keeps the bytes; the path is their UTF-8 text, a malformed sequence as
+        // U+FFFD (Java's `new String(bytes, UTF_8)`, Spark 4.2.0: `B=SPARK`, `b=é`).
+        DataType::Binary => Ok(lossy(column.as_binary::<i32>().iter())),
+        DataType::LargeBinary => Ok(lossy(column.as_binary::<i64>().iter())),
+        DataType::BinaryView => Ok(lossy(column.as_binary_view().iter())),
         _ => {
-            let zone = match (zone, column.data_type()) {
-                (Some(offset), _) => FixedOffset(offset),
+            let utc = FixedOffset(0);
+            let zone: &dyn TimeZoneRules = match (zone, column.data_type()) {
+                (Some(zone), _) => zone,
                 (None, DataType::Timestamp(_, Some(_))) => {
                     return Err(unsupported(
-                        "partitioning by a timestamp column in a session time zone other than a fixed offset"
+                        "partitioning by a timestamp column in a session time zone that is not known"
                             .to_owned(),
                     ));
                 }
-                (None, _) => FixedOffset(0),
+                (None, _) => &utc,
             };
             let opts = CastOptions {
                 mode: CastMode::Legacy,
-                time_zone: &zone,
+                time_zone: zone,
             };
             let strings = cast(column, &DataType::Utf8, &opts)?;
             let strings = strings.as_string::<i32>();
             Ok(strings.iter().map(|v| v.map(str::to_owned)).collect())
         }
     }
+}
+
+/// Each value's bytes as UTF-8 text, a malformed sequence as U+FFFD.
+fn lossy<'a>(values: impl Iterator<Item = Option<&'a [u8]>>) -> Vec<Option<String>> {
+    values
+        .map(|v| v.map(|b| String::from_utf8_lossy(b).into_owned()))
+        .collect()
 }
 
 /// One partition path segment per row of `columns` (in column order):
@@ -220,12 +249,18 @@ pub fn renders_as_string(data_type: &DataType) -> bool {
     )
 }
 
-/// Checks that the partition column of `data_type` can be rendered.
+/// Checks that the partition column of `data_type` can be rendered: a type [`renders_as_string`] accepts, or a
+/// binary carrier (its bytes as text, [`partition_texts`]).
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for any other type.
 pub fn check_partition_column(name: &str, data_type: &DataType) -> Result<()> {
-    if renders_as_string(data_type) {
+    if renders_as_string(data_type)
+        || matches!(
+            data_type,
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+        )
+    {
         Ok(())
     } else {
         Err(unsupported(format!(
