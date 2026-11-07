@@ -41,9 +41,11 @@ use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::operators::{global_ref, local_mut};
-use crate::physical::{ExchangeId, HashScheme, Partitioning};
+use crate::physical::{ExchangeFilterPlan, ExchangeId, HashScheme, Partitioning, ValueId, Version};
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::sync::{Mutex, lock};
+use crate::values::{Partial, Producer, Value, ValueService};
+use krishiv_io::{DisabledReason, FilterSnapshot, KeyFilterBuilder};
 
 /// Rows buffered per reduce partition before they go out as one frame.
 const FRAME_ROWS: usize = 8192;
@@ -199,6 +201,10 @@ pub struct ExchangeSink {
     partitions: u32,
     partitioning: Partitioning,
     schema: SchemaRef,
+    /// The runtime filters collected from the rows written, and where
+    /// they are published (design P2-T177, cross-stage filters).
+    filters: Vec<ExchangeFilterPlan>,
+    publisher: Option<(Arc<dyn ValueService>, Producer)>,
 }
 
 impl fmt::Debug for ExchangeSink {
@@ -214,6 +220,16 @@ impl fmt::Debug for ExchangeSink {
 struct SinkGlobal {
     /// `None` once committed.
     writer: Mutex<Option<Box<dyn ExchangeWriter>>>,
+    /// The drivers' filter partials merged so far (`None`: a filter whose
+    /// partial was lost, published as disabled).
+    filters: Mutex<Vec<Option<KeyFilterBuilder>>>,
+    /// The drivers' reservations of those partials, held until they are
+    /// published (I11).
+    filter_memory: Mutex<Vec<Reservation>>,
+    /// The published filters' memory, held with the sink's state: a final
+    /// filter that does not fit is published as its min/max range only, as
+    /// a join build's.
+    published: Mutex<Option<Reservation>>,
 }
 
 struct SinkLocal {
@@ -224,6 +240,9 @@ struct SinkLocal {
     reservation: Reservation,
     signal: Arc<SpillSignal>,
     routes: Vec<u32>,
+    /// This driver's filter partials and the memory they hold.
+    filters: Vec<Option<KeyFilterBuilder>>,
+    filter_memory: Reservation,
 }
 
 #[derive(Default)]
@@ -260,7 +279,75 @@ impl ExchangeSink {
             partitions,
             partitioning,
             schema,
+            filters: Vec::new(),
+            publisher: None,
         })
+    }
+
+    /// The same sink collecting `filters` from the rows it writes and
+    /// publishing them into `values` as `producer`'s partials once its
+    /// output committed (design P2-T177, cross-stage filters).
+    #[must_use]
+    pub fn with_filters(
+        mut self,
+        filters: Vec<ExchangeFilterPlan>,
+        values: Arc<dyn ValueService>,
+        producer: Producer,
+    ) -> Self {
+        self.filters = filters;
+        self.publisher = Some((values, producer));
+        self
+    }
+
+    fn partials(&self) -> Vec<Option<KeyFilterBuilder>> {
+        self.filters
+            .iter()
+            .map(|f| KeyFilterBuilder::new(f.key_type.clone(), f.options))
+            .collect()
+    }
+
+    /// Adds the keys of `batch` to the driver's partials, reserving what
+    /// they grew by; Bloom filters are dropped when that fails (an
+    /// optional filter never waits for memory).
+    fn collect(&self, l: &mut SinkLocal, batch: &RecordBatch) {
+        for (b, f) in l.filters.iter_mut().zip(&self.filters) {
+            let ok = match (b.as_mut(), batch.columns().get(f.column)) {
+                // As the join's build: a NULL key matches nothing unless
+                // the key is null-safe.
+                (Some(builder), Some(k)) => {
+                    let keep = if f.null_safe { None } else { k.logical_nulls() };
+                    builder.add(k.as_ref(), keep.as_ref()).is_ok()
+                }
+                _ => false,
+            };
+            if !ok {
+                *b = None;
+            }
+        }
+        let want: usize = l
+            .filters
+            .iter()
+            .flatten()
+            .map(KeyFilterBuilder::heap_bytes)
+            .sum();
+        let held = l.filter_memory.size();
+        if want > held && l.filter_memory.try_grow(want - held).is_err() {
+            for b in l.filters.iter_mut().flatten() {
+                b.drop_bloom();
+            }
+            let want: usize = l
+                .filters
+                .iter()
+                .flatten()
+                .map(KeyFilterBuilder::heap_bytes)
+                .sum();
+            if want < held {
+                l.filter_memory.shrink(held - want);
+            } else {
+                // The few value-set bytes left are not worth failing over.
+                let _ = l.filter_memory.try_grow(want - held);
+            }
+        }
     }
 
     /// Writes partition `p`'s buffered rows as one frame and frees their
@@ -305,6 +392,9 @@ impl Sink for ExchangeSink {
                 .writer(self.output, self.partitions, Arc::clone(&self.schema))?;
         Ok(Arc::new(SinkGlobal {
             writer: Mutex::new(Some(writer)),
+            filters: Mutex::new(self.partials()),
+            filter_memory: Mutex::default(),
+            published: Mutex::default(),
         }))
     }
 
@@ -320,6 +410,8 @@ impl Sink for ExchangeSink {
             reservation: memory.reservation(),
             signal: Arc::clone(memory.signal()),
             routes: Vec::new(),
+            filters: self.partials(),
+            filter_memory: memory.reservation(),
         }))
     }
 
@@ -337,6 +429,10 @@ impl Sink for ExchangeSink {
         let bytes = data.get_array_memory_size();
         if l.reservation.try_grow(bytes).is_err() {
             return Ok(SinkStatus::NeedMemory { bytes });
+        }
+        // Taken from here on (a `NeedMemory` retry would count it twice).
+        if !self.filters.is_empty() {
+            self.collect(l, data);
         }
         let mut routes = std::mem::take(&mut l.routes);
         route(&self.partitioning, data, self.partitions, &mut routes)?;
@@ -380,20 +476,70 @@ impl Sink for ExchangeSink {
             .downcast::<SinkLocal>()
             .map_err(|_| internal("wrong local state for ExchangeSink".to_owned()))?;
         self.emit_all(&mut l)?;
+        if !self.filters.is_empty() {
+            let g = global_ref::<SinkGlobal>(&l.global, "ExchangeSink")?;
+            let mut merged = lock(&g.filters);
+            for (dst, src) in merged.iter_mut().zip(std::mem::take(&mut l.filters)) {
+                *dst = match (dst.take(), src) {
+                    (Some(mut a), Some(b)) => {
+                        a.merge(b);
+                        Some(a)
+                    }
+                    _ => None,
+                };
+            }
+            drop(merged);
+            let memory = l.filter_memory.split(usize::MAX);
+            lock(&g.filter_memory).push(memory);
+        }
         Ok(())
     }
 
     fn finalize<'a>(
         &'a self,
         global: &'a GlobalState,
-        _ctx: &'a TaskContext,
+        ctx: &'a TaskContext,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let g = global_ref::<SinkGlobal>(global, "ExchangeSink")?;
             let writer = lock(&g.writer)
                 .take()
                 .ok_or_else(|| internal("an exchange committed twice".to_owned()))?;
-            writer.commit()
+            writer.commit()?;
+            // Published only once the rows are visible: a partial whose
+            // output never committed is never merged.
+            if let Some((values, producer)) = &self.publisher {
+                let partials = std::mem::take(&mut *lock(&g.filters));
+                let finished: Vec<_> = partials
+                    .into_iter()
+                    .map(|b| b.map(KeyFilterBuilder::finish))
+                    .collect();
+                // The partials are gone: their memory funds the final
+                // filters, each reserved before it is published.
+                lock(&g.filter_memory).clear();
+                let mut held = ctx.consumer().reservation();
+                for (f, keys) in self.filters.iter().zip(finished) {
+                    let snapshot = keys.map_or(
+                        FilterSnapshot::Disabled(DisabledReason::ProducerFailed),
+                        |keys| {
+                            let keys = if held.try_grow(keys.heap_bytes()).is_ok() {
+                                keys
+                            } else {
+                                keys.range_only()
+                            };
+                            FilterSnapshot::Final(Arc::new(keys))
+                        },
+                    );
+                    values.publish(Partial {
+                        value: ValueId::Filter(f.id),
+                        version: Version::BATCH,
+                        producer: *producer,
+                        payload: Value::Filter(snapshot),
+                    })?;
+                }
+                *lock(&g.published) = Some(held);
+            }
+            Ok(())
         })
     }
 
