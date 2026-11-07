@@ -261,20 +261,47 @@ async fn a_call_in_a_grouping_key_is_evaluated_below_the_aggregate() {
     assert_eq!(got, vec![Some(5), Some(5)]);
 }
 
+/// Two-argument `x + y` registered as `py_add` (both `bigint`).
+fn add_def() -> PythonUdfDef {
+    PythonUdfDef {
+        name: "py_add".to_owned(),
+        eval_type: PythonEvalType::ArrowBatched,
+        return_type: DataType::Long,
+        deterministic: true,
+        thread_safe: true,
+    }
+}
+
 #[tokio::test]
-async fn a_call_in_an_outer_join_condition_is_refused() {
+async fn a_call_reading_one_side_of_an_outer_join_is_evaluated_below_it() {
+    // Spark 4.2.0 accepts `f(a.id) = b.id` for every join type
+    // (research/spark-notes/python-udf-errors.md §2).
     let (s, _) = session(None);
     s.register_python_udf(plus_one_def("py_plus"));
-    let err = match s
-        .sql("SELECT * FROM range(3) a LEFT JOIN range(3) b ON py_plus(a.id) = b.id")
-        .await
-    {
-        Ok(df) => df.collect().await.unwrap_err(),
-        Err(e) => e,
-    };
-    assert_eq!(
-        err.error_class(),
-        ErrorClass::UnsupportedFeaturePythonUdfInOnClause,
-        "{err}"
-    );
+    let got = longs(
+        &s,
+        "SELECT b.id FROM range(3) a LEFT JOIN range(3) b ON py_plus(a.id) = b.id ORDER BY a.id",
+    )
+    .await;
+    assert_eq!(got, vec![Some(1), Some(2), None]);
+}
+
+#[tokio::test]
+async fn a_call_reading_both_sides_of_an_outer_join_is_refused_with_its_join_type() {
+    let (s, _) = session(None);
+    s.register_python_udf(add_def());
+    for (join, name) in [("LEFT JOIN", "LEFT OUTER"), ("LEFT ANTI JOIN", "LEFT ANTI")] {
+        let sql =
+            format!("SELECT a.id FROM range(3) a {join} range(3) b ON py_add(a.id, b.id) = 2");
+        let err = match s.sql(&sql).await {
+            Ok(df) => df.collect().await.unwrap_err(),
+            Err(e) => e,
+        };
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::UnsupportedFeaturePythonUdfInOnClause,
+            "{join}: {err}"
+        );
+        assert!(err.to_string().contains(name), "{join}: {err}");
+    }
 }

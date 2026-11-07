@@ -64,9 +64,24 @@ impl Planner<'_> {
             return self.join_with_python_udfs(left, right, kind, on);
         }
         let hints = (self.side_hint(left), self.side_hint(right));
-        let logical = (Arc::clone(left), Arc::clone(right));
-        let left = self.plan(left)?;
-        let right = self.plan(right)?;
+        let planned = (self.plan(left)?, self.plan(right)?);
+        self.join_planned((left, right), planned, hints, kind, on)
+    }
+
+    /// [`Self::join`] over inputs already planned: `logical` are the inputs
+    /// as written (their statistics decide the build side), `planned` what
+    /// they were planned to (a side may hold more columns than its logical
+    /// input, such as a `PythonEval`'s), `hints` their join hints.
+    pub(super) fn join_planned(
+        &mut self,
+        logical: (&Arc<LogicalPlan>, &Arc<LogicalPlan>),
+        planned: (Planned, Planned),
+        hints: (Option<JoinStrategy>, Option<JoinStrategy>),
+        kind: JoinKind,
+        on: Option<&Arc<Expr>>,
+    ) -> Result<Planned> {
+        let logical = (Arc::clone(logical.0), Arc::clone(logical.1));
+        let (left, right) = planned;
         let left_ids: HashSet<AttrId> = left.layout.iter().copied().collect();
         let right_ids: HashSet<AttrId> = right.layout.iter().copied().collect();
         let mut conjuncts = Vec::new();
@@ -710,7 +725,7 @@ impl Planner<'_> {
     /// The strategy hint of one join side: the first hint above its
     /// relation through single-input nodes (Spark's `EliminateResolvedHint`),
     /// a later different one overridden. The hints seen are consumed.
-    fn side_hint(&mut self, p: &Arc<LogicalPlan>) -> Option<JoinStrategy> {
+    pub(super) fn side_hint(&mut self, p: &Arc<LogicalPlan>) -> Option<JoinStrategy> {
         let mut found: Option<JoinStrategy> = None;
         let mut cur = p;
         loop {
@@ -930,7 +945,7 @@ fn null_aware_key(e: &Expr) -> Option<(&Arc<Expr>, &Arc<Expr>)> {
 }
 
 /// The attributes `e` reads.
-fn reads(e: &Expr, out: &mut HashSet<AttrId>) {
+pub(super) fn reads(e: &Expr, out: &mut HashSet<AttrId>) {
     if let ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) = &e.node {
         out.insert(c.id);
     }

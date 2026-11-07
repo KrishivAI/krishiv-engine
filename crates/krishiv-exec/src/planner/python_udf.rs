@@ -13,12 +13,13 @@
 //! share a node (equal calls are evaluated once); a call over another
 //! call's result, or calls of another eval type, go in a node above.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{KrishivError, UnsupportedFeaturePythonUdfInOnClause};
 use krishiv_plan::{
-    BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, JoinCondition, JoinKind,
-    LogicalPlan, PythonEvalType, ResolvedExpr, ResolvedFunction,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, JoinCondition,
+    JoinKind, LogicalPlan, PythonEvalType, ResolvedExpr, ResolvedFunction,
 };
 use krishiv_types::DataType;
 
@@ -90,8 +91,20 @@ impl Planner<'_> {
     /// Unchanged (no node) when `exprs` call no Python UDF.
     pub(crate) fn extract_python(
         &mut self,
+        input: Planned,
+        exprs: &[Arc<Expr>],
+    ) -> Result<(Planned, Vec<Arc<Expr>>)> {
+        self.extract_python_where(input, exprs, &|_| true)
+    }
+
+    /// [`Self::extract_python`] for the calls `wanted` accepts only (a
+    /// join side's: the calls reading only its columns); the others stay in
+    /// the expressions.
+    fn extract_python_where(
+        &mut self,
         mut input: Planned,
         exprs: &[Arc<Expr>],
+        wanted: &dyn Fn(&Expr) -> bool,
     ) -> Result<(Planned, Vec<Arc<Expr>>)> {
         let mut exprs = exprs.to_vec();
         loop {
@@ -99,6 +112,7 @@ impl Planner<'_> {
             for e in &exprs {
                 innermost(e, &mut calls);
             }
+            calls.retain(|c| wanted(c));
             let Some(first) = calls.first().and_then(|c| python_call(c)) else {
                 return Ok((input, exprs));
             };
@@ -178,10 +192,14 @@ impl Planner<'_> {
     }
 
     /// A join whose condition calls Python UDFs (Spark's
-    /// `ExtractPythonUDFFromJoinCondition`): for an inner or cross join the
-    /// conjuncts calling one become a filter above the join of the rest
-    /// (a cross join when none is left); any other join type raises
-    /// `UNSUPPORTED_FEATURE.PYTHON_UDF_IN_ON_CLAUSE`.
+    /// `ExtractPythonUDFFromJoinCondition`, `joins.scala` at v4.2.0): for an
+    /// inner or cross join the conjuncts calling one become a filter above
+    /// the join of the rest (a cross join when none is left). For the other
+    /// join types a call reading both sides raises
+    /// `UNSUPPORTED_FEATURE.PYTHON_UDF_IN_ON_CLAUSE`; a call reading one
+    /// side is evaluated below that side, and the join reads its column
+    /// (`research/spark-notes/python-udf-errors.md` §2: Spark accepts
+    /// `f(a.id) = b.id` for every join type).
     pub(crate) fn join_with_python_udfs(
         &mut self,
         left: &Arc<LogicalPlan>,
@@ -190,9 +208,7 @@ impl Planner<'_> {
         on: &Arc<Expr>,
     ) -> Result<Planned> {
         if !matches!(kind, JoinKind::Inner | JoinKind::Cross) {
-            return Err(KrishivError::from(UnsupportedFeaturePythonUdfInOnClause {
-                join_type: spark_join_type(kind).to_owned(),
-            }));
+            return self.outer_join_with_python_udfs(left, right, kind, on);
         }
         let mut conjuncts = Vec::new();
         super::join::conjuncts_of(on, &mut conjuncts);
@@ -210,6 +226,64 @@ impl Planner<'_> {
             .ok_or_else(|| internal("a filter without a predicate"))?;
         self.filter(input, predicate)
     }
+}
+
+impl Planner<'_> {
+    /// The non-inner case of [`Self::join_with_python_udfs`].
+    fn outer_join_with_python_udfs(
+        &mut self,
+        left: &Arc<LogicalPlan>,
+        right: &Arc<LogicalPlan>,
+        kind: JoinKind,
+        on: &Arc<Expr>,
+    ) -> Result<Planned> {
+        let hints = (self.side_hint(left), self.side_hint(right));
+        let (lp, rp) = (self.plan(left)?, self.plan(right)?);
+        let lids: HashSet<AttrId> = lp.layout.iter().copied().collect();
+        let rids: HashSet<AttrId> = rp.layout.iter().copied().collect();
+        let reads_of = |e: &Expr| {
+            let mut ids = HashSet::new();
+            super::join::reads(e, &mut ids);
+            ids
+        };
+        // A call reading both sides is Spark's error, whatever else it holds.
+        let mut both = false;
+        visit_calls(on, &mut |call| {
+            let ids = reads_of(call);
+            both = both
+                || (ids.iter().any(|i| lids.contains(i)) && ids.iter().any(|i| rids.contains(i)));
+        });
+        if both {
+            return Err(KrishivError::from(UnsupportedFeaturePythonUdfInOnClause {
+                join_type: spark_join_type(kind).to_owned(),
+            }));
+        }
+        // A call with no column read is evaluated with the left side.
+        let on_left = |e: &Expr| reads_of(e).iter().all(|i| lids.contains(i));
+        let on_right = |e: &Expr| {
+            let ids = reads_of(e);
+            !ids.is_empty() && ids.iter().all(|i| rids.contains(i))
+        };
+        let (lp, exprs) = self.extract_python_where(lp, std::slice::from_ref(on), &on_left)?;
+        let (rp, exprs) = self.extract_python_where(rp, &exprs, &on_right)?;
+        let on = exprs
+            .first()
+            .ok_or_else(|| internal("a join condition went missing"))?;
+        if has_python_udf(on) {
+            return Err(internal(
+                "a Python UDF call in a join condition reads no side",
+            ));
+        }
+        self.join_planned((left, right), (lp, rp), hints, kind, Some(on))
+    }
+}
+
+/// Calls `f` with every Python UDF call in `e`, outer ones first.
+fn visit_calls(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    if python_call(e).is_some() {
+        f(e);
+    }
+    e.for_each_child(&mut |c| visit_calls(c, f));
 }
 
 /// `conjuncts` joined by `AND`; `None` when there are none.
