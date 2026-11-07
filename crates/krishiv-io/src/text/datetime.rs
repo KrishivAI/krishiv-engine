@@ -57,7 +57,7 @@ impl Datetimes {
             match (o.str(opt), purpose) {
                 (Some(p), _) => DateTimePattern::new(p, purpose).map(Some),
                 (None, Purpose::Format) => DateTimePattern::new(default, purpose).map(Some),
-                (None, Purpose::Parse) => Ok(None),
+                (None, Purpose::Parse | Purpose::ParseNtz) => Ok(None),
             }
         };
         let date = pattern("dateFormat", DATE_PATTERN)?;

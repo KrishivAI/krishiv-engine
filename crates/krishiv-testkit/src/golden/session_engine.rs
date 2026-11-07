@@ -229,6 +229,36 @@ impl SessionEngine {
         if !first.eq_ignore_ascii_case("SET") {
             return;
         }
+        // `SET TIME ZONE 'zone'` sets `spark.sql.session.timeZone` too: the cells render in it. `LOCAL` is the
+        // default (the suite's zone); an interval form is left to the session.
+        let mut rest = words.clone();
+        if rest.next().is_some_and(|w| w.eq_ignore_ascii_case("TIME"))
+            && rest.next().is_some_and(|w| w.eq_ignore_ascii_case("ZONE"))
+        {
+            let value: Vec<&str> = rest.collect();
+            let value = value.join(" ");
+            let key = "spark.sql.session.timeZone";
+            if value.eq_ignore_ascii_case("LOCAL") {
+                self.conf.retain(|(k, _)| !k.eq_ignore_ascii_case(key));
+                if let Some(kv) = self
+                    .base
+                    .iter()
+                    .rev()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                {
+                    self.conf.push(kv.clone());
+                }
+            } else if let Some(zone) = value
+                .strip_prefix('\'')
+                .and_then(|v| v.strip_suffix('\''))
+                .or_else(|| value.strip_prefix('"').and_then(|v| v.strip_suffix('"')))
+                // A zone Spark refuses leaves the configuration as it was.
+                && krishiv_plan::analyzer::SessionZone::resolve(zone).is_some()
+            {
+                self.conf.push((key.to_owned(), zone.to_owned()));
+            }
+            return;
+        }
         if let Some((k, v)) = sql.get(3..).and_then(|rest| rest.split_once('=')) {
             let (k, v) = (k.trim().to_owned(), v.trim().to_owned());
             // A key Krishiv does not know is ignored by the session, as Spark keys are.

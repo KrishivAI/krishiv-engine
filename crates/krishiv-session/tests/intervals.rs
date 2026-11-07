@@ -1151,12 +1151,25 @@ fn a_string_cast_limits_the_first_day_time_field() -> R {
 
 #[test]
 fn legacy_interval_differences_are_refused_by_name() -> R {
+    // A date difference is a calendar interval under the legacy flag (`datetime_names_and_ntz`); a timestamp
+    // difference is still refused.
     let session = Session::new()?;
     block_on(session.sql("SET spark.sql.legacy.interval.enabled = true"))?;
+    // Spark 4.2.0 (local run 2026-11-06): both are `1 months`.
     for expr in [
         "DATE '2024-02-01' - DATE '2024-01-01'",
-        "TIMESTAMP '2024-02-01' - TIMESTAMP '2024-01-01'",
         "try_subtract(DATE '2024-02-01', DATE '2024-01-01')",
+    ] {
+        let got = answer(&session, expr);
+        assert_eq!(got.error_class, None, "{expr}");
+        assert_eq!(got.data_type.as_deref(), Some("interval"), "{expr}");
+        assert_eq!(got.value.as_deref(), Some("1 months"), "{expr}");
+    }
+    // A timestamp difference, and a date difference over a non-deterministic
+    // operand (the rewrite would read it more than once), are refused by name.
+    for expr in [
+        "TIMESTAMP '2024-02-01' - TIMESTAMP '2024-01-01'",
+        "date_add(DATE '2024-01-01', CAST(rand() * 100 AS INT)) - DATE '2024-01-01'",
     ] {
         assert_eq!(
             answer(&session, expr).error_class.as_deref(),
