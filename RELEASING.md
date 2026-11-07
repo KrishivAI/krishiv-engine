@@ -73,14 +73,28 @@ approve the `testpypi` deployment. Verify the install from TestPyPI in a clean
 venv: `pip install --index-url https://test.pypi.org/simple/ --extra-index-url
 https://pypi.org/simple/ "krishiv[pyarrow]==0.2.0"`.
 
-## crates.io and PyPI (not set up)
+## Release channels for 0.2.0 (owner decision 2026-11-07)
 
-Publishing to crates.io or PyPI proper is not wired up at all. It needs, in
-one reviewed change by the maintainer: dropping `publish = false` and adding
-versions to the path dependencies of the crates that ship (what
-`publish-dry-run.sh` simulates), the licence decision in ADR 0033, registry
-credentials or trusted publishers, and a new gated workflow like the TestPyPI
-one. Until then there is nothing to run.
+0.2.0 goes to three channels. Docker and Helm are **not** part of it; they move to P3 with the server and Spark
+Connect work. Every channel stays a hard stop: tag and publish only on the owner's explicit go.
+
+| Channel | What ships | Dry run today |
+|---|---|---|
+| PyPI `krishiv` | abi3 (cp311+) and free-threaded cp314t wheels: manylinux x86_64/aarch64, musllinux, macOS arm64 | `wheels.yml` builds and tests every wheel; `publish-testpypi.yml` (manual) uploads them to TestPyPI |
+| crates.io `krishiv` | the facade plus the internal crates at the same version (ADR 0026) | `publish-dry-run` job of `ci.yml` (`.github/scripts/publish-dry-run.sh`) |
+| GitHub Release `v0.2.0` | changelog, quickstart, `krishiv` CLI binaries for Linux x86_64, Linux aarch64 and macOS arm64, SBOM, signatures | `binaries.yml` builds and smoke-tests the three binaries (and the `krishiv-compat` x86-64 baseline); the SBOM, the signatures and the release upload are **not wired yet** |
+
+Not wired yet (each is a reviewed change by the maintainer, because it edits the guards in
+`release_publishing_is_manual_and_gated`):
+
+- dropping `publish = false` and adding versions to the path dependencies of the crates that ship (what
+  `publish-dry-run.sh` simulates), and the PyPI and crates.io credentials (a PyPI trusted publisher over OIDC and a
+  scoped crates.io token) behind `environment:` gates with required reviewers;
+- a gated release workflow (`workflow_dispatch` only) that downloads the `binaries.yml` artifacts, writes checksums
+  and an SBOM, signs them and drafts the GitHub Release. Its dry-run mode must stop before any upload or tag.
+
+Owner actions before the gate are listed in `ops/needs-owner.md` ("Release 0.2.0 channels and pre-publish setup"):
+crates.io keywords and description (drop `datafusion`), the PyPI classifier, the credentials, and the go/no-go.
 
 ## Before any release
 
