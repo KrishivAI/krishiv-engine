@@ -72,6 +72,8 @@ impl Rewriter {
         match kind {
             JoinKind::FullOuter => true,
             _ if both => true,
+            // A nondeterministic conjunct is never pushed: moving it changes how often it runs.
+            _ if !crate::raises::is_deterministic(c) => true,
             JoinKind::LeftOuter | JoinKind::LeftAnti => left_only,
             JoinKind::RightOuter => right_only,
             _ => false,

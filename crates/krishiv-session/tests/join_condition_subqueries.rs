@@ -247,6 +247,26 @@ fn semi_and_anti_joins_with_a_constant_condition() -> R {
     Ok(())
 }
 
+/// A right-only scalar under semi and anti joins matches its literal form.
+#[test]
+fn semi_and_anti_joins_with_a_right_only_scalar() -> R {
+    let s = session()?;
+    for kind in ["left semi join", "left anti join"] {
+        let q = |c: &str| format!("select f1.id from f1 {kind} f2 on f1.id = f2.id and {c}");
+        assert_eq!(
+            run(&s, &q("f2.id = (select max(id) from tt)"))?,
+            run(&s, &q("f2.id = 9"))?,
+            "{kind}"
+        );
+        assert_eq!(
+            run(&s, &q("f2.id = (select min(id) from tt)"))?,
+            run(&s, &q("f2.id = 2"))?,
+            "{kind}"
+        );
+    }
+    Ok(())
+}
+
 /// A condition on right columns only lifts onto the right input, so it still filters it:
 /// `f2.id = max(tt.id)` is `f2.id = 9`, true for no right row, in every kind, and the rows are
 /// those of the literal form.
