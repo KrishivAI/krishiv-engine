@@ -1165,12 +1165,12 @@ mod tests {
         let lists = [
             batch(0..block),
             batch(block..block + 5),
-            batch(block + 5..3 * block + 5),
-            batch(3 * block + 5..3 * block + 9),
+            batch(block + 5..3 * block + 8),
+            batch(3 * block + 8..3 * block + 12),
         ];
         let arena = RowArena::over_chunks(&schema, &lists).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(arena.parts.len(), 4);
-        assert_eq!(arena.len(), 3 * block + 9);
+        assert_eq!(arena.len(), 3 * block + 12);
         // The two tails: one of a chunk that also gives blocks (kept beside it), one of a chunk the copy replaces.
         let (copy, kept) = RowArena::reblock_bytes(&lists, 0);
         assert!(kept > 0 && kept < copy && copy < 2048, "{copy} {kept}");
