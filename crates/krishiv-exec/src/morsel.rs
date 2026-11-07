@@ -195,7 +195,9 @@ impl Baton {
     }
 
     /// `member`, holding the baton, waits at `barrier`, which is closed:
-    /// the baton moves on, and comes back once `barrier` has opened.
+    /// the baton moves on, and the member is skipped until `barrier` has
+    /// opened (it gets the baton again in its turn after that). A member
+    /// that does not hold the baton changes nothing.
     pub(crate) fn pass(&self, member: usize, barrier: Arc<Barrier>) {
         {
             let mut s = lock(&self.state);

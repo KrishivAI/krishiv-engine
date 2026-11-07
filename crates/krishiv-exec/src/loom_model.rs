@@ -2,7 +2,8 @@
 //! Loom models of the executor's handoffs: morsel claims, the finalize
 //! countdown, cancellation wake-ups, the blocked result channel (woken by a
 //! read or by dropping the stream), the driver's spill-versus-cancel wait,
-//! the `blocking_done` handshake and the operator flush barrier. Each
+//! the `blocking_done` handshake, the operator flush barrier and the
+//! deterministic fan-in's baton (`morsel::Baton`). Each
 //! protocol model was checked to fail with a planted bug (Relaxed
 //! countdown; check-before-listen in the wait loop, in `blocking_done` and
 //! in `Barrier::wait`; `drop_receiver` not waking senders).
@@ -25,8 +26,14 @@ use crate::channel::Channel;
 use crate::morsel::{Barrier, Baton, Countdown, MorselCursor};
 
 fn model(f: impl Fn() + Sync + Send + 'static) {
+    model_bounded(3, f);
+}
+
+/// As [`model`] with another preemption bound (three threads at bound 3 take
+/// about 12 minutes).
+fn model_bounded(preemptions: usize, f: impl Fn() + Sync + Send + 'static) {
     let mut b = loom::model::Builder::new();
-    b.preemption_bound = Some(3);
+    b.preemption_bound = Some(preemptions);
     b.check(f);
 }
 
@@ -143,6 +150,70 @@ fn a_deterministic_fan_in_runs_in_one_order() {
             order,
             [(0, "input"), (1, "input"), (1, "flush"), (0, "flush")]
         );
+    });
+}
+
+/// Three members: the baton skips a member waiting at the closed barrier
+/// and goes round in member order, so the inputs run 0, 1, 2 and the
+/// flushes 2 (the last to arrive keeps the baton), then 0, then 1.
+#[test]
+fn three_members_take_turns_in_member_order() {
+    model_bounded(2, || {
+        let baton = Arc::new(Baton::new(3));
+        let barrier = Arc::new(Barrier::new(3));
+        let log = Arc::new(loom::sync::Mutex::new(Vec::new()));
+        let spawn = |i| {
+            thread::spawn(member(
+                i,
+                Arc::clone(&baton),
+                Arc::clone(&barrier),
+                Arc::clone(&log),
+            ))
+        };
+        let (one, two) = (spawn(1), spawn(2));
+        member(
+            0,
+            Arc::clone(&baton),
+            Arc::clone(&barrier),
+            Arc::clone(&log),
+        )();
+        assert!(one.join().is_ok() && two.join().is_ok());
+        let order = crate::sync::lock(&log).clone();
+        assert_eq!(
+            order,
+            [
+                (0, "input"),
+                (1, "input"),
+                (2, "input"),
+                (2, "flush"),
+                (0, "flush"),
+                (1, "flush")
+            ]
+        );
+    });
+}
+
+/// Three members, one failed before the barrier: the two others wait at a
+/// barrier that can never open, and the baton reaches neither of them
+/// (both see `false`, never a turn at a closed barrier).
+#[test]
+fn a_baton_never_goes_to_a_member_at_a_closed_barrier() {
+    model(|| {
+        let baton = Arc::new(Baton::new(3));
+        let barrier = Arc::new(Barrier::new(3));
+        baton.leave(2);
+        let (b, bar) = (Arc::clone(&baton), Arc::clone(&barrier));
+        let other = thread::spawn(move || {
+            assert!(block_on(b.acquire(1)));
+            bar.arrive();
+            b.pass(1, Arc::clone(&bar));
+            block_on(b.acquire(1))
+        });
+        assert!(block_on(baton.acquire(0)));
+        barrier.arrive();
+        baton.pass(0, Arc::clone(&barrier));
+        assert!(!block_on(baton.acquire(0)));
+        assert_eq!(other.join().ok(), Some(false));
     });
 }
 

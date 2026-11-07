@@ -144,13 +144,16 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle 
     let executor = Arc::clone(&run.executor);
     let q = Arc::clone(&query);
     // Made here and moved into the task, so a driver that fails to start,
-    // or is aborted before its first poll, still leaves the baton.
+    // or is aborted before its first poll, still leaves the baton; dropped
+    // only after a failure is recorded, so the member left behind sees the
+    // query failed rather than a fan-in nobody can run (first error wins).
     let turn = run.turn.as_ref().map(|(baton, member)| Turn {
         baton: Arc::clone(baton),
         member: *member,
     });
     let body = async move {
-        if let Err(e) = drive(run, partition, turn).await {
+        let _turn = turn;
+        if let Err(e) = drive(run, partition).await {
             q.fail(e);
         }
     };
@@ -170,10 +173,8 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle 
     crate::console::spawn_named(&executor, &query, query.class(), &name, Box::pin(timed))
 }
 
-async fn drive(run: Arc<PipelineRun>, partition: u32, turn: Option<Turn>) -> Result<()> {
-    let mut driver = Driver::new(run, partition)?;
-    driver.turn = turn;
-    driver.run().await
+async fn drive(run: Arc<PipelineRun>, partition: u32) -> Result<()> {
+    Driver::new(run, partition)?.run().await
 }
 
 /// Times every poll of a driver: the stall detector. A poll is a
@@ -468,8 +469,9 @@ struct Driver {
     yields: u64,
     /// The source position last reported to the sink.
     position: Option<u64>,
-    /// The driver's turn in a deterministic fan-in, if it takes turns.
-    turn: Option<Turn>,
+    /// The driver's baton and member index in a deterministic fan-in, if it
+    /// takes turns (its [`Turn`] guard is held by the driver's task).
+    turn: Option<(Arc<Baton>, usize)>,
 }
 
 impl Driver {
@@ -526,7 +528,7 @@ impl Driver {
             batches: 0,
             yields: 0,
             position: None,
-            turn: None,
+            turn: run.turn.clone(),
             owner,
             run,
         })
@@ -598,10 +600,9 @@ impl Driver {
 
     /// Waits until this driver holds its fan-in's baton, if it takes turns.
     async fn take_turn(&mut self) -> Result<()> {
-        let Some(turn) = &self.turn else {
+        let Some((baton, member)) = self.turn.clone() else {
             return Ok(());
         };
-        let (baton, member) = (Arc::clone(&turn.baton), turn.member);
         let run = Arc::clone(&self.run);
         let (held, _) = pause(
             &run,
@@ -612,6 +613,9 @@ impl Driver {
         if held {
             Ok(())
         } else {
+            // Only a member that failed leaves the others stuck: its error
+            // (already recorded) wins over this one.
+            run.query.check_cancelled()?;
             Err(internal(
                 "every member of a deterministic fan-in waits at a closed flush barrier".to_owned(),
             ))
@@ -762,10 +766,10 @@ impl Driver {
         barrier.arrive();
         // Taking turns, a driver at a closed barrier hands the baton on and
         // gets it back once the barrier has opened.
-        if let Some(turn) = &self.turn
+        if let Some((baton, member)) = &self.turn
             && !barrier.is_open()
         {
-            turn.baton.pass(turn.member, Arc::clone(barrier));
+            baton.pass(*member, Arc::clone(barrier));
             self.take_turn().await?;
         }
         pause(&run, Some((&self.owner, &self.slots)), barrier.wait()).await?;
