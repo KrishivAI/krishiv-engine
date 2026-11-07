@@ -1791,10 +1791,13 @@ impl Session {
                 .clone_from(&s.layout.partition_columns);
             layout.bucket.clone_from(&s.layout.bucket);
             options.clone_from(&s.options);
-            (
-                s.columns.clone(),
-                (s.provider.clone(), s.provider_written.clone()),
-            )
+            // A view has no provider of its own: Spark gives the new table
+            // `spark.sql.sources.default` (`CreateTableLikeCommand`, `isViewLike`).
+            let provider = s
+                .view
+                .is_none()
+                .then(|| (s.provider.clone(), s.provider_written.clone()));
+            (s.columns.clone(), provider)
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
                 .state
@@ -1817,7 +1820,7 @@ impl Session {
                         comment: None,
                     })
                     .collect(),
-                ("parquet".to_owned(), "parquet".to_owned()),
+                None,
             )
         } else {
             return Err(source.not_found());
@@ -1832,7 +1835,13 @@ impl Session {
                     .join(".");
                 (self.provider_of(Some(using.clone()))?, using)
             }
-            None => source_provider,
+            // `None`: a view, which has no provider of its own. The default
+            // is looked up only here, so an explicit `USING` never depends on it.
+            None => match source_provider {
+                Some(p) => p,
+                // Validated, and written as the setting has it (`CSV`).
+                None => (self.provider_of(None)?, self.written_provider(None)),
+            },
         };
         let external = t.location.is_some();
         let location = match &t.location {
