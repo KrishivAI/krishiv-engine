@@ -775,7 +775,9 @@ pub struct AnalyzedPlan {
     /// Per output column, the `CHAR(n)` / `VARCHAR(n)` string it was declared with (see `char_varchar`).
     pub output_declared: Vec<Option<String>>,
     /// Per output column, its comment (Spark's `comment` field metadata: it follows a column through bare-column
-    /// aliases, `*`, grouping keys and CTE references; any other expression has none).
+    /// aliases, `*`, joins, subqueries, set operations, grouping keys (also of `ROLLUP`/`CUBE`/`GROUPING SETS`)
+    /// and CTE references; any other expression, a written cast included, has none). Known limit: a read of a
+    /// permanent view gives its columns the comments of the columns under them, not the view's stored ones.
     pub output_comments: Vec<Option<String>>,
     /// The version pinned per table.
     pub pins: BTreeMap<TableIdent, TableVersion>,

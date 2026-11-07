@@ -313,11 +313,15 @@ impl Resolver<'_> {
     /// calls it as each item is bound, so a later item that reads the alias (a lateral column alias) sees it.
     pub(super) fn carry_declared_item(&mut self, b: &Bound, written: Option<&Expr>) {
         let internal_cast = written.is_some_and(is_internal_cast_alias);
+        // An item already resolved comes from a stored analyzed plan (a DataFrame's temporary view): its
+        // read-side padding call stands for the padded column.
+        let stored = written.is_some_and(|w| matches!(w.node, ExprNode::Resolved(_)));
         // A column comment follows the same alias of a bare column (Spark's `Alias` keeps a named child's
-        // metadata; any other expression starts without it).
+        // metadata; any other expression starts without it), and a stored plan's padded `CHAR` column.
         if !self.comments.is_empty()
             && let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
             && let Some(c) = commented_column(expr, internal_cast)
+                .or_else(|| read_padded_column(expr).filter(|_| stored).map(|(c, _)| c))
             && let Some(t) = self.comments.get(&c.id).cloned()
         {
             self.comments.insert(output.id, t);
@@ -325,9 +329,6 @@ impl Resolver<'_> {
         if self.declared.is_empty() {
             return;
         }
-        // An item already resolved comes from a stored analyzed plan (a DataFrame's temporary view): its
-        // read-side padding call stands for the padded column.
-        let stored = written.is_some_and(|w| matches!(w.node, ExprNode::Resolved(_)));
         if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
             && let Some(c) = bare_column(expr, internal_cast).or_else(|| {
                 let (c, n) = read_padded_column(expr).filter(|_| stored)?;

@@ -372,7 +372,23 @@ fn column_comments_follow_columns_through_queries() {
             .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
             .collect()
     };
-    let cases: [(&str, &[(&str, &str)]); 14] = [
+    let cases: [(&str, &[(&str, &str)]); 18] = [
+        (
+            "SELECT a, b FROM t GROUP BY ROLLUP(a, b)",
+            &[("a", "ca"), ("b", "cb")],
+        ),
+        (
+            "SELECT a, count(*) FROM t GROUP BY CUBE(a)",
+            &[("a", "ca"), ("count(1)", "NULL")],
+        ),
+        (
+            "SELECT a, b FROM t GROUP BY GROUPING SETS ((a), (b))",
+            &[("a", "ca"), ("b", "cb")],
+        ),
+        (
+            "SELECT a, a FROM t UNION ALL SELECT a, a FROM t",
+            &[("a", "ca"), ("a", "ca")],
+        ),
         ("SELECT a AS x, b FROM t", &[("x", "ca"), ("b", "cb")]),
         ("SELECT t.a FROM t JOIN u ON t.a = u.a", &[("a", "ca")]),
         (
@@ -437,4 +453,15 @@ fn column_comments_follow_columns_through_queries() {
         comments("SELECT * FROM v1"),
         pairs(&[("a", "ca"), ("b", "cb")])
     );
+    // Known difference: a read of a view takes the comment of the column under it, not the view's stored one
+    // (Spark 4.2.0 gives `y` the view's `cy`: `column-comments/probe3.out`); see the limit in
+    // `research/spark/column-comments.md`.
+    assert_eq!(
+        comments("SELECT * FROM v2"),
+        pairs(&[("x", "ca"), ("y", "cb")])
+    );
+    // A changed comment is not served from a cached analysis (the catalog epoch is in its fingerprint).
+    assert_eq!(comments("SELECT a FROM t"), pairs(&[("a", "ca")]));
+    run(&s, "ALTER TABLE t ALTER COLUMN a COMMENT 'new'");
+    assert_eq!(comments("SELECT a FROM t"), pairs(&[("a", "new")]));
 }
