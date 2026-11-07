@@ -45,7 +45,7 @@ use crate::ast::{
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
-
+mod generator_order;
 mod identified;
 mod pipe;
 mod variant;
@@ -1071,53 +1071,6 @@ impl Lowerer {
         Ok(arc(self.call("stack", call_args, span)))
     }
 
-    /// `generator(arg)` over `plan` (a [`PlanNode::Generate`]) and the
-    /// select item standing for its columns: a star over the generator's
-    /// own qualifier, in the place of the call.
-    fn select_generator(
-        &mut self,
-        plan: LogicalPlan,
-        item: &SelectItem,
-        index: usize,
-    ) -> R<(LogicalPlan, Arc<IrExpr>)> {
-        let Some((kind, outer, args, name)) = Self::generator_of(&item.expr) else {
-            return Err(unsupported("a select item that is no generator", item.span));
-        };
-        let arg = self.generator_arg(name, args, item.span)?;
-        let names = match &item.alias {
-            None => Vec::new(),
-            Some(Alias::Name(n)) => vec![n.value.clone()],
-            Some(Alias::List(l)) => l.iter().map(|n| n.value.clone()).collect(),
-        };
-        // A reserved qualifier the generated columns are read through; no
-        // user table can have it.
-        let qualifier = format!("{}{index}", krishiv_plan::GENERATE_QUALIFIER_PREFIX);
-        let plan = self.node(
-            PlanNode::Generate {
-                input: arc(plan),
-                kind,
-                outer,
-                arg,
-                output: Vec::new(),
-                names,
-                qualifier: Some(qualifier.clone()),
-            },
-            item.span,
-        );
-        let star = self.ex(
-            ExprNode::Star(Star {
-                regex: None,
-                replace: Vec::new(),
-                position: None,
-                qualifier: vec![qualifier],
-                except: Vec::new(),
-                plan_id: None,
-            }),
-            item.span,
-        );
-        Ok((plan, arc(star)))
-    }
-
     fn select_list(&mut self, s: &Select, input: LogicalPlan) -> R<LogicalPlan> {
         let mut plan = self.lateral_views(input, &s.lateral_views)?;
         if let Some(w) = &s.selection {
@@ -1141,22 +1094,24 @@ impl Lowerer {
             .projection
             .iter()
             .any(|i| Self::generator_of(&i.expr).is_some());
-        for (index, item) in s.projection.iter().enumerate() {
-            // With GROUP BY or HAVING the analyzer extracts the generator
-            // from the aggregate (Spark's `ExtractGenerator`).
-            if s.group_by.is_none()
-                && s.having.is_none()
-                && !(aggregates && has_generator)
-                && Self::generator_of(&item.expr).is_some()
-            {
+        // With GROUP BY or HAVING the analyzer extracts the generators from the aggregate
+        // (Spark's `ExtractGenerator`).
+        let mut stars = std::collections::HashMap::new();
+        if s.group_by.is_none() && s.having.is_none() && !(aggregates && has_generator) {
+            for index in generator_order::chain(&s.projection) {
                 let taken =
                     std::mem::replace(&mut plan, LogicalPlan::new(PlanNode::OneRowRelation));
-                let (generated, star) = self.select_generator(taken, item, index)?;
+                let (generated, star) =
+                    self.select_generator(taken, &s.projection[index], index)?;
                 plan = generated;
-                items.push(star);
-                continue;
+                stars.insert(index, star);
             }
-            items.push(self.select_item(item)?);
+        }
+        for (index, item) in s.projection.iter().enumerate() {
+            items.push(match stars.remove(&index) {
+                Some(star) => star,
+                None => self.select_item(item)?,
+            });
         }
         // `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
         // a select list with no aggregate call filters the rows (as `WHERE` does; aggregates in

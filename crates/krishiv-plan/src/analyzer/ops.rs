@@ -709,6 +709,14 @@ impl Resolver<'_> {
                     }
                     items.push(bound);
                 }
+                // A generator written with one alias is a lateral alias of the items after it
+                // (its columns keep their generator qualifier: see `Resolver::column`).
+                if s.qualifier.iter().any(|q| {
+                    q.starts_with(crate::GENERATE_QUALIFIER_PREFIX)
+                        && q.ends_with(crate::GENERATE_ALIAS_SUFFIX)
+                }) {
+                    lateral.extend(expanded.iter().cloned());
+                }
                 continue;
             }
             let b = {
@@ -1349,27 +1357,6 @@ impl Resolver<'_> {
             self.widened(c, &missing)?
         };
         Ok((bounds, wide))
-    }
-
-    /// Whether a `Generate` node sits between `plan` and the aggregate it
-    /// sorts: the search stops at the first aggregate, so a generator in
-    /// that aggregate's input does not count.
-    fn holds_generator(plan: &Arc<LogicalPlan>) -> bool {
-        let mut seen = HashSet::new();
-        let mut stack = vec![Arc::clone(plan)];
-        while let Some(p) = stack.pop() {
-            if !seen.insert(Arc::as_ptr(&p) as usize) {
-                continue;
-            }
-            if matches!(p.node, PlanNode::Generate { .. }) {
-                return true;
-            }
-            if matches!(p.node, PlanNode::Aggregate { .. }) {
-                continue;
-            }
-            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
-        }
-        false
     }
 
     /// The aggregate under `c`'s filters, sorts and limits (`HAVING`), and

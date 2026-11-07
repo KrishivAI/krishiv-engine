@@ -335,6 +335,10 @@ pub struct FileScanMetrics {
     pub units_pruned_bloom: u64,
     /// Units whose Bloom filter failed a check and was not used.
     pub bloom_rejected: u64,
+    /// Units a dictionary page ruled out (also in `units_pruned`).
+    pub units_pruned_dictionary: u64,
+    /// Units whose dictionary page failed a check and was not used.
+    pub dictionary_rejected: u64,
     /// Rows decoded.
     pub rows: u64,
     /// Bytes pushed into decoders.
@@ -393,6 +397,12 @@ impl FileScanMetrics {
                 ("bloom_rejected", self.bloom_rejected),
             ]));
         }
+        if self.units_pruned_dictionary > 0 || self.dictionary_rejected > 0 {
+            out.extend(crate::metrics::counts([
+                ("scan_units_pruned_dictionary", self.units_pruned_dictionary),
+                ("dictionary_rejected", self.dictionary_rejected),
+            ]));
+        }
         if self.reads.reads > 0 {
             // Mean reads in flight over a span is `scan_read_inflight_ns`
             // divided by that span (the scan's wall time in the profile).
@@ -425,6 +435,8 @@ impl FileScanMetrics {
         self.page_index_rejected += m.page_index_rejected;
         self.units_pruned_bloom += m.units_pruned_bloom;
         self.bloom_rejected += m.bloom_rejected;
+        self.units_pruned_dictionary += m.units_pruned_dictionary;
+        self.dictionary_rejected += m.dictionary_rejected;
         self.rows += m.rows;
         self.bytes += m.bytes_pushed;
         self.units_filtered += m.units_filtered;

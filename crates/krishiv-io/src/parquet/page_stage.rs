@@ -30,6 +30,7 @@ use parquet::file::statistics::Statistics;
 use parquet::schema::types::ColumnDescriptor;
 
 use super::bloom_probe;
+use super::dict_probe;
 use super::index_guard::{self, Rejected};
 use super::meta::{ParquetMetadata, column_statistics, leaf_type, micros_per_unit};
 use crate::error::FormatError;
@@ -69,6 +70,17 @@ struct BloomCheck {
     probes: Vec<Vec<u64>>,
 }
 
+/// A dictionary page to check for a unit (stage 2b, T085): the page's
+/// range and, per equality conjunct on the column, its literals as the
+/// file stores them.
+#[derive(Debug, Clone)]
+struct DictCheck {
+    leaf: usize,
+    range: Range<u64>,
+    physical: PhysicalType,
+    probes: Vec<Vec<Vec<u8>>>,
+}
+
 /// A row group the stage looks at.
 #[derive(Debug, Clone)]
 struct IndexedUnit {
@@ -81,6 +93,8 @@ struct IndexedUnit {
     reads: Option<Vec<ReadColumn>>,
     /// The stored Bloom filters to probe (stage 2a).
     blooms: Vec<BloomCheck>,
+    /// The dictionary pages to check (stage 2b).
+    dicts: Vec<DictCheck>,
 }
 
 /// The stage's state for one decoder.
@@ -101,6 +115,10 @@ pub(super) struct PageStage {
     pub(super) bloom_pruned: u64,
     /// Units whose Bloom filter failed a check and was not used.
     pub(super) bloom_rejected: u64,
+    /// Units a dictionary page ruled out.
+    pub(super) dict_pruned: u64,
+    /// Units whose dictionary page failed a check and was not used.
+    pub(super) dict_rejected: u64,
 }
 
 /// What the stage decided for a unit: the rows to keep.
@@ -212,6 +230,7 @@ impl PageStage {
         read_leaves: &[usize],
         page: bool,
         bloom: bool,
+        dict: bool,
     ) -> Option<Self> {
         let conjuncts: Vec<PushdownExpr> = conjuncts_of(predicate)
             .into_iter()
@@ -224,6 +243,8 @@ impl PageStage {
         let footer = meta.reader.metadata();
         let mut planned = Vec::new();
         let mut ranges = Vec::new();
+        // Dictionary bytes the stage fetches so far (stage 2b's budget).
+        let mut dict_bytes = 0_u64;
         for &index in units {
             let rg = footer.row_group(index);
             let row_group = meta.row_groups.get(index)?;
@@ -326,7 +347,69 @@ impl PageStage {
                     }
                 }
             }
-            if columns.is_empty() && blooms.is_empty() {
+            // Dictionary pages (stage 2b, T085): the same equality
+            // conjuncts, on chunks whose data pages are all dictionary
+            // encoded, with a dictionary page under the byte cap.
+            let mut dicts: Vec<DictCheck> = Vec::new();
+            if dict && dict_bytes < dict_probe::MAX_STAGE_DICTIONARY_BYTES {
+                for c in &conjuncts {
+                    if prune(c, &row_group.statistics) != TriState::Unknown {
+                        continue;
+                    }
+                    let Some((path, values)) = bloom_probe::probe_values(c) else {
+                        continue;
+                    };
+                    let Some(leaf) = (0..descr.num_columns()).find(|&l| {
+                        let d = descr.column(l);
+                        d.max_rep_level() == 0 && d.path().parts() == path.0.as_slice()
+                    }) else {
+                        continue;
+                    };
+                    let d = descr.column(leaf);
+                    let col = rg.column(leaf);
+                    if !bloom_probe::eligible(&d) || !dict_probe::all_dictionary(col) {
+                        continue;
+                    }
+                    let Some(dt) = leaf_type(&meta.schema, &path.0) else {
+                        continue;
+                    };
+                    // Dates and timestamps are stored in the writer's calendar,
+                    // which a Spark < 3.0 file may rebase (`calendar.rs`): their
+                    // literals are not compared to stored bytes here.
+                    if matches!(
+                        dt,
+                        arrow_schema::DataType::Date32 | arrow_schema::DataType::Timestamp(..)
+                    ) {
+                        continue;
+                    }
+                    let Some(literals) = bloom_probe::plain_values(
+                        &values,
+                        d.physical_type(),
+                        dt,
+                        micros_per_unit(&d),
+                    ) else {
+                        continue;
+                    };
+                    let Some(range) = dict_probe::dictionary_range(col, meta.size) else {
+                        continue;
+                    };
+                    match dicts.iter_mut().find(|x| x.leaf == leaf) {
+                        Some(x) => x.probes.push(literals),
+                        None if dict_bytes.saturating_add(range.end - range.start)
+                            > dict_probe::MAX_STAGE_DICTIONARY_BYTES => {}
+                        None => {
+                            dict_bytes += range.end - range.start;
+                            dicts.push(DictCheck {
+                                leaf,
+                                range,
+                                physical: d.physical_type(),
+                                probes: vec![literals],
+                            });
+                        }
+                    }
+                }
+            }
+            if columns.is_empty() && blooms.is_empty() && dicts.is_empty() {
                 continue;
             }
             // The other projected columns' offset indexes (all or none: a
@@ -370,7 +453,7 @@ impl PageStage {
                 columns.clear();
                 reads = None;
             }
-            if columns.is_empty() && blooms.is_empty() {
+            if columns.is_empty() && blooms.is_empty() && dicts.is_empty() {
                 continue;
             }
             for c in &columns {
@@ -383,12 +466,16 @@ impl PageStage {
             for b in &blooms {
                 ranges.push(b.range.clone());
             }
+            for d in &dicts {
+                ranges.push(d.range.clone());
+            }
             planned.push(IndexedUnit {
                 index,
                 rows: row_group.rows,
                 columns,
                 reads,
                 blooms,
+                dicts,
             });
         }
         if planned.is_empty() {
@@ -407,6 +494,8 @@ impl PageStage {
             pages_pruned: 0,
             bloom_pruned: 0,
             bloom_rejected: 0,
+            dict_pruned: 0,
+            dict_rejected: 0,
         })
     }
 
@@ -458,6 +547,8 @@ impl PageStage {
         let mut first_reason: Option<String> = None;
         let (mut bloom_pruned, mut bloom_rejected) = (0_u64, 0_u64);
         let mut first_bloom: Option<String> = None;
+        let (mut dict_pruned, mut dict_rejected) = (0_u64, 0_u64);
+        let mut first_dict: Option<String> = None;
         for unit in &self.units {
             // A stored Bloom filter that rules the row group out ends it.
             if !unit.blooms.is_empty() {
@@ -476,6 +567,31 @@ impl PageStage {
                     Err(why) => {
                         bloom_rejected += 1;
                         first_bloom.get_or_insert(why.0);
+                    }
+                }
+            }
+            // A dictionary page with none of a conjunct's literals ends it.
+            if !unit.dicts.is_empty() {
+                let checked =
+                    super::contain("checking a dictionary page", FormatError::Corrupt, || {
+                        Self::dictionaries_match(&held, meta, unit)
+                            .map_err(|why| FormatError::Corrupt(why.0))
+                    });
+                match checked {
+                    Ok(false) => {
+                        if let Ok(rows) = usize::try_from(unit.rows) {
+                            dict_pruned += 1;
+                            out.push(Decision {
+                                index: unit.index,
+                                keep: std::iter::once(RowSelector::skip(rows)).collect(),
+                            });
+                            continue;
+                        }
+                    }
+                    Ok(true) => {}
+                    Err(why) => {
+                        dict_rejected += 1;
+                        first_dict.get_or_insert_with(|| why.to_string());
                     }
                 }
             }
@@ -504,8 +620,13 @@ impl PageStage {
         if let Some(reason) = first_bloom {
             tracing::warn!(units = bloom_rejected, %reason, "a Parquet Bloom filter is ignored");
         }
+        if let Some(reason) = first_dict {
+            tracing::warn!(units = dict_rejected, %reason, "a Parquet dictionary page is ignored");
+        }
         self.bloom_pruned += bloom_pruned;
         self.bloom_rejected += bloom_rejected;
+        self.dict_pruned += dict_pruned;
+        self.dict_rejected += dict_rejected;
         self.pages_pruned += pruned;
         self.rejected += rejected;
         Outcome {
@@ -538,6 +659,42 @@ impl PageStage {
             }
         }
         Ok(true)
+    }
+
+    /// Whether the unit may hold a row matching every dictionary-checked
+    /// conjunct: `false` when some conjunct's literals are all absent from
+    /// the column's dictionary. Every data page is dictionary encoded
+    /// (`dict_probe::all_dictionary`), so a value not in the dictionary is
+    /// in no row.
+    fn dictionaries_match(
+        held: &BTreeMap<(u64, u64), Bytes>,
+        meta: &ParquetMetadata,
+        unit: &IndexedUnit,
+    ) -> Result<bool, Rejected> {
+        let rg = meta.reader.metadata().row_group(unit.index);
+        for d in &unit.dicts {
+            let bytes = Self::slice_bytes(held, &d.range)?;
+            let (values, count) = dict_probe::read_dictionary(rg.column(d.leaf), &d.range, bytes)?;
+            for literals in &d.probes {
+                if !dict_probe::any_entry_in(&values, count, d.physical, literals)? {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// [`Self::slice`] as shared bytes (no copy).
+    fn slice_bytes(held: &BTreeMap<(u64, u64), Bytes>, r: &Range<u64>) -> Result<Bytes, Rejected> {
+        let bytes = held
+            .get(&(r.start, r.end))
+            .ok_or_else(|| Rejected::from("an index range did not arrive"))?;
+        let len =
+            usize::try_from(r.end - r.start).map_err(|_| Rejected::from("a range overflows"))?;
+        if bytes.len() < len {
+            return Err(Rejected::from("an index range arrived short"));
+        }
+        Ok(bytes.slice(..len))
     }
 
     fn slice<'a>(
@@ -706,5 +863,7 @@ fn page_statistics(index: &ColumnIndexMetaData, page: usize, rows: u64) -> Optio
     })
 }
 
+#[cfg(test)]
+mod dict_tests;
 #[cfg(test)]
 mod tests;
