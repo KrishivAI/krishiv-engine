@@ -72,6 +72,7 @@ use std::sync::Arc;
 
 mod arbitrate;
 mod clock;
+mod cohort;
 mod consumer;
 mod error;
 mod event;
@@ -87,6 +88,7 @@ mod spillfile;
 mod sync;
 
 pub use clock::{Clock, SystemClock};
+pub use cohort::{Cohort, Seat, SeatState};
 pub use consumer::{ConsumerHandle, GrantCredit, SpillStats};
 pub use error::MemoryError;
 pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
@@ -265,6 +267,12 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// releases its memory without waiting for its next batch boundary.
     fn aborted(&self) -> BoxFuture<'_, MemoryError> {
         Box::pin(std::future::pending())
+    }
+    /// The cohort `name` of this pool's query, shared by every pool of the
+    /// query (see [`Cohort`]); `None` outside a query.
+    fn cohort(&self, name: &'static str) -> Option<std::sync::Arc<Cohort>> {
+        let _ = name;
+        None
     }
 }
 
