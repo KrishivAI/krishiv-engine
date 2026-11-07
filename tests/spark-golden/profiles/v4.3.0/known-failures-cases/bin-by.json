@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "parser-tail": [
+      3,
+      4,
+      5
+    ],
+    "s43-other": [
+      6,
+      7
+    ]
+  },
+  "file": "bin-by",
+  "format_version": 1
+}

@@ -1,0 +1,23 @@
+{
+  "cases": {
+    "s43-other": [
+      16,
+      18,
+      19,
+      22,
+      24,
+      28,
+      33,
+      41,
+      42,
+      43,
+      44,
+      46,
+      48,
+      50,
+      52
+    ]
+  },
+  "file": "generators-resolution-edge-cases",
+  "format_version": 1
+}
