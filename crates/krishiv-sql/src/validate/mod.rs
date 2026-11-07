@@ -32,12 +32,14 @@
 //! | a bucket count of 0 or above `bucketing.maxBuckets` | `INVALID_BUCKET_COUNT` |
 //! | a `DESCRIBE` with `AS JSON` but no `EXTENDED`/`FORMATTED`, with a column and `AS JSON`, or with a column and a partition | `DESCRIBE_JSON_NOT_EXTENDED`, `UNSUPPORTED_FEATURE.DESC_TABLE_COLUMN_JSON`, `UNSUPPORTED_FEATURE.DESC_TABLE_COLUMN_PARTITION` |
 //! | a `DESCRIBE` partition key without a value | `INVALID_SQL_SYNTAX.EMPTY_PARTITION_VALUE` |
+//! | a partition key written twice | `DUPLICATE_KEY` (see [`keys`]) |
 //!
 //! Not checked here (the analyzer raises it, `Resolver::inline_table`): an inline table whose expressions fail when Spark
 //! evaluates them while parsing (`INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION`),
 //! which needs expression evaluation.
 
 pub(crate) mod interval;
+mod keys;
 pub(crate) mod literal;
 mod pipe;
 mod relation;
@@ -49,7 +51,7 @@ mod types;
 use std::collections::HashSet;
 
 use krishiv_common::error::{
-    CreateTableColumnDescriptorDuplicate, DescribeJsonNotExtended, DuplicateClauses,
+    CreateTableColumnDescriptorDuplicate, DescribeJsonNotExtended, DuplicateClauses, DuplicateKey,
     DuplicatedCteNames, FeatureNotEnabled, IdentityColumnsDuplicatedSequenceGeneratorOption,
     IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceWhereTableAliasNotAllowed,
     InvalidBucketCount, InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit,
@@ -64,6 +66,7 @@ use krishiv_common::error::{
     UnsupportedFeatureLateralJoinUsing, UnsupportedFeatureSchemaLevelCollations,
     UnsupportedFeatureSqlCursor, UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
 };
+use krishiv_common::names::to_sql_id;
 
 pub(crate) use self::types::data_type;
 use crate::ParserOptions;
@@ -814,24 +817,9 @@ impl Checker<'_> {
                 as_json,
                 ..
             } => {
-                self.ddl_name(table)?;
-                if let Some(spec) = partition {
-                    for part in &spec.parts {
-                        if part.value.is_none() {
-                            return Err(at(
-                                InvalidSqlSyntaxEmptyPartitionValue {
-                                    part_key: quote(&part.key.value),
-                                },
-                                d.span,
-                            ));
-                        }
-                    }
-                    spec.parts
-                        .iter()
-                        .filter_map(|p| p.value.as_ref())
-                        .try_for_each(|e| self.expr(e))?;
-                }
-                column.iter().try_for_each(|c| self.column_name(c))?;
+                // `SparkSqlParser.visitDescribeRelation`: `AS JSON` without a mode, the name, then a
+                // column (with a partition, or `AS JSON`), else the partition spec (its values and
+                // repeated keys, then a key without a value).
                 if *as_json && mode.is_none() {
                     return Err(at(
                         DescribeJsonNotExtended {
@@ -840,11 +828,28 @@ impl Checker<'_> {
                         d.span,
                     ));
                 }
-                if *as_json && !column.is_empty() {
-                    return Err(at(UnsupportedFeatureDescTableColumnJson {}, d.span));
+                self.ddl_name(table)?;
+                if !column.is_empty() {
+                    if partition.is_some() {
+                        return Err(at(UnsupportedFeatureDescTableColumnPartition {}, d.span));
+                    }
+                    if *as_json {
+                        return Err(at(UnsupportedFeatureDescTableColumnJson {}, d.span));
+                    }
+                    return column.iter().try_for_each(|c| self.column_name(c));
                 }
-                if !column.is_empty() && partition.is_some() {
-                    return Err(at(UnsupportedFeatureDescTableColumnPartition {}, d.span));
+                self.partition_values(partition.as_ref())?;
+                if let Some(part) = partition
+                    .iter()
+                    .flat_map(|s| &s.parts)
+                    .find(|p| p.value.is_none())
+                {
+                    return Err(at(
+                        InvalidSqlSyntaxEmptyPartitionValue {
+                            part_key: quote(&part.key.value),
+                        },
+                        d.span,
+                    ));
                 }
                 Ok(())
             }
@@ -910,11 +915,39 @@ impl Checker<'_> {
     }
 
     /// The values of a `PARTITION` specification's keys.
+    /// Then a repeated key (lower case unless `spark.sql.caseSensitive`) is `DUPLICATE_KEY` at the spec, the key
+    /// quoted by `toSQLId` (`INVALID_ATTRIBUTE_NAME_SYNTAX` when it is not an attribute name), as
+    /// `AstBuilder.visitPartitionSpec` checks before the table is looked up.
     fn partition_values(&self, spec: Option<&PartitionSpec>) -> R {
-        spec.into_iter()
-            .flat_map(|s| &s.parts)
+        let Some(spec) = spec else {
+            return Ok(());
+        };
+        spec.parts
+            .iter()
             .filter_map(|p| p.value.as_ref())
-            .try_for_each(|e| self.expr(e))
+            .try_for_each(|e| self.expr(e))?;
+        let keys: Vec<String> = spec
+            .parts
+            .iter()
+            .map(|p| {
+                if self.opts.case_sensitive {
+                    p.key.value.clone()
+                } else {
+                    p.key.value.to_lowercase()
+                }
+            })
+            .collect();
+        let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+        match keys::first_duplicate_key(&keys) {
+            None => Ok(()),
+            Some(key) => Err(at(
+                match to_sql_id(key) {
+                    Ok(key_column) => DuplicateKey { key_column }.into(),
+                    Err(e) => e,
+                },
+                spec.span,
+            )),
+        }
     }
 
     /// The values of `OPTIONS`, `TBLPROPERTIES` and similar lists.
