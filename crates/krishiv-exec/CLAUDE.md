@@ -119,6 +119,7 @@ Paths are relative to this crate.
   tables place rows by the seeded `g = finalize(h, seed)`; `rows/flooding_tests.rs` bounds probe runs under crafted and forged `h` collisions
 - `src/window/mod.rs` window operator and plan types; `src/window/eval.rs` frames, ranking and frame aggregates; `src/planner/window.rs` plans it over sorted input
 - `src/operators/file_scan.rs` and `file_write.rs` file scan and write operators over `krishiv-io`
+- `src/planner/ndv_sample.rs` (P2-T164 U6) `FileTable::sample_distinct`: plan-time distinct-value samples of the file columns an equality or `IN` compares (first rows in file order through `ScanStream`, `krishiv.optimizer.ndvSampling.*`), exact for a table the sample read whole, else GEE (`estimate`); cached in `krishiv_io::DistinctSamples`; `FileTable::statistics` reports them as `StatSource::Sampled`
 
 ## Extension points
 - New operator: follow skill `krishiv-operator`; stateless ones go in `src/operators/`, stateful ones next to aggregate or join.

@@ -44,6 +44,14 @@ pub trait HostSetup: Send + Sync + 'static {
     /// configuration, over the cluster's shared object store. The
     /// simulation adds the exchange.
     fn worker(&self) -> BoxFuture<'static, Result<WorkerContext>>;
+
+    /// Called when the coordinator releases `job` on host `host`: the
+    /// broadcast builds the job started there and how many of them did not
+    /// fit (`krishiv.exec.join.sharedBroadcastBytes`), so each task built
+    /// its own table. A test's view of what the workers shared.
+    fn released(&self, host: usize, job: u64, builds: usize, fallbacks: usize) {
+        let _ = (host, job, builds, fallbacks);
+    }
 }
 
 /// The execution seed of a task: from the simulation's seed, its job,
@@ -77,6 +85,7 @@ struct Host {
     executor: Arc<dyn Executor>,
     pool: Arc<dyn MemoryPool>,
     runner: QueryRunner,
+    setup: Arc<dyn HostSetup>,
     /// Each running job's exchange and broadcast builds, until the
     /// coordinator releases it.
     jobs: Mutex<BTreeMap<u64, Job>>,
@@ -115,6 +124,7 @@ pub async fn serve(
         workers: workers.clone(),
         fault,
         runner: QueryRunner::new(Arc::clone(&executor)),
+        setup,
         executor,
         pool,
         jobs: Mutex::default(),
@@ -171,10 +181,19 @@ impl Host {
     async fn answer(&self, mut stream: TcpStream) -> Result<()> {
         match Request::read(&mut stream).await? {
             Request::Release { job } => {
-                self.jobs
+                let released = self
+                    .jobs
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .remove(&job);
+                if let Some(j) = released {
+                    self.setup.released(
+                        self.index,
+                        job,
+                        j.broadcasts.builds(),
+                        j.broadcasts.fallbacks(),
+                    );
+                }
                 Reply::Done(Vec::new()).write(&mut stream).await
             }
             Request::Run {
@@ -382,6 +401,7 @@ mod tests {
             workers: testing::workers(&["worker-0"]),
             fault: None,
             runner: QueryRunner::new(Arc::clone(&executor)),
+            setup: Arc::new(Empty),
             executor,
             pool: TreePool::with_clock(&MemoryConfig::default(), Arc::new(TokioClock)),
             jobs: Mutex::default(),

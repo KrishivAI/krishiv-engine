@@ -40,8 +40,8 @@ TopN 100, [s_acctbal#14 DESC NULLS LAST, n_name#22 ASC NULLS FIRST, s_name#10 AS
                      :  :- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19]
                      :  +- BroadcastExchange
                      :     +- Project [p_partkey#0, p_mfgr#2]
-                     :        +- Filter ((p_type#4 like '%BRASS') and (p_size#5 == 15))
-                     :           +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5], PushedFilters: [((p_type#4 like '%BRASS') and (p_size#5 == 15))]
+                     :        +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
+                     :           +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5], PushedFilters: [((p_size#5 == 15) and (p_type#4 like '%BRASS'))]
                      +- BroadcastExchange
                         +- Project [s_suppkey#9, s_name#10, s_address#11, s_phone#13, s_acctbal#14, s_comment#15, n_name#22]
                            +- HashJoin Inner, [s_nationkey#12] = [n_nationkey#21], RuntimeFilter #7: s_nationkey#12 -> spark_catalog.default.supplier.s_nationkey
