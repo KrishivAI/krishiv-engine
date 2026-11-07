@@ -154,6 +154,7 @@
 //! the tables: two clock reads per batch, for
 //! [`QueryMetrics::hash_probe_share`](crate::QueryMetrics::hash_probe_share)).
 
+mod block;
 mod broadcast;
 mod build;
 mod fallback;

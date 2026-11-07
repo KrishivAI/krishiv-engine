@@ -213,7 +213,7 @@ impl Cols {
     }
 }
 
-/// An arena's bytes by part ([`RowArena::memory_split`]), as `get_array_memory_size` counts them.
+/// An arena's bytes by part ([`RowArena::memory_split`]): each block's rows' share of its buffers.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct ArenaBytes {
     pub(crate) hash: usize,
@@ -222,9 +222,11 @@ pub(crate) struct ArenaBytes {
     pub(crate) other: usize,
 }
 
-/// One chunk of an arena: a batch of build rows and its columns, read in place.
+/// One block of an arena: a batch of build rows and its columns, read in place.
 #[derive(Debug)]
 struct ArenaPart {
+    /// `batch.num_rows()`, kept beside the columns `at` reads.
+    rows: u32,
     batch: Batch,
     hashes: UInt64Array,
     keys: Cols,
@@ -237,6 +239,7 @@ struct ArenaPart {
 impl ArenaPart {
     fn of(batch: Batch) -> Result<Self> {
         let bad = || internal("malformed join row arena".to_owned());
+        let rows = u32::try_from(batch.num_rows()).map_err(|_| bad())?;
         let hashes = batch.data().column_by_name("hash").ok_or_else(bad)?;
         let hashes = hashes
             .as_primitive_opt::<UInt64Type>()
@@ -249,6 +252,7 @@ impl ArenaPart {
             None => None,
         };
         Ok(Self {
+            rows,
             batch,
             hashes,
             keys,
@@ -258,116 +262,199 @@ impl ArenaPart {
     }
 }
 
-/// One partition's build rows: its chunks read in place (X3' step 3, design
-/// `P2-X3-copy-free-join-finalize`; no concatenation copy at finalize). Rows
-/// are numbered across the chunks in order; `starts[i]` is chunk `i`'s first
-/// row id and `starts[parts.len()]` is the row count.
+/// Rows per arena block: `1 << ARENA_SHIFT` (X3' step 3 option C, study 10
+/// §4: 16,384 rows, about 1-6 MB of build rows).
+pub(crate) const ARENA_SHIFT: u32 = 14;
+/// [`ARENA_SHIFT`] as a row count.
+pub(crate) const ARENA_ROWS: usize = 1 << ARENA_SHIFT;
+
+/// One partition's build rows, read in place (X3' step 3, design
+/// `P2-X3-copy-free-join-finalize` option C): blocks of exactly
+/// `1 << shift` rows, the last one shorter, so row `id` is row
+/// `id & mask` of block `id >> shift`, found without a table or a search.
+/// Rows are numbered across the blocks in order.
 #[derive(Debug)]
 pub(crate) struct RowArena {
     parts: Vec<ArenaPart>,
-    starts: Vec<u32>,
-    /// For each block of [`ARENA_BLOCK`] rows, the chunk holding the block's
-    /// first row, when there are two or more chunks: a row's chunk is that
-    /// one or a few after it (4 bytes per block, small enough to stay in
-    /// cache, unlike a byte per row).
-    block_chunk: Vec<u32>,
+    shift: u32,
     len: usize,
 }
 
-/// Rows per entry of [`RowArena::block_chunk`] (`1 << ARENA_BLOCK_SHIFT`).
-const ARENA_BLOCK_SHIFT: u32 = 6;
-const ARENA_BLOCK: usize = 1 << ARENA_BLOCK_SHIFT;
+/// How [`RowArena::over_chunks`] cuts chunks into blocks: each entry is a
+/// block of pieces `(chunk, offset, rows)`; a block of one piece is a
+/// zero-copy slice, one of several is concatenated. Every whole block a
+/// chunk holds comes first, in order; then the tails (chunks shorter than a
+/// block, and what is left of longer ones) are joined into blocks, the last
+/// one shorter. A partition's chunks are its drivers' lists one after
+/// another, each ending in a tail: in row order, the first tail would shift
+/// every later block across two chunks and copy it.
+fn block_plan(chunks: &[Batch], block: usize) -> Vec<Vec<(usize, usize, usize)>> {
+    let mut blocks = Vec::new();
+    let mut tails = Vec::new();
+    for (c, chunk) in chunks.iter().enumerate() {
+        let n = chunk.num_rows();
+        let whole = n - n % block;
+        blocks.extend((0..whole).step_by(block).map(|at| vec![(c, at, block)]));
+        if whole < n {
+            tails.push((c, whole, n - whole));
+        }
+    }
+    let mut pending: Vec<(usize, usize, usize)> = Vec::new();
+    let mut held = 0usize;
+    for (c, mut at, mut n) in tails {
+        while n > 0 {
+            let take = (block - held).min(n);
+            pending.push((c, at, take));
+            held += take;
+            at += take;
+            n -= take;
+            if held == block {
+                blocks.push(std::mem::take(&mut pending));
+                held = 0;
+            }
+        }
+    }
+    if !pending.is_empty() {
+        blocks.push(pending);
+    }
+    blocks
+}
+
+/// The bytes a slice of `len` rows at `offset` of `batch` takes once copied
+/// (its rows' share of the buffers, weights included).
+fn slice_bytes(batch: &Batch, offset: usize, len: usize) -> usize {
+    let data = batch.data();
+    let columns: usize = data
+        .columns()
+        .iter()
+        .map(|c| {
+            let part = c.slice(offset, len).to_data();
+            part.get_slice_memory_size()
+                .unwrap_or_else(|_| part.get_array_memory_size())
+        })
+        .fold(0, usize::saturating_add);
+    let weights = match batch.weights() {
+        Weights::Const(_) => 0,
+        Weights::Column(_) => len * size_of::<i64>(),
+    };
+    columns.saturating_add(weights)
+}
 
 impl RowArena {
-    /// The arena over `chunks` (same schema, in order), without copying their
-    /// rows. Empty chunks are skipped; an arena of no rows keeps one empty
-    /// chunk of `schema`, so its key format is still known.
+    /// The arena over `chunks` (same schema). Chunks are cut into blocks of
+    /// [`ARENA_ROWS`] rows: a block inside one chunk is a zero-copy slice,
+    /// the chunks' tails are copied into blocks ([`block_plan`] gives the
+    /// row order; [`reblock_bytes`](Self::reblock_bytes) bounds the copy).
+    /// One chunk keeps its row order.
+    /// An arena of no rows keeps one empty chunk of `schema`, so its key
+    /// format is still known.
     pub(crate) fn over_chunks(schema: &SchemaRef, chunks: &[Batch]) -> Result<Self> {
-        let mut parts = Vec::with_capacity(chunks.len().max(1));
-        let mut starts = Vec::with_capacity(chunks.len() + 1);
+        Self::with_shift(schema, chunks, ARENA_SHIFT)
+    }
+
+    fn with_shift(schema: &SchemaRef, chunks: &[Batch], shift: u32) -> Result<Self> {
+        let block = 1usize << shift;
+        let plan = block_plan(chunks, block);
+        let mut parts = Vec::with_capacity(plan.len().max(1));
         let mut len = 0usize;
-        for chunk in chunks.iter().filter(|c| c.num_rows() > 0) {
-            starts.push(Self::row_id(len)?);
-            len = len.saturating_add(chunk.num_rows());
-            parts.push(ArenaPart::of(chunk.clone())?);
+        for pieces in plan {
+            let batch = match pieces.as_slice() {
+                [(c, at, n)] => match chunks.get(*c) {
+                    Some(chunk) if *at == 0 && *n == chunk.num_rows() => chunk.clone(),
+                    Some(chunk) => chunk.slice(*at, *n).map_err(|e| internal(e.to_string()))?,
+                    None => return Err(internal("join arena block out of range".to_owned())),
+                },
+                _ => {
+                    let slices = pieces
+                        .iter()
+                        .map(|&(c, at, n)| {
+                            chunks
+                                .get(c)
+                                .ok_or_else(|| {
+                                    internal("join arena block out of range".to_owned())
+                                })?
+                                .slice(at, n)
+                                .map_err(|e| internal(e.to_string()))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Batch::concat(schema, &slices).map_err(|e| internal(e.to_string()))?
+                }
+            };
+            len = len.saturating_add(batch.num_rows());
+            parts.push(ArenaPart::of(batch)?);
         }
         if parts.is_empty() {
             let empty = match chunks.first() {
                 Some(c) => c.clone(),
                 None => Batch::new(RecordBatch::new_empty(Arc::clone(schema))),
             };
-            starts.push(0);
             parts.push(ArenaPart::of(empty)?);
         }
-        starts.push(Self::row_id(len)?);
-        let mut block_chunk = Vec::new();
-        if parts.len() > 1 {
-            block_chunk
-                .try_reserve_exact(len.div_ceil(ARENA_BLOCK))
-                .map_err(|e| internal(e.to_string()))?;
-            let mut chunk = 0usize;
-            for first in (0..len).step_by(ARENA_BLOCK) {
-                while starts.get(chunk + 1).is_some_and(|&s| s as usize <= first) {
-                    chunk += 1;
+        Self::row_id(len)?;
+        Ok(Self { parts, shift, len })
+    }
+
+    /// What [`over_chunks`](Self::over_chunks) copies to build the blocks
+    /// that span chunks: `(copy, kept)`, the bytes of the copy (reserved
+    /// before it, buffer rounding included) and of the part of it that stays
+    /// beside its source once the arena is built, because the source chunk
+    /// lives on: the first `live` chunks (held by their owner), and chunks
+    /// that also give whole blocks (sliced in place). The rest of the copy
+    /// replaces chunks that are dropped.
+    pub(crate) fn reblock_bytes(chunks: &[Batch], live: usize) -> (usize, usize) {
+        // Each new buffer rounds up to 64 bytes; about three per column.
+        let rounding = chunks
+            .first()
+            .map_or(0, |c| c.data().num_columns().saturating_add(1) * 3 * 64);
+        let mut copy = 0usize;
+        let mut kept = 0usize;
+        for pieces in block_plan(chunks, ARENA_ROWS)
+            .iter()
+            .filter(|p| p.len() > 1)
+        {
+            copy = copy.saturating_add(rounding);
+            for &(c, at, n) in pieces {
+                let Some(b) = chunks.get(c) else { continue };
+                let bytes = slice_bytes(b, at, n);
+                copy = copy.saturating_add(bytes);
+                if c < live || b.num_rows() >= ARENA_ROWS {
+                    kept = kept.saturating_add(bytes);
                 }
-                block_chunk.push(Self::row_id(chunk)?);
             }
         }
-        Ok(Self {
-            parts,
-            starts,
-            block_chunk,
-            len,
-        })
+        (copy, kept)
     }
 
     fn row_id(n: usize) -> Result<u32> {
         u32::try_from(n).map_err(|_| internal("a join partition has over 2^32 rows".to_owned()))
     }
 
-    /// The bytes of the block-to-chunk table (part of the index's cost).
-    pub(crate) fn chunk_table_bytes(&self) -> usize {
-        self.block_chunk.capacity() * size_of::<u32>()
-    }
-
-    /// The bytes [`chunk_table_bytes`](Self::chunk_table_bytes) is at most
-    /// for `rows` rows.
-    pub(crate) fn chunk_table_bound(rows: usize) -> usize {
-        rows.div_ceil(ARENA_BLOCK) * size_of::<u32>()
-    }
-
-    /// The chunk holding row `row` and the row's index in it (`None` past
+    /// The block holding row `row` and the row's index in it (`None` past
     /// the end).
     #[inline]
     fn at(&self, row: u32) -> Option<(&ArenaPart, u32)> {
-        if (row as usize) >= self.len {
-            return None;
-        }
-        if let [one] = self.parts.as_slice() {
-            return Some((one, row));
-        }
-        let mut i = *self.block_chunk.get((row >> ARENA_BLOCK_SHIFT) as usize)? as usize;
-        // The block's chunk starts at or before `row`; a later one may too
-        // (chunks shorter than a block).
-        while self.starts.get(i + 1).is_some_and(|&s| s <= row) {
-            i += 1;
-        }
-        let part = self.parts.get(i)?;
-        Some((part, row.checked_sub(*self.starts.get(i)?)?))
+        let part = self.parts.get((row >> self.shift) as usize)?;
+        let local = row & ((1u32 << self.shift) - 1);
+        (local < part.rows).then_some((part, local))
     }
 
     pub(crate) fn len(&self) -> usize {
         self.len
     }
 
-    /// The arena's bytes by part (`get_array_memory_size`, the measure its reservation uses): the `hash` column, the key
-    /// columns (`key*`), and everything else (payload, NULL-key flags).
+    /// The arena's bytes by part (each block's share of its buffers): the `hash` column, the key columns (`key*`), and
+    /// everything else (payload, NULL-key flags).
     pub(crate) fn memory_split(&self) -> ArenaBytes {
         let mut out = ArenaBytes::default();
         for part in &self.parts {
             let data = part.batch.data();
             for (field, column) in data.schema().fields().iter().zip(data.columns()) {
-                let bytes = column.get_array_memory_size();
+                // Blocks sliced from one chunk share its buffers: count each
+                // block's rows only.
+                let column = column.to_data();
+                let bytes = column
+                    .get_slice_memory_size()
+                    .unwrap_or_else(|_| column.get_array_memory_size());
                 let name = field.name();
                 if name == "hash" {
                     out.hash += bytes;
@@ -397,7 +484,13 @@ impl RowArena {
         self.parts
             .iter()
             .map(|p| match &p.keys {
-                Cols::Arrow(k) => k.values().len(),
+                // A block sliced from a chunk shares its values: count the
+                // block's own range.
+                Cols::Arrow(k) => {
+                    let o = k.value_offsets();
+                    let span = o.last().copied().unwrap_or(0) - o.first().copied().unwrap_or(0);
+                    usize::try_from(span).unwrap_or(0)
+                }
                 Cols::Rows(_) => 0,
             })
             .sum()
@@ -577,12 +670,6 @@ impl JoinTable {
     /// per row. Row layout: the [`JoinIndex`] sized for one key per row and
     /// a link per row (it copies no keys and holds the heads itself).
     pub(crate) fn index_bytes(rows: usize, key_bytes: usize, row_layout: bool) -> usize {
-        // Plus the arena's chunk table (`RowArena::chunk_table_bytes`).
-        Self::index_only_bytes(rows, key_bytes, row_layout)
-            .saturating_add(RowArena::chunk_table_bound(rows))
-    }
-
-    fn index_only_bytes(rows: usize, key_bytes: usize, row_layout: bool) -> usize {
         if row_layout {
             IndexChoice::Adaptive
                 .bytes(rows)
@@ -642,10 +729,7 @@ impl JoinTable {
             }
             Index::Rows { index, .. } => index.memory_size(),
         };
-        index
-            + self.next.capacity() * size_of::<u32>()
-            + self.marks.capacity() * size_of::<u64>()
-            + self.arena.chunk_table_bytes()
+        index + self.next.capacity() * size_of::<u32>() + self.marks.capacity() * size_of::<u64>()
     }
 
     /// Bytes of the match bitmap of a table of `rows` rows
@@ -985,11 +1069,12 @@ mod tests {
         }
     }
 
-    /// An arena over several chunks (no copy, X3' step 3) reads every row as the one batch of the same rows does:
-    /// through the block-to-chunk table, with chunks longer and shorter than a block, past 256 chunks, with empty
-    /// chunks skipped, and the index built over it chains the same rows.
+    /// An arena over several chunks (X3' step 3 option C) holds every row of the one batch of the same rows, in blocks
+    /// of `1 << shift` rows: whole blocks of a chunk first, in order (zero-copy), then the tails joined; with chunks
+    /// longer and shorter than a block, empty ones and many tiny ones. One chunk keeps its order; the index built over
+    /// the blocks finds the same keys.
     #[test]
-    fn a_chunked_arena_reads_and_indexes_as_one_batch() {
+    fn a_blocked_arena_holds_the_rows_of_one_batch() {
         let schema =
             arena_schema(ArenaFormat::Arrow { payload: false }).unwrap_or_else(|e| panic!("{e}"));
         let n = 600usize;
@@ -1000,7 +1085,7 @@ mod tests {
                     Arc::clone(&schema),
                     vec![
                         Arc::new(UInt64Array::from_iter_values(
-                            rows.clone().map(|i| (i % 97) as u64),
+                            rows.clone().map(|i| i as u64),
                         )),
                         Arc::new(LargeBinaryArray::from_iter_values(rows.map(key))),
                     ],
@@ -1008,9 +1093,30 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{e}")),
             )
         };
+        let rows_of = |arena: &RowArena| {
+            let mut out: Vec<(u64, Vec<u8>)> = (0..u32::try_from(arena.len()).unwrap_or(0))
+                .map(|r| {
+                    (
+                        arena.hash(r),
+                        arena.key_bytes(r).unwrap_or_default().to_vec(),
+                    )
+                })
+                .collect();
+            out.sort();
+            out
+        };
         let one = RowArena::over_chunks(&schema, &[batch(0..n)]).unwrap_or_else(|e| panic!("{e}"));
-        // Uneven chunks with empty ones between, a block-aligned edge (64, 128); then 300 chunks of 2 rows
-        // (many chunks per block, more than 256 chunks).
+        let all = rows_of(&one);
+        // One chunk, longer than a block: sliced in order, nothing copied.
+        let sliced =
+            RowArena::with_shift(&schema, &[batch(0..n)], 4).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(sliced.parts.len(), n.div_ceil(16));
+        for row in 0..u32::try_from(n).unwrap_or(0) {
+            assert_eq!(sliced.hash(row), u64::from(row), "row {row}");
+        }
+        assert_eq!(RowArena::reblock_bytes(&[batch(0..n)], 0), (0, 0));
+        // Its key bytes are counted once, not once per block of the chunk.
+        assert_eq!(sliced.arrow_key_bytes(), one.arrow_key_bytes());
         let uneven: Vec<Batch> = [
             0..1,
             1..1,
@@ -1026,11 +1132,17 @@ mod tests {
         .collect();
         let many: Vec<Batch> = (0..n / 2).map(|c| batch(2 * c..2 * c + 2)).collect();
         for chunks in [uneven, many] {
-            let arena = RowArena::over_chunks(&schema, &chunks).unwrap_or_else(|e| panic!("{e}"));
+            let arena = RowArena::with_shift(&schema, &chunks, 4).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(arena.len(), n);
+            assert_eq!(rows_of(&arena), all);
+            // Every block but the last is full.
+            let (last, full) = arena
+                .parts
+                .split_last()
+                .unwrap_or_else(|| panic!("no blocks"));
+            assert!(full.iter().all(|p| p.rows == 16));
+            assert!((1..=16).contains(&last.rows));
             for row in 0..u32::try_from(n).unwrap_or(0) {
-                assert_eq!(arena.hash(row), one.hash(row), "row {row}");
-                assert_eq!(arena.key_bytes(row), one.key_bytes(row), "row {row}");
                 assert_eq!(arena.weight(row), 1, "row {row}");
             }
             // Past the end: nothing, not a panic.
@@ -1045,9 +1157,36 @@ mod tests {
                 0,
             )
             .unwrap_or_else(|e| panic!("{e}"));
-            assert_eq!(chained.next(), single.next());
             assert_eq!(chained.index_size().0, single.index_size().0);
         }
+        // Block-aligned chunks with tails between them (a partition's drivers' lists): the blocks are not copied,
+        // only the tails are.
+        let block = ARENA_ROWS;
+        let lists = [
+            batch(0..block),
+            batch(block..block + 5),
+            batch(block + 5..3 * block + 5),
+            batch(3 * block + 5..3 * block + 9),
+        ];
+        let arena = RowArena::over_chunks(&schema, &lists).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(arena.parts.len(), 4);
+        assert_eq!(arena.len(), 3 * block + 9);
+        // The two tails: one of a chunk that also gives blocks (kept beside it), one of a chunk the copy replaces.
+        let (copy, kept) = RowArena::reblock_bytes(&lists, 0);
+        assert!(kept > 0 && kept < copy && copy < 2048, "{copy} {kept}");
+        assert_eq!(
+            RowArena::reblock_bytes(&lists, 4),
+            (copy, copy - 3 * 3 * 64)
+        );
+        assert_eq!(arena.hash(0), 0);
+        assert_eq!(
+            arena.hash(u32::try_from(block).unwrap_or(0)),
+            (block + 5) as u64
+        );
+        assert_eq!(
+            arena.hash(u32::try_from(3 * block).unwrap_or(0)),
+            block as u64
+        );
     }
 
     /// An arena of no rows (a grace partition whose build side is empty, its
@@ -1064,7 +1203,6 @@ mod tests {
             assert!(arena.has_arrow_keys());
             assert_eq!(arena.hash(0), 0);
             assert_eq!(arena.key_bytes(0), None);
-            assert_eq!(arena.chunk_table_bytes(), 0);
             let table = JoinTable::build(arena, None, 0).unwrap_or_else(|e| panic!("{e}"));
             assert!(table.next().is_empty());
         }

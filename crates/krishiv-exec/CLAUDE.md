@@ -28,7 +28,8 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 `join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
-`probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join · `broadcast.rs`
+`probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join · `block.rs` a
+partition's chunks kept few: the probe side's tiered merge, the build side's cut into the arena's 2^14-row blocks · `broadcast.rs`
 (P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
 broadcast exchange builds its table once per job and worker (its own query over the resource's pool, no spill, its
 reservations never abort a query) and every task probes it through a `PrebuiltSink` that republishes its runtime

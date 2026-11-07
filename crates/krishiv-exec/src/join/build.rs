@@ -405,8 +405,9 @@ impl BuildSink {
 }
 
 /// What indexing a partition's in-memory rows reserves: its [`JoinTable`]
-/// index (and match bitmap when `marks`); `None` if no rows are in memory.
-/// The arena reads the chunks in place, so no copy of the rows is reserved.
+/// index (and match bitmap when `marks`), and the copy of the chunk tails
+/// the arena joins into blocks ([`RowArena::reblock_bytes`]); `None` if no
+/// rows are in memory.
 fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<usize> {
     if part.chunks.is_empty() {
         return None;
@@ -417,7 +418,7 @@ fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<usize> {
     if marks {
         index = index.saturating_add(JoinTable::marks_bytes(rows));
     }
-    Some(index)
+    Some(index.saturating_add(RowArena::reblock_bytes(&part.chunks, 0).0))
 }
 
 /// A duration in whole nanoseconds, saturating.
@@ -433,6 +434,9 @@ struct Job {
     chunks: Vec<Batch>,
     /// What indexing it reserves (see [`build_need`]).
     need: usize,
+    /// Of that, the arena's copied tails that stay beside chunks it also
+    /// slices: reserved through the probe ([`RowArena::reblock_bytes`]).
+    kept: usize,
     /// Its estimated distinct keys (row layout, when sketched).
     keys: Option<usize>,
 }
@@ -647,7 +651,7 @@ impl Sink for BuildSink {
         }
         for (p, c) in chunks {
             l.parts[p].chunks.push(c);
-            let merged = l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
+            let merged = l.parts[p].block(s.arena_schema(&g.hashing))?;
             s.counters.max(Counter::MaxCoalesceCopyBytes, merged as u64);
         }
         if let Some((sketches, _)) = &mut l.sketches {
@@ -710,7 +714,7 @@ impl Sink for BuildSink {
             let filter_memory = self.publish_filters(g, ctx);
             // Write what is left of spilled partitions; reserve the index of
             // the rest, spilling the largest while it does not fit. The arenas
-            // read the chunks in place, so finalize needs no copy of the rows.
+            // read the blocks in place; finalize copies only the chunk tails.
             let mut index = ctx.consumer().reservation();
             if s.spill.is_some() {
                 loop {
@@ -764,6 +768,7 @@ impl Sink for BuildSink {
                     .map(|(i, need, p, keys)| Job {
                         part: i,
                         bytes: p.bytes(),
+                        kept: RowArena::reblock_bytes(&p.chunks, 0).1,
                         chunks: std::mem::take(&mut p.chunks),
                         need,
                         keys,
@@ -802,6 +807,7 @@ impl Sink for BuildSink {
                         chunks,
                         need: index_bytes,
                         keys,
+                        kept,
                         ..
                     }) = jobs.pop_front_if(|_| funded)
                     {
@@ -836,7 +842,7 @@ impl Sink for BuildSink {
                                     table
                                 })
                                 .await?;
-                            Ok::<_, KrishivError>((p, table, index_bytes))
+                            Ok::<_, KrishivError>((p, table, index_bytes.saturating_sub(kept)))
                         });
                         continue;
                     }
@@ -846,7 +852,7 @@ impl Sink for BuildSink {
                 };
                 let (p, table, index_bytes) = done?;
                 // The index was reserved for one key per row: keep what it
-                // holds.
+                // holds (and the arena's copied tails that stay).
                 index.shrink(
                     index_bytes
                         .saturating_sub(table.index_memory())

@@ -33,6 +33,7 @@ use krishiv_memory::{
 };
 use krishiv_types::batch::Batch;
 
+use super::block::block_chunks;
 use super::build::BuildGlobal;
 use super::keys::{Hashing, MAX_DEPTH, PARTITIONS};
 use super::probe::{Cursor, Tables};
@@ -76,61 +77,6 @@ impl Part {
 
     pub(crate) fn mem_rows(&self) -> usize {
         self.chunks.iter().map(Batch::num_rows).sum()
-    }
-
-    /// Merges runs of small in-memory chunks (each chunk carries fixed array
-    /// overhead), if each merged copy can be reserved first.
-    ///
-    /// Size-tiered, like an LSM tree: a chunk's tier is `log16` of its bytes,
-    /// and only a trailing run of at least `FANOUT` chunks no higher in tier
-    /// than the newest one is merged. Merging every chunk held whenever the
-    /// count reached the fan-out copied the whole partition again every 15
-    /// pushes (quadratic in its size); tiered, a row is copied about once
-    /// per tier it climbs.
-    ///
-    /// Returns the bytes of the largest run merged (each merge reserves the
-    /// run again while it copies: the transient peak), 0 when none was.
-    pub(crate) fn coalesce(&mut self, schema: &SchemaRef) -> Result<usize> {
-        const FANOUT: usize = 16;
-        let size = |c: &Batch| c.data().get_array_memory_size();
-        let tier = |c: &Batch| size(c).max(1).ilog(FANOUT);
-        let mut largest = 0;
-        while self.chunks.len() >= FANOUT {
-            let Some(top) = self.chunks.last().map(tier) else {
-                return Ok(largest);
-            };
-            let run = self
-                .chunks
-                .iter()
-                .rev()
-                .take_while(|c| tier(c) <= top)
-                .count();
-            if run < FANOUT {
-                return Ok(largest);
-            }
-            let from = self.chunks.len() - run;
-            let old: usize = self.chunks[from..].iter().map(size).sum();
-            let Some(m) = self.memory.first_mut().filter(|m| m.size() >= old) else {
-                return Ok(largest);
-            };
-            if m.try_grow(old).is_err() {
-                return Ok(largest);
-            }
-            let merged =
-                Batch::concat(schema, &self.chunks[from..]).map_err(|e| internal(e.to_string()));
-            let merged = match merged {
-                Ok(b) if size(&b) <= old => b,
-                other => {
-                    m.shrink(old);
-                    return other.map(|_| largest);
-                }
-            };
-            largest = largest.max(old);
-            m.shrink(old + old - size(&merged));
-            self.chunks.truncate(from);
-            self.chunks.push(merged);
-        }
-        Ok(largest)
     }
 
     pub(crate) fn absorb(&mut self, other: Self) {
@@ -1199,6 +1145,16 @@ impl Loading {
                     return Ok(Loaded::Need(bytes));
                 }
                 self.chunks.push(b);
+                // Spill frames are slices of 64 KiB: joined into blocks as
+                // they come, one block's copy at a time, not all at the end.
+                let copied = block_chunks(
+                    &mut self.chunks,
+                    &mut self.memory,
+                    shared.arena_schema(hashing),
+                )?;
+                shared
+                    .counters
+                    .max(Counter::MaxCoalesceCopyBytes, copied as u64);
             }
             if self.reader.is_none() {
                 let Some(file) = self.task.build.files.get(self.file) else {
@@ -1234,7 +1190,8 @@ impl Loading {
         }
         // Every row read: the table's index and the probe rows' read-back
         // headroom (exact, so a partition that loads can always be joined).
-        // The arena reads the chunks in place: no concatenated copy.
+        // The arena reads the chunks in place, copying only blocks that span
+        // chunks.
         let chunks: Vec<Batch> = self
             .task
             .build
@@ -1250,14 +1207,20 @@ impl Loading {
         } else {
             0
         };
-        let need =
-            JoinTable::index_bytes(rows, key_bytes(&chunks), hashing.rows()) + marks + headroom;
+        // Blocks that span chunks are copied: reserved, and the part beside
+        // chunks that live on (the task's own build chunks) stays reserved.
+        let (copy, kept) = RowArena::reblock_bytes(&chunks, self.task.build.chunks.len());
+        let need = JoinTable::index_bytes(rows, key_bytes(&chunks), hashing.rows())
+            + marks
+            + headroom
+            + copy;
         if self.memory.try_grow(need).is_err() {
             return Ok(Loaded::Need(need));
         }
         let arena = RowArena::over_chunks(shared.arena_schema(hashing), &chunks)?;
         drop(chunks);
         self.chunks.clear();
+        self.memory.shrink(copy - kept);
         let layout = shared.keys.layout().filter(|_| hashing.rows());
         let mut table = JoinTable::build(arena, layout, hashing.g_seed())?;
         if shared.join_type.builds_preserved() {
@@ -1613,81 +1576,6 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
-    }
-
-    /// Coalescing is size-tiered: a merged chunk is not copied again by the
-    /// next run of small chunks (merging all chunks every 16 pushes was
-    /// quadratic), the chunk count stays bounded, and no row is lost.
-    #[test]
-    fn coalescing_does_not_recopy_merged_chunks() {
-        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
-        let id = pool.register("coalesce", None);
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int64, false),
-            Field::new("s", DataType::Utf8, false),
-        ]));
-        let chunk = |i: i64| {
-            let k = Int64Array::from_iter_values(i * 300..(i + 1) * 300);
-            let s = StringArray::from_iter_values((0..300).map(|j| format!("row-{i}-{j}")));
-            Batch::new(
-                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(s)]).unwrap(),
-            )
-        };
-        let mut parts = vec![Part::with_memory(krishiv_memory::Reservation::new(
-            Arc::clone(&pool),
-            id,
-        ))];
-        let push = |parts: &mut Vec<Part>, i: i64| {
-            let c = chunk(i);
-            reserve_chunks(parts, &[(0, c.clone())]).unwrap();
-            parts[0].chunks.push(c);
-            parts[0].coalesce(&schema).unwrap()
-        };
-        let sizes: usize = (0..16)
-            .map(|i| chunk(i).data().get_array_memory_size())
-            .sum();
-        let mut merged_run = 0;
-        for i in 0..16 {
-            merged_run = push(&mut parts, i);
-        }
-        assert_eq!(parts[0].chunks.len(), 1, "16 small chunks merge");
-        // It reports the run it merged: the 16 chunks' bytes.
-        assert_eq!(merged_run, sizes);
-        let merged = Arc::clone(parts[0].chunks[0].data().column(0));
-        for i in 16..31 {
-            assert_eq!(push(&mut parts, i), 0, "no merge below the fan-out");
-        }
-        assert_eq!(parts[0].chunks.len(), 16);
-        let first = parts[0].chunks[0].data().column(0);
-        assert!(
-            Arc::ptr_eq(first, &merged),
-            "the merged chunk was copied again"
-        );
-        let mut most = 0;
-        for i in 31..1024 {
-            push(&mut parts, i);
-            most = most.max(parts[0].chunks.len());
-        }
-        assert!(most < 3 * 16, "{most} chunks held");
-        assert_eq!(parts[0].mem_rows(), 1024 * 300);
-        let mut keys: Vec<i64> = parts[0]
-            .chunks
-            .iter()
-            .flat_map(|c| {
-                let k = c
-                    .data()
-                    .column(0)
-                    .as_primitive::<arrow_array::types::Int64Type>();
-                k.values().to_vec()
-            })
-            .collect();
-        keys.sort_unstable();
-        assert!(
-            keys.into_iter().eq(0..1024 * 300),
-            "rows lost or duplicated"
-        );
-        drop(parts);
-        assert_eq!(pool.reserved(), 0);
     }
 
     /// Probe rows deferred in many small chunks are coalesced, spilled in
