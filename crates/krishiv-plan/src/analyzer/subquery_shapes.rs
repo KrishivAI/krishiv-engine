@@ -74,7 +74,7 @@ pub(super) fn aggregates_below(p: &LogicalPlan) -> bool {
 
 /// Whether `p` is one row of expressions over no relation: `SELECT 1`,
 /// `VALUES (1)`, through aliases and projections.
-pub(super) fn one_row_literals(p: &LogicalPlan) -> bool {
+fn one_row_literals(p: &LogicalPlan) -> bool {
     match &p.node {
         PlanNode::OneRowRelation => true,
         PlanNode::InlineTable { rows, .. } => rows.len() == 1,
@@ -85,9 +85,9 @@ pub(super) fn one_row_literals(p: &LogicalPlan) -> bool {
     }
 }
 
-/// `IN` forms Spark folds before any join (`NullPropagation`, one-row literals)
-/// left here: a NULL among several values, or several over one literal row
-/// (one value over one row is an equality). Refused, not answered two-valued.
+/// The `IN` forms Spark folds before any join (`NullPropagation`, the
+/// one-row literal rewrite): `v IN (q)` with a NULL `v`, or over a one-row
+/// literal relation. They are refused rather than answered two-valued.
 pub(super) fn check_in(values: &[Arc<Expr>], plan: &Arc<LogicalPlan>, origin: Origin) -> R<()> {
     if values.iter().any(|v| null_literal(v)) {
         return Err(unsupported("IN (subquery) with a NULL value", origin));

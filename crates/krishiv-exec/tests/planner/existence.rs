@@ -146,8 +146,7 @@ fn a_user_column_named_exists_never_collides() {
 #[test]
 fn forms_spark_folds_before_any_join_are_refused() {
     let env = env();
-    // One value over one row is an equality now (Spark folds it); several are not yet.
-    let sql = "SELECT a FROM t WHERE (a, s) IN (SELECT 1, 's1') OR s = 's0'";
+    let sql = "SELECT a FROM t WHERE a IN (SELECT 1) OR s = 's0'";
     let plan =
         krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
             .unwrap();

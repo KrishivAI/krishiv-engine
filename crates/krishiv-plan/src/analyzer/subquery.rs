@@ -44,7 +44,7 @@ use super::catalog::{FunctionLookup, FunctionRegistry};
 use super::exprs::{builtin_name, literal_type, pretty};
 use super::ops::{MAX_ID, col_expr};
 use super::subquery_shapes::{aggregates_below, check_in, positive_literal};
-pub(super) use super::subquery_shapes::{null_literal, one_row_aggregate, one_row_literals};
+pub(super) use super::subquery_shapes::{null_literal, one_row_aggregate};
 use super::{AnalysisError, ResolutionConf, SparkProfile};
 use crate::walk::{Node, visit_distinct};
 use crate::{

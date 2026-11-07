@@ -6,9 +6,9 @@
 //! name over a grouping key.
 #![cfg(test)]
 
-use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
+use arrow_array::{Array, RecordBatch};
 use futures::executor::block_on;
 use krishiv_session::Session;
 
@@ -91,24 +91,29 @@ fn calls_are_named_as_spark_names_them() {
     assert_eq!(schema.field(2).name(), "grouping(id(c1))");
 }
 
-/// `x IN (SELECT 1)` is `x = 1` (Spark folds the one-row subquery), so a
-/// NULL `x` is NULL and the rest compare; inside a SQL function too.
+/// `x IN (one row of values)` over a column stays refused: Spark answers it
+/// two-valued (a NULL `x` or value gives false, and `NOT` over it is
+/// null-aware), which an equality would not (review of #505, checked on Spark
+/// 4.2.0). A constant NULL is folded first, to NULL, as Spark's
+/// `NullPropagation` does.
 #[test]
-fn in_over_one_row_of_values_is_an_equality() {
+fn in_over_one_row_of_values_is_refused() {
     let s = session();
-    run(
-        &s,
-        "CREATE TEMPORARY FUNCTION in1(x INT) RETURNS INT RETURN IF(x IN (SELECT 1), 1, 0)",
-    );
-    let out = run(&s, "SELECT in1(c1) FROM t1");
-    assert_eq!(ints(&out), vec![vec![0], vec![0], vec![1]]);
-    let out = run(
-        &s,
-        "SELECT isnull(CAST(NULL AS INT) IN (SELECT 1)), 2 IN (SELECT 1)",
-    );
-    let b = &out[0];
-    assert!(b.column(0).as_boolean().value(0));
-    assert!(!b.column(1).as_boolean().value(0));
+    for sql in [
+        "SELECT c1 IN (SELECT 1) FROM t1",
+        "SELECT coalesce(c1 IN (SELECT 1), true) FROM t1",
+        "SELECT c1 FROM t1 WHERE (c1 IN (SELECT 1)) IS NULL",
+        "SELECT NOT (c1 IN (SELECT 1)) FROM t1",
+    ] {
+        let e = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{sql}: {e}"
+        );
+    }
+    let out = run(&s, "SELECT CAST(NULL AS INT) IN (SELECT 1)");
+    assert!(out[0].column(0).is_null(0));
 }
 
 /// Spark 4.2.0 (`sql-udf.sql` 772-787): a table function's body keeps the

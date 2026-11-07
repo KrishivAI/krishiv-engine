@@ -1572,11 +1572,10 @@ impl Resolver<'_> {
 }
 
 impl Resolver<'_> {
-    /// `v IN (correlated global aggregate)` or `v IN (one row of values)`:
-    /// the subquery has exactly one row for each outer row (a count of
-    /// nothing is 0), so the `IN` is `v = (scalar subquery)`, which the
-    /// scalar path decorrelates (with its count-bug handling). Any other `IN`
-    /// is returned as it came.
+    /// `v IN (correlated global aggregate)`: the aggregate has exactly one
+    /// row for each outer row (a count of nothing is 0), so the `IN` is
+    /// `v = (scalar subquery)`, which the scalar path decorrelates with
+    /// its count-bug handling. Any other `IN` is returned as it came.
     fn in_global_aggregate(&self, e: Arc<Expr>) -> Arc<Expr> {
         let ExprNode::Subquery {
             kind: SubqueryKind::In(values),
@@ -1586,14 +1585,11 @@ impl Resolver<'_> {
             return e;
         };
         let [value] = &values[..] else { return e };
-        // One row of values (`x IN (SELECT 1)`) is the same equality: Spark
-        // folds it before any join (`OptimizeOneRowRelationSubquery`). Over a
-        // global aggregate, Spark's legacy rule (`subquery_legacy.rs`) answers
-        // it otherwise.
-        let aggregate = !self.ctx.conf.legacy_exists_in_count
-            && matches!(plan.node, crate::PlanNode::Aggregate { .. })
-            && crate::analyzer::subquery::one_row_aggregate(plan);
-        if !aggregate && !crate::analyzer::subquery::one_row_literals(plan) {
+        // Spark's legacy rule (`subquery_legacy.rs`) answers it otherwise.
+        if self.ctx.conf.legacy_exists_in_count
+            || !matches!(plan.node, crate::PlanNode::Aggregate { .. })
+            || !crate::analyzer::subquery::one_row_aggregate(plan)
+        {
             return e;
         }
         let scalar = Arc::new(

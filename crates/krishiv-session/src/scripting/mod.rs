@@ -439,11 +439,7 @@ impl Run<'_> {
             // after the rest of the script has run.
             // Nested columns (ARRAY, STRUCT, MAP) are returned through their constructors.
             for field in schema.fields() {
-                if crate::nested_value::is_nested(field.data_type()) {
-                    DataType::from_arrow(field.data_type())?;
-                } else {
-                    crate::command::arrow_krishiv_type(field.data_type())?;
-                }
+                check_result_type(field.data_type())?;
             }
             if !schema.fields().is_empty() {
                 // One row more than the cap shows that it was exceeded; no more is read.
@@ -951,6 +947,24 @@ fn distinct(targets: &[Target], names: &[String]) -> Result<(), KrishivError> {
             }
             .into());
         }
+    }
+    Ok(())
+}
+
+/// Whether a script's result can hold a column of type `t`: a scalar type a literal row can
+/// hold, or a nested type (returned through its constructor) whose every element, field, key and
+/// value can.
+fn check_result_type(t: &arrow_schema::DataType) -> Result<(), KrishivError> {
+    use arrow_schema::DataType as A;
+    match t {
+        A::List(f) | A::LargeList(f) | A::Map(f, _) => check_result_type(f.data_type()),
+        A::Struct(fields) => fields
+            .iter()
+            .try_for_each(|f| check_result_type(f.data_type())),
+        _ => crate::command::arrow_krishiv_type(t).map(|_| ()),
+    }?;
+    if crate::nested_value::is_nested(t) {
+        DataType::from_arrow(t)?;
     }
     Ok(())
 }

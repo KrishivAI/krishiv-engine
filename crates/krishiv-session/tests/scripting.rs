@@ -752,4 +752,9 @@ fn scripts_refuse_ansi_interval_results() {
     ] {
         assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
     }
+    // Inside a nested column too, before the rest of the script runs (review of #505).
+    rows(&s, "DECLARE ran INT DEFAULT 0");
+    let sql = "BEGIN SELECT array(INTERVAL '1' DAY) AS a; SET ran = 1; END";
+    assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
+    assert_eq!(rows(&s, "SELECT ran"), ok(&[&["0"]]));
 }
