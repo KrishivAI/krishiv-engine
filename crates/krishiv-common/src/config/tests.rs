@@ -976,3 +976,19 @@ fn binary_output_style_parses_and_has_no_default() {
         Some("BASE64")
     );
 }
+
+#[test]
+fn ui_enabled_defaults_on_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&UI_ENABLED).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    c.set("krishiv.ui.enabled", "false").unwrap();
+    assert_eq!(
+        c.get(&UI_ENABLED).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(c.set("krishiv.ui.enabled", "maybe").is_err());
+    assert_eq!(UI_ENABLED.scope, Scope::Cluster);
+}
