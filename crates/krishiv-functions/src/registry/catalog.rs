@@ -65,8 +65,18 @@ fn row(line: &'static str) -> Option<SparkFunction> {
             "generator" => Some(FunctionKind::Generator),
             _ => None,
         },
-        arity: Arity::new(probed, expected),
+        arity: ceiling(name, Arity::new(probed, expected)),
     })
+}
+
+/// Functions whose Spark arity ends below what the probed counts say (the probe stops at `Arity::PROBED`
+/// and counts above it repeat the last answer): `make_timestamp_ntz` takes at most 6 arguments, while
+/// `make_timestamp_ltz` takes a seventh, the zone.
+fn ceiling(name: &str, arity: Arity) -> Arity {
+    match name {
+        "make_timestamp_ntz" | "try_make_timestamp_ntz" => arity.with_ceiling(6),
+        _ => arity,
+    }
 }
 
 /// The catalog's rows (comment lines skipped) and the number of malformed

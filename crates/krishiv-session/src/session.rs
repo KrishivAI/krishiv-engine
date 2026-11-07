@@ -601,6 +601,7 @@ impl Session {
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
             Statement::AlterNamespace(a) => self.exec_alter_namespace(&a, query).await,
+            Statement::Repair(r) => self.exec_repair(&r).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
             Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
@@ -828,11 +829,11 @@ impl Session {
             .fields()
             .iter()
             .map(|f| {
-                Ok(TableColumn {
-                    name: f.name().clone(),
-                    data_type: DataType::from_arrow_field(f)?,
-                    nullable: f.is_nullable(),
-                })
+                Ok(TableColumn::new(
+                    f.name().clone(),
+                    DataType::from_arrow_field(f)?,
+                    f.is_nullable(),
+                ))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
         if let Some(b) = batches.iter().find(|b| b.schema() != schema) {
@@ -1812,6 +1813,7 @@ impl Session {
         target: WriteTarget,
         types: &[DataType],
         pre: &mut Option<Admitted>,
+        dry: bool,
     ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
             format,
@@ -1859,6 +1861,10 @@ impl Session {
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
+        // Checked only (`dry`): nothing is admitted or replaced.
+        if dry {
+            return Ok(Vec::new());
+        }
         // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
         // an overwrite replaces, which a refused or cancelled query must not have done.
         // Admitted by the caller already (it changed something before this write), else here.

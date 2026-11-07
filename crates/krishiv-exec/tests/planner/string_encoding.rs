@@ -66,11 +66,13 @@ fn cx() -> Cx {
                 name: "a".to_owned(),
                 data_type: krishiv_types::DataType::Integer,
                 nullable: true,
+                char_varchar: None,
             },
             TableColumn {
                 name: "s".to_owned(),
                 data_type: krishiv_types::DataType::String,
                 nullable: true,
+                char_varchar: None,
             },
         ];
         (
@@ -117,11 +119,13 @@ fn cx() -> Cx {
             name: "a".to_owned(),
             data_type: DataType::Integer,
             nullable: true,
+            char_varchar: None,
         },
         TableColumn {
             name: "b".to_owned(),
             data_type: DataType::Binary,
             nullable: true,
+            char_varchar: None,
         },
     ];
     let catalog = MemoryCatalog::new("spark_catalog")

@@ -1685,10 +1685,7 @@ impl<'a> Planner<'a> {
         let scan = scan_below(&input.node)?;
         let bound_column = scan.scan.output.iter().find(|c| c.id == attr)?;
         if !krishiv_io::runtime_filter::supported_key_type(&key_type)
-            || matches!(
-                bound_column.data_type,
-                krishiv_types::DataType::CollatedString(_)
-            )
+            || bound_column.data_type.contains_collation()
         {
             return None;
         }

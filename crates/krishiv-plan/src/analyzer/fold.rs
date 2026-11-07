@@ -184,6 +184,9 @@ pub(super) fn constant(
             | ArrowType::Float32
             | ArrowType::Float64
             | ArrowType::Decimal128(..)
+            | ArrowType::Duration(arrow_schema::TimeUnit::Microsecond)
+            | ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth)
+            | ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
     ) {
         return None;
     }
@@ -218,6 +221,20 @@ fn value(a: &ArrayRef, ansi: bool) -> Result<Constant, KrishivError> {
         ArrowType::Int32 => Constant::Integral(i64::from(a.as_primitive::<Int32Type>().value(0))),
         ArrowType::Int64 => Constant::Integral(a.as_primitive::<Int64Type>().value(0)),
         ArrowType::Utf8 => Constant::String(a.as_string::<i32>().value(0).to_owned()),
+        ArrowType::Duration(arrow_schema::TimeUnit::Microsecond) => Constant::Interval(
+            a.as_primitive::<arrow_array::types::DurationMicrosecondType>()
+                .value(0),
+        ),
+        ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth) => {
+            Constant::Interval(i64::from(
+                a.as_primitive::<arrow_array::types::IntervalYearMonthType>()
+                    .value(0),
+            ))
+        }
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => Constant::Timestamp(
+            a.as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+                .value(0),
+        ),
         ArrowType::Float32 | ArrowType::Float64 | ArrowType::Decimal128(..) => {
             let int = cast(
                 a.as_ref(),
@@ -819,6 +836,12 @@ fn literal(l: &Literal) -> Option<ArrayRef> {
         ),
         Literal::String(v) => Arc::new(StringArray::from(vec![v.as_str()])),
         Literal::Date(v) => Arc::new(Date32Array::from(vec![*v])),
+        Literal::YearMonthInterval { months, .. } => {
+            Arc::new(arrow_array::IntervalYearMonthArray::from(vec![*months]))
+        }
+        Literal::DayTimeInterval { micros, .. } => {
+            Arc::new(arrow_array::DurationMicrosecondArray::from(vec![*micros]))
+        }
         _ => return None,
     })
 }

@@ -82,11 +82,13 @@ pub(crate) fn min_max_supported(t: &DataType) -> bool {
     )
 }
 
-/// Whether `min`/`max` take structs of Arrow type `t`: the same field-wise
-/// comparator the comparison operators use accepts them
-/// ([`krishiv_kernels::r#struct::comparable`]).
+/// Whether `min`/`max` take structs and arrays of Arrow type `t`: the same comparator the
+/// comparison operators use accepts them ([`krishiv_kernels::r#struct::comparable`]).
 pub(crate) fn struct_min_max_supported(t: &DataType) -> bool {
-    matches!(t, DataType::Struct(_)) && krishiv_kernels::r#struct::comparable(t)
+    matches!(
+        t,
+        DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_)
+    ) && krishiv_kernels::r#struct::comparable(t)
 }
 
 /// `min`/`max` values, by physical kind.
@@ -1093,7 +1095,10 @@ impl Accumulator {
                 count: Vec::new(),
                 overflow: Vec::new(),
             },
-            (f @ (F::Min | F::Max), DataType::Struct(_)) => Kind::MinMaxStruct {
+            (
+                f @ (F::Min | F::Max),
+                DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_),
+            ) => Kind::MinMaxStruct {
                 max: *f == F::Max,
                 values: Vec::new(),
                 bytes: Vec::new(),
@@ -2169,7 +2174,7 @@ impl Accumulator {
                         "a struct extremum of another length than the group ids".to_owned(),
                     ));
                 }
-                if !matches!(a.data_type(), DataType::Struct(_)) {
+                if !struct_min_max_supported(a.data_type()) {
                     return Err(internal(format!("a struct extremum of {}", a.data_type())));
                 }
                 let order = if *max {
@@ -3240,7 +3245,7 @@ fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayR
 /// `a` with the string and binary views it holds copied out of the shared
 /// buffers of the batch it was taken from: a one-row winner would otherwise
 /// keep every buffer of that batch alive, and the reservation would count
-/// them once per group. Nested structs are compacted field by field; other
+/// them once per group. Nested structs and arrays are compacted field by field; other
 /// types already own what `take` copied.
 fn compact_views(a: ArrayRef) -> ArrayRef {
     match a.data_type() {
@@ -3250,6 +3255,32 @@ fn compact_views(a: ArrayRef) -> ArrayRef {
             let s = a.as_struct();
             let children: Vec<ArrayRef> = s.columns().iter().cloned().map(compact_views).collect();
             match arrow_array::StructArray::try_new(fields.clone(), children, s.nulls().cloned()) {
+                Ok(compacted) => Arc::new(compacted),
+                Err(_) => a,
+            }
+        }
+        DataType::List(field) => {
+            let l = a.as_list::<i32>();
+            let values = compact_views(Arc::clone(l.values()));
+            match arrow_array::ListArray::try_new(
+                Arc::clone(field),
+                l.offsets().clone(),
+                values,
+                l.nulls().cloned(),
+            ) {
+                Ok(compacted) => Arc::new(compacted),
+                Err(_) => a,
+            }
+        }
+        DataType::LargeList(field) => {
+            let l = a.as_list::<i64>();
+            let values = compact_views(Arc::clone(l.values()));
+            match arrow_array::LargeListArray::try_new(
+                Arc::clone(field),
+                l.offsets().clone(),
+                values,
+                l.nulls().cloned(),
+            ) {
                 Ok(compacted) => Arc::new(compacted),
                 Err(_) => a,
             }

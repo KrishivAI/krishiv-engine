@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use krishiv_common::config::{
     Config, EXEC_AGG_ROW_LAYOUT, EXEC_BATCH_SIZE, EXEC_JOIN_RADIX_BITS, EXEC_JOIN_ROW_LAYOUT,
-    EXEC_JOIN_SMJ_BUFFER_BYTES, EXEC_SEED, EXEC_SORT_HASH_BUCKETS,
+    EXEC_JOIN_SHARED_BROADCAST_BYTES, EXEC_JOIN_SMJ_BUFFER_BYTES, EXEC_SEED,
+    EXEC_SORT_HASH_BUCKETS,
 };
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
@@ -68,6 +69,10 @@ pub struct ExecConfig {
     /// The bytes of one key's right-side rows a sort-merge join keeps in
     /// memory (`krishiv.exec.join.smj.bufferBytes`; 0: a share of the pool).
     pub join_merge_buffer_bytes: usize,
+    /// The most one query's shared broadcast tables may hold on a worker
+    /// (`krishiv.exec.join.sharedBroadcastBytes`; `None`: no cap beyond the
+    /// query's memory). A build past it falls back to one per task.
+    pub shared_broadcast_bytes: Option<usize>,
     /// Every pipeline runs on one driver, so the order of merges and of the
     /// output rows does not depend on how the drivers interleave
     /// (`krishiv.deterministicOrder`).
@@ -89,6 +94,7 @@ impl Default for ExecConfig {
             join_radix_bits: 3,
             sort_hash_buckets: true,
             join_merge_buffer_bytes: 0,
+            shared_broadcast_bytes: None,
             deterministic_order: false,
         }
     }
@@ -125,6 +131,11 @@ impl ExecConfig {
             .and_then(krishiv_common::config::ConfigValue::as_size)
             .and_then(|n| usize::try_from(n).ok())
             .unwrap_or(0);
+        let shared_broadcast_bytes = config
+            .get(&EXEC_JOIN_SHARED_BROADCAST_BYTES)
+            .and_then(krishiv_common::config::ConfigValue::as_size)
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n > 0);
         let seed = config
             .get(&EXEC_SEED)
             .and_then(krishiv_common::config::ConfigValue::as_int)
@@ -142,6 +153,7 @@ impl ExecConfig {
             join_row_layout,
             join_radix_bits,
             join_merge_buffer_bytes,
+            shared_broadcast_bytes,
             ..Self::default()
         }
     }

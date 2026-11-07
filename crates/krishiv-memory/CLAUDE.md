@@ -11,6 +11,7 @@ Paths are relative to this crate.
 - `src/lib.rs` public surface: pools, reservations, release hook
 - `src/pool.rs` memory pools (`MemoryPool::snapshot()`: the pools down to the live consumers as plain `PoolEntry` rows, for `system.memory`); `src/reservation.rs` reservation handles; `src/consumer.rs` memory consumers
 - `src/resident.rs` resident-set guard: with a probe installed, cuts what the process holds above the reservations plus an allowance from the root's limit for ordinary grants; spill I/O, `Reservation::unguarded` growth and exhausted arbitration rounds are exempt. A sync `try_grow` whose refusal fails the query must use `.unguarded()`
+- `src/cohort.rs` cohorts: members of one query sizing unspillable memory they free on their own (a nested loop's chunks) together; a member waits while another is active instead of failing (`MemoryPool::cohort`, `Seat`, `SeatState`)
 - `src/arbitrate.rs` memory arbitrator; `src/limit.rs` memory-limit detection (cgroup and meminfo fixtures)
 - `src/spill.rs` spill scopes and spill accounting
 - `src/spillfile/format.rs` on-disk spill format; `src/spillfile/writer.rs` and `reader.rs` frame I/O
@@ -19,6 +20,7 @@ Paths are relative to this crate.
 
 ## Extension points
 - New memory consumer: take a `Reservation` from the pool and grow it with `try_grow`; do not allocate unaccounted.
+- A caller with a cheaper fallback than the arbitrator's abort (the sort's intermediate merge: a smaller fan-in) grows with `Reservation::grow_without_abort` (ADR 0007 update, `reserve_without_abort`): it waits and arbitrates like `grow`, but a refusal comes back as `MemoryError::Exhausted` instead of aborting a query.
 - On-disk spill format change: bump its version in `src/spillfile/format.rs` and keep reading the previous version (ADR 0029: version N reads N-1). Today only version 1 exists, so the reader accepts exactly it.
 
 ## Invariants

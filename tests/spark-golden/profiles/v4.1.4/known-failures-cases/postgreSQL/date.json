@@ -1,0 +1,16 @@
+{
+  "cases": {
+    "other-version": [
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53
+    ]
+  },
+  "file": "postgreSQL/date",
+  "format_version": 1
+}

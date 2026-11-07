@@ -9,6 +9,9 @@
 use super::*;
 use krishiv_common::error::ErrorClass;
 
+mod namespace_and_row_format;
+mod property_keys;
+
 /// The tree of `sql`, without Spark's post-parse checks (tree shapes).
 fn tree(sql: &str) -> ast::Statement {
     match crate::parser::parse_statement_unchecked(sql, ParserOptions::default()) {
@@ -722,6 +725,19 @@ fn statement_dispatch_disambiguation() {
         checked("FROM s INSERT INTO a SELECT *"),
         ast::Statement::Query(_)
     ));
+    // The same after a `WITH` clause, which every insert clause then sees.
+    assert!(matches!(
+        checked("WITH r AS (SELECT 1 AS a) FROM r SELECT a"),
+        ast::Statement::Query(_)
+    ));
+    let ast::Statement::Insert(insert) =
+        checked("WITH r AS (SELECT 1 AS a) FROM r INSERT INTO t SELECT * INSERT INTO u SELECT a")
+    else {
+        panic!("a multi-table insert");
+    };
+    assert!(insert.source.is_some());
+    assert_eq!(insert.clauses.len(), 2);
+    assert!(insert.clauses.iter().all(|c| c.query.with.is_some()));
 }
 
 /// `INSERT` statements: single-table and multi-table.
@@ -1519,4 +1535,150 @@ fn explained_commands() {
         panic!("not explained")
     };
     assert!(matches!(*e.statement, Statement::Insert(_)));
+}
+
+/// A partition key written twice is `DUPLICATE_KEY` at the spec, in every statement with a spec, before
+/// the table is looked up (`AstBuilder.visitPartitionSpec`; Spark 4.2.0 runs in
+/// `research/spark/partition-spec-duplicate-key.md`).
+#[test]
+fn a_repeated_partition_key_is_duplicate_key() {
+    let cases = [
+        ("INSERT INTO t PARTITION (p=1, P=2) SELECT 1", "`p`"),
+        ("INSERT OVERWRITE t PARTITION (p, p) SELECT 1", "`p`"),
+        ("ALTER TABLE t ADD PARTITION (`p.q`=1, `P.Q`=2)", "`p`.`q`"),
+        (
+            "ALTER TABLE t ADD PARTITION (z=1, z=2, `p.q`=1, `p.q`=2)",
+            "`p`.`q`",
+        ),
+        (
+            "ALTER TABLE t ADD PARTITION (p=1, p=2) PARTITION (q=1, q=2)",
+            "`p`",
+        ),
+        ("ALTER TABLE t DROP PARTITION (p=1, p=2)", "`p`"),
+        (
+            "ALTER TABLE t PARTITION (p=1, p=2) RENAME TO PARTITION (p=3)",
+            "`p`",
+        ),
+        (
+            "ALTER TABLE t PARTITION (p=1) RENAME TO PARTITION (p=3, p=4)",
+            "`p`",
+        ),
+        (
+            "ALTER TABLE t PARTITION (p=1, p=2) SET LOCATION '/x'",
+            "`p`",
+        ),
+        (
+            "ALTER TABLE t PARTITION (p=1, p=2) SET SERDEPROPERTIES ('a'='b')",
+            "`p`",
+        ),
+        ("SHOW PARTITIONS t PARTITION (p=1, p=2)", "`p`"),
+        ("TRUNCATE TABLE t PARTITION (p=1, p=2)", "`p`"),
+        ("DESCRIBE t PARTITION (p=1, p=2)", "`p`"),
+        ("DESC t PARTITION (p, p)", "`p`"),
+        ("DESC t PARTITION (q, p, p)", "`p`"),
+        (
+            "ANALYZE TABLE t PARTITION (p=1, p=2) COMPUTE STATISTICS",
+            "`p`",
+        ),
+    ];
+    for (sql, key) in cases {
+        let e = err(sql);
+        assert_eq!(e.error.error_class(), ErrorClass::DuplicateKey, "{sql}");
+        assert_eq!(e.error.sql_state(), Some("23505"), "{sql}");
+        assert_eq!(
+            e.error.message_parameters(),
+            [("keyColumn", key.to_owned())],
+            "{sql}"
+        );
+    }
+    // The span is the spec, from `PARTITION` to `)`.
+    let sql = "ALTER TABLE t DROP PARTITION (p=1, p=2)";
+    assert_eq!(err(sql).span.text(sql), "PARTITION (p=1, p=2)");
+    // A repeated key that is not an attribute name fails while Spark quotes it.
+    for (sql, name) in [
+        ("ALTER TABLE t ADD PARTITION (`a``b`=1, `A``B`=2)", "a`b"),
+        ("ALTER TABLE t ADD PARTITION (`.a`=1, `.a`=2)", ".a"),
+    ] {
+        let e = err(sql);
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidAttributeNameSyntax,
+            "{sql}"
+        );
+        assert_eq!(
+            e.error.message_parameters(),
+            [("name", name.to_owned())],
+            "{sql}"
+        );
+    }
+    // The query of an INSERT is checked first.
+    let e = err("INSERT INTO t PARTITION (p=1, p=2) VALUES (1, CAST('x' AS INTX))");
+    assert_eq!(e.error.error_class(), ErrorClass::UnsupportedDatatype);
+    // With `spark.sql.caseSensitive`, keys compare exactly.
+    let opts = ParserOptions {
+        case_sensitive: true,
+        ..ParserOptions::default()
+    };
+    assert!(parse_statement("ALTER TABLE t ADD PARTITION (A=1, a=2)", &opts).is_ok());
+    for (sql, key) in [
+        ("ALTER TABLE t ADD PARTITION (A=1, A=2, a=1, a=2)", "`A`"),
+        ("ALTER TABLE t ADD PARTITION (`A.b`=1, `A.b`=2)", "`A`.`b`"),
+    ] {
+        let e = parse_statement(sql, &opts).unwrap_err();
+        assert_eq!(e.error.error_class(), ErrorClass::DuplicateKey, "{sql}");
+        assert_eq!(
+            e.error.message_parameters(),
+            [("keyColumn", key.to_owned())],
+            "{sql}"
+        );
+    }
+}
+
+/// `DESCRIBE`'s checks in `SparkSqlParser.visitDescribeRelation`'s order (Spark 4.2.0).
+#[test]
+fn describe_checks_follow_sparks_order() {
+    let cases = [
+        (
+            "DESCRIBE t PARTITION (p=1, p=2) AS JSON",
+            ErrorClass::DescribeJsonNotExtended,
+        ),
+        (
+            "DESC FORMATTED t PARTITION (p=1, p) c",
+            ErrorClass::UnsupportedFeatureDescTableColumnPartition,
+        ),
+        (
+            "DESC FORMATTED t PARTITION (p=1, p=2) c AS JSON",
+            ErrorClass::UnsupportedFeatureDescTableColumnPartition,
+        ),
+        ("DESC t PARTITION (p, p)", ErrorClass::DuplicateKey),
+        (
+            "DESC t PARTITION (p, q)",
+            ErrorClass::InvalidSqlSyntaxEmptyPartitionValue,
+        ),
+    ];
+    for (sql, class) in cases {
+        assert_eq!(err(sql).error.error_class(), class, "{sql}");
+    }
+    // The key without a value Spark names walks the spec's `toMap`: written order up to four keys,
+    // hash order from five.
+    for (sql, key) in [
+        ("DESC t PARTITION (a=1, yoo, sgf)", "`yoo`"),
+        ("DESC t PARTITION (a=1, b=1, yoo, sgf)", "`yoo`"),
+        ("DESC t PARTITION (a=1, b=1, c=1, yoo, sgf)", "`sgf`"),
+        ("DESC t PARTITION (a=1, b=1, c=1, d=1, yoo, sgf)", "`sgf`"),
+        ("DESC t PARTITION (an, c0, a=1, b=1, c=1)", "`an`"),
+        ("DESC t PARTITION (c0, an, a=1, b=1, c=1)", "`c0`"),
+    ] {
+        let e = err(sql);
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidSqlSyntaxEmptyPartitionValue,
+            "{sql}"
+        );
+        assert_eq!(
+            e.error.message_parameters(),
+            [("partKey", key.to_owned())],
+            "{sql}"
+        );
+    }
 }

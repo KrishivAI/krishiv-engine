@@ -1,8 +1,7 @@
 {
   "cases": {
-    "subqueries": [
-      17,
-      18
+    "query-features": [
+      32
     ]
   },
   "file": "subquery/in-subquery/in-joins",

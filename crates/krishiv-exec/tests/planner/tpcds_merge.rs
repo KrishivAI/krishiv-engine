@@ -65,6 +65,7 @@ fn tables() -> (MemoryCatalog, Arc<MemoryTables>) {
                     name: c["name"].as_str().unwrap().to_owned(),
                     data_type: krishiv_types::parse_data_type(ty).unwrap(),
                     nullable: c["nullable"].as_bool().unwrap(),
+                    char_varchar: None,
                 }
             })
             .collect();

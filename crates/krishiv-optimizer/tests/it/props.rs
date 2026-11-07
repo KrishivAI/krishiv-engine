@@ -678,3 +678,37 @@ fn a_swapped_equality_pushed_into_a_join_is_a_repeat() {
         &Gen::new(2_091_781_642_927_400_886).top(),
     );
 }
+
+/// Seed 11649424267131205810 of `random_queries_reach_the_lowest_operator`:
+/// join ordering derived the class equality `c0 = c2` over an input
+/// `Project [(a + 1) AS c0, ..., a AS c2]` and estimated it as column =
+/// column there (both counts guesses, read as the rows: about one row); the
+/// filter pushdown after it moved it below the projection as `(a + 1) = a`,
+/// column = expression, the default selectivity. The input's estimate moved
+/// from one row to billions, so the next run put it on the other side of its
+/// join. An input's conjunct is now estimated through the projection's
+/// computed outputs, as it reads once pushed below them.
+#[test]
+fn a_conjunct_over_a_projection_estimates_as_once_pushed_below_it() {
+    let seed = 11_649_424_267_131_205_810_u64;
+    let sql = Gen::new(seed).top();
+    let plan = support::resolve(&sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    assert_eq!(
+        optimized.root().resolved_output(),
+        plan.root().resolved_output()
+    );
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{sql}: not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let db = data::small(seed);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root()),
+        "{sql}"
+    );
+}

@@ -71,11 +71,13 @@ impl FileSchemaResolver for Files {
                     name: "a".to_owned(),
                     data_type: DataType::Integer,
                     nullable: false,
+                    char_varchar: None,
                 },
                 TableColumn {
                     name: "B".to_owned(),
                     data_type: DataType::String,
                     nullable: true,
+                    char_varchar: None,
                 },
             ])
         } else {
@@ -93,6 +95,7 @@ fn catalog() -> MemoryCatalog {
         name: n.to_owned(),
         data_type: DataType::Long,
         nullable: false,
+        char_varchar: None,
     };
     MemoryCatalog::new("spark_catalog")
         .with_table(&["default"], "t", vec![col("x")], None)

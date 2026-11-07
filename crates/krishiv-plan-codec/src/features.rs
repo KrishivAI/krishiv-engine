@@ -244,7 +244,7 @@ fn type_feature(t: &DataType) -> Option<Feature> {
         DataType::YearMonthInterval { .. }
         | DataType::DayTimeInterval { .. }
         | DataType::CalendarInterval => Some(Feature::IntervalTypes),
-        DataType::CollatedString(_) => Some(Feature::CollatedStrings),
+        DataType::CollatedString(c) if !c.is_utf8_binary() => Some(Feature::CollatedStrings),
         DataType::Variant => Some(Feature::VariantType),
         _ => t.is_nested().then_some(Feature::NestedTypes),
     }
@@ -253,7 +253,7 @@ fn type_feature(t: &DataType) -> Option<Feature> {
 /// Whether `t` is or holds a collated string.
 fn collated(t: &DataType) -> bool {
     match t {
-        DataType::CollatedString(_) => true,
+        DataType::CollatedString(c) => !c.is_utf8_binary(),
         DataType::Array(a) => collated(a.element_type()),
         DataType::Map(m) => collated(m.key_type()) || collated(m.value_type()),
         DataType::Struct(s) => s.fields().iter().any(|x| collated(x.data_type())),
@@ -620,7 +620,17 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::SortMergeJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Generate { kind, .. } => f(Construct::Generator(*kind)),
-        PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
+        // The planner's schema is classified by field, as an exchange
+        // source's is.
+        PhysNode::Exchange(e) => {
+            f(Construct::Partitioning(&e.partitioning));
+            if let Some(schema) = &e.schema {
+                schema
+                    .fields()
+                    .iter()
+                    .for_each(|field| visit_arrow_field(field, f));
+            }
+        }
         // A reduce fragment may name a type only in the schema it reads
         // (a sort by column index above it), so the schema is classified
         // by field, as the plan's output schema is.
