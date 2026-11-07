@@ -19,23 +19,17 @@ impl Resolver<'_> {
         let reads_type = matches!(&e.node, ExprNode::Alias { .. })
             || matches!(&e.node, ExprNode::Function(f)
                 if f.name.eq_ignore_ascii_case("typeof") || f.name.eq_ignore_ascii_case("collation"));
-        let kids = if !reads_type
-            && kids.iter().any(|k| {
-                k.ty.data_type
-                    .as_ref()
-                    .is_some_and(DataType::is_binary_marker)
-            }) {
+        let marked = |k: &Bound| {
+            k.ty.data_type
+                .as_ref()
+                .is_some_and(|t| t.any_type(&DataType::is_binary_marker))
+        };
+        let kids = if !reads_type && kids.iter().any(marked) {
             plain_kids = kids
                 .iter()
                 .map(|k| {
                     let mut k = k.clone();
-                    if k.ty
-                        .data_type
-                        .as_ref()
-                        .is_some_and(DataType::is_binary_marker)
-                    {
-                        k.ty.data_type = Some(DataType::String);
-                    }
+                    k.ty.data_type = k.ty.data_type.as_ref().map(DataType::without_binary_marker);
                     k
                 })
                 .collect();

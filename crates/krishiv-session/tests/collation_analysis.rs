@@ -741,6 +741,7 @@ fn the_marker_unifies_with_string() {
     assert_eq!(n("select p from u where p in (select c from u)"), 1);
     assert_eq!(n("select c from u where c in (select p from u)"), 1);
     assert_eq!(n("select array_contains(a, 'x') from u"), 1);
+    assert_eq!(n("select coalesce(a, array(1)) from u where false"), 0);
     assert_eq!(n("select c from u where false union all select 1"), 1);
     assert_eq!(n("select 1 in (select c from u where false) from u"), 1);
     assert_eq!(
