@@ -27,12 +27,8 @@ a value between 4 and 26 (defaults to 12) and mode to 'sum', 'min', 'max', or 'a
 ## Examples
 
 ```sql
-SELECT tuple_sketch_estimate_integer(tuple_union_theta_integer(tuple_sketch_agg_integer(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1, 4), (2, 2, 5), (3, 3, 6) tab(col1, val1, col2);
-```
-
-Result:
-
-```text
-6.0
+-- tuple_union_theta_integer, example 1
+> SELECT tuple_sketch_estimate_integer(tuple_union_theta_integer(tuple_sketch_agg_integer(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1, 4), (2, 2, 5), (3, 3, 6) tab(col1, val1, col2);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

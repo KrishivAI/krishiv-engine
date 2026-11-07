@@ -24,22 +24,14 @@ With the default settings, the function returns null for null input.
 ## Examples
 
 ```sql
-SELECT cardinality(array('b', 'd', 'c', 'a'));
-```
-
-Result:
-
-```text
+-- cardinality, example 1
+> SELECT cardinality(array('b', 'd', 'c', 'a'));
 4
 ```
 
 ```sql
-SELECT cardinality(map('a', 1, 'b', 2));
-```
-
-Result:
-
-```text
+-- cardinality, example 2
+> SELECT cardinality(map('a', 1, 'b', 2));
 2
 ```
 

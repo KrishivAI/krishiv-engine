@@ -21,52 +21,32 @@ Returns true if `str` matches `regexp`, or false otherwise.
 ## Examples
 
 ```sql
-SET spark.sql.parser.escapedStringLiterals=true;
-```
-
-Result:
-
-```text
-spark.sql.parser.escapedStringLiterals	true
+-- rlike, example 1
+> SET spark.sql.parser.escapedStringLiterals=true;
+spark.sql.parser.escapedStringLiterals | true
 ```
 
 ```sql
-SELECT rlike('%SystemDrive%\Users\John', '%SystemDrive%\\Users.*');
+-- rlike, example 2
+> SELECT rlike('%SystemDrive%\Users\John', '%SystemDrive%\\Users.*');
+Error: INVALID_PARAMETER_VALUE.PATTERN
 ```
 
-Result:
+```sql
+-- rlike, example 3
+> SET spark.sql.parser.escapedStringLiterals=false;
+spark.sql.parser.escapedStringLiterals | false
+```
 
-```text
+```sql
+-- rlike, example 4
+> SELECT rlike('%SystemDrive%\\Users\\John', '%SystemDrive%\\\\Users.*');
 true
 ```
 
 ```sql
-SET spark.sql.parser.escapedStringLiterals=false;
-```
-
-Result:
-
-```text
-spark.sql.parser.escapedStringLiterals	false
-```
-
-```sql
-SELECT rlike('%SystemDrive%\\Users\\John', '%SystemDrive%\\\\Users.*');
-```
-
-Result:
-
-```text
-true
-```
-
-```sql
-SELECT rlike('%SystemDrive%\\Users\\John', r'%SystemDrive%\\Users.*');
-```
-
-Result:
-
-```text
+-- rlike, example 5
+> SELECT rlike('%SystemDrive%\\Users\\John', r'%SystemDrive%\\Users.*');
 true
 ```
 

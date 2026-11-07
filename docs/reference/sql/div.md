@@ -21,22 +21,14 @@ Divide `expr1` by `expr2`. It returns NULL if an operand is NULL or `expr2` is 0
 ## Examples
 
 ```sql
-SELECT 3 div 2;
-```
-
-Result:
-
-```text
+-- div, example 1
+> SELECT 3 div 2;
 1
 ```
 
 ```sql
-SELECT INTERVAL '1-1' YEAR TO MONTH div INTERVAL '-1' MONTH;
-```
-
-Result:
-
-```text
+-- div, example 2
+> SELECT INTERVAL '1-1' YEAR TO MONTH div INTERVAL '-1' MONTH;
 -13
 ```
 

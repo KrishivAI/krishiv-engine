@@ -20,12 +20,8 @@ Returns schema in the DDL format of the avro schema in JSON string format.
 ## Examples
 
 ```sql
-SELECT schema_of_avro('{"type": "record", "name": "struct", "fields": [{"name": "u", "type": ["int", "string"]}]}', map());
-```
-
-Result:
-
-```text
-STRUCT<u: STRUCT<member0: INT, member1: STRING> NOT NULL>
+-- schema_of_avro, example 1
+> SELECT schema_of_avro('{"type": "record", "name": "struct", "fields": [{"name": "u", "type": ["int", "string"]}]}', map());
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

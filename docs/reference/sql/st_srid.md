@@ -21,32 +21,20 @@ Returns the SRID of the input GEOGRAPHY or GEOMETRY value.
 ## Examples
 
 ```sql
-SELECT st_srid(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040'));
-```
-
-Result:
-
-```text
+-- st_srid, example 1
+> SELECT st_srid(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040'));
 4326
 ```
 
 ```sql
-SELECT st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'));
-```
-
-Result:
-
-```text
+-- st_srid, example 2
+> SELECT st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'));
 0
 ```
 
 ```sql
-SELECT st_srid(NULL);
-```
-
-Result:
-
-```text
+-- st_srid, example 3
+> SELECT st_srid(NULL);
 NULL
 ```
 

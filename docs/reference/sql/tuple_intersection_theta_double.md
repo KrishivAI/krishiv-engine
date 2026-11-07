@@ -26,12 +26,8 @@ assigned a default double summary value based on the mode: 0.0 for 'sum' mode, +
 ## Examples
 
 ```sql
-SELECT tuple_sketch_estimate_double(tuple_intersection_theta_double(tuple_sketch_agg_double(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1.0D, 1), (2, 2.0D, 2), (3, 3.0D, 4) tab(col1, val1, col2);
-```
-
-Result:
-
-```text
-2.0
+-- tuple_intersection_theta_double, example 1
+> SELECT tuple_sketch_estimate_double(tuple_intersection_theta_double(tuple_sketch_agg_double(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1.0D, 1), (2, 2.0D, 2), (3, 3.0D, 4) tab(col1, val1, col2);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

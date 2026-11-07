@@ -21,12 +21,8 @@ Removes the leading space characters from `str`.
 ## Examples
 
 ```sql
-SELECT ltrim('    SparkSQL   ');
-```
-
-Result:
-
-```text
-SparkSQL
+-- ltrim, example 1
+> SELECT ltrim('    SparkSQL   ');
+SparkSQL   
 ```
 

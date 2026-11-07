@@ -21,42 +21,26 @@ Returns the remainder after `expr1`/`expr2`. `dividend` must be a numeric. `divi
 ## Examples
 
 ```sql
-SELECT try_mod(3, 2);
-```
-
-Result:
-
-```text
+-- try_mod, example 1
+> SELECT try_mod(3, 2);
 1
 ```
 
 ```sql
-SELECT try_mod(2L, 2L);
-```
-
-Result:
-
-```text
+-- try_mod, example 2
+> SELECT try_mod(2L, 2L);
 0
 ```
 
 ```sql
-SELECT try_mod(3.0, 2.0);
-```
-
-Result:
-
-```text
+-- try_mod, example 3
+> SELECT try_mod(3.0, 2.0);
 1.0
 ```
 
 ```sql
-SELECT try_mod(1, 0);
-```
-
-Result:
-
-```text
+-- try_mod, example 4
+> SELECT try_mod(1, 0);
 NULL
 ```
 

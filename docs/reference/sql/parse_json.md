@@ -21,12 +21,8 @@ Parse a JSON string as a Variant value. Throw an exception when the string is no
 ## Examples
 
 ```sql
-SELECT parse_json('{"a":1,"b":0.8}');
-```
-
-Result:
-
-```text
+-- parse_json, example 1
+> SELECT parse_json('{"a":1,"b":0.8}');
 {"a":1,"b":0.8}
 ```
 

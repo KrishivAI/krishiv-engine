@@ -21,12 +21,8 @@ Returns the current date at the start of query evaluation. All calls of curdate 
 ## Examples
 
 ```sql
-SELECT curdate();
-```
-
-Result:
-
-```text
-2022-09-06
+-- curdate, example 1
+> SELECT curdate();
+2026-11-07
 ```
 

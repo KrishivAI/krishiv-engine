@@ -21,12 +21,8 @@ Returns an integer value, or the value zero if no match is found, or a match is 
 ## Examples
 
 ```sql
-SELECT xpath_int('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
-```
-
-Result:
-
-```text
-3
+-- xpath_int, example 1
+> SELECT xpath_int('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

@@ -1,0 +1,6988 @@
+{
+  "abs#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "abs#2": {
+    "ok": true,
+    "rows": [
+      "1-1"
+    ]
+  },
+  "acos#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "acos#2": {
+    "ok": true,
+    "rows": [
+      "NaN"
+    ]
+  },
+  "acosh#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "acosh#2": {
+    "ok": true,
+    "rows": [
+      "NaN"
+    ]
+  },
+  "add_months#1": {
+    "ok": true,
+    "rows": [
+      "2016-09-30"
+    ]
+  },
+  "aes_decrypt#1": {
+    "ok": true,
+    "rows": [
+      "Spark"
+    ]
+  },
+  "aes_decrypt#2": {
+    "ok": true,
+    "rows": [
+      "Spark SQL"
+    ]
+  },
+  "aes_decrypt#3": {
+    "ok": true,
+    "rows": [
+      "Spark SQL"
+    ]
+  },
+  "aes_decrypt#4": {
+    "ok": true,
+    "rows": [
+      "Apache Spark"
+    ]
+  },
+  "aes_decrypt#5": {
+    "ok": true,
+    "rows": [
+      "Spark"
+    ]
+  },
+  "aes_decrypt#6": {
+    "ok": true,
+    "rows": [
+      "Spark"
+    ]
+  },
+  "aes_encrypt#1": {
+    "volatile": true
+  },
+  "aes_encrypt#2": {
+    "volatile": true
+  },
+  "aes_encrypt#3": {
+    "ok": true,
+    "rows": [
+      "3lmwu+Mw0H3fi5NDvcu9lg=="
+    ]
+  },
+  "aes_encrypt#4": {
+    "volatile": true
+  },
+  "aes_encrypt#5": {
+    "ok": true,
+    "rows": [
+      "AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg="
+    ]
+  },
+  "aes_encrypt#6": {
+    "ok": true,
+    "rows": [
+      "AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4"
+    ]
+  },
+  "aggregate#1": {
+    "ok": true,
+    "rows": [
+      "6"
+    ]
+  },
+  "aggregate#2": {
+    "ok": true,
+    "rows": [
+      "60"
+    ]
+  },
+  "and#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "and#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "and#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "and#4": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "any#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "any#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "any#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "any_value#1": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "any_value#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "any_value#3": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "approx_count_distinct#1": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "approx_percentile#1": {
+    "ok": true,
+    "rows": [
+      "[1,1,0]"
+    ]
+  },
+  "approx_percentile#2": {
+    "ok": true,
+    "rows": [
+      "7"
+    ]
+  },
+  "approx_percentile#3": {
+    "ok": true,
+    "rows": [
+      "0-1"
+    ]
+  },
+  "approx_percentile#4": {
+    "ok": true,
+    "rows": [
+      "[0 00:00:01.000000000,0 00:00:02.000000000]"
+    ]
+  },
+  "approx_top_k#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "approx_top_k#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "approx_top_k#3": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "approx_top_k_accumulate#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "approx_top_k_accumulate#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "approx_top_k_combine#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "approx_top_k_estimate#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "approx_top_k_estimate#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "array#1": {
+    "ok": true,
+    "rows": [
+      "[1,2,3]"
+    ]
+  },
+  "array_agg#1": {
+    "ok": true,
+    "rows": [
+      "[1,2,1]"
+    ]
+  },
+  "array_append#1": {
+    "ok": true,
+    "rows": [
+      "[\"b\",\"d\",\"c\",\"a\",\"d\"]"
+    ]
+  },
+  "array_append#2": {
+    "ok": true,
+    "rows": [
+      "[1,2,3,null,null]"
+    ]
+  },
+  "array_append#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "array_compact#1": {
+    "ok": true,
+    "rows": [
+      "[1,2,3]"
+    ]
+  },
+  "array_compact#2": {
+    "ok": true,
+    "rows": [
+      "[\"a\",\"b\",\"c\"]"
+    ]
+  },
+  "array_contains#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "array_distinct#1": {
+    "ok": true,
+    "rows": [
+      "[1,2,3,null]"
+    ]
+  },
+  "array_except#1": {
+    "ok": true,
+    "rows": [
+      "[2]"
+    ]
+  },
+  "array_insert#1": {
+    "ok": true,
+    "rows": [
+      "[1,2,3,4,5]"
+    ]
+  },
+  "array_insert#2": {
+    "ok": true,
+    "rows": [
+      "[5,4,3,2,1]"
+    ]
+  },
+  "array_insert#3": {
+    "ok": true,
+    "rows": [
+      "[5,4,3,2,1]"
+    ]
+  },
+  "array_intersect#1": {
+    "ok": true,
+    "rows": [
+      "[1,3]"
+    ]
+  },
+  "array_join#1": {
+    "ok": true,
+    "rows": [
+      "hello world"
+    ]
+  },
+  "array_join#2": {
+    "ok": true,
+    "rows": [
+      "hello world"
+    ]
+  },
+  "array_join#3": {
+    "ok": true,
+    "rows": [
+      "hello , world"
+    ]
+  },
+  "array_max#1": {
+    "ok": true,
+    "rows": [
+      "20"
+    ]
+  },
+  "array_min#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "array_position#1": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "array_position#2": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "array_prepend#1": {
+    "ok": true,
+    "rows": [
+      "[\"d\",\"b\",\"d\",\"c\",\"a\"]"
+    ]
+  },
+  "array_prepend#2": {
+    "ok": true,
+    "rows": [
+      "[null,1,2,3,null]"
+    ]
+  },
+  "array_prepend#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "array_remove#1": {
+    "ok": true,
+    "rows": [
+      "[1,2,null]"
+    ]
+  },
+  "array_repeat#1": {
+    "ok": true,
+    "rows": [
+      "[\"123\",\"123\"]"
+    ]
+  },
+  "array_size#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "array_sort#1": {
+    "class": "PARSE_SYNTAX_ERROR",
+    "ok": false
+  },
+  "array_sort#2": {
+    "class": "PARSE_SYNTAX_ERROR",
+    "ok": false
+  },
+  "array_sort#3": {
+    "ok": true,
+    "rows": [
+      "[\"a\",\"b\",\"c\",\"d\",null]"
+    ]
+  },
+  "array_union#1": {
+    "ok": true,
+    "rows": [
+      "[1,2,3,5]"
+    ]
+  },
+  "arrays_overlap#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "arrays_zip#1": {
+    "ok": true,
+    "rows": [
+      "[{\"0\":1,\"1\":2},{\"0\":2,\"1\":3},{\"0\":3,\"1\":4}]"
+    ]
+  },
+  "arrays_zip#2": {
+    "ok": true,
+    "rows": [
+      "[{\"0\":1,\"1\":2,\"2\":3},{\"0\":2,\"1\":3,\"2\":4}]"
+    ]
+  },
+  "ascii#1": {
+    "ok": true,
+    "rows": [
+      "50"
+    ]
+  },
+  "ascii#2": {
+    "ok": true,
+    "rows": [
+      "50"
+    ]
+  },
+  "asin#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "asin#2": {
+    "ok": true,
+    "rows": [
+      "NaN"
+    ]
+  },
+  "asinh#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "assert_true#1": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "atan#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "atan2#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "atanh#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "atanh#2": {
+    "ok": true,
+    "rows": [
+      "NaN"
+    ]
+  },
+  "avg#1": {
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
+  },
+  "avg#2": {
+    "ok": true,
+    "rows": [
+      "1.5"
+    ]
+  },
+  "base64#1": {
+    "ok": true,
+    "rows": [
+      "U3BhcmsgU1FM"
+    ]
+  },
+  "base64#2": {
+    "ok": true,
+    "rows": [
+      "U3BhcmsgU1FM"
+    ]
+  },
+  "between#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "bin#1": {
+    "ok": true,
+    "rows": [
+      "1101"
+    ]
+  },
+  "bin#2": {
+    "ok": true,
+    "rows": [
+      "1111111111111111111111111111111111111111111111111111111111110011"
+    ]
+  },
+  "bin#3": {
+    "ok": true,
+    "rows": [
+      "1101"
+    ]
+  },
+  "bit_and#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "bit_count#1": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "bit_get#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "bit_get#2": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "bit_length#1": {
+    "ok": true,
+    "rows": [
+      "72"
+    ]
+  },
+  "bit_length#2": {
+    "ok": true,
+    "rows": [
+      "72"
+    ]
+  },
+  "bit_or#1": {
+    "ok": true,
+    "rows": [
+      "7"
+    ]
+  },
+  "bit_xor#1": {
+    "ok": true,
+    "rows": [
+      "6"
+    ]
+  },
+  "bitmap_and_agg#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_and_agg#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_bit_position#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_bit_position#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_bucket_number#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_bucket_number#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_construct_agg#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_construct_agg#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_count#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_count#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_count#3": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_or_agg#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bitmap_or_agg#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "bool_and#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "bool_and#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "bool_and#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "bool_or#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "bool_or#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "bool_or#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "bround#1": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "bround#2": {
+    "ok": true,
+    "rows": [
+      "20"
+    ]
+  },
+  "btrim#1": {
+    "ok": true,
+    "rows": [
+      "SparkSQL"
+    ]
+  },
+  "btrim#2": {
+    "ok": true,
+    "rows": [
+      "SparkSQL"
+    ]
+  },
+  "btrim#3": {
+    "ok": true,
+    "rows": [
+      "parkSQ"
+    ]
+  },
+  "btrim#4": {
+    "ok": true,
+    "rows": [
+      "parkSQ"
+    ]
+  },
+  "cardinality#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "cardinality#2": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "cast#1": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "cast#2": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "cbrt#1": {
+    "ok": true,
+    "rows": [
+      "3.0"
+    ]
+  },
+  "ceil#1": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "ceil#2": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "ceil#3": {
+    "ok": true,
+    "rows": [
+      "3.142"
+    ]
+  },
+  "ceil#4": {
+    "ok": true,
+    "rows": [
+      "1000"
+    ]
+  },
+  "ceiling#1": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "ceiling#2": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "ceiling#3": {
+    "ok": true,
+    "rows": [
+      "3.142"
+    ]
+  },
+  "ceiling#4": {
+    "ok": true,
+    "rows": [
+      "1000"
+    ]
+  },
+  "char#1": {
+    "ok": true,
+    "rows": [
+      "A"
+    ]
+  },
+  "char_length#1": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "char_length#2": {
+    "ok": true,
+    "rows": [
+      "9"
+    ]
+  },
+  "char_length#3": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "char_length#4": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "character_length#1": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "character_length#2": {
+    "ok": true,
+    "rows": [
+      "9"
+    ]
+  },
+  "character_length#3": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "character_length#4": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "chr#1": {
+    "ok": true,
+    "rows": [
+      "A"
+    ]
+  },
+  "coalesce#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "collate#1": {
+    "ok": true,
+    "rows": [
+      "SYSTEM.BUILTIN.UTF8_LCASE"
+    ]
+  },
+  "collation#1": {
+    "ok": true,
+    "rows": [
+      "SYSTEM.BUILTIN.UTF8_BINARY"
+    ]
+  },
+  "collations#1": {
+    "class": "UNRESOLVABLE_TABLE_VALUED_FUNCTION",
+    "ok": false
+  },
+  "collect_list#1": {
+    "ok": true,
+    "rows": [
+      "[1,2,1]"
+    ]
+  },
+  "collect_set#1": {
+    "ok": true,
+    "rows": [
+      "[1,2]"
+    ]
+  },
+  "concat#1": {
+    "ok": true,
+    "rows": [
+      "SparkSQL"
+    ]
+  },
+  "concat#2": {
+    "ok": true,
+    "rows": [
+      "[1,2,3,4,5,6]"
+    ]
+  },
+  "concat_ws#1": {
+    "ok": true,
+    "rows": [
+      "Spark SQL"
+    ]
+  },
+  "concat_ws#2": {
+    "ok": true,
+    "rows": [
+      ""
+    ]
+  },
+  "concat_ws#3": {
+    "ok": true,
+    "rows": [
+      "foo/bar"
+    ]
+  },
+  "concat_ws#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "contains#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "contains#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "contains#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "contains#4": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "conv#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "conv#2": {
+    "ok": true,
+    "rows": [
+      "-16"
+    ]
+  },
+  "convert_timezone#1": {
+    "ok": true,
+    "rows": [
+      "2021-12-05 15:00:00"
+    ]
+  },
+  "convert_timezone#2": {
+    "ok": true,
+    "rows": [
+      "2021-12-06 00:00:00"
+    ]
+  },
+  "corr#1": {
+    "ok": true,
+    "rows": [
+      "0.8660254037844387"
+    ]
+  },
+  "cos#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "cosh#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "cot#1": {
+    "ok": true,
+    "rows": [
+      "0.6420926159343306"
+    ]
+  },
+  "count#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "count#2": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "count#3": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "count_if#1": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "count_if#2": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "count_min_sketch#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "covar_pop#1": {
+    "ok": true,
+    "rows": [
+      "0.6666666666666666"
+    ]
+  },
+  "covar_samp#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "crc32#1": {
+    "ok": true,
+    "rows": [
+      "1557323817"
+    ]
+  },
+  "csc#1": {
+    "ok": true,
+    "rows": [
+      "1.1883951057781212"
+    ]
+  },
+  "cume_dist#1": {
+    "ok": true,
+    "rows": [
+      "A1\t1\t0.6666666666666666",
+      "A1\t1\t0.6666666666666666",
+      "A1\t2\t1.0",
+      "A2\t3\t1.0"
+    ]
+  },
+  "curdate#1": {
+    "ok": true,
+    "rows": [
+      "2026-11-07"
+    ]
+  },
+  "current_catalog#1": {
+    "ok": true,
+    "rows": [
+      "spark_catalog"
+    ]
+  },
+  "current_database#1": {
+    "ok": true,
+    "rows": [
+      "default"
+    ]
+  },
+  "current_date#1": {
+    "ok": true,
+    "rows": [
+      "2026-11-07"
+    ]
+  },
+  "current_date#2": {
+    "ok": true,
+    "rows": [
+      "2026-11-07"
+    ]
+  },
+  "current_path#1": {
+    "ok": true,
+    "rows": [
+      "system.builtin,system.session,spark_catalog.default"
+    ]
+  },
+  "current_schema#1": {
+    "ok": true,
+    "rows": [
+      "default"
+    ]
+  },
+  "current_time#1": {
+    "volatile": true
+  },
+  "current_time#2": {
+    "volatile": true
+  },
+  "current_time#3": {
+    "volatile": true
+  },
+  "current_time#4": {
+    "volatile": true
+  },
+  "current_time#5": {
+    "volatile": true
+  },
+  "current_timestamp#1": {
+    "volatile": true
+  },
+  "current_timestamp#2": {
+    "volatile": true
+  },
+  "current_timezone#1": {
+    "ok": true,
+    "rows": [
+      "America/Los_Angeles"
+    ]
+  },
+  "current_user#1": {
+    "ok": true,
+    "rows": [
+      "krishiv"
+    ]
+  },
+  "date_add#1": {
+    "ok": true,
+    "rows": [
+      "2016-07-31"
+    ]
+  },
+  "date_diff#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "date_diff#2": {
+    "ok": true,
+    "rows": [
+      "-1"
+    ]
+  },
+  "date_format#1": {
+    "ok": true,
+    "rows": [
+      "2016"
+    ]
+  },
+  "date_from_unix_date#1": {
+    "ok": true,
+    "rows": [
+      "1970-01-02"
+    ]
+  },
+  "date_part#1": {
+    "ok": true,
+    "rows": [
+      "2019"
+    ]
+  },
+  "date_part#2": {
+    "ok": true,
+    "rows": [
+      "33"
+    ]
+  },
+  "date_part#3": {
+    "ok": true,
+    "rows": [
+      "224"
+    ]
+  },
+  "date_part#4": {
+    "ok": true,
+    "rows": [
+      "1.000001"
+    ]
+  },
+  "date_part#5": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "date_part#6": {
+    "ok": true,
+    "rows": [
+      "30.001001"
+    ]
+  },
+  "date_part#7": {
+    "ok": true,
+    "rows": [
+      "11"
+    ]
+  },
+  "date_part#8": {
+    "ok": true,
+    "rows": [
+      "55"
+    ]
+  },
+  "date_sub#1": {
+    "ok": true,
+    "rows": [
+      "2016-07-29"
+    ]
+  },
+  "date_trunc#1": {
+    "ok": true,
+    "rows": [
+      "2015-01-01 00:00:00"
+    ]
+  },
+  "date_trunc#2": {
+    "ok": true,
+    "rows": [
+      "2015-03-01 00:00:00"
+    ]
+  },
+  "date_trunc#3": {
+    "ok": true,
+    "rows": [
+      "2015-03-05 00:00:00"
+    ]
+  },
+  "date_trunc#4": {
+    "ok": true,
+    "rows": [
+      "2015-03-05 09:00:00"
+    ]
+  },
+  "date_trunc#5": {
+    "ok": true,
+    "rows": [
+      "2015-03-05 09:32:05.123"
+    ]
+  },
+  "dateadd#1": {
+    "ok": true,
+    "rows": [
+      "2016-07-31"
+    ]
+  },
+  "datediff#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "datediff#2": {
+    "ok": true,
+    "rows": [
+      "-1"
+    ]
+  },
+  "datepart#1": {
+    "ok": true,
+    "rows": [
+      "2019"
+    ]
+  },
+  "datepart#2": {
+    "ok": true,
+    "rows": [
+      "33"
+    ]
+  },
+  "datepart#3": {
+    "ok": true,
+    "rows": [
+      "224"
+    ]
+  },
+  "datepart#4": {
+    "ok": true,
+    "rows": [
+      "1.000001"
+    ]
+  },
+  "datepart#5": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "datepart#6": {
+    "ok": true,
+    "rows": [
+      "30.001001"
+    ]
+  },
+  "datepart#7": {
+    "ok": true,
+    "rows": [
+      "11"
+    ]
+  },
+  "datepart#8": {
+    "ok": true,
+    "rows": [
+      "55"
+    ]
+  },
+  "day#1": {
+    "ok": true,
+    "rows": [
+      "30"
+    ]
+  },
+  "dayname#1": {
+    "ok": true,
+    "rows": [
+      "Wed"
+    ]
+  },
+  "dayofmonth#1": {
+    "ok": true,
+    "rows": [
+      "30"
+    ]
+  },
+  "dayofweek#1": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "dayofyear#1": {
+    "ok": true,
+    "rows": [
+      "100"
+    ]
+  },
+  "decode#1": {
+    "ok": true,
+    "rows": [
+      "abc"
+    ]
+  },
+  "decode#2": {
+    "ok": true,
+    "rows": [
+      "San Francisco"
+    ]
+  },
+  "decode#3": {
+    "ok": true,
+    "rows": [
+      "Non domestic"
+    ]
+  },
+  "decode#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "decode#5": {
+    "ok": true,
+    "rows": [
+      "SQL"
+    ]
+  },
+  "degrees#1": {
+    "ok": true,
+    "rows": [
+      "180.0"
+    ]
+  },
+  "dense_rank#1": {
+    "ok": true,
+    "rows": [
+      "A1\t1\t1",
+      "A1\t1\t1",
+      "A1\t2\t2",
+      "A2\t3\t1"
+    ]
+  },
+  "div#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "div#2": {
+    "ok": true,
+    "rows": [
+      "-13"
+    ]
+  },
+  "e#1": {
+    "ok": true,
+    "rows": [
+      "2.718281828459045"
+    ]
+  },
+  "element_at#1": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "element_at#2": {
+    "ok": true,
+    "rows": [
+      "b"
+    ]
+  },
+  "elt#1": {
+    "ok": true,
+    "rows": [
+      "scala"
+    ]
+  },
+  "elt#2": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "encode#1": {
+    "ok": true,
+    "rows": [
+      "abc"
+    ]
+  },
+  "endswith#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "endswith#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "endswith#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "endswith#4": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "endswith#5": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "equal_null#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "equal_null#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "equal_null#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "equal_null#4": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "equal_null#5": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "every#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "every#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "every#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "exists#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "exists#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "exists#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "exists#4": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "exists#5": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "exp#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "explode#1": {
+    "ok": true,
+    "rows": [
+      "10",
+      "20"
+    ]
+  },
+  "explode#2": {
+    "ok": true,
+    "rows": [
+      "10",
+      "20"
+    ]
+  },
+  "explode_outer#1": {
+    "ok": true,
+    "rows": [
+      "10",
+      "20"
+    ]
+  },
+  "explode_outer#2": {
+    "ok": true,
+    "rows": [
+      "10",
+      "20"
+    ]
+  },
+  "expm1#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "extract#1": {
+    "ok": true,
+    "rows": [
+      "2019"
+    ]
+  },
+  "extract#10": {
+    "ok": true,
+    "rows": [
+      "8"
+    ]
+  },
+  "extract#11": {
+    "ok": true,
+    "rows": [
+      "1.000001"
+    ]
+  },
+  "extract#2": {
+    "ok": true,
+    "rows": [
+      "33"
+    ]
+  },
+  "extract#3": {
+    "ok": true,
+    "rows": [
+      "224"
+    ]
+  },
+  "extract#4": {
+    "ok": true,
+    "rows": [
+      "1.000001"
+    ]
+  },
+  "extract#5": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "extract#6": {
+    "ok": true,
+    "rows": [
+      "30.001001"
+    ]
+  },
+  "extract#7": {
+    "ok": true,
+    "rows": [
+      "11"
+    ]
+  },
+  "extract#8": {
+    "ok": true,
+    "rows": [
+      "55"
+    ]
+  },
+  "extract#9": {
+    "ok": true,
+    "rows": [
+      "9"
+    ]
+  },
+  "factorial#1": {
+    "ok": true,
+    "rows": [
+      "120"
+    ]
+  },
+  "filter#1": {
+    "ok": true,
+    "rows": [
+      "[1,3]"
+    ]
+  },
+  "filter#2": {
+    "class": "INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH",
+    "ok": false
+  },
+  "filter#3": {
+    "ok": true,
+    "rows": [
+      "[0,2,3]"
+    ]
+  },
+  "find_in_set#1": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "first#1": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "first#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "first#3": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "first_value#1": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "first_value#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "first_value#3": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "flatten#1": {
+    "ok": true,
+    "rows": [
+      "[1,2,3,4]"
+    ]
+  },
+  "floor#1": {
+    "ok": true,
+    "rows": [
+      "-1"
+    ]
+  },
+  "floor#2": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "floor#3": {
+    "ok": true,
+    "rows": [
+      "3.141"
+    ]
+  },
+  "floor#4": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "forall#1": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "forall#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "forall#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "forall#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "format_number#1": {
+    "ok": true,
+    "rows": [
+      "12,332.1235"
+    ]
+  },
+  "format_number#2": {
+    "ok": true,
+    "rows": [
+      "12332.123"
+    ]
+  },
+  "format_string#1": {
+    "ok": true,
+    "rows": [
+      "Hello World 100 days"
+    ]
+  },
+  "from_avro#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "from_csv#1": {
+    "ok": true,
+    "rows": [
+      "{\"a\":1,\"b\":0.8}"
+    ]
+  },
+  "from_csv#2": {
+    "ok": true,
+    "rows": [
+      "{\"time\":2015-08-26 00:00:00}"
+    ]
+  },
+  "from_json#1": {
+    "ok": true,
+    "rows": [
+      "{\"a\":1,\"b\":0.8}"
+    ]
+  },
+  "from_json#2": {
+    "ok": true,
+    "rows": [
+      "{\"time\":2015-08-26 00:00:00}"
+    ]
+  },
+  "from_json#3": {
+    "ok": true,
+    "rows": [
+      "{\"teacher\":\"Alice\",\"student\":[{\"name\":\"Bob\",\"rank\":1},{\"name\":\"Charlie\",\"rank\":2}]}"
+    ]
+  },
+  "from_protobuf#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "from_unixtime#1": {
+    "ok": true,
+    "rows": [
+      "1969-12-31 16:00:00"
+    ]
+  },
+  "from_unixtime#2": {
+    "ok": true,
+    "rows": [
+      "1969-12-31 16:00:00"
+    ]
+  },
+  "from_utc_timestamp#1": {
+    "ok": true,
+    "rows": [
+      "2016-08-31 09:00:00"
+    ]
+  },
+  "from_xml#1": {
+    "ok": true,
+    "rows": [
+      "{\"a\":1,\"b\":0.8}"
+    ]
+  },
+  "from_xml#2": {
+    "ok": true,
+    "rows": [
+      "{\"time\":2015-08-26 00:00:00}"
+    ]
+  },
+  "from_xml#3": {
+    "ok": true,
+    "rows": [
+      "{\"teacher\":\"Alice\",\"student\":[{\"name\":\"Bob\",\"rank\":1},{\"name\":\"Charlie\",\"rank\":2}]}"
+    ]
+  },
+  "get#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "get#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "get#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "get_json_object#1": {
+    "ok": true,
+    "rows": [
+      "b"
+    ]
+  },
+  "get_json_object#2": {
+    "ok": true,
+    "rows": [
+      "b"
+    ]
+  },
+  "get_json_object#3": {
+    "ok": true,
+    "rows": [
+      "[\"b\",\"c\"]"
+    ]
+  },
+  "getbit#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "getbit#2": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "greatest#1": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "grouping#1": {
+    "ok": true,
+    "rows": [
+      "Alice\t0\t2",
+      "NULL\t1\t7",
+      "Bob\t0\t5"
+    ]
+  },
+  "grouping_id#1": {
+    "ok": true,
+    "rows": [
+      "Alice\t0\t2\t165.0",
+      "Alice\t1\t2\t165.0",
+      "NULL\t2\t2\t165.0",
+      "NULL\t3\t7\t172.5",
+      "Bob\t0\t5\t180.0",
+      "Bob\t1\t5\t180.0",
+      "NULL\t2\t5\t180.0"
+    ]
+  },
+  "hash#1": {
+    "ok": true,
+    "rows": [
+      "-1321691492"
+    ]
+  },
+  "hex#1": {
+    "ok": true,
+    "rows": [
+      "11"
+    ]
+  },
+  "hex#2": {
+    "ok": true,
+    "rows": [
+      "537061726B2053514C"
+    ]
+  },
+  "histogram_numeric#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "hll_sketch_agg#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "hll_sketch_estimate#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "hll_union#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "hll_union_agg#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "hour#1": {
+    "ok": true,
+    "rows": [
+      "12"
+    ]
+  },
+  "hour#2": {
+    "ok": true,
+    "rows": [
+      "13"
+    ]
+  },
+  "hypot#1": {
+    "ok": true,
+    "rows": [
+      "5.0"
+    ]
+  },
+  "if#1": {
+    "ok": true,
+    "rows": [
+      "a"
+    ]
+  },
+  "ifnull#1": {
+    "ok": true,
+    "rows": [
+      "[\"2\"]"
+    ]
+  },
+  "ilike#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "ilike#2": {
+    "ok": true,
+    "rows": [
+      "\\abc\ttrue\ttrue"
+    ]
+  },
+  "ilike#3": {
+    "ok": true,
+    "rows": [
+      "spark.sql.parser.escapedStringLiterals\ttrue"
+    ]
+  },
+  "ilike#4": {
+    "class": "INVALID_FORMAT.ESC_IN_THE_MIDDLE",
+    "ok": false
+  },
+  "ilike#5": {
+    "ok": true,
+    "rows": [
+      "spark.sql.parser.escapedStringLiterals\tfalse"
+    ]
+  },
+  "ilike#6": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "ilike#7": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "in#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "in#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "in#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "in#4": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "initcap#1": {
+    "ok": true,
+    "rows": [
+      "Spark Sql"
+    ]
+  },
+  "inline#1": {
+    "ok": true,
+    "rows": [
+      "1\ta",
+      "2\tb"
+    ]
+  },
+  "inline#2": {
+    "ok": true,
+    "rows": [
+      "1\ta",
+      "2\tb"
+    ]
+  },
+  "inline_outer#1": {
+    "ok": true,
+    "rows": [
+      "1\ta",
+      "2\tb"
+    ]
+  },
+  "inline_outer#2": {
+    "ok": true,
+    "rows": [
+      "1\ta",
+      "2\tb"
+    ]
+  },
+  "input_file_block_length#1": {
+    "ok": true,
+    "rows": [
+      "-1"
+    ]
+  },
+  "input_file_block_start#1": {
+    "ok": true,
+    "rows": [
+      "-1"
+    ]
+  },
+  "input_file_name#1": {
+    "ok": true,
+    "rows": [
+      ""
+    ]
+  },
+  "instr#1": {
+    "ok": true,
+    "rows": [
+      "6"
+    ]
+  },
+  "is_valid_utf8#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "is_valid_utf8#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "is_valid_utf8#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "is_valid_utf8#4": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "is_valid_variant#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "is_valid_variant#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "is_variant_null#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "is_variant_null#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "is_variant_null#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "is_variant_null#4": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "is_variant_null#5": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "is_variant_null#6": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "isnan#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "isnotnull#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "isnull#1": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "java_method#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "java_method#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "json_array_length#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "json_array_length#2": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "json_array_length#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "json_object_keys#1": {
+    "ok": true,
+    "rows": [
+      "[]"
+    ]
+  },
+  "json_object_keys#2": {
+    "ok": true,
+    "rows": [
+      "[\"key\"]"
+    ]
+  },
+  "json_object_keys#3": {
+    "ok": true,
+    "rows": [
+      "[\"f1\",\"f2\"]"
+    ]
+  },
+  "json_tuple#1": {
+    "ok": true,
+    "rows": [
+      "1\t2"
+    ]
+  },
+  "kll_merge_agg_bigint#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_merge_agg_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_merge_agg_float#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_agg_bigint#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_agg_bigint#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_agg_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_agg_double#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_agg_float#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_agg_float#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_get_n_bigint#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_get_n_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_get_n_float#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_get_quantile_bigint#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_get_quantile_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_get_quantile_float#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_get_rank_bigint#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_get_rank_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_get_rank_float#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_merge_bigint#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_merge_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_merge_float#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_to_string_bigint#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_to_string_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kll_sketch_to_string_float#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "kurtosis#1": {
+    "ok": true,
+    "rows": [
+      "-0.7014368047529609"
+    ]
+  },
+  "kurtosis#2": {
+    "ok": true,
+    "rows": [
+      "0.19432323191698986"
+    ]
+  },
+  "lag#1": {
+    "ok": true,
+    "rows": [
+      "A1\t1\tNULL",
+      "A1\t1\t1",
+      "A1\t2\t1",
+      "A2\t3\tNULL"
+    ]
+  },
+  "last#1": {
+    "ok": true,
+    "rows": [
+      "20"
+    ]
+  },
+  "last#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "last#3": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "last_day#1": {
+    "ok": true,
+    "rows": [
+      "2009-01-31"
+    ]
+  },
+  "last_value#1": {
+    "ok": true,
+    "rows": [
+      "20"
+    ]
+  },
+  "last_value#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "last_value#3": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "lcase#1": {
+    "ok": true,
+    "rows": [
+      "sparksql"
+    ]
+  },
+  "lead#1": {
+    "ok": true,
+    "rows": [
+      "A1\t1\t1",
+      "A1\t1\t2",
+      "A1\t2\tNULL",
+      "A2\t3\tNULL"
+    ]
+  },
+  "least#1": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "left#1": {
+    "ok": true,
+    "rows": [
+      "Spa"
+    ]
+  },
+  "left#2": {
+    "ok": true,
+    "rows": [
+      "Spa"
+    ]
+  },
+  "len#1": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "len#2": {
+    "ok": true,
+    "rows": [
+      "9"
+    ]
+  },
+  "len#3": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "len#4": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "length#1": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "length#2": {
+    "ok": true,
+    "rows": [
+      "9"
+    ]
+  },
+  "length#3": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "length#4": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "levenshtein#1": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "levenshtein#2": {
+    "ok": true,
+    "rows": [
+      "-1"
+    ]
+  },
+  "like#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "like#2": {
+    "ok": true,
+    "rows": [
+      "\\abc\ttrue\ttrue"
+    ]
+  },
+  "like#3": {
+    "ok": true,
+    "rows": [
+      "spark.sql.parser.escapedStringLiterals\ttrue"
+    ]
+  },
+  "like#4": {
+    "class": "INVALID_FORMAT.ESC_IN_THE_MIDDLE",
+    "ok": false
+  },
+  "like#5": {
+    "ok": true,
+    "rows": [
+      "spark.sql.parser.escapedStringLiterals\tfalse"
+    ]
+  },
+  "like#6": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "like#7": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "listagg#1": {
+    "ok": true,
+    "rows": [
+      "abc"
+    ]
+  },
+  "listagg#2": {
+    "ok": true,
+    "rows": [
+      "cba"
+    ]
+  },
+  "listagg#3": {
+    "ok": true,
+    "rows": [
+      "ab"
+    ]
+  },
+  "listagg#4": {
+    "ok": true,
+    "rows": [
+      "aa"
+    ]
+  },
+  "listagg#5": {
+    "ok": true,
+    "rows": [
+      "ab"
+    ]
+  },
+  "listagg#6": {
+    "ok": true,
+    "rows": [
+      "a, b, c"
+    ]
+  },
+  "listagg#7": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "ln#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "localtimestamp#1": {
+    "volatile": true
+  },
+  "locate#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "locate#2": {
+    "ok": true,
+    "rows": [
+      "7"
+    ]
+  },
+  "locate#3": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "log#1": {
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
+  },
+  "log10#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "log1p#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "log2#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "lower#1": {
+    "ok": true,
+    "rows": [
+      "sparksql"
+    ]
+  },
+  "lpad#1": {
+    "ok": true,
+    "rows": [
+      "???hi"
+    ]
+  },
+  "lpad#2": {
+    "ok": true,
+    "rows": [
+      "h"
+    ]
+  },
+  "lpad#3": {
+    "ok": true,
+    "rows": [
+      "   hi"
+    ]
+  },
+  "lpad#4": {
+    "ok": true,
+    "rows": [
+      "000000AABB"
+    ]
+  },
+  "lpad#5": {
+    "ok": true,
+    "rows": [
+      "112211AABB"
+    ]
+  },
+  "ltrim#1": {
+    "ok": true,
+    "rows": [
+      "SparkSQL   "
+    ]
+  },
+  "luhn_check#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "luhn_check#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "luhn_check#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "make_date#1": {
+    "ok": true,
+    "rows": [
+      "2013-07-15"
+    ]
+  },
+  "make_date#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "make_dt_interval#1": {
+    "ok": true,
+    "rows": [
+      "1 12:30:01.001001000"
+    ]
+  },
+  "make_dt_interval#2": {
+    "ok": true,
+    "rows": [
+      "2 00:00:00.000000000"
+    ]
+  },
+  "make_dt_interval#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "make_interval#1": {
+    "ok": true,
+    "rows": [
+      "100 years 11 months 8 days 12 hours 30 minutes 1.001001 seconds"
+    ]
+  },
+  "make_interval#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "make_interval#3": {
+    "ok": true,
+    "rows": [
+      "1 months 1 days 1 minutes 40.000001 seconds"
+    ]
+  },
+  "make_time#1": {
+    "ok": true,
+    "rows": [
+      "06:30:45.887"
+    ]
+  },
+  "make_time#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "make_timestamp#1": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "make_timestamp#2": {
+    "ok": true,
+    "rows": [
+      "2014-12-27 21:30:45.887"
+    ]
+  },
+  "make_timestamp#3": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 00:00:00"
+    ]
+  },
+  "make_timestamp#4": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "make_timestamp#5": {
+    "ok": true,
+    "rows": [
+      "2014-12-27 21:30:45.887"
+    ]
+  },
+  "make_timestamp_ltz#1": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "make_timestamp_ltz#2": {
+    "ok": true,
+    "rows": [
+      "2014-12-27 21:30:45.887"
+    ]
+  },
+  "make_timestamp_ltz#3": {
+    "ok": true,
+    "rows": [
+      "2019-07-01 00:00:00"
+    ]
+  },
+  "make_timestamp_ltz#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "make_timestamp_ltz#5": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "make_timestamp_ltz#6": {
+    "ok": true,
+    "rows": [
+      "2014-12-27 21:30:45.887"
+    ]
+  },
+  "make_timestamp_ntz#1": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "make_timestamp_ntz#2": {
+    "ok": true,
+    "rows": [
+      "2019-07-01 00:00:00"
+    ]
+  },
+  "make_timestamp_ntz#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "make_timestamp_ntz#4": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "make_valid_utf8#1": {
+    "ok": true,
+    "rows": [
+      "Spark"
+    ]
+  },
+  "make_valid_utf8#2": {
+    "ok": true,
+    "rows": [
+      "a"
+    ]
+  },
+  "make_valid_utf8#3": {
+    "ok": true,
+    "rows": [
+      "�"
+    ]
+  },
+  "make_valid_utf8#4": {
+    "ok": true,
+    "rows": [
+      "a�b"
+    ]
+  },
+  "make_ym_interval#1": {
+    "ok": true,
+    "rows": [
+      "1-2"
+    ]
+  },
+  "make_ym_interval#2": {
+    "ok": true,
+    "rows": [
+      "1-0"
+    ]
+  },
+  "make_ym_interval#3": {
+    "ok": true,
+    "rows": [
+      "-0-11"
+    ]
+  },
+  "make_ym_interval#4": {
+    "ok": true,
+    "rows": [
+      "2-0"
+    ]
+  },
+  "map#1": {
+    "ok": true,
+    "rows": [
+      "{1.0:\"2\",3.0:\"4\"}"
+    ]
+  },
+  "map_concat#1": {
+    "ok": true,
+    "rows": [
+      "{1:\"a\",2:\"b\",3:\"c\"}"
+    ]
+  },
+  "map_contains_key#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "map_contains_key#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "map_entries#1": {
+    "ok": true,
+    "rows": [
+      "[{\"key\":1,\"value\":\"a\"},{\"key\":2,\"value\":\"b\"}]"
+    ]
+  },
+  "map_filter#1": {
+    "ok": true,
+    "rows": [
+      "{1:0,3:-1}"
+    ]
+  },
+  "map_from_arrays#1": {
+    "ok": true,
+    "rows": [
+      "{1.0:\"2\",3.0:\"4\"}"
+    ]
+  },
+  "map_from_entries#1": {
+    "ok": true,
+    "rows": [
+      "{1:\"a\",2:\"b\"}"
+    ]
+  },
+  "map_keys#1": {
+    "ok": true,
+    "rows": [
+      "[1,2]"
+    ]
+  },
+  "map_values#1": {
+    "ok": true,
+    "rows": [
+      "[\"a\",\"b\"]"
+    ]
+  },
+  "map_zip_with#1": {
+    "ok": true,
+    "rows": [
+      "{1:\"ax\",2:\"by\"}"
+    ]
+  },
+  "map_zip_with#2": {
+    "ok": true,
+    "rows": [
+      "{\"a\":1,\"b\":5,\"c\":4}"
+    ]
+  },
+  "mask#1": {
+    "ok": true,
+    "rows": [
+      "xxxx-XXXX-nnnn-nnnn"
+    ]
+  },
+  "mask#10": {
+    "ok": true,
+    "rows": [
+      "AbCDdddoooo"
+    ]
+  },
+  "mask#11": {
+    "ok": true,
+    "rows": [
+      "AbCD123oooo"
+    ]
+  },
+  "mask#12": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "mask#13": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "mask#14": {
+    "ok": true,
+    "rows": [
+      "AbCD123-@$#"
+    ]
+  },
+  "mask#2": {
+    "ok": true,
+    "rows": [
+      "xxxx-QQQQ-nnnn-nnnn"
+    ]
+  },
+  "mask#3": {
+    "ok": true,
+    "rows": [
+      "QqQQnnn-@$#"
+    ]
+  },
+  "mask#4": {
+    "ok": true,
+    "rows": [
+      "XxXXnnn-@$#"
+    ]
+  },
+  "mask#5": {
+    "ok": true,
+    "rows": [
+      "QxQQnnn-@$#"
+    ]
+  },
+  "mask#6": {
+    "ok": true,
+    "rows": [
+      "QqQQnnn-@$#"
+    ]
+  },
+  "mask#7": {
+    "ok": true,
+    "rows": [
+      "QqQQddd-@$#"
+    ]
+  },
+  "mask#8": {
+    "ok": true,
+    "rows": [
+      "QqQQdddoooo"
+    ]
+  },
+  "mask#9": {
+    "ok": true,
+    "rows": [
+      "AqCDdddoooo"
+    ]
+  },
+  "max#1": {
+    "ok": true,
+    "rows": [
+      "50"
+    ]
+  },
+  "max_by#1": {
+    "ok": true,
+    "rows": [
+      "b"
+    ]
+  },
+  "max_by#2": {
+    "ok": true,
+    "rows": [
+      "[\"b\",\"c\"]"
+    ]
+  },
+  "md5#1": {
+    "ok": true,
+    "rows": [
+      "8cde774d6f7333752ed72cacddb05126"
+    ]
+  },
+  "mean#1": {
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
+  },
+  "mean#2": {
+    "ok": true,
+    "rows": [
+      "1.5"
+    ]
+  },
+  "measure#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "median#1": {
+    "ok": true,
+    "rows": [
+      "5.0"
+    ]
+  },
+  "median#2": {
+    "ok": true,
+    "rows": [
+      "0-5"
+    ]
+  },
+  "min#1": {
+    "ok": true,
+    "rows": [
+      "-1"
+    ]
+  },
+  "min_by#1": {
+    "ok": true,
+    "rows": [
+      "a"
+    ]
+  },
+  "min_by#2": {
+    "ok": true,
+    "rows": [
+      "[\"a\",\"c\"]"
+    ]
+  },
+  "minute#1": {
+    "ok": true,
+    "rows": [
+      "58"
+    ]
+  },
+  "minute#2": {
+    "ok": true,
+    "rows": [
+      "59"
+    ]
+  },
+  "mod#1": {
+    "ok": true,
+    "rows": [
+      "0.2"
+    ]
+  },
+  "mod#2": {
+    "ok": true,
+    "rows": [
+      "0.2"
+    ]
+  },
+  "mode#1": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "mode#2": {
+    "ok": true,
+    "rows": [
+      "0-10"
+    ]
+  },
+  "mode#3": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "mode#4": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "mode#5": {
+    "ok": true,
+    "rows": [
+      "-10"
+    ]
+  },
+  "mode#6": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "mode#7": {
+    "ok": true,
+    "rows": [
+      "10"
+    ]
+  },
+  "mode#8": {
+    "ok": true,
+    "rows": [
+      "20"
+    ]
+  },
+  "monotonically_increasing_id#1": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "month#1": {
+    "ok": true,
+    "rows": [
+      "7"
+    ]
+  },
+  "monthname#1": {
+    "ok": true,
+    "rows": [
+      "Feb"
+    ]
+  },
+  "months_between#1": {
+    "ok": true,
+    "rows": [
+      "3.94959677"
+    ]
+  },
+  "months_between#2": {
+    "ok": true,
+    "rows": [
+      "3.9495967741935485"
+    ]
+  },
+  "named_struct#1": {
+    "ok": true,
+    "rows": [
+      "{\"a\":1,\"b\":2,\"c\":3}"
+    ]
+  },
+  "nanvl#1": {
+    "ok": true,
+    "rows": [
+      "123.0"
+    ]
+  },
+  "negative#1": {
+    "ok": true,
+    "rows": [
+      "-1"
+    ]
+  },
+  "next_day#1": {
+    "ok": true,
+    "rows": [
+      "2015-01-20"
+    ]
+  },
+  "not#1": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "not#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "not#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "now#1": {
+    "volatile": true
+  },
+  "nth_value#1": {
+    "ok": true,
+    "rows": [
+      "A1\t1\t1",
+      "A1\t1\t1",
+      "A1\t2\t1",
+      "A2\t3\tNULL"
+    ]
+  },
+  "ntile#1": {
+    "ok": true,
+    "rows": [
+      "A1\t1\t1",
+      "A1\t1\t1",
+      "A1\t2\t2",
+      "A2\t3\t1"
+    ]
+  },
+  "nullif#1": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "nullifzero#1": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "nullifzero#2": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "nvl#1": {
+    "ok": true,
+    "rows": [
+      "[\"2\"]"
+    ]
+  },
+  "nvl2#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "octet_length#1": {
+    "ok": true,
+    "rows": [
+      "9"
+    ]
+  },
+  "octet_length#2": {
+    "ok": true,
+    "rows": [
+      "9"
+    ]
+  },
+  "op-amp#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "op-bang#1": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "op-bang#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-bang#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "op-caret#1": {
+    "ok": true,
+    "rows": [
+      "6"
+    ]
+  },
+  "op-eq#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-eq#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-eq#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "op-eq#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "op-eq-eq#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-eq-eq#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-eq-eq#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "op-eq-eq#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "op-gt#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-gt#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-gt#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "op-gt#4": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "op-gt#5": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "op-gt-eq#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-gt-eq#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "op-gt-eq#3": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-gt-eq#4": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "op-gt-eq#5": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "op-gt-gt#1": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "op-gt-gt#2": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "op-gt-gt-gt#1": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "op-gt-gt-gt#2": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "op-lt#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-lt#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "op-lt#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "op-lt#4": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-lt#5": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "op-lt-eq#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-lt-eq#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-lt-eq#3": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-lt-eq#4": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-lt-eq#5": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "op-lt-eq-gt#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-lt-eq-gt#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-lt-eq-gt#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "op-lt-eq-gt#4": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "op-lt-lt#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "op-lt-lt#2": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "op-minus#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "op-percent#1": {
+    "ok": true,
+    "rows": [
+      "0.2"
+    ]
+  },
+  "op-percent#2": {
+    "ok": true,
+    "rows": [
+      "0.2"
+    ]
+  },
+  "op-pipe#1": {
+    "ok": true,
+    "rows": [
+      "7"
+    ]
+  },
+  "op-plus#1": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "op-slash#1": {
+    "ok": true,
+    "rows": [
+      "1.5"
+    ]
+  },
+  "op-slash#2": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "op-star#1": {
+    "ok": true,
+    "rows": [
+      "6"
+    ]
+  },
+  "op-tilde#1": {
+    "ok": true,
+    "rows": [
+      "-1"
+    ]
+  },
+  "or#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "or#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "or#3": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "or#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "overlay#1": {
+    "ok": true,
+    "rows": [
+      "Spark_SQL"
+    ]
+  },
+  "overlay#2": {
+    "ok": true,
+    "rows": [
+      "Spark CORE"
+    ]
+  },
+  "overlay#3": {
+    "ok": true,
+    "rows": [
+      "Spark ANSI SQL"
+    ]
+  },
+  "overlay#4": {
+    "ok": true,
+    "rows": [
+      "Structured SQL"
+    ]
+  },
+  "overlay#5": {
+    "ok": true,
+    "rows": [
+      "Spark_SQL"
+    ]
+  },
+  "overlay#6": {
+    "ok": true,
+    "rows": [
+      "Spark CORE"
+    ]
+  },
+  "overlay#7": {
+    "ok": true,
+    "rows": [
+      "Spark ANSI SQL"
+    ]
+  },
+  "overlay#8": {
+    "ok": true,
+    "rows": [
+      "Structured SQL"
+    ]
+  },
+  "parse_json#1": {
+    "ok": true,
+    "rows": [
+      "{\"a\":1,\"b\":0.8}"
+    ]
+  },
+  "parse_url#1": {
+    "ok": true,
+    "rows": [
+      "spark.apache.org"
+    ]
+  },
+  "parse_url#2": {
+    "ok": true,
+    "rows": [
+      "query=1"
+    ]
+  },
+  "parse_url#3": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "percent_rank#1": {
+    "ok": true,
+    "rows": [
+      "A1\t1\t0.0",
+      "A1\t1\t0.0",
+      "A1\t2\t1.0",
+      "A2\t3\t0.0"
+    ]
+  },
+  "percentile#1": {
+    "ok": true,
+    "rows": [
+      "3.0"
+    ]
+  },
+  "percentile#2": {
+    "ok": true,
+    "rows": [
+      "[2.5,7.5]"
+    ]
+  },
+  "percentile#3": {
+    "ok": true,
+    "rows": [
+      "0-5"
+    ]
+  },
+  "percentile#4": {
+    "ok": true,
+    "rows": [
+      "[0 00:00:02.000000000,0 00:00:05.000000000]"
+    ]
+  },
+  "percentile_approx#1": {
+    "ok": true,
+    "rows": [
+      "[1,1,0]"
+    ]
+  },
+  "percentile_approx#2": {
+    "ok": true,
+    "rows": [
+      "7"
+    ]
+  },
+  "percentile_approx#3": {
+    "ok": true,
+    "rows": [
+      "0-1"
+    ]
+  },
+  "percentile_approx#4": {
+    "ok": true,
+    "rows": [
+      "[0 00:00:01.000000000,0 00:00:02.000000000]"
+    ]
+  },
+  "percentile_cont#1": {
+    "ok": true,
+    "rows": [
+      "2.5"
+    ]
+  },
+  "percentile_cont#2": {
+    "ok": true,
+    "rows": [
+      "0-2"
+    ]
+  },
+  "percentile_disc#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "percentile_disc#2": {
+    "ok": true,
+    "rows": [
+      "0-0"
+    ]
+  },
+  "pi#1": {
+    "ok": true,
+    "rows": [
+      "3.141592653589793"
+    ]
+  },
+  "pmod#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "pmod#2": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "posexplode#1": {
+    "ok": true,
+    "rows": [
+      "0\t10",
+      "1\t20"
+    ]
+  },
+  "posexplode#2": {
+    "ok": true,
+    "rows": [
+      "0\t10",
+      "1\t20"
+    ]
+  },
+  "posexplode_outer#1": {
+    "ok": true,
+    "rows": [
+      "0\t10",
+      "1\t20"
+    ]
+  },
+  "posexplode_outer#2": {
+    "ok": true,
+    "rows": [
+      "0\t10",
+      "1\t20"
+    ]
+  },
+  "position#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "position#2": {
+    "ok": true,
+    "rows": [
+      "7"
+    ]
+  },
+  "position#3": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "positive#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "pow#1": {
+    "ok": true,
+    "rows": [
+      "8.0"
+    ]
+  },
+  "power#1": {
+    "ok": true,
+    "rows": [
+      "8.0"
+    ]
+  },
+  "printf#1": {
+    "ok": true,
+    "rows": [
+      "Hello World 100 days"
+    ]
+  },
+  "python_worker_logs#1": {
+    "ok": true,
+    "rows": [
+      "spark.sql.pyspark.worker.logging.enabled\ttrue"
+    ]
+  },
+  "python_worker_logs#2": {
+    "class": "UNRESOLVABLE_TABLE_VALUED_FUNCTION",
+    "ok": false
+  },
+  "quarter#1": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "quote#1": {
+    "ok": true,
+    "rows": [
+      "'Don\\'t'"
+    ]
+  },
+  "radians#1": {
+    "ok": true,
+    "rows": [
+      "3.141592653589793"
+    ]
+  },
+  "raise_error#1": {
+    "class": "USER_RAISED_EXCEPTION",
+    "ok": false
+  },
+  "rand#1": {
+    "volatile": true
+  },
+  "rand#2": {
+    "ok": true,
+    "rows": [
+      "0.7604953758285915"
+    ]
+  },
+  "rand#3": {
+    "ok": true,
+    "rows": [
+      "0.7604953758285915"
+    ]
+  },
+  "randn#1": {
+    "volatile": true
+  },
+  "randn#2": {
+    "ok": true,
+    "rows": [
+      "1.6034991609278433"
+    ]
+  },
+  "randn#3": {
+    "ok": true,
+    "rows": [
+      "1.6034991609278433"
+    ]
+  },
+  "random#1": {
+    "volatile": true
+  },
+  "random#2": {
+    "ok": true,
+    "rows": [
+      "0.7604953758285915"
+    ]
+  },
+  "random#3": {
+    "ok": true,
+    "rows": [
+      "0.7604953758285915"
+    ]
+  },
+  "randstr#1": {
+    "ok": true,
+    "rows": [
+      "ceV"
+    ]
+  },
+  "range#1": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "range#2": {
+    "ok": true,
+    "rows": [
+      "0",
+      "1"
+    ]
+  },
+  "range#3": {
+    "ok": true,
+    "rows": [
+      "0",
+      "2"
+    ]
+  },
+  "rank#1": {
+    "ok": true,
+    "rows": [
+      "A1\t1\t1",
+      "A1\t1\t1",
+      "A1\t2\t3",
+      "A2\t3\t1"
+    ]
+  },
+  "reduce#1": {
+    "ok": true,
+    "rows": [
+      "6"
+    ]
+  },
+  "reduce#2": {
+    "ok": true,
+    "rows": [
+      "60"
+    ]
+  },
+  "reflect#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "reflect#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "regexp#1": {
+    "ok": true,
+    "rows": [
+      "spark.sql.parser.escapedStringLiterals\ttrue"
+    ]
+  },
+  "regexp#2": {
+    "class": "INVALID_PARAMETER_VALUE.PATTERN",
+    "ok": false
+  },
+  "regexp#3": {
+    "ok": true,
+    "rows": [
+      "spark.sql.parser.escapedStringLiterals\tfalse"
+    ]
+  },
+  "regexp#4": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "regexp#5": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "regexp_count#1": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "regexp_count#2": {
+    "ok": true,
+    "rows": [
+      "8"
+    ]
+  },
+  "regexp_extract#1": {
+    "ok": true,
+    "rows": [
+      "100"
+    ]
+  },
+  "regexp_extract#2": {
+    "ok": true,
+    "rows": [
+      "100"
+    ]
+  },
+  "regexp_extract_all#1": {
+    "ok": true,
+    "rows": [
+      "[\"100\",\"300\"]"
+    ]
+  },
+  "regexp_extract_all#2": {
+    "ok": true,
+    "rows": [
+      "[\"100\",\"300\"]"
+    ]
+  },
+  "regexp_instr#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "regexp_instr#2": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "regexp_like#1": {
+    "ok": true,
+    "rows": [
+      "spark.sql.parser.escapedStringLiterals\ttrue"
+    ]
+  },
+  "regexp_like#2": {
+    "class": "INVALID_PARAMETER_VALUE.PATTERN",
+    "ok": false
+  },
+  "regexp_like#3": {
+    "ok": true,
+    "rows": [
+      "spark.sql.parser.escapedStringLiterals\tfalse"
+    ]
+  },
+  "regexp_like#4": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "regexp_like#5": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "regexp_replace#1": {
+    "ok": true,
+    "rows": [
+      "num-num"
+    ]
+  },
+  "regexp_replace#2": {
+    "ok": true,
+    "rows": [
+      "num-num"
+    ]
+  },
+  "regexp_substr#1": {
+    "ok": true,
+    "rows": [
+      "Steven"
+    ]
+  },
+  "regexp_substr#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_avgx#1": {
+    "ok": true,
+    "rows": [
+      "2.75"
+    ]
+  },
+  "regr_avgx#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_avgx#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_avgx#4": {
+    "ok": true,
+    "rows": [
+      "3.0"
+    ]
+  },
+  "regr_avgx#5": {
+    "ok": true,
+    "rows": [
+      "3.0"
+    ]
+  },
+  "regr_avgy#1": {
+    "ok": true,
+    "rows": [
+      "1.75"
+    ]
+  },
+  "regr_avgy#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_avgy#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_avgy#4": {
+    "ok": true,
+    "rows": [
+      "1.6666666666666667"
+    ]
+  },
+  "regr_avgy#5": {
+    "ok": true,
+    "rows": [
+      "1.5"
+    ]
+  },
+  "regr_count#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "regr_count#2": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "regr_count#3": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "regr_count#4": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "regr_count#5": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "regr_intercept#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "regr_intercept#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_intercept#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_intercept#4": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "regr_intercept#5": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "regr_r2#1": {
+    "ok": true,
+    "rows": [
+      "0.2727272727272726"
+    ]
+  },
+  "regr_r2#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_r2#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_r2#4": {
+    "ok": true,
+    "rows": [
+      "0.7500000000000001"
+    ]
+  },
+  "regr_r2#5": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "regr_slope#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "regr_slope#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_slope#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_slope#4": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "regr_slope#5": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "regr_sxx#1": {
+    "ok": true,
+    "rows": [
+      "2.7499999999999996"
+    ]
+  },
+  "regr_sxx#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_sxx#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_sxx#4": {
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
+  },
+  "regr_sxx#5": {
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
+  },
+  "regr_sxy#1": {
+    "ok": true,
+    "rows": [
+      "0.7499999999999998"
+    ]
+  },
+  "regr_sxy#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_sxy#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_sxy#4": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "regr_sxy#5": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "regr_syy#1": {
+    "ok": true,
+    "rows": [
+      "0.75"
+    ]
+  },
+  "regr_syy#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_syy#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "regr_syy#4": {
+    "ok": true,
+    "rows": [
+      "0.6666666666666666"
+    ]
+  },
+  "regr_syy#5": {
+    "ok": true,
+    "rows": [
+      "0.5"
+    ]
+  },
+  "repeat#1": {
+    "ok": true,
+    "rows": [
+      "123123"
+    ]
+  },
+  "replace#1": {
+    "ok": true,
+    "rows": [
+      "ABCDEF"
+    ]
+  },
+  "reverse#1": {
+    "ok": true,
+    "rows": [
+      "LQS krapS"
+    ]
+  },
+  "reverse#2": {
+    "class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+    "ok": false
+  },
+  "reverse#3": {
+    "ok": true,
+    "rows": [
+      "FECA"
+    ]
+  },
+  "right#1": {
+    "ok": true,
+    "rows": [
+      "SQL"
+    ]
+  },
+  "rint#1": {
+    "ok": true,
+    "rows": [
+      "12.0"
+    ]
+  },
+  "rlike#1": {
+    "ok": true,
+    "rows": [
+      "spark.sql.parser.escapedStringLiterals\ttrue"
+    ]
+  },
+  "rlike#2": {
+    "class": "INVALID_PARAMETER_VALUE.PATTERN",
+    "ok": false
+  },
+  "rlike#3": {
+    "ok": true,
+    "rows": [
+      "spark.sql.parser.escapedStringLiterals\tfalse"
+    ]
+  },
+  "rlike#4": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "rlike#5": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "round#1": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "row_number#1": {
+    "ok": true,
+    "rows": [
+      "A1\t1\t1",
+      "A1\t1\t2",
+      "A1\t2\t3",
+      "A2\t3\t1"
+    ]
+  },
+  "rpad#1": {
+    "ok": true,
+    "rows": [
+      "hi???"
+    ]
+  },
+  "rpad#2": {
+    "ok": true,
+    "rows": [
+      "h"
+    ]
+  },
+  "rpad#3": {
+    "ok": true,
+    "rows": [
+      "hi   "
+    ]
+  },
+  "rpad#4": {
+    "ok": true,
+    "rows": [
+      "AABB000000"
+    ]
+  },
+  "rpad#5": {
+    "ok": true,
+    "rows": [
+      "AABB112211"
+    ]
+  },
+  "rtrim#1": {
+    "ok": true,
+    "rows": [
+      "    SparkSQL"
+    ]
+  },
+  "schema_of_avro#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "schema_of_csv#1": {
+    "ok": true,
+    "rows": [
+      "STRUCT<_c0: INT, _c1: STRING>"
+    ]
+  },
+  "schema_of_json#1": {
+    "ok": true,
+    "rows": [
+      "ARRAY<STRUCT<col: BIGINT>>"
+    ]
+  },
+  "schema_of_json#2": {
+    "ok": true,
+    "rows": [
+      "ARRAY<STRUCT<col: BIGINT>>"
+    ]
+  },
+  "schema_of_variant#1": {
+    "ok": true,
+    "rows": [
+      "VOID"
+    ]
+  },
+  "schema_of_variant#2": {
+    "ok": true,
+    "rows": [
+      "ARRAY<OBJECT<a: BIGINT, b: BOOLEAN>>"
+    ]
+  },
+  "schema_of_variant_agg#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "schema_of_variant_agg#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "schema_of_xml#1": {
+    "ok": true,
+    "rows": [
+      "STRUCT<a: BIGINT>"
+    ]
+  },
+  "schema_of_xml#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "sec#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "second#1": {
+    "ok": true,
+    "rows": [
+      "59"
+    ]
+  },
+  "second#2": {
+    "ok": true,
+    "rows": [
+      "59"
+    ]
+  },
+  "sentences#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "sentences#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "sentences#3": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "sequence#1": {
+    "ok": true,
+    "rows": [
+      "[1,2,3,4,5]"
+    ]
+  },
+  "sequence#2": {
+    "ok": true,
+    "rows": [
+      "[5,4,3,2,1]"
+    ]
+  },
+  "sequence#3": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "sequence#4": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "session_user#1": {
+    "ok": true,
+    "rows": [
+      "krishiv"
+    ]
+  },
+  "session_window#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "session_window#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "sha#1": {
+    "ok": true,
+    "rows": [
+      "85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c"
+    ]
+  },
+  "sha1#1": {
+    "ok": true,
+    "rows": [
+      "85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c"
+    ]
+  },
+  "sha2#1": {
+    "ok": true,
+    "rows": [
+      "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b"
+    ]
+  },
+  "shiftleft#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "shiftleft#2": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "shiftright#1": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "shiftright#2": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "shiftrightunsigned#1": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "shiftrightunsigned#2": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "shuffle#1": {
+    "volatile": true
+  },
+  "shuffle#2": {
+    "volatile": true
+  },
+  "sign#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "sign#2": {
+    "ok": true,
+    "rows": [
+      "-1.0"
+    ]
+  },
+  "signum#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "signum#2": {
+    "ok": true,
+    "rows": [
+      "-1.0"
+    ]
+  },
+  "sin#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "sinh#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "size#1": {
+    "ok": true,
+    "rows": [
+      "4"
+    ]
+  },
+  "size#2": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "skewness#1": {
+    "ok": true,
+    "rows": [
+      "1.1135657469022011"
+    ]
+  },
+  "skewness#2": {
+    "ok": true,
+    "rows": [
+      "-1.113565746902201"
+    ]
+  },
+  "slice#1": {
+    "ok": true,
+    "rows": [
+      "[2,3]"
+    ]
+  },
+  "slice#2": {
+    "ok": true,
+    "rows": [
+      "[3,4]"
+    ]
+  },
+  "some#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "some#2": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "some#3": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "sort_array#1": {
+    "ok": true,
+    "rows": [
+      "[null,\"a\",\"b\",\"c\",\"d\"]"
+    ]
+  },
+  "sort_array#2": {
+    "ok": true,
+    "rows": [
+      "[\"d\",\"c\",\"b\",\"a\",null]"
+    ]
+  },
+  "soundex#1": {
+    "ok": true,
+    "rows": [
+      "M460"
+    ]
+  },
+  "space#1": {
+    "ok": true,
+    "rows": [
+      "  1"
+    ]
+  },
+  "spark_partition_id#1": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "split#1": {
+    "ok": true,
+    "rows": [
+      "[\"one\",\"two\",\"three\",\"\"]"
+    ]
+  },
+  "split#2": {
+    "ok": true,
+    "rows": [
+      "[\"one\",\"two\",\"three\",\"\"]"
+    ]
+  },
+  "split#3": {
+    "ok": true,
+    "rows": [
+      "[\"one\",\"twoBthreeC\"]"
+    ]
+  },
+  "split_part#1": {
+    "ok": true,
+    "rows": [
+      "13"
+    ]
+  },
+  "sql_keywords#1": {
+    "ok": true,
+    "rows": [
+      "ADD\tfalse",
+      "AFTER\tfalse"
+    ]
+  },
+  "sqrt#1": {
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
+  },
+  "st_asbinary#1": {
+    "ok": true,
+    "rows": [
+      "0101000000000000000000F03F0000000000000040"
+    ]
+  },
+  "st_asbinary#2": {
+    "ok": true,
+    "rows": [
+      "00000000013FF00000000000004000000000000000"
+    ]
+  },
+  "st_geogfromwkb#1": {
+    "ok": true,
+    "rows": [
+      "0101000000000000000000F03F0000000000000040"
+    ]
+  },
+  "st_geomfromwkb#1": {
+    "ok": true,
+    "rows": [
+      "0101000000000000000000F03F0000000000000040"
+    ]
+  },
+  "st_geomfromwkb#2": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "st_geomfromwkb#3": {
+    "ok": true,
+    "rows": [
+      "0101000000000000000000F03F0000000000000040"
+    ]
+  },
+  "st_geomfromwkb#4": {
+    "ok": true,
+    "rows": [
+      "4326"
+    ]
+  },
+  "st_setsrid#1": {
+    "ok": true,
+    "rows": [
+      "4326"
+    ]
+  },
+  "st_setsrid#2": {
+    "ok": true,
+    "rows": [
+      "3857"
+    ]
+  },
+  "st_srid#1": {
+    "ok": true,
+    "rows": [
+      "4326"
+    ]
+  },
+  "st_srid#2": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "st_srid#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "stack#1": {
+    "ok": true,
+    "rows": [
+      "1\t2",
+      "3\tNULL"
+    ]
+  },
+  "startswith#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "startswith#2": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "startswith#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "startswith#4": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "startswith#5": {
+    "ok": true,
+    "rows": [
+      "false"
+    ]
+  },
+  "std#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "stddev#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "stddev_pop#1": {
+    "ok": true,
+    "rows": [
+      "0.816496580927726"
+    ]
+  },
+  "stddev_samp#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "str_to_map#1": {
+    "ok": true,
+    "rows": [
+      "{\"a\":\"1\",\"b\":\"2\",\"c\":\"3\"}"
+    ]
+  },
+  "str_to_map#2": {
+    "ok": true,
+    "rows": [
+      "{\"a\":null}"
+    ]
+  },
+  "string_agg#1": {
+    "ok": true,
+    "rows": [
+      "abc"
+    ]
+  },
+  "string_agg#2": {
+    "ok": true,
+    "rows": [
+      "cba"
+    ]
+  },
+  "string_agg#3": {
+    "ok": true,
+    "rows": [
+      "ab"
+    ]
+  },
+  "string_agg#4": {
+    "ok": true,
+    "rows": [
+      "aa"
+    ]
+  },
+  "string_agg#5": {
+    "ok": true,
+    "rows": [
+      "ab"
+    ]
+  },
+  "string_agg#6": {
+    "ok": true,
+    "rows": [
+      "a, b, c"
+    ]
+  },
+  "string_agg#7": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "struct#1": {
+    "ok": true,
+    "rows": [
+      "{\"col1\":1,\"col2\":2,\"col3\":3}"
+    ]
+  },
+  "substr#1": {
+    "ok": true,
+    "rows": [
+      "k SQL"
+    ]
+  },
+  "substr#2": {
+    "ok": true,
+    "rows": [
+      "SQL"
+    ]
+  },
+  "substr#3": {
+    "ok": true,
+    "rows": [
+      "k"
+    ]
+  },
+  "substr#4": {
+    "ok": true,
+    "rows": [
+      "k SQL"
+    ]
+  },
+  "substr#5": {
+    "ok": true,
+    "rows": [
+      "SQL"
+    ]
+  },
+  "substr#6": {
+    "ok": true,
+    "rows": [
+      "k"
+    ]
+  },
+  "substr#7": {
+    "ok": true,
+    "rows": [
+      "k SQL"
+    ]
+  },
+  "substring#1": {
+    "ok": true,
+    "rows": [
+      "k SQL"
+    ]
+  },
+  "substring#2": {
+    "ok": true,
+    "rows": [
+      "SQL"
+    ]
+  },
+  "substring#3": {
+    "ok": true,
+    "rows": [
+      "k"
+    ]
+  },
+  "substring#4": {
+    "ok": true,
+    "rows": [
+      "k SQL"
+    ]
+  },
+  "substring#5": {
+    "ok": true,
+    "rows": [
+      "SQL"
+    ]
+  },
+  "substring#6": {
+    "ok": true,
+    "rows": [
+      "k"
+    ]
+  },
+  "substring#7": {
+    "ok": true,
+    "rows": [
+      "k SQL"
+    ]
+  },
+  "substring_index#1": {
+    "ok": true,
+    "rows": [
+      "www.apache"
+    ]
+  },
+  "sum#1": {
+    "ok": true,
+    "rows": [
+      "30"
+    ]
+  },
+  "sum#2": {
+    "ok": true,
+    "rows": [
+      "25"
+    ]
+  },
+  "sum#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "tan#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "tanh#1": {
+    "ok": true,
+    "rows": [
+      "0.0"
+    ]
+  },
+  "theta_difference#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "theta_intersection#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "theta_intersection_agg#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "theta_sketch_agg#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "theta_sketch_estimate#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "theta_union#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "theta_union_agg#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "time_bucket#1": {
+    "ok": true,
+    "rows": [
+      "2024-01-01 11:15:00"
+    ]
+  },
+  "time_bucket#2": {
+    "ok": true,
+    "rows": [
+      "2024-01-01 11:00:00"
+    ]
+  },
+  "time_bucket#3": {
+    "ok": true,
+    "rows": [
+      "2024-07-15 09:00:00"
+    ]
+  },
+  "time_diff#1": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "time_diff#2": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "time_diff#3": {
+    "ok": true,
+    "rows": [
+      "-8"
+    ]
+  },
+  "time_from_micros#1": {
+    "ok": true,
+    "rows": [
+      "00:00:00"
+    ]
+  },
+  "time_from_micros#2": {
+    "ok": true,
+    "rows": [
+      "14:30:00"
+    ]
+  },
+  "time_from_micros#3": {
+    "ok": true,
+    "rows": [
+      "14:30:00.5"
+    ]
+  },
+  "time_from_micros#4": {
+    "ok": true,
+    "rows": [
+      "23:59:59.999999"
+    ]
+  },
+  "time_from_millis#1": {
+    "ok": true,
+    "rows": [
+      "00:00:00"
+    ]
+  },
+  "time_from_millis#2": {
+    "ok": true,
+    "rows": [
+      "14:30:00"
+    ]
+  },
+  "time_from_millis#3": {
+    "ok": true,
+    "rows": [
+      "14:30:00.5"
+    ]
+  },
+  "time_from_millis#4": {
+    "ok": true,
+    "rows": [
+      "23:59:59.999"
+    ]
+  },
+  "time_from_seconds#1": {
+    "ok": true,
+    "rows": [
+      "00:00:00"
+    ]
+  },
+  "time_from_seconds#2": {
+    "ok": true,
+    "rows": [
+      "14:30:00"
+    ]
+  },
+  "time_from_seconds#3": {
+    "ok": true,
+    "rows": [
+      "14:30:00.5"
+    ]
+  },
+  "time_from_seconds#4": {
+    "ok": true,
+    "rows": [
+      "23:59:59.999999"
+    ]
+  },
+  "time_to_micros#1": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "time_to_micros#2": {
+    "ok": true,
+    "rows": [
+      "52200000000"
+    ]
+  },
+  "time_to_micros#3": {
+    "ok": true,
+    "rows": [
+      "52200500000"
+    ]
+  },
+  "time_to_micros#4": {
+    "ok": true,
+    "rows": [
+      "86399999999"
+    ]
+  },
+  "time_to_millis#1": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "time_to_millis#2": {
+    "ok": true,
+    "rows": [
+      "52200000"
+    ]
+  },
+  "time_to_millis#3": {
+    "ok": true,
+    "rows": [
+      "52200500"
+    ]
+  },
+  "time_to_millis#4": {
+    "ok": true,
+    "rows": [
+      "86399999"
+    ]
+  },
+  "time_to_seconds#1": {
+    "ok": true,
+    "rows": [
+      "0.000000"
+    ]
+  },
+  "time_to_seconds#2": {
+    "ok": true,
+    "rows": [
+      "52200.000000"
+    ]
+  },
+  "time_to_seconds#3": {
+    "ok": true,
+    "rows": [
+      "52200.500000"
+    ]
+  },
+  "time_to_seconds#4": {
+    "ok": true,
+    "rows": [
+      "86399.999999"
+    ]
+  },
+  "time_trunc#1": {
+    "ok": true,
+    "rows": [
+      "09:00:00"
+    ]
+  },
+  "time_trunc#2": {
+    "ok": true,
+    "rows": [
+      "09:32:05.123"
+    ]
+  },
+  "timestamp_micros#1": {
+    "ok": true,
+    "rows": [
+      "2008-12-25 07:30:00.123123"
+    ]
+  },
+  "timestamp_millis#1": {
+    "ok": true,
+    "rows": [
+      "2008-12-25 07:30:00.123"
+    ]
+  },
+  "timestamp_seconds#1": {
+    "ok": true,
+    "rows": [
+      "2008-12-25 07:30:00"
+    ]
+  },
+  "timestamp_seconds#2": {
+    "ok": true,
+    "rows": [
+      "2008-12-25 07:30:00.123"
+    ]
+  },
+  "to_avro#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "to_avro#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "to_binary#1": {
+    "ok": true,
+    "rows": [
+      "abc"
+    ]
+  },
+  "to_char#1": {
+    "ok": true,
+    "rows": [
+      "454"
+    ]
+  },
+  "to_char#2": {
+    "ok": true,
+    "rows": [
+      "454.00"
+    ]
+  },
+  "to_char#3": {
+    "ok": true,
+    "rows": [
+      "12,454"
+    ]
+  },
+  "to_char#4": {
+    "ok": true,
+    "rows": [
+      "$78.12"
+    ]
+  },
+  "to_char#5": {
+    "ok": true,
+    "rows": [
+      "12,454.8-"
+    ]
+  },
+  "to_char#6": {
+    "ok": true,
+    "rows": [
+      "2016"
+    ]
+  },
+  "to_char#7": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "to_char#8": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "to_char#9": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "to_csv#1": {
+    "ok": true,
+    "rows": [
+      "1,2"
+    ]
+  },
+  "to_csv#2": {
+    "ok": true,
+    "rows": [
+      "26/08/2015"
+    ]
+  },
+  "to_date#1": {
+    "ok": true,
+    "rows": [
+      "2009-07-30"
+    ]
+  },
+  "to_date#2": {
+    "ok": true,
+    "rows": [
+      "2016-12-31"
+    ]
+  },
+  "to_json#1": {
+    "ok": true,
+    "rows": [
+      "{\"a\":1,\"b\":2}"
+    ]
+  },
+  "to_json#2": {
+    "ok": true,
+    "rows": [
+      "{\"time\":\"26/08/2015\"}"
+    ]
+  },
+  "to_json#3": {
+    "ok": true,
+    "rows": [
+      "[{\"a\":1,\"b\":2}]"
+    ]
+  },
+  "to_json#4": {
+    "ok": true,
+    "rows": [
+      "{\"a\":{\"b\":1}}"
+    ]
+  },
+  "to_json#5": {
+    "ok": true,
+    "rows": [
+      "{\"[1]\":{\"b\":2}}"
+    ]
+  },
+  "to_json#6": {
+    "ok": true,
+    "rows": [
+      "{\"a\":1}"
+    ]
+  },
+  "to_json#7": {
+    "ok": true,
+    "rows": [
+      "[{\"a\":1}]"
+    ]
+  },
+  "to_json#8": {
+    "ok": true,
+    "rows": [
+      "{\"a\":2,\"b\":1}"
+    ]
+  },
+  "to_number#1": {
+    "ok": true,
+    "rows": [
+      "454"
+    ]
+  },
+  "to_number#2": {
+    "ok": true,
+    "rows": [
+      "454.00"
+    ]
+  },
+  "to_number#3": {
+    "ok": true,
+    "rows": [
+      "12454"
+    ]
+  },
+  "to_number#4": {
+    "ok": true,
+    "rows": [
+      "78.12"
+    ]
+  },
+  "to_number#5": {
+    "ok": true,
+    "rows": [
+      "-12454.8"
+    ]
+  },
+  "to_protobuf#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "to_time#1": {
+    "ok": true,
+    "rows": [
+      "00:12:00"
+    ]
+  },
+  "to_time#2": {
+    "ok": true,
+    "rows": [
+      "12:10:05"
+    ]
+  },
+  "to_timestamp#1": {
+    "ok": true,
+    "rows": [
+      "2016-12-31 00:12:00"
+    ]
+  },
+  "to_timestamp#2": {
+    "ok": true,
+    "rows": [
+      "2016-12-31 00:00:00"
+    ]
+  },
+  "to_timestamp_ltz#1": {
+    "ok": true,
+    "rows": [
+      "2016-12-31 00:12:00"
+    ]
+  },
+  "to_timestamp_ltz#2": {
+    "ok": true,
+    "rows": [
+      "2016-12-31 00:00:00"
+    ]
+  },
+  "to_timestamp_ntz#1": {
+    "ok": true,
+    "rows": [
+      "2016-12-31 00:12:00"
+    ]
+  },
+  "to_timestamp_ntz#2": {
+    "ok": true,
+    "rows": [
+      "2016-12-31 00:00:00"
+    ]
+  },
+  "to_unix_timestamp#1": {
+    "ok": true,
+    "rows": [
+      "1460098800"
+    ]
+  },
+  "to_utc_timestamp#1": {
+    "ok": true,
+    "rows": [
+      "2016-08-30 15:00:00"
+    ]
+  },
+  "to_varchar#1": {
+    "ok": true,
+    "rows": [
+      "454"
+    ]
+  },
+  "to_varchar#2": {
+    "ok": true,
+    "rows": [
+      "454.00"
+    ]
+  },
+  "to_varchar#3": {
+    "ok": true,
+    "rows": [
+      "12,454"
+    ]
+  },
+  "to_varchar#4": {
+    "ok": true,
+    "rows": [
+      "$78.12"
+    ]
+  },
+  "to_varchar#5": {
+    "ok": true,
+    "rows": [
+      "12,454.8-"
+    ]
+  },
+  "to_varchar#6": {
+    "ok": true,
+    "rows": [
+      "2016"
+    ]
+  },
+  "to_varchar#7": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "to_varchar#8": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "to_varchar#9": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "to_variant_object#1": {
+    "ok": true,
+    "rows": [
+      "{\"a\":1,\"b\":2}"
+    ]
+  },
+  "to_variant_object#2": {
+    "ok": true,
+    "rows": [
+      "[1,2,3]"
+    ]
+  },
+  "to_variant_object#3": {
+    "ok": true,
+    "rows": [
+      "[{\"a\":1}]"
+    ]
+  },
+  "to_variant_object#4": {
+    "ok": true,
+    "rows": [
+      "[{\"a\":2}]"
+    ]
+  },
+  "to_xml#1": {
+    "ok": true,
+    "rows": [
+      "<ROW>\n    <a>1</a>\n    <b>2</b>\n</ROW>"
+    ]
+  },
+  "to_xml#2": {
+    "ok": true,
+    "rows": [
+      "<ROW>\n    <time>26/08/2015</time>\n</ROW>"
+    ]
+  },
+  "transform#1": {
+    "ok": true,
+    "rows": [
+      "[2,3,4]"
+    ]
+  },
+  "transform#2": {
+    "ok": true,
+    "rows": [
+      "[1,3,5]"
+    ]
+  },
+  "transform_keys#1": {
+    "ok": true,
+    "rows": [
+      "{2:1,3:2,4:3}"
+    ]
+  },
+  "transform_keys#2": {
+    "ok": true,
+    "rows": [
+      "{2:1,4:2,6:3}"
+    ]
+  },
+  "transform_values#1": {
+    "ok": true,
+    "rows": [
+      "{1:2,2:3,3:4}"
+    ]
+  },
+  "transform_values#2": {
+    "ok": true,
+    "rows": [
+      "{1:2,2:4,3:6}"
+    ]
+  },
+  "translate#1": {
+    "ok": true,
+    "rows": [
+      "A1B2C3"
+    ]
+  },
+  "trim#1": {
+    "ok": true,
+    "rows": [
+      "SparkSQL"
+    ]
+  },
+  "trim#2": {
+    "ok": true,
+    "rows": [
+      "SparkSQL"
+    ]
+  },
+  "trim#3": {
+    "ok": true,
+    "rows": [
+      "SparkSQL   "
+    ]
+  },
+  "trim#4": {
+    "ok": true,
+    "rows": [
+      "    SparkSQL"
+    ]
+  },
+  "trim#5": {
+    "ok": true,
+    "rows": [
+      "parkSQ"
+    ]
+  },
+  "trim#6": {
+    "ok": true,
+    "rows": [
+      "parkSQ"
+    ]
+  },
+  "trim#7": {
+    "ok": true,
+    "rows": [
+      "parkSQLS"
+    ]
+  },
+  "trim#8": {
+    "ok": true,
+    "rows": [
+      "SSparkSQ"
+    ]
+  },
+  "trunc#1": {
+    "ok": true,
+    "rows": [
+      "2019-07-29"
+    ]
+  },
+  "trunc#2": {
+    "ok": true,
+    "rows": [
+      "2019-07-01"
+    ]
+  },
+  "trunc#3": {
+    "ok": true,
+    "rows": [
+      "2009-02-01"
+    ]
+  },
+  "trunc#4": {
+    "ok": true,
+    "rows": [
+      "2015-01-01"
+    ]
+  },
+  "try_add#1": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "try_add#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_add#3": {
+    "ok": true,
+    "rows": [
+      "2021-01-02"
+    ]
+  },
+  "try_add#4": {
+    "ok": true,
+    "rows": [
+      "2022-01-01"
+    ]
+  },
+  "try_add#5": {
+    "ok": true,
+    "rows": [
+      "2021-01-02 00:00:00"
+    ]
+  },
+  "try_add#6": {
+    "ok": true,
+    "rows": [
+      "3-0"
+    ]
+  },
+  "try_aes_decrypt#1": {
+    "ok": true,
+    "rows": [
+      "Spark SQL"
+    ]
+  },
+  "try_aes_decrypt#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_avg#1": {
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
+  },
+  "try_avg#2": {
+    "ok": true,
+    "rows": [
+      "1.5"
+    ]
+  },
+  "try_avg#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_divide#1": {
+    "ok": true,
+    "rows": [
+      "1.5"
+    ]
+  },
+  "try_divide#2": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "try_divide#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_divide#4": {
+    "ok": true,
+    "rows": [
+      "0-1"
+    ]
+  },
+  "try_divide#5": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_element_at#1": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "try_element_at#2": {
+    "ok": true,
+    "rows": [
+      "b"
+    ]
+  },
+  "try_make_interval#1": {
+    "ok": true,
+    "rows": [
+      "100 years 11 months 8 days 12 hours 30 minutes 1.001001 seconds"
+    ]
+  },
+  "try_make_interval#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_make_interval#3": {
+    "ok": true,
+    "rows": [
+      "1 months 1 days 1 minutes 40.000001 seconds"
+    ]
+  },
+  "try_make_interval#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_make_timestamp#1": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "try_make_timestamp#2": {
+    "ok": true,
+    "rows": [
+      "2014-12-27 21:30:45.887"
+    ]
+  },
+  "try_make_timestamp#3": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 00:00:00"
+    ]
+  },
+  "try_make_timestamp#4": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "try_make_timestamp#5": {
+    "ok": true,
+    "rows": [
+      "2014-12-27 21:30:45.887"
+    ]
+  },
+  "try_make_timestamp#6": {
+    "ok": true,
+    "rows": [
+      "2019-07-01 00:00:00"
+    ]
+  },
+  "try_make_timestamp#7": {
+    "ok": true,
+    "rows": [
+      "2019-06-30 23:59:01"
+    ]
+  },
+  "try_make_timestamp#8": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_make_timestamp#9": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_make_timestamp_ltz#1": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "try_make_timestamp_ltz#2": {
+    "ok": true,
+    "rows": [
+      "2014-12-27 21:30:45.887"
+    ]
+  },
+  "try_make_timestamp_ltz#3": {
+    "ok": true,
+    "rows": [
+      "2019-07-01 00:00:00"
+    ]
+  },
+  "try_make_timestamp_ltz#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_make_timestamp_ltz#5": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_make_timestamp_ltz#6": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "try_make_timestamp_ltz#7": {
+    "ok": true,
+    "rows": [
+      "2014-12-27 21:30:45.887"
+    ]
+  },
+  "try_make_timestamp_ntz#1": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "try_make_timestamp_ntz#2": {
+    "ok": true,
+    "rows": [
+      "2019-07-01 00:00:00"
+    ]
+  },
+  "try_make_timestamp_ntz#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_make_timestamp_ntz#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_make_timestamp_ntz#5": {
+    "ok": true,
+    "rows": [
+      "2014-12-28 06:30:45.887"
+    ]
+  },
+  "try_mod#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "try_mod#2": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "try_mod#3": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "try_mod#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_multiply#1": {
+    "ok": true,
+    "rows": [
+      "6"
+    ]
+  },
+  "try_multiply#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_multiply#3": {
+    "ok": true,
+    "rows": [
+      "6-0"
+    ]
+  },
+  "try_parse_json#1": {
+    "ok": true,
+    "rows": [
+      "{\"a\":1,\"b\":0.8}"
+    ]
+  },
+  "try_parse_json#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_parse_url#1": {
+    "ok": true,
+    "rows": [
+      "spark.apache.org"
+    ]
+  },
+  "try_parse_url#2": {
+    "ok": true,
+    "rows": [
+      "query=1"
+    ]
+  },
+  "try_parse_url#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_parse_url#4": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "try_reflect#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "try_reflect#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "try_reflect#3": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "try_subtract#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "try_subtract#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_subtract#3": {
+    "ok": true,
+    "rows": [
+      "2021-01-01"
+    ]
+  },
+  "try_subtract#4": {
+    "ok": true,
+    "rows": [
+      "2020-01-01"
+    ]
+  },
+  "try_subtract#5": {
+    "ok": true,
+    "rows": [
+      "2021-01-01 00:00:00"
+    ]
+  },
+  "try_subtract#6": {
+    "ok": true,
+    "rows": [
+      "1-0"
+    ]
+  },
+  "try_sum#1": {
+    "ok": true,
+    "rows": [
+      "30"
+    ]
+  },
+  "try_sum#2": {
+    "ok": true,
+    "rows": [
+      "25"
+    ]
+  },
+  "try_sum#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_sum#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_to_binary#1": {
+    "ok": true,
+    "rows": [
+      "abc"
+    ]
+  },
+  "try_to_binary#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_to_binary#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_to_date#1": {
+    "ok": true,
+    "rows": [
+      "2016-12-31"
+    ]
+  },
+  "try_to_date#2": {
+    "ok": true,
+    "rows": [
+      "2016-12-31"
+    ]
+  },
+  "try_to_date#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_to_number#1": {
+    "ok": true,
+    "rows": [
+      "454"
+    ]
+  },
+  "try_to_number#2": {
+    "ok": true,
+    "rows": [
+      "454.00"
+    ]
+  },
+  "try_to_number#3": {
+    "ok": true,
+    "rows": [
+      "12454"
+    ]
+  },
+  "try_to_number#4": {
+    "ok": true,
+    "rows": [
+      "78.12"
+    ]
+  },
+  "try_to_number#5": {
+    "ok": true,
+    "rows": [
+      "-12454.8"
+    ]
+  },
+  "try_to_time#1": {
+    "ok": true,
+    "rows": [
+      "00:12:00.001"
+    ]
+  },
+  "try_to_time#2": {
+    "ok": true,
+    "rows": [
+      "12:10:05.999999"
+    ]
+  },
+  "try_to_time#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_to_timestamp#1": {
+    "ok": true,
+    "rows": [
+      "2016-12-31 00:12:00"
+    ]
+  },
+  "try_to_timestamp#2": {
+    "ok": true,
+    "rows": [
+      "2016-12-31 00:00:00"
+    ]
+  },
+  "try_to_timestamp#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_url_decode#1": {
+    "ok": true,
+    "rows": [
+      "https://spark.apache.org"
+    ]
+  },
+  "try_validate_utf8#1": {
+    "ok": true,
+    "rows": [
+      "Spark"
+    ]
+  },
+  "try_validate_utf8#2": {
+    "ok": true,
+    "rows": [
+      "a"
+    ]
+  },
+  "try_validate_utf8#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_validate_utf8#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_variant_get#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "try_variant_get#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_variant_get#3": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "try_variant_get#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "try_variant_get#5": {
+    "ok": true,
+    "rows": [
+      "\"hello\""
+    ]
+  },
+  "try_variant_get#6": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "tuple_difference_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_difference_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_difference_theta_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_difference_theta_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_intersection_agg_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_intersection_agg_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_intersection_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_intersection_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_intersection_theta_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_intersection_theta_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_sketch_agg_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_sketch_agg_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_sketch_estimate_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_sketch_estimate_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_sketch_summary_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_sketch_summary_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_sketch_theta_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_sketch_theta_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_union_agg_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_union_agg_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_union_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_union_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_union_theta_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "tuple_union_theta_integer#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "typeof#1": {
+    "ok": true,
+    "rows": [
+      "int"
+    ]
+  },
+  "typeof#2": {
+    "ok": true,
+    "rows": [
+      "array<int>"
+    ]
+  },
+  "ucase#1": {
+    "ok": true,
+    "rows": [
+      "SPARKSQL"
+    ]
+  },
+  "unbase64#1": {
+    "ok": true,
+    "rows": [
+      "Spark SQL"
+    ]
+  },
+  "unhex#1": {
+    "ok": true,
+    "rows": [
+      "Spark SQL"
+    ]
+  },
+  "uniform#1": {
+    "ok": true,
+    "rows": [
+      "true"
+    ]
+  },
+  "unix_date#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "unix_micros#1": {
+    "ok": true,
+    "rows": [
+      "1000000"
+    ]
+  },
+  "unix_millis#1": {
+    "ok": true,
+    "rows": [
+      "1000"
+    ]
+  },
+  "unix_seconds#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "unix_timestamp#1": {
+    "volatile": true
+  },
+  "unix_timestamp#2": {
+    "ok": true,
+    "rows": [
+      "1460098800"
+    ]
+  },
+  "upper#1": {
+    "ok": true,
+    "rows": [
+      "SPARKSQL"
+    ]
+  },
+  "url_decode#1": {
+    "ok": true,
+    "rows": [
+      "https://spark.apache.org"
+    ]
+  },
+  "url_encode#1": {
+    "ok": true,
+    "rows": [
+      "https%3A%2F%2Fspark.apache.org"
+    ]
+  },
+  "user#1": {
+    "ok": true,
+    "rows": [
+      "krishiv"
+    ]
+  },
+  "uuid#1": {
+    "volatile": true
+  },
+  "validate_utf8#1": {
+    "ok": true,
+    "rows": [
+      "Spark"
+    ]
+  },
+  "validate_utf8#2": {
+    "ok": true,
+    "rows": [
+      "a"
+    ]
+  },
+  "var_pop#1": {
+    "ok": true,
+    "rows": [
+      "0.6666666666666666"
+    ]
+  },
+  "var_samp#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "variance#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "variant_explode#1": {
+    "ok": true,
+    "rows": [
+      "0\tNULL\t\"hello\"",
+      "1\tNULL\t\"world\""
+    ]
+  },
+  "variant_explode#2": {
+    "ok": true,
+    "rows": [
+      "0\ta\ttrue",
+      "1\tb\t3.14"
+    ]
+  },
+  "variant_explode_outer#1": {
+    "ok": true,
+    "rows": [
+      "0\tNULL\t\"hello\"",
+      "1\tNULL\t\"world\""
+    ]
+  },
+  "variant_explode_outer#2": {
+    "ok": true,
+    "rows": [
+      "0\ta\ttrue",
+      "1\tb\t3.14"
+    ]
+  },
+  "variant_get#1": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "variant_get#2": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "variant_get#3": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "variant_get#4": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "variant_get#5": {
+    "ok": true,
+    "rows": [
+      "\"hello\""
+    ]
+  },
+  "vector_avg#1": {
+    "ok": true,
+    "rows": [
+      "[2.0,3.0]"
+    ]
+  },
+  "vector_cosine_similarity#1": {
+    "ok": true,
+    "rows": [
+      "0.9746319"
+    ]
+  },
+  "vector_inner_product#1": {
+    "ok": true,
+    "rows": [
+      "32.0"
+    ]
+  },
+  "vector_l2_distance#1": {
+    "ok": true,
+    "rows": [
+      "5.196152"
+    ]
+  },
+  "vector_norm#1": {
+    "ok": true,
+    "rows": [
+      "5.0"
+    ]
+  },
+  "vector_norm#2": {
+    "ok": true,
+    "rows": [
+      "7.0"
+    ]
+  },
+  "vector_norm#3": {
+    "ok": true,
+    "rows": [
+      "4.0"
+    ]
+  },
+  "vector_normalize#1": {
+    "ok": true,
+    "rows": [
+      "[0.6,0.8]"
+    ]
+  },
+  "vector_normalize#2": {
+    "ok": true,
+    "rows": [
+      "[0.42857143,0.5714286]"
+    ]
+  },
+  "vector_normalize#3": {
+    "ok": true,
+    "rows": [
+      "[0.75,1.0]"
+    ]
+  },
+  "vector_sum#1": {
+    "ok": true,
+    "rows": [
+      "[4.0,6.0]"
+    ]
+  },
+  "version#1": {
+    "ok": true,
+    "rows": [
+      "4.2.0"
+    ]
+  },
+  "weekday#1": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "weekofyear#1": {
+    "ok": true,
+    "rows": [
+      "8"
+    ]
+  },
+  "when#1": {
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
+  },
+  "when#2": {
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
+  },
+  "when#3": {
+    "ok": true,
+    "rows": [
+      "NULL"
+    ]
+  },
+  "width_bucket#1": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "width_bucket#2": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "width_bucket#3": {
+    "ok": true,
+    "rows": [
+      "5"
+    ]
+  },
+  "width_bucket#4": {
+    "ok": true,
+    "rows": [
+      "3"
+    ]
+  },
+  "width_bucket#5": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "width_bucket#6": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "width_bucket#7": {
+    "ok": true,
+    "rows": [
+      "1"
+    ]
+  },
+  "width_bucket#8": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "window#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "window#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "window_time#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xpath#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xpath#2": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xpath_boolean#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xpath_double#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xpath_float#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xpath_int#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xpath_long#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xpath_number#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xpath_short#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xpath_string#1": {
+    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "ok": false
+  },
+  "xxhash64#1": {
+    "ok": true,
+    "rows": [
+      "5602566077635097486"
+    ]
+  },
+  "year#1": {
+    "ok": true,
+    "rows": [
+      "2016"
+    ]
+  },
+  "zeroifnull#1": {
+    "ok": true,
+    "rows": [
+      "0"
+    ]
+  },
+  "zeroifnull#2": {
+    "ok": true,
+    "rows": [
+      "2"
+    ]
+  },
+  "zip_with#1": {
+    "ok": true,
+    "rows": [
+      "[{\"y\":\"a\",\"x\":1},{\"y\":\"b\",\"x\":2},{\"y\":\"c\",\"x\":3}]"
+    ]
+  },
+  "zip_with#2": {
+    "ok": true,
+    "rows": [
+      "[4,6]"
+    ]
+  },
+  "zip_with#3": {
+    "ok": true,
+    "rows": [
+      "[\"ad\",\"be\",\"cf\"]"
+    ]
+  }
+}

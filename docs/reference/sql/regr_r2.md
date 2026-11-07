@@ -21,52 +21,32 @@ Returns the coefficient of determination for non-null pairs in a group, where `y
 ## Examples
 
 ```sql
-SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
-0.2727272727272727
+-- regr_r2, example 1
+> SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
+0.2727272727272726
 ```
 
 ```sql
-SELECT regr_r2(y, x) FROM VALUES (1, null) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_r2, example 2
+> SELECT regr_r2(y, x) FROM VALUES (1, null) AS tab(y, x);
 NULL
 ```
 
 ```sql
-SELECT regr_r2(y, x) FROM VALUES (null, 1) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_r2, example 3
+> SELECT regr_r2(y, x) FROM VALUES (null, 1) AS tab(y, x);
 NULL
 ```
 
 ```sql
-SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_r2, example 4
+> SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
 0.7500000000000001
 ```
 
 ```sql
-SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_r2, example 5
+> SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
 1.0
 ```
 

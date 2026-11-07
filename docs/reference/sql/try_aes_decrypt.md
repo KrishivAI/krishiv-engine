@@ -21,22 +21,14 @@ This is a special version of `aes_decrypt` that performs the same operation, but
 ## Examples
 
 ```sql
-SELECT try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');
-```
-
-Result:
-
-```text
+-- try_aes_decrypt, example 1
+> SELECT try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');
 Spark SQL
 ```
 
 ```sql
-SELECT try_aes_decrypt(unhex('----------468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');
-```
-
-Result:
-
-```text
+-- try_aes_decrypt, example 2
+> SELECT try_aes_decrypt(unhex('----------468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');
 NULL
 ```
 

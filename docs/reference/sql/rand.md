@@ -21,32 +21,20 @@ Returns a random value with independent and identically distributed (i.i.d.) uni
 ## Examples
 
 ```sql
-SELECT rand();
-```
-
-Result:
-
-```text
-0.9629742951434543
+-- rand, example 1
+> SELECT rand();
+-- the result differs on every run
 ```
 
 ```sql
-SELECT rand(0);
-```
-
-Result:
-
-```text
+-- rand, example 2
+> SELECT rand(0);
 0.7604953758285915
 ```
 
 ```sql
-SELECT rand(null);
-```
-
-Result:
-
-```text
+-- rand, example 3
+> SELECT rand(null);
 0.7604953758285915
 ```
 

@@ -21,22 +21,14 @@ Returns the concatenation of col1, col2, ..., colN.
 ## Examples
 
 ```sql
-SELECT concat('Spark', 'SQL');
-```
-
-Result:
-
-```text
+-- concat, example 1
+> SELECT concat('Spark', 'SQL');
 SparkSQL
 ```
 
 ```sql
-SELECT concat(array(1, 2, 3), array(4, 5), array(6));
-```
-
-Result:
-
-```text
+-- concat, example 2
+> SELECT concat(array(1, 2, 3), array(4, 5), array(6));
 [1,2,3,4,5,6]
 ```
 

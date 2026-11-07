@@ -21,12 +21,8 @@ Get all of the Spark SQL string collations
 ## Examples
 
 ```sql
-SELECT * FROM collations() WHERE NAME = 'UTF8_BINARY';
-```
-
-Result:
-
-```text
-SYSTEM  BUILTIN  UTF8_BINARY NULL  NULL  ACCENT_SENSITIVE  CASE_SENSITIVE  NO_PAD  NULL
+-- collations, example 1
+> SELECT * FROM collations() WHERE NAME = 'UTF8_BINARY';
+Error: UNRESOLVABLE_TABLE_VALUED_FUNCTION
 ```
 

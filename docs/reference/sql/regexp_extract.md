@@ -22,22 +22,14 @@ expression and corresponding to the regex group index.
 ## Examples
 
 ```sql
-SELECT regexp_extract('100-200', '(\\d+)-(\\d+)', 1);
-```
-
-Result:
-
-```text
+-- regexp_extract, example 1
+> SELECT regexp_extract('100-200', '(\\d+)-(\\d+)', 1);
 100
 ```
 
 ```sql
-SELECT regexp_extract('100-200', r'(\d+)-(\d+)', 1);
-```
-
-Result:
-
-```text
+-- regexp_extract, example 2
+> SELECT regexp_extract('100-200', r'(\d+)-(\d+)', 1);
 100
 ```
 

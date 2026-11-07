@@ -23,32 +23,20 @@ default, it follows casting rules to a date if the `fmt` is omitted.
 ## Examples
 
 ```sql
-SELECT try_to_date('2016-12-31');
-```
-
-Result:
-
-```text
+-- try_to_date, example 1
+> SELECT try_to_date('2016-12-31');
 2016-12-31
 ```
 
 ```sql
-SELECT try_to_date('2016-12-31', 'yyyy-MM-dd');
-```
-
-Result:
-
-```text
+-- try_to_date, example 2
+> SELECT try_to_date('2016-12-31', 'yyyy-MM-dd');
 2016-12-31
 ```
 
 ```sql
-SELECT try_to_date('foo', 'yyyy-MM-dd');
-```
-
-Result:
-
-```text
+-- try_to_date, example 3
+> SELECT try_to_date('foo', 'yyyy-MM-dd');
 NULL
 ```
 

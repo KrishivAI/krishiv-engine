@@ -21,12 +21,8 @@ Returns the logarithm of `expr` with base 10.
 ## Examples
 
 ```sql
-SELECT log10(10);
-```
-
-Result:
-
-```text
+-- log10, example 1
+> SELECT log10(10);
 1.0
 ```
 

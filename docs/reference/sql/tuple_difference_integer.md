@@ -23,12 +23,8 @@ Returns elements in the first sketch that are not in the second sketch.
 ## Examples
 
 ```sql
-SELECT tuple_sketch_estimate_integer(tuple_difference_integer(tuple_sketch_agg_integer(col1, val1), tuple_sketch_agg_integer(col2, val2))) FROM VALUES (5, 5, 4, 4), (1, 1, 4, 4), (2, 2, 5, 5), (3, 3, 1, 1) tab(col1, val1, col2, val2);
-```
-
-Result:
-
-```text
-2.0
+-- tuple_difference_integer, example 1
+> SELECT tuple_sketch_estimate_integer(tuple_difference_integer(tuple_sketch_agg_integer(col1, val1), tuple_sketch_agg_integer(col2, val2))) FROM VALUES (5, 5, 4, 4), (1, 1, 4, 4), (2, 2, 5, 5), (3, 3, 1, 1) tab(col1, val1, col2, val2);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

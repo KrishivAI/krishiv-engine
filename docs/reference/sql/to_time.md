@@ -23,22 +23,14 @@ raises an error. By default, it follows casting rules to a time if the `format` 
 ## Examples
 
 ```sql
-SELECT to_time('00:12:00');
-```
-
-Result:
-
-```text
+-- to_time, example 1
+> SELECT to_time('00:12:00');
 00:12:00
 ```
 
 ```sql
-SELECT to_time('12.10.05', 'HH.mm.ss');
-```
-
-Result:
-
-```text
+-- to_time, example 2
+> SELECT to_time('12.10.05', 'HH.mm.ss');
 12:10:05
 ```
 

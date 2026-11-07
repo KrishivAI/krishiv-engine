@@ -24,22 +24,14 @@ With the default settings, the function returns null for null input.
 ## Examples
 
 ```sql
-SELECT size(array('b', 'd', 'c', 'a'));
-```
-
-Result:
-
-```text
+-- size, example 1
+> SELECT size(array('b', 'd', 'c', 'a'));
 4
 ```
 
 ```sql
-SELECT size(map('a', 1, 'b', 2));
-```
-
-Result:
-
-```text
+-- size, example 2
+> SELECT size(map('a', 1, 'b', 2));
 2
 ```
 

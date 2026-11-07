@@ -21,12 +21,8 @@ Returns the number of seconds since 1970-01-01 00:00:00 UTC. Truncates higher le
 ## Examples
 
 ```sql
-SELECT unix_seconds(TIMESTAMP('1970-01-01 00:00:01Z'));
-```
-
-Result:
-
-```text
+-- unix_seconds, example 1
+> SELECT unix_seconds(TIMESTAMP('1970-01-01 00:00:01Z'));
 1
 ```
 

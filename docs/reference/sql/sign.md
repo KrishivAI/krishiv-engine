@@ -21,22 +21,14 @@ Returns -1.0, 0.0 or 1.0 as `expr` is negative, 0 or positive.
 ## Examples
 
 ```sql
-SELECT sign(40);
-```
-
-Result:
-
-```text
+-- sign, example 1
+> SELECT sign(40);
 1.0
 ```
 
 ```sql
-SELECT sign(INTERVAL -'100' YEAR);
-```
-
-Result:
-
-```text
+-- sign, example 2
+> SELECT sign(INTERVAL -'100' YEAR);
 -1.0
 ```
 

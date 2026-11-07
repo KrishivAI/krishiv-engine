@@ -21,22 +21,14 @@ Returns a new GEOGRAPHY or GEOMETRY value whose SRID is the specified SRID value
 ## Examples
 
 ```sql
-SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), 4326));
-```
-
-Result:
-
-```text
+-- st_setsrid, example 1
+> SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), 4326));
 4326
 ```
 
 ```sql
-SELECT st_srid(st_setsrid(ST_GeomFromWKB(X'0101000000000000000000F03F0000000000000040'), 3857));
-```
-
-Result:
-
-```text
+-- st_setsrid, example 2
+> SELECT st_srid(st_setsrid(ST_GeomFromWKB(X'0101000000000000000000F03F0000000000000040'), 3857));
 3857
 ```
 

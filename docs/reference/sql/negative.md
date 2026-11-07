@@ -21,12 +21,8 @@ Returns the negated value of `expr`.
 ## Examples
 
 ```sql
-SELECT negative(1);
-```
-
-Result:
-
-```text
+-- negative, example 1
+> SELECT negative(1);
 -1
 ```
 

@@ -21,12 +21,8 @@ Returns the bitwise XOR of all non-null input values, or null if none.
 ## Examples
 
 ```sql
-SELECT bit_xor(col) FROM VALUES (3), (5) AS tab(col);
-```
-
-Result:
-
-```text
+-- bit_xor, example 1
+> SELECT bit_xor(col) FROM VALUES (3), (5) AS tab(col);
 6
 ```
 

@@ -21,12 +21,8 @@ Returns the cosecant of `expr`, as if computed by `1/java.lang.Math.sin`.
 ## Examples
 
 ```sql
-SELECT csc(1);
-```
-
-Result:
-
-```text
+-- csc, example 1
+> SELECT csc(1);
 1.1883951057781212
 ```
 

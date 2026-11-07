@@ -22,12 +22,8 @@ Returns the inverse tangent (a.k.a. arc tangent) of `expr`, as if computed by
 ## Examples
 
 ```sql
-SELECT atan(0);
-```
-
-Result:
-
-```text
+-- atan, example 1
+> SELECT atan(0);
 0.0
 ```
 

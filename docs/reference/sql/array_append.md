@@ -24,32 +24,20 @@ output is NULL
 ## Examples
 
 ```sql
-SELECT array_append(array('b', 'd', 'c', 'a'), 'd');
-```
-
-Result:
-
-```text
+-- array_append, example 1
+> SELECT array_append(array('b', 'd', 'c', 'a'), 'd');
 ["b","d","c","a","d"]
 ```
 
 ```sql
-SELECT array_append(array(1, 2, 3, null), null);
-```
-
-Result:
-
-```text
+-- array_append, example 2
+> SELECT array_append(array(1, 2, 3, null), null);
 [1,2,3,null,null]
 ```
 
 ```sql
-SELECT array_append(CAST(null as Array<Int>), 2);
-```
-
-Result:
-
-```text
+-- array_append, example 3
+> SELECT array_append(CAST(null as Array<Int>), 2);
 NULL
 ```
 

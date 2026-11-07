@@ -22,52 +22,32 @@ but returns true if both are null, false if one of the them is null.
 ## Examples
 
 ```sql
-SELECT equal_null(3, 3);
-```
-
-Result:
-
-```text
+-- equal_null, example 1
+> SELECT equal_null(3, 3);
 true
 ```
 
 ```sql
-SELECT equal_null(1, '11');
-```
-
-Result:
-
-```text
+-- equal_null, example 2
+> SELECT equal_null(1, '11');
 false
 ```
 
 ```sql
-SELECT equal_null(true, NULL);
-```
-
-Result:
-
-```text
+-- equal_null, example 3
+> SELECT equal_null(true, NULL);
 false
 ```
 
 ```sql
-SELECT equal_null(NULL, 'abc');
-```
-
-Result:
-
-```text
+-- equal_null, example 4
+> SELECT equal_null(NULL, 'abc');
 false
 ```
 
 ```sql
-SELECT equal_null(NULL, NULL);
-```
-
-Result:
-
-```text
+-- equal_null, example 5
+> SELECT equal_null(NULL, NULL);
 true
 ```
 

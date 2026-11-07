@@ -20,12 +20,8 @@ Converts a binary Avro value into a Catalyst value.
 ## Examples
 
 ```sql
-SELECT from_avro(s, '{"type": "record", "name": "struct", "fields": [{ "name": "u", "type": ["int","string"] }]}', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1));
-```
-
-Result:
-
-```text
-[false]
+-- from_avro, example 1
+> SELECT from_avro(s, '{"type": "record", "name": "struct", "fields": [{ "name": "u", "type": ["int","string"] }]}', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1));
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

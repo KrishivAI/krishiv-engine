@@ -27,12 +27,8 @@ between 4 and 26 (defaults to 12) and mode to 'sum', 'min', 'max', or 'alwaysone
 ## Examples
 
 ```sql
-SELECT tuple_sketch_estimate_double(tuple_union_theta_double(tuple_sketch_agg_double(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1.0D, 4), (2, 2.0D, 5), (3, 3.0D, 6) tab(col1, val1, col2);
-```
-
-Result:
-
-```text
-6.0
+-- tuple_union_theta_double, example 1
+> SELECT tuple_sketch_estimate_double(tuple_union_theta_double(tuple_sketch_agg_double(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1.0D, 4), (2, 2.0D, 5), (3, 3.0D, 6) tab(col1, val1, col2);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

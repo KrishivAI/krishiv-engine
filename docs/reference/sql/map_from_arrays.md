@@ -22,12 +22,8 @@ in keys should not be null
 ## Examples
 
 ```sql
-SELECT map_from_arrays(array(1.0, 3.0), array('2', '4'));
-```
-
-Result:
-
-```text
+-- map_from_arrays, example 1
+> SELECT map_from_arrays(array(1.0, 3.0), array('2', '4'));
 {1.0:"2",3.0:"4"}
 ```
 

@@ -21,12 +21,8 @@ Returns the tangent of `expr`, as if computed by `java.lang.Math.tan`.
 ## Examples
 
 ```sql
-SELECT tan(0);
-```
-
-Result:
-
-```text
+-- tan, example 1
+> SELECT tan(0);
 0.0
 ```
 

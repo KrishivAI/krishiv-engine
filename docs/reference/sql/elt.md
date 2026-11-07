@@ -24,22 +24,14 @@ it throws ArrayIndexOutOfBoundsException for invalid indices.
 ## Examples
 
 ```sql
-SELECT elt(1, 'scala', 'java');
-```
-
-Result:
-
-```text
+-- elt, example 1
+> SELECT elt(1, 'scala', 'java');
 scala
 ```
 
 ```sql
-SELECT elt(2, 'a', 1);
-```
-
-Result:
-
-```text
+-- elt, example 2
+> SELECT elt(2, 'a', 1);
 1
 ```
 

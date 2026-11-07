@@ -21,12 +21,8 @@ Returns the collation name of a given expression.
 ## Examples
 
 ```sql
-SELECT collation('Spark SQL');
-```
-
-Result:
-
-```text
+-- collation, example 1
+> SELECT collation('Spark SQL');
 SYSTEM.BUILTIN.UTF8_BINARY
 ```
 

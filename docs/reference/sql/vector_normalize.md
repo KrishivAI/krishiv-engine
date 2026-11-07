@@ -23,32 +23,20 @@ Degree defaults to 2.0 (Euclidean norm) if unspecified. Supported values: 1.0 (L
 ## Examples
 
 ```sql
-SELECT vector_normalize(array(3.0F, 4.0F), 2.0F);
-```
-
-Result:
-
-```text
+-- vector_normalize, example 1
+> SELECT vector_normalize(array(3.0F, 4.0F), 2.0F);
 [0.6,0.8]
 ```
 
 ```sql
-SELECT vector_normalize(array(3.0F, 4.0F), 1.0F);
-```
-
-Result:
-
-```text
+-- vector_normalize, example 2
+> SELECT vector_normalize(array(3.0F, 4.0F), 1.0F);
 [0.42857143,0.5714286]
 ```
 
 ```sql
-SELECT vector_normalize(array(3.0F, 4.0F), float('inf'));
-```
-
-Result:
-
-```text
+-- vector_normalize, example 3
+> SELECT vector_normalize(array(3.0F, 4.0F), float('inf'));
 [0.75,1.0]
 ```
 

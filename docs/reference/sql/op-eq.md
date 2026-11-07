@@ -21,42 +21,26 @@ Returns true if `expr1` equals `expr2`, or false otherwise.
 ## Examples
 
 ```sql
-SELECT 2 = 2;
-```
-
-Result:
-
-```text
+-- =, example 1
+> SELECT 2 = 2;
 true
 ```
 
 ```sql
-SELECT 1 = '1';
-```
-
-Result:
-
-```text
+-- =, example 2
+> SELECT 1 = '1';
 true
 ```
 
 ```sql
-SELECT true = NULL;
-```
-
-Result:
-
-```text
+-- =, example 3
+> SELECT true = NULL;
 NULL
 ```
 
 ```sql
-SELECT NULL = NULL;
-```
-
-Result:
-
-```text
+-- =, example 4
+> SELECT NULL = NULL;
 NULL
 ```
 

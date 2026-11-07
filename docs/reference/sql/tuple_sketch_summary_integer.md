@@ -23,12 +23,8 @@ Datasketches TupleSketch. The mode can be 'sum', 'min', 'max', or 'alwaysone'
 ## Examples
 
 ```sql
-SELECT tuple_sketch_summary_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (1, 2), (2, 3) tab(key, summary);
-```
-
-Result:
-
-```text
-6
+-- tuple_sketch_summary_integer, example 1
+> SELECT tuple_sketch_summary_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (1, 2), (2, 3) tab(key, summary);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

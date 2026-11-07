@@ -24,52 +24,32 @@ a character string, and with zeros if it is a byte sequence.
 ## Examples
 
 ```sql
-SELECT lpad('hi', 5, '??');
-```
-
-Result:
-
-```text
+-- lpad, example 1
+> SELECT lpad('hi', 5, '??');
 ???hi
 ```
 
 ```sql
-SELECT lpad('hi', 1, '??');
-```
-
-Result:
-
-```text
+-- lpad, example 2
+> SELECT lpad('hi', 1, '??');
 h
 ```
 
 ```sql
-SELECT lpad('hi', 5);
-```
-
-Result:
-
-```text
-hi
+-- lpad, example 3
+> SELECT lpad('hi', 5);
+   hi
 ```
 
 ```sql
-SELECT hex(lpad(unhex('aabb'), 5));
-```
-
-Result:
-
-```text
+-- lpad, example 4
+> SELECT hex(lpad(unhex('aabb'), 5));
 000000AABB
 ```
 
 ```sql
-SELECT hex(lpad(unhex('aabb'), 5, unhex('1122')));
-```
-
-Result:
-
-```text
+-- lpad, example 5
+> SELECT hex(lpad(unhex('aabb'), 5, unhex('1122')));
 112211AABB
 ```
 

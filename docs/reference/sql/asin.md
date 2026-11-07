@@ -22,22 +22,14 @@ as if computed by `java.lang.Math.asin`.
 ## Examples
 
 ```sql
-SELECT asin(0);
-```
-
-Result:
-
-```text
+-- asin, example 1
+> SELECT asin(0);
 0.0
 ```
 
 ```sql
-SELECT asin(2);
-```
-
-Result:
-
-```text
+-- asin, example 2
+> SELECT asin(2);
 NaN
 ```
 

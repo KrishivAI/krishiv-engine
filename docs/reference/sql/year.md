@@ -21,12 +21,8 @@ Returns the year component of the date/timestamp.
 ## Examples
 
 ```sql
-SELECT year('2016-07-30');
-```
-
-Result:
-
-```text
+-- year, example 1
+> SELECT year('2016-07-30');
 2016
 ```
 

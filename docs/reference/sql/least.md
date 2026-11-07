@@ -21,12 +21,8 @@ Returns the least value of all parameters, skipping null values.
 ## Examples
 
 ```sql
-SELECT least(10, 9, 2, 4, 3);
-```
-
-Result:
-
-```text
+-- least, example 1
+> SELECT least(10, 9, 2, 4, 3);
 2
 ```
 

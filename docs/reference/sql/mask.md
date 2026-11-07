@@ -23,142 +23,86 @@ This can be useful for creating copies of tables with sensitive information remo
 ## Examples
 
 ```sql
-SELECT mask('abcd-EFGH-8765-4321');
-```
-
-Result:
-
-```text
+-- mask, example 1
+> SELECT mask('abcd-EFGH-8765-4321');
 xxxx-XXXX-nnnn-nnnn
 ```
 
 ```sql
-SELECT mask('abcd-EFGH-8765-4321', 'Q');
-```
-
-Result:
-
-```text
+-- mask, example 2
+> SELECT mask('abcd-EFGH-8765-4321', 'Q');
 xxxx-QQQQ-nnnn-nnnn
 ```
 
 ```sql
-SELECT mask('AbCD123-@$#', 'Q', 'q');
-```
-
-Result:
-
-```text
+-- mask, example 3
+> SELECT mask('AbCD123-@$#', 'Q', 'q');
 QqQQnnn-@$#
 ```
 
 ```sql
-SELECT mask('AbCD123-@$#');
-```
-
-Result:
-
-```text
+-- mask, example 4
+> SELECT mask('AbCD123-@$#');
 XxXXnnn-@$#
 ```
 
 ```sql
-SELECT mask('AbCD123-@$#', 'Q');
-```
-
-Result:
-
-```text
+-- mask, example 5
+> SELECT mask('AbCD123-@$#', 'Q');
 QxQQnnn-@$#
 ```
 
 ```sql
-SELECT mask('AbCD123-@$#', 'Q', 'q');
-```
-
-Result:
-
-```text
+-- mask, example 6
+> SELECT mask('AbCD123-@$#', 'Q', 'q');
 QqQQnnn-@$#
 ```
 
 ```sql
-SELECT mask('AbCD123-@$#', 'Q', 'q', 'd');
-```
-
-Result:
-
-```text
+-- mask, example 7
+> SELECT mask('AbCD123-@$#', 'Q', 'q', 'd');
 QqQQddd-@$#
 ```
 
 ```sql
-SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', 'o');
-```
-
-Result:
-
-```text
+-- mask, example 8
+> SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', 'o');
 QqQQdddoooo
 ```
 
 ```sql
-SELECT mask('AbCD123-@$#', NULL, 'q', 'd', 'o');
-```
-
-Result:
-
-```text
+-- mask, example 9
+> SELECT mask('AbCD123-@$#', NULL, 'q', 'd', 'o');
 AqCDdddoooo
 ```
 
 ```sql
-SELECT mask('AbCD123-@$#', NULL, NULL, 'd', 'o');
-```
-
-Result:
-
-```text
+-- mask, example 10
+> SELECT mask('AbCD123-@$#', NULL, NULL, 'd', 'o');
 AbCDdddoooo
 ```
 
 ```sql
-SELECT mask('AbCD123-@$#', NULL, NULL, NULL, 'o');
-```
-
-Result:
-
-```text
+-- mask, example 11
+> SELECT mask('AbCD123-@$#', NULL, NULL, NULL, 'o');
 AbCD123oooo
 ```
 
 ```sql
-SELECT mask(NULL, NULL, NULL, NULL, 'o');
-```
-
-Result:
-
-```text
+-- mask, example 12
+> SELECT mask(NULL, NULL, NULL, NULL, 'o');
 NULL
 ```
 
 ```sql
-SELECT mask(NULL);
-```
-
-Result:
-
-```text
+-- mask, example 13
+> SELECT mask(NULL);
 NULL
 ```
 
 ```sql
-SELECT mask('AbCD123-@$#', NULL, NULL, NULL, NULL);
-```
-
-Result:
-
-```text
+-- mask, example 14
+> SELECT mask('AbCD123-@$#', NULL, NULL, NULL, NULL);
 AbCD123-@$#
 ```
 

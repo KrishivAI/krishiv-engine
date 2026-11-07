@@ -23,32 +23,20 @@ Degree defaults to 2.0 (Euclidean norm) if unspecified. Supported values: 1.0 (L
 ## Examples
 
 ```sql
-SELECT vector_norm(array(3.0F, 4.0F), 2.0F);
-```
-
-Result:
-
-```text
+-- vector_norm, example 1
+> SELECT vector_norm(array(3.0F, 4.0F), 2.0F);
 5.0
 ```
 
 ```sql
-SELECT vector_norm(array(3.0F, 4.0F), 1.0F);
-```
-
-Result:
-
-```text
+-- vector_norm, example 2
+> SELECT vector_norm(array(3.0F, 4.0F), 1.0F);
 7.0
 ```
 
 ```sql
-SELECT vector_norm(array(3.0F, 4.0F), float('inf'));
-```
-
-Result:
-
-```text
+-- vector_norm, example 3
+> SELECT vector_norm(array(3.0F, 4.0F), float('inf'));
 4.0
 ```
 

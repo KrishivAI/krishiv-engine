@@ -21,12 +21,8 @@ Converts hexadecimal `expr` to binary.
 ## Examples
 
 ```sql
-SELECT decode(unhex('537061726B2053514C'), 'UTF-8');
-```
-
-Result:
-
-```text
+-- unhex, example 1
+> SELECT decode(unhex('537061726B2053514C'), 'UTF-8');
 Spark SQL
 ```
 

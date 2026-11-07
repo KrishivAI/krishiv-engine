@@ -23,42 +23,26 @@ btrim(str, trimStr) - Remove the leading and trailing `trimStr` characters from 
 ## Examples
 
 ```sql
-SELECT btrim('    SparkSQL   ');
-```
-
-Result:
-
-```text
+-- btrim, example 1
+> SELECT btrim('    SparkSQL   ');
 SparkSQL
 ```
 
 ```sql
-SELECT btrim(encode('    SparkSQL   ', 'utf-8'));
-```
-
-Result:
-
-```text
+-- btrim, example 2
+> SELECT btrim(encode('    SparkSQL   ', 'utf-8'));
 SparkSQL
 ```
 
 ```sql
-SELECT btrim('SSparkSQLS', 'SL');
-```
-
-Result:
-
-```text
+-- btrim, example 3
+> SELECT btrim('SSparkSQLS', 'SL');
 parkSQ
 ```
 
 ```sql
-SELECT btrim(encode('SSparkSQLS', 'utf-8'), encode('SL', 'utf-8'));
-```
-
-Result:
-
-```text
+-- btrim, example 4
+> SELECT btrim(encode('SSparkSQLS', 'utf-8'), encode('SL', 'utf-8'));
 parkSQ
 ```
 

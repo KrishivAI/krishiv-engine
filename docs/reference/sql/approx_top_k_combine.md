@@ -22,12 +22,8 @@ Combines multiple sketches into a single sketch.
 ## Examples
 
 ```sql
-SELECT approx_top_k_estimate(approx_top_k_combine(sketch, 10000), 5) FROM (SELECT approx_top_k_accumulate(expr) AS sketch FROM VALUES (0), (0), (1), (1) AS tab(expr) UNION ALL SELECT approx_top_k_accumulate(expr) AS sketch FROM VALUES (2), (3), (4), (4) AS tab(expr));
-```
-
-Result:
-
-```text
-[{"item":0,"count":2},{"item":4,"count":2},{"item":1,"count":2},{"item":2,"count":1},{"item":3,"count":1}]
+-- approx_top_k_combine, example 1
+> SELECT approx_top_k_estimate(approx_top_k_combine(sketch, 10000), 5) FROM (SELECT approx_top_k_accumulate(expr) AS sketch FROM VALUES (0), (0), (1), (1) AS tab(expr) UNION ALL SELECT approx_top_k_accumulate(expr) AS sketch FROM VALUES (2), (3), (4), (4) AS tab(expr));
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

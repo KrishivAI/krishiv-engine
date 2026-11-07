@@ -23,12 +23,8 @@ Returns the estimated number of unique values.
 ## Examples
 
 ```sql
-SELECT hll_sketch_estimate(hll_union_agg(sketch, true)) FROM (SELECT hll_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT hll_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
-```
-
-Result:
-
-```text
-1
+-- hll_union_agg, example 1
+> SELECT hll_sketch_estimate(hll_union_agg(sketch, true)) FROM (SELECT hll_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT hll_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

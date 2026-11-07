@@ -21,22 +21,14 @@ Returns `unix_time` in the specified `fmt`.
 ## Examples
 
 ```sql
-SELECT from_unixtime(0, 'yyyy-MM-dd HH:mm:ss');
-```
-
-Result:
-
-```text
+-- from_unixtime, example 1
+> SELECT from_unixtime(0, 'yyyy-MM-dd HH:mm:ss');
 1969-12-31 16:00:00
 ```
 
 ```sql
-SELECT from_unixtime(0);
-```
-
-Result:
-
-```text
+-- from_unixtime, example 2
+> SELECT from_unixtime(0);
 1969-12-31 16:00:00
 ```
 

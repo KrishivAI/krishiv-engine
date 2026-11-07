@@ -21,12 +21,8 @@ Returns the square root of `expr`.
 ## Examples
 
 ```sql
-SELECT sqrt(4);
-```
-
-Result:
-
-```text
+-- sqrt, example 1
+> SELECT sqrt(4);
 2.0
 ```
 

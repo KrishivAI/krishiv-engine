@@ -21,12 +21,8 @@ Returns the UNIX timestamp of the given time.
 ## Examples
 
 ```sql
-SELECT to_unix_timestamp('2016-04-08', 'yyyy-MM-dd');
-```
-
-Result:
-
-```text
+-- to_unix_timestamp, example 1
+> SELECT to_unix_timestamp('2016-04-08', 'yyyy-MM-dd');
 1460098800
 ```
 

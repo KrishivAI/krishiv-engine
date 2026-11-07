@@ -21,22 +21,14 @@ Return a percentile value based on a continuous distribution of numeric or ANSI 
 ## Examples
 
 ```sql
-SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col);
-```
-
-Result:
-
-```text
+-- percentile_cont, example 1
+> SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col);
 2.5
 ```
 
 ```sql
-SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-```
-
-Result:
-
-```text
+-- percentile_cont, example 2
+> SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
 0-2
 ```
 

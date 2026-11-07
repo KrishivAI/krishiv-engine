@@ -45,92 +45,56 @@ If `expr` is a binary, it is converted to a string in one of the formats:
 ## Examples
 
 ```sql
-SELECT to_char(454, '999');
-```
-
-Result:
-
-```text
+-- to_char, example 1
+> SELECT to_char(454, '999');
 454
 ```
 
 ```sql
-SELECT to_char(454.00, '000D00');
-```
-
-Result:
-
-```text
+-- to_char, example 2
+> SELECT to_char(454.00, '000D00');
 454.00
 ```
 
 ```sql
-SELECT to_char(12454, '99G999');
-```
-
-Result:
-
-```text
+-- to_char, example 3
+> SELECT to_char(12454, '99G999');
 12,454
 ```
 
 ```sql
-SELECT to_char(78.12, '$99.99');
-```
-
-Result:
-
-```text
+-- to_char, example 4
+> SELECT to_char(78.12, '$99.99');
 $78.12
 ```
 
 ```sql
-SELECT to_char(-12454.8, '99G999D9S');
-```
-
-Result:
-
-```text
+-- to_char, example 5
+> SELECT to_char(-12454.8, '99G999D9S');
 12,454.8-
 ```
 
 ```sql
-SELECT to_char(date'2016-04-08', 'y');
-```
-
-Result:
-
-```text
+-- to_char, example 6
+> SELECT to_char(date'2016-04-08', 'y');
 2016
 ```
 
 ```sql
-SELECT to_char(x'537061726b2053514c', 'base64');
-```
-
-Result:
-
-```text
-U3BhcmsgU1FM
+-- to_char, example 7
+> SELECT to_char(x'537061726b2053514c', 'base64');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT to_char(x'537061726b2053514c', 'hex');
-```
-
-Result:
-
-```text
-537061726B2053514C
+-- to_char, example 8
+> SELECT to_char(x'537061726b2053514c', 'hex');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT to_char(encode('abc', 'utf-8'), 'utf-8');
-```
-
-Result:
-
-```text
-abc
+-- to_char, example 9
+> SELECT to_char(encode('abc', 'utf-8'), 'utf-8');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

@@ -21,12 +21,8 @@ Converts the argument from a base 64 string `str` to a binary.
 ## Examples
 
 ```sql
-SELECT unbase64('U3BhcmsgU1FM');
-```
-
-Result:
-
-```text
+-- unbase64, example 1
+> SELECT unbase64('U3BhcmsgU1FM');
 Spark SQL
 ```
 

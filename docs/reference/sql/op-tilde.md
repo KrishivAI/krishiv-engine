@@ -21,12 +21,8 @@ Returns the result of bitwise NOT of `expr`.
 ## Examples
 
 ```sql
-SELECT ~ 0;
-```
-
-Result:
-
-```text
+-- ~, example 1
+> SELECT ~ 0;
 -1
 ```
 

@@ -21,32 +21,20 @@ Returns the number of elements in the outermost JSON array.
 ## Examples
 
 ```sql
-SELECT json_array_length('[1,2,3,4]');
-```
-
-Result:
-
-```text
+-- json_array_length, example 1
+> SELECT json_array_length('[1,2,3,4]');
 4
 ```
 
 ```sql
-SELECT json_array_length('[1,2,3,{"f1":1,"f2":[5,6]},4]');
-```
-
-Result:
-
-```text
+-- json_array_length, example 2
+> SELECT json_array_length('[1,2,3,{"f1":1,"f2":[5,6]},4]');
 5
 ```
 
 ```sql
-SELECT json_array_length('[1,2');
-```
-
-Result:
-
-```text
+-- json_array_length, example 3
+> SELECT json_array_length('[1,2');
 NULL
 ```
 

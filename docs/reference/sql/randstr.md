@@ -24,12 +24,8 @@ respectively).
 ## Examples
 
 ```sql
-SELECT randstr(3, 0) AS result;
-```
-
-Result:
-
-```text
+-- randstr, example 1
+> SELECT randstr(3, 0) AS result;
 ceV
 ```
 

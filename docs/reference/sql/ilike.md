@@ -21,72 +21,44 @@ Returns true if str matches `pattern` with `escape` case-insensitively, null if 
 ## Examples
 
 ```sql
-SELECT ilike('Spark', '_Park');
-```
-
-Result:
-
-```text
+-- ilike, example 1
+> SELECT ilike('Spark', '_Park');
 true
 ```
 
 ```sql
-SELECT '\\abc' AS S, S ilike r'\\abc', S ilike '\\\\abc';
-```
-
-Result:
-
-```text
-\abc	true	true
+-- ilike, example 2
+> SELECT '\\abc' AS S, S ilike r'\\abc', S ilike '\\\\abc';
+\abc | true | true
 ```
 
 ```sql
-SET spark.sql.parser.escapedStringLiterals=true;
-```
-
-Result:
-
-```text
-spark.sql.parser.escapedStringLiterals	true
+-- ilike, example 3
+> SET spark.sql.parser.escapedStringLiterals=true;
+spark.sql.parser.escapedStringLiterals | true
 ```
 
 ```sql
-SELECT '%SystemDrive%\Users\John' ilike '\%SystemDrive\%\\users%';
+-- ilike, example 4
+> SELECT '%SystemDrive%\Users\John' ilike '\%SystemDrive\%\\users%';
+Error: INVALID_FORMAT.ESC_IN_THE_MIDDLE
 ```
 
-Result:
+```sql
+-- ilike, example 5
+> SET spark.sql.parser.escapedStringLiterals=false;
+spark.sql.parser.escapedStringLiterals | false
+```
 
-```text
+```sql
+-- ilike, example 6
+> SELECT '%SystemDrive%\\USERS\\John' ilike r'%SystemDrive%\\Users%';
 true
 ```
 
 ```sql
-SET spark.sql.parser.escapedStringLiterals=false;
-```
-
-Result:
-
-```text
-spark.sql.parser.escapedStringLiterals	false
-```
-
-```sql
-SELECT '%SystemDrive%\\USERS\\John' ilike r'%SystemDrive%\\Users%';
-```
-
-Result:
-
-```text
-true
-```
-
-```sql
-SELECT '%SystemDrive%/Users/John' ilike '/%SYSTEMDrive/%//Users%' ESCAPE '/';
-```
-
-Result:
-
-```text
+-- ilike, example 7
+> SELECT '%SystemDrive%/Users/John' ilike '/%SYSTEMDrive/%//Users%' ESCAPE '/';
 true
 ```
 

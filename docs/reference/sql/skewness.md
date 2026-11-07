@@ -21,22 +21,14 @@ Returns the skewness value calculated from values of a group.
 ## Examples
 
 ```sql
-SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);
-```
-
-Result:
-
-```text
+-- skewness, example 1
+> SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);
 1.1135657469022011
 ```
 
 ```sql
-SELECT skewness(col) FROM VALUES (-1000), (-100), (10), (20) AS tab(col);
-```
-
-Result:
-
-```text
--1.1135657469022011
+-- skewness, example 2
+> SELECT skewness(col) FROM VALUES (-1000), (-100), (10), (20) AS tab(col);
+-1.113565746902201
 ```
 

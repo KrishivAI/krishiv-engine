@@ -21,32 +21,20 @@ Returns `expr1`*`expr2` and the result is null on overflow. The acceptable input
 ## Examples
 
 ```sql
-SELECT try_multiply(2, 3);
-```
-
-Result:
-
-```text
+-- try_multiply, example 1
+> SELECT try_multiply(2, 3);
 6
 ```
 
 ```sql
-SELECT try_multiply(-2147483648, 10);
-```
-
-Result:
-
-```text
+-- try_multiply, example 2
+> SELECT try_multiply(-2147483648, 10);
 NULL
 ```
 
 ```sql
-SELECT try_multiply(interval 2 year, 3);
-```
-
-Result:
-
-```text
+-- try_multiply, example 3
+> SELECT try_multiply(interval 2 year, 3);
 6-0
 ```
 

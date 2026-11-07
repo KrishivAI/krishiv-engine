@@ -23,12 +23,8 @@ ThetaSketch AnotB object.
 ## Examples
 
 ```sql
-SELECT theta_sketch_estimate(theta_difference(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) tab(col1, col2);
-```
-
-Result:
-
-```text
-2
+-- theta_difference, example 1
+> SELECT theta_sketch_estimate(theta_difference(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) tab(col1, col2);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

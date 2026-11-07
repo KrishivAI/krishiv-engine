@@ -21,22 +21,14 @@ Returns the numeric value of the first character of `str`.
 ## Examples
 
 ```sql
-SELECT ascii('222');
-```
-
-Result:
-
-```text
+-- ascii, example 1
+> SELECT ascii('222');
 50
 ```
 
 ```sql
-SELECT ascii(2);
-```
-
-Result:
-
-```text
+-- ascii, example 2
+> SELECT ascii(2);
 50
 ```
 

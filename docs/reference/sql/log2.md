@@ -21,12 +21,8 @@ Returns the logarithm of `expr` with base 2.
 ## Examples
 
 ```sql
-SELECT log2(2);
-```
-
-Result:
-
-```text
+-- log2, example 1
+> SELECT log2(2);
 1.0
 ```
 

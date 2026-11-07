@@ -21,12 +21,8 @@ Returns log(1 + `expr`).
 ## Examples
 
 ```sql
-SELECT log1p(0);
-```
-
-Result:
-
-```text
+-- log1p, example 1
+> SELECT log1p(0);
 0.0
 ```
 

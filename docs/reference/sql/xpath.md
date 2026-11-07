@@ -21,22 +21,14 @@ Returns a string array of values within the nodes of xml that match the XPath ex
 ## Examples
 
 ```sql
-SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b/text()');
-```
-
-Result:
-
-```text
-["b1","b2","b3"]
+-- xpath, example 1
+> SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b/text()');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b');
-```
-
-Result:
-
-```text
-[null,null,null]
+-- xpath, example 2
+> SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

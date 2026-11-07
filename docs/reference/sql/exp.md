@@ -21,12 +21,8 @@ Returns e to the power of `expr`.
 ## Examples
 
 ```sql
-SELECT exp(0);
-```
-
-Result:
-
-```text
+-- exp, example 1
+> SELECT exp(0);
 1.0
 ```
 

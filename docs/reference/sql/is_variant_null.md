@@ -21,62 +21,38 @@ Check if a variant value is a variant null. Returns true if and only if the inpu
 ## Examples
 
 ```sql
-SELECT is_variant_null(parse_json('null'));
-```
-
-Result:
-
-```text
+-- is_variant_null, example 1
+> SELECT is_variant_null(parse_json('null'));
 true
 ```
 
 ```sql
-SELECT is_variant_null(parse_json('"null"'));
-```
-
-Result:
-
-```text
+-- is_variant_null, example 2
+> SELECT is_variant_null(parse_json('"null"'));
 false
 ```
 
 ```sql
-SELECT is_variant_null(parse_json('13'));
-```
-
-Result:
-
-```text
+-- is_variant_null, example 3
+> SELECT is_variant_null(parse_json('13'));
 false
 ```
 
 ```sql
-SELECT is_variant_null(parse_json(null));
-```
-
-Result:
-
-```text
+-- is_variant_null, example 4
+> SELECT is_variant_null(parse_json(null));
 false
 ```
 
 ```sql
-SELECT is_variant_null(variant_get(parse_json('{"a":null, "b":"spark"}'), "$.c"));
-```
-
-Result:
-
-```text
+-- is_variant_null, example 5
+> SELECT is_variant_null(variant_get(parse_json('{"a":null, "b":"spark"}'), "$.c"));
 false
 ```
 
 ```sql
-SELECT is_variant_null(variant_get(parse_json('{"a":null, "b":"spark"}'), "$.a"));
-```
-
-Result:
-
-```text
+-- is_variant_null, example 6
+> SELECT is_variant_null(variant_get(parse_json('{"a":null, "b":"spark"}'), "$.a"));
 true
 ```
 

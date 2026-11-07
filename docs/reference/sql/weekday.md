@@ -21,12 +21,8 @@ Returns the day of the week for date/timestamp (0 = Monday, 1 = Tuesday, ..., 6 
 ## Examples
 
 ```sql
-SELECT weekday('2009-07-30');
-```
-
-Result:
-
-```text
+-- weekday, example 1
+> SELECT weekday('2009-07-30');
 3
 ```
 

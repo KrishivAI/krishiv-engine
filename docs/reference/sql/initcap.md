@@ -22,12 +22,8 @@ All other letters are in lowercase. Words are delimited by white space.
 ## Examples
 
 ```sql
-SELECT initcap('sPark sql');
-```
-
-Result:
-
-```text
+-- initcap, example 1
+> SELECT initcap('sPark sql');
 Spark Sql
 ```
 

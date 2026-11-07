@@ -21,12 +21,8 @@ Returns the population standard deviation calculated from values of a group.
 ## Examples
 
 ```sql
-SELECT stddev_pop(col) FROM VALUES (1), (2), (3) AS tab(col);
-```
-
-Result:
-
-```text
+-- stddev_pop, example 1
+> SELECT stddev_pop(col) FROM VALUES (1), (2), (3) AS tab(col);
 0.816496580927726
 ```
 

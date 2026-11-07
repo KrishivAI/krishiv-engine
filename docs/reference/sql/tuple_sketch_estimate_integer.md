@@ -23,12 +23,8 @@ summary type must be an integer.
 ## Examples
 
 ```sql
-SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (1, 2), (2, 3) tab(key, summary);
-```
-
-Result:
-
-```text
-2.0
+-- tuple_sketch_estimate_integer, example 1
+> SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (1, 2), (2, 3) tab(key, summary);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

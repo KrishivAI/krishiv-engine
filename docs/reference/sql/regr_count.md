@@ -21,52 +21,32 @@ Returns the number of non-null number pairs in a group, where `y` is the depende
 ## Examples
 
 ```sql
-SELECT regr_count(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_count, example 1
+> SELECT regr_count(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
 4
 ```
 
 ```sql
-SELECT regr_count(y, x) FROM VALUES (1, null) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_count, example 2
+> SELECT regr_count(y, x) FROM VALUES (1, null) AS tab(y, x);
 0
 ```
 
 ```sql
-SELECT regr_count(y, x) FROM VALUES (null, 1) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_count, example 3
+> SELECT regr_count(y, x) FROM VALUES (null, 1) AS tab(y, x);
 0
 ```
 
 ```sql
-SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_count, example 4
+> SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
 3
 ```
 
 ```sql
-SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_count, example 5
+> SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
 2
 ```
 

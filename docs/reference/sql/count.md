@@ -25,32 +25,20 @@ count(DISTINCT expr[, expr...]) - Returns the number of rows for which the suppl
 ## Examples
 
 ```sql
-SELECT count(*) FROM VALUES (NULL), (5), (5), (20) AS tab(col);
-```
-
-Result:
-
-```text
+-- count, example 1
+> SELECT count(*) FROM VALUES (NULL), (5), (5), (20) AS tab(col);
 4
 ```
 
 ```sql
-SELECT count(col) FROM VALUES (NULL), (5), (5), (20) AS tab(col);
-```
-
-Result:
-
-```text
+-- count, example 2
+> SELECT count(col) FROM VALUES (NULL), (5), (5), (20) AS tab(col);
 3
 ```
 
 ```sql
-SELECT count(DISTINCT col) FROM VALUES (NULL), (5), (5), (10) AS tab(col);
-```
-
-Result:
-
-```text
+-- count, example 3
+> SELECT count(DISTINCT col) FROM VALUES (NULL), (5), (5), (10) AS tab(col);
 2
 ```
 

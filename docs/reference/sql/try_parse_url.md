@@ -21,42 +21,26 @@ This is a special version of `parse_url` that performs the same operation, but r
 ## Examples
 
 ```sql
-SELECT try_parse_url('http://spark.apache.org/path?query=1', 'HOST');
-```
-
-Result:
-
-```text
+-- try_parse_url, example 1
+> SELECT try_parse_url('http://spark.apache.org/path?query=1', 'HOST');
 spark.apache.org
 ```
 
 ```sql
-SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY');
-```
-
-Result:
-
-```text
+-- try_parse_url, example 2
+> SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY');
 query=1
 ```
 
 ```sql
-SELECT try_parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');
-```
-
-Result:
-
-```text
+-- try_parse_url, example 3
+> SELECT try_parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');
 NULL
 ```
 
 ```sql
-SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY', 'query');
-```
-
-Result:
-
-```text
+-- try_parse_url, example 4
+> SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY', 'query');
 1
 ```
 

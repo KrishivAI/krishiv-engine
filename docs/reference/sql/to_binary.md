@@ -24,12 +24,8 @@ The function returns NULL if at least one of the input parameters is NULL.
 ## Examples
 
 ```sql
-SELECT to_binary('abc', 'utf-8');
-```
-
-Result:
-
-```text
+-- to_binary, example 1
+> SELECT to_binary('abc', 'utf-8');
 abc
 ```
 

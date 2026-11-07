@@ -21,82 +21,50 @@ Extracts a part of the date/timestamp or interval source.
 ## Examples
 
 ```sql
-SELECT datepart('YEAR', TIMESTAMP '2019-08-12 01:00:00.123456');
-```
-
-Result:
-
-```text
+-- datepart, example 1
+> SELECT datepart('YEAR', TIMESTAMP '2019-08-12 01:00:00.123456');
 2019
 ```
 
 ```sql
-SELECT datepart('week', timestamp'2019-08-12 01:00:00.123456');
-```
-
-Result:
-
-```text
+-- datepart, example 2
+> SELECT datepart('week', timestamp'2019-08-12 01:00:00.123456');
 33
 ```
 
 ```sql
-SELECT datepart('doy', DATE'2019-08-12');
-```
-
-Result:
-
-```text
+-- datepart, example 3
+> SELECT datepart('doy', DATE'2019-08-12');
 224
 ```
 
 ```sql
-SELECT datepart('SECONDS', timestamp'2019-10-01 00:00:01.000001');
-```
-
-Result:
-
-```text
+-- datepart, example 4
+> SELECT datepart('SECONDS', timestamp'2019-10-01 00:00:01.000001');
 1.000001
 ```
 
 ```sql
-SELECT datepart('days', interval 5 days 3 hours 7 minutes);
-```
-
-Result:
-
-```text
+-- datepart, example 5
+> SELECT datepart('days', interval 5 days 3 hours 7 minutes);
 5
 ```
 
 ```sql
-SELECT datepart('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
-```
-
-Result:
-
-```text
+-- datepart, example 6
+> SELECT datepart('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
 30.001001
 ```
 
 ```sql
-SELECT datepart('MONTH', INTERVAL '2021-11' YEAR TO MONTH);
-```
-
-Result:
-
-```text
+-- datepart, example 7
+> SELECT datepart('MONTH', INTERVAL '2021-11' YEAR TO MONTH);
 11
 ```
 
 ```sql
-SELECT datepart('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND);
-```
-
-Result:
-
-```text
+-- datepart, example 8
+> SELECT datepart('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND);
 55
 ```
 

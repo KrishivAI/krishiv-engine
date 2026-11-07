@@ -21,36 +21,26 @@ Returns the concatenation of the strings separated by `sep`, skipping null value
 ## Examples
 
 ```sql
-SELECT concat_ws(' ', 'Spark', 'SQL');
-```
-
-Result:
-
-```text
+-- concat_ws, example 1
+> SELECT concat_ws(' ', 'Spark', 'SQL');
 Spark SQL
 ```
 
 ```sql
-SELECT concat_ws('s');
+-- concat_ws, example 2
+> SELECT concat_ws('s');
+
 ```
 
 ```sql
-SELECT concat_ws('/', 'foo', null, 'bar');
-```
-
-Result:
-
-```text
+-- concat_ws, example 3
+> SELECT concat_ws('/', 'foo', null, 'bar');
 foo/bar
 ```
 
 ```sql
-SELECT concat_ws(null, 'Spark', 'SQL');
-```
-
-Result:
-
-```text
+-- concat_ws, example 4
+> SELECT concat_ws(null, 'Spark', 'SQL');
 NULL
 ```
 

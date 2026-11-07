@@ -21,12 +21,8 @@ Returns the rightmost `len`(`len` can be string type) characters from the string
 ## Examples
 
 ```sql
-SELECT right('Spark SQL', 3);
-```
-
-Result:
-
-```text
+-- right, example 1
+> SELECT right('Spark SQL', 3);
 SQL
 ```
 

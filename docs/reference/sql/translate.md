@@ -21,12 +21,8 @@ Translates the `input` string by replacing the characters present in the `from` 
 ## Examples
 
 ```sql
-SELECT translate('AaBbCc', 'abc', '123');
-```
-
-Result:
-
-```text
+-- translate, example 1
+> SELECT translate('AaBbCc', 'abc', '123');
 A1B2C3
 ```
 

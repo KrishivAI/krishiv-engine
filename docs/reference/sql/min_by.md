@@ -24,22 +24,14 @@ Returns NULL if there are no non-NULL ordering values.
 ## Examples
 
 ```sql
-SELECT min_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
-```
-
-Result:
-
-```text
+-- min_by, example 1
+> SELECT min_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
 a
 ```
 
 ```sql
-SELECT min_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
-```
-
-Result:
-
-```text
+-- min_by, example 2
+> SELECT min_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
 ["a","c"]
 ```
 

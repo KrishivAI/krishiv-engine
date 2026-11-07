@@ -21,12 +21,8 @@ Returns sqrt(`expr1`² + `expr2`²).
 ## Examples
 
 ```sql
-SELECT hypot(3, 4);
-```
-
-Result:
-
-```text
+-- hypot, example 1
+> SELECT hypot(3, 4);
 5.0
 ```
 

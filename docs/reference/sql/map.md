@@ -21,12 +21,8 @@ Creates a map with the given key/value pairs.
 ## Examples
 
 ```sql
-SELECT map(1.0, '2', 3.0, '4');
-```
-
-Result:
-
-```text
+-- map, example 1
+> SELECT map(1.0, '2', 3.0, '4');
 {1.0:"2",3.0:"4"}
 ```
 

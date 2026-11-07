@@ -21,12 +21,8 @@ Returns a double value, the value zero if no match is found, or NaN if a match i
 ## Examples
 
 ```sql
-SELECT xpath_double('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
-```
-
-Result:
-
-```text
-3.0
+-- xpath_double, example 1
+> SELECT xpath_double('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

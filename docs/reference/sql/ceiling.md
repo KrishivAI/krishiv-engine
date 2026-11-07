@@ -21,42 +21,26 @@ Returns the smallest number after rounding up that is not smaller than `expr`. A
 ## Examples
 
 ```sql
-SELECT ceiling(-0.1);
-```
-
-Result:
-
-```text
+-- ceiling, example 1
+> SELECT ceiling(-0.1);
 0
 ```
 
 ```sql
-SELECT ceiling(5);
-```
-
-Result:
-
-```text
+-- ceiling, example 2
+> SELECT ceiling(5);
 5
 ```
 
 ```sql
-SELECT ceiling(3.1411, 3);
-```
-
-Result:
-
-```text
+-- ceiling, example 3
+> SELECT ceiling(3.1411, 3);
 3.142
 ```
 
 ```sql
-SELECT ceiling(3.1411, -3);
-```
-
-Result:
-
-```text
+-- ceiling, example 4
+> SELECT ceiling(3.1411, -3);
 1000
 ```
 

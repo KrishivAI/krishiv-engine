@@ -21,42 +21,26 @@ Logical AND.
 ## Examples
 
 ```sql
-SELECT true and true;
-```
-
-Result:
-
-```text
+-- and, example 1
+> SELECT true and true;
 true
 ```
 
 ```sql
-SELECT true and false;
-```
-
-Result:
-
-```text
+-- and, example 2
+> SELECT true and false;
 false
 ```
 
 ```sql
-SELECT true and NULL;
-```
-
-Result:
-
-```text
+-- and, example 3
+> SELECT true and NULL;
 NULL
 ```
 
 ```sql
-SELECT false and NULL;
-```
-
-Result:
-
-```text
+-- and, example 4
+> SELECT false and NULL;
 false
 ```
 

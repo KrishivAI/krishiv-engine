@@ -21,12 +21,8 @@ evaluate if `input` is [not] in between `lower` and `upper`
 ## Examples
 
 ```sql
-SELECT 0.5 between 0.1 AND 1.0;
-```
-
-Result:
-
-```text
+-- between, example 1
+> SELECT 0.5 between 0.1 AND 1.0;
 true
 ```
 

@@ -23,12 +23,8 @@ Returns the intersected TupleSketch compact binary representation.
 ## Examples
 
 ```sql
-SELECT tuple_sketch_estimate_integer(tuple_intersection_agg_integer(sketch)) FROM (SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (1, 1), (2, 2), (3, 3) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (2, 2), (3, 3), (4, 4) tab(key, summary));
-```
-
-Result:
-
-```text
-2.0
+-- tuple_intersection_agg_integer, example 1
+> SELECT tuple_sketch_estimate_integer(tuple_intersection_agg_integer(sketch)) FROM (SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (1, 1), (2, 2), (3, 3) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (2, 2), (3, 3), (4, 4) tab(key, summary));
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

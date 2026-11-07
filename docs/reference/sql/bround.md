@@ -21,22 +21,14 @@ Returns `expr` rounded to `d` decimal places using HALF_EVEN rounding mode.
 ## Examples
 
 ```sql
-SELECT bround(2.5, 0);
-```
-
-Result:
-
-```text
+-- bround, example 1
+> SELECT bround(2.5, 0);
 2
 ```
 
 ```sql
-SELECT bround(25, -1);
-```
-
-Result:
-
-```text
+-- bround, example 2
+> SELECT bround(25, -1);
 20
 ```
 

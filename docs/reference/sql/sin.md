@@ -21,12 +21,8 @@ Returns the sine of `expr`, as if computed by `java.lang.Math.sin`.
 ## Examples
 
 ```sql
-SELECT sin(0);
-```
-
-Result:
-
-```text
+-- sin, example 1
+> SELECT sin(0);
 0.0
 ```
 

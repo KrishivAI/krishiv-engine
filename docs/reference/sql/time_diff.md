@@ -21,32 +21,20 @@ Gets the difference between the times in the specified units.
 ## Examples
 
 ```sql
-SELECT time_diff('HOUR', TIME'20:30:29', TIME'21:30:28');
-```
-
-Result:
-
-```text
+-- time_diff, example 1
+> SELECT time_diff('HOUR', TIME'20:30:29', TIME'21:30:28');
 0
 ```
 
 ```sql
-SELECT time_diff('HOUR', TIME'20:30:29', TIME'21:30:29');
-```
-
-Result:
-
-```text
+-- time_diff, example 2
+> SELECT time_diff('HOUR', TIME'20:30:29', TIME'21:30:29');
 1
 ```
 
 ```sql
-SELECT time_diff('HOUR', TIME'20:30:29', TIME'12:00:00');
-```
-
-Result:
-
-```text
+-- time_diff, example 3
+> SELECT time_diff('HOUR', TIME'20:30:29', TIME'12:00:00');
 -8
 ```
 

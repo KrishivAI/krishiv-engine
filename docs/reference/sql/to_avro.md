@@ -21,22 +21,14 @@ corresponding Avro format result.
 ## Examples
 
 ```sql
-SELECT to_avro(s, '{"type": "record", "name": "struct", "fields": [{ "name": "u", "type": ["int","string"] }]}') IS NULL FROM (SELECT NULL AS s);
-```
-
-Result:
-
-```text
-[true]
+-- to_avro, example 1
+> SELECT to_avro(s, '{"type": "record", "name": "struct", "fields": [{ "name": "u", "type": ["int","string"] }]}') IS NULL FROM (SELECT NULL AS s);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT to_avro(s) IS NULL FROM (SELECT NULL AS s);
-```
-
-Result:
-
-```text
-[true]
+-- to_avro, example 2
+> SELECT to_avro(s) IS NULL FROM (SELECT NULL AS s);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

@@ -21,22 +21,14 @@ Returns a struct value with the given `csvStr` and `schema`.
 ## Examples
 
 ```sql
-SELECT from_csv('1, 0.8', 'a INT, b DOUBLE');
-```
-
-Result:
-
-```text
+-- from_csv, example 1
+> SELECT from_csv('1, 0.8', 'a INT, b DOUBLE');
 {"a":1,"b":0.8}
 ```
 
 ```sql
-SELECT from_csv('26/08/2015', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));
-```
-
-Result:
-
-```text
+-- from_csv, example 2
+> SELECT from_csv('26/08/2015', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));
 {"time":2015-08-26 00:00:00}
 ```
 

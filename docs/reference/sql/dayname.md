@@ -21,12 +21,8 @@ Returns the three-letter abbreviated day name from the given date.
 ## Examples
 
 ```sql
-SELECT dayname(DATE('2008-02-20'));
-```
-
-Result:
-
-```text
+-- dayname, example 1
+> SELECT dayname(DATE('2008-02-20'));
 Wed
 ```
 

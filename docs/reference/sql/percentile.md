@@ -28,42 +28,26 @@ positive integral
 ## Examples
 
 ```sql
-SELECT percentile(col, 0.3) FROM VALUES (0), (10) AS tab(col);
-```
-
-Result:
-
-```text
+-- percentile, example 1
+> SELECT percentile(col, 0.3) FROM VALUES (0), (10) AS tab(col);
 3.0
 ```
 
 ```sql
-SELECT percentile(col, array(0.25, 0.75)) FROM VALUES (0), (10) AS tab(col);
-```
-
-Result:
-
-```text
+-- percentile, example 2
+> SELECT percentile(col, array(0.25, 0.75)) FROM VALUES (0), (10) AS tab(col);
 [2.5,7.5]
 ```
 
 ```sql
-SELECT percentile(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-```
-
-Result:
-
-```text
+-- percentile, example 3
+> SELECT percentile(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
 0-5
 ```
 
 ```sql
-SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col);
-```
-
-Result:
-
-```text
+-- percentile, example 4
+> SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col);
 [0 00:00:02.000000000,0 00:00:05.000000000]
 ```
 

@@ -21,22 +21,14 @@ Returns the number of `TRUE` values for the expression.
 ## Examples
 
 ```sql
-SELECT count_if(col % 2 = 0) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);
-```
-
-Result:
-
-```text
+-- count_if, example 1
+> SELECT count_if(col % 2 = 0) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);
 2
 ```
 
 ```sql
-SELECT count_if(col IS NULL) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);
-```
-
-Result:
-
-```text
+-- count_if, example 2
+> SELECT count_if(col IS NULL) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);
 1
 ```
 

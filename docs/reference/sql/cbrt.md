@@ -21,12 +21,8 @@ Returns the cube root of `expr`.
 ## Examples
 
 ```sql
-SELECT cbrt(27.0);
-```
-
-Result:
-
-```text
+-- cbrt, example 1
+> SELECT cbrt(27.0);
 3.0
 ```
 

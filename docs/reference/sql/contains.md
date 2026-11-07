@@ -23,42 +23,26 @@ Both left or right must be of STRING or BINARY type.
 ## Examples
 
 ```sql
-SELECT contains('Spark SQL', 'Spark');
-```
-
-Result:
-
-```text
+-- contains, example 1
+> SELECT contains('Spark SQL', 'Spark');
 true
 ```
 
 ```sql
-SELECT contains('Spark SQL', 'SPARK');
-```
-
-Result:
-
-```text
+-- contains, example 2
+> SELECT contains('Spark SQL', 'SPARK');
 false
 ```
 
 ```sql
-SELECT contains('Spark SQL', null);
-```
-
-Result:
-
-```text
+-- contains, example 3
+> SELECT contains('Spark SQL', null);
 NULL
 ```
 
 ```sql
-SELECT contains(x'537061726b2053514c', x'537061726b');
-```
-
-Result:
-
-```text
+-- contains, example 4
+> SELECT contains(x'537061726b2053514c', x'537061726b');
 true
 ```
 

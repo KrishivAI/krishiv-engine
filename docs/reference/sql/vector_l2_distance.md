@@ -22,12 +22,8 @@ The vectors must have the same dimension.
 ## Examples
 
 ```sql
-SELECT vector_l2_distance(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));
-```
-
-Result:
-
-```text
+-- vector_l2_distance, example 1
+> SELECT vector_l2_distance(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));
 5.196152
 ```
 

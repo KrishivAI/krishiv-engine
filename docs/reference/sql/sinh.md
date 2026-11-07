@@ -21,12 +21,8 @@ Returns hyperbolic sine of `expr`, as if computed by `java.lang.Math.sinh`.
 ## Examples
 
 ```sql
-SELECT sinh(0);
-```
-
-Result:
-
-```text
+-- sinh, example 1
+> SELECT sinh(0);
 0.0
 ```
 

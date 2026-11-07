@@ -21,22 +21,14 @@ Returns `expr1`/`expr2`. It always performs floating point division.
 ## Examples
 
 ```sql
-SELECT 3 / 2;
-```
-
-Result:
-
-```text
+-- /, example 1
+> SELECT 3 / 2;
 1.5
 ```
 
 ```sql
-SELECT 2L / 2L;
-```
-
-Result:
-
-```text
+-- /, example 2
+> SELECT 2L / 2L;
 1.0
 ```
 

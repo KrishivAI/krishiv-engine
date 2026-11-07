@@ -21,32 +21,20 @@ Returns a struct value with the given `xmlStr` and `schema`.
 ## Examples
 
 ```sql
-SELECT from_xml('<p><a>1</a><b>0.8</b></p>', 'a INT, b DOUBLE');
-```
-
-Result:
-
-```text
+-- from_xml, example 1
+> SELECT from_xml('<p><a>1</a><b>0.8</b></p>', 'a INT, b DOUBLE');
 {"a":1,"b":0.8}
 ```
 
 ```sql
-SELECT from_xml('<p><time>26/08/2015</time></p>', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));
-```
-
-Result:
-
-```text
+-- from_xml, example 2
+> SELECT from_xml('<p><time>26/08/2015</time></p>', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));
 {"time":2015-08-26 00:00:00}
 ```
 
 ```sql
-SELECT from_xml('<p><teacher>Alice</teacher><student><name>Bob</name><rank>1</rank></student><student><name>Charlie</name><rank>2</rank></student></p>', 'STRUCT<teacher: STRING, student: ARRAY<STRUCT<name: STRING, rank: INT>>>');
-```
-
-Result:
-
-```text
+-- from_xml, example 3
+> SELECT from_xml('<p><teacher>Alice</teacher><student><name>Bob</name><rank>1</rank></student><student><name>Charlie</name><rank>2</rank></student></p>', 'STRUCT<teacher: STRING, student: ARRAY<STRUCT<name: STRING, rank: INT>>>');
 {"teacher":"Alice","student":[{"name":"Bob","rank":1},{"name":"Charlie","rank":2}]}
 ```
 

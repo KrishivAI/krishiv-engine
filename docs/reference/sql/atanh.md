@@ -21,22 +21,14 @@ Returns inverse hyperbolic tangent of `expr`.
 ## Examples
 
 ```sql
-SELECT atanh(0);
-```
-
-Result:
-
-```text
+-- atanh, example 1
+> SELECT atanh(0);
 0.0
 ```
 
 ```sql
-SELECT atanh(2);
-```
-
-Result:
-
-```text
+-- atanh, example 2
+> SELECT atanh(2);
 NaN
 ```
 

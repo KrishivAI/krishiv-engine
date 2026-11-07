@@ -24,12 +24,8 @@ length to the input array.
 ## Examples
 
 ```sql
-SELECT kll_sketch_get_quantile_bigint(kll_sketch_agg_bigint(col), 0.5) > 1 FROM VALUES (1), (2), (3), (4), (5) tab(col);
-```
-
-Result:
-
-```text
-true
+-- kll_sketch_get_quantile_bigint, example 1
+> SELECT kll_sketch_get_quantile_bigint(kll_sketch_agg_bigint(col), 0.5) > 1 FROM VALUES (1), (2), (3), (4), (5) tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

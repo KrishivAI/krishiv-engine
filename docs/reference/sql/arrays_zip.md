@@ -22,22 +22,14 @@ N-th values of input arrays.
 ## Examples
 
 ```sql
-SELECT arrays_zip(array(1, 2, 3), array(2, 3, 4));
-```
-
-Result:
-
-```text
+-- arrays_zip, example 1
+> SELECT arrays_zip(array(1, 2, 3), array(2, 3, 4));
 [{"0":1,"1":2},{"0":2,"1":3},{"0":3,"1":4}]
 ```
 
 ```sql
-SELECT arrays_zip(array(1, 2), array(2, 3), array(3, 4));
-```
-
-Result:
-
-```text
+-- arrays_zip, example 2
+> SELECT arrays_zip(array(1, 2), array(2, 3), array(3, 4));
 [{"0":1,"1":2,"2":3},{"0":2,"1":3,"2":4}]
 ```
 

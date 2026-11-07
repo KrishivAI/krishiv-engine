@@ -21,52 +21,32 @@ Returns true if `expr1` is less than `expr2`.
 ## Examples
 
 ```sql
-SELECT 1 < 2;
-```
-
-Result:
-
-```text
+-- <, example 1
+> SELECT 1 < 2;
 true
 ```
 
 ```sql
-SELECT 1.1 < '1';
-```
-
-Result:
-
-```text
+-- <, example 2
+> SELECT 1.1 < '1';
 false
 ```
 
 ```sql
-SELECT to_date('2009-07-30 04:17:52') < to_date('2009-07-30 04:17:52');
-```
-
-Result:
-
-```text
+-- <, example 3
+> SELECT to_date('2009-07-30 04:17:52') < to_date('2009-07-30 04:17:52');
 false
 ```
 
 ```sql
-SELECT to_date('2009-07-30 04:17:52') < to_date('2009-08-01 04:17:52');
-```
-
-Result:
-
-```text
+-- <, example 4
+> SELECT to_date('2009-07-30 04:17:52') < to_date('2009-08-01 04:17:52');
 true
 ```
 
 ```sql
-SELECT 1 < NULL;
-```
-
-Result:
-
-```text
+-- <, example 5
+> SELECT 1 < NULL;
 NULL
 ```
 

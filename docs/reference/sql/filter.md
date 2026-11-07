@@ -21,32 +21,20 @@ Filters the input array using the given predicate.
 ## Examples
 
 ```sql
-SELECT filter(array(1, 2, 3), x -> x % 2 == 1);
-```
-
-Result:
-
-```text
+-- filter, example 1
+> SELECT filter(array(1, 2, 3), x -> x % 2 == 1);
 [1,3]
 ```
 
 ```sql
-SELECT filter(array(0, 2, 3), (x, i) -> x > i);
-```
-
-Result:
-
-```text
-[2,3]
+-- filter, example 2
+> SELECT filter(array(0, 2, 3), (x, i) -> x > i);
+Error: INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH
 ```
 
 ```sql
-SELECT filter(array(0, null, 2, 3, null), x -> x IS NOT NULL);
-```
-
-Result:
-
-```text
+-- filter, example 3
+> SELECT filter(array(0, null, 2, 3, null), x -> x IS NOT NULL);
 [0,2,3]
 ```
 

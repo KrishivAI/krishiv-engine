@@ -21,12 +21,8 @@ Replaces all occurrences of `search` with `replace`.
 ## Examples
 
 ```sql
-SELECT replace('ABCabc', 'abc', 'DEF');
-```
-
-Result:
-
-```text
+-- replace, example 1
+> SELECT replace('ABCabc', 'abc', 'DEF');
 ABCDEF
 ```
 

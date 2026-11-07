@@ -21,22 +21,14 @@ Creates timestamp from the number of seconds (can be fractional) since UTC epoch
 ## Examples
 
 ```sql
-SELECT timestamp_seconds(1230219000);
-```
-
-Result:
-
-```text
+-- timestamp_seconds, example 1
+> SELECT timestamp_seconds(1230219000);
 2008-12-25 07:30:00
 ```
 
 ```sql
-SELECT timestamp_seconds(1230219000.123);
-```
-
-Result:
-
-```text
+-- timestamp_seconds, example 2
+> SELECT timestamp_seconds(1230219000.123);
 2008-12-25 07:30:00.123
 ```
 

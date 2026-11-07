@@ -22,12 +22,8 @@ Returns the hyperbolic tangent of `expr`, as if computed by
 ## Examples
 
 ```sql
-SELECT tanh(0);
-```
-
-Result:
-
-```text
+-- tanh, example 1
+> SELECT tanh(0);
 0.0
 ```
 

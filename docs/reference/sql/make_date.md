@@ -21,22 +21,14 @@ Create date from year, month and day fields. If the configuration `spark.sql.ans
 ## Examples
 
 ```sql
-SELECT make_date(2013, 7, 15);
-```
-
-Result:
-
-```text
+-- make_date, example 1
+> SELECT make_date(2013, 7, 15);
 2013-07-15
 ```
 
 ```sql
-SELECT make_date(2019, 7, NULL);
-```
-
-Result:
-
-```text
+-- make_date, example 2
+> SELECT make_date(2019, 7, NULL);
 NULL
 ```
 

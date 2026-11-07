@@ -22,22 +22,14 @@ the array as long, or 0 if no match is found.
 ## Examples
 
 ```sql
-SELECT array_position(array(312, 773, 708, 708), 708);
-```
-
-Result:
-
-```text
+-- array_position, example 1
+> SELECT array_position(array(312, 773, 708, 708), 708);
 3
 ```
 
 ```sql
-SELECT array_position(array(312, 773, 708, 708), 414);
-```
-
-Result:
-
-```text
+-- array_position, example 2
+> SELECT array_position(array(312, 773, 708, 708), 414);
 0
 ```
 

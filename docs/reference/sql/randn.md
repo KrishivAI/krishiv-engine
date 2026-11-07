@@ -21,32 +21,20 @@ Returns a random value with independent and identically distributed (i.i.d.) val
 ## Examples
 
 ```sql
-SELECT randn();
-```
-
-Result:
-
-```text
--0.3254147983080288
+-- randn, example 1
+> SELECT randn();
+-- the result differs on every run
 ```
 
 ```sql
-SELECT randn(0);
-```
-
-Result:
-
-```text
+-- randn, example 2
+> SELECT randn(0);
 1.6034991609278433
 ```
 
 ```sql
-SELECT randn(null);
-```
-
-Result:
-
-```text
+-- randn, example 3
+> SELECT randn(null);
 1.6034991609278433
 ```
 

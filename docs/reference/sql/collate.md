@@ -21,12 +21,8 @@ Marks a given expression with the specified collation.
 ## Examples
 
 ```sql
-SELECT COLLATION('Spark SQL' collate UTF8_LCASE);
-```
-
-Result:
-
-```text
+-- collate, example 1
+> SELECT COLLATION('Spark SQL' collate UTF8_LCASE);
 SYSTEM.BUILTIN.UTF8_LCASE
 ```
 

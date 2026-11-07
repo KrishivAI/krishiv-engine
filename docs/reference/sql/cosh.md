@@ -22,12 +22,8 @@ Returns the hyperbolic cosine of `expr`, as if computed by
 ## Examples
 
 ```sql
-SELECT cosh(0);
-```
-
-Result:
-
-```text
+-- cosh, example 1
+> SELECT cosh(0);
 1.0
 ```
 

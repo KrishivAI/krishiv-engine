@@ -25,32 +25,20 @@ to the session time zone.
 ## Examples
 
 ```sql
-SELECT time_bucket(INTERVAL '15' MINUTE, TIMESTAMP '2024-01-01 11:27:00', TIMESTAMP '1970-01-01 00:00:00');
-```
-
-Result:
-
-```text
+-- time_bucket, example 1
+> SELECT time_bucket(INTERVAL '15' MINUTE, TIMESTAMP '2024-01-01 11:27:00', TIMESTAMP '1970-01-01 00:00:00');
 2024-01-01 11:15:00
 ```
 
 ```sql
-SELECT time_bucket(INTERVAL '1' HOUR, TIMESTAMP '2024-01-01 11:27:00');
-```
-
-Result:
-
-```text
+-- time_bucket, example 2
+> SELECT time_bucket(INTERVAL '1' HOUR, TIMESTAMP '2024-01-01 11:27:00');
 2024-01-01 11:00:00
 ```
 
 ```sql
-SELECT time_bucket(INTERVAL '1' MONTH, TIMESTAMP '2024-07-20 14:30:00', TIMESTAMP '2024-06-15 09:00:00');
-```
-
-Result:
-
-```text
+-- time_bucket, example 3
+> SELECT time_bucket(INTERVAL '1' MONTH, TIMESTAMP '2024-07-20 14:30:00', TIMESTAMP '2024-06-15 09:00:00');
 2024-07-15 09:00:00
 ```
 

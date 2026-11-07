@@ -23,22 +23,14 @@ the `fmt` is omitted.
 ## Examples
 
 ```sql
-SELECT to_date('2009-07-30 04:17:52');
-```
-
-Result:
-
-```text
+-- to_date, example 1
+> SELECT to_date('2009-07-30 04:17:52');
 2009-07-30
 ```
 
 ```sql
-SELECT to_date('2016-12-31', 'yyyy-MM-dd');
-```
-
-Result:
-
-```text
+-- to_date, example 2
+> SELECT to_date('2016-12-31', 'yyyy-MM-dd');
 2016-12-31
 ```
 

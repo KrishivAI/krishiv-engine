@@ -21,12 +21,8 @@ Returns the bitwise OR of all non-null input values, or null if none.
 ## Examples
 
 ```sql
-SELECT bit_or(col) FROM VALUES (3), (5) AS tab(col);
-```
-
-Result:
-
-```text
+-- bit_or, example 1
+> SELECT bit_or(col) FROM VALUES (3), (5) AS tab(col);
 7
 ```
 

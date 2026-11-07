@@ -21,6 +21,8 @@ Returns the name of the file being read, or empty string if not available.
 ## Examples
 
 ```sql
-SELECT input_file_name();
+-- input_file_name, example 1
+> SELECT input_file_name();
+
 ```
 

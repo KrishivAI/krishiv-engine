@@ -21,32 +21,20 @@ Logical not.
 ## Examples
 
 ```sql
-SELECT ! true;
-```
-
-Result:
-
-```text
+-- !, example 1
+> SELECT ! true;
 false
 ```
 
 ```sql
-SELECT ! false;
-```
-
-Result:
-
-```text
+-- !, example 2
+> SELECT ! false;
 true
 ```
 
 ```sql
-SELECT ! NULL;
-```
-
-Result:
-
-```text
+-- !, example 3
+> SELECT ! NULL;
 NULL
 ```
 

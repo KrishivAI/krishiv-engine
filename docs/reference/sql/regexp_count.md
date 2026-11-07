@@ -21,22 +21,14 @@ Returns a count of the number of times that the regular expression pattern `rege
 ## Examples
 
 ```sql
-SELECT regexp_count('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');
-```
-
-Result:
-
-```text
+-- regexp_count, example 1
+> SELECT regexp_count('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');
 2
 ```
 
 ```sql
-SELECT regexp_count('abcdefghijklmnopqrstuvwxyz', '[a-z]{3}');
-```
-
-Result:
-
-```text
+-- regexp_count, example 2
+> SELECT regexp_count('abcdefghijklmnopqrstuvwxyz', '[a-z]{3}');
 8
 ```
 

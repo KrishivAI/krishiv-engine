@@ -23,52 +23,32 @@ Both left or right must be of STRING or BINARY type.
 ## Examples
 
 ```sql
-SELECT endswith('Spark SQL', 'SQL');
-```
-
-Result:
-
-```text
+-- endswith, example 1
+> SELECT endswith('Spark SQL', 'SQL');
 true
 ```
 
 ```sql
-SELECT endswith('Spark SQL', 'Spark');
-```
-
-Result:
-
-```text
+-- endswith, example 2
+> SELECT endswith('Spark SQL', 'Spark');
 false
 ```
 
 ```sql
-SELECT endswith('Spark SQL', null);
-```
-
-Result:
-
-```text
+-- endswith, example 3
+> SELECT endswith('Spark SQL', null);
 NULL
 ```
 
 ```sql
-SELECT endswith(x'537061726b2053514c', x'537061726b');
-```
-
-Result:
-
-```text
+-- endswith, example 4
+> SELECT endswith(x'537061726b2053514c', x'537061726b');
 false
 ```
 
 ```sql
-SELECT endswith(x'537061726b2053514c', x'53514c');
-```
-
-Result:
-
-```text
+-- endswith, example 5
+> SELECT endswith(x'537061726b2053514c', x'53514c');
 true
 ```
 

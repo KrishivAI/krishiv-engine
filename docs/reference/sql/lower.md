@@ -21,12 +21,8 @@ Returns `str` with all characters changed to lowercase.
 ## Examples
 
 ```sql
-SELECT lower('SparkSql');
-```
-
-Result:
-
-```text
+-- lower, example 1
+> SELECT lower('SparkSql');
 sparksql
 ```
 

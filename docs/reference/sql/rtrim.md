@@ -21,12 +21,8 @@ Removes the trailing space characters from `str`.
 ## Examples
 
 ```sql
-SELECT rtrim('    SparkSQL   ');
-```
-
-Result:
-
-```text
-SparkSQL
+-- rtrim, example 1
+> SELECT rtrim('    SparkSQL   ');
+    SparkSQL
 ```
 

@@ -21,12 +21,8 @@ Returns the three-letter abbreviated month name from the given date.
 ## Examples
 
 ```sql
-SELECT monthname('2008-02-20');
-```
-
-Result:
-
-```text
+-- monthname, example 1
+> SELECT monthname('2008-02-20');
 Feb
 ```
 

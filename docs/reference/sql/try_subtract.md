@@ -21,62 +21,38 @@ Returns `expr1`-`expr2` and the result is null on overflow. The acceptable input
 ## Examples
 
 ```sql
-SELECT try_subtract(2, 1);
-```
-
-Result:
-
-```text
+-- try_subtract, example 1
+> SELECT try_subtract(2, 1);
 1
 ```
 
 ```sql
-SELECT try_subtract(-2147483648, 1);
-```
-
-Result:
-
-```text
+-- try_subtract, example 2
+> SELECT try_subtract(-2147483648, 1);
 NULL
 ```
 
 ```sql
-SELECT try_subtract(date'2021-01-02', 1);
-```
-
-Result:
-
-```text
+-- try_subtract, example 3
+> SELECT try_subtract(date'2021-01-02', 1);
 2021-01-01
 ```
 
 ```sql
-SELECT try_subtract(date'2021-01-01', interval 1 year);
-```
-
-Result:
-
-```text
+-- try_subtract, example 4
+> SELECT try_subtract(date'2021-01-01', interval 1 year);
 2020-01-01
 ```
 
 ```sql
-SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day);
-```
-
-Result:
-
-```text
+-- try_subtract, example 5
+> SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day);
 2021-01-01 00:00:00
 ```
 
 ```sql
-SELECT try_subtract(interval 2 year, interval 1 year);
-```
-
-Result:
-
-```text
+-- try_subtract, example 6
+> SELECT try_subtract(interval 2 year, interval 1 year);
 1-0
 ```
 

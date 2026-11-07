@@ -21,32 +21,20 @@ Splits `str` into an array of array of words.
 ## Examples
 
 ```sql
-SELECT sentences('Hi there! Good morning.');
-```
-
-Result:
-
-```text
-[["Hi","there"],["Good","morning"]]
+-- sentences, example 1
+> SELECT sentences('Hi there! Good morning.');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT sentences('Hi there! Good morning.', 'en');
-```
-
-Result:
-
-```text
-[["Hi","there"],["Good","morning"]]
+-- sentences, example 2
+> SELECT sentences('Hi there! Good morning.', 'en');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT sentences('Hi there! Good morning.', 'en', 'US');
-```
-
-Result:
-
-```text
-[["Hi","there"],["Good","morning"]]
+-- sentences, example 3
+> SELECT sentences('Hi there! Good morning.', 'en', 'US');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

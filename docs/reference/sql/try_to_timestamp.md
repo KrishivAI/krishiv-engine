@@ -24,32 +24,20 @@ The result data type is consistent with the value of configuration `spark.sql.ti
 ## Examples
 
 ```sql
-SELECT try_to_timestamp('2016-12-31 00:12:00');
-```
-
-Result:
-
-```text
+-- try_to_timestamp, example 1
+> SELECT try_to_timestamp('2016-12-31 00:12:00');
 2016-12-31 00:12:00
 ```
 
 ```sql
-SELECT try_to_timestamp('2016-12-31', 'yyyy-MM-dd');
-```
-
-Result:
-
-```text
+-- try_to_timestamp, example 2
+> SELECT try_to_timestamp('2016-12-31', 'yyyy-MM-dd');
 2016-12-31 00:00:00
 ```
 
 ```sql
-SELECT try_to_timestamp('foo', 'yyyy-MM-dd');
-```
-
-Result:
-
-```text
+-- try_to_timestamp, example 3
+> SELECT try_to_timestamp('foo', 'yyyy-MM-dd');
 NULL
 ```
 

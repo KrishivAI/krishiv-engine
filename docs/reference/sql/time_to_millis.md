@@ -21,42 +21,26 @@ Returns the number of milliseconds since midnight for the given TIME value.
 ## Examples
 
 ```sql
-SELECT time_to_millis(TIME'00:00:00');
-```
-
-Result:
-
-```text
+-- time_to_millis, example 1
+> SELECT time_to_millis(TIME'00:00:00');
 0
 ```
 
 ```sql
-SELECT time_to_millis(TIME'14:30:00');
-```
-
-Result:
-
-```text
+-- time_to_millis, example 2
+> SELECT time_to_millis(TIME'14:30:00');
 52200000
 ```
 
 ```sql
-SELECT time_to_millis(TIME'14:30:00.5');
-```
-
-Result:
-
-```text
+-- time_to_millis, example 3
+> SELECT time_to_millis(TIME'14:30:00.5');
 52200500
 ```
 
 ```sql
-SELECT time_to_millis(TIME'23:59:59.999');
-```
-
-Result:
-
-```text
+-- time_to_millis, example 4
+> SELECT time_to_millis(TIME'23:59:59.999');
 86399999
 ```
 

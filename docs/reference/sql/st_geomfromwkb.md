@@ -21,42 +21,26 @@ Parses the WKB description of a geometry and returns the corresponding GEOMETRY 
 ## Examples
 
 ```sql
-SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040')));
-```
-
-Result:
-
-```text
+-- st_geomfromwkb, example 1
+> SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040')));
 0101000000000000000000F03F0000000000000040
 ```
 
 ```sql
-SELECT st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'));
-```
-
-Result:
-
-```text
+-- st_geomfromwkb, example 2
+> SELECT st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'));
 0
 ```
 
 ```sql
-SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 4326)));
-```
-
-Result:
-
-```text
+-- st_geomfromwkb, example 3
+> SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 4326)));
 0101000000000000000000F03F0000000000000040
 ```
 
 ```sql
-SELECT st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 4326));
-```
-
-Result:
-
-```text
+-- st_geomfromwkb, example 4
+> SELECT st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 4326));
 4326
 ```
 

@@ -21,22 +21,14 @@ Bitwise (signed) right shift.
 ## Examples
 
 ```sql
-SELECT shiftright(4, 1);
-```
-
-Result:
-
-```text
+-- >>, example 1
+> SELECT shiftright(4, 1);
 2
 ```
 
 ```sql
-SELECT 4 >> 1;
-```
-
-Result:
-
-```text
+-- >>, example 2
+> SELECT 4 >> 1;
 2
 ```
 

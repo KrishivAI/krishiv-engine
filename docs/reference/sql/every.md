@@ -21,32 +21,20 @@ Returns true if all values of `expr` are true.
 ## Examples
 
 ```sql
-SELECT every(col) FROM VALUES (true), (true), (true) AS tab(col);
-```
-
-Result:
-
-```text
+-- every, example 1
+> SELECT every(col) FROM VALUES (true), (true), (true) AS tab(col);
 true
 ```
 
 ```sql
-SELECT every(col) FROM VALUES (NULL), (true), (true) AS tab(col);
-```
-
-Result:
-
-```text
+-- every, example 2
+> SELECT every(col) FROM VALUES (NULL), (true), (true) AS tab(col);
 true
 ```
 
 ```sql
-SELECT every(col) FROM VALUES (true), (false), (true) AS tab(col);
-```
-
-Result:
-
-```text
+-- every, example 3
+> SELECT every(col) FROM VALUES (true), (false), (true) AS tab(col);
 false
 ```
 

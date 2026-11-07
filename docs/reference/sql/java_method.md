@@ -21,22 +21,14 @@ Calls a method with reflection.
 ## Examples
 
 ```sql
-SELECT java_method('java.util.UUID', 'randomUUID');
-```
-
-Result:
-
-```text
-c33fb387-8500-4bfa-81d2-6e0e3e930df2
+-- java_method, example 1
+> SELECT java_method('java.util.UUID', 'randomUUID');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT java_method('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');
-```
-
-Result:
-
-```text
-a5cf6c42-0c85-418f-af6c-3e4e5b1328f2
+-- java_method, example 2
+> SELECT java_method('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

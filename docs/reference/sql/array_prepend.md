@@ -24,32 +24,20 @@ output is NULL
 ## Examples
 
 ```sql
-SELECT array_prepend(array('b', 'd', 'c', 'a'), 'd');
-```
-
-Result:
-
-```text
+-- array_prepend, example 1
+> SELECT array_prepend(array('b', 'd', 'c', 'a'), 'd');
 ["d","b","d","c","a"]
 ```
 
 ```sql
-SELECT array_prepend(array(1, 2, 3, null), null);
-```
-
-Result:
-
-```text
+-- array_prepend, example 2
+> SELECT array_prepend(array(1, 2, 3, null), null);
 [null,1,2,3,null]
 ```
 
 ```sql
-SELECT array_prepend(CAST(null as Array<Int>), 2);
-```
-
-Result:
-
-```text
+-- array_prepend, example 3
+> SELECT array_prepend(CAST(null as Array<Int>), 2);
 NULL
 ```
 

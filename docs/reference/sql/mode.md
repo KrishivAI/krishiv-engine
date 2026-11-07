@@ -25,82 +25,50 @@ mode() WITHIN GROUP (ORDER BY col) - Returns the most frequent value for the val
 ## Examples
 
 ```sql
-SELECT mode(col) FROM VALUES (0), (10), (10) AS tab(col);
-```
-
-Result:
-
-```text
+-- mode, example 1
+> SELECT mode(col) FROM VALUES (0), (10), (10) AS tab(col);
 10
 ```
 
 ```sql
-SELECT mode(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-```
-
-Result:
-
-```text
+-- mode, example 2
+> SELECT mode(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH), (INTERVAL '10' MONTH) AS tab(col);
 0-10
 ```
 
 ```sql
-SELECT mode(col) FROM VALUES (0), (10), (10), (null), (null), (null) AS tab(col);
-```
-
-Result:
-
-```text
+-- mode, example 3
+> SELECT mode(col) FROM VALUES (0), (10), (10), (null), (null), (null) AS tab(col);
 10
 ```
 
 ```sql
-SELECT mode(col, false) FROM VALUES (-10), (0), (10) AS tab(col);
-```
-
-Result:
-
-```text
+-- mode, example 4
+> SELECT mode(col, false) FROM VALUES (-10), (0), (10) AS tab(col);
 0
 ```
 
 ```sql
-SELECT mode(col, true) FROM VALUES (-10), (0), (10) AS tab(col);
-```
-
-Result:
-
-```text
+-- mode, example 5
+> SELECT mode(col, true) FROM VALUES (-10), (0), (10) AS tab(col);
 -10
 ```
 
 ```sql
-SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10) AS tab(col);
-```
-
-Result:
-
-```text
+-- mode, example 6
+> SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10) AS tab(col);
 10
 ```
 
 ```sql
-SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);
-```
-
-Result:
-
-```text
+-- mode, example 7
+> SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);
 10
 ```
 
 ```sql
-SELECT mode() WITHIN GROUP (ORDER BY col DESC) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);
-```
-
-Result:
-
-```text
+-- mode, example 8
+> SELECT mode() WITHIN GROUP (ORDER BY col DESC) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);
 20
 ```
 

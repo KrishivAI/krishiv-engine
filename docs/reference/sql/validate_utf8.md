@@ -21,22 +21,14 @@ Returns the original string if `str` is a valid UTF-8 string, otherwise throws a
 ## Examples
 
 ```sql
-SELECT validate_utf8('Spark');
-```
-
-Result:
-
-```text
+-- validate_utf8, example 1
+> SELECT validate_utf8('Spark');
 Spark
 ```
 
 ```sql
-SELECT validate_utf8(x'61');
-```
-
-Result:
-
-```text
+-- validate_utf8, example 2
+> SELECT validate_utf8(x'61');
 a
 ```
 

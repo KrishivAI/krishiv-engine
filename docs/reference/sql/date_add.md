@@ -21,12 +21,8 @@ Returns the date that is `num_days` after `start_date`.
 ## Examples
 
 ```sql
-SELECT date_add('2016-07-30', 1);
-```
-
-Result:
-
-```text
+-- date_add, example 1
+> SELECT date_add('2016-07-30', 1);
 2016-07-31
 ```
 

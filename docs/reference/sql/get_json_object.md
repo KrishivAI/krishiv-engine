@@ -21,32 +21,20 @@ Extracts a json object from `path`.
 ## Examples
 
 ```sql
-SELECT get_json_object('{"a":"b"}', '$.a');
-```
-
-Result:
-
-```text
+-- get_json_object, example 1
+> SELECT get_json_object('{"a":"b"}', '$.a');
 b
 ```
 
 ```sql
-SELECT get_json_object('[{"a":"b"},{"a":"c"}]', '$[0].a');
-```
-
-Result:
-
-```text
+-- get_json_object, example 2
+> SELECT get_json_object('[{"a":"b"},{"a":"c"}]', '$[0].a');
 b
 ```
 
 ```sql
-SELECT get_json_object('[{"a":"b"},{"a":"c"}]', '$[*].a');
-```
-
-Result:
-
-```text
+-- get_json_object, example 3
+> SELECT get_json_object('[{"a":"b"},{"a":"c"}]', '$[*].a');
 ["b","c"]
 ```
 

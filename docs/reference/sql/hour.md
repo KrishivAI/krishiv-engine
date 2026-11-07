@@ -25,22 +25,14 @@ If `expr` is a TIME type (since 4.1.0), it returns the hour of the time-of-day.
 ## Examples
 
 ```sql
-SELECT hour('2018-02-14 12:58:59');
-```
-
-Result:
-
-```text
+-- hour, example 1
+> SELECT hour('2018-02-14 12:58:59');
 12
 ```
 
 ```sql
-SELECT hour(TIME'13:59:59.999999');
-```
-
-Result:
-
-```text
+-- hour, example 2
+> SELECT hour(TIME'13:59:59.999999');
 13
 ```
 

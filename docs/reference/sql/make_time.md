@@ -21,22 +21,14 @@ Create time from hour, minute and second fields. For invalid inputs it will thro
 ## Examples
 
 ```sql
-SELECT make_time(6, 30, 45.887);
-```
-
-Result:
-
-```text
+-- make_time, example 1
+> SELECT make_time(6, 30, 45.887);
 06:30:45.887
 ```
 
 ```sql
-SELECT make_time(NULL, 30, 0);
-```
-
-Result:
-
-```text
+-- make_time, example 2
+> SELECT make_time(NULL, 30, 0);
 NULL
 ```
 

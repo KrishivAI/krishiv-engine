@@ -21,12 +21,8 @@ Returns exp(`expr`) - 1.
 ## Examples
 
 ```sql
-SELECT expm1(0);
-```
-
-Result:
-
-```text
+-- expm1, example 1
+> SELECT expm1(0);
 0.0
 ```
 

@@ -21,12 +21,8 @@ Returns the sample standard deviation calculated from values of a group.
 ## Examples
 
 ```sql
-SELECT stddev(col) FROM VALUES (1), (2), (3) AS tab(col);
-```
-
-Result:
-
-```text
+-- stddev, example 1
+> SELECT stddev(col) FROM VALUES (1), (2), (3) AS tab(col);
 1.0
 ```
 

@@ -21,22 +21,14 @@ Returns the remainder after `expr1`/`expr2`.
 ## Examples
 
 ```sql
-SELECT 2 % 1.8;
-```
-
-Result:
-
-```text
+-- %, example 1
+> SELECT 2 % 1.8;
 0.2
 ```
 
 ```sql
-SELECT MOD(2, 1.8);
-```
-
-Result:
-
-```text
+-- %, example 2
+> SELECT MOD(2, 1.8);
 0.2
 ```
 

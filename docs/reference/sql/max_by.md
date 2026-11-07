@@ -24,22 +24,14 @@ Returns NULL if there are no non-NULL ordering values.
 ## Examples
 
 ```sql
-SELECT max_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
-```
-
-Result:
-
-```text
+-- max_by, example 1
+> SELECT max_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
 b
 ```
 
 ```sql
-SELECT max_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
-```
-
-Result:
-
-```text
+-- max_by, example 2
+> SELECT max_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
 ["b","c"]
 ```
 

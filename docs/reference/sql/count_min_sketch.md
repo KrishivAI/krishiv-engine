@@ -24,12 +24,8 @@ cardinality estimation using sub-linear space.
 ## Examples
 
 ```sql
-SELECT hex(count_min_sketch(col, 0.5d, 0.5d, 1)) FROM VALUES (1), (2), (1) AS tab(col);
-```
-
-Result:
-
-```text
-0000000100000000000000030000000100000004000000005D8D6AB90000000000000000000000000000000200000000000000010000000000000000
+-- count_min_sketch, example 1
+> SELECT hex(count_min_sketch(col, 0.5d, 0.5d, 1)) FROM VALUES (1), (2), (1) AS tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

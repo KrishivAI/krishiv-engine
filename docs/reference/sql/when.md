@@ -21,32 +21,20 @@ When `expr1` = true, returns `expr2`; else when `expr3` = true, returns `expr4`;
 ## Examples
 
 ```sql
-SELECT CASE WHEN 1 > 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END;
-```
-
-Result:
-
-```text
+-- when, example 1
+> SELECT CASE WHEN 1 > 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END;
 1.0
 ```
 
 ```sql
-SELECT CASE WHEN 1 < 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END;
-```
-
-Result:
-
-```text
+-- when, example 2
+> SELECT CASE WHEN 1 < 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END;
 2.0
 ```
 
 ```sql
-SELECT CASE WHEN 1 < 0 THEN 1 WHEN 2 < 0 THEN 2.0 END;
-```
-
-Result:
-
-```text
+-- when, example 3
+> SELECT CASE WHEN 1 < 0 THEN 1 WHEN 2 < 0 THEN 2.0 END;
 NULL
 ```
 

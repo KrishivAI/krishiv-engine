@@ -21,32 +21,20 @@ Merges the two given arrays, element-wise, into a single array using function. I
 ## Examples
 
 ```sql
-SELECT zip_with(array(1, 2, 3), array('a', 'b', 'c'), (x, y) -> (y, x));
-```
-
-Result:
-
-```text
+-- zip_with, example 1
+> SELECT zip_with(array(1, 2, 3), array('a', 'b', 'c'), (x, y) -> (y, x));
 [{"y":"a","x":1},{"y":"b","x":2},{"y":"c","x":3}]
 ```
 
 ```sql
-SELECT zip_with(array(1, 2), array(3, 4), (x, y) -> x + y);
-```
-
-Result:
-
-```text
+-- zip_with, example 2
+> SELECT zip_with(array(1, 2), array(3, 4), (x, y) -> x + y);
 [4,6]
 ```
 
 ```sql
-SELECT zip_with(array('a', 'b', 'c'), array('d', 'e', 'f'), (x, y) -> concat(x, y));
-```
-
-Result:
-
-```text
+-- zip_with, example 3
+> SELECT zip_with(array('a', 'b', 'c'), array('d', 'e', 'f'), (x, y) -> concat(x, y));
 ["ad","be","cf"]
 ```
 

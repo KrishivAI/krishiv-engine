@@ -22,22 +22,14 @@ Accumulates items into a sketch.
 ## Examples
 
 ```sql
-SELECT approx_top_k_estimate(approx_top_k_accumulate(expr)) FROM VALUES (0), (0), (1), (1), (2), (3), (4), (4) AS tab(expr);
-```
-
-Result:
-
-```text
-[{"item":0,"count":2},{"item":4,"count":2},{"item":1,"count":2},{"item":2,"count":1},{"item":3,"count":1}]
+-- approx_top_k_accumulate, example 1
+> SELECT approx_top_k_estimate(approx_top_k_accumulate(expr)) FROM VALUES (0), (0), (1), (1), (2), (3), (4), (4) AS tab(expr);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT approx_top_k_estimate(approx_top_k_accumulate(expr, 100), 2) FROM VALUES 'a', 'b', 'c', 'c', 'c', 'c', 'd', 'd' AS tab(expr);
-```
-
-Result:
-
-```text
-[{"item":"c","count":4},{"item":"d","count":2}]
+-- approx_top_k_accumulate, example 2
+> SELECT approx_top_k_estimate(approx_top_k_accumulate(expr, 100), 2) FROM VALUES 'a', 'b', 'c', 'c', 'c', 'c', 'd', 'd' AS tab(expr);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

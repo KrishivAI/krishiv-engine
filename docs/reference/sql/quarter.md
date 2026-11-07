@@ -21,12 +21,8 @@ Returns the quarter of the year for date, in the range 1 to 4.
 ## Examples
 
 ```sql
-SELECT quarter('2016-08-31');
-```
-
-Result:
-
-```text
+-- quarter, example 1
+> SELECT quarter('2016-08-31');
 3
 ```
 

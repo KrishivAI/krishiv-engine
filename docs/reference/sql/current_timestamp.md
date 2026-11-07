@@ -23,22 +23,14 @@ current_timestamp - Returns the current timestamp at the start of query evaluati
 ## Examples
 
 ```sql
-SELECT current_timestamp();
-```
-
-Result:
-
-```text
-2020-04-25 15:49:11.914
+-- current_timestamp, example 1
+> SELECT current_timestamp();
+-- the result differs on every run
 ```
 
 ```sql
-SELECT current_timestamp;
-```
-
-Result:
-
-```text
-2020-04-25 15:49:11.914
+-- current_timestamp, example 2
+> SELECT current_timestamp;
+-- the result differs on every run
 ```
 

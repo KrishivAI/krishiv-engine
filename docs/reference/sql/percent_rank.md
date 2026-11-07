@@ -21,15 +21,11 @@ Computes the percentage ranking of a value in a group of values.
 ## Examples
 
 ```sql
-SELECT a, b, percent_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
-```
-
-Result:
-
-```text
-A1	1	0.0
-A1	1	0.0
-A1	2	1.0
-A2	3	0.0
+-- percent_rank, example 1
+> SELECT a, b, percent_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+A1 | 1 | 0.0
+A1 | 1 | 0.0
+A1 | 2 | 1.0
+A2 | 3 | 0.0
 ```
 

@@ -21,32 +21,20 @@ Make interval from years, months, weeks, days, hours, mins and secs.
 ## Examples
 
 ```sql
-SELECT make_interval(100, 11, 1, 1, 12, 30, 01.001001);
-```
-
-Result:
-
-```text
+-- make_interval, example 1
+> SELECT make_interval(100, 11, 1, 1, 12, 30, 01.001001);
 100 years 11 months 8 days 12 hours 30 minutes 1.001001 seconds
 ```
 
 ```sql
-SELECT make_interval(100, null, 3);
-```
-
-Result:
-
-```text
+-- make_interval, example 2
+> SELECT make_interval(100, null, 3);
 NULL
 ```
 
 ```sql
-SELECT make_interval(0, 1, 0, 1, 0, 0, 100.000001);
-```
-
-Result:
-
-```text
+-- make_interval, example 3
+> SELECT make_interval(0, 1, 0, 1, 0, 0, 100.000001);
 1 months 1 days 1 minutes 40.000001 seconds
 ```
 

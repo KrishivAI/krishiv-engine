@@ -22,12 +22,8 @@ array2, without duplicates.
 ## Examples
 
 ```sql
-SELECT array_intersect(array(1, 2, 3), array(1, 3, 5));
-```
-
-Result:
-
-```text
+-- array_intersect, example 1
+> SELECT array_intersect(array(1, 2, 3), array(1, 3, 5));
 [1,3]
 ```
 

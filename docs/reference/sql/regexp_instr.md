@@ -21,22 +21,14 @@ Searches a string for a regular expression and returns an integer that indicates
 ## Examples
 
 ```sql
-SELECT regexp_instr(r"\abc", r"^\\abc$");
-```
-
-Result:
-
-```text
+-- regexp_instr, example 1
+> SELECT regexp_instr(r"\abc", r"^\\abc$");
 1
 ```
 
 ```sql
-SELECT regexp_instr('user@spark.apache.org', '@[^.]*');
-```
-
-Result:
-
-```text
+-- regexp_instr, example 2
+> SELECT regexp_instr('user@spark.apache.org', '@[^.]*');
 5
 ```
 

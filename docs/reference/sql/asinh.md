@@ -21,12 +21,8 @@ Returns inverse hyperbolic sine of `expr`.
 ## Examples
 
 ```sql
-SELECT asinh(0);
-```
-
-Result:
-
-```text
+-- asinh, example 1
+> SELECT asinh(0);
 0.0
 ```
 

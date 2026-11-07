@@ -21,12 +21,8 @@ expr2 - Returns `expr1`-`expr2`.
 ## Examples
 
 ```sql
-SELECT 2 - 1;
-```
-
-Result:
-
-```text
+-- -, example 1
+> SELECT 2 - 1;
 1
 ```
 

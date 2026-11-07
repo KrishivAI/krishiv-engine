@@ -23,12 +23,8 @@ The sketch's summary type must be an integer.
 ## Examples
 
 ```sql
-SELECT tuple_sketch_theta_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (2, 2), (3, 3) tab(key, summary);
-```
-
-Result:
-
-```text
-1.0
+-- tuple_sketch_theta_integer, example 1
+> SELECT tuple_sketch_theta_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (2, 2), (3, 3) tab(key, summary);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

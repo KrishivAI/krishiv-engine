@@ -21,12 +21,8 @@ Returns a string consisting of `n` spaces.
 ## Examples
 
 ```sql
-SELECT concat(space(2), '1');
-```
-
-Result:
-
-```text
-1
+-- space, example 1
+> SELECT concat(space(2), '1');
+  1
 ```
 

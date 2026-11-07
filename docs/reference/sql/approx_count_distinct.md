@@ -22,12 +22,8 @@ Returns the estimated cardinality by HyperLogLog++.
 ## Examples
 
 ```sql
-SELECT approx_count_distinct(col1) FROM VALUES (1), (1), (2), (2), (3) tab(col1);
-```
-
-Result:
-
-```text
+-- approx_count_distinct, example 1
+> SELECT approx_count_distinct(col1) FROM VALUES (1), (1), (2), (2), (3) tab(col1);
 3
 ```
 

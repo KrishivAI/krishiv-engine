@@ -23,52 +23,32 @@ same semantics as the to_number function.
 ## Examples
 
 ```sql
-SELECT try_to_number('454', '999');
-```
-
-Result:
-
-```text
+-- try_to_number, example 1
+> SELECT try_to_number('454', '999');
 454
 ```
 
 ```sql
-SELECT try_to_number('454.00', '000.00');
-```
-
-Result:
-
-```text
+-- try_to_number, example 2
+> SELECT try_to_number('454.00', '000.00');
 454.00
 ```
 
 ```sql
-SELECT try_to_number('12,454', '99,999');
-```
-
-Result:
-
-```text
+-- try_to_number, example 3
+> SELECT try_to_number('12,454', '99,999');
 12454
 ```
 
 ```sql
-SELECT try_to_number('$78.12', '$99.99');
-```
-
-Result:
-
-```text
+-- try_to_number, example 4
+> SELECT try_to_number('$78.12', '$99.99');
 78.12
 ```
 
 ```sql
-SELECT try_to_number('12,454.8-', '99,999.9S');
-```
-
-Result:
-
-```text
+-- try_to_number, example 5
+> SELECT try_to_number('12,454.8-', '99,999.9S');
 -12454.8
 ```
 

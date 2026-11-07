@@ -21,12 +21,8 @@ Returns the current database.
 ## Examples
 
 ```sql
-SELECT current_schema();
-```
-
-Result:
-
-```text
+-- current_schema, example 1
+> SELECT current_schema();
 default
 ```
 

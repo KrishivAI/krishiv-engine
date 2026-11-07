@@ -22,42 +22,26 @@ but returns true if both are null, false if one of the them is null.
 ## Examples
 
 ```sql
-SELECT 2 <=> 2;
-```
-
-Result:
-
-```text
+-- <=>, example 1
+> SELECT 2 <=> 2;
 true
 ```
 
 ```sql
-SELECT 1 <=> '1';
-```
-
-Result:
-
-```text
+-- <=>, example 2
+> SELECT 1 <=> '1';
 true
 ```
 
 ```sql
-SELECT true <=> NULL;
-```
-
-Result:
-
-```text
+-- <=>, example 3
+> SELECT true <=> NULL;
 false
 ```
 
 ```sql
-SELECT NULL <=> NULL;
-```
-
-Result:
-
-```text
+-- <=>, example 4
+> SELECT NULL <=> NULL;
 true
 ```
 

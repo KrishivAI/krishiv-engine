@@ -21,82 +21,50 @@ Returns a JSON string with a given struct value
 ## Examples
 
 ```sql
-SELECT to_json(named_struct('a', 1, 'b', 2));
-```
-
-Result:
-
-```text
+-- to_json, example 1
+> SELECT to_json(named_struct('a', 1, 'b', 2));
 {"a":1,"b":2}
 ```
 
 ```sql
-SELECT to_json(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));
-```
-
-Result:
-
-```text
+-- to_json, example 2
+> SELECT to_json(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));
 {"time":"26/08/2015"}
 ```
 
 ```sql
-SELECT to_json(array(named_struct('a', 1, 'b', 2)));
-```
-
-Result:
-
-```text
+-- to_json, example 3
+> SELECT to_json(array(named_struct('a', 1, 'b', 2)));
 [{"a":1,"b":2}]
 ```
 
 ```sql
-SELECT to_json(map('a', named_struct('b', 1)));
-```
-
-Result:
-
-```text
+-- to_json, example 4
+> SELECT to_json(map('a', named_struct('b', 1)));
 {"a":{"b":1}}
 ```
 
 ```sql
-SELECT to_json(map(named_struct('a', 1),named_struct('b', 2)));
-```
-
-Result:
-
-```text
+-- to_json, example 5
+> SELECT to_json(map(named_struct('a', 1),named_struct('b', 2)));
 {"[1]":{"b":2}}
 ```
 
 ```sql
-SELECT to_json(map('a', 1));
-```
-
-Result:
-
-```text
+-- to_json, example 6
+> SELECT to_json(map('a', 1));
 {"a":1}
 ```
 
 ```sql
-SELECT to_json(array(map('a', 1)));
-```
-
-Result:
-
-```text
+-- to_json, example 7
+> SELECT to_json(array(map('a', 1)));
 [{"a":1}]
 ```
 
 ```sql
-SELECT to_json(named_struct('b', 1, 'a', 2), map('sortKeys', 'true'));
-```
-
-Result:
-
-```text
+-- to_json, example 8
+> SELECT to_json(named_struct('b', 1, 'a', 2), map('sortKeys', 'true'));
 {"a":2,"b":1}
 ```
 

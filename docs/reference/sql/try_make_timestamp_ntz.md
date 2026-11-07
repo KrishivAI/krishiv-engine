@@ -23,52 +23,32 @@ try_make_timestamp_ntz(date, time) - Create a local date-time from date and time
 ## Examples
 
 ```sql
-SELECT try_make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887);
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ntz, example 1
+> SELECT try_make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887);
 2014-12-28 06:30:45.887
 ```
 
 ```sql
-SELECT try_make_timestamp_ntz(2019, 6, 30, 23, 59, 60);
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ntz, example 2
+> SELECT try_make_timestamp_ntz(2019, 6, 30, 23, 59, 60);
 2019-07-01 00:00:00
 ```
 
 ```sql
-SELECT try_make_timestamp_ntz(null, 7, 22, 15, 30, 0);
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ntz, example 3
+> SELECT try_make_timestamp_ntz(null, 7, 22, 15, 30, 0);
 NULL
 ```
 
 ```sql
-SELECT try_make_timestamp_ntz(2024, 13, 22, 15, 30, 0);
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ntz, example 4
+> SELECT try_make_timestamp_ntz(2024, 13, 22, 15, 30, 0);
 NULL
 ```
 
 ```sql
-SELECT try_make_timestamp_ntz(DATE'2014-12-28', TIME'6:30:45.887');
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ntz, example 5
+> SELECT try_make_timestamp_ntz(DATE'2014-12-28', TIME'6:30:45.887');
 2014-12-28 06:30:45.887
 ```
 

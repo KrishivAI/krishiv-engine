@@ -21,22 +21,14 @@ Transforms elements in an array using the function.
 ## Examples
 
 ```sql
-SELECT transform(array(1, 2, 3), x -> x + 1);
-```
-
-Result:
-
-```text
+-- transform, example 1
+> SELECT transform(array(1, 2, 3), x -> x + 1);
 [2,3,4]
 ```
 
 ```sql
-SELECT transform(array(1, 2, 3), (x, i) -> x + i);
-```
-
-Result:
-
-```text
+-- transform, example 2
+> SELECT transform(array(1, 2, 3), (x, i) -> x + i);
 [1,3,5]
 ```
 

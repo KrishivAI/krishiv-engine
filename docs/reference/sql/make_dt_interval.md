@@ -21,32 +21,20 @@ Make DayTimeIntervalType duration from days, hours, mins and secs.
 ## Examples
 
 ```sql
-SELECT make_dt_interval(1, 12, 30, 01.001001);
-```
-
-Result:
-
-```text
+-- make_dt_interval, example 1
+> SELECT make_dt_interval(1, 12, 30, 01.001001);
 1 12:30:01.001001000
 ```
 
 ```sql
-SELECT make_dt_interval(2);
-```
-
-Result:
-
-```text
+-- make_dt_interval, example 2
+> SELECT make_dt_interval(2);
 2 00:00:00.000000000
 ```
 
 ```sql
-SELECT make_dt_interval(100, null, 3);
-```
-
-Result:
-
-```text
+-- make_dt_interval, example 3
+> SELECT make_dt_interval(100, null, 3);
 NULL
 ```
 

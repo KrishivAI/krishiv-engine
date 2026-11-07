@@ -21,12 +21,8 @@ Returns `expr1`+`expr2`.
 ## Examples
 
 ```sql
-SELECT 1 + 2;
-```
-
-Result:
-
-```text
+-- +, example 1
+> SELECT 1 + 2;
 3
 ```
 

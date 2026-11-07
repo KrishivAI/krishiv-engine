@@ -21,12 +21,8 @@ Returns the current SQL path (qualified schema names).
 ## Examples
 
 ```sql
-SELECT current_path();
-```
-
-Result:
-
-```text
+-- current_path, example 1
+> SELECT current_path();
 system.builtin,system.session,spark_catalog.default
 ```
 

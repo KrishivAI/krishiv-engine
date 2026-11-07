@@ -24,52 +24,32 @@ current_time - Returns the current time at the start of query evaluation.
 ## Examples
 
 ```sql
-SELECT current_time();
-```
-
-Result:
-
-```text
-15:49:11.914120
+-- current_time, example 1
+> SELECT current_time();
+-- the result differs on every run
 ```
 
 ```sql
-SELECT current_time;
-```
-
-Result:
-
-```text
-15:49:11.914120
+-- current_time, example 2
+> SELECT current_time;
+-- the result differs on every run
 ```
 
 ```sql
-SELECT current_time(0);
-```
-
-Result:
-
-```text
-15:49:11
+-- current_time, example 3
+> SELECT current_time(0);
+-- the result differs on every run
 ```
 
 ```sql
-SELECT current_time(3);
-```
-
-Result:
-
-```text
-15:49:11.914
+-- current_time, example 4
+> SELECT current_time(3);
+-- the result differs on every run
 ```
 
 ```sql
-SELECT current_time(1+1);
-```
-
-Result:
-
-```text
-15:49:11.91
+-- current_time, example 5
+> SELECT current_time(1+1);
+-- the result differs on every run
 ```
 

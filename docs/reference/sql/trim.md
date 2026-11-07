@@ -35,82 +35,50 @@ trim(TRAILING trimStr FROM str) - Remove the trailing `trimStr` characters from 
 ## Examples
 
 ```sql
-SELECT trim('    SparkSQL   ');
-```
-
-Result:
-
-```text
+-- trim, example 1
+> SELECT trim('    SparkSQL   ');
 SparkSQL
 ```
 
 ```sql
-SELECT trim(BOTH FROM '    SparkSQL   ');
-```
-
-Result:
-
-```text
+-- trim, example 2
+> SELECT trim(BOTH FROM '    SparkSQL   ');
 SparkSQL
 ```
 
 ```sql
-SELECT trim(LEADING FROM '    SparkSQL   ');
-```
-
-Result:
-
-```text
-SparkSQL
+-- trim, example 3
+> SELECT trim(LEADING FROM '    SparkSQL   ');
+SparkSQL   
 ```
 
 ```sql
-SELECT trim(TRAILING FROM '    SparkSQL   ');
-```
-
-Result:
-
-```text
-SparkSQL
+-- trim, example 4
+> SELECT trim(TRAILING FROM '    SparkSQL   ');
+    SparkSQL
 ```
 
 ```sql
-SELECT trim('SL' FROM 'SSparkSQLS');
-```
-
-Result:
-
-```text
+-- trim, example 5
+> SELECT trim('SL' FROM 'SSparkSQLS');
 parkSQ
 ```
 
 ```sql
-SELECT trim(BOTH 'SL' FROM 'SSparkSQLS');
-```
-
-Result:
-
-```text
+-- trim, example 6
+> SELECT trim(BOTH 'SL' FROM 'SSparkSQLS');
 parkSQ
 ```
 
 ```sql
-SELECT trim(LEADING 'SL' FROM 'SSparkSQLS');
-```
-
-Result:
-
-```text
+-- trim, example 7
+> SELECT trim(LEADING 'SL' FROM 'SSparkSQLS');
 parkSQLS
 ```
 
 ```sql
-SELECT trim(TRAILING 'SL' FROM 'SSparkSQLS');
-```
-
-Result:
-
-```text
+-- trim, example 8
+> SELECT trim(TRAILING 'SL' FROM 'SSparkSQLS');
 SSparkSQ
 ```
 

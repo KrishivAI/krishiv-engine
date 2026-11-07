@@ -21,12 +21,8 @@ Returns the natural logarithm (base e) of `expr`.
 ## Examples
 
 ```sql
-SELECT ln(1);
-```
-
-Result:
-
-```text
+-- ln, example 1
+> SELECT ln(1);
 0.0
 ```
 

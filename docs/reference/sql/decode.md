@@ -26,52 +26,32 @@ decode(expr, search, result [, search, result ] ... [, default]) - Compares expr
 ## Examples
 
 ```sql
-SELECT decode(encode('abc', 'utf-8'), 'utf-8');
-```
-
-Result:
-
-```text
+-- decode, example 1
+> SELECT decode(encode('abc', 'utf-8'), 'utf-8');
 abc
 ```
 
 ```sql
-SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');
-```
-
-Result:
-
-```text
+-- decode, example 2
+> SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');
 San Francisco
 ```
 
 ```sql
-SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');
-```
-
-Result:
-
-```text
+-- decode, example 3
+> SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');
 Non domestic
 ```
 
 ```sql
-SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle');
-```
-
-Result:
-
-```text
+-- decode, example 4
+> SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle');
 NULL
 ```
 
 ```sql
-SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, 'rocks');
-```
-
-Result:
-
-```text
+-- decode, example 5
+> SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, 'rocks');
 SQL
 ```
 

@@ -21,42 +21,26 @@ Returns the sum calculated from values of a group and the result is null on over
 ## Examples
 
 ```sql
-SELECT try_sum(col) FROM VALUES (5), (10), (15) AS tab(col);
-```
-
-Result:
-
-```text
+-- try_sum, example 1
+> SELECT try_sum(col) FROM VALUES (5), (10), (15) AS tab(col);
 30
 ```
 
 ```sql
-SELECT try_sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);
-```
-
-Result:
-
-```text
+-- try_sum, example 2
+> SELECT try_sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);
 25
 ```
 
 ```sql
-SELECT try_sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
-```
-
-Result:
-
-```text
+-- try_sum, example 3
+> SELECT try_sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
 NULL
 ```
 
 ```sql
-SELECT try_sum(col) FROM VALUES (9223372036854775807L), (1L) AS tab(col);
-```
-
-Result:
-
-```text
+-- try_sum, example 4
+> SELECT try_sum(col) FROM VALUES (9223372036854775807L), (1L) AS tab(col);
 NULL
 ```
 

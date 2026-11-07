@@ -22,32 +22,20 @@ or an array with reverse order of elements.
 ## Examples
 
 ```sql
-SELECT reverse('Spark SQL');
-```
-
-Result:
-
-```text
+-- reverse, example 1
+> SELECT reverse('Spark SQL');
 LQS krapS
 ```
 
 ```sql
-SELECT reverse(array(2, 1, 4, 3));
-```
-
-Result:
-
-```text
-[3,4,1,2]
+-- reverse, example 2
+> SELECT reverse(array(2, 1, 4, 3));
+Error: DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE
 ```
 
 ```sql
-SELECT hex(reverse(x'CAFE'));
-```
-
-Result:
-
-```text
+-- reverse, example 3
+> SELECT hex(reverse(x'CAFE'));
 FECA
 ```
 

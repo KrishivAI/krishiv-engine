@@ -21,42 +21,26 @@ Returns the largest number after rounding down that is not greater than `expr`. 
 ## Examples
 
 ```sql
-SELECT floor(-0.1);
-```
-
-Result:
-
-```text
+-- floor, example 1
+> SELECT floor(-0.1);
 -1
 ```
 
 ```sql
-SELECT floor(5);
-```
-
-Result:
-
-```text
+-- floor, example 2
+> SELECT floor(5);
 5
 ```
 
 ```sql
-SELECT floor(3.1411, 3);
-```
-
-Result:
-
-```text
+-- floor, example 3
+> SELECT floor(3.1411, 3);
 3.141
 ```
 
 ```sql
-SELECT floor(3.1411, -3);
-```
-
-Result:
-
-```text
+-- floor, example 4
+> SELECT floor(3.1411, -3);
 0
 ```
 

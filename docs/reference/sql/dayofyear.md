@@ -21,12 +21,8 @@ Returns the day of year of the date/timestamp.
 ## Examples
 
 ```sql
-SELECT dayofyear('2016-04-09');
-```
-
-Result:
-
-```text
+-- dayofyear, example 1
+> SELECT dayofyear('2016-04-09');
 100
 ```
 

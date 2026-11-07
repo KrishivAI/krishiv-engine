@@ -21,12 +21,8 @@ Returns the population variance calculated from values of a group.
 ## Examples
 
 ```sql
-SELECT var_pop(col) FROM VALUES (1), (2), (3) AS tab(col);
-```
-
-Result:
-
-```text
+-- var_pop, example 1
+> SELECT var_pop(col) FROM VALUES (1), (2), (3) AS tab(col);
 0.6666666666666666
 ```
 

@@ -21,22 +21,14 @@ Casts the value `expr` to the target data type `type`. `expr` :: `type` alternat
 ## Examples
 
 ```sql
-SELECT cast('10' as int);
-```
-
-Result:
-
-```text
+-- cast, example 1
+> SELECT cast('10' as int);
 10
 ```
 
 ```sql
-SELECT '10' :: int;
-```
-
-Result:
-
-```text
+-- cast, example 2
+> SELECT '10' :: int;
 10
 ```
 

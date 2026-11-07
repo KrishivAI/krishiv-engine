@@ -525,6 +525,7 @@ jobs:
       - name: SQL, Python, Rust and configuration pages match the generators
         run: |
           cargo xtask docs-sql --check
+          cargo xtask docs-examples --check
           cargo xtask docs-python --check
           cargo xtask docs-rust --check
           cargo xtask docs-config "$RUNNER_TEMP/configuration.md"

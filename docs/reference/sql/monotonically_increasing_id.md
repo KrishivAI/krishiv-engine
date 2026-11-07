@@ -26,12 +26,8 @@ The function is non-deterministic because its result depends on partition IDs.
 ## Examples
 
 ```sql
-SELECT monotonically_increasing_id();
-```
-
-Result:
-
-```text
+-- monotonically_increasing_id, example 1
+> SELECT monotonically_increasing_id();
 0
 ```
 

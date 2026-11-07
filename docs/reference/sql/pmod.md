@@ -21,22 +21,14 @@ Returns the positive value of `expr1` mod `expr2`.
 ## Examples
 
 ```sql
-SELECT pmod(10, 3);
-```
-
-Result:
-
-```text
+-- pmod, example 1
+> SELECT pmod(10, 3);
 1
 ```
 
 ```sql
-SELECT pmod(-10, 3);
-```
-
-Result:
-
-```text
+-- pmod, example 2
+> SELECT pmod(-10, 3);
 2
 ```
 

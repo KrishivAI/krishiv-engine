@@ -21,42 +21,26 @@ Returns the number of seconds since midnight for the given TIME value.
 ## Examples
 
 ```sql
-SELECT time_to_seconds(TIME'00:00:00');
-```
-
-Result:
-
-```text
+-- time_to_seconds, example 1
+> SELECT time_to_seconds(TIME'00:00:00');
 0.000000
 ```
 
 ```sql
-SELECT time_to_seconds(TIME'14:30:00');
-```
-
-Result:
-
-```text
+-- time_to_seconds, example 2
+> SELECT time_to_seconds(TIME'14:30:00');
 52200.000000
 ```
 
 ```sql
-SELECT time_to_seconds(TIME'14:30:00.5');
-```
-
-Result:
-
-```text
+-- time_to_seconds, example 3
+> SELECT time_to_seconds(TIME'14:30:00.5');
 52200.500000
 ```
 
 ```sql
-SELECT time_to_seconds(TIME'23:59:59.999999');
-```
-
-Result:
-
-```text
+-- time_to_seconds, example 4
+> SELECT time_to_seconds(TIME'23:59:59.999999');
 86399.999999
 ```
 

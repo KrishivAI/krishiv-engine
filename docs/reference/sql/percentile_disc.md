@@ -21,22 +21,14 @@ Return a percentile value based on a discrete distribution of numeric or ANSI in
 ## Examples
 
 ```sql
-SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col);
-```
-
-Result:
-
-```text
+-- percentile_disc, example 1
+> SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col);
 0.0
 ```
 
 ```sql
-SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-```
-
-Result:
-
-```text
+-- percentile_disc, example 2
+> SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
 0-0
 ```
 

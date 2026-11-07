@@ -21,42 +21,26 @@ This is a special version of `make_interval` that performs the same operation, b
 ## Examples
 
 ```sql
-SELECT try_make_interval(100, 11, 1, 1, 12, 30, 01.001001);
-```
-
-Result:
-
-```text
+-- try_make_interval, example 1
+> SELECT try_make_interval(100, 11, 1, 1, 12, 30, 01.001001);
 100 years 11 months 8 days 12 hours 30 minutes 1.001001 seconds
 ```
 
 ```sql
-SELECT try_make_interval(100, null, 3);
-```
-
-Result:
-
-```text
+-- try_make_interval, example 2
+> SELECT try_make_interval(100, null, 3);
 NULL
 ```
 
 ```sql
-SELECT try_make_interval(0, 1, 0, 1, 0, 0, 100.000001);
-```
-
-Result:
-
-```text
+-- try_make_interval, example 3
+> SELECT try_make_interval(0, 1, 0, 1, 0, 0, 100.000001);
 1 months 1 days 1 minutes 40.000001 seconds
 ```
 
 ```sql
-SELECT try_make_interval(2147483647);
-```
-
-Result:
-
-```text
+-- try_make_interval, example 4
+> SELECT try_make_interval(2147483647);
 NULL
 ```
 

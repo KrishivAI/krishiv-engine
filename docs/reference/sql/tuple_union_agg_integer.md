@@ -24,12 +24,8 @@ Returns the unioned TupleSketch compact binary representation.
 ## Examples
 
 ```sql
-SELECT tuple_sketch_estimate_integer(tuple_union_agg_integer(sketch)) FROM (SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (1, 5), (2, 10) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (2, 3), (3, 7) tab(key, summary));
-```
-
-Result:
-
-```text
-3.0
+-- tuple_union_agg_integer, example 1
+> SELECT tuple_sketch_estimate_integer(tuple_union_agg_integer(sketch)) FROM (SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (1, 5), (2, 10) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (2, 3), (3, 7) tab(key, summary));
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

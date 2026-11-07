@@ -22,12 +22,8 @@ All vectors must have the same dimension.
 ## Examples
 
 ```sql
-SELECT vector_sum(col) FROM VALUES (array(1.0F, 2.0F)), (array(3.0F, 4.0F)) AS tab(col);
-```
-
-Result:
-
-```text
+-- vector_sum, example 1
+> SELECT vector_sum(col) FROM VALUES (array(1.0F, 2.0F)), (array(3.0F, 4.0F)) AS tab(col);
 [4.0,6.0]
 ```
 

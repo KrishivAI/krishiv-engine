@@ -21,72 +21,44 @@ Returns true if str matches `pattern` with `escape`, null if any arguments are n
 ## Examples
 
 ```sql
-SELECT like('Spark', '_park');
-```
-
-Result:
-
-```text
+-- like, example 1
+> SELECT like('Spark', '_park');
 true
 ```
 
 ```sql
-SELECT '\\abc' AS S, S like r'\\abc', S like '\\\\abc';
-```
-
-Result:
-
-```text
-\abc	true	true
+-- like, example 2
+> SELECT '\\abc' AS S, S like r'\\abc', S like '\\\\abc';
+\abc | true | true
 ```
 
 ```sql
-SET spark.sql.parser.escapedStringLiterals=true;
-```
-
-Result:
-
-```text
-spark.sql.parser.escapedStringLiterals	true
+-- like, example 3
+> SET spark.sql.parser.escapedStringLiterals=true;
+spark.sql.parser.escapedStringLiterals | true
 ```
 
 ```sql
-SELECT '%SystemDrive%\Users\John' like '\%SystemDrive\%\\Users%';
+-- like, example 4
+> SELECT '%SystemDrive%\Users\John' like '\%SystemDrive\%\\Users%';
+Error: INVALID_FORMAT.ESC_IN_THE_MIDDLE
 ```
 
-Result:
+```sql
+-- like, example 5
+> SET spark.sql.parser.escapedStringLiterals=false;
+spark.sql.parser.escapedStringLiterals | false
+```
 
-```text
+```sql
+-- like, example 6
+> SELECT '%SystemDrive%\\Users\\John' like r'%SystemDrive%\\Users%';
 true
 ```
 
 ```sql
-SET spark.sql.parser.escapedStringLiterals=false;
-```
-
-Result:
-
-```text
-spark.sql.parser.escapedStringLiterals	false
-```
-
-```sql
-SELECT '%SystemDrive%\\Users\\John' like r'%SystemDrive%\\Users%';
-```
-
-Result:
-
-```text
-true
-```
-
-```sql
-SELECT '%SystemDrive%/Users/John' like '/%SystemDrive/%//Users%' ESCAPE '/';
-```
-
-Result:
-
-```text
+-- like, example 7
+> SELECT '%SystemDrive%/Users/John' like '/%SystemDrive/%//Users%' ESCAPE '/';
 true
 ```
 

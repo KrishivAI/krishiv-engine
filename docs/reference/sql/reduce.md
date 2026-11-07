@@ -23,22 +23,14 @@ into the final result by applying a finish function.
 ## Examples
 
 ```sql
-SELECT reduce(array(1, 2, 3), 0, (acc, x) -> acc + x);
-```
-
-Result:
-
-```text
+-- reduce, example 1
+> SELECT reduce(array(1, 2, 3), 0, (acc, x) -> acc + x);
 6
 ```
 
 ```sql
-SELECT reduce(array(1, 2, 3), 0, (acc, x) -> acc + x, acc -> acc * 10);
-```
-
-Result:
-
-```text
+-- reduce, example 2
+> SELECT reduce(array(1, 2, 3), 0, (acc, x) -> acc + x, acc -> acc * 10);
 60
 ```
 

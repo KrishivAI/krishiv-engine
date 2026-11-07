@@ -22,22 +22,14 @@ Returns the inverse cosine (a.k.a. arc cosine) of `expr`, as if computed by
 ## Examples
 
 ```sql
-SELECT acos(1);
-```
-
-Result:
-
-```text
+-- acos, example 1
+> SELECT acos(1);
 0.0
 ```
 
 ```sql
-SELECT acos(2);
-```
-
-Result:
-
-```text
+-- acos, example 2
+> SELECT acos(2);
 NaN
 ```
 

@@ -22,12 +22,8 @@ without duplicates.
 ## Examples
 
 ```sql
-SELECT array_union(array(1, 2, 3), array(1, 3, 5));
-```
-
-Result:
-
-```text
+-- array_union, example 1
+> SELECT array_union(array(1, 2, 3), array(1, 3, 5));
 [1,2,3,5]
 ```
 

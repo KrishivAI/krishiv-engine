@@ -21,12 +21,8 @@ Returns `expr1` if it's not NaN, or `expr2` otherwise.
 ## Examples
 
 ```sql
-SELECT nanvl(cast('NaN' as double), 123);
-```
-
-Result:
-
-```text
+-- nanvl, example 1
+> SELECT nanvl(cast('NaN' as double), 123);
 123.0
 ```
 

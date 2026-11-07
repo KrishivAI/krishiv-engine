@@ -21,12 +21,8 @@ Returns the current catalog.
 ## Examples
 
 ```sql
-SELECT current_catalog();
-```
-
-Result:
-
-```text
+-- current_catalog, example 1
+> SELECT current_catalog();
 spark_catalog
 ```
 

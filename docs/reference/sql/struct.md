@@ -21,12 +21,8 @@ Creates a struct with the given field values.
 ## Examples
 
 ```sql
-SELECT struct(1, 2, 3);
-```
-
-Result:
-
-```text
+-- struct, example 1
+> SELECT struct(1, 2, 3);
 {"col1":1,"col2":2,"col3":3}
 ```
 

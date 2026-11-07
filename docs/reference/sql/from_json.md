@@ -21,32 +21,20 @@ Returns a struct value with the given `jsonStr` and `schema`.
 ## Examples
 
 ```sql
-SELECT from_json('{"a":1, "b":0.8}', 'a INT, b DOUBLE');
-```
-
-Result:
-
-```text
+-- from_json, example 1
+> SELECT from_json('{"a":1, "b":0.8}', 'a INT, b DOUBLE');
 {"a":1,"b":0.8}
 ```
 
 ```sql
-SELECT from_json('{"time":"26/08/2015"}', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));
-```
-
-Result:
-
-```text
+-- from_json, example 2
+> SELECT from_json('{"time":"26/08/2015"}', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));
 {"time":2015-08-26 00:00:00}
 ```
 
 ```sql
-SELECT from_json('{"teacher": "Alice", "student": [{"name": "Bob", "rank": 1}, {"name": "Charlie", "rank": 2}]}', 'STRUCT<teacher: STRING, student: ARRAY<STRUCT<name: STRING, rank: INT>>>');
-```
-
-Result:
-
-```text
+-- from_json, example 3
+> SELECT from_json('{"teacher": "Alice", "student": [{"name": "Bob", "rank": 1}, {"name": "Charlie", "rank": 2}]}', 'STRUCT<teacher: STRING, student: ARRAY<STRUCT<name: STRING, rank: INT>>>');
 {"teacher":"Alice","student":[{"name":"Bob","rank":1},{"name":"Charlie","rank":2}]}
 ```
 

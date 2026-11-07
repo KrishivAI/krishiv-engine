@@ -21,12 +21,8 @@ Returns true if the array contains the value.
 ## Examples
 
 ```sql
-SELECT array_contains(array(1, 2, 3), 2);
-```
-
-Result:
-
-```text
+-- array_contains, example 1
+> SELECT array_contains(array(1, 2, 3), 2);
 true
 ```
 

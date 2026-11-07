@@ -21,22 +21,14 @@ Returns the mean calculated from values of a group.
 ## Examples
 
 ```sql
-SELECT avg(col) FROM VALUES (1), (2), (3) AS tab(col);
-```
-
-Result:
-
-```text
+-- avg, example 1
+> SELECT avg(col) FROM VALUES (1), (2), (3) AS tab(col);
 2.0
 ```
 
 ```sql
-SELECT avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);
-```
-
-Result:
-
-```text
+-- avg, example 2
+> SELECT avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);
 1.5
 ```
 

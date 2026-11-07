@@ -21,12 +21,8 @@ Returns true if the XPath expression evaluates to true, or if a matching node is
 ## Examples
 
 ```sql
-SELECT xpath_boolean('<a><b>1</b></a>','a/b');
-```
-
-Result:
-
-```text
-true
+-- xpath_boolean, example 1
+> SELECT xpath_boolean('<a><b>1</b></a>','a/b');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

@@ -21,52 +21,32 @@ Extracts a sub-variant from `v` according to `path`, and then cast the sub-varia
 ## Examples
 
 ```sql
-SELECT variant_get(parse_json('{"a": 1}'), '$.a', 'int');
-```
-
-Result:
-
-```text
+-- variant_get, example 1
+> SELECT variant_get(parse_json('{"a": 1}'), '$.a', 'int');
 1
 ```
 
 ```sql
-SELECT variant_get(parse_json('{"a": 1}'), '$.b', 'int');
-```
-
-Result:
-
-```text
+-- variant_get, example 2
+> SELECT variant_get(parse_json('{"a": 1}'), '$.b', 'int');
 NULL
 ```
 
 ```sql
-SELECT variant_get(parse_json('[1, "2"]'), '$[1]', 'string');
-```
-
-Result:
-
-```text
+-- variant_get, example 3
+> SELECT variant_get(parse_json('[1, "2"]'), '$[1]', 'string');
 2
 ```
 
 ```sql
-SELECT variant_get(parse_json('[1, "2"]'), '$[2]', 'string');
-```
-
-Result:
-
-```text
+-- variant_get, example 4
+> SELECT variant_get(parse_json('[1, "2"]'), '$[2]', 'string');
 NULL
 ```
 
 ```sql
-SELECT variant_get(parse_json('[1, "hello"]'), '$[1]');
-```
-
-Result:
-
-```text
+-- variant_get, example 5
+> SELECT variant_get(parse_json('[1, "hello"]'), '$[1]');
 "hello"
 ```
 

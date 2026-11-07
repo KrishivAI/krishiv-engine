@@ -21,12 +21,8 @@ Returns Soundex code of the string.
 ## Examples
 
 ```sql
-SELECT soundex('Miller');
-```
-
-Result:
-
-```text
+-- soundex, example 1
+> SELECT soundex('Miller');
 M460
 ```
 

@@ -21,12 +21,8 @@ Returns the factorial of `expr`. `expr` is [0..20]. Otherwise, null.
 ## Examples
 
 ```sql
-SELECT factorial(5);
-```
-
-Result:
-
-```text
+-- factorial, example 1
+> SELECT factorial(5);
 120
 ```
 

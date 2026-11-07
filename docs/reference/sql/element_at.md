@@ -29,22 +29,14 @@ element_at(map, key) - Returns value for given key. The function returns NULL if
 ## Examples
 
 ```sql
-SELECT element_at(array(1, 2, 3), 2);
-```
-
-Result:
-
-```text
+-- element_at, example 1
+> SELECT element_at(array(1, 2, 3), 2);
 2
 ```
 
 ```sql
-SELECT element_at(map(1, 'a', 2, 'b'), 2);
-```
-
-Result:
-
-```text
+-- element_at, example 2
+> SELECT element_at(map(1, 'a', 2, 'b'), 2);
 b
 ```
 

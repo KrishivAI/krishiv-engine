@@ -21,12 +21,8 @@ Returns the sample variance calculated from values of a group.
 ## Examples
 
 ```sql
-SELECT var_samp(col) FROM VALUES (1), (2), (3) AS tab(col);
-```
-
-Result:
-
-```text
+-- var_samp, example 1
+> SELECT var_samp(col) FROM VALUES (1), (2), (3) AS tab(col);
 1.0
 ```
 

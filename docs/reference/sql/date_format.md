@@ -21,12 +21,8 @@ Converts `timestamp` to a value of string in the format specified by the date fo
 ## Examples
 
 ```sql
-SELECT date_format('2016-04-08', 'y');
-```
-
-Result:
-
-```text
+-- date_format, example 1
+> SELECT date_format('2016-04-08', 'y');
 2016
 ```
 

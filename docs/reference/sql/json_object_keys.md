@@ -21,32 +21,20 @@ Returns all the keys of the outermost JSON object as an array.
 ## Examples
 
 ```sql
-SELECT json_object_keys('{}');
-```
-
-Result:
-
-```text
+-- json_object_keys, example 1
+> SELECT json_object_keys('{}');
 []
 ```
 
 ```sql
-SELECT json_object_keys('{"key": "value"}');
-```
-
-Result:
-
-```text
+-- json_object_keys, example 2
+> SELECT json_object_keys('{"key": "value"}');
 ["key"]
 ```
 
 ```sql
-SELECT json_object_keys('{"f1":"abc","f2":{"f3":"a", "f4":"b"}}');
-```
-
-Result:
-
-```text
+-- json_object_keys, example 3
+> SELECT json_object_keys('{"f1":"abc","f2":{"f3":"a", "f4":"b"}}');
 ["f1","f2"]
 ```
 

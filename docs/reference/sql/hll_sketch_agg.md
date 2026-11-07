@@ -23,12 +23,8 @@ slots for the HllSketch.
 ## Examples
 
 ```sql
-SELECT hll_sketch_estimate(hll_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-```
-
-Result:
-
-```text
-3
+-- hll_sketch_agg, example 1
+> SELECT hll_sketch_estimate(hll_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

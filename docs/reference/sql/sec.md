@@ -21,12 +21,8 @@ Returns the secant of `expr`, as if computed by `1/java.lang.Math.cos`.
 ## Examples
 
 ```sql
-SELECT sec(0);
-```
-
-Result:
-
-```text
+-- sec, example 1
+> SELECT sec(0);
 1.0
 ```
 

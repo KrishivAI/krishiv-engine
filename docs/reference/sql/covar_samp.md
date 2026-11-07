@@ -21,12 +21,8 @@ Returns the sample covariance of a set of number pairs.
 ## Examples
 
 ```sql
-SELECT covar_samp(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);
-```
-
-Result:
-
-```text
+-- covar_samp, example 1
+> SELECT covar_samp(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);
 1.0
 ```
 

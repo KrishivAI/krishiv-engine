@@ -21,22 +21,14 @@ Returns inverse hyperbolic cosine of `expr`.
 ## Examples
 
 ```sql
-SELECT acosh(1);
-```
-
-Result:
-
-```text
+-- acosh, example 1
+> SELECT acosh(1);
 0.0
 ```
 
 ```sql
-SELECT acosh(0);
-```
-
-Result:
-
-```text
+-- acosh, example 2
+> SELECT acosh(0);
 NaN
 ```
 

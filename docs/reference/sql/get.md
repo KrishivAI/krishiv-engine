@@ -22,32 +22,20 @@ outside of the array boundaries, then this function returns NULL.
 ## Examples
 
 ```sql
-SELECT get(array(1, 2, 3), 0);
-```
-
-Result:
-
-```text
+-- get, example 1
+> SELECT get(array(1, 2, 3), 0);
 1
 ```
 
 ```sql
-SELECT get(array(1, 2, 3), 3);
-```
-
-Result:
-
-```text
+-- get, example 2
+> SELECT get(array(1, 2, 3), 3);
 NULL
 ```
 
 ```sql
-SELECT get(array(1, 2, 3), -1);
-```
-
-Result:
-
-```text
+-- get, example 3
+> SELECT get(array(1, 2, 3), -1);
 NULL
 ```
 

@@ -21,12 +21,8 @@ Returns the population covariance of a set of number pairs.
 ## Examples
 
 ```sql
-SELECT covar_pop(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);
-```
-
-Result:
-
-```text
+-- covar_pop, example 1
+> SELECT covar_pop(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);
 0.6666666666666666
 ```
 

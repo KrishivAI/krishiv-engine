@@ -21,12 +21,8 @@ Remove all elements that equal to element from array.
 ## Examples
 
 ```sql
-SELECT array_remove(array(1, 2, 3, null, 3), 3);
-```
-
-Result:
-
-```text
+-- array_remove, example 1
+> SELECT array_remove(array(1, 2, 3, null, 3), 3);
 [1,2,null]
 ```
 

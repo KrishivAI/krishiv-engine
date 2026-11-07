@@ -21,12 +21,8 @@ Returns the value of `expr`.
 ## Examples
 
 ```sql
-SELECT positive(1);
-```
-
-Result:
-
-```text
+-- positive, example 1
+> SELECT positive(1);
 1
 ```
 

@@ -21,42 +21,26 @@ Returns true if `expr` equals to any valN.
 ## Examples
 
 ```sql
-SELECT 1 in(1, 2, 3);
-```
-
-Result:
-
-```text
+-- in, example 1
+> SELECT 1 in(1, 2, 3);
 true
 ```
 
 ```sql
-SELECT 1 in(2, 3, 4);
-```
-
-Result:
-
-```text
+-- in, example 2
+> SELECT 1 in(2, 3, 4);
 false
 ```
 
 ```sql
-SELECT named_struct('a', 1, 'b', 2) in(named_struct('a', 1, 'b', 1), named_struct('a', 1, 'b', 3));
-```
-
-Result:
-
-```text
+-- in, example 3
+> SELECT named_struct('a', 1, 'b', 2) in(named_struct('a', 1, 'b', 1), named_struct('a', 1, 'b', 3));
 false
 ```
 
 ```sql
-SELECT named_struct('a', 1, 'b', 2) in(named_struct('a', 1, 'b', 2), named_struct('a', 1, 'b', 3));
-```
-
-Result:
-
-```text
+-- in, example 4
+> SELECT named_struct('a', 1, 'b', 2) in(named_struct('a', 1, 'b', 2), named_struct('a', 1, 'b', 3));
 true
 ```
 

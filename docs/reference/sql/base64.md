@@ -21,22 +21,14 @@ Converts the argument from a binary `bin` to a base 64 string.
 ## Examples
 
 ```sql
-SELECT base64('Spark SQL');
-```
-
-Result:
-
-```text
+-- base64, example 1
+> SELECT base64('Spark SQL');
 U3BhcmsgU1FM
 ```
 
 ```sql
-SELECT base64(x'537061726b2053514c');
-```
-
-Result:
-
-```text
+-- base64, example 2
+> SELECT base64(x'537061726b2053514c');
 U3BhcmsgU1FM
 ```
 

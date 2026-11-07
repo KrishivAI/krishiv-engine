@@ -22,12 +22,8 @@ by intersecting all the Theta sketches in the input column.
 ## Examples
 
 ```sql
-SELECT theta_sketch_estimate(theta_intersection_agg(sketch)) FROM (SELECT theta_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT theta_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
-```
-
-Result:
-
-```text
-1
+-- theta_intersection_agg, example 1
+> SELECT theta_sketch_estimate(theta_intersection_agg(sketch)) FROM (SELECT theta_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT theta_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

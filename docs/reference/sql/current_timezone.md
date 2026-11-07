@@ -21,12 +21,8 @@ Returns the current session local timezone.
 ## Examples
 
 ```sql
-SELECT current_timezone();
-```
-
-Result:
-
-```text
-Asia/Shanghai
+-- current_timezone, example 1
+> SELECT current_timezone();
+America/Los_Angeles
 ```
 

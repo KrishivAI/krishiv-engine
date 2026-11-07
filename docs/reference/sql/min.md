@@ -21,12 +21,8 @@ Returns the minimum value of `expr`.
 ## Examples
 
 ```sql
-SELECT min(col) FROM VALUES (10), (-1), (20) AS tab(col);
-```
-
-Result:
-
-```text
+-- min, example 1
+> SELECT min(col) FROM VALUES (10), (-1), (20) AS tab(col);
 -1
 ```
 

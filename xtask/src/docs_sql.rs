@@ -125,6 +125,73 @@ fn parse_examples(block: &str) -> Vec<(String, String)> {
     out
 }
 
+/// The id of a function page's `n`th example in the captured-output file.
+fn example_id(name: &str, n: usize) -> String {
+    format!("{}#{}", slug(name), n + 1)
+}
+
+/// The file with the engine's answers to the examples, written by `cargo xtask docs-examples`.
+pub const CAPTURED: &str = "docs/reference/sql/_examples.json";
+
+fn captured_examples() -> serde_json::Value {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or(Path::new("."));
+    std::fs::read_to_string(root.join(CAPTURED))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// The lines under an example's input: the engine's captured answer, the error class of a failed
+/// example, a note for an answer that differs between runs, or (not yet captured) Spark's own.
+fn shown_result(captured: Option<&serde_json::Value>, spark: &str) -> String {
+    let Some(c) = captured else {
+        return if spark.is_empty() {
+            String::new()
+        } else {
+            format!("{spark}\n")
+        };
+    };
+    if c.get("volatile").and_then(serde_json::Value::as_bool) == Some(true) {
+        return "-- the result differs on every run\n".to_owned();
+    }
+    if c.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+        let rows = c.get("rows").and_then(serde_json::Value::as_array);
+        return rows
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .fold(String::new(), |mut a, r| {
+                a.push_str(&r.replace('\t', " | "));
+                a.push('\n');
+                a
+            });
+    }
+    format!(
+        "Error: {}\n",
+        c.get("class")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unclassified")
+    )
+}
+
+/// Every example of every function page as `(id, sql)`.
+///
+/// # Errors
+/// When the vendored documentation dump is malformed.
+pub fn examples() -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    for line in DOCS_JSONL.lines().filter(|l| !l.trim().is_empty()) {
+        let doc: SparkDoc =
+            serde_json::from_str(line).map_err(|e| format!("spark-function-docs.jsonl: {e}"))?;
+        for (n, (sql, _)) in parse_examples(&doc.examples).into_iter().enumerate() {
+            out.push((example_id(&doc.name, n), sql));
+        }
+    }
+    Ok(out)
+}
+
 fn kind_name(kind: FunctionKind) -> &'static str {
     match kind {
         FunctionKind::Scalar => "scalar",
@@ -176,7 +243,7 @@ fn status(name: &str, def: Option<&FunctionDef>) -> &'static str {
     }
 }
 
-fn page(doc: &SparkDoc, reg: &Registry) -> String {
+fn page(doc: &SparkDoc, reg: &Registry, captured: &serde_json::Value) -> String {
     let def = match reg.lookup(&doc.name, krishiv_functions::signature::SparkProfile::V4_2) {
         krishiv_functions::registry::Lookup::Found(d) => Some(d),
         _ => None,
@@ -226,11 +293,14 @@ fn page(doc: &SparkDoc, reg: &Registry) -> String {
     let examples = parse_examples(&doc.examples);
     if !examples.is_empty() {
         m.push_str("## Examples\n\n");
-        for (sql, result) in examples {
-            let _ = write!(m, "```sql\n{sql}\n```\n\n");
-            if !result.is_empty() {
-                let _ = write!(m, "Result:\n\n```text\n{result}\n```\n\n");
+        for (n, (sql, spark_result)) in examples.iter().enumerate() {
+            let id = example_id(&doc.name, n);
+            let _ = writeln!(m, "```sql\n-- {}, example {}", doc.name, n + 1);
+            for l in sql.lines() {
+                let _ = writeln!(m, "> {l}");
             }
+            m.push_str(&shown_result(captured.get(&id), spark_result));
+            m.push_str("```\n\n");
         }
     }
     m
@@ -242,6 +312,7 @@ fn page(doc: &SparkDoc, reg: &Registry) -> String {
 /// When the vendored documentation dump is malformed or two names share a page.
 pub fn render() -> Result<BTreeMap<PathBuf, String>, String> {
     let reg = builtins();
+    let captured = captured_examples();
     let mut docs: Vec<SparkDoc> = Vec::new();
     for line in DOCS_JSONL.lines().filter(|l| !l.trim().is_empty()) {
         docs.push(
@@ -257,7 +328,10 @@ pub fn render() -> Result<BTreeMap<PathBuf, String>, String> {
     let mut implemented = 0_usize;
     for doc in &docs {
         let file = PathBuf::from(OUT_DIR).join(format!("{}.md", slug(&doc.name)));
-        if out.insert(file.clone(), page(doc, reg)).is_some() {
+        if out
+            .insert(file.clone(), page(doc, reg, &captured))
+            .is_some()
+        {
             return Err(format!("two functions share the page {}", file.display()));
         }
         let def = matches!(

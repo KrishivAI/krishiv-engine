@@ -23,52 +23,32 @@ make_timestamp(date[, time[, timezone]]) - Create timestamp from date and time f
 ## Examples
 
 ```sql
-SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887);
-```
-
-Result:
-
-```text
+-- make_timestamp, example 1
+> SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887);
 2014-12-28 06:30:45.887
 ```
 
 ```sql
-SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887, 'CET');
-```
-
-Result:
-
-```text
+-- make_timestamp, example 2
+> SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887, 'CET');
 2014-12-27 21:30:45.887
 ```
 
 ```sql
-SELECT make_timestamp(DATE'2014-12-28');
-```
-
-Result:
-
-```text
+-- make_timestamp, example 3
+> SELECT make_timestamp(DATE'2014-12-28');
 2014-12-28 00:00:00
 ```
 
 ```sql
-SELECT make_timestamp(DATE'2014-12-28', TIME'6:30:45.887');
-```
-
-Result:
-
-```text
+-- make_timestamp, example 4
+> SELECT make_timestamp(DATE'2014-12-28', TIME'6:30:45.887');
 2014-12-28 06:30:45.887
 ```
 
 ```sql
-SELECT make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', 'CET');
-```
-
-Result:
-
-```text
+-- make_timestamp, example 5
+> SELECT make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', 'CET');
 2014-12-27 21:30:45.887
 ```
 

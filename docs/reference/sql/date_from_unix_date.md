@@ -21,12 +21,8 @@ Create date from the number of days since 1970-01-01.
 ## Examples
 
 ```sql
-SELECT date_from_unix_date(1);
-```
-
-Result:
-
-```text
+-- date_from_unix_date, example 1
+> SELECT date_from_unix_date(1);
 1970-01-02
 ```
 

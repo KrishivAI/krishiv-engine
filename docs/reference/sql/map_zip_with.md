@@ -24,22 +24,14 @@ keys, only the first entry of the duplicated key is passed into the lambda funct
 ## Examples
 
 ```sql
-SELECT map_zip_with(map(1, 'a', 2, 'b'), map(1, 'x', 2, 'y'), (k, v1, v2) -> concat(v1, v2));
-```
-
-Result:
-
-```text
+-- map_zip_with, example 1
+> SELECT map_zip_with(map(1, 'a', 2, 'b'), map(1, 'x', 2, 'y'), (k, v1, v2) -> concat(v1, v2));
 {1:"ax",2:"by"}
 ```
 
 ```sql
-SELECT map_zip_with(map('a', 1, 'b', 2), map('b', 3, 'c', 4), (k, v1, v2) -> coalesce(v1, 0) + coalesce(v2, 0));
-```
-
-Result:
-
-```text
+-- map_zip_with, example 2
+> SELECT map_zip_with(map('a', 1, 'b', 2), map('b', 3, 'c', 4), (k, v1, v2) -> coalesce(v1, 0) + coalesce(v2, 0));
 {"a":1,"b":5,"c":4}
 ```
 

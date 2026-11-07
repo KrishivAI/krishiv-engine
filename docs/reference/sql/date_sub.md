@@ -21,12 +21,8 @@ Returns the date that is `num_days` before `start_date`.
 ## Examples
 
 ```sql
-SELECT date_sub('2016-07-30', 1);
-```
-
-Result:
-
-```text
+-- date_sub, example 1
+> SELECT date_sub('2016-07-30', 1);
 2016-07-29
 ```
 

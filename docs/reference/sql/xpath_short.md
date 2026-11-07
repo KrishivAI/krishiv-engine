@@ -21,12 +21,8 @@ Returns a short integer value, or the value zero if no match is found, or a matc
 ## Examples
 
 ```sql
-SELECT xpath_short('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
-```
-
-Result:
-
-```text
-3
+-- xpath_short, example 1
+> SELECT xpath_short('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

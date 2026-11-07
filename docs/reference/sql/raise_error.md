@@ -20,12 +20,8 @@ Throws a USER_RAISED_EXCEPTION with `expr` as message.
 ## Examples
 
 ```sql
-SELECT raise_error('custom error message');
-```
-
-Result:
-
-```text
-[USER_RAISED_EXCEPTION] custom error message
+-- raise_error, example 1
+> SELECT raise_error('custom error message');
+Error: USER_RAISED_EXCEPTION
 ```
 

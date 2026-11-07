@@ -21,12 +21,8 @@ Returns pi.
 ## Examples
 
 ```sql
-SELECT pi();
-```
-
-Result:
-
-```text
+-- pi, example 1
+> SELECT pi();
 3.141592653589793
 ```
 

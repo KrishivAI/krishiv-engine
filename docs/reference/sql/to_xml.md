@@ -21,27 +21,19 @@ Returns a XML string with a given struct value
 ## Examples
 
 ```sql
-SELECT to_xml(named_struct('a', 1, 'b', 2));
-```
-
-Result:
-
-```text
+-- to_xml, example 1
+> SELECT to_xml(named_struct('a', 1, 'b', 2));
 <ROW>
-<a>1</a>
-<b>2</b>
+    <a>1</a>
+    <b>2</b>
 </ROW>
 ```
 
 ```sql
-SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));
-```
-
-Result:
-
-```text
+-- to_xml, example 2
+> SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));
 <ROW>
-<time>26/08/2015</time>
+    <time>26/08/2015</time>
 </ROW>
 ```
 

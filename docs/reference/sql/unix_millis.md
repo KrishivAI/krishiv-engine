@@ -21,12 +21,8 @@ Returns the number of milliseconds since 1970-01-01 00:00:00 UTC. Truncates high
 ## Examples
 
 ```sql
-SELECT unix_millis(TIMESTAMP('1970-01-01 00:00:01Z'));
-```
-
-Result:
-
-```text
+-- unix_millis, example 1
+> SELECT unix_millis(TIMESTAMP('1970-01-01 00:00:01Z'));
 1000
 ```
 

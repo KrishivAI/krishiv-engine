@@ -21,62 +21,38 @@ Returns the sum of `expr1`and `expr2` and the result is null on overflow. The ac
 ## Examples
 
 ```sql
-SELECT try_add(1, 2);
-```
-
-Result:
-
-```text
+-- try_add, example 1
+> SELECT try_add(1, 2);
 3
 ```
 
 ```sql
-SELECT try_add(2147483647, 1);
-```
-
-Result:
-
-```text
+-- try_add, example 2
+> SELECT try_add(2147483647, 1);
 NULL
 ```
 
 ```sql
-SELECT try_add(date'2021-01-01', 1);
-```
-
-Result:
-
-```text
+-- try_add, example 3
+> SELECT try_add(date'2021-01-01', 1);
 2021-01-02
 ```
 
 ```sql
-SELECT try_add(date'2021-01-01', interval 1 year);
-```
-
-Result:
-
-```text
+-- try_add, example 4
+> SELECT try_add(date'2021-01-01', interval 1 year);
 2022-01-01
 ```
 
 ```sql
-SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day);
-```
-
-Result:
-
-```text
+-- try_add, example 5
+> SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day);
 2021-01-02 00:00:00
 ```
 
 ```sql
-SELECT try_add(interval 1 year, interval 2 year);
-```
-
-Result:
-
-```text
+-- try_add, example 6
+> SELECT try_add(interval 1 year, interval 2 year);
 3-0
 ```
 

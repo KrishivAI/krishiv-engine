@@ -21,12 +21,8 @@ Returns the week of the year of the given date. A week is considered to start on
 ## Examples
 
 ```sql
-SELECT weekofyear('2008-02-20');
-```
-
-Result:
-
-```text
+-- weekofyear, example 1
+> SELECT weekofyear('2008-02-20');
 8
 ```
 

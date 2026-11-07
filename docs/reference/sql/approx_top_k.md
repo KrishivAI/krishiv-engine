@@ -23,32 +23,20 @@ Returns top k items with their frequency.
 ## Examples
 
 ```sql
-SELECT approx_top_k(expr) FROM VALUES (0), (0), (1), (1), (2), (3), (4), (4) AS tab(expr);
-```
-
-Result:
-
-```text
-[{"item":0,"count":2},{"item":4,"count":2},{"item":1,"count":2},{"item":2,"count":1},{"item":3,"count":1}]
+-- approx_top_k, example 1
+> SELECT approx_top_k(expr) FROM VALUES (0), (0), (1), (1), (2), (3), (4), (4) AS tab(expr);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT approx_top_k(expr, 2) FROM VALUES 'a', 'b', 'c', 'c', 'c', 'c', 'd', 'd' AS tab(expr);
-```
-
-Result:
-
-```text
-[{"item":"c","count":4},{"item":"d","count":2}]
+-- approx_top_k, example 2
+> SELECT approx_top_k(expr, 2) FROM VALUES 'a', 'b', 'c', 'c', 'c', 'c', 'd', 'd' AS tab(expr);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT approx_top_k(expr, 10, 100) FROM VALUES (0), (1), (1), (2), (2), (2) AS tab(expr);
-```
-
-Result:
-
-```text
-[{"item":2,"count":3},{"item":1,"count":2},{"item":0,"count":1}]
+-- approx_top_k, example 3
+> SELECT approx_top_k(expr, 10, 100) FROM VALUES (0), (1), (1), (2), (2), (2) AS tab(expr);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

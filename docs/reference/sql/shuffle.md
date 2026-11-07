@@ -21,22 +21,14 @@ Returns a random permutation of the given array.
 ## Examples
 
 ```sql
-SELECT shuffle(array(1, 20, 3, 5));
-```
-
-Result:
-
-```text
-[3,1,5,20]
+-- shuffle, example 1
+> SELECT shuffle(array(1, 20, 3, 5));
+-- the result differs on every run
 ```
 
 ```sql
-SELECT shuffle(array(1, 20, null, 3));
-```
-
-Result:
-
-```text
-[20,null,3,1]
+-- shuffle, example 2
+> SELECT shuffle(array(1, 20, null, 3));
+-- the result differs on every run
 ```
 

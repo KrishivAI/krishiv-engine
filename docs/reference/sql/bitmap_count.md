@@ -21,32 +21,20 @@ Returns the number of set bits in the child bitmap.
 ## Examples
 
 ```sql
-SELECT bitmap_count(X '1010');
-```
-
-Result:
-
-```text
-2
+-- bitmap_count, example 1
+> SELECT bitmap_count(X '1010');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT bitmap_count(X 'FFFF');
-```
-
-Result:
-
-```text
-16
+-- bitmap_count, example 2
+> SELECT bitmap_count(X 'FFFF');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT bitmap_count(X '0');
-```
-
-Result:
-
-```text
-0
+-- bitmap_count, example 3
+> SELECT bitmap_count(X '0');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

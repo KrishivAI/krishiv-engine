@@ -21,22 +21,14 @@ Returns the leftmost `len`(`len` can be string type) characters from the string 
 ## Examples
 
 ```sql
-SELECT left('Spark SQL', 3);
-```
-
-Result:
-
-```text
+-- left, example 1
+> SELECT left('Spark SQL', 3);
 Spa
 ```
 
 ```sql
-SELECT left(encode('Spark SQL', 'utf-8'), 3);
-```
-
-Result:
-
-```text
+-- left, example 2
+> SELECT left(encode('Spark SQL', 'utf-8'), 3);
 Spa
 ```
 

@@ -21,12 +21,8 @@ Returns an unordered array containing the values of the map.
 ## Examples
 
 ```sql
-SELECT map_values(map(1, 'a', 2, 'b'));
-```
-
-Result:
-
-```text
+-- map_values, example 1
+> SELECT map_values(map(1, 'a', 2, 'b'));
 ["a","b"]
 ```
 

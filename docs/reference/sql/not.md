@@ -21,32 +21,20 @@ Logical not.
 ## Examples
 
 ```sql
-SELECT not true;
-```
-
-Result:
-
-```text
+-- not, example 1
+> SELECT not true;
 false
 ```
 
 ```sql
-SELECT not false;
-```
-
-Result:
-
-```text
+-- not, example 2
+> SELECT not false;
 true
 ```
 
 ```sql
-SELECT not NULL;
-```
-
-Result:
-
-```text
+-- not, example 3
+> SELECT not NULL;
 NULL
 ```
 

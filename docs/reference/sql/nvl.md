@@ -21,12 +21,8 @@ Returns `expr2` if `expr1` is null, or `expr1` otherwise.
 ## Examples
 
 ```sql
-SELECT nvl(NULL, array('2'));
-```
-
-Result:
-
-```text
+-- nvl, example 1
+> SELECT nvl(NULL, array('2'));
 ["2"]
 ```
 

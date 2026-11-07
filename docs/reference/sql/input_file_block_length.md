@@ -21,12 +21,8 @@ Returns the length of the block being read, or -1 if not available.
 ## Examples
 
 ```sql
-SELECT input_file_block_length();
-```
-
-Result:
-
-```text
+-- input_file_block_length, example 1
+> SELECT input_file_block_length();
 -1
 ```
 

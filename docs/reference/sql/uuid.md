@@ -21,12 +21,8 @@ Returns an universally unique identifier (UUID) string. The value is returned as
 ## Examples
 
 ```sql
-SELECT uuid();
-```
-
-Result:
-
-```text
-46707d92-02f4-4817-8116-a4c3b23e6266
+-- uuid, example 1
+> SELECT uuid();
+-- the result differs on every run
 ```
 

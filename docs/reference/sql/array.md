@@ -21,12 +21,8 @@ Returns an array with the given elements.
 ## Examples
 
 ```sql
-SELECT array(1, 2, 3);
-```
-
-Result:
-
-```text
+-- array, example 1
+> SELECT array(1, 2, 3);
 [1,2,3]
 ```
 

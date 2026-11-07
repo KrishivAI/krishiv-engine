@@ -21,22 +21,14 @@ Returns true if the map contains the key.
 ## Examples
 
 ```sql
-SELECT map_contains_key(map(1, 'a', 2, 'b'), 1);
-```
-
-Result:
-
-```text
+-- map_contains_key, example 1
+> SELECT map_contains_key(map(1, 'a', 2, 'b'), 1);
 true
 ```
 
 ```sql
-SELECT map_contains_key(map(1, 'a', 2, 'b'), 3);
-```
-
-Result:
-
-```text
+-- map_contains_key, example 2
+> SELECT map_contains_key(map(1, 'a', 2, 'b'), 3);
 false
 ```
 

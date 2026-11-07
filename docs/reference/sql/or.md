@@ -21,42 +21,26 @@ Logical OR.
 ## Examples
 
 ```sql
-SELECT true or false;
-```
-
-Result:
-
-```text
+-- or, example 1
+> SELECT true or false;
 true
 ```
 
 ```sql
-SELECT false or false;
-```
-
-Result:
-
-```text
+-- or, example 2
+> SELECT false or false;
 false
 ```
 
 ```sql
-SELECT true or NULL;
-```
-
-Result:
-
-```text
+-- or, example 3
+> SELECT true or NULL;
 true
 ```
 
 ```sql
-SELECT false or NULL;
-```
-
-Result:
-
-```text
+-- or, example 4
+> SELECT false or NULL;
 NULL
 ```
 

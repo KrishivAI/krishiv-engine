@@ -24,52 +24,32 @@ a character string, and with zeros if it is a binary string.
 ## Examples
 
 ```sql
-SELECT rpad('hi', 5, '??');
-```
-
-Result:
-
-```text
+-- rpad, example 1
+> SELECT rpad('hi', 5, '??');
 hi???
 ```
 
 ```sql
-SELECT rpad('hi', 1, '??');
-```
-
-Result:
-
-```text
+-- rpad, example 2
+> SELECT rpad('hi', 1, '??');
 h
 ```
 
 ```sql
-SELECT rpad('hi', 5);
-```
-
-Result:
-
-```text
-hi
+-- rpad, example 3
+> SELECT rpad('hi', 5);
+hi   
 ```
 
 ```sql
-SELECT hex(rpad(unhex('aabb'), 5));
-```
-
-Result:
-
-```text
+-- rpad, example 4
+> SELECT hex(rpad(unhex('aabb'), 5));
 AABB000000
 ```
 
 ```sql
-SELECT hex(rpad(unhex('aabb'), 5, unhex('1122')));
-```
-
-Result:
-
-```text
+-- rpad, example 5
+> SELECT hex(rpad(unhex('aabb'), 5, unhex('1122')));
 AABB112211
 ```
 

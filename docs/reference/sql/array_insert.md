@@ -25,32 +25,20 @@ with 'null' elements.
 ## Examples
 
 ```sql
-SELECT array_insert(array(1, 2, 3, 4), 5, 5);
-```
-
-Result:
-
-```text
+-- array_insert, example 1
+> SELECT array_insert(array(1, 2, 3, 4), 5, 5);
 [1,2,3,4,5]
 ```
 
 ```sql
-SELECT array_insert(array(5, 4, 3, 2), -1, 1);
-```
-
-Result:
-
-```text
+-- array_insert, example 2
+> SELECT array_insert(array(5, 4, 3, 2), -1, 1);
 [5,4,3,2,1]
 ```
 
 ```sql
-SELECT array_insert(array(5, 3, 2, 1), -4, 4);
-```
-
-Result:
-
-```text
+-- array_insert, example 3
+> SELECT array_insert(array(5, 3, 2, 1), -4, 4);
 [5,4,3,2,1]
 ```
 

@@ -21,22 +21,14 @@ Convert `num` from `from_base` to `to_base`.
 ## Examples
 
 ```sql
-SELECT conv('100', 2, 10);
-```
-
-Result:
-
-```text
+-- conv, example 1
+> SELECT conv('100', 2, 10);
 4
 ```
 
 ```sql
-SELECT conv(-10, 16, -10);
-```
-
-Result:
-
-```text
+-- conv, example 2
+> SELECT conv(-10, 16, -10);
 -16
 ```
 

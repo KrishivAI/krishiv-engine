@@ -23,32 +23,20 @@ numbers to distinguish valid numbers from mistyped, incorrect numbers.
 ## Examples
 
 ```sql
-SELECT luhn_check('8112189876');
-```
-
-Result:
-
-```text
+-- luhn_check, example 1
+> SELECT luhn_check('8112189876');
 true
 ```
 
 ```sql
-SELECT luhn_check('79927398713');
-```
-
-Result:
-
-```text
+-- luhn_check, example 2
+> SELECT luhn_check('79927398713');
 true
 ```
 
 ```sql
-SELECT luhn_check('79927398714');
-```
-
-Result:
-
-```text
+-- luhn_check, example 3
+> SELECT luhn_check('79927398714');
 false
 ```
 

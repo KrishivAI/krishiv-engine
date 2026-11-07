@@ -23,92 +23,56 @@ try_make_timestamp(date[, time[, timezone]]) - Try to create a timestamp from da
 ## Examples
 
 ```sql
-SELECT try_make_timestamp(2014, 12, 28, 6, 30, 45.887);
-```
-
-Result:
-
-```text
+-- try_make_timestamp, example 1
+> SELECT try_make_timestamp(2014, 12, 28, 6, 30, 45.887);
 2014-12-28 06:30:45.887
 ```
 
 ```sql
-SELECT try_make_timestamp(2014, 12, 28, 6, 30, 45.887, 'CET');
-```
-
-Result:
-
-```text
+-- try_make_timestamp, example 2
+> SELECT try_make_timestamp(2014, 12, 28, 6, 30, 45.887, 'CET');
 2014-12-27 21:30:45.887
 ```
 
 ```sql
-SELECT try_make_timestamp(DATE'2014-12-28');
-```
-
-Result:
-
-```text
+-- try_make_timestamp, example 3
+> SELECT try_make_timestamp(DATE'2014-12-28');
 2014-12-28 00:00:00
 ```
 
 ```sql
-SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887');
-```
-
-Result:
-
-```text
+-- try_make_timestamp, example 4
+> SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887');
 2014-12-28 06:30:45.887
 ```
 
 ```sql
-SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', 'CET');
-```
-
-Result:
-
-```text
+-- try_make_timestamp, example 5
+> SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', 'CET');
 2014-12-27 21:30:45.887
 ```
 
 ```sql
-SELECT try_make_timestamp(2019, 6, 30, 23, 59, 60);
-```
-
-Result:
-
-```text
+-- try_make_timestamp, example 6
+> SELECT try_make_timestamp(2019, 6, 30, 23, 59, 60);
 2019-07-01 00:00:00
 ```
 
 ```sql
-SELECT try_make_timestamp(2019, 6, 30, 23, 59, 1);
-```
-
-Result:
-
-```text
+-- try_make_timestamp, example 7
+> SELECT try_make_timestamp(2019, 6, 30, 23, 59, 1);
 2019-06-30 23:59:01
 ```
 
 ```sql
-SELECT try_make_timestamp(null, 7, 22, 15, 30, 0);
-```
-
-Result:
-
-```text
+-- try_make_timestamp, example 8
+> SELECT try_make_timestamp(null, 7, 22, 15, 30, 0);
 NULL
 ```
 
 ```sql
-SELECT try_make_timestamp(2024, 13, 22, 15, 30, 0);
-```
-
-Result:
-
-```text
+-- try_make_timestamp, example 9
+> SELECT try_make_timestamp(2024, 13, 22, 15, 30, 0);
 NULL
 ```
 

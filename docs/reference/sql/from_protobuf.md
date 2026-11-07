@@ -20,12 +20,8 @@ Converts a binary Protobuf value into a Catalyst value.
 ## Examples
 
 ```sql
-SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id));
-```
-
-Result:
-
-```text
-[false]
+-- from_protobuf, example 1
+> SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id));
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

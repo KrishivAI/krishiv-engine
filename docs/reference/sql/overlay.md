@@ -21,82 +21,50 @@ Replace `input` with `replace` that starts at `pos` and is of length `len`.
 ## Examples
 
 ```sql
-SELECT overlay('Spark SQL' PLACING '_' FROM 6);
-```
-
-Result:
-
-```text
+-- overlay, example 1
+> SELECT overlay('Spark SQL' PLACING '_' FROM 6);
 Spark_SQL
 ```
 
 ```sql
-SELECT overlay('Spark SQL' PLACING 'CORE' FROM 7);
-```
-
-Result:
-
-```text
+-- overlay, example 2
+> SELECT overlay('Spark SQL' PLACING 'CORE' FROM 7);
 Spark CORE
 ```
 
 ```sql
-SELECT overlay('Spark SQL' PLACING 'ANSI ' FROM 7 FOR 0);
-```
-
-Result:
-
-```text
+-- overlay, example 3
+> SELECT overlay('Spark SQL' PLACING 'ANSI ' FROM 7 FOR 0);
 Spark ANSI SQL
 ```
 
 ```sql
-SELECT overlay('Spark SQL' PLACING 'tructured' FROM 2 FOR 4);
-```
-
-Result:
-
-```text
+-- overlay, example 4
+> SELECT overlay('Spark SQL' PLACING 'tructured' FROM 2 FOR 4);
 Structured SQL
 ```
 
 ```sql
-SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('_', 'utf-8') FROM 6);
-```
-
-Result:
-
-```text
+-- overlay, example 5
+> SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('_', 'utf-8') FROM 6);
 Spark_SQL
 ```
 
 ```sql
-SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('CORE', 'utf-8') FROM 7);
-```
-
-Result:
-
-```text
+-- overlay, example 6
+> SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('CORE', 'utf-8') FROM 7);
 Spark CORE
 ```
 
 ```sql
-SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('ANSI ', 'utf-8') FROM 7 FOR 0);
-```
-
-Result:
-
-```text
+-- overlay, example 7
+> SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('ANSI ', 'utf-8') FROM 7 FOR 0);
 Spark ANSI SQL
 ```
 
 ```sql
-SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('tructured', 'utf-8') FROM 2 FOR 4);
-```
-
-Result:
-
-```text
+-- overlay, example 8
+> SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('tructured', 'utf-8') FROM 2 FOR 4);
 Structured SQL
 ```
 

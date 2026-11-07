@@ -21,22 +21,14 @@ Returns schema in the DDL format of XML string.
 ## Examples
 
 ```sql
-SELECT schema_of_xml('<p><a>1</a></p>');
-```
-
-Result:
-
-```text
+-- schema_of_xml, example 1
+> SELECT schema_of_xml('<p><a>1</a></p>');
 STRUCT<a: BIGINT>
 ```
 
 ```sql
-SELECT schema_of_xml('<p><a attr="2">1</a><a>3</a></p>', map('excludeAttribute', 'true'));
-```
-
-Result:
-
-```text
-STRUCT<a: ARRAY<BIGINT>>
+-- schema_of_xml, example 2
+> SELECT schema_of_xml('<p><a attr="2">1</a><a>3</a></p>', map('excludeAttribute', 'true'));
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

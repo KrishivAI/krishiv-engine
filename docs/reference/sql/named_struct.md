@@ -21,12 +21,8 @@ Creates a struct with the given field names and values.
 ## Examples
 
 ```sql
-SELECT named_struct("a", 1, "b", 2, "c", 3);
-```
-
-Result:
-
-```text
+-- named_struct, example 1
+> SELECT named_struct("a", 1, "b", 2, "c", 3);
 {"a":1,"b":2,"c":3}
 ```
 

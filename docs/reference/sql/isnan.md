@@ -21,12 +21,8 @@ Returns true if `expr` is NaN, or false otherwise.
 ## Examples
 
 ```sql
-SELECT isnan(cast('NaN' as double));
-```
-
-Result:
-
-```text
+-- isnan, example 1
+> SELECT isnan(cast('NaN' as double));
 true
 ```
 

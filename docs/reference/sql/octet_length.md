@@ -21,22 +21,14 @@ Returns the byte length of string data or number of bytes of binary data.
 ## Examples
 
 ```sql
-SELECT octet_length('Spark SQL');
-```
-
-Result:
-
-```text
+-- octet_length, example 1
+> SELECT octet_length('Spark SQL');
 9
 ```
 
 ```sql
-SELECT octet_length(x'537061726b2053514c');
-```
-
-Result:
-
-```text
+-- octet_length, example 2
+> SELECT octet_length(x'537061726b2053514c');
 9
 ```
 

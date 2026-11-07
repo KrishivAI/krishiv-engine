@@ -21,32 +21,20 @@ Returns true if all values of `expr` are true.
 ## Examples
 
 ```sql
-SELECT bool_and(col) FROM VALUES (true), (true), (true) AS tab(col);
-```
-
-Result:
-
-```text
+-- bool_and, example 1
+> SELECT bool_and(col) FROM VALUES (true), (true), (true) AS tab(col);
 true
 ```
 
 ```sql
-SELECT bool_and(col) FROM VALUES (NULL), (true), (true) AS tab(col);
-```
-
-Result:
-
-```text
+-- bool_and, example 2
+> SELECT bool_and(col) FROM VALUES (NULL), (true), (true) AS tab(col);
 true
 ```
 
 ```sql
-SELECT bool_and(col) FROM VALUES (true), (false), (true) AS tab(col);
-```
-
-Result:
-
-```text
+-- bool_and, example 3
+> SELECT bool_and(col) FROM VALUES (true), (false), (true) AS tab(col);
 false
 ```
 

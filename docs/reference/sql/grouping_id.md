@@ -22,18 +22,14 @@ returns the level of grouping, equals to
 ## Examples
 
 ```sql
-SELECT name, grouping_id(), sum(age), avg(height) FROM VALUES (2, 'Alice', 165), (5, 'Bob', 180) people(age, name, height) GROUP BY cube(name, height);
-```
-
-Result:
-
-```text
-Alice	0	2	165.0
-Alice	1	2	165.0
-NULL	3	7	172.5
-Bob	0	5	180.0
-Bob	1	5	180.0
-NULL	2	2	165.0
-NULL	2	5	180.0
+-- grouping_id, example 1
+> SELECT name, grouping_id(), sum(age), avg(height) FROM VALUES (2, 'Alice', 165), (5, 'Bob', 180) people(age, name, height) GROUP BY cube(name, height);
+Alice | 0 | 2 | 165.0
+Alice | 1 | 2 | 165.0
+NULL | 2 | 2 | 165.0
+NULL | 3 | 7 | 172.5
+Bob | 0 | 5 | 180.0
+Bob | 1 | 5 | 180.0
+NULL | 2 | 5 | 180.0
 ```
 

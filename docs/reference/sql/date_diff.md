@@ -21,22 +21,14 @@ Returns the number of days from `startDate` to `endDate`.
 ## Examples
 
 ```sql
-SELECT date_diff('2009-07-31', '2009-07-30');
-```
-
-Result:
-
-```text
+-- date_diff, example 1
+> SELECT date_diff('2009-07-31', '2009-07-30');
 1
 ```
 
 ```sql
-SELECT date_diff('2009-07-30', '2009-07-31');
-```
-
-Result:
-
-```text
+-- date_diff, example 2
+> SELECT date_diff('2009-07-30', '2009-07-31');
 -1
 ```
 

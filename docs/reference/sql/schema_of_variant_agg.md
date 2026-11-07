@@ -21,22 +21,14 @@ Returns the merged schema in the SQL format of a variant column.
 ## Examples
 
 ```sql
-SELECT schema_of_variant_agg(parse_json(j)) FROM VALUES ('1'), ('2'), ('3') AS tab(j);
-```
-
-Result:
-
-```text
-BIGINT
+-- schema_of_variant_agg, example 1
+> SELECT schema_of_variant_agg(parse_json(j)) FROM VALUES ('1'), ('2'), ('3') AS tab(j);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT schema_of_variant_agg(parse_json(j)) FROM VALUES ('{"a": 1}'), ('{"b": true}'), ('{"c": 1.23}') AS tab(j);
-```
-
-Result:
-
-```text
-OBJECT<a: BIGINT, b: BOOLEAN, c: DECIMAL(3,2)>
+-- schema_of_variant_agg, example 2
+> SELECT schema_of_variant_agg(parse_json(j)) FROM VALUES ('{"a": 1}'), ('{"b": true}'), ('{"c": 1.23}') AS tab(j);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

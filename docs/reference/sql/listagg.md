@@ -23,72 +23,44 @@ If all values are NULL, NULL is returned.
 ## Examples
 
 ```sql
-SELECT listagg(col) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-```
-
-Result:
-
-```text
+-- listagg, example 1
+> SELECT listagg(col) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
 abc
 ```
 
 ```sql
-SELECT listagg(col) WITHIN GROUP (ORDER BY col DESC) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-```
-
-Result:
-
-```text
+-- listagg, example 2
+> SELECT listagg(col) WITHIN GROUP (ORDER BY col DESC) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
 cba
 ```
 
 ```sql
-SELECT listagg(col) FROM VALUES ('a'), (NULL), ('b') AS tab(col);
-```
-
-Result:
-
-```text
+-- listagg, example 3
+> SELECT listagg(col) FROM VALUES ('a'), (NULL), ('b') AS tab(col);
 ab
 ```
 
 ```sql
-SELECT listagg(col) FROM VALUES ('a'), ('a') AS tab(col);
-```
-
-Result:
-
-```text
+-- listagg, example 4
+> SELECT listagg(col) FROM VALUES ('a'), ('a') AS tab(col);
 aa
 ```
 
 ```sql
-SELECT listagg(DISTINCT col) FROM VALUES ('a'), ('a'), ('b') AS tab(col);
-```
-
-Result:
-
-```text
+-- listagg, example 5
+> SELECT listagg(DISTINCT col) FROM VALUES ('a'), ('a'), ('b') AS tab(col);
 ab
 ```
 
 ```sql
-SELECT listagg(col, ', ') FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-```
-
-Result:
-
-```text
+-- listagg, example 6
+> SELECT listagg(col, ', ') FROM VALUES ('a'), ('b'), ('c') AS tab(col);
 a, b, c
 ```
 
 ```sql
-SELECT listagg(col) FROM VALUES (NULL), (NULL) AS tab(col);
-```
-
-Result:
-
-```text
+-- listagg, example 7
+> SELECT listagg(col) FROM VALUES (NULL), (NULL) AS tab(col);
 NULL
 ```
 

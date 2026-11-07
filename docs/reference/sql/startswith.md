@@ -23,52 +23,32 @@ Both left or right must be of STRING or BINARY type.
 ## Examples
 
 ```sql
-SELECT startswith('Spark SQL', 'Spark');
-```
-
-Result:
-
-```text
+-- startswith, example 1
+> SELECT startswith('Spark SQL', 'Spark');
 true
 ```
 
 ```sql
-SELECT startswith('Spark SQL', 'SQL');
-```
-
-Result:
-
-```text
+-- startswith, example 2
+> SELECT startswith('Spark SQL', 'SQL');
 false
 ```
 
 ```sql
-SELECT startswith('Spark SQL', null);
-```
-
-Result:
-
-```text
+-- startswith, example 3
+> SELECT startswith('Spark SQL', null);
 NULL
 ```
 
 ```sql
-SELECT startswith(x'537061726b2053514c', x'537061726b');
-```
-
-Result:
-
-```text
+-- startswith, example 4
+> SELECT startswith(x'537061726b2053514c', x'537061726b');
 true
 ```
 
 ```sql
-SELECT startswith(x'537061726b2053514c', x'53514c');
-```
-
-Result:
-
-```text
+-- startswith, example 5
+> SELECT startswith(x'537061726b2053514c', x'53514c');
 false
 ```
 

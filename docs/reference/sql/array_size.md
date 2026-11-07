@@ -21,12 +21,8 @@ Returns the size of an array. The function returns null for null input.
 ## Examples
 
 ```sql
-SELECT array_size(array('b', 'd', 'c', 'a'));
-```
-
-Result:
-
-```text
+-- array_size, example 1
+> SELECT array_size(array('b', 'd', 'c', 'a'));
 4
 ```
 

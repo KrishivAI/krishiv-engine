@@ -22,12 +22,8 @@ Returns 0, if the string was not found or if the given string (`str`) contains a
 ## Examples
 
 ```sql
-SELECT find_in_set('ab','abc,b,ab,c,def');
-```
-
-Result:
-
-```text
+-- find_in_set, example 1
+> SELECT find_in_set('ab','abc,b,ab,c,def');
 3
 ```
 

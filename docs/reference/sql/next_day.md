@@ -24,12 +24,8 @@ the function throws SparkIllegalArgumentException if `spark.sql.ansi.enabled` is
 ## Examples
 
 ```sql
-SELECT next_day('2015-01-14', 'TU');
-```
-
-Result:
-
-```text
+-- next_day, example 1
+> SELECT next_day('2015-01-14', 'TU');
 2015-01-20
 ```
 

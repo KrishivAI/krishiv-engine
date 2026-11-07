@@ -21,12 +21,8 @@ Returns human readable summary information about this sketch.
 ## Examples
 
 ```sql
-SELECT LENGTH(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col))) > 0 FROM VALUES (1), (2), (3), (4), (5) tab(col);
-```
-
-Result:
-
-```text
-true
+-- kll_sketch_to_string_bigint, example 1
+> SELECT LENGTH(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col))) > 0 FROM VALUES (1), (2), (3), (4), (5) tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

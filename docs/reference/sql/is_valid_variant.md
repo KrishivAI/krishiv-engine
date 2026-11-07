@@ -21,22 +21,14 @@ Returns true if the variant is valid, false if it is malformed, NULL if `v` is N
 ## Examples
 
 ```sql
-SELECT is_valid_variant(parse_json('null'));
-```
-
-Result:
-
-```text
-true
+-- is_valid_variant, example 1
+> SELECT is_valid_variant(parse_json('null'));
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT is_valid_variant(parse_json('[{"b":true,"a":0}]'));
-```
-
-Result:
-
-```text
-true
+-- is_valid_variant, example 2
+> SELECT is_valid_variant(parse_json('[{"b":true,"a":0}]'));
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

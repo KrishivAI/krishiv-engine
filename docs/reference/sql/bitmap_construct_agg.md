@@ -22,22 +22,14 @@ the child expression. The child expression will most likely be bitmap_bit_positi
 ## Examples
 
 ```sql
-SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (2), (3) AS tab(col);
-```
-
-Result:
-
-```text
-070000
+-- bitmap_construct_agg, example 1
+> SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (2), (3) AS tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (1), (1) AS tab(col);
-```
-
-Result:
-
-```text
-010000
+-- bitmap_construct_agg, example 2
+> SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (1), (1) AS tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

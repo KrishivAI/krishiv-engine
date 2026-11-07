@@ -21,22 +21,14 @@ Return DDL-formatted type string for the data type of the input.
 ## Examples
 
 ```sql
-SELECT typeof(1);
-```
-
-Result:
-
-```text
+-- typeof, example 1
+> SELECT typeof(1);
 int
 ```
 
 ```sql
-SELECT typeof(array(1));
-```
-
-Result:
-
-```text
+-- typeof, example 2
+> SELECT typeof(array(1));
 array<int>
 ```
 

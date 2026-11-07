@@ -30,12 +30,8 @@ propagated from the input value consumed in the aggregate function.
 ## Examples
 
 ```sql
-SELECT histogram_numeric(col, 5) FROM VALUES (0), (1), (2), (10) AS tab(col);
-```
-
-Result:
-
-```text
-[{"x":0,"y":1.0},{"x":1,"y":1.0},{"x":2,"y":1.0},{"x":10,"y":1.0}]
+-- histogram_numeric, example 1
+> SELECT histogram_numeric(col, 5) FROM VALUES (0), (1), (2), (10) AS tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

@@ -21,22 +21,14 @@ Returns the median of numeric or ANSI interval column `col`.
 ## Examples
 
 ```sql
-SELECT median(col) FROM VALUES (0), (10) AS tab(col);
-```
-
-Result:
-
-```text
+-- median, example 1
+> SELECT median(col) FROM VALUES (0), (10) AS tab(col);
 5.0
 ```
 
 ```sql
-SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-```
-
-Result:
-
-```text
+-- median, example 2
+> SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
 0-5
 ```
 

@@ -23,22 +23,14 @@ The position argument cannot be negative.
 ## Examples
 
 ```sql
-SELECT getbit(11, 0);
-```
-
-Result:
-
-```text
+-- getbit, example 1
+> SELECT getbit(11, 0);
 1
 ```
 
 ```sql
-SELECT getbit(11, 2);
-```
-
-Result:
-
-```text
+-- getbit, example 2
+> SELECT getbit(11, 2);
 0
 ```
 

@@ -21,12 +21,8 @@ Filters entries in a map using the function.
 ## Examples
 
 ```sql
-SELECT map_filter(map(1, 0, 2, 2, 3, -1), (k, v) -> k > v);
-```
-
-Result:
-
-```text
+-- map_filter, example 1
+> SELECT map_filter(map(1, 0, 2, 2, 3, -1), (k, v) -> k > v);
 {1:0,3:-1}
 ```
 

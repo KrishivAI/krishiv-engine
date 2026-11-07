@@ -21,12 +21,8 @@ Decodes a `str` in 'application/x-www-form-urlencoded' format using a specific e
 ## Examples
 
 ```sql
-SELECT url_decode('https%3A%2F%2Fspark.apache.org');
-```
-
-Result:
-
-```text
+-- url_decode, example 1
+> SELECT url_decode('https%3A%2F%2Fspark.apache.org');
 https://spark.apache.org
 ```
 

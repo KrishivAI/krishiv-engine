@@ -21,22 +21,14 @@ Returns the geospatial value (value of type GEOGRAPHY or GEOMETRY) in WKB format
 ## Examples
 
 ```sql
-SELECT hex(st_asbinary(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040')));
-```
-
-Result:
-
-```text
+-- st_asbinary, example 1
+> SELECT hex(st_asbinary(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040')));
 0101000000000000000000F03F0000000000000040
 ```
 
 ```sql
-SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), 'XDR'));
-```
-
-Result:
-
-```text
+-- st_asbinary, example 2
+> SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), 'XDR'));
 00000000013FF00000000000004000000000000000
 ```
 

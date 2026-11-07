@@ -23,22 +23,14 @@ a timestamp if the `fmt` is omitted.
 ## Examples
 
 ```sql
-SELECT to_timestamp_ntz('2016-12-31 00:12:00');
-```
-
-Result:
-
-```text
+-- to_timestamp_ntz, example 1
+> SELECT to_timestamp_ntz('2016-12-31 00:12:00');
 2016-12-31 00:12:00
 ```
 
 ```sql
-SELECT to_timestamp_ntz('2016-12-31', 'yyyy-MM-dd');
-```
-
-Result:
-
-```text
+-- to_timestamp_ntz, example 2
+> SELECT to_timestamp_ntz('2016-12-31', 'yyyy-MM-dd');
 2016-12-31 00:00:00
 ```
 

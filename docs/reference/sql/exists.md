@@ -21,52 +21,32 @@ Tests whether a predicate holds for one or more elements in the array.
 ## Examples
 
 ```sql
-SELECT exists(array(1, 2, 3), x -> x % 2 == 0);
-```
-
-Result:
-
-```text
+-- exists, example 1
+> SELECT exists(array(1, 2, 3), x -> x % 2 == 0);
 true
 ```
 
 ```sql
-SELECT exists(array(1, 2, 3), x -> x % 2 == 10);
-```
-
-Result:
-
-```text
+-- exists, example 2
+> SELECT exists(array(1, 2, 3), x -> x % 2 == 10);
 false
 ```
 
 ```sql
-SELECT exists(array(1, null, 3), x -> x % 2 == 0);
-```
-
-Result:
-
-```text
+-- exists, example 3
+> SELECT exists(array(1, null, 3), x -> x % 2 == 0);
 NULL
 ```
 
 ```sql
-SELECT exists(array(0, null, 2, 3, null), x -> x IS NULL);
-```
-
-Result:
-
-```text
+-- exists, example 4
+> SELECT exists(array(0, null, 2, 3, null), x -> x IS NULL);
 true
 ```
 
 ```sql
-SELECT exists(array(1, 2, 3), x -> x IS NULL);
-```
-
-Result:
-
-```text
+-- exists, example 5
+> SELECT exists(array(1, 2, 3), x -> x IS NULL);
 false
 ```
 

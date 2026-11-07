@@ -24,14 +24,8 @@ See <a href="https://spark.apache.org/docs/latest/structured-streaming-programmi
 ## Examples
 
 ```sql
-SELECT a, window.start as start, window.end as end, window_time(window), cnt FROM (SELECT a, window, count(*) as cnt FROM VALUES ('A1', '2021-01-01 00:00:00'), ('A1', '2021-01-01 00:04:30'), ('A1', '2021-01-01 00:06:00'), ('A2', '2021-01-01 00:01:00') AS tab(a, b) GROUP by a, window(b, '5 minutes') ORDER BY a, window.start);
-```
-
-Result:
-
-```text
-A1	2021-01-01 00:00:00	2021-01-01 00:05:00	2021-01-01 00:04:59.999999	2
-A1	2021-01-01 00:05:00	2021-01-01 00:10:00	2021-01-01 00:09:59.999999	1
-A2	2021-01-01 00:00:00	2021-01-01 00:05:00	2021-01-01 00:04:59.999999	1
+-- window_time, example 1
+> SELECT a, window.start as start, window.end as end, window_time(window), cnt FROM (SELECT a, window, count(*) as cnt FROM VALUES ('A1', '2021-01-01 00:00:00'), ('A1', '2021-01-01 00:04:30'), ('A1', '2021-01-01 00:06:00'), ('A2', '2021-01-01 00:01:00') AS tab(a, b) GROUP by a, window(b, '5 minutes') ORDER BY a, window.start);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

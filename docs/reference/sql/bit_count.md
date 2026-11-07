@@ -21,12 +21,8 @@ Returns the number of bits that are set in the argument expr as an unsigned 64-b
 ## Examples
 
 ```sql
-SELECT bit_count(0);
-```
-
-Result:
-
-```text
+-- bit_count, example 1
+> SELECT bit_count(0);
 0
 ```
 

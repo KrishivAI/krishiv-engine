@@ -21,42 +21,26 @@ Returns true if `str` is a valid UTF-8 string, otherwise returns false.
 ## Examples
 
 ```sql
-SELECT is_valid_utf8('Spark');
-```
-
-Result:
-
-```text
+-- is_valid_utf8, example 1
+> SELECT is_valid_utf8('Spark');
 true
 ```
 
 ```sql
-SELECT is_valid_utf8(x'61');
-```
-
-Result:
-
-```text
+-- is_valid_utf8, example 2
+> SELECT is_valid_utf8(x'61');
 true
 ```
 
 ```sql
-SELECT is_valid_utf8(x'80');
-```
-
-Result:
-
-```text
+-- is_valid_utf8, example 3
+> SELECT is_valid_utf8(x'80');
 false
 ```
 
 ```sql
-SELECT is_valid_utf8(x'61C262');
-```
-
-Result:
-
-```text
+-- is_valid_utf8, example 4
+> SELECT is_valid_utf8(x'61C262');
 false
 ```
 

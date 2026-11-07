@@ -22,32 +22,20 @@ If `isIgnoreNull` is true, returns only non-null values.
 ## Examples
 
 ```sql
-SELECT any_value(col) FROM VALUES (10), (5), (20) AS tab(col);
-```
-
-Result:
-
-```text
+-- any_value, example 1
+> SELECT any_value(col) FROM VALUES (10), (5), (20) AS tab(col);
 10
 ```
 
 ```sql
-SELECT any_value(col) FROM VALUES (NULL), (5), (20) AS tab(col);
-```
-
-Result:
-
-```text
+-- any_value, example 2
+> SELECT any_value(col) FROM VALUES (NULL), (5), (20) AS tab(col);
 NULL
 ```
 
 ```sql
-SELECT any_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);
-```
-
-Result:
-
-```text
+-- any_value, example 3
+> SELECT any_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);
 5
 ```
 

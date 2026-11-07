@@ -21,12 +21,8 @@ Returns the double value that is closest in value to the argument and is equal t
 ## Examples
 
 ```sql
-SELECT rint(12.3456);
-```
-
-Result:
-
-```text
+-- rint, example 1
+> SELECT rint(12.3456);
 12.0
 ```
 

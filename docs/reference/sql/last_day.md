@@ -21,12 +21,8 @@ Returns the last day of the month which the date belongs to.
 ## Examples
 
 ```sql
-SELECT last_day('2009-01-12');
-```
-
-Result:
-
-```text
+-- last_day, example 1
+> SELECT last_day('2009-01-12');
 2009-01-31
 ```
 

@@ -22,32 +22,20 @@ The given `pos` and return value are 1-based.
 ## Examples
 
 ```sql
-SELECT position('bar', 'foobarbar');
-```
-
-Result:
-
-```text
+-- position, example 1
+> SELECT position('bar', 'foobarbar');
 4
 ```
 
 ```sql
-SELECT position('bar', 'foobarbar', 5);
-```
-
-Result:
-
-```text
+-- position, example 2
+> SELECT position('bar', 'foobarbar', 5);
 7
 ```
 
 ```sql
-SELECT POSITION('bar' IN 'foobarbar');
-```
-
-Result:
-
-```text
+-- position, example 3
+> SELECT POSITION('bar' IN 'foobarbar');
 4
 ```
 

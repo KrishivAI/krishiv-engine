@@ -21,12 +21,8 @@ Returns the ASCII character having the binary equivalent to `expr`. If n is larg
 ## Examples
 
 ```sql
-SELECT chr(65);
-```
-
-Result:
-
-```text
+-- chr, example 1
+> SELECT chr(65);
 A
 ```
 

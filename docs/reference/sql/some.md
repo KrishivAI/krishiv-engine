@@ -21,32 +21,20 @@ Returns true if at least one value of `expr` is true.
 ## Examples
 
 ```sql
-SELECT some(col) FROM VALUES (true), (false), (false) AS tab(col);
-```
-
-Result:
-
-```text
+-- some, example 1
+> SELECT some(col) FROM VALUES (true), (false), (false) AS tab(col);
 true
 ```
 
 ```sql
-SELECT some(col) FROM VALUES (NULL), (true), (false) AS tab(col);
-```
-
-Result:
-
-```text
+-- some, example 2
+> SELECT some(col) FROM VALUES (NULL), (true), (false) AS tab(col);
 true
 ```
 
 ```sql
-SELECT some(col) FROM VALUES (false), (false), (NULL) AS tab(col);
-```
-
-Result:
-
-```text
+-- some, example 3
+> SELECT some(col) FROM VALUES (false), (false), (NULL) AS tab(col);
 false
 ```
 

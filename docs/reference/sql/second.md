@@ -25,22 +25,14 @@ If `expr` is a TIME type (since 4.1.0), it returns the second of the time-of-day
 ## Examples
 
 ```sql
-SELECT second('2018-02-14 12:58:59');
-```
-
-Result:
-
-```text
+-- second, example 1
+> SELECT second('2018-02-14 12:58:59');
 59
 ```
 
 ```sql
-SELECT second(TIME'13:25:59.999999');
-```
-
-Result:
-
-```text
+-- second, example 2
+> SELECT second(TIME'13:25:59.999999');
 59
 ```
 

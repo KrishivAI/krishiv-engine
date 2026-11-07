@@ -21,12 +21,8 @@ Returns a sha1 hash value as a hex string of the `expr`.
 ## Examples
 
 ```sql
-SELECT sha1('Spark');
-```
-
-Result:
-
-```text
+-- sha1, example 1
+> SELECT sha1('Spark');
 85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
 ```
 

@@ -21,12 +21,8 @@ Returns `expr2` if `expr1` is null, or `expr1` otherwise.
 ## Examples
 
 ```sql
-SELECT ifnull(NULL, array('2'));
-```
-
-Result:
-
-```text
+-- ifnull, example 1
+> SELECT ifnull(NULL, array('2'));
 ["2"]
 ```
 

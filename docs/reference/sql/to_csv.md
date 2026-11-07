@@ -21,22 +21,14 @@ Returns a CSV string with a given struct value
 ## Examples
 
 ```sql
-SELECT to_csv(named_struct('a', 1, 'b', 2));
-```
-
-Result:
-
-```text
+-- to_csv, example 1
+> SELECT to_csv(named_struct('a', 1, 'b', 2));
 1,2
 ```
 
 ```sql
-SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));
-```
-
-Result:
-
-```text
+-- to_csv, example 2
+> SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));
 26/08/2015
 ```
 

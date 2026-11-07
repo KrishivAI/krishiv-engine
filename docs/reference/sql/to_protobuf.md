@@ -21,12 +21,8 @@ Protobuf format result.
 ## Examples
 
 ```sql
-SELECT to_protobuf(s, 'Person', '/path/to/descriptor.desc', map('emitDefaultValues', 'true')) IS NULL FROM (SELECT NULL AS s);
-```
-
-Result:
-
-```text
-[true]
+-- to_protobuf, example 1
+> SELECT to_protobuf(s, 'Person', '/path/to/descriptor.desc', map('emitDefaultValues', 'true')) IS NULL FROM (SELECT NULL AS s);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

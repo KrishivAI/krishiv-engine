@@ -21,12 +21,8 @@ Returns a formatted string from printf-style format strings.
 ## Examples
 
 ```sql
-SELECT format_string("Hello World %d %s", 100, "days");
-```
-
-Result:
-
-```text
+-- format_string, example 1
+> SELECT format_string("Hello World %d %s", 100, "days");
 Hello World 100 days
 ```
 

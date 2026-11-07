@@ -23,12 +23,8 @@ the number buckets or slots for the ThetaSketch.
 ## Examples
 
 ```sql
-SELECT theta_sketch_estimate(theta_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-```
-
-Result:
-
-```text
-3
+-- theta_sketch_agg, example 1
+> SELECT theta_sketch_estimate(theta_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

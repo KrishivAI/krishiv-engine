@@ -21,52 +21,32 @@ Returns the intercept of the univariate linear regression line for non-null pair
 ## Examples
 
 ```sql
-SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, 2), (3, 3), (4, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_intercept, example 1
+> SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, 2), (3, 3), (4, 4) AS tab(y, x);
 0.0
 ```
 
 ```sql
-SELECT regr_intercept(y, x) FROM VALUES (1, null) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_intercept, example 2
+> SELECT regr_intercept(y, x) FROM VALUES (1, null) AS tab(y, x);
 NULL
 ```
 
 ```sql
-SELECT regr_intercept(y, x) FROM VALUES (null, 1) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_intercept, example 3
+> SELECT regr_intercept(y, x) FROM VALUES (null, 1) AS tab(y, x);
 NULL
 ```
 
 ```sql
-SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, null), (3, 3), (4, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_intercept, example 4
+> SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, null), (3, 3), (4, 4) AS tab(y, x);
 0.0
 ```
 
 ```sql
-SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, null), (null, 3), (4, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_intercept, example 5
+> SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, null), (null, 3), (4, 4) AS tab(y, x);
 0.0
 ```
 

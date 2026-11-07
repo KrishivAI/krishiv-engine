@@ -21,12 +21,8 @@ Parses the WKB description of a geography and returns the corresponding GEOGRAPH
 ## Examples
 
 ```sql
-SELECT hex(st_asbinary(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040')));
-```
-
-Result:
-
-```text
+-- st_geogfromwkb, example 1
+> SELECT hex(st_asbinary(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040')));
 0101000000000000000000F03F0000000000000040
 ```
 

@@ -21,22 +21,14 @@ Returns the substring that matches the regular expression `regexp` within the st
 ## Examples
 
 ```sql
-SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');
-```
-
-Result:
-
-```text
+-- regexp_substr, example 1
+> SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');
 Steven
 ```
 
 ```sql
-SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', 'Jeck');
-```
-
-Result:
-
-```text
+-- regexp_substr, example 2
+> SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', 'Jeck');
 NULL
 ```
 

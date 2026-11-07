@@ -21,12 +21,8 @@ Encodes the first argument using the second argument character set. If either ar
 ## Examples
 
 ```sql
-SELECT encode('abc', 'utf-8');
-```
-
-Result:
-
-```text
+-- encode, example 1
+> SELECT encode('abc', 'utf-8');
 abc
 ```
 

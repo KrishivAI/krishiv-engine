@@ -24,22 +24,14 @@ calculated based on 31 days per month, and rounded to 8 digits unless roundOff=f
 ## Examples
 
 ```sql
-SELECT months_between('1997-02-28 10:30:00', '1996-10-30');
-```
-
-Result:
-
-```text
+-- months_between, example 1
+> SELECT months_between('1997-02-28 10:30:00', '1996-10-30');
 3.94959677
 ```
 
 ```sql
-SELECT months_between('1997-02-28 10:30:00', '1996-10-30', false);
-```
-
-Result:
-
-```text
+-- months_between, example 2
+> SELECT months_between('1997-02-28 10:30:00', '1996-10-30', false);
 3.9495967741935485
 ```
 

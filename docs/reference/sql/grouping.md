@@ -22,14 +22,10 @@ not, returns 1 for aggregated or 0 for not aggregated in the result set.",
 ## Examples
 
 ```sql
-SELECT name, grouping(name), sum(age) FROM VALUES (2, 'Alice'), (5, 'Bob') people(age, name) GROUP BY cube(name);
-```
-
-Result:
-
-```text
-Alice	0	2
-Bob	0	5
-NULL	1	7
+-- grouping, example 1
+> SELECT name, grouping(name), sum(age) FROM VALUES (2, 'Alice'), (5, 'Bob') people(age, name) GROUP BY cube(name);
+Alice | 0 | 2
+NULL | 1 | 7
+Bob | 0 | 5
 ```
 

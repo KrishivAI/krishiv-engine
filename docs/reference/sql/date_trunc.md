@@ -21,52 +21,32 @@ Returns timestamp `ts` truncated to the unit specified by the format model `fmt`
 ## Examples
 
 ```sql
-SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359');
-```
-
-Result:
-
-```text
+-- date_trunc, example 1
+> SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359');
 2015-01-01 00:00:00
 ```
 
 ```sql
-SELECT date_trunc('MM', '2015-03-05T09:32:05.359');
-```
-
-Result:
-
-```text
+-- date_trunc, example 2
+> SELECT date_trunc('MM', '2015-03-05T09:32:05.359');
 2015-03-01 00:00:00
 ```
 
 ```sql
-SELECT date_trunc('DD', '2015-03-05T09:32:05.359');
-```
-
-Result:
-
-```text
+-- date_trunc, example 3
+> SELECT date_trunc('DD', '2015-03-05T09:32:05.359');
 2015-03-05 00:00:00
 ```
 
 ```sql
-SELECT date_trunc('HOUR', '2015-03-05T09:32:05.359');
-```
-
-Result:
-
-```text
+-- date_trunc, example 4
+> SELECT date_trunc('HOUR', '2015-03-05T09:32:05.359');
 2015-03-05 09:00:00
 ```
 
 ```sql
-SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456');
-```
-
-Result:
-
-```text
+-- date_trunc, example 5
+> SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456');
 2015-03-05 09:32:05.123
 ```
 

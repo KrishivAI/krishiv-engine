@@ -21,42 +21,26 @@ Creates a TIME value from seconds since midnight.
 ## Examples
 
 ```sql
-SELECT time_from_seconds(0);
-```
-
-Result:
-
-```text
+-- time_from_seconds, example 1
+> SELECT time_from_seconds(0);
 00:00:00
 ```
 
 ```sql
-SELECT time_from_seconds(52200);
-```
-
-Result:
-
-```text
+-- time_from_seconds, example 2
+> SELECT time_from_seconds(52200);
 14:30:00
 ```
 
 ```sql
-SELECT time_from_seconds(52200.5);
-```
-
-Result:
-
-```text
+-- time_from_seconds, example 3
+> SELECT time_from_seconds(52200.5);
 14:30:00.5
 ```
 
 ```sql
-SELECT time_from_seconds(86399.999999);
-```
-
-Result:
-
-```text
+-- time_from_seconds, example 4
+> SELECT time_from_seconds(86399.999999);
 23:59:59.999999
 ```
 

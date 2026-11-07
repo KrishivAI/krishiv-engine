@@ -21,82 +21,50 @@ Extracts a part of the date/timestamp or interval source.
 ## Examples
 
 ```sql
-SELECT date_part('YEAR', TIMESTAMP '2019-08-12 01:00:00.123456');
-```
-
-Result:
-
-```text
+-- date_part, example 1
+> SELECT date_part('YEAR', TIMESTAMP '2019-08-12 01:00:00.123456');
 2019
 ```
 
 ```sql
-SELECT date_part('week', timestamp'2019-08-12 01:00:00.123456');
-```
-
-Result:
-
-```text
+-- date_part, example 2
+> SELECT date_part('week', timestamp'2019-08-12 01:00:00.123456');
 33
 ```
 
 ```sql
-SELECT date_part('doy', DATE'2019-08-12');
-```
-
-Result:
-
-```text
+-- date_part, example 3
+> SELECT date_part('doy', DATE'2019-08-12');
 224
 ```
 
 ```sql
-SELECT date_part('SECONDS', timestamp'2019-10-01 00:00:01.000001');
-```
-
-Result:
-
-```text
+-- date_part, example 4
+> SELECT date_part('SECONDS', timestamp'2019-10-01 00:00:01.000001');
 1.000001
 ```
 
 ```sql
-SELECT date_part('days', interval 5 days 3 hours 7 minutes);
-```
-
-Result:
-
-```text
+-- date_part, example 5
+> SELECT date_part('days', interval 5 days 3 hours 7 minutes);
 5
 ```
 
 ```sql
-SELECT date_part('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
-```
-
-Result:
-
-```text
+-- date_part, example 6
+> SELECT date_part('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
 30.001001
 ```
 
 ```sql
-SELECT date_part('MONTH', INTERVAL '2021-11' YEAR TO MONTH);
-```
-
-Result:
-
-```text
+-- date_part, example 7
+> SELECT date_part('MONTH', INTERVAL '2021-11' YEAR TO MONTH);
 11
 ```
 
 ```sql
-SELECT date_part('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND);
-```
-
-Result:
-
-```text
+-- date_part, example 8
+> SELECT date_part('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND);
 55
 ```
 

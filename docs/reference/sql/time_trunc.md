@@ -21,22 +21,14 @@ Returns `time` truncated to the `unit`.
 ## Examples
 
 ```sql
-SELECT time_trunc('HOUR', TIME'09:32:05.359');
-```
-
-Result:
-
-```text
+-- time_trunc, example 1
+> SELECT time_trunc('HOUR', TIME'09:32:05.359');
 09:00:00
 ```
 
 ```sql
-SELECT time_trunc('MILLISECOND', TIME'09:32:05.123456');
-```
-
-Result:
-
-```text
+-- time_trunc, example 2
+> SELECT time_trunc('MILLISECOND', TIME'09:32:05.123456');
 09:32:05.123
 ```
 

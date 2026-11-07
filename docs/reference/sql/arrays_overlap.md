@@ -21,12 +21,8 @@ Returns true if a1 contains at least a non-null element present also in a2. If t
 ## Examples
 
 ```sql
-SELECT arrays_overlap(array(1, 2, 3), array(3, 4, 5));
-```
-
-Result:
-
-```text
+-- arrays_overlap, example 1
+> SELECT arrays_overlap(array(1, 2, 3), array(3, 4, 5));
 true
 ```
 

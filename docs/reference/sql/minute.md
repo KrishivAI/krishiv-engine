@@ -25,22 +25,14 @@ If `expr` is a TIME type (since 4.1.0), it returns the minute of the time-of-day
 ## Examples
 
 ```sql
-SELECT minute('2009-07-30 12:58:59');
-```
-
-Result:
-
-```text
+-- minute, example 1
+> SELECT minute('2009-07-30 12:58:59');
 58
 ```
 
 ```sql
-SELECT minute(TIME'23:59:59.999999');
-```
-
-Result:
-
-```text
+-- minute, example 2
+> SELECT minute(TIME'23:59:59.999999');
 59
 ```
 

@@ -22,12 +22,8 @@ any non-NaN elements for double/float type. NULL elements are skipped.
 ## Examples
 
 ```sql
-SELECT array_min(array(1, 20, null, 3));
-```
-
-Result:
-
-```text
+-- array_min, example 1
+> SELECT array_min(array(1, 20, null, 3));
 1
 ```
 

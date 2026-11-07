@@ -22,22 +22,14 @@ expression. The input should be bitmaps created from bitmap_construct_agg().
 ## Examples
 
 ```sql
-SELECT substring(hex(bitmap_and_agg(col)), 0, 6) FROM VALUES (X 'F0'), (X '70'), (X '30') AS tab(col);
-```
-
-Result:
-
-```text
-300000
+-- bitmap_and_agg, example 1
+> SELECT substring(hex(bitmap_and_agg(col)), 0, 6) FROM VALUES (X 'F0'), (X '70'), (X '30') AS tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT substring(hex(bitmap_and_agg(col)), 0, 6) FROM VALUES (X 'FF'), (X 'FF'), (X 'FF') AS tab(col);
-```
-
-Result:
-
-```text
-FF0000
+-- bitmap_and_agg, example 2
+> SELECT substring(hex(bitmap_and_agg(col)), 0, 6) FROM VALUES (X 'FF'), (X 'FF'), (X 'FF') AS tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

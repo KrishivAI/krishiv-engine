@@ -21,12 +21,8 @@ Returns a 64-bit hash value of the arguments. Hash seed is 42.
 ## Examples
 
 ```sql
-SELECT xxhash64('Spark', array(123), 2);
-```
-
-Result:
-
-```text
+-- xxhash64, example 1
+> SELECT xxhash64('Spark', array(123), 2);
 5602566077635097486
 ```
 

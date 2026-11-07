@@ -21,12 +21,8 @@ Returns the text contents of the first xml node that matches the XPath expressio
 ## Examples
 
 ```sql
-SELECT xpath_string('<a><b>b</b><c>cc</c></a>','a/c');
-```
-
-Result:
-
-```text
-cc
+-- xpath_string, example 1
+> SELECT xpath_string('<a><b>b</b><c>cc</c></a>','a/c');
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

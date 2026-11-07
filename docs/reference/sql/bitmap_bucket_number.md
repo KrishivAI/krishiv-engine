@@ -21,22 +21,14 @@ Returns the bucket number for the given input child expression.
 ## Examples
 
 ```sql
-SELECT bitmap_bucket_number(123);
-```
-
-Result:
-
-```text
-1
+-- bitmap_bucket_number, example 1
+> SELECT bitmap_bucket_number(123);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT bitmap_bucket_number(0);
-```
-
-Result:
-
-```text
-0
+-- bitmap_bucket_number, example 2
+> SELECT bitmap_bucket_number(0);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

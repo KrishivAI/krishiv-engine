@@ -21,12 +21,8 @@ Returns the number of days since 1970-01-01.
 ## Examples
 
 ```sql
-SELECT unix_date(DATE("1970-01-02"));
-```
-
-Result:
-
-```text
+-- unix_date, example 1
+> SELECT unix_date(DATE("1970-01-02"));
 1
 ```
 

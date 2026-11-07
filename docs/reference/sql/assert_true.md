@@ -21,12 +21,8 @@ Throws an exception if `expr` is not true.
 ## Examples
 
 ```sql
-SELECT assert_true(0 < 1);
-```
-
-Result:
-
-```text
+-- assert_true, example 1
+> SELECT assert_true(0 < 1);
 NULL
 ```
 

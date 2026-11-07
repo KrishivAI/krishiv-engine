@@ -21,42 +21,26 @@ Returns the character length of string data or number of bytes of binary data. T
 ## Examples
 
 ```sql
-SELECT len('Spark SQL ');
-```
-
-Result:
-
-```text
+-- len, example 1
+> SELECT len('Spark SQL ');
 10
 ```
 
 ```sql
-SELECT len(x'537061726b2053514c');
-```
-
-Result:
-
-```text
+-- len, example 2
+> SELECT len(x'537061726b2053514c');
 9
 ```
 
 ```sql
-SELECT CHAR_LENGTH('Spark SQL ');
-```
-
-Result:
-
-```text
+-- len, example 3
+> SELECT CHAR_LENGTH('Spark SQL ');
 10
 ```
 
 ```sql
-SELECT CHARACTER_LENGTH('Spark SQL ');
-```
-
-Result:
-
-```text
+-- len, example 4
+> SELECT CHARACTER_LENGTH('Spark SQL ');
 10
 ```
 

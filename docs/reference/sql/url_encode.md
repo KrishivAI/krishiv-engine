@@ -21,12 +21,8 @@ Translates a string into 'application/x-www-form-urlencoded' format using a spec
 ## Examples
 
 ```sql
-SELECT url_encode('https://spark.apache.org');
-```
-
-Result:
-
-```text
+-- url_encode, example 1
+> SELECT url_encode('https://spark.apache.org');
 https%3A%2F%2Fspark.apache.org
 ```
 

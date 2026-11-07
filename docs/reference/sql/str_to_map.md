@@ -21,22 +21,14 @@ Creates a map after splitting the text into key/value pairs using delimiters. De
 ## Examples
 
 ```sql
-SELECT str_to_map('a:1,b:2,c:3', ',', ':');
-```
-
-Result:
-
-```text
+-- str_to_map, example 1
+> SELECT str_to_map('a:1,b:2,c:3', ',', ':');
 {"a":"1","b":"2","c":"3"}
 ```
 
 ```sql
-SELECT str_to_map('a');
-```
-
-Result:
-
-```text
+-- str_to_map, example 2
+> SELECT str_to_map('a');
 {"a":null}
 ```
 

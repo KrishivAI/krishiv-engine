@@ -21,42 +21,26 @@ Tests whether a predicate holds for all elements in the array.
 ## Examples
 
 ```sql
-SELECT forall(array(1, 2, 3), x -> x % 2 == 0);
-```
-
-Result:
-
-```text
+-- forall, example 1
+> SELECT forall(array(1, 2, 3), x -> x % 2 == 0);
 false
 ```
 
 ```sql
-SELECT forall(array(2, 4, 8), x -> x % 2 == 0);
-```
-
-Result:
-
-```text
+-- forall, example 2
+> SELECT forall(array(2, 4, 8), x -> x % 2 == 0);
 true
 ```
 
 ```sql
-SELECT forall(array(1, null, 3), x -> x % 2 == 0);
-```
-
-Result:
-
-```text
+-- forall, example 3
+> SELECT forall(array(1, null, 3), x -> x % 2 == 0);
 false
 ```
 
 ```sql
-SELECT forall(array(2, null, 8), x -> x % 2 == 0);
-```
-
-Result:
-
-```text
+-- forall, example 4
+> SELECT forall(array(2, null, 8), x -> x % 2 == 0);
 NULL
 ```
 

@@ -21,12 +21,8 @@ If `expr1` evaluates to true, then returns `expr2`; otherwise returns `expr3`.
 ## Examples
 
 ```sql
-SELECT if(1 < 2, 'a', 'b');
-```
-
-Result:
-
-```text
+-- if, example 1
+> SELECT if(1 < 2, 'a', 'b');
 a
 ```
 

@@ -21,22 +21,14 @@ Returns the UNIX timestamp of current or specified time.
 ## Examples
 
 ```sql
-SELECT unix_timestamp();
-```
-
-Result:
-
-```text
-1476884637
+-- unix_timestamp, example 1
+> SELECT unix_timestamp();
+-- the result differs on every run
 ```
 
 ```sql
-SELECT unix_timestamp('2016-04-08', 'yyyy-MM-dd');
-```
-
-Result:
-
-```text
-1460041200
+-- unix_timestamp, example 2
+> SELECT unix_timestamp('2016-04-08', 'yyyy-MM-dd');
+1460098800
 ```
 

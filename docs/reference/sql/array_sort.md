@@ -30,32 +30,20 @@ the function will fail and raise an error.
 ## Examples
 
 ```sql
-SELECT array_sort(array(5, 6, 1), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end);
-```
-
-Result:
-
-```text
-[1,5,6]
+-- array_sort, example 1
+> SELECT array_sort(array(5, 6, 1), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end);
+Error: PARSE_SYNTAX_ERROR
 ```
 
 ```sql
-SELECT array_sort(array('bc', 'ab', 'dc'), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end);
-```
-
-Result:
-
-```text
-["dc","bc","ab"]
+-- array_sort, example 2
+> SELECT array_sort(array('bc', 'ab', 'dc'), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end);
+Error: PARSE_SYNTAX_ERROR
 ```
 
 ```sql
-SELECT array_sort(array('b', 'd', null, 'c', 'a'));
-```
-
-Result:
-
-```text
+-- array_sort, example 3
+> SELECT array_sort(array('b', 'd', null, 'c', 'a'));
 ["a","b","c","d",null]
 ```
 

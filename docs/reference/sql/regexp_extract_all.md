@@ -22,22 +22,14 @@ expression and corresponding to the regex group index.
 ## Examples
 
 ```sql
-SELECT regexp_extract_all('100-200, 300-400', '(\\d+)-(\\d+)', 1);
-```
-
-Result:
-
-```text
+-- regexp_extract_all, example 1
+> SELECT regexp_extract_all('100-200, 300-400', '(\\d+)-(\\d+)', 1);
 ["100","300"]
 ```
 
 ```sql
-SELECT regexp_extract_all('100-200, 300-400', r'(\d+)-(\d+)', 1);
-```
-
-Result:
-
-```text
+-- regexp_extract_all, example 2
+> SELECT regexp_extract_all('100-200, 300-400', r'(\d+)-(\d+)', 1);
 ["100","300"]
 ```
 

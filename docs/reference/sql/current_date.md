@@ -23,22 +23,14 @@ current_date - Returns the current date at the start of query evaluation.
 ## Examples
 
 ```sql
-SELECT current_date();
-```
-
-Result:
-
-```text
-2020-04-25
+-- current_date, example 1
+> SELECT current_date();
+2026-11-07
 ```
 
 ```sql
-SELECT current_date;
-```
-
-Result:
-
-```text
-2020-04-25
+-- current_date, example 2
+> SELECT current_date;
+2026-11-07
 ```
 

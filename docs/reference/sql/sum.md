@@ -21,32 +21,20 @@ Returns the sum calculated from values of a group.
 ## Examples
 
 ```sql
-SELECT sum(col) FROM VALUES (5), (10), (15) AS tab(col);
-```
-
-Result:
-
-```text
+-- sum, example 1
+> SELECT sum(col) FROM VALUES (5), (10), (15) AS tab(col);
 30
 ```
 
 ```sql
-SELECT sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);
-```
-
-Result:
-
-```text
+-- sum, example 2
+> SELECT sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);
 25
 ```
 
 ```sql
-SELECT sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
-```
-
-Result:
-
-```text
+-- sum, example 3
+> SELECT sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
 NULL
 ```
 

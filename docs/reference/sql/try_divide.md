@@ -21,52 +21,32 @@ Returns `dividend`/`divisor`. It always performs floating point division. Its re
 ## Examples
 
 ```sql
-SELECT try_divide(3, 2);
-```
-
-Result:
-
-```text
+-- try_divide, example 1
+> SELECT try_divide(3, 2);
 1.5
 ```
 
 ```sql
-SELECT try_divide(2L, 2L);
-```
-
-Result:
-
-```text
+-- try_divide, example 2
+> SELECT try_divide(2L, 2L);
 1.0
 ```
 
 ```sql
-SELECT try_divide(1, 0);
-```
-
-Result:
-
-```text
+-- try_divide, example 3
+> SELECT try_divide(1, 0);
 NULL
 ```
 
 ```sql
-SELECT try_divide(interval 2 month, 2);
-```
-
-Result:
-
-```text
+-- try_divide, example 4
+> SELECT try_divide(interval 2 month, 2);
 0-1
 ```
 
 ```sql
-SELECT try_divide(interval 2 month, 0);
-```
-
-Result:
-
-```text
+-- try_divide, example 5
+> SELECT try_divide(interval 2 month, 0);
 NULL
 ```
 

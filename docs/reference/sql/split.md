@@ -21,32 +21,20 @@ Splits `str` around occurrences that match `regex` and returns an array with a l
 ## Examples
 
 ```sql
-SELECT split('oneAtwoBthreeC', '[ABC]');
-```
-
-Result:
-
-```text
+-- split, example 1
+> SELECT split('oneAtwoBthreeC', '[ABC]');
 ["one","two","three",""]
 ```
 
 ```sql
-SELECT split('oneAtwoBthreeC', '[ABC]', -1);
-```
-
-Result:
-
-```text
+-- split, example 2
+> SELECT split('oneAtwoBthreeC', '[ABC]', -1);
 ["one","two","three",""]
 ```
 
 ```sql
-SELECT split('oneAtwoBthreeC', '[ABC]', 2);
-```
-
-Result:
-
-```text
+-- split, example 3
+> SELECT split('oneAtwoBthreeC', '[ABC]', 2);
 ["one","twoBthreeC"]
 ```
 

@@ -21,42 +21,26 @@ Returns `date` with the time portion of the day truncated to the unit specified 
 ## Examples
 
 ```sql
-SELECT trunc('2019-08-04', 'week');
-```
-
-Result:
-
-```text
+-- trunc, example 1
+> SELECT trunc('2019-08-04', 'week');
 2019-07-29
 ```
 
 ```sql
-SELECT trunc('2019-08-04', 'quarter');
-```
-
-Result:
-
-```text
+-- trunc, example 2
+> SELECT trunc('2019-08-04', 'quarter');
 2019-07-01
 ```
 
 ```sql
-SELECT trunc('2009-02-12', 'MM');
-```
-
-Result:
-
-```text
+-- trunc, example 3
+> SELECT trunc('2009-02-12', 'MM');
 2009-02-01
 ```
 
 ```sql
-SELECT trunc('2015-10-27', 'YEAR');
-```
-
-Result:
-
-```text
+-- trunc, example 4
+> SELECT trunc('2015-10-27', 'YEAR');
 2015-01-01
 ```
 

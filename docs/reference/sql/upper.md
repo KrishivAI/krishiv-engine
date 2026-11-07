@@ -21,12 +21,8 @@ Returns `str` with all characters changed to uppercase.
 ## Examples
 
 ```sql
-SELECT upper('SparkSql');
-```
-
-Result:
-
-```text
+-- upper, example 1
+> SELECT upper('SparkSql');
 SPARKSQL
 ```
 

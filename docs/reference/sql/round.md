@@ -21,12 +21,8 @@ Returns `expr` rounded to `d` decimal places using HALF_UP rounding mode.
 ## Examples
 
 ```sql
-SELECT round(2.5, 0);
-```
-
-Result:
-
-```text
+-- round, example 1
+> SELECT round(2.5, 0);
 3
 ```
 

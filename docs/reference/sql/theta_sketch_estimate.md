@@ -22,12 +22,8 @@ given the binary representation of a Datasketches ThetaSketch.
 ## Examples
 
 ```sql
-SELECT theta_sketch_estimate(theta_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-```
-
-Result:
-
-```text
-3
+-- theta_sketch_estimate, example 1
+> SELECT theta_sketch_estimate(theta_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

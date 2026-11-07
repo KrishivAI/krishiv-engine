@@ -23,72 +23,44 @@ substr(str FROM pos[ FOR len]]) - Returns the substring of `str` that starts at 
 ## Examples
 
 ```sql
-SELECT substr('Spark SQL', 5);
-```
-
-Result:
-
-```text
+-- substr, example 1
+> SELECT substr('Spark SQL', 5);
 k SQL
 ```
 
 ```sql
-SELECT substr('Spark SQL', -3);
-```
-
-Result:
-
-```text
+-- substr, example 2
+> SELECT substr('Spark SQL', -3);
 SQL
 ```
 
 ```sql
-SELECT substr('Spark SQL', 5, 1);
-```
-
-Result:
-
-```text
+-- substr, example 3
+> SELECT substr('Spark SQL', 5, 1);
 k
 ```
 
 ```sql
-SELECT substr('Spark SQL' FROM 5);
-```
-
-Result:
-
-```text
+-- substr, example 4
+> SELECT substr('Spark SQL' FROM 5);
 k SQL
 ```
 
 ```sql
-SELECT substr('Spark SQL' FROM -3);
-```
-
-Result:
-
-```text
+-- substr, example 5
+> SELECT substr('Spark SQL' FROM -3);
 SQL
 ```
 
 ```sql
-SELECT substr('Spark SQL' FROM 5 FOR 1);
-```
-
-Result:
-
-```text
+-- substr, example 6
+> SELECT substr('Spark SQL' FROM 5 FOR 1);
 k
 ```
 
 ```sql
-SELECT substr(encode('Spark SQL', 'utf-8'), 5);
-```
-
-Result:
-
-```text
+-- substr, example 7
+> SELECT substr(encode('Spark SQL', 'utf-8'), 5);
 k SQL
 ```
 

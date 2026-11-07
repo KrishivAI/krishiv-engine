@@ -21,12 +21,8 @@ Removes duplicate values from the array.
 ## Examples
 
 ```sql
-SELECT array_distinct(array(1, 2, 3, null, 3));
-```
-
-Result:
-
-```text
+-- array_distinct, example 1
+> SELECT array_distinct(array(1, 2, 3, null, 3));
 [1,2,3,null]
 ```
 

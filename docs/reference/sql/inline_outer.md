@@ -21,24 +21,16 @@ Explodes an array of structs into a table. Uses column names col1, col2, etc. by
 ## Examples
 
 ```sql
-SELECT inline_outer(array(struct(1, 'a'), struct(2, 'b')));
-```
-
-Result:
-
-```text
-1	a
-2	b
+-- inline_outer, example 1
+> SELECT inline_outer(array(struct(1, 'a'), struct(2, 'b')));
+1 | a
+2 | b
 ```
 
 ```sql
-SELECT inline_outer(input => array(struct(1, 'a'), struct(2, 'b')));
-```
-
-Result:
-
-```text
-1	a
-2	b
+-- inline_outer, example 2
+> SELECT inline_outer(input => array(struct(1, 'a'), struct(2, 'b')));
+1 | a
+2 | b
 ```
 

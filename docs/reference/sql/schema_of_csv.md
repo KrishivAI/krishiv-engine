@@ -21,12 +21,8 @@ Returns schema in the DDL format of CSV string.
 ## Examples
 
 ```sql
-SELECT schema_of_csv('1,abc');
-```
-
-Result:
-
-```text
+-- schema_of_csv, example 1
+> SELECT schema_of_csv('1,abc');
 STRUCT<_c0: INT, _c1: STRING>
 ```
 

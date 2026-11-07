@@ -21,12 +21,8 @@ Returns `str` enclosed by single quotes and each instance of single quote in it 
 ## Examples
 
 ```sql
-SELECT quote('Don\'t');
-```
-
-Result:
-
-```text
+-- quote, example 1
+> SELECT quote('Don\'t');
 'Don\'t'
 ```
 

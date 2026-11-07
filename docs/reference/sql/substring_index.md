@@ -25,12 +25,8 @@ when searching for `delim`.
 ## Examples
 
 ```sql
-SELECT substring_index('www.apache.org', '.', 2);
-```
-
-Result:
-
-```text
+-- substring_index, example 1
+> SELECT substring_index('www.apache.org', '.', 2);
 www.apache
 ```
 

@@ -22,12 +22,8 @@ The vectors must have the same dimension.
 ## Examples
 
 ```sql
-SELECT vector_cosine_similarity(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));
-```
-
-Result:
-
-```text
+-- vector_cosine_similarity, example 1
+> SELECT vector_cosine_similarity(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));
 0.9746319
 ```
 

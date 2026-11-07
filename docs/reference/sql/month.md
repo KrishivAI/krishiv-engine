@@ -21,12 +21,8 @@ Returns the month component of the date/timestamp.
 ## Examples
 
 ```sql
-SELECT month('2016-07-30');
-```
-
-Result:
-
-```text
+-- month, example 1
+> SELECT month('2016-07-30');
 7
 ```
 

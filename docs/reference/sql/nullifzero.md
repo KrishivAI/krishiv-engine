@@ -21,22 +21,14 @@ Returns null if `expr` is equal to zero, or `expr` otherwise.
 ## Examples
 
 ```sql
-SELECT nullifzero(0);
-```
-
-Result:
-
-```text
+-- nullifzero, example 1
+> SELECT nullifzero(0);
 NULL
 ```
 
 ```sql
-SELECT nullifzero(2);
-```
-
-Result:
-
-```text
+-- nullifzero, example 2
+> SELECT nullifzero(2);
 2
 ```
 

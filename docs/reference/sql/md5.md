@@ -21,12 +21,8 @@ Returns an MD5 128-bit checksum as a hex string of `expr`.
 ## Examples
 
 ```sql
-SELECT md5('Spark');
-```
-
-Result:
-
-```text
+-- md5, example 1
+> SELECT md5('Spark');
 8cde774d6f7333752ed72cacddb05126
 ```
 

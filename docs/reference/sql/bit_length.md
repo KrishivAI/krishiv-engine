@@ -21,22 +21,14 @@ Returns the bit length of string data or number of bits of binary data.
 ## Examples
 
 ```sql
-SELECT bit_length('Spark SQL');
-```
-
-Result:
-
-```text
+-- bit_length, example 1
+> SELECT bit_length('Spark SQL');
 72
 ```
 
 ```sql
-SELECT bit_length(x'537061726b2053514c');
-```
-
-Result:
-
-```text
+-- bit_length, example 2
+> SELECT bit_length(x'537061726b2053514c');
 72
 ```
 

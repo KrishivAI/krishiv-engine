@@ -21,22 +21,14 @@ Subsets array x starting from index start (array indices start at 1, or starting
 ## Examples
 
 ```sql
-SELECT slice(array(1, 2, 3, 4), 2, 2);
-```
-
-Result:
-
-```text
+-- slice, example 1
+> SELECT slice(array(1, 2, 3, 4), 2, 2);
 [2,3]
 ```
 
 ```sql
-SELECT slice(array(1, 2, 3, 4), -2, 2);
-```
-
-Result:
-
-```text
+-- slice, example 2
+> SELECT slice(array(1, 2, 3, 4), -2, 2);
 [3,4]
 ```
 

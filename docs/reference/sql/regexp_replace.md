@@ -21,22 +21,14 @@ Replaces all substrings of `str` that match `regexp` with `rep`.
 ## Examples
 
 ```sql
-SELECT regexp_replace('100-200', '(\\d+)', 'num');
-```
-
-Result:
-
-```text
+-- regexp_replace, example 1
+> SELECT regexp_replace('100-200', '(\\d+)', 'num');
 num-num
 ```
 
 ```sql
-SELECT regexp_replace('100-200', r'(\d+)', 'num');
-```
-
-Result:
-
-```text
+-- regexp_replace, example 2
+> SELECT regexp_replace('100-200', r'(\d+)', 'num');
 num-num
 ```
 

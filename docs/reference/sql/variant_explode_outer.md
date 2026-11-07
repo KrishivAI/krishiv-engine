@@ -21,24 +21,16 @@ It separates a variant object/array into multiple rows containing its fields/ele
 ## Examples
 
 ```sql
-SELECT * from variant_explode_outer(parse_json('["hello", "world"]'));
-```
-
-Result:
-
-```text
-0	NULL	"hello"
-1	NULL	"world"
+-- variant_explode_outer, example 1
+> SELECT * from variant_explode_outer(parse_json('["hello", "world"]'));
+0 | NULL | "hello"
+1 | NULL | "world"
 ```
 
 ```sql
-SELECT * from variant_explode_outer(input => parse_json('{"a": true, "b": 3.14}'));
-```
-
-Result:
-
-```text
-0	a	true
-1	b	3.14
+-- variant_explode_outer, example 2
+> SELECT * from variant_explode_outer(input => parse_json('{"a": true, "b": 3.14}'));
+0 | a | true
+1 | b | 3.14
 ```
 

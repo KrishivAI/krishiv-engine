@@ -21,112 +21,68 @@ Extracts a part of the date or timestamp or time or interval source.
 ## Examples
 
 ```sql
-SELECT extract(YEAR FROM TIMESTAMP '2019-08-12 01:00:00.123456');
-```
-
-Result:
-
-```text
+-- extract, example 1
+> SELECT extract(YEAR FROM TIMESTAMP '2019-08-12 01:00:00.123456');
 2019
 ```
 
 ```sql
-SELECT extract(week FROM timestamp'2019-08-12 01:00:00.123456');
-```
-
-Result:
-
-```text
+-- extract, example 2
+> SELECT extract(week FROM timestamp'2019-08-12 01:00:00.123456');
 33
 ```
 
 ```sql
-SELECT extract(doy FROM DATE'2019-08-12');
-```
-
-Result:
-
-```text
+-- extract, example 3
+> SELECT extract(doy FROM DATE'2019-08-12');
 224
 ```
 
 ```sql
-SELECT extract(SECONDS FROM timestamp'2019-10-01 00:00:01.000001');
-```
-
-Result:
-
-```text
+-- extract, example 4
+> SELECT extract(SECONDS FROM timestamp'2019-10-01 00:00:01.000001');
 1.000001
 ```
 
 ```sql
-SELECT extract(days FROM interval 5 days 3 hours 7 minutes);
-```
-
-Result:
-
-```text
+-- extract, example 5
+> SELECT extract(days FROM interval 5 days 3 hours 7 minutes);
 5
 ```
 
 ```sql
-SELECT extract(seconds FROM interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
-```
-
-Result:
-
-```text
+-- extract, example 6
+> SELECT extract(seconds FROM interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
 30.001001
 ```
 
 ```sql
-SELECT extract(MONTH FROM INTERVAL '2021-11' YEAR TO MONTH);
-```
-
-Result:
-
-```text
+-- extract, example 7
+> SELECT extract(MONTH FROM INTERVAL '2021-11' YEAR TO MONTH);
 11
 ```
 
 ```sql
-SELECT extract(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND);
-```
-
-Result:
-
-```text
+-- extract, example 8
+> SELECT extract(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND);
 55
 ```
 
 ```sql
-SELECT extract(HOUR FROM time '09:08:01.000001');
-```
-
-Result:
-
-```text
+-- extract, example 9
+> SELECT extract(HOUR FROM time '09:08:01.000001');
 9
 ```
 
 ```sql
-SELECT extract(MINUTE FROM time '09:08:01.000001');
-```
-
-Result:
-
-```text
+-- extract, example 10
+> SELECT extract(MINUTE FROM time '09:08:01.000001');
 8
 ```
 
 ```sql
-SELECT extract(SECOND FROM time '09:08:01.000001');
-```
-
-Result:
-
-```text
+-- extract, example 11
+> SELECT extract(SECOND FROM time '09:08:01.000001');
 1.000001
 ```
 

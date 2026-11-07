@@ -21,12 +21,8 @@ Given a timestamp like '2017-07-14 02:40:00.0', interprets it as a time in the g
 ## Examples
 
 ```sql
-SELECT to_utc_timestamp('2016-08-31', 'Asia/Seoul');
-```
-
-Result:
-
-```text
+-- to_utc_timestamp, example 1
+> SELECT to_utc_timestamp('2016-08-31', 'Asia/Seoul');
 2016-08-30 15:00:00
 ```
 

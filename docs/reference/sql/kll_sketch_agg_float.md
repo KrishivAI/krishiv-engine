@@ -23,22 +23,14 @@ Larger k values provide more accurate quantile estimates but result in larger, s
 ## Examples
 
 ```sql
-SELECT LENGTH(kll_sketch_to_string_float(kll_sketch_agg_float(col))) > 0 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);
-```
-
-Result:
-
-```text
-true
+-- kll_sketch_agg_float, example 1
+> SELECT LENGTH(kll_sketch_to_string_float(kll_sketch_agg_float(col))) > 0 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT LENGTH(kll_sketch_to_string_float(kll_sketch_agg_float(col, 400))) > 0 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);
-```
-
-Result:
-
-```text
-true
+-- kll_sketch_agg_float, example 2
+> SELECT LENGTH(kll_sketch_to_string_float(kll_sketch_agg_float(col, 400))) > 0 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

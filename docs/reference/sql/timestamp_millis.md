@@ -21,12 +21,8 @@ Creates timestamp from the number of milliseconds since UTC epoch.
 ## Examples
 
 ```sql
-SELECT timestamp_millis(1230219000123);
-```
-
-Result:
-
-```text
+-- timestamp_millis, example 1
+> SELECT timestamp_millis(1230219000123);
 2008-12-25 07:30:00.123
 ```
 

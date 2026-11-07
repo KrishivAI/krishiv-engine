@@ -21,52 +21,32 @@ Returns REGR_COUNT(y, x) * VAR_POP(x) for non-null pairs in a group, where `y` i
 ## Examples
 
 ```sql
-SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
-2.75
+-- regr_sxx, example 1
+> SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
+2.7499999999999996
 ```
 
 ```sql
-SELECT regr_sxx(y, x) FROM VALUES (1, null) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_sxx, example 2
+> SELECT regr_sxx(y, x) FROM VALUES (1, null) AS tab(y, x);
 NULL
 ```
 
 ```sql
-SELECT regr_sxx(y, x) FROM VALUES (null, 1) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_sxx, example 3
+> SELECT regr_sxx(y, x) FROM VALUES (null, 1) AS tab(y, x);
 NULL
 ```
 
 ```sql
-SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_sxx, example 4
+> SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
 2.0
 ```
 
 ```sql
-SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_sxx, example 5
+> SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
 2.0
 ```
 

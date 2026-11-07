@@ -21,12 +21,8 @@ Returns the number of microseconds since 1970-01-01 00:00:00 UTC.
 ## Examples
 
 ```sql
-SELECT unix_micros(TIMESTAMP('1970-01-01 00:00:01Z'));
-```
-
-Result:
-
-```text
+-- unix_micros, example 1
+> SELECT unix_micros(TIMESTAMP('1970-01-01 00:00:01Z'));
 1000000
 ```
 

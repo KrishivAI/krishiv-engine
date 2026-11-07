@@ -21,12 +21,8 @@ Returns Euler's number, e.
 ## Examples
 
 ```sql
-SELECT e();
-```
-
-Result:
-
-```text
+-- e, example 1
+> SELECT e();
 2.718281828459045
 ```
 

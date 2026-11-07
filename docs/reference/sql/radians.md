@@ -21,12 +21,8 @@ Converts degrees to radians.
 ## Examples
 
 ```sql
-SELECT radians(180);
-```
-
-Result:
-
-```text
+-- radians, example 1
+> SELECT radians(180);
 3.141592653589793
 ```
 

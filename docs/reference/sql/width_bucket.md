@@ -23,82 +23,50 @@ in the range `min_value` to `max_value`."
 ## Examples
 
 ```sql
-SELECT width_bucket(5.3, 0.2, 10.6, 5);
-```
-
-Result:
-
-```text
+-- width_bucket, example 1
+> SELECT width_bucket(5.3, 0.2, 10.6, 5);
 3
 ```
 
 ```sql
-SELECT width_bucket(-2.1, 1.3, 3.4, 3);
-```
-
-Result:
-
-```text
+-- width_bucket, example 2
+> SELECT width_bucket(-2.1, 1.3, 3.4, 3);
 0
 ```
 
 ```sql
-SELECT width_bucket(8.1, 0.0, 5.7, 4);
-```
-
-Result:
-
-```text
+-- width_bucket, example 3
+> SELECT width_bucket(8.1, 0.0, 5.7, 4);
 5
 ```
 
 ```sql
-SELECT width_bucket(-0.9, 5.2, 0.5, 2);
-```
-
-Result:
-
-```text
+-- width_bucket, example 4
+> SELECT width_bucket(-0.9, 5.2, 0.5, 2);
 3
 ```
 
 ```sql
-SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
-```
-
-Result:
-
-```text
+-- width_bucket, example 5
+> SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
 1
 ```
 
 ```sql
-SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
-```
-
-Result:
-
-```text
+-- width_bucket, example 6
+> SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
 2
 ```
 
 ```sql
-SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
-```
-
-Result:
-
-```text
+-- width_bucket, example 7
+> SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
 1
 ```
 
 ```sql
-SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
-```
-
-Result:
-
-```text
+-- width_bucket, example 8
+> SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
 2
 ```
 

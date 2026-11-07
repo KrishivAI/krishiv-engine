@@ -21,12 +21,8 @@ Collects and returns a list of non-unique elements.
 ## Examples
 
 ```sql
-SELECT array_agg(col) FROM VALUES (1), (2), (1) AS tab(col);
-```
-
-Result:
-
-```text
+-- array_agg, example 1
+> SELECT array_agg(col) FROM VALUES (1), (2), (1) AS tab(col);
 [1,2,1]
 ```
 

@@ -21,22 +21,14 @@ Transforms elements in a map using the function.
 ## Examples
 
 ```sql
-SELECT transform_keys(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> k + 1);
-```
-
-Result:
-
-```text
+-- transform_keys, example 1
+> SELECT transform_keys(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> k + 1);
 {2:1,3:2,4:3}
 ```
 
 ```sql
-SELECT transform_keys(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> k + v);
-```
-
-Result:
-
-```text
+-- transform_keys, example 2
+> SELECT transform_keys(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> k + v);
 {2:1,4:2,6:3}
 ```
 

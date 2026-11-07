@@ -21,22 +21,14 @@ Removes null values from the array.
 ## Examples
 
 ```sql
-SELECT array_compact(array(1, 2, 3, null));
-```
-
-Result:
-
-```text
+-- array_compact, example 1
+> SELECT array_compact(array(1, 2, 3, null));
 [1,2,3]
 ```
 
 ```sql
-SELECT array_compact(array("a", "b", "c"));
-```
-
-Result:
-
-```text
+-- array_compact, example 2
+> SELECT array_compact(array("a", "b", "c"));
 ["a","b","c"]
 ```
 

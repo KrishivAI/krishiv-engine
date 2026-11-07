@@ -21,42 +21,26 @@ Convert a nested input (array/map/struct) into a variant where maps and structs 
 ## Examples
 
 ```sql
-SELECT to_variant_object(named_struct('a', 1, 'b', 2));
-```
-
-Result:
-
-```text
+-- to_variant_object, example 1
+> SELECT to_variant_object(named_struct('a', 1, 'b', 2));
 {"a":1,"b":2}
 ```
 
 ```sql
-SELECT to_variant_object(array(1, 2, 3));
-```
-
-Result:
-
-```text
+-- to_variant_object, example 2
+> SELECT to_variant_object(array(1, 2, 3));
 [1,2,3]
 ```
 
 ```sql
-SELECT to_variant_object(array(named_struct('a', 1)));
-```
-
-Result:
-
-```text
+-- to_variant_object, example 3
+> SELECT to_variant_object(array(named_struct('a', 1)));
 [{"a":1}]
 ```
 
 ```sql
-SELECT to_variant_object(array(map("a", 2)));
-```
-
-Result:
-
-```text
+-- to_variant_object, example 4
+> SELECT to_variant_object(array(map("a", 2)));
 [{"a":2}]
 ```
 

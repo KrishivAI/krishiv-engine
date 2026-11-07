@@ -21,12 +21,8 @@ Returns the date that is `num_months` after `start_date`.
 ## Examples
 
 ```sql
-SELECT add_months('2016-08-31', 1);
-```
-
-Result:
-
-```text
+-- add_months, example 1
+> SELECT add_months('2016-08-31', 1);
 2016-09-30
 ```
 

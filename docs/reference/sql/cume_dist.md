@@ -21,15 +21,11 @@ Computes the position of a value relative to all values in the partition.
 ## Examples
 
 ```sql
-SELECT a, b, cume_dist() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
-```
-
-Result:
-
-```text
-A1	1	0.6666666666666666
-A1	1	0.6666666666666666
-A1	2	1.0
-A2	3	1.0
+-- cume_dist, example 1
+> SELECT a, b, cume_dist() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+A1 | 1 | 0.6666666666666666
+A1 | 1 | 0.6666666666666666
+A1 | 2 | 1.0
+A2 | 3 | 1.0
 ```
 

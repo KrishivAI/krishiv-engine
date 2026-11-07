@@ -24,22 +24,14 @@ This is supposed to function like MySQL's FORMAT.
 ## Examples
 
 ```sql
-SELECT format_number(12332.123456, 4);
-```
-
-Result:
-
-```text
+-- format_number, example 1
+> SELECT format_number(12332.123456, 4);
 12,332.1235
 ```
 
 ```sql
-SELECT format_number(12332.123456, '##################.###');
-```
-
-Result:
-
-```text
+-- format_number, example 2
+> SELECT format_number(12332.123456, '##################.###');
 12332.123
 ```
 

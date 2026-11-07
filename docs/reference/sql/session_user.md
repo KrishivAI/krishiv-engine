@@ -21,12 +21,8 @@ user name of current execution context.
 ## Examples
 
 ```sql
-SELECT session_user();
-```
-
-Result:
-
-```text
-mockingjay
+-- session_user, example 1
+> SELECT session_user();
+krishiv
 ```
 

@@ -23,72 +23,44 @@ try_make_timestamp_ltz(date, time[, timezone]) - Try to create the current times
 ## Examples
 
 ```sql
-SELECT try_make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887);
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ltz, example 1
+> SELECT try_make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887);
 2014-12-28 06:30:45.887
 ```
 
 ```sql
-SELECT try_make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, 'CET');
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ltz, example 2
+> SELECT try_make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, 'CET');
 2014-12-27 21:30:45.887
 ```
 
 ```sql
-SELECT try_make_timestamp_ltz(2019, 6, 30, 23, 59, 60);
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ltz, example 3
+> SELECT try_make_timestamp_ltz(2019, 6, 30, 23, 59, 60);
 2019-07-01 00:00:00
 ```
 
 ```sql
-SELECT try_make_timestamp_ltz(null, 7, 22, 15, 30, 0);
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ltz, example 4
+> SELECT try_make_timestamp_ltz(null, 7, 22, 15, 30, 0);
 NULL
 ```
 
 ```sql
-SELECT try_make_timestamp_ltz(2024, 13, 22, 15, 30, 0);
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ltz, example 5
+> SELECT try_make_timestamp_ltz(2024, 13, 22, 15, 30, 0);
 NULL
 ```
 
 ```sql
-SELECT try_make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887');
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ltz, example 6
+> SELECT try_make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887');
 2014-12-28 06:30:45.887
 ```
 
 ```sql
-SELECT try_make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', 'CET');
-```
-
-Result:
-
-```text
+-- try_make_timestamp_ltz, example 7
+> SELECT try_make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', 'CET');
 2014-12-27 21:30:45.887
 ```
 

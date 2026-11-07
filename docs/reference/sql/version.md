@@ -21,12 +21,8 @@ Returns the Spark version. The string contains 2 fields, the first being a relea
 ## Examples
 
 ```sql
-SELECT version();
-```
-
-Result:
-
-```text
-3.1.0 a6d6ea3efedbad14d99c24143834cd4e2e52fb40
+-- version, example 1
+> SELECT version();
+4.2.0
 ```
 

@@ -23,72 +23,44 @@ If all values are NULL, NULL is returned.
 ## Examples
 
 ```sql
-SELECT string_agg(col) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-```
-
-Result:
-
-```text
+-- string_agg, example 1
+> SELECT string_agg(col) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
 abc
 ```
 
 ```sql
-SELECT string_agg(col) WITHIN GROUP (ORDER BY col DESC) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-```
-
-Result:
-
-```text
+-- string_agg, example 2
+> SELECT string_agg(col) WITHIN GROUP (ORDER BY col DESC) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
 cba
 ```
 
 ```sql
-SELECT string_agg(col) FROM VALUES ('a'), (NULL), ('b') AS tab(col);
-```
-
-Result:
-
-```text
+-- string_agg, example 3
+> SELECT string_agg(col) FROM VALUES ('a'), (NULL), ('b') AS tab(col);
 ab
 ```
 
 ```sql
-SELECT string_agg(col) FROM VALUES ('a'), ('a') AS tab(col);
-```
-
-Result:
-
-```text
+-- string_agg, example 4
+> SELECT string_agg(col) FROM VALUES ('a'), ('a') AS tab(col);
 aa
 ```
 
 ```sql
-SELECT string_agg(DISTINCT col) FROM VALUES ('a'), ('a'), ('b') AS tab(col);
-```
-
-Result:
-
-```text
+-- string_agg, example 5
+> SELECT string_agg(DISTINCT col) FROM VALUES ('a'), ('a'), ('b') AS tab(col);
 ab
 ```
 
 ```sql
-SELECT string_agg(col, ', ') FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-```
-
-Result:
-
-```text
+-- string_agg, example 6
+> SELECT string_agg(col, ', ') FROM VALUES ('a'), ('b'), ('c') AS tab(col);
 a, b, c
 ```
 
 ```sql
-SELECT string_agg(col) FROM VALUES (NULL), (NULL) AS tab(col);
-```
-
-Result:
-
-```text
+-- string_agg, example 7
+> SELECT string_agg(col) FROM VALUES (NULL), (NULL) AS tab(col);
 NULL
 ```
 

@@ -21,12 +21,8 @@ Given a timestamp like '2017-07-14 02:40:00.0', interprets it as a time in UTC, 
 ## Examples
 
 ```sql
-SELECT from_utc_timestamp('2016-08-31', 'Asia/Seoul');
-```
-
-Result:
-
-```text
+-- from_utc_timestamp, example 1
+> SELECT from_utc_timestamp('2016-08-31', 'Asia/Seoul');
 2016-08-31 09:00:00
 ```
 

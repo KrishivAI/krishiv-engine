@@ -21,12 +21,8 @@ Returns the greatest value of all parameters, skipping null values.
 ## Examples
 
 ```sql
-SELECT greatest(10, 9, 2, 4, 3);
-```
-
-Result:
-
-```text
+-- greatest, example 1
+> SELECT greatest(10, 9, 2, 4, 3);
 10
 ```
 

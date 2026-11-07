@@ -21,22 +21,14 @@ Returns the Levenshtein distance between the two given strings. If threshold is 
 ## Examples
 
 ```sql
-SELECT levenshtein('kitten', 'sitting');
-```
-
-Result:
-
-```text
+-- levenshtein, example 1
+> SELECT levenshtein('kitten', 'sitting');
 3
 ```
 
 ```sql
-SELECT levenshtein('kitten', 'sitting', 2);
-```
-
-Result:
-
-```text
+-- levenshtein, example 2
+> SELECT levenshtein('kitten', 'sitting', 2);
 -1
 ```
 

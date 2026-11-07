@@ -21,52 +21,32 @@ Returns the average of the dependent variable for non-null pairs in a group, whe
 ## Examples
 
 ```sql
-SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_avgy, example 1
+> SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
 1.75
 ```
 
 ```sql
-SELECT regr_avgy(y, x) FROM VALUES (1, null) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_avgy, example 2
+> SELECT regr_avgy(y, x) FROM VALUES (1, null) AS tab(y, x);
 NULL
 ```
 
 ```sql
-SELECT regr_avgy(y, x) FROM VALUES (null, 1) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_avgy, example 3
+> SELECT regr_avgy(y, x) FROM VALUES (null, 1) AS tab(y, x);
 NULL
 ```
 
 ```sql
-SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_avgy, example 4
+> SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
 1.6666666666666667
 ```
 
 ```sql
-SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-```
-
-Result:
-
-```text
+-- regr_avgy, example 5
+> SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
 1.5
 ```
 

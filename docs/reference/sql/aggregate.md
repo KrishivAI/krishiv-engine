@@ -23,22 +23,14 @@ into the final result by applying a finish function.
 ## Examples
 
 ```sql
-SELECT aggregate(array(1, 2, 3), 0, (acc, x) -> acc + x);
-```
-
-Result:
-
-```text
+-- aggregate, example 1
+> SELECT aggregate(array(1, 2, 3), 0, (acc, x) -> acc + x);
 6
 ```
 
 ```sql
-SELECT aggregate(array(1, 2, 3), 0, (acc, x) -> acc + x, acc -> acc * 10);
-```
-
-Result:
-
-```text
+-- aggregate, example 2
+> SELECT aggregate(array(1, 2, 3), 0, (acc, x) -> acc + x, acc -> acc * 10);
 60
 ```
 

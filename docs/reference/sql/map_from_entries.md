@@ -21,12 +21,8 @@ Returns a map created from the given array of entries.
 ## Examples
 
 ```sql
-SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b')));
-```
-
-Result:
-
-```text
+-- map_from_entries, example 1
+> SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b')));
 {1:"a",2:"b"}
 ```
 

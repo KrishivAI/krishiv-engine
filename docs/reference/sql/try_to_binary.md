@@ -21,32 +21,20 @@ This is a special version of `to_binary` that performs the same operation, but r
 ## Examples
 
 ```sql
-SELECT try_to_binary('abc', 'utf-8');
-```
-
-Result:
-
-```text
+-- try_to_binary, example 1
+> SELECT try_to_binary('abc', 'utf-8');
 abc
 ```
 
 ```sql
-select try_to_binary('a!', 'base64');
-```
-
-Result:
-
-```text
+-- try_to_binary, example 2
+> select try_to_binary('a!', 'base64');
 NULL
 ```
 
 ```sql
-select try_to_binary('abc', 'invalidFormat');
-```
-
-Result:
-
-```text
+-- try_to_binary, example 3
+> select try_to_binary('abc', 'invalidFormat');
 NULL
 ```
 

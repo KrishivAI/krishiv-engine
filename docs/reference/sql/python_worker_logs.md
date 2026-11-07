@@ -21,16 +21,14 @@ Returns a table of logs collected from Python workers.
 ## Examples
 
 ```sql
-SET spark.sql.pyspark.worker.logging.enabled=true;
-```
-
-Result:
-
-```text
-spark.sql.pyspark.worker.logging.enabled	true
+-- python_worker_logs, example 1
+> SET spark.sql.pyspark.worker.logging.enabled=true;
+spark.sql.pyspark.worker.logging.enabled | true
 ```
 
 ```sql
-SELECT * FROM python_worker_logs();
+-- python_worker_logs, example 2
+> SELECT * FROM python_worker_logs();
+Error: UNRESOLVABLE_TABLE_VALUED_FUNCTION
 ```
 

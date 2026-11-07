@@ -26,12 +26,8 @@ number.
 ## Examples
 
 ```sql
-SELECT uniform(10, 20, 0) > 0 AS result;
-```
-
-Result:
-
-```text
+-- uniform, example 1
+> SELECT uniform(10, 20, 0) > 0 AS result;
 true
 ```
 

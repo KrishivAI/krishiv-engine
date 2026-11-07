@@ -21,32 +21,20 @@ Returns the string representation of the long value `expr` represented in binary
 ## Examples
 
 ```sql
-SELECT bin(13);
-```
-
-Result:
-
-```text
+-- bin, example 1
+> SELECT bin(13);
 1101
 ```
 
 ```sql
-SELECT bin(-13);
-```
-
-Result:
-
-```text
+-- bin, example 2
+> SELECT bin(-13);
 1111111111111111111111111111111111111111111111111111111111110011
 ```
 
 ```sql
-SELECT bin(13.3);
-```
-
-Result:
-
-```text
+-- bin, example 3
+> SELECT bin(13.3);
 1101
 ```
 

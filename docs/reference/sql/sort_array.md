@@ -24,22 +24,14 @@ array in ascending order or at the end of the returned array in descending order
 ## Examples
 
 ```sql
-SELECT sort_array(array('b', 'd', null, 'c', 'a'), true);
-```
-
-Result:
-
-```text
+-- sort_array, example 1
+> SELECT sort_array(array('b', 'd', null, 'c', 'a'), true);
 [null,"a","b","c","d"]
 ```
 
 ```sql
-SELECT sort_array(array('b', 'd', null, 'c', 'a'), false);
-```
-
-Result:
-
-```text
+-- sort_array, example 2
+> SELECT sort_array(array('b', 'd', null, 'c', 'a'), false);
 ["d","c","b","a",null]
 ```
 

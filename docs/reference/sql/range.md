@@ -21,46 +21,22 @@ Returns a table of values within a specified range.
 ## Examples
 
 ```sql
-SELECT * FROM range(1);
-```
-
-Result:
-
-```text
-+---+
-| id|
-+---+
-|  0|
-+---+
+-- range, example 1
+> SELECT * FROM range(1);
+0
 ```
 
 ```sql
-SELECT * FROM range(0, 2);
-```
-
-Result:
-
-```text
-+---+
-|id |
-+---+
-|0  |
-|1  |
-+---+
+-- range, example 2
+> SELECT * FROM range(0, 2);
+0
+1
 ```
 
 ```sql
-SELECT * FROM range(0, 4, 2);
-```
-
-Result:
-
-```text
-+---+
-|id |
-+---+
-|0  |
-|2  |
-+---+
+-- range, example 3
+> SELECT * FROM range(0, 4, 2);
+0
+2
 ```
 

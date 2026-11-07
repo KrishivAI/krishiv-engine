@@ -30,42 +30,26 @@ then the step expression must resolve to the 'interval' or 'year-month interval'
 ## Examples
 
 ```sql
-SELECT sequence(1, 5);
-```
-
-Result:
-
-```text
+-- sequence, example 1
+> SELECT sequence(1, 5);
 [1,2,3,4,5]
 ```
 
 ```sql
-SELECT sequence(5, 1);
-```
-
-Result:
-
-```text
+-- sequence, example 2
+> SELECT sequence(5, 1);
 [5,4,3,2,1]
 ```
 
 ```sql
-SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval 1 month);
-```
-
-Result:
-
-```text
-[2018-01-01,2018-02-01,2018-03-01]
+-- sequence, example 3
+> SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval 1 month);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval '0-1' year to month);
-```
-
-Result:
-
-```text
-[2018-01-01,2018-02-01,2018-03-01]
+-- sequence, example 4
+> SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval '0-1' year to month);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

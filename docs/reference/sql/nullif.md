@@ -21,12 +21,8 @@ Returns null if `expr1` equals to `expr2`, or `expr1` otherwise.
 ## Examples
 
 ```sql
-SELECT nullif(2, 2);
-```
-
-Result:
-
-```text
+-- nullif, example 1
+> SELECT nullif(2, 2);
 NULL
 ```
 

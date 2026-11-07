@@ -21,42 +21,26 @@ Make year-month interval from years, months.
 ## Examples
 
 ```sql
-SELECT make_ym_interval(1, 2);
-```
-
-Result:
-
-```text
+-- make_ym_interval, example 1
+> SELECT make_ym_interval(1, 2);
 1-2
 ```
 
 ```sql
-SELECT make_ym_interval(1, 0);
-```
-
-Result:
-
-```text
+-- make_ym_interval, example 2
+> SELECT make_ym_interval(1, 0);
 1-0
 ```
 
 ```sql
-SELECT make_ym_interval(-1, 1);
-```
-
-Result:
-
-```text
+-- make_ym_interval, example 3
+> SELECT make_ym_interval(-1, 1);
 -0-11
 ```
 
 ```sql
-SELECT make_ym_interval(2);
-```
-
-Result:
-
-```text
+-- make_ym_interval, example 4
+> SELECT make_ym_interval(2);
 2-0
 ```
 

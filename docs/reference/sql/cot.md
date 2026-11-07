@@ -21,12 +21,8 @@ Returns the cotangent of `expr`, as if computed by `1/java.lang.Math.tan`.
 ## Examples
 
 ```sql
-SELECT cot(1);
-```
-
-Result:
-
-```text
+-- cot, example 1
+> SELECT cot(1);
 0.6420926159343306
 ```
 

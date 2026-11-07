@@ -21,12 +21,8 @@ Transforms an array of arrays into a single array.
 ## Examples
 
 ```sql
-SELECT flatten(array(array(1, 2), array(3, 4)));
-```
-
-Result:
-
-```text
+-- flatten, example 1
+> SELECT flatten(array(array(1, 2), array(3, 4)));
 [1,2,3,4]
 ```
 

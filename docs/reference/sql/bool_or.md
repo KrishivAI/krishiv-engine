@@ -21,32 +21,20 @@ Returns true if at least one value of `expr` is true.
 ## Examples
 
 ```sql
-SELECT bool_or(col) FROM VALUES (true), (false), (false) AS tab(col);
-```
-
-Result:
-
-```text
+-- bool_or, example 1
+> SELECT bool_or(col) FROM VALUES (true), (false), (false) AS tab(col);
 true
 ```
 
 ```sql
-SELECT bool_or(col) FROM VALUES (NULL), (true), (false) AS tab(col);
-```
-
-Result:
-
-```text
+-- bool_or, example 2
+> SELECT bool_or(col) FROM VALUES (NULL), (true), (false) AS tab(col);
 true
 ```
 
 ```sql
-SELECT bool_or(col) FROM VALUES (false), (false), (NULL) AS tab(col);
-```
-
-Result:
-
-```text
+-- bool_or, example 3
+> SELECT bool_or(col) FROM VALUES (false), (false), (NULL) AS tab(col);
 false
 ```
 

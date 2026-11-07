@@ -21,12 +21,8 @@ Returns the start offset of the block being read, or -1 if not available.
 ## Examples
 
 ```sql
-SELECT input_file_block_start();
-```
-
-Result:
-
-```text
+-- input_file_block_start, example 1
+> SELECT input_file_block_start();
 -1
 ```
 

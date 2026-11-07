@@ -21,22 +21,14 @@ Parse a JSON string as a Variant value. Return NULL when the string is not valid
 ## Examples
 
 ```sql
-SELECT try_parse_json('{"a":1,"b":0.8}');
-```
-
-Result:
-
-```text
+-- try_parse_json, example 1
+> SELECT try_parse_json('{"a":1,"b":0.8}');
 {"a":1,"b":0.8}
 ```
 
 ```sql
-SELECT try_parse_json('{"a":1,');
-```
-
-Result:
-
-```text
+-- try_parse_json, example 2
+> SELECT try_parse_json('{"a":1,');
 NULL
 ```
 

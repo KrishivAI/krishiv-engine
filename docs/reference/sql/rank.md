@@ -23,15 +23,11 @@ will produce gaps in the sequence.
 ## Examples
 
 ```sql
-SELECT a, b, rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
-```
-
-Result:
-
-```text
-A1	1	1
-A1	1	1
-A1	2	3
-A2	3	1
+-- rank, example 1
+> SELECT a, b, rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+A1 | 1 | 1
+A1 | 1 | 1
+A1 | 2 | 3
+A2 | 3 | 1
 ```
 

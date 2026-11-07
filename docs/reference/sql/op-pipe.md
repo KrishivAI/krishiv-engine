@@ -21,12 +21,8 @@ Returns the result of bitwise OR of `expr1` and `expr2`.
 ## Examples
 
 ```sql
-SELECT 3 | 5;
-```
-
-Result:
-
-```text
+-- |, example 1
+> SELECT 3 | 5;
 7
 ```
 

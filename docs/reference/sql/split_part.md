@@ -25,12 +25,8 @@ end of the string. If the `delimiter` is an empty string, the `str` is not split
 ## Examples
 
 ```sql
-SELECT split_part('11.12.13', '.', 3);
-```
-
-Result:
-
-```text
+-- split_part, example 1
+> SELECT split_part('11.12.13', '.', 3);
 13
 ```
 

@@ -21,12 +21,8 @@ Returns the string which repeats the given string value n times.
 ## Examples
 
 ```sql
-SELECT repeat('123', 2);
-```
-
-Result:
-
-```text
+-- repeat, example 1
+> SELECT repeat('123', 2);
 123123
 ```
 

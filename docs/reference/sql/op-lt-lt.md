@@ -21,22 +21,14 @@ Bitwise left shift.
 ## Examples
 
 ```sql
-SELECT shiftleft(2, 1);
-```
-
-Result:
-
-```text
+-- <<, example 1
+> SELECT shiftleft(2, 1);
 4
 ```
 
 ```sql
-SELECT 2 << 1;
-```
-
-Result:
-
-```text
+-- <<, example 2
+> SELECT 2 << 1;
 4
 ```
 

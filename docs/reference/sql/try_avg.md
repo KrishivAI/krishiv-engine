@@ -21,32 +21,20 @@ Returns the mean calculated from values of a group and the result is null on ove
 ## Examples
 
 ```sql
-SELECT try_avg(col) FROM VALUES (1), (2), (3) AS tab(col);
-```
-
-Result:
-
-```text
+-- try_avg, example 1
+> SELECT try_avg(col) FROM VALUES (1), (2), (3) AS tab(col);
 2.0
 ```
 
 ```sql
-SELECT try_avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);
-```
-
-Result:
-
-```text
+-- try_avg, example 2
+> SELECT try_avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);
 1.5
 ```
 
 ```sql
-SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col);
-```
-
-Result:
-
-```text
+-- try_avg, example 3
+> SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col);
 NULL
 ```
 

@@ -21,12 +21,8 @@ Returns the (1-based) index of the first occurrence of `substr` in `str`.
 ## Examples
 
 ```sql
-SELECT instr('SparkSQL', 'SQL');
-```
-
-Result:
-
-```text
+-- instr, example 1
+> SELECT instr('SparkSQL', 'SQL');
 6
 ```
 

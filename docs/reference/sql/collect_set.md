@@ -21,12 +21,8 @@ Collects and returns a set of unique elements.
 ## Examples
 
 ```sql
-SELECT collect_set(col) FROM VALUES (1), (2), (1) AS tab(col);
-```
-
-Result:
-
-```text
+-- collect_set, example 1
+> SELECT collect_set(col) FROM VALUES (1), (2), (1) AS tab(col);
 [1,2]
 ```
 

@@ -21,13 +21,9 @@ Separates `expr1`, ..., `exprk` into `n` rows. Uses column names col0, col1, etc
 ## Examples
 
 ```sql
-SELECT stack(2, 1, 2, 3);
-```
-
-Result:
-
-```text
-1	2
-3	NULL
+-- stack, example 1
+> SELECT stack(2, 1, 2, 3);
+1 | 2
+3 | NULL
 ```
 

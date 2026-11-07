@@ -20,15 +20,10 @@ this function is used and can only be used to calculate a measure defined in a m
 ## Examples
 
 ```sql
-SELECT dimension_col, measure(measure_col)
-FROM test_metric_view
-GROUP BY dimension_col;
-```
-
-Result:
-
-```text
-dim_1, 100
-dim_2, 200
+-- measure, example 1
+> SELECT dimension_col, measure(measure_col)
+> FROM test_metric_view
+> GROUP BY dimension_col;
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

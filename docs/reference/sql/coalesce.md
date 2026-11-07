@@ -21,12 +21,8 @@ Returns the first non-null argument if exists. Otherwise, null.
 ## Examples
 
 ```sql
-SELECT coalesce(NULL, 1, NULL);
-```
-
-Result:
-
-```text
+-- coalesce, example 1
+> SELECT coalesce(NULL, 1, NULL);
 1
 ```
 

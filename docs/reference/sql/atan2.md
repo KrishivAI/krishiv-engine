@@ -23,12 +23,8 @@ and the point given by the coordinates (`exprX`, `exprY`), as if computed by
 ## Examples
 
 ```sql
-SELECT atan2(0, 0);
-```
-
-Result:
-
-```text
+-- atan2, example 1
+> SELECT atan2(0, 0);
 0.0
 ```
 

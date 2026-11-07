@@ -21,12 +21,8 @@ Returns true if `expr` is not null, or false otherwise.
 ## Examples
 
 ```sql
-SELECT isnotnull(1);
-```
-
-Result:
-
-```text
+-- isnotnull, example 1
+> SELECT isnotnull(1);
 true
 ```
 

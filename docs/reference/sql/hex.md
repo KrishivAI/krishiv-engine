@@ -21,22 +21,14 @@ Converts `expr` to hexadecimal.
 ## Examples
 
 ```sql
-SELECT hex(17);
-```
-
-Result:
-
-```text
+-- hex, example 1
+> SELECT hex(17);
 11
 ```
 
 ```sql
-SELECT hex('Spark SQL');
-```
-
-Result:
-
-```text
+-- hex, example 2
+> SELECT hex('Spark SQL');
 537061726B2053514C
 ```
 

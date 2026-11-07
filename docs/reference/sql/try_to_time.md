@@ -23,32 +23,20 @@ returns NULL. By default, it follows casting rules to a time if the `format` is 
 ## Examples
 
 ```sql
-SELECT try_to_time('00:12:00.001');
-```
-
-Result:
-
-```text
+-- try_to_time, example 1
+> SELECT try_to_time('00:12:00.001');
 00:12:00.001
 ```
 
 ```sql
-SELECT try_to_time('12.10.05.999999', 'HH.mm.ss.SSSSSS');
-```
-
-Result:
-
-```text
+-- try_to_time, example 2
+> SELECT try_to_time('12.10.05.999999', 'HH.mm.ss.SSSSSS');
 12:10:05.999999
 ```
 
 ```sql
-SELECT try_to_time('foo', 'HH:mm:ss');
-```
-
-Result:
-
-```text
+-- try_to_time, example 3
+> SELECT try_to_time('foo', 'HH:mm:ss');
 NULL
 ```
 

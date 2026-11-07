@@ -26,22 +26,14 @@ try_element_at(map, key) - Returns value for given key. The function always retu
 ## Examples
 
 ```sql
-SELECT try_element_at(array(1, 2, 3), 2);
-```
-
-Result:
-
-```text
+-- try_element_at, example 1
+> SELECT try_element_at(array(1, 2, 3), 2);
 2
 ```
 
 ```sql
-SELECT try_element_at(map(1, 'a', 2, 'b'), 2);
-```
-
-Result:
-
-```text
+-- try_element_at, example 2
+> SELECT try_element_at(map(1, 'a', 2, 'b'), 2);
 b
 ```
 

@@ -23,12 +23,8 @@ localtimestamp - Returns the current local date-time at the session time zone at
 ## Examples
 
 ```sql
-SELECT localtimestamp();
-```
-
-Result:
-
-```text
-2020-04-25 15:49:11.914
+-- localtimestamp, example 1
+> SELECT localtimestamp();
+-- the result differs on every run
 ```
 

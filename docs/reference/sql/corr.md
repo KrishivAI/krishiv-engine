@@ -21,12 +21,8 @@ Returns Pearson coefficient of correlation between a set of number pairs.
 ## Examples
 
 ```sql
-SELECT corr(c1, c2) FROM VALUES (3, 2), (3, 3), (6, 4) as tab(c1, c2);
-```
-
-Result:
-
-```text
+-- corr, example 1
+> SELECT corr(c1, c2) FROM VALUES (3, 2), (3, 3), (6, 4) as tab(c1, c2);
 0.8660254037844387
 ```
 

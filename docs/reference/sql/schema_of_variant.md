@@ -21,22 +21,14 @@ Returns schema in the SQL format of a variant.
 ## Examples
 
 ```sql
-SELECT schema_of_variant(parse_json('null'));
-```
-
-Result:
-
-```text
+-- schema_of_variant, example 1
+> SELECT schema_of_variant(parse_json('null'));
 VOID
 ```
 
 ```sql
-SELECT schema_of_variant(parse_json('[{"b":true,"a":0}]'));
-```
-
-Result:
-
-```text
+-- schema_of_variant, example 2
+> SELECT schema_of_variant(parse_json('[{"b":true,"a":0}]'));
 ARRAY<OBJECT<a: BIGINT, b: BOOLEAN>>
 ```
 

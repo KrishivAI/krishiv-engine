@@ -21,12 +21,8 @@ Raises `expr1` to the power of `expr2`.
 ## Examples
 
 ```sql
-SELECT power(2, 3);
-```
-
-Result:
-
-```text
+-- power, example 1
+> SELECT power(2, 3);
 8.0
 ```
 

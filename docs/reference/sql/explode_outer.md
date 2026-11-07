@@ -21,23 +21,15 @@ Separates the elements of array `expr` into multiple rows, or the elements of ma
 ## Examples
 
 ```sql
-SELECT explode_outer(array(10, 20));
-```
-
-Result:
-
-```text
+-- explode_outer, example 1
+> SELECT explode_outer(array(10, 20));
 10
 20
 ```
 
 ```sql
-SELECT explode_outer(collection => array(10, 20));
-```
-
-Result:
-
-```text
+-- explode_outer, example 2
+> SELECT explode_outer(collection => array(10, 20));
 10
 20
 ```

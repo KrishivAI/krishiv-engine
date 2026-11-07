@@ -21,12 +21,8 @@ Returns a cyclic redundancy check value of the `expr` as a bigint.
 ## Examples
 
 ```sql
-SELECT crc32('Spark');
-```
-
-Result:
-
-```text
+-- crc32, example 1
+> SELECT crc32('Spark');
 1557323817
 ```
 

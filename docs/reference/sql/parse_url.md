@@ -21,32 +21,20 @@ Extracts a part from a URL.
 ## Examples
 
 ```sql
-SELECT parse_url('http://spark.apache.org/path?query=1', 'HOST');
-```
-
-Result:
-
-```text
+-- parse_url, example 1
+> SELECT parse_url('http://spark.apache.org/path?query=1', 'HOST');
 spark.apache.org
 ```
 
 ```sql
-SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY');
-```
-
-Result:
-
-```text
+-- parse_url, example 2
+> SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY');
 query=1
 ```
 
 ```sql
-SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', 'query');
-```
-
-Result:
-
-```text
+-- parse_url, example 3
+> SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', 'query');
 1
 ```
 

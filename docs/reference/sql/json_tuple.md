@@ -21,12 +21,8 @@ Returns a tuple like the function get_json_object, but it takes multiple names. 
 ## Examples
 
 ```sql
-SELECT json_tuple('{"a":1, "b":2}', 'a', 'b');
-```
-
-Result:
-
-```text
-1	2
+-- json_tuple, example 1
+> SELECT json_tuple('{"a":1, "b":2}', 'a', 'b');
+1 | 2
 ```
 

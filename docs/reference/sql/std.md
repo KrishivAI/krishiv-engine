@@ -21,12 +21,8 @@ Returns the sample standard deviation calculated from values of a group.
 ## Examples
 
 ```sql
-SELECT std(col) FROM VALUES (1), (2), (3) AS tab(col);
-```
-
-Result:
-
-```text
+-- std, example 1
+> SELECT std(col) FROM VALUES (1), (2), (3) AS tab(col);
 1.0
 ```
 

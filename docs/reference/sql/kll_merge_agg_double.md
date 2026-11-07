@@ -24,12 +24,8 @@ If k is not specified, the merged sketch adopts the k value from the first input
 ## Examples
 
 ```sql
-SELECT kll_sketch_get_n_double(kll_merge_agg_double(sketch)) FROM (SELECT kll_sketch_agg_double(col) as sketch FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)) tab(col) UNION ALL SELECT kll_sketch_agg_double(col) as sketch FROM VALUES (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)), (CAST(6.0 AS DOUBLE)) tab(col)) t;
-```
-
-Result:
-
-```text
-6
+-- kll_merge_agg_double, example 1
+> SELECT kll_sketch_get_n_double(kll_merge_agg_double(sketch)) FROM (SELECT kll_sketch_agg_double(col) as sketch FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)) tab(col) UNION ALL SELECT kll_sketch_agg_double(col) as sketch FROM VALUES (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)), (CAST(6.0 AS DOUBLE)) tab(col)) t;
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

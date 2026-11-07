@@ -21,12 +21,8 @@ Returns the day of month of the date/timestamp.
 ## Examples
 
 ```sql
-SELECT dayofmonth('2009-07-30');
-```
-
-Result:
-
-```text
+-- dayofmonth, example 1
+> SELECT dayofmonth('2009-07-30');
 30
 ```
 

@@ -21,12 +21,8 @@ Returns a hash value of the arguments.
 ## Examples
 
 ```sql
-SELECT hash('Spark', array(123), 2);
-```
-
-Result:
-
-```text
+-- hash, example 1
+> SELECT hash('Spark', array(123), 2);
 -1321691492
 ```
 

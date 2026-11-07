@@ -21,12 +21,8 @@ This is a special version of `url_decode` that performs the same operation, but 
 ## Examples
 
 ```sql
-SELECT try_url_decode('https%3A%2F%2Fspark.apache.org');
-```
-
-Result:
-
-```text
+-- try_url_decode, example 1
+> SELECT try_url_decode('https%3A%2F%2Fspark.apache.org');
 https://spark.apache.org
 ```
 

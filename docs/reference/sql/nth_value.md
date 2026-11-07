@@ -25,15 +25,11 @@ is less than 10), null is returned.
 ## Examples
 
 ```sql
-SELECT a, b, nth_value(b, 2) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
-```
-
-Result:
-
-```text
-A1	1	1
-A1	1	1
-A1	2	1
-A2	3	NULL
+-- nth_value, example 1
+> SELECT a, b, nth_value(b, 2) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+A1 | 1 | 1
+A1 | 1 | 1
+A1 | 2 | 1
+A2 | 3 | NULL
 ```
 

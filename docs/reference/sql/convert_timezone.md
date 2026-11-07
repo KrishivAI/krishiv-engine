@@ -21,22 +21,14 @@ Converts the timestamp without time zone `sourceTs` from the `sourceTz` time zon
 ## Examples
 
 ```sql
-SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00');
-```
-
-Result:
-
-```text
+-- convert_timezone, example 1
+> SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00');
 2021-12-05 15:00:00
 ```
 
 ```sql
-SELECT convert_timezone('Europe/Brussels', timestamp_ntz'2021-12-05 15:00:00');
-```
-
-Result:
-
-```text
+-- convert_timezone, example 2
+> SELECT convert_timezone('Europe/Brussels', timestamp_ntz'2021-12-05 15:00:00');
 2021-12-06 00:00:00
 ```
 

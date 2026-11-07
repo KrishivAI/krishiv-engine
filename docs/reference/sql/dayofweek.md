@@ -21,12 +21,8 @@ Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, ..., 7 =
 ## Examples
 
 ```sql
-SELECT dayofweek('2009-07-30');
-```
-
-Result:
-
-```text
+-- dayofweek, example 1
+> SELECT dayofweek('2009-07-30');
 5
 ```
 

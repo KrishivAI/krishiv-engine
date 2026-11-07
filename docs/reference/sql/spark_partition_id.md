@@ -21,12 +21,8 @@ Returns the current partition id.
 ## Examples
 
 ```sql
-SELECT spark_partition_id();
-```
-
-Result:
-
-```text
+-- spark_partition_id, example 1
+> SELECT spark_partition_id();
 0
 ```
 

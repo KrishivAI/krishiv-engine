@@ -22,12 +22,8 @@ SHA-224, SHA-256, SHA-384, and SHA-512 are supported. Bit length of 0 is equival
 ## Examples
 
 ```sql
-SELECT sha2('Spark', 256);
-```
-
-Result:
-
-```text
+-- sha2, example 1
+> SELECT sha2('Spark', 256);
 529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b
 ```
 

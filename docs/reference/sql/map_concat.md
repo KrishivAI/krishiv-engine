@@ -21,12 +21,8 @@ Returns the union of all the given maps
 ## Examples
 
 ```sql
-SELECT map_concat(map(1, 'a', 2, 'b'), map(3, 'c'));
-```
-
-Result:
-
-```text
+-- map_concat, example 1
+> SELECT map_concat(map(1, 'a', 2, 'b'), map(3, 'c'));
 {1:"a",2:"b",3:"c"}
 ```
 

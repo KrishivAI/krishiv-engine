@@ -21,12 +21,8 @@ Collects and returns a list of non-unique elements.
 ## Examples
 
 ```sql
-SELECT collect_list(col) FROM VALUES (1), (2), (1) AS tab(col);
-```
-
-Result:
-
-```text
+-- collect_list, example 1
+> SELECT collect_list(col) FROM VALUES (1), (2), (1) AS tab(col);
 [1,2,1]
 ```
 

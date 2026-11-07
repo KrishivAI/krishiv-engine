@@ -21,22 +21,14 @@ Returns schema in the DDL format of JSON string.
 ## Examples
 
 ```sql
-SELECT schema_of_json('[{"col":0}]');
-```
-
-Result:
-
-```text
+-- schema_of_json, example 1
+> SELECT schema_of_json('[{"col":0}]');
 ARRAY<STRUCT<col: BIGINT>>
 ```
 
 ```sql
-SELECT schema_of_json('[{"col":01}]', map('allowNumericLeadingZeros', 'true'));
-```
-
-Result:
-
-```text
+-- schema_of_json, example 2
+> SELECT schema_of_json('[{"col":01}]', map('allowNumericLeadingZeros', 'true'));
 ARRAY<STRUCT<col: BIGINT>>
 ```
 

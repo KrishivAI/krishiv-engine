@@ -21,22 +21,14 @@ Returns the absolute value of the numeric or interval value.
 ## Examples
 
 ```sql
-SELECT abs(-1);
-```
-
-Result:
-
-```text
+-- abs, example 1
+> SELECT abs(-1);
 1
 ```
 
 ```sql
-SELECT abs(INTERVAL -'1-1' YEAR TO MONTH);
-```
-
-Result:
-
-```text
+-- abs, example 2
+> SELECT abs(INTERVAL -'1-1' YEAR TO MONTH);
 1-1
 ```
 

@@ -21,12 +21,8 @@ Returns the array containing element count times.
 ## Examples
 
 ```sql
-SELECT array_repeat('123', 2);
-```
-
-Result:
-
-```text
+-- array_repeat, example 1
+> SELECT array_repeat('123', 2);
 ["123","123"]
 ```
 

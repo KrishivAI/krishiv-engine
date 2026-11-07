@@ -22,12 +22,8 @@ Returns the cosine of `expr`, as if computed by
 ## Examples
 
 ```sql
-SELECT cos(0);
-```
-
-Result:
-
-```text
+-- cos, example 1
+> SELECT cos(0);
 1.0
 ```
 

@@ -22,12 +22,8 @@ All vectors must have the same dimension.
 ## Examples
 
 ```sql
-SELECT vector_avg(col) FROM VALUES (array(1.0F, 2.0F)), (array(3.0F, 4.0F)) AS tab(col);
-```
-
-Result:
-
-```text
+-- vector_avg, example 1
+> SELECT vector_avg(col) FROM VALUES (array(1.0F, 2.0F)), (array(3.0F, 4.0F)) AS tab(col);
 [2.0,3.0]
 ```
 

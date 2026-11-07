@@ -21,12 +21,8 @@ Returns the current timestamp at the start of query evaluation.
 ## Examples
 
 ```sql
-SELECT now();
-```
-
-Result:
-
-```text
-2020-04-25 15:49:11.914
+-- now, example 1
+> SELECT now();
+-- the result differs on every run
 ```
 

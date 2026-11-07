@@ -21,13 +21,9 @@ Get Spark SQL keywords
 ## Examples
 
 ```sql
-SELECT * FROM sql_keywords() LIMIT 2;
-```
-
-Result:
-
-```text
-ADD  false
-AFTER  false
+-- sql_keywords, example 1
+> SELECT * FROM sql_keywords() LIMIT 2;
+ADD | false
+AFTER | false
 ```
 

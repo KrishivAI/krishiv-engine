@@ -21,22 +21,14 @@ Returns the bit position for the given input child expression.
 ## Examples
 
 ```sql
-SELECT bitmap_bit_position(1);
-```
-
-Result:
-
-```text
-0
+-- bitmap_bit_position, example 1
+> SELECT bitmap_bit_position(1);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 
 ```sql
-SELECT bitmap_bit_position(123);
-```
-
-Result:
-
-```text
-122
+-- bitmap_bit_position, example 2
+> SELECT bitmap_bit_position(123);
+Error: KRISHIV_UNSUPPORTED_FEATURE
 ```
 

@@ -21,12 +21,8 @@ Returns the maximum value of `expr`.
 ## Examples
 
 ```sql
-SELECT max(col) FROM VALUES (10), (50), (20) AS tab(col);
-```
-
-Result:
-
-```text
+-- max, example 1
+> SELECT max(col) FROM VALUES (10), (50), (20) AS tab(col);
 50
 ```
 

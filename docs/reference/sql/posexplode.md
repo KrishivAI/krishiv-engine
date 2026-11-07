@@ -21,24 +21,16 @@ Separates the elements of array `expr` into multiple rows with positions, or the
 ## Examples
 
 ```sql
-SELECT posexplode(array(10,20));
-```
-
-Result:
-
-```text
-0	10
-1	20
+-- posexplode, example 1
+> SELECT posexplode(array(10,20));
+0 | 10
+1 | 20
 ```
 
 ```sql
-SELECT posexplode(collection => array(10,20));
-```
-
-Result:
-
-```text
-0	10
-1	20
+-- posexplode, example 2
+> SELECT posexplode(collection => array(10,20));
+0 | 10
+1 | 20
 ```
 

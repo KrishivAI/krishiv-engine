@@ -23,32 +23,20 @@ nullReplacement, any null value is filtered.
 ## Examples
 
 ```sql
-SELECT array_join(array('hello', 'world'), ' ');
-```
-
-Result:
-
-```text
+-- array_join, example 1
+> SELECT array_join(array('hello', 'world'), ' ');
 hello world
 ```
 
 ```sql
-SELECT array_join(array('hello', null ,'world'), ' ');
-```
-
-Result:
-
-```text
+-- array_join, example 2
+> SELECT array_join(array('hello', null ,'world'), ' ');
 hello world
 ```
 
 ```sql
-SELECT array_join(array('hello', null ,'world'), ' ', ',');
-```
-
-Result:
-
-```text
+-- array_join, example 3
+> SELECT array_join(array('hello', null ,'world'), ' ', ',');
 hello , world
 ```
 

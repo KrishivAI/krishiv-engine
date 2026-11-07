@@ -21,42 +21,26 @@ Creates a TIME value from milliseconds since midnight.
 ## Examples
 
 ```sql
-SELECT time_from_millis(0);
-```
-
-Result:
-
-```text
+-- time_from_millis, example 1
+> SELECT time_from_millis(0);
 00:00:00
 ```
 
 ```sql
-SELECT time_from_millis(52200000);
-```
-
-Result:
-
-```text
+-- time_from_millis, example 2
+> SELECT time_from_millis(52200000);
 14:30:00
 ```
 
 ```sql
-SELECT time_from_millis(52200500);
-```
-
-Result:
-
-```text
+-- time_from_millis, example 3
+> SELECT time_from_millis(52200500);
 14:30:00.5
 ```
 
 ```sql
-SELECT time_from_millis(86399999);
-```
-
-Result:
-
-```text
+-- time_from_millis, example 4
+> SELECT time_from_millis(86399999);
 23:59:59.999
 ```
 

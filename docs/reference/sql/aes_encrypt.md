@@ -25,62 +25,38 @@ The default mode is GCM.
 ## Examples
 
 ```sql
-SELECT hex(aes_encrypt('Spark', '0000111122223333'));
-```
-
-Result:
-
-```text
-83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94
+-- aes_encrypt, example 1
+> SELECT hex(aes_encrypt('Spark', '0000111122223333'));
+-- the result differs on every run
 ```
 
 ```sql
-SELECT hex(aes_encrypt('Spark SQL', '0000111122223333', 'GCM'));
-```
-
-Result:
-
-```text
-6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210
+-- aes_encrypt, example 2
+> SELECT hex(aes_encrypt('Spark SQL', '0000111122223333', 'GCM'));
+-- the result differs on every run
 ```
 
 ```sql
-SELECT base64(aes_encrypt('Spark SQL', '1234567890abcdef', 'ECB', 'PKCS'));
-```
-
-Result:
-
-```text
+-- aes_encrypt, example 3
+> SELECT base64(aes_encrypt('Spark SQL', '1234567890abcdef', 'ECB', 'PKCS'));
 3lmwu+Mw0H3fi5NDvcu9lg==
 ```
 
 ```sql
-SELECT base64(aes_encrypt('Apache Spark', '1234567890abcdef', 'CBC', 'DEFAULT'));
-```
-
-Result:
-
-```text
-2NYmDCjgXTbbxGA3/SnJEfFC/JQ7olk2VQWReIAAFKo=
+-- aes_encrypt, example 4
+> SELECT base64(aes_encrypt('Apache Spark', '1234567890abcdef', 'CBC', 'DEFAULT'));
+-- the result differs on every run
 ```
 
 ```sql
-SELECT base64(aes_encrypt('Spark', 'abcdefghijklmnop12345678ABCDEFGH', 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000')));
-```
-
-Result:
-
-```text
+-- aes_encrypt, example 5
+> SELECT base64(aes_encrypt('Spark', 'abcdefghijklmnop12345678ABCDEFGH', 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000')));
 AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg=
 ```
 
 ```sql
-SELECT base64(aes_encrypt('Spark', 'abcdefghijklmnop12345678ABCDEFGH', 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input'));
-```
-
-Result:
-
-```text
+-- aes_encrypt, example 6
+> SELECT base64(aes_encrypt('Spark', 'abcdefghijklmnop12345678ABCDEFGH', 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input'));
 AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4
 ```
 
