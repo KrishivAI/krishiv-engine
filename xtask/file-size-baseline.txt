@@ -29,7 +29,8 @@
 2790 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # the two-step INSERT projection that checks each CHAR/VARCHAR value once, net of the moved CTAS/view column lists (T001b)
-3278 crates/krishiv-session/src/table_commands.rs
+# +4 lines: ANALYZE .. FOR COLUMNS marks the table so DESCRIBE EXTENDED t col refuses (review of #496 M2)
+3282 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 2760 crates/krishiv-sql/src/lower.rs
 5225 crates/krishiv-sql/src/parser.rs
