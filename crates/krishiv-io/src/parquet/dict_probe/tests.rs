@@ -152,3 +152,56 @@ fn the_mask_over_a_decoded_dictionary() {
         .collect();
     assert_eq!(kept, ["fig"]);
 }
+
+/// The membership walk reads only the entries the page holds: a page
+/// shorter than its declared count is rejected, never read past.
+#[test]
+fn membership_over_plain_entries_and_short_pages() {
+    use parquet::basic::Type as PhysicalType;
+
+    use super::any_entry_in;
+
+    let ints: Vec<u8> = [3_i64, 9, -1]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    let lit = |v: i64| v.to_le_bytes().to_vec();
+    assert_eq!(
+        any_entry_in(&ints, 3, PhysicalType::INT64, &[lit(9)]),
+        Ok(true)
+    );
+    assert_eq!(
+        any_entry_in(&ints, 3, PhysicalType::INT64, &[lit(4)]),
+        Ok(false)
+    );
+    assert!(any_entry_in(&ints, 4, PhysicalType::INT64, &[lit(9)]).is_err());
+
+    let mut strings = Vec::new();
+    for s in ["ab", "", "xyz"] {
+        strings.extend(u32::try_from(s.len()).unwrap().to_le_bytes());
+        strings.extend(s.as_bytes());
+    }
+    let s = |v: &str| v.as_bytes().to_vec();
+    assert_eq!(
+        any_entry_in(&strings, 3, PhysicalType::BYTE_ARRAY, &[s("xyz")]),
+        Ok(true)
+    );
+    assert_eq!(
+        any_entry_in(&strings, 3, PhysicalType::BYTE_ARRAY, &[s("")]),
+        Ok(true)
+    );
+    assert_eq!(
+        any_entry_in(&strings, 3, PhysicalType::BYTE_ARRAY, &[s("xy")]),
+        Ok(false)
+    );
+    assert!(
+        any_entry_in(
+            &strings[..strings.len() - 1],
+            3,
+            PhysicalType::BYTE_ARRAY,
+            &[s("q")]
+        )
+        .is_err()
+    );
+    assert!(any_entry_in(&ints, 1, PhysicalType::DOUBLE, &[lit(1)]).is_err());
+}
