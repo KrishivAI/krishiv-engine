@@ -37,6 +37,7 @@ fn singletons(n: usize) -> impl Iterator<Item = (Set, Best)> {
             1 << i,
             Best {
                 cost: 0.0,
+                tie: 0.0,
                 left: 0,
                 right: 0,
             },
@@ -53,6 +54,20 @@ fn connected(masks: &[Set], a: Set, b: Set) -> bool {
         .any(|&m| m & !s == 0 && m & a != 0 && m & b != 0)
 }
 
+/// Whether costs `(cost, tie)` are below `(other, other_tie)`: the cost
+/// decides unless the two are equal, up to the rounding of summing the same
+/// numbers in another order (a relative 1e-9, three orders under the
+/// smallest gap that matters: TPC-H q09's two shapes differ by 1e-6); then
+/// the tie (bytes) does.
+pub(super) fn cheaper(cost: (f64, f64), other: (f64, f64)) -> bool {
+    let equal = (cost.0 - other.0).abs() <= 1e-9 * cost.0.abs().max(other.0.abs());
+    if equal {
+        cost.1 < other.1
+    } else {
+        cost.0 < other.0
+    }
+}
+
 /// Dynamic programming over every split of every subset of `n` inputs:
 /// the table of cheapest plans and the work done. `n` is below 64. A
 /// set's join costs `rows_of` of the set plus `split_of` of its two halves
@@ -62,6 +77,8 @@ pub(super) fn dpsub(
     masks: &[Set],
     rows_of: &dyn Fn(Set) -> f64,
     split_of: &dyn Fn(Set, Set) -> f64,
+    tie_of: &dyn Fn(Set) -> f64,
+    tie_split: &dyn Fn(Set, Set) -> f64,
 ) -> (HashMap<Set, Best>, Work) {
     let full: Set = (1 << n) - 1;
     let mut best: HashMap<Set, Best> = singletons(n).collect();
@@ -84,10 +101,12 @@ pub(super) fn dpsub(
             {
                 work.pairs += 1;
                 let cost = x.cost + y.cost + split_of(a, b);
+                let tie = x.tie + y.tie + tie_split(a, b);
                 // The first of equal splits wins: they come largest `a` first.
-                if found.is_none_or(|f| cost < f.cost) {
+                if found.is_none_or(|f| cheaper((cost, tie), (f.cost, f.tie))) {
                     found = Some(Best {
                         cost,
+                        tie,
                         left: a,
                         right: b,
                     });
@@ -97,6 +116,7 @@ pub(super) fn dpsub(
         }
         if let Some(mut f) = found {
             f.cost = rows(f.cost + rows_of(s));
+            f.tie = rows(f.tie + tie_of(s));
             best.insert(s, f);
         }
     }
@@ -129,7 +149,7 @@ mod tests {
         let n = 10;
         let masks: Vec<Set> = (1..n).map(|i| (1 << (i - 1)) | (1 << i)).collect();
         let rows_of = estimator(vec![100.0; n], masks.iter().map(|&m| (m, 0.01)).collect());
-        let (best, work) = dpsub(n, &masks, &rows_of, &|_, _| 0.0);
+        let (best, work) = dpsub(n, &masks, &rows_of, &|_, _| 0.0, &|_| 0.0, &|_, _| 0.0);
         // (n³ − n) / 6 connected pairs of a chain, among every split of
         // every subset: (3^n + 1) / 2 − 2^n.
         assert_eq!(work.pairs, 165);
@@ -143,7 +163,7 @@ mod tests {
         // Inputs 0, 1 and 2 meet only in one condition over all three.
         let masks = vec![0b111];
         let rows_of = estimator(vec![10.0; 3], vec![(0b111, 0.5)]);
-        let (best, work) = dpsub(3, &masks, &rows_of, &|_, _| 0.0);
+        let (best, work) = dpsub(3, &masks, &rows_of, &|_, _| 0.0, &|_| 0.0, &|_, _| 0.0);
         assert!(!best.contains_key(&0b111));
         assert_eq!(work.pairs, 0);
     }
@@ -153,11 +173,34 @@ mod tests {
         // 0-1 joined; the hyperedge {0, 1, 2} then joins {0, 1} and {2}.
         let masks = vec![0b011, 0b111];
         let rows_of = estimator(vec![10.0; 3], vec![(0b011, 0.1), (0b111, 0.5)]);
-        let (best, _) = dpsub(3, &masks, &rows_of, &|_, _| 0.0);
+        let (best, _) = dpsub(3, &masks, &rows_of, &|_, _| 0.0, &|_| 0.0, &|_, _| 0.0);
         assert_eq!(
             best.get(&0b111).map(|b| (b.left, b.right)),
             Some((0b011, 0b100))
         );
+    }
+
+    #[test]
+    fn equal_rows_are_broken_by_bytes() {
+        // Two inputs joined last: {0, 1} then 2, or {1, 2} then 0 cost the
+        // same rows; the tie says the second is the smaller in bytes.
+        let masks = vec![0b011, 0b110];
+        let rows_of = estimator(vec![10.0; 3], masks.iter().map(|&m| (m, 0.1)).collect());
+        let tie_split = |a: Set, b: Set| {
+            if a | b == 0b111 && a == 0b110 || b == 0b110 {
+                1.0
+            } else {
+                5.0
+            }
+        };
+        let (best, _) = dpsub(3, &masks, &rows_of, &|_, _| 0.0, &|_| 0.0, &tie_split);
+        assert_eq!(
+            best.get(&0b111).map(|b| (b.left, b.right)),
+            Some((0b001, 0b110))
+        );
+        assert!(cheaper((1.0, 1.0), (1.0 + 1e-12, 2.0)));
+        assert!(!cheaper((1.0, 3.0), (1.0, 2.0)));
+        assert!(!cheaper((1.001, 1.0), (1.0, 2.0)));
     }
 
     #[test]
@@ -166,7 +209,7 @@ mod tests {
         // same, and the largest half holding input 0 wins.
         let masks = vec![0b011, 0b110, 0b101];
         let rows_of = estimator(vec![10.0; 3], masks.iter().map(|&m| (m, 0.1)).collect());
-        let (best, work) = dpsub(3, &masks, &rows_of, &|_, _| 0.0);
+        let (best, work) = dpsub(3, &masks, &rows_of, &|_, _| 0.0, &|_| 0.0, &|_, _| 0.0);
         assert_eq!(work.pairs, 6);
         assert_eq!(
             best.get(&0b111).map(|b| (b.left, b.right)),

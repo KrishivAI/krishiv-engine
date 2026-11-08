@@ -212,7 +212,7 @@ pub(crate) fn reorder(
         done: HashMap::new(),
         settings,
         notes: Vec::new(),
-        reads: (settings.cost == JoinCost::Bytes).then(|| reads::Reads::of_query(root)),
+        reads: Some(reads::Reads::of_query(root)),
     };
     let out = r.positional(root);
     (out, r.notes)
@@ -228,7 +228,7 @@ struct Reorder<'a> {
     settings: Settings,
     /// A [`TreeStats`] per tree planned, when tracing.
     notes: Vec<String>,
-    /// The query's column reads, when trees are costed by bytes.
+    /// The query's column reads: bytes cost a tree, or break a tie in rows.
     reads: Option<reads::Reads>,
 }
 
@@ -496,6 +496,7 @@ impl Reorder<'_> {
             return self.children(root);
         }
         graph.trace = self.settings.trace;
+        graph.by_bytes = self.settings.cost == JoinCost::Bytes;
         let (plan, stats) = graph.plan(self.settings);
         if self.settings.trace {
             self.notes.push(stats.to_string());
@@ -614,10 +615,17 @@ fn rows(x: f64) -> f64 {
 /// A set of inputs, as bits (exact planning only).
 type Set = u64;
 
+/// The pair of parts the greedy enumerator joins next, its rows and its
+/// cost (`cost`, then `tie`).
+type Pick = ((usize, usize), f64, (f64, f64));
+
 /// The cheapest plan of a subset: the halves it joins (none for an input).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Best {
     cost: f64,
+    /// The bytes of the plan, when `cost` counts rows: of two plans with
+    /// the same rows, the smaller in bytes wins.
+    tie: f64,
     left: Set,
     right: Set,
 }
@@ -714,8 +722,10 @@ struct Graph {
     leaves: Vec<Arc<LogicalPlan>>,
     rows: Vec<f64>,
     /// Per input, its columns that may be read after it is joined (their
-    /// widths and readers); `None` when the tree is costed by rows.
+    /// widths and readers); `None` when the reads are unknown.
     widths: Option<Vec<Vec<ColumnUse>>>,
+    /// Whether plans are costed by bytes; by rows, bytes only break ties.
+    by_bytes: bool,
     /// The conjuncts over more than one input.
     preds: Vec<Pred>,
 }
@@ -941,6 +951,7 @@ impl Graph {
             leaves: sorted,
             rows,
             widths,
+            by_bytes: false,
             preds: kept,
         }
     }
@@ -1013,11 +1024,32 @@ impl Graph {
     /// What producing a join result of `rows` rows costs: its rows, or by
     /// bytes [`ROW_BYTES`] a row (the work per row streamed).
     fn result_cost(&self, rows: f64) -> f64 {
-        if self.widths.is_some() {
+        if self.by_bytes {
             self::rows(rows * ROW_BYTES)
         } else {
             rows
         }
+    }
+
+    /// What producing `rows` rows costs in bytes, when the tree is costed
+    /// by rows and the reads are known: the tie-break between plans of the
+    /// same rows (0 otherwise).
+    fn tie_result(&self, rows: f64) -> f64 {
+        if self.by_bytes || self.widths.is_none() {
+            0.0
+        } else {
+            self::rows(rows * ROW_BYTES)
+        }
+    }
+
+    /// What building a join's input costs in bytes (the one with fewer rows,
+    /// `b` on a tie), as [`Self::tie_result`].
+    fn tie_build(&self, a: (f64, f64), b: (f64, f64)) -> f64 {
+        if self.by_bytes || self.widths.is_none() {
+            return 0.0;
+        }
+        let build = if b.0 <= a.0 { b } else { a };
+        self::rows(build.0 * (ROW_BYTES + build.1))
     }
 
     /// Whether a join of inputs `a` and `b` (rows, width) builds `b`: the
@@ -1025,7 +1057,7 @@ impl Graph {
     /// input has more than [`BUILD_BYTES_FACTOR`] times the other's bytes.
     fn builds_second(&self, a: (f64, f64), b: (f64, f64)) -> bool {
         let fewer = b.0 <= a.0;
-        if self.widths.is_none() {
+        if !self.by_bytes {
             return fewer;
         }
         let (ma, mb) = (self.measure(a.0, a.1), self.measure(b.0, b.1));
@@ -1039,7 +1071,7 @@ impl Graph {
     /// What building a join's build input costs: nothing by rows (their
     /// `C_out` counts only results), its bytes by bytes.
     fn build_cost(&self, a: (f64, f64), b: (f64, f64)) -> f64 {
-        if self.widths.is_none() {
+        if !self.by_bytes {
             return 0.0;
         }
         let build = if self.builds_second(a, b) { b } else { a };
@@ -1049,7 +1081,7 @@ impl Graph {
     /// The size of a relation of `rows` rows over inputs `width` wide: its
     /// rows, or its bytes ([`ROW_BYTES`] a row plus the width).
     fn measure(&self, rows: f64, width: f64) -> f64 {
-        if self.widths.is_some() {
+        if self.by_bytes {
             self::rows(rows * (ROW_BYTES + width))
         } else {
             rows
@@ -1176,14 +1208,11 @@ impl Graph {
                     v
                 };
                 let result_of = |s: Set| self.result_cost(size(s).0);
-                let split_of = |a: Set, b: Set| {
-                    if self.widths.is_some() {
-                        self.build_cost(size(a), size(b))
-                    } else {
-                        0.0
-                    }
-                };
-                let (table, work) = dp::dpsub(n, &masks, &result_of, &split_of);
+                let split_of = |a: Set, b: Set| self.build_cost(size(a), size(b));
+                let tie_of = |s: Set| self.tie_result(size(s).0);
+                let tie_split = |a: Set, b: Set| self.tie_build(size(a), size(b));
+                let (table, work) =
+                    dp::dpsub(n, &masks, &result_of, &split_of, &tie_of, &tie_split);
                 (Some(table), None, work)
             }
             Enumerator::DpSub => (None, Some("inputs"), dp::Work::default()),
@@ -1321,14 +1350,18 @@ impl Graph {
                 *on = self.independent(&both, on);
                 *sel = on.iter().map(|&k| self.preds[k].sel).product();
             }
-            let mut pick: Option<((usize, usize), f64, f64)> = None;
+            let mut pick: Option<Pick> = None;
             for (&(a, b), (sel, edge, _)) in &pairs {
                 let (Some(pa), Some(pb)) = (&parts[a], &parts[b]) else {
                     continue;
                 };
                 let r = rows(pa.rows * pb.rows * sel);
-                let m = self.result_cost(r) + self.build_cost(self.size(pa), self.size(pb));
-                if *edge && pick.is_none_or(|(_, _, best)| m < best) {
+                let (sa, sb) = (self.size(pa), self.size(pb));
+                let m = (
+                    self.result_cost(r) + self.build_cost(sa, sb),
+                    self.tie_result(r) + self.tie_build(sa, sb),
+                );
+                if *edge && pick.is_none_or(|(_, _, best)| dp::cheaper(m, best)) {
                     pick = Some(((a, b), r, m));
                 }
             }
@@ -1546,6 +1579,7 @@ mod tests {
         };
         Graph {
             trace: false,
+            by_bytes: true,
             leaves: Vec::new(),
             rows: vec![10.0, 10.0],
             widths: Some(vec![
@@ -1587,6 +1621,7 @@ mod tests {
         // Costed by rows, fewer rows build (`b` on a tie).
         let rows = Graph {
             widths: None,
+            by_bytes: false,
             ..graph()
         };
         assert!(rows.builds_second((10.0, 0.0), (10.0, 0.0)));
