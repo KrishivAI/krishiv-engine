@@ -130,6 +130,41 @@ jobs:
           if taplo fmt --check --config .github/ci-fixtures/taplo.toml .github/ci-fixtures/unformatted.toml; then echo "taplo accepted the unformatted fixture"; exit 1; fi
           if docker run --rm -v "$PWD/.github/ci-fixtures:/workdir" davidanson/markdownlint-cli2:v0.23.3 bad.md; then echo "markdownlint accepted the bad fixture"; exit 1; fi
 
+  # T133: the UI. svelte-check, a build whose output must equal the committed
+  # crates/krishiv-ui-assets/assets (ADR 0024: cargo build never needs Node), and the
+  # Playwright page check (ui/tests/check_pages.py) against that build. No Rust toolchain.
+  ui:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04 # Playwright has no chromium build for ubuntu-latest (26.04)
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      # The runner image ships Node; pnpm comes from npm (major pinned, the lockfile pins the rest).
+      - name: svelte-check and build
+        working-directory: ui
+        run: |
+          npx --yes pnpm@10 install --frozen-lockfile
+          npx --yes pnpm@10 run check
+          npx --yes pnpm@10 run sync-assets
+      - name: Committed assets equal the build
+        run: git diff --exit-code --stat -- crates/krishiv-ui-assets/assets
+      - name: Upload the rebuilt assets (on drift)
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-assets-rebuilt
+          path: crates/krishiv-ui-assets/assets
+      - name: Page check (360/390/820/1440 px, dark and light)
+        run: |
+          uv run --no-project --python 3.12 --with playwright==1.55.0 playwright install --with-deps chromium
+          uv run --no-project --python 3.12 --with playwright==1.55.0 python ui/tests/check_pages.py
+
   # P2-T151: Python code quality (ruff lint + format, ty) for python/, bench/ and
   # tests/scripts/. Needs no Rust toolchain and no built extension, and it is cheap, so it
   # runs on every PR instead of being gated by `changes`. Required check (a maintainer
