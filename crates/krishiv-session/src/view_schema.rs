@@ -144,10 +144,19 @@ pub(crate) fn check_read(
         }
     };
     if read.mode == Some(ViewSchemaMode::Evolution) {
+        // A changed column comment is a schema change too (Spark compares the fields with their metadata).
+        let comment = |i: usize| analyzed.output_comments.get(i).cloned().flatten();
         let redo = output.len() != entry.columns.len()
-            || output.iter().zip(&entry.columns).any(|(o, c)| {
-                o.name != c.name || o.data_type != c.data_type || o.nullable != c.nullable
-            });
+            || output
+                .iter()
+                .zip(&entry.columns)
+                .enumerate()
+                .any(|(i, (o, c))| {
+                    o.name != c.name
+                        || o.data_type != c.data_type
+                        || o.nullable != c.nullable
+                        || comment(i) != c.comment
+                });
         if !redo {
             return Ok(None);
         }
@@ -159,6 +168,7 @@ pub(crate) fn check_read(
             .map(|(i, o)| {
                 let mut c = StoreColumn::plain(o.name.clone(), o.data_type.clone(), o.nullable);
                 c.char_varchar = analyzed.output_declared.get(i).cloned().flatten();
+                c.comment = analyzed.output_comments.get(i).cloned().flatten();
                 c
             })
             .collect();

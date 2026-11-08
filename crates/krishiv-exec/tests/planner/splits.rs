@@ -94,6 +94,7 @@ fn scan_plan(table: Arc<dyn TableProvider>, nullable: bool) -> (PhysicalPlan, Ar
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
             legacy_time_parser: false,
+            binary_output_style: None,
         },
     );
     let tables = Arc::new(Stub { table });

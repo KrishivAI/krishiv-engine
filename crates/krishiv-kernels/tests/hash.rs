@@ -349,3 +349,45 @@ fn time_hashes_as_its_nanosecond_long() {
     assert_eq!(h(&[&time]), h(&[&long]));
     assert_eq!(x(&[&time]), x(&[&long]));
 }
+
+/// A calendar interval hashes as Spark's generated code does: its microseconds
+/// as a `long`, then its months as an `int`; the days are not hashed. A NULL
+/// row leaves the hash unchanged, nested and sliced columns too.
+#[test]
+fn calendar_intervals_hash_micros_then_months() {
+    use krishiv_types::calendar::{CalendarValue, calendar_array};
+
+    let cal = calendar_array([
+        Some(CalendarValue::new(14, 25, 123_456_789_012_123_456)),
+        None,
+        Some(CalendarValue::new(-1, 7, -1)),
+    ]);
+    let micros = Int64Array::from(vec![123_456_789_012_123_456, 0, -1]);
+    let months = Int32Array::from(vec![14, 0, -1]);
+    let want = h(&[&micros, &months]);
+    let seed = h(&[&NullArray::new(1)])[0];
+    assert_eq!(h(&[cal.as_ref()]), [want[0], seed, want[2]]);
+    // The days do not change the hash.
+    let other_days = calendar_array([Some(CalendarValue::new(14, -3, 123_456_789_012_123_456))]);
+    assert_eq!(h(&[other_days.as_ref()])[0], want[0]);
+    let mx = x(&[&micros, &months]);
+    assert_eq!(x(&[cal.as_ref()])[0], mx[0]);
+    assert_eq!(x(&[cal.as_ref()])[2], mx[2]);
+    // Sliced: the rows keep their hashes.
+    assert_eq!(h(&[cal.slice(1, 2).as_ref()]), [seed, want[2]]);
+    // Inside an array: the elements chain, the NULL one skipped.
+    let list = ListArray::new(
+        Arc::new(Field::new_list_field(cal.data_type().clone(), true)),
+        OffsetBuffer::from_lengths([3]),
+        Arc::clone(&cal),
+        None,
+    );
+    let list_hash = h(&[&list])[0];
+    let flat = h(&[
+        &Int64Array::from(vec![123_456_789_012_123_456]),
+        &Int32Array::from(vec![14]),
+        &Int64Array::from(vec![-1]),
+        &Int32Array::from(vec![-1]),
+    ])[0];
+    assert_eq!(list_hash, flat);
+}
