@@ -3,9 +3,6 @@
 //! on stdio. This is a plain binary, not a test harness, so its stdout
 //! carries only the JSON-RPC stream: the test client rejects any non-JSON
 //! line as server pollution.
-// The server's future nests the session's async query path deeply enough to pass
-// the default query depth (128) when its layout is computed.
-#![recursion_limit = "256"]
 
 use krishiv_mcp::{KrishivMcpServer, McpConfig};
 
