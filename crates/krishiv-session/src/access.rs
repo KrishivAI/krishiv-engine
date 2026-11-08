@@ -780,38 +780,25 @@ pub(crate) fn refuse_secret_options(
 }
 
 /// Whether expression text `t` calls `secret` anywhere: the name bare or back-quoted, in any case,
-/// followed by `(`, inside parentheses, casts or other calls too. String literals are skipped;
-/// anything else that looks like a call counts (the check fails closed).
+/// followed by `(`, inside parentheses, casts or other calls too. It reads the parser's own tokens,
+/// so string literals are skipped and comments between the name and `(` are trivia, as in the
+/// parser; anything else that looks like a call counts (the check fails closed).
 fn calls_secret(t: &str) -> bool {
-    let b = t.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        let c = b[i];
-        if c == b'\'' || c == b'"' {
-            // A string literal, with backslash escapes.
-            i += 1;
-            while i < b.len() && b[i] != c {
-                i += if b[i] == b'\\' { 2 } else { 1 };
-            }
-            i += 1;
-            continue;
-        }
-        let (name, end) = if c == b'`' {
-            let close = t[i + 1..].find('`').map_or(b.len(), |n| i + 1 + n);
-            (&t[(i + 1).min(close)..close], (close + 1).min(b.len()))
-        } else if c.is_ascii_alphanumeric() || c == b'_' {
-            let end = t[i..]
-                .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-                .map_or(b.len(), |n| i + n);
-            (&t[i..end], end)
-        } else {
-            i += 1;
-            continue;
+    use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
+    let tokens: Vec<_> = tokenize(t)
+        .into_iter()
+        .filter(|k| !k.kind.is_trivia())
+        .collect();
+    tokens.windows(2).any(|w| {
+        let name = t.get(w[0].span.start..w[0].span.end).unwrap_or("");
+        let named = match w[0].kind {
+            TokenKind::Word => name.eq_ignore_ascii_case("secret"),
+            TokenKind::QuotedIdent => name
+                .strip_prefix('`')
+                .and_then(|n| n.strip_suffix('`'))
+                .is_some_and(|n| n.replace("``", "`").eq_ignore_ascii_case("secret")),
+            _ => false,
         };
-        if name.eq_ignore_ascii_case("secret") && t[end..].trim_start().starts_with('(') {
-            return true;
-        }
-        i = end;
-    }
-    false
+        named && w[1].kind == TokenKind::Sym(Sym::LParen)
+    })
 }

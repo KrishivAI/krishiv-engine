@@ -1710,6 +1710,10 @@ fn a_secret_in_create_table_options_is_refused() {
         "(secret('scope', 'key'))",
         "CAST(secret('scope', 'key') AS STRING)",
         "concat('x', secret('scope', 'key'))",
+        // Comments between the name and `(` are trivia to the parser too.
+        "secret /* c */ ('scope', 'key')",
+        "secret /* a /* nested */ b */ ('scope', 'key')",
+        "secret -- c\n ('scope', 'key')",
     ] {
         let r = block_on(s.sql(&format!(
             "CREATE TABLE t_sec (a INT) USING parquet OPTIONS (k = {value})"
