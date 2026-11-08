@@ -55,6 +55,22 @@ impl MorselCursor {
     }
 }
 
+impl MorselCursor {
+    /// The `j`-th claim of lane `lane` out of `lanes` (T094 G1, logical
+    /// partitions): the lane owns the claim ordinals `lane, lane + lanes,
+    /// lane + 2 * lanes, ...`, so which morsels a lane reads never depends on
+    /// which thread ran first. The caller keeps `j` (its own counter); no
+    /// shared state is touched. `None` once the lane's ordinals pass `len`
+    /// (or `lanes` is zero).
+    pub fn claim_strided(&self, lane: usize, lanes: usize, j: usize) -> Option<(u64, usize)> {
+        let i = j.checked_mul(lanes)?.checked_add(lane)?;
+        if lanes == 0 || lane >= lanes || i >= self.len {
+            return None;
+        }
+        Some((i as u64, self.order.as_ref().map_or(i, |o| o[i])))
+    }
+}
+
 /// A Fisher-Yates shuffle of `0..len` driven by SplitMix64.
 fn permutation(len: usize, seed: u64) -> Vec<usize> {
     let mut state = seed;
