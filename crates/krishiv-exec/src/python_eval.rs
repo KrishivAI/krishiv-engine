@@ -37,10 +37,11 @@
 //! **Errors and cancellation.** The first failed call fails the query.
 //! Dropping the sink's state (query end, cancel, error) drops every pending
 //! call's future and the reservation of its input: nothing stays charged.
+//! `finalize` waits for every slice still in flight at once, so the first
+//! failure, or a cancel, ends it without waiting for the slices before it.
 //! What the runtime does with a call whose future was dropped is its own
-//! (the embedded runtime skips a queued call whose future was dropped; one
-//! already inside Python runs to its end, the interrupt is pending, design
-//! P2-T059 §2.4 "Stuck UDFs").
+//! (the embedded runtime skips a queued call and interrupts one already
+//! inside Python, design P2-T059 §2.5 "Cancel").
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -228,6 +229,14 @@ impl InFlight {
             }
         }
         done
+    }
+
+    /// The error of a call of this slice that failed, if any.
+    fn failed(&self) -> Option<&KrishivError> {
+        self.slots.iter().find_map(|s| match s {
+            Slot::Done(Err(e)) => Some(e),
+            _ => None,
+        })
     }
 
     /// The output rows: the input's columns, then each call's result in
@@ -473,7 +482,31 @@ impl Sink for PythonEvalSink {
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let g = global_ref::<EvalGlobal>(global, "PythonEval")?;
-            let leftover = std::mem::take(&mut *lock(&g.leftover));
+            let mut leftover = std::mem::take(&mut *lock(&g.leftover));
+            // Every slice still in flight at once, not in order: the first
+            // failed call (or a cancel) ends the wait, and the error drops
+            // the other calls' futures, which interrupts a call still
+            // running (design P2-T059 §2.5 "Cancel"). In order, a failure
+            // behind a long call would wait for it.
+            let mut cancelled = std::pin::pin!(ctx.query().cancelled());
+            poll_fn(|cx| {
+                if cancelled.as_mut().poll(cx).is_ready() {
+                    return Poll::Ready(Err(ctx.query().cancellation()));
+                }
+                let mut all = true;
+                for slice in leftover.iter_mut().flat_map(|(_, s)| s.iter_mut()) {
+                    all &= slice.poll_all(cx);
+                    if let Some(e) = slice.failed() {
+                        return Poll::Ready(Err(e.clone()));
+                    }
+                }
+                if all {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await?;
             for (ready, slices) in leftover {
                 let mut batches: Vec<Batch> = ready.into_iter().collect();
                 for mut slice in slices {

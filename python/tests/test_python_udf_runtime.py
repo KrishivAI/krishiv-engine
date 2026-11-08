@@ -167,3 +167,46 @@ def test_a_udf_that_runs_a_query_fails_instead_of_waiting_for_itself() -> None:
     text = out.get("error", "")
     assert "PYTHON_EXCEPTION" in text, text
     assert "CONTEXT_ONLY_VALID_ON_DRIVER" in text, text
+
+
+def test_a_running_call_of_a_failed_query_is_interrupted() -> None:
+    # Design §2.5 "Cancel" (T098b I2): when the query fails, another call still running in Python gets
+    # an asynchronous KeyboardInterrupt instead of holding its pool thread until it ends. Two one-row
+    # batches on two pool threads: one loops (pure Python, so the interrupt is raised at its next
+    # bytecode), the other fails after 0.5 s.
+    seen: dict = {}
+
+    def stuck_or_boom(x: pa.Array) -> pa.Array:
+        if x[0].as_py() == 1:
+            time.sleep(0.5)
+            raise ValueError("boom")
+        started = time.monotonic()
+        seen["looping"] = started
+        try:
+            while time.monotonic() - started < 60:
+                pass
+        except KeyboardInterrupt:
+            seen["interrupted"] = time.monotonic() - started
+            raise
+        seen["ran_out"] = True
+        return x
+
+    spark = _spark()
+    spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "1")
+    spark._native.register_python_udf("py_stuck", ARROW_BATCHED, "bigint", True, True, stuck_or_boom)
+    t0 = time.monotonic()
+    with pytest.raises(Exception, match="ValueError: boom"):
+        spark.sql("SELECT py_stuck(id) FROM range(0, 2, 1, 2)").collect()
+    assert time.monotonic() - t0 < 30, "the failed query waited for the looping call"
+    # The interrupt lands on the looping call within a few seconds of the failure.
+    deadline = time.monotonic() + 15
+    while "interrupted" not in seen and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert "looping" in seen, seen
+    assert "interrupted" in seen, seen
+    assert "ran_out" not in seen, seen
+    # The pool thread serves later calls normally: no interrupt is left pending for them.
+    spark._native.register_python_udf("py_plus_after", ARROW_BATCHED, "bigint", True, True, _plus_one)
+    for _ in range(20):
+        rows = spark.sql("SELECT py_plus_after(id) FROM range(0, 8, 1, 4) ORDER BY 1").collect()
+        assert _ids(rows) == list(range(1, 9))

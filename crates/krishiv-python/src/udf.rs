@@ -13,6 +13,7 @@
 //! size (review B2). After the exit hook ran no pool starts again, so no
 //! Python runs during finalization (review M2).
 
+pub(crate) mod interrupt;
 pub(crate) mod pool;
 pub(crate) mod runtime;
 

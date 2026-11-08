@@ -34,6 +34,7 @@ use pyo3::prelude::*;
 use pyo3::sync::MutexExt;
 use pyo3::types::{PyCapsule, PyDict, PyTuple};
 
+use super::interrupt::{Call, CancelOnDrop};
 use super::pool::Pool;
 use crate::stream::capsule_pointer;
 use crate::stream::ffi::{ARRAY_CAPSULE, SCHEMA_CAPSULE, export_column, import_column};
@@ -280,6 +281,8 @@ impl PreparedUdf for Prepared {
         let registered = Arc::clone(&self.registered);
         let declared = self.declared.clone();
         let runner = Arc::clone(&self.runner);
+        let call = Call::new();
+        let cancel = CancelOnDrop(Arc::clone(&call));
         pool.submit(Box::new(move |py| {
             // A call whose future was dropped (its query cancelled or
             // failed) is skipped: it would hold the pool thread and its input
@@ -291,10 +294,12 @@ impl PreparedUdf for Prepared {
             // unwinding: a nested call on this thread (a UDF running a query)
             // must not leave the outer call reading another's (review 2c M2).
             let _scope = RunnerScope::enter(runner, args.num_rows());
-            let result = invoke(py, &registered, &args, &declared);
+            let result = invoke(py, &registered, &args, &declared, &call);
             let _ = done.send(result);
         }));
         Box::pin(async move {
+            // Dropped with this future: a call still running is interrupted.
+            let _cancel = cancel;
             result.await.unwrap_or_else(|_| {
                 Err(InternalError {
                     message: "a Python UDF call ended without a result (its pool thread panicked or stopped)"
@@ -312,6 +317,7 @@ fn invoke(
     registered: &Registered,
     args: &RecordBatch,
     declared: &DataType,
+    call: &Call,
 ) -> Result<ArrayRef, KrishivError> {
     let array_type = py
         .import("pyarrow")
@@ -336,9 +342,18 @@ fn invoke(
             l.lock_py_attached(py)
                 .unwrap_or_else(PoisonError::into_inner)
         });
+        // Dropped while it waited for the lock: nobody reads its result.
+        if !call.start(py) {
+            return Err(InternalError {
+                message: "a cancelled Python UDF call".to_owned(),
+            }
+            .into());
+        }
         IN_UDF.with(|f| f.set(true));
         let r = registered.wrapper.bind(py).call1(call_args);
         IN_UDF.with(|f| f.set(false));
+        // At once: an interrupt that came too late is cleared here.
+        call.finish(py);
         r
     }
     .map_err(|e| python_error(py, &e))?;
