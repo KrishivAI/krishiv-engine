@@ -1860,6 +1860,7 @@ impl DataFrame {
                     source: source.clone(),
                     columns,
                     known: false,
+                    partitions: Some(Default::default()),
                 },
             );
             self.session.state.cache.invalidate_table(name);
