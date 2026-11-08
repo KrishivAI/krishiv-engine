@@ -1217,7 +1217,7 @@ fn row_text(vals: &[Val], kinds: &[FieldKind]) -> String {
             Val::F32(f) => out.push_str(&java_float_string32(*f)),
             Val::F64(f) => out.push_str(&java_double_string(*f)),
             Val::Text(t) => out.push_str(t),
-            Val::Bytes(b) => binary_text(b, &mut out),
+            Val::Bytes(b) => crate::binary_style::BinaryStyle::HexDiscrete.write(b, &mut out),
             Val::Calendar(c) => out.push_str(&krishiv_types::interval::calendar_string(
                 c.months, c.days, c.micros,
             )),
@@ -1415,6 +1415,8 @@ pub fn from_csv(
 /// Options of `to_csv` resolved once at bind.
 #[derive(Debug, Clone)]
 pub struct ToCsvOptions {
+    /// How a binary value prints (`spark.sql.binaryOutputStyle`).
+    pub binary: crate::binary_style::BinaryStyle,
     /// Quoting settings (`sep`, `quote`, `escape`, `escape_escape`,
     /// `empty_value`).
     pub syntax: Syntax,
@@ -1434,19 +1436,6 @@ pub struct ToCsvOptions {
     pub timestamp_pattern: Option<DateTimePattern>,
     /// Timestamp_ntz pattern.
     pub ntz_pattern: Option<DateTimePattern>,
-}
-
-/// Spark's text of a binary value: `[AB 01 FF]`.
-fn binary_text(b: &[u8], out: &mut String) {
-    use std::fmt::Write as _;
-    out.push('[');
-    for (i, byte) in b.iter().enumerate() {
-        if i > 0 {
-            out.push(' ');
-        }
-        let _ = write!(out, "{byte:02X}");
-    }
-    out.push(']');
 }
 
 /// One value as the file shows it. Whitespace at either end is dropped when
@@ -1739,15 +1728,15 @@ pub fn struct_to_csv(
                         true
                     }
                     (FieldKind::Bin, DataType::BinaryView) => {
-                        binary_text(a.as_binary_view().value(row), &mut cell);
+                        o.binary.write(a.as_binary_view().value(row), &mut cell);
                         true
                     }
                     (FieldKind::Bin, DataType::Binary) => {
-                        binary_text(a.as_binary::<i32>().value(row), &mut cell);
+                        o.binary.write(a.as_binary::<i32>().value(row), &mut cell);
                         true
                     }
                     (FieldKind::Bin, _) => {
-                        binary_text(a.as_binary::<i64>().value(row), &mut cell);
+                        o.binary.write(a.as_binary::<i64>().value(row), &mut cell);
                         true
                     }
                     (FieldKind::Date, _) => {
@@ -1913,6 +1902,7 @@ mod tests {
             None,
         );
         let o = ToCsvOptions {
+            binary: crate::binary_style::BinaryStyle::default(),
             syntax: Syntax::default(),
             quote_all: false,
             escape_quotes: true,
@@ -2033,6 +2023,7 @@ mod tests {
             ..Syntax::default()
         };
         let o = ToCsvOptions {
+            binary: crate::binary_style::BinaryStyle::default(),
             syntax,
             quote_all: false,
             escape_quotes: true,
@@ -2073,6 +2064,7 @@ mod tests {
             None,
         );
         let o = ToCsvOptions {
+            binary: crate::binary_style::BinaryStyle::default(),
             syntax: Syntax::default(),
             quote_all: false,
             escape_quotes: true,

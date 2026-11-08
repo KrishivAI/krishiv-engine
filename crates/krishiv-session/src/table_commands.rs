@@ -2869,6 +2869,7 @@ fn from_source(source: &krishiv_sql::ast::FromClause, c: &InsertClause) -> Inser
         },
         order_by: Vec::new(),
         order_span: None,
+        organization_span: None,
         cluster_by: Vec::new(),
         distribute_by: Vec::new(),
         sort_by: Vec::new(),

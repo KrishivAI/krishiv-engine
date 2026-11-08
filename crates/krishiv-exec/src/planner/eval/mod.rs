@@ -47,7 +47,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_null_array};
 use arrow_schema::{DataType as ArrowType, SchemaRef};
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, LEGACY_CODING_ERROR_ACTION, LEGACY_JAVA_CHARSETS,
+    ANSI_ENABLED, BINARY_OUTPUT_STYLE, Config, LEGACY_CODING_ERROR_ACTION, LEGACY_JAVA_CHARSETS,
     LEGACY_STATISTICAL_AGGREGATE, LEGACY_TIME_PARSER_POLICY, MAP_KEY_DEDUP_POLICY,
     SESSION_TIME_ZONE,
 };
@@ -216,6 +216,8 @@ pub(crate) struct EvalEnv {
     pub(crate) legacy_coding_error_action: bool,
     /// `spark.sql.legacy.timeParserPolicy = LEGACY`; plan data too.
     pub(crate) legacy_time_parser: bool,
+    /// `spark.sql.binaryOutputStyle`; plan data too (the `binary_output_style` codec feature).
+    pub(crate) binary_style: krishiv_kernels::binary_style::BinaryStyle,
     /// Counts the unseeded random binds of one plan instantiation (see
     /// [`BindOptions::seed_salt`](krishiv_functions::scalar::BindOptions::seed_salt)).
     pub(crate) seed_salt: Arc<AtomicU64>,
@@ -273,6 +275,11 @@ impl EvalEnv {
             .get(&LEGACY_TIME_PARSER_POLICY)
             .and_then(|v| v.as_str())
             .is_some_and(|s| s.eq_ignore_ascii_case("LEGACY"));
+        let binary_style = config
+            .get(&BINARY_OUTPUT_STYLE)
+            .and_then(|v| v.as_str())
+            .and_then(krishiv_kernels::binary_style::BinaryStyle::from_name)
+            .unwrap_or_default();
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -291,6 +298,7 @@ impl EvalEnv {
             legacy_java_charsets,
             legacy_coding_error_action,
             legacy_time_parser,
+            binary_style,
             seed_salt: Arc::new(AtomicU64::new(0)),
             partition_shift: 0,
         }
@@ -319,6 +327,11 @@ impl EvalEnv {
             legacy_java_charsets: env.legacy_java_charsets,
             legacy_coding_error_action: env.legacy_coding_error_action,
             legacy_time_parser: env.legacy_time_parser,
+            binary_style: env
+                .binary_output_style
+                .as_deref()
+                .and_then(krishiv_kernels::binary_style::BinaryStyle::from_name)
+                .unwrap_or_default(),
             seed_salt: Arc::new(AtomicU64::new(0)),
             partition_shift: 0,
         }
@@ -337,6 +350,11 @@ impl EvalEnv {
             legacy_java_charsets: self.legacy_java_charsets,
             legacy_coding_error_action: self.legacy_coding_error_action,
             legacy_time_parser: self.legacy_time_parser,
+            // An unset style and an explicit `HEX_DISCRETE` print alike: only a different style
+            // is plan data, so older plans encode as before.
+            binary_output_style: (self.binary_style
+                != krishiv_kernels::binary_style::BinaryStyle::default())
+            .then(|| Arc::from(self.binary_style.name())),
         }
     }
 }
@@ -1143,6 +1161,7 @@ mod tests {
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
             legacy_time_parser: false,
+            binary_style: krishiv_kernels::binary_style::BinaryStyle::default(),
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             partition_shift: 0,
         }

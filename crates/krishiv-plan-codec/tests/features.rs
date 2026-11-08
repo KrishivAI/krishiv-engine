@@ -28,6 +28,19 @@ fn corrupt(m: &pb::PhysicalPlan, expected: &str) {
 }
 
 #[test]
+fn an_unknown_binary_output_style_is_corrupt() {
+    for style in ["hex", "HEX_DISCRETE", "nonsense", ""] {
+        let mut m = message("binary_output_style");
+        m.env.as_mut().unwrap().binary_output_style = Some(style.to_owned());
+        corrupt(&m, "an unknown binary output style");
+    }
+    let mut m = message("binary_output_style");
+    m.env.as_mut().unwrap().binary_output_style = Some("BASE64".to_owned());
+    let plan = decode(&m.encode_to_vec()).unwrap();
+    assert_eq!(plan.env().binary_output_style.as_deref(), Some("BASE64"));
+}
+
+#[test]
 fn the_header_lists_exactly_the_features_in_use() {
     let m = message("window_ranking");
     assert_eq!(m.features, ["window"]);
@@ -79,6 +92,10 @@ fn the_header_lists_exactly_the_features_in_use() {
     assert_eq!(
         message("legacy_time_parser").features,
         ["legacy_time_parser"]
+    );
+    assert_eq!(
+        message("binary_output_style").features,
+        ["binary_output_style"]
     );
     assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
     // The exchange's schema alone names the collation.

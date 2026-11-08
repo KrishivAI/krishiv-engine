@@ -354,6 +354,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..89,
 }
 -- SELECT a AND b AND c AND d AND e, NOT NOT !x, a <=> b, a <> b, a != b, a <= b, a >= b, a !> b, a !< b, a == b
@@ -778,6 +779,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..109,
 }
 -- SELECT a BETWEEN 1 AND 2, a NOT BETWEEN b AND c, a IN (), a NOT IN (1, 2), a IN (SELECT 1), a NOT IN (VALUES 1)
@@ -1002,6 +1004,7 @@ Query {
                                     windows: [],
                                     limit: None,
                                     offset: None,
+                                    organization_span: None,
                                     span: 81..89,
                                 },
                                 negated: false,
@@ -1057,6 +1060,7 @@ Query {
                                     windows: [],
                                     limit: None,
                                     offset: None,
+                                    organization_span: None,
                                     span: 102..110,
                                 },
                                 negated: true,
@@ -1089,6 +1093,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..111,
 }
 -- SELECT a LIKE 'x' ESCAPE '/', a NOT ILIKE 'y', a LIKE ANY ('x', 'y'), a NOT ILIKE ALL (), a LIKE SOME ('z')
@@ -1289,6 +1294,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..107,
 }
 -- SELECT a RLIKE 'x', a NOT REGEXP 'y', a IS NULL, a IS NOT NULL, a IS TRUE, a IS NOT FALSE, a IS UNKNOWN
@@ -1495,6 +1501,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..103,
 }
 -- SELECT a IS DISTINCT FROM b, a IS NOT DISTINCT FROM b, NOT a IN (1) AND b OR c
@@ -1671,6 +1678,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..78,
 }
 -- SELECT EXISTS (SELECT 1), (SELECT 1), ((SELECT 1)), (1, 2 AS b), (a), struct(), struct(1 AS a, b), exists(1)
@@ -1728,6 +1736,7 @@ Query {
                                     windows: [],
                                     limit: None,
                                     offset: None,
+                                    organization_span: None,
                                     span: 15..23,
                                 },
                             ),
@@ -1782,6 +1791,7 @@ Query {
                                     windows: [],
                                     limit: None,
                                     offset: None,
+                                    organization_span: None,
                                     span: 27..35,
                                 },
                             ),
@@ -1840,6 +1850,7 @@ Query {
                                                 windows: [],
                                                 limit: None,
                                                 offset: None,
+                                                organization_span: None,
                                                 span: 40..48,
                                             },
                                         ),
@@ -1853,6 +1864,7 @@ Query {
                                     windows: [],
                                     limit: None,
                                     offset: None,
+                                    organization_span: None,
                                     span: 39..49,
                                 },
                             ),
@@ -2050,6 +2062,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..108,
 }
 -- SELECT CASE WHEN a THEN 1 WHEN b THEN 2 ELSE 3 END, CASE a WHEN 1 THEN 'x' END
@@ -2200,6 +2213,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..78,
 }
 -- SELECT a[1][b].c.d, f(x).y, t.*, t.* EXCEPT (a, b.c), * EXCEPT (d), ?
@@ -2451,6 +2465,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..69,
 }
 -- SELECT x -> x + 1, (x, y) -> x * y, transform(a, all -> all * all)
@@ -2670,6 +2685,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..66,
 }
 -- SELECT count(DISTINCT a), count(ALL b), count(*), count(ALL), sum(c) FILTER (WHERE d), first(e IGNORE NULLS), last(f) RESPECT NULLS
@@ -3042,6 +3058,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..131,
 }
 -- SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a DESC), rank() OVER (PARTITION BY a ORDER BY b ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
@@ -3225,6 +3242,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..148,
 }
 -- SELECT sum(a) OVER w, sum(a) OVER (w), sum(a) OVER (DISTRIBUTE BY a SORT BY b RANGE 1 PRECEDING), sum(a) OVER (CLUSTER BY a ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING)
@@ -3571,6 +3589,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..173,
 }
 -- SELECT left(a, 1), right(b, 2), db.f(1), a.left(1), if(a, 1, 2), all, all + 1
@@ -3937,6 +3956,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..77,
 }
 -- SELECT current_date, current_timestamp, user, session_user, current_path, current_date()
@@ -4092,5 +4112,6 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..88,
 }

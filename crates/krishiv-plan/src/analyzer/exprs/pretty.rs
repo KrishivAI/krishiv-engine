@@ -125,6 +125,8 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
         // to `named_struct` shows its children as written).
         ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
         ExprNode::MultiAlias { names, .. } => format!("{} AS ({})", k[0], names.join(", ")),
+        // Spark names a pipe item by the item.
+        ExprNode::Pipe { .. } => k[0].to_owned(),
         // Spark's `Alias.sql`: an alias inside an expression shows its name.
         ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
             format!(
@@ -531,6 +533,9 @@ pub(super) fn call(
             }
             s + " END"
         }
+        // `uuid(seed)`: the seed is no child of Spark's `Uuid`, so it is
+        // not shown (Spark 4.2.0 names `uuid(5)` as `uuid()`).
+        _ if name.eq_ignore_ascii_case("uuid") && k.len() == 1 => "uuid()".to_owned(),
         // Spark's own spellings of `if` and `positive`.
         _ if name.eq_ignore_ascii_case("if") && k.len() == 3 => {
             format!("(IF({}, {}, {}))", k[0], k[1], k[2])
