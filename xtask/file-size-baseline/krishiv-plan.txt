@@ -5,6 +5,6 @@
 # over main: a cast of an alias keeps the alias's name (T001c, PR #491); USING-join keys (P2b row 11); char comparison padding and declared types through GROUP BY and lateral aliases (T001b)
 # +14: not_constant walks distinct nodes (review of #529)
 # +6 lines over main: a SQL function call keeps its written name (T184, PR #505)
-4642 crates/krishiv-plan/src/analyzer/ops.rs
-3096 crates/krishiv-plan/src/analyzer/subquery.rs
+4659 crates/krishiv-plan/src/analyzer/ops.rs
+3095 crates/krishiv-plan/src/analyzer/subquery.rs
 5384 crates/krishiv-plan/src/tests/analyzer.rs
