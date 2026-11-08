@@ -206,13 +206,16 @@ impl RuntimeBloom {
     /// `Find`). The answers are the same either way.
     #[must_use]
     pub fn check_batch(&self, hashes: &[u64]) -> arrow_buffer::BooleanBuffer {
-        if self.num_bytes() <= PREFETCH_ABOVE_BYTES {
+        // Block indices are kept as `u32`: a filter of 2^32 blocks or more
+        // (128 GiB, never planned) keeps the one-at-a-time loop.
+        if self.num_bytes() <= PREFETCH_ABOVE_BYTES || u32::try_from(self.blocks.len()).is_err() {
             return super::member::pack(hashes, |h| self.check_hash(h));
         }
-        let blocks: Vec<u32> = hashes
-            .iter()
-            .map(|&h| u32::try_from(self.block(h)).unwrap_or(u32::MAX))
-            .collect();
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "below the block count, which fits in u32 (checked above)"
+        )]
+        let blocks: Vec<u32> = hashes.iter().map(|&h| self.block(h) as u32).collect();
         let mut words = Vec::with_capacity(hashes.len().div_ceil(64));
         for (c, chunk) in hashes.chunks(64).enumerate() {
             let base = c * 64;
@@ -371,9 +374,7 @@ mod tests {
         assert!(format!("{f:?}").contains("bytes"));
     }
 
-    /// The batched probe answers as the one-hash probe does, on both sides
-    /// of the prefetch threshold and for batch lengths around the 64-answer
-    /// words and the prefetch distance (study 18 §R4).
+    /// A block is one aligned 32-byte unit, so it never spans two lines.
     #[test]
     fn blocks_never_straddle_a_cache_line() {
         assert_eq!(std::mem::size_of::<Block>(), BLOCK_BYTES);
@@ -382,6 +383,9 @@ mod tests {
         assert_eq!(f.blocks.as_ptr().addr() % BLOCK_BYTES, 0);
     }
 
+    /// The batched probe answers as the one-hash probe does, on both sides
+    /// of the prefetch threshold and for batch lengths around the 64-answer
+    /// words and the prefetch distance (study 18 §R4).
     #[test]
     fn batched_probes_answer_as_single_probes() {
         for bytes in [
