@@ -303,6 +303,12 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         .env
         .as_ref()
         .ok_or_else(|| corrupt("no expression environment"))?;
+    // A writer sets the style only when it is not the default, and by its exact name.
+    if let Some(style) = env.binary_output_style.as_deref()
+        && !matches!(style, "UTF-8" | "BASIC" | "BASE64" | "HEX")
+    {
+        return Err(corrupt("an unknown binary output style"));
+    }
     let env = ExprEnv {
         ansi: env.ansi,
         // The wire carries the flag for the `legacy_statistical_aggregate`
@@ -319,6 +325,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         legacy_java_charsets: env.legacy_java_charsets.unwrap_or(false),
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
         legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
+        binary_output_style: env.binary_output_style.as_deref().map(std::sync::Arc::from),
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));

@@ -161,3 +161,109 @@ fn set_with_a_generator_keeps_the_target_name() {
         ["1"]
     );
 }
+
+/// The error `sql` fails with: its class and message parameters.
+fn error(s: &Session, sql: &str) -> (String, Vec<(String, String)>) {
+    let Err(e) = block_on(async { s.sql(sql).await?.collect().await }) else {
+        return ("no error".to_owned(), Vec::new());
+    };
+    let params = e
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), v.clone()))
+        .collect();
+    (e.error_class().name().to_owned(), params)
+}
+
+/// Spark's `ValidateAndStripPipeExpressions` (`pipe-operators.sql` 70, 72,
+/// 242, 250, 311): `EXTEND` and `SET` items hold no aggregate function,
+/// `AGGREGATE` items hold one; a window function is not an aggregate here.
+#[test]
+fn pipe_items_check_their_aggregate_functions() {
+    let s = Session::new().unwrap();
+    let src = format!("select * from {T}");
+    let (class, params) = error(&s, &format!("{src} |> extend sum(x) as z"));
+    assert_eq!(class, "PIPE_OPERATOR_CONTAINS_AGGREGATE_FUNCTION");
+    assert!(
+        params.iter().any(|(k, v)| k == "clause" && v == "EXTEND"),
+        "{params:?}"
+    );
+    assert!(
+        params
+            .iter()
+            .any(|(k, v)| k == "expr" && v.starts_with("sum(x#")),
+        "{params:?}"
+    );
+    let (class, params) = error(&s, &format!("{src} |> set x = max(x)"));
+    assert_eq!(class, "PIPE_OPERATOR_CONTAINS_AGGREGATE_FUNCTION");
+    assert!(
+        params.iter().any(|(k, v)| k == "clause" && v == "SET"),
+        "{params:?}"
+    );
+    for sql in [
+        format!("{src} |> aggregate x group by x"),
+        format!("{src} |> aggregate x"),
+    ] {
+        assert_eq!(
+            error(&s, &sql).0,
+            "PIPE_OPERATOR_AGGREGATE_EXPRESSION_CONTAINS_NO_AGGREGATE_FUNCTION",
+            "{sql}"
+        );
+    }
+    let (class, params) = error(&s, &format!("{src} |> extend *"));
+    assert_eq!(class, "INVALID_USAGE_OF_STAR_OR_REGEX");
+    assert!(
+        params
+            .iter()
+            .any(|(k, v)| k == "prettyName" && v == "expression `pipeexpression`"),
+        "{params:?}"
+    );
+    // Allowed: an aggregate item with arithmetic around it, a window
+    // function in EXTEND, and items named as their expressions.
+    assert_eq!(
+        rows(&s, &format!("{src} |> aggregate sum(x) + 1 as s")),
+        ["2"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            &format!("{src} |> extend sum(x) over () as w |> select w")
+        ),
+        ["1", "1"]
+    );
+    assert_eq!(
+        rows(&s, &format!("{src} |> extend x + 1 |> select `(x + 1)`")),
+        ["1", "2"]
+    );
+}
+
+/// A generator's written alias in `AGGREGATE` names its column (Spark 4.2.0:
+/// `y`, so the next operator reads `y`).
+#[test]
+fn an_aggregate_generator_keeps_its_alias() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT 1 AS x |> AGGREGATE explode(collect_list(x)) AS y |> SELECT y"
+        ),
+        ["1"]
+    );
+}
+
+/// A generator with several names in `AGGREGATE` is nested in Spark's
+/// `pipeexpression(..)` wrapper, so it is refused (Spark 4.2.0).
+#[test]
+fn an_aggregate_generator_with_several_names_is_nested() {
+    let s = Session::new().unwrap();
+    let (class, params) = error(
+        &s,
+        "SELECT 1 AS x |> AGGREGATE posexplode(collect_list(x)) AS (p, y)",
+    );
+    assert_eq!(class, "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS");
+    assert!(
+        params.iter().any(|(k, v)| k == "expression"
+            && v == "\"pipeexpression(multialias(posexplode(collect_list(x))))\""),
+        "{params:?}"
+    );
+}

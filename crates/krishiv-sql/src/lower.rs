@@ -28,9 +28,9 @@ use krishiv_common::stack::{STEP, on_big_stack};
 use krishiv_plan::{
     Builtin, CastMode, ColumnRef, Cte, Expr as IrExpr, ExprNode, FrameBound as IrFrameBound,
     FrameUnits as IrFrameUnits, FunctionCall, Grouping, JoinCondition, JoinKind as IrJoin,
-    Literal as IrLiteral, LogicalPlan, Origin, PivotValue, Plan, PlanNode, ReadSource, SortOrder,
-    SourceId, Star, SubqueryKind, TypedLiteralKind as IrTypedKind, UnpivotColumnSet, WindowExpr,
-    WindowFrame as IrWindowFrame, WindowSpec as IrWindowSpec, WindowSpecRef,
+    Literal as IrLiteral, LogicalPlan, Origin, PipeClause, PivotValue, Plan, PlanNode, ReadSource,
+    SortOrder, SourceId, Star, SubqueryKind, TypedLiteralKind as IrTypedKind, UnpivotColumnSet,
+    WindowExpr, WindowFrame as IrWindowFrame, WindowSpec as IrWindowSpec, WindowSpecRef,
 };
 use krishiv_types::DecimalType;
 
@@ -38,14 +38,16 @@ use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause,
     FromStatement, GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Hint, Ident, Join,
     JoinConstraint, JoinKind, LateralView, Limit, Literal, NamedWindow, NullTreatment, NumKind,
-    Pipe, PipeAggregate, PipeOp, PipeOpKind, Pivot, Query, Relation, RelationExt, Select,
-    SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableAlias,
-    TableFactor, TableFactorKind, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
+    Pipe, PipeAggregate, PipeOp, PipeOpKind, Pivot, Query, Relation, RelationExt, SampleMethodKind,
+    SampleType, Select, SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem,
+    Span, TableAlias, TableFactor, TableFactorKind, TableSample, Truth, UnaryOp, Unpivot,
+    WindowRef, WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
 mod generator_order;
 mod identified;
+mod pipe;
 mod variant;
 
 pub use identified::lower_identified;
@@ -135,28 +137,17 @@ fn err(e: impl Into<KrishivError>, span: Span) -> ParseError {
     }
 }
 
-/// The clauses `ORDER BY`, `SORT BY`, `OFFSET` and `LIMIT` of a query or of
-/// a pipe operator.
+/// The clauses `ORDER BY`, `CLUSTER BY`, `DISTRIBUTE BY`, `SORT BY`,
+/// `OFFSET` and `LIMIT` of a query or of a pipe operator.
 struct Organization<'a> {
     order_by: &'a [SortItem],
+    cluster_by: &'a [Expr],
+    distribute_by: &'a [Expr],
     sort_by: &'a [SortItem],
     order_span: Option<Span>,
     offset: Option<&'a Expr>,
     limit: Option<&'a Limit>,
     span: Span,
-}
-
-/// Rejects the query-organization clauses lowering does not support.
-fn reject_organization(q: &Query) -> R<()> {
-    for (present, what) in [
-        (!q.cluster_by.is_empty(), "CLUSTER BY"),
-        (!q.distribute_by.is_empty(), "DISTRIBUTE BY"),
-    ] {
-        if present {
-            return Err(unsupported(what, q.span));
-        }
-    }
-    Ok(())
 }
 
 fn unsupported(feature: &str, span: Span) -> ParseError {
@@ -453,7 +444,6 @@ impl Lowerer {
     }
 
     fn query_inner(&mut self, q: &Query) -> R<LogicalPlan> {
-        reject_organization(q)?;
         // Kept for the definitions as well as the body: a later definition
         // may read a recursive one under `LIMIT ALL`.
         let recursive = q.with.as_ref().is_some_and(|w| w.recursive);
@@ -626,7 +616,6 @@ impl Lowerer {
         let from = arc(self.from(&f.from)?);
         let mut inputs = Vec::with_capacity(f.bodies.len());
         for body in &f.bodies {
-            reject_organization(body)?;
             let plan = match &body.body.kind {
                 SetExprKind::Select(s) => self.with_windows(&body.windows, |l| {
                     let inner = l.select_over(s, (*from).clone())?;
@@ -736,19 +725,6 @@ impl Lowerer {
         )
     }
 
-    /// `input |> operator |> ...`: each operator reads the plan of the
-    /// ones before it, as Spark's `visitOperatorPipeRightSide` builds them.
-    fn pipe(&mut self, p: &Pipe) -> R<LogicalPlan> {
-        let mut plan = self.deeper(|l| l.body(&p.input))?;
-        for op in &p.ops {
-            // Spark's `PipeOperator(left)`: the operator reads what the one
-            // before it output, never a column that one dropped.
-            plan = self.node(PlanNode::PipeOperator { input: arc(plan) }, op.span);
-            plan = self.pipe_op(plan, op)?;
-        }
-        Ok(plan)
-    }
-
     /// A `HAVING` condition as Spark's `AstBuilder` reads it: a predicate, or else cast to boolean.
     fn having_predicate(&mut self, h: &Expr) -> R<Arc<IrExpr>> {
         let predicate = self.expr(h)?;
@@ -767,236 +743,19 @@ impl Lowerer {
         }))
     }
 
-    fn pipe_op(&mut self, plan: LogicalPlan, op: &PipeOp) -> R<LogicalPlan> {
-        let star = |l: &Self, except: Vec<Vec<String>>| {
-            arc(l.ex(
-                ExprNode::Star(Star {
-                    regex: None,
-                    replace: Vec::new(),
-                    position: None,
-                    qualifier: Vec::new(),
-                    except,
-                    plan_id: None,
-                }),
-                op.span,
-            ))
-        };
-        Ok(match &op.kind {
-            PipeOpKind::Select(s) => {
-                let exprs = self.with_windows(&s.windows, |l| {
-                    s.projection
-                        .iter()
-                        .map(|i| l.select_item(i))
-                        .collect::<R<Vec<_>>>()
-                })?;
-                // `|> SELECT items GROUP BY keys` is an aggregate whose
-                // select list is the items.
-                let plan = match &s.group_by {
-                    Some(g) => {
-                        let grouping = self.grouping(g)?;
-                        self.node(
-                            PlanNode::Aggregate {
-                                input: arc(plan),
-                                grouping,
-                                aggregates: exprs,
-                            },
-                            s.span,
-                        )
-                    }
-                    None => self.node(
-                        PlanNode::Project {
-                            input: arc(plan),
-                            exprs,
-                        },
-                        s.span,
-                    ),
-                };
-                self.wrap_distinct_hints(plan, s.quantifier, &s.hints, s.span)?
-            }
-            PipeOpKind::Extend(items) => {
-                let mut exprs = vec![star(self, Vec::new())];
-                for item in items {
-                    exprs.push(self.select_item(item)?);
-                }
-                self.node(
-                    PlanNode::Project {
-                        input: arc(plan),
-                        exprs,
-                    },
-                    op.span,
-                )
-            }
-            PipeOpKind::Drop(names) => {
-                let except = names
-                    .iter()
-                    .map(|n| n.parts.iter().map(|p| p.value.clone()).collect())
-                    .collect();
-                let exprs = vec![star(self, except)];
-                self.node(
-                    PlanNode::Project {
-                        input: arc(plan),
-                        exprs,
-                    },
-                    op.span,
-                )
-            }
-            PipeOpKind::As(name) => self.node(
-                PlanNode::SubqueryAlias {
-                    input: arc(plan),
-                    alias: name.value.clone(),
-                    columns: Vec::new(),
-                },
-                op.span,
-            ),
-            PipeOpKind::Where(w) => {
-                let predicate = arc(self.expr(&w.condition)?);
-                self.node(
-                    PlanNode::Filter {
-                        input: arc(plan),
-                        predicate,
-                    },
-                    op.span,
-                )
-            }
-            PipeOpKind::Pivot(p, None) => self.pivot(plan, p)?,
-            PipeOpKind::Unpivot(u, None) => self.unpivot(plan, u)?,
-            PipeOpKind::Join(j) => self.join(plan, j)?,
-            PipeOpKind::SetOp {
-                op: set,
-                quantifier,
-                right,
-            } => {
-                let right = arc(self.deeper(|l| l.body(right))?);
-                self.set_operation(*set, *quantifier, arc(plan), right, op.span)
-            }
-            PipeOpKind::Organization(o) => {
-                if !o.cluster_by.is_empty() {
-                    return Err(unsupported("CLUSTER BY", o.span));
-                }
-                if !o.distribute_by.is_empty() {
-                    return Err(unsupported("DISTRIBUTE BY", o.span));
-                }
-                self.organize_parts(
-                    plan,
-                    &Organization {
-                        order_by: &o.order_by,
-                        sort_by: &o.sort_by,
-                        order_span: o.order_span,
-                        offset: o.offset.as_ref(),
-                        limit: o.limit.as_ref(),
-                        span: o.span,
-                    },
-                )?
-            }
-            PipeOpKind::Aggregate(a) => self.pipe_aggregate(plan, a)?,
-            PipeOpKind::Set(assignments) => {
-                // One projection per assignment, so a later one reads the
-                // value an earlier one set (`SET z = 1, zz = z + 1`).
-                let mut plan = plan;
-                for a in assignments {
-                    // Validation rejects multi-part keys.
-                    let Some(name) = a.key.last() else { continue };
-                    let value = arc(self.expr(&a.value)?);
-                    let star = self.ex(
-                        ExprNode::Star(Star {
-                            regex: None,
-                            qualifier: Vec::new(),
-                            except: Vec::new(),
-                            replace: vec![(name.value.clone(), value)],
-                            position: None,
-                            plan_id: None,
-                        }),
-                        a.span,
-                    );
-                    plan = self.node(
-                        PlanNode::Project {
-                            input: arc(plan),
-                            exprs: vec![arc(star)],
-                        },
-                        a.span,
-                    );
-                }
-                plan
-            }
-            PipeOpKind::Sample(t) => return Err(unsupported("TABLESAMPLE", t.span)),
-            PipeOpKind::Pivot(_, Some(_)) | PipeOpKind::Unpivot(_, Some(_)) => {
-                return Err(unsupported("PIVOT with UNPIVOT", op.span));
-            }
-        })
-    }
-
-    /// The input column a pipe `GROUP BY` number names.
-    fn position(&self, e: &Expr) -> Option<usize> {
-        match &e.kind {
-            ExprKind::Literal(Literal::Number {
-                text,
-                kind: NumKind::Int,
-            }) => text
-                .parse::<i32>()
-                .ok()
-                .and_then(|n| usize::try_from(n).ok()),
-            _ => None,
-        }
-    }
-
-    /// `AGGREGATE [aggregates] [GROUP BY keys]`: the result is the keys,
-    /// then the aggregates.
-    fn pipe_aggregate(&mut self, plan: LogicalPlan, a: &PipeAggregate) -> R<LogicalPlan> {
-        let mut keys = Vec::new();
-        let mut items = Vec::new();
-        for g in a.group_by.iter().flat_map(|g| &g.items) {
-            match &g.kind {
-                GroupItemKind::Expr(e) => {
-                    // A number names an input column, unlike `GROUP BY n`
-                    // of a query, which names a select item.
-                    let key = match self.position(e) {
-                        Some(position) => arc(self.ex(
-                            ExprNode::Star(Star {
-                                regex: None,
-                                qualifier: Vec::new(),
-                                except: Vec::new(),
-                                replace: Vec::new(),
-                                position: Some(position),
-                                plan_id: None,
-                            }),
-                            e.span,
-                        )),
-                        None => arc(self.expr(e)?),
-                    };
-                    items.push(Arc::clone(&key));
-                    keys.push(key);
-                }
-                GroupItemKind::Named(item) => {
-                    keys.push(arc(self.expr(&item.expr)?));
-                    items.push(self.select_item(item)?);
-                }
-                _ => return Err(unsupported("grouping sets in a pipe AGGREGATE", g.span)),
-            }
-        }
-        for item in &a.aggregates {
-            items.push(self.select_item(item)?);
-        }
-        Ok(self.node(
-            PlanNode::Aggregate {
-                input: arc(plan),
-                grouping: Grouping::GroupBy(keys),
-                aggregates: items,
-            },
-            a.span,
-        ))
-    }
-
     /// `ORDER BY`, `SORT BY`, `OFFSET` and `LIMIT` of `q` over `plan`.
     fn organize(&mut self, plan: LogicalPlan, q: &Query) -> R<LogicalPlan> {
         self.organize_parts(
             plan,
             &Organization {
                 order_by: &q.order_by,
+                cluster_by: &q.cluster_by,
+                distribute_by: &q.distribute_by,
                 sort_by: &q.sort_by,
                 order_span: q.order_span,
                 offset: q.offset.as_ref(),
                 limit: q.limit.as_ref(),
-                span: q.span,
+                span: q.organization_span.unwrap_or(q.span),
             },
         )
     }
@@ -1004,6 +763,46 @@ impl Lowerer {
     /// The clauses of [`Self::organize`] given as parts, which a pipe
     /// operator shares.
     fn organize_parts(&mut self, mut plan: LogicalPlan, q: &Organization<'_>) -> R<LogicalPlan> {
+        // `DISTRIBUTE BY` and `CLUSTER BY` repartition; `CLUSTER BY` then
+        // sorts each partition by the same expressions, ascending (Spark's
+        // `withQueryResultClauses`). Validation allowed one of them only.
+        for (exprs, sorts) in [(q.distribute_by, false), (q.cluster_by, true)] {
+            if exprs.is_empty() {
+                continue;
+            }
+            // Spark's errors cite the clauses (`queryOrganization`).
+            let span = q.span;
+            let lowered = exprs
+                .iter()
+                .map(|e| self.expr(e).map(arc))
+                .collect::<R<Vec<_>>>()?;
+            // `CLUSTER BY` sorts by the same expressions, lowered once.
+            let order: Vec<SortOrder> = if sorts {
+                lowered
+                    .iter()
+                    .map(|x| SortOrder::asc(Arc::clone(x)))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            plan = self.node(
+                PlanNode::Repartition {
+                    input: arc(plan),
+                    exprs: lowered,
+                },
+                span,
+            );
+            if sorts {
+                plan = self.node(
+                    PlanNode::Sort {
+                        input: arc(plan),
+                        order,
+                        global: false,
+                    },
+                    span,
+                );
+            }
+        }
         for (items, global) in [(q.order_by, true), (q.sort_by, false)] {
             if !items.is_empty() {
                 let order = items.iter().map(|s| self.sort_item(s)).collect::<R<_>>()?;
@@ -1773,10 +1572,80 @@ impl Lowerer {
         })
     }
 
-    fn factor(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
-        if let Some(sample) = &tf.sample {
-            return Err(unsupported("TABLESAMPLE", sample.span));
+    /// `TABLESAMPLE` over `plan`, as Spark's `AstBuilder.withSample` builds
+    /// it (its checks are in `validate/sample.rs`): `n ROWS` is `LIMIT n`;
+    /// `PERCENT` and `BUCKET x OUT OF y` are a Bernoulli sample of a
+    /// fraction, which keeps every row at a fraction of 1 or more and none
+    /// at 0 or less (Spark's `BernoulliCellSampler`). A fraction in between
+    /// keeps rows by a random draw per row seeded by Spark's partition
+    /// index, which Krishiv's partitions do not reproduce, so it stays
+    /// unsupported, as does `SYSTEM` (block) sampling.
+    fn sample(&mut self, plan: LogicalPlan, s: &TableSample) -> R<LogicalPlan> {
+        if s.sample_type == Some(SampleType::System) {
+            return Err(unsupported("TABLESAMPLE SYSTEM", s.span));
         }
+        let Some(method) = &s.method else {
+            return Err(unsupported("TABLESAMPLE", s.span));
+        };
+        let limit = |l: &mut Self, plan: LogicalPlan, limit: Arc<IrExpr>| {
+            l.node(
+                PlanNode::Limit {
+                    input: arc(plan),
+                    limit,
+                },
+                s.span,
+            )
+        };
+        let fraction = match &method.kind {
+            SampleMethodKind::Rows(e) => {
+                let n = arc(self.expr(e)?);
+                return Ok(limit(self, plan, n));
+            }
+            SampleMethodKind::Percent { negative, value } => {
+                let sign = if *negative { -1.0 } else { 1.0 };
+                sign * value.parse::<f64>().unwrap_or(f64::NAN) / 100.0
+            }
+            SampleMethodKind::Bucket {
+                numerator,
+                denominator,
+                on: None,
+            } => {
+                numerator.parse::<f64>().unwrap_or(f64::NAN)
+                    / denominator.parse::<f64>().unwrap_or(f64::NAN)
+            }
+            // Validation refuses these.
+            _ => return Err(unsupported("TABLESAMPLE", s.span)),
+        };
+        if fraction >= 1.0 {
+            Ok(plan)
+        } else if fraction <= 0.0 {
+            Ok(limit(
+                self,
+                plan,
+                arc(IrExpr::literal(IrLiteral::Integer(0))),
+            ))
+        } else {
+            Err(unsupported(
+                "TABLESAMPLE of a fraction between 0 and 1",
+                s.span,
+            ))
+        }
+    }
+
+    fn factor(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
+        let plan = self.factor_relation(tf)?;
+        let plan = match &tf.sample {
+            Some(sample) => self.sample(plan, sample)?,
+            None => plan,
+        };
+        Ok(match &tf.alias {
+            None => plan,
+            Some(a) => self.with_alias(plan, a, tf.span),
+        })
+    }
+
+    /// The relation of `tf`, before its sample and alias.
+    fn factor_relation(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
         let plan = match &tf.kind {
             TableFactorKind::Table {
                 name,
@@ -1927,10 +1796,7 @@ impl Lowerer {
                 }
             }
         };
-        Ok(match &tf.alias {
-            None => plan,
-            Some(a) => self.with_alias(plan, a, tf.span),
-        })
+        Ok(plan)
     }
 
     /// `plan` under the `SubqueryAlias` of `a` (the one wrapper both the
