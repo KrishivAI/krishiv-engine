@@ -294,7 +294,7 @@ jobs:
           pattern: wheels-*
           path: dist
           merge-multiple: true
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - name: Measure the wheels
         run: cargo xtask wheel-sizes dist --measure-only "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json"
       - name: Record the main commit measured against

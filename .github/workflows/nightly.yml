@@ -19,7 +19,7 @@ concurrency:
 
 env:
   # Faster builds and links in CI: line tables only (backtraces and coverage keep
-  # line numbers); mold is installed per job by rui314/setup-mold.
+  # line numbers); mold is installed per job by .github/actions/setup-mold.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
