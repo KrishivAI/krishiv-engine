@@ -5,8 +5,8 @@
 //!
 //! One pool per process, started by the first UDF call and sized by the
 //! session making it (`krishiv.python.udf.threads`, read when the session
-//! is created; 0 is the machine's thread count on a free-threaded Python,
-//! else 1). A call asks for the current pool ([`current`]) when its runtime
+//! is created; 0 is the session executor's compute thread count on a
+//! free-threaded Python, else 1). A call asks for the current pool ([`current`]) when its runtime
 //! has none or holds a fork's copy: after `os.fork` the child's copy of the
 //! parent's pool has no threads (they stayed in the parent), so it is left alone, never
 //! stopped or joined, and the child starts a pool of its own of the same
@@ -36,9 +36,13 @@ static SHUT: AtomicBool = AtomicBool::new(false);
 /// How long the exit hook waits for the pool's threads.
 const STOP_LIMIT: Duration = Duration::from_secs(5);
 
-/// The size of the pool for `threads` (0: chosen as above). Raises after
-/// the exit hook ran.
-pub(crate) fn pool_size(py: Python<'_>, threads: usize) -> PyResult<usize> {
+/// The size of the pool for `threads` (0: chosen as above, from the
+/// executor's `executor_threads`; review M5). Raises after the exit hook ran.
+pub(crate) fn pool_size(
+    py: Python<'_>,
+    threads: usize,
+    executor_threads: usize,
+) -> PyResult<usize> {
     if SHUT.load(Ordering::SeqCst) {
         return Err(PyRuntimeError::new_err(
             "Python UDFs cannot be registered while the interpreter exits",
@@ -50,7 +54,7 @@ pub(crate) fn pool_size(py: Python<'_>, threads: usize) -> PyResult<usize> {
     Ok(if gil_enabled(py)? {
         1
     } else {
-        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+        executor_threads.max(1)
     })
 }
 

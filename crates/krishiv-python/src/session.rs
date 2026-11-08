@@ -265,7 +265,9 @@ impl PySession {
             .get("krishiv.python.udf.threads")
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(0);
-        let size = crate::udf::pool_size(py, threads)?;
+        let executor_threads =
+            krishiv_exec::Executor::parallelism(self.inner.runtime().executor().as_ref());
+        let size = crate::udf::pool_size(py, threads, executor_threads)?;
         let made = std::sync::Arc::new(crate::udf::runtime::PyUdfRuntime::new(
             size,
             self.inner.conf(),
