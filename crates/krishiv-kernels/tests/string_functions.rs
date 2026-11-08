@@ -1256,3 +1256,25 @@ fn single_byte_tables_round_trip() {
         assert_eq!(back.value(0).len(), 256, "{cs}");
     }
 }
+
+/// `locate` over `UTF8_LCASE` operands: values of a Spark 4.2.0 local run (2026-11-08) for the
+/// ASCII and U+0130 cases.
+#[test]
+fn locate_lcase_follows_spark_lowercase_matching() {
+    let at = |sub: &str, text: &str, start: i32| {
+        s::locate_lcase(StrOperand::Array(&r1(sub)), lit(Some(text)), int(start))
+            .unwrap()
+            .value(0)
+    };
+    assert_eq!(at("ab", "xAbAy", 1), 2);
+    assert_eq!(at("a", "xAbAy", 3), 4);
+    assert_eq!(at("zz", "xAbAy", 1), 0);
+    assert_eq!(at("", "xAbAy", 3), 1);
+    // `İ` lower-cases to `i` + U+0307: a match may not end or start inside the pair.
+    assert_eq!(at("i", "a\u{130}", 1), 0);
+    assert_eq!(at("i\u{307}", "a\u{130}", 1), 2);
+    assert_eq!(at("\u{307}", "a\u{130}", 1), 0);
+    // The position counts characters of the original text, not of the lower-cased one.
+    assert_eq!(at("b", "a\u{130}b", 1), 3);
+    assert_eq!(at("\u{3c3}", "x\u{3c2}", 1), 2);
+}
