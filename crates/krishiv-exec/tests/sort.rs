@@ -1113,12 +1113,13 @@ async fn two_sorts(rows: u64, limit: usize) -> [Result<Vec<Batch>>; 2] {
 /// sort driver's input batch asked through the driver meanwhile waits for
 /// the other task's holding merge seat. At 3 MiB, 32 runs: 48 of 64 sorts
 /// failed without the cohort and the cap, 6 with them; with the wait for
-/// holding seats, 2 of 192 (3.5 MiB: 2 of 128; 4 MiB: 0 of 128). What still
-/// fails: buffers a driver combined while the task's other driver still
-/// sorts input, which no spill reaches until finalize, so the limits here
-/// stay above it. Below about 2.75 MiB the pool is smaller than one task's
-/// fan-in-2 merge (1.19 MB) next to the other task's two drivers buffering
-/// a batch each.
+/// holding seats, 2 of 192 (3.5 MiB: 2 of 128; 4 MiB: 0 of 128); 16 of 192
+/// after main moved on. The rest were buffers a driver combined while the
+/// task's other driver still sorted input, which no spill reached until
+/// finalize: the drivers still sorting input now report and spill them, 0
+/// of 320 at 3 MiB. At 2.75 MiB 6 of 128 still fail: below about that the
+/// pool is smaller than one task's fan-in-2 merge (1.19 MB) next to the
+/// other task's two drivers buffering a batch each.
 /// `KRISHIV_SORT_TWO_TASK_RUNS` repeats each limit (a stress loop).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_sorts_finish_when_their_spill_writes_fill_the_pool() {
@@ -1126,7 +1127,7 @@ async fn two_sorts_finish_when_their_spill_writes_fill_the_pool() {
     let runs: usize = std::env::var("KRISHIV_SORT_TWO_TASK_RUNS").map_or(1, |v| v.parse().unwrap());
     let rows = 65_536;
     let mut failed = Vec::new();
-    for limit in [4096 * KIB, 5120 * KIB] {
+    for limit in [3584 * KIB, 4096 * KIB] {
         for _ in 0..runs {
             for out in two_sorts(rows, limit).await {
                 match out {
