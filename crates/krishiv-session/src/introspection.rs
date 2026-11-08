@@ -135,7 +135,7 @@ fn tree_children(out: &mut String, prefix: &str, ty: &DataType) {
     }
 }
 
-fn keep(pattern: Option<&ShowPattern>, name: &str) -> bool {
+pub(crate) fn keep(pattern: Option<&ShowPattern>, name: &str) -> bool {
     pattern.is_none_or(|p| matches(&p.pattern, name))
 }
 

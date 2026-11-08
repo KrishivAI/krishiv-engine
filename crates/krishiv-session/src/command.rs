@@ -1469,6 +1469,14 @@ impl Session {
                 )
                 .await
             }
+            krishiv_sql::ast::ShowKind::Catalogs { pattern, .. } => {
+                let rows = [CATALOG, crate::system::SYSTEM]
+                    .into_iter()
+                    .filter(|n| crate::introspection::keep(pattern.as_ref(), n))
+                    .map(|n| vec![Some(n.to_owned())])
+                    .collect();
+                self.string_frame(&["catalog"], rows).await
+            }
             _ => self.exec_show_catalog(s, original).await,
         }
     }
