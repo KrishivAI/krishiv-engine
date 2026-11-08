@@ -173,6 +173,7 @@ fn env_data() -> ExprEnv {
         legacy_java_charsets: false,
         legacy_coding_error_action: false,
         legacy_time_parser: false,
+        binary_output_style: None,
     }
 }
 

@@ -79,6 +79,7 @@
 //! | `PlanNode::Shift` | R | - | - |
 //! | `PlanNode::Hint` | U | - | - |
 //! | `PlanNode::PipeOperator` | U | - | - |
+//! | `PlanNode::Repartition` | U | - | - |
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
@@ -111,7 +112,7 @@
 //! | `ResolvedExpr::StateInput` | R | - | - |
 //!
 //! Not in v1 (spec 13 §9; added with the features that need them):
-//! `Generate`, `Repartition`, `Hint`, `Pivot`, `Command`,
+//! `Generate`, `Hint`, `Pivot`, `Command`,
 //! `Extension`, `ToDF`, `Offset`, `Deduplicate`, `LocalRelation` and `Range`
 //! relations; lambda, extract-value and extension expressions.
 
@@ -141,8 +142,9 @@ pub use display::identity_string;
 pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
     AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FrameBound, FrameUnits,
-    FunctionCall, NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star,
-    SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
+    FunctionCall, NullOrdering, PipeClause, ResolvedExpr, ResolvedFunction, SortDirection,
+    SortOrder, Star, SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec,
+    WindowSpecRef,
 };
 pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};

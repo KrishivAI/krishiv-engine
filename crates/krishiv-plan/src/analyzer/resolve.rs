@@ -852,6 +852,7 @@ impl Resolver<'_> {
                 params,
             } => self.hint(p, input, name, params, env),
             PlanNode::PipeOperator { input } => self.pipe_operator(input, env),
+            PlanNode::Repartition { input, exprs } => self.repartition(p, input, exprs, env),
             PlanNode::TableFunction { name, args } => self.table_function(p, name, args, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
@@ -1031,6 +1032,7 @@ impl Resolver<'_> {
             | PlanNode::WithCte { .. }
             | PlanNode::Hint { .. }
             | PlanNode::PipeOperator { .. }
+            | PlanNode::Repartition { .. }
             | PlanNode::Union { .. }
             | PlanNode::Distinct { .. }
             | PlanNode::Pivot { .. }
