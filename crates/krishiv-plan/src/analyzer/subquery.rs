@@ -62,7 +62,7 @@ use krishiv_common::stack::{STEP, on_big_stack};
 mod rank;
 use rank::{outer_only, repartitioned, window_reads_outer};
 
-type R<T> = Result<T, AnalysisError>;
+pub(super) type R<T> = Result<T, AnalysisError>;
 
 #[path = "subquery_split.rs"]
 mod split;
@@ -111,7 +111,7 @@ pub(super) fn rewrite(
     Ok(out)
 }
 
-struct Rewriter {
+pub(super) struct Rewriter {
     next_id: u64,
     /// Each relation rewritten, by address (the original kept alive), so a
     /// relation shared by several parents or subqueries is rewritten once.
@@ -547,7 +547,7 @@ impl Rewriter {
     }
 
     /// Whether the subquery `e` refers to its enclosing query.
-    fn correlated(&mut self, e: &Expr) -> bool {
+    pub(super) fn correlated(&mut self, e: &Expr) -> bool {
         let ExprNode::Subquery { plan, .. } = &e.node else {
             return false;
         };
@@ -577,7 +577,7 @@ impl Rewriter {
                 right,
                 kind,
                 condition: JoinCondition::On(on),
-            } if self.existential(on) => self.join(&p, left, right, kind, on),
+            } if self.joins_here(on, kind, left, right) => self.join(&p, left, right, kind, on),
             PlanNode::Join {
                 left,
                 right,
@@ -819,10 +819,8 @@ impl Rewriter {
         Ok(if widened { columns(base, &out) } else { base })
     }
 
-    /// A join whose `ON` holds `EXISTS` / `IN` subqueries: each is an
-    /// existence join under the side whose columns it reads, and the `ON`
-    /// reads the `exists` column (Spark plans the same `ExistenceJoin`
-    /// below the join). A subquery that reads both sides stays unsupported.
+    /// A join whose `ON` holds `EXISTS` / `IN` subqueries: each is an existence join under
+    /// the side it reads (Spark's `ExistenceJoin`); one reading both sides stays unsupported.
     fn join(
         &mut self,
         p: &Arc<LogicalPlan>,
@@ -893,6 +891,7 @@ impl Rewriter {
             r = joined;
             plain.extend(conds);
         }
+        let (plain, l, r) = self.lift_sides(plain, kind, l, r, [&left_ids, &right_ids])?;
         if plain.iter().any(|c| self.reads_correlated(c)) {
             return Err(unsupported(
                 "correlated subqueries outside a filter or a projection",
@@ -1096,7 +1095,7 @@ impl Rewriter {
     /// Whether `e` holds an `EXISTS` or `IN` subquery that an existence
     /// join computes: a correlated `EXISTS`, or any `IN`. (An uncorrelated
     /// `EXISTS` stays an expression computed once.)
-    fn existential(&mut self, e: &Arc<Expr>) -> bool {
+    pub(super) fn existential(&mut self, e: &Arc<Expr>) -> bool {
         subqueries(e).iter().any(|s| match &s.node {
             ExprNode::Subquery {
                 kind: SubqueryKind::Exists,
@@ -2455,7 +2454,7 @@ impl Rewriter {
         Ok((node(shift, Origin::UNKNOWN), Renumber { lo, hi, offset }))
     }
 
-    fn fresh(&mut self) -> AttrId {
+    pub(super) fn fresh(&mut self) -> AttrId {
         self.next_id += 1;
         AttrId(self.next_id - 1)
     }
@@ -2701,7 +2700,7 @@ fn with_domain(
 }
 
 /// `value` as the attribute `output`.
-fn alias(value: Arc<Expr>, output: &BoundColumn) -> Arc<Expr> {
+pub(super) fn alias(value: Arc<Expr>, output: &BoundColumn) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
         expr: value,
         output: output.clone(),
@@ -2804,7 +2803,7 @@ fn peel_limit(plan: &Arc<LogicalPlan>, input: &Arc<LogicalPlan>) -> R<PeeledLimi
 }
 
 /// Whether `right` reads a column of `left`: a lateral join's right side.
-fn reads_left(left: &Arc<LogicalPlan>, right: &Arc<LogicalPlan>) -> bool {
+pub(super) fn reads_left(left: &Arc<LogicalPlan>, right: &Arc<LogicalPlan>) -> bool {
     let Ok(out) = output(left) else {
         return false;
     };
