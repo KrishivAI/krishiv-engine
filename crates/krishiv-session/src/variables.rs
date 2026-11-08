@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
-use krishiv_plan::Literal;
 use krishiv_plan::analyzer::{SessionVariable, VariableSnapshot, variable_name};
 use krishiv_sql::ast::ObjectName;
 use krishiv_types::DataType;
@@ -24,7 +23,7 @@ pub(crate) struct StoredVariable {
     /// The declared or inferred type.
     pub(crate) data_type: DataType,
     /// The current value, of [`Self::data_type`].
-    pub(crate) value: Literal,
+    pub(crate) value: krishiv_plan::analyzer::VariableValue,
     /// The padded `SELECT` re-evaluating the default (`None` for a
     /// declaration without a default, whose default is NULL).
     pub(crate) default_query: Option<String>,

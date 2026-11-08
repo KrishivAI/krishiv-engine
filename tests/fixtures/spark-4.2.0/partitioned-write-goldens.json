@@ -1,0 +1,366 @@
+{
+ "format_version": 1,
+ "generator": "tests/scripts/gen_partitioned_write_goldens.py",
+ "spark_version": "4.2.0",
+ "cases": [
+  {
+   "id": "int_one_level",
+   "spark_partition_dirs": [
+    "p=0",
+    "p=1",
+    "p=2"
+   ],
+   "schema": "struct<id:bigint,p:int>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "0|0",
+    "1|1",
+    "2|2",
+    "3|0",
+    "4|1",
+    "5|2",
+    "6|0",
+    "7|1",
+    "8|2"
+   ],
+   "spark_rows": [
+    "0|0",
+    "1|1",
+    "2|2",
+    "3|0",
+    "4|1",
+    "5|2",
+    "6|0",
+    "7|1",
+    "8|2"
+   ]
+  },
+  {
+   "id": "string_escapes_and_null",
+   "spark_partition_dirs": [
+    "p=50%25",
+    "p=__HIVE_DEFAULT_PARTITION__",
+    "p=a b",
+    "p=a%23b",
+    "p=k%3Dv",
+    "p=x%2Fy",
+    "p=é"
+   ],
+   "schema": "struct<id:int,p:string>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "1|a b",
+    "2|x/y",
+    "3|k=v",
+    "4|50%",
+    "5|é",
+    "6|NULL",
+    "7|NULL",
+    "8|a#b"
+   ],
+   "spark_rows": [
+    "1|a b",
+    "2|x/y",
+    "3|k=v",
+    "4|50%",
+    "5|é",
+    "6|NULL",
+    "7|NULL",
+    "8|a#b"
+   ]
+  },
+  {
+   "id": "date_and_null_date",
+   "spark_partition_dirs": [
+    "d=1999-12-31",
+    "d=2024-02-29",
+    "d=__HIVE_DEFAULT_PARTITION__"
+   ],
+   "schema": "struct<id:int,d:date>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "1|2024-02-29",
+    "2|1999-12-31",
+    "3|NULL"
+   ],
+   "spark_rows": [
+    "1|2024-02-29",
+    "2|1999-12-31",
+    "3|NULL"
+   ]
+  },
+  {
+   "id": "two_levels",
+   "spark_partition_dirs": [
+    "a=x/b=1",
+    "a=x/b=2",
+    "a=y/b=1",
+    "a=y/b=__HIVE_DEFAULT_PARTITION__"
+   ],
+   "schema": "struct<id:int,a:string,b:int>",
+   "nullable": [
+    true,
+    true,
+    true
+   ],
+   "rows": [
+    "1|x|1",
+    "2|x|2",
+    "3|y|1",
+    "4|y|NULL"
+   ],
+   "spark_rows": [
+    "1|x|1",
+    "2|x|2",
+    "3|y|1",
+    "4|y|NULL"
+   ]
+  },
+  {
+   "id": "decimal_and_long_values",
+   "spark_partition_dirs": [
+    "p=-0.25",
+    "p=1.50"
+   ],
+   "schema": "struct<id:int,p:double>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "1|1.5",
+    "2|-0.25"
+   ],
+   "spark_rows": [
+    "1|1.5",
+    "2|-0.25"
+   ]
+  },
+  {
+   "id": "boolean_partition",
+   "spark_partition_dirs": [
+    "p=false",
+    "p=true"
+   ],
+   "schema": "struct<id:int,p:string>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "1|true",
+    "2|false"
+   ],
+   "spark_rows": [
+    "1|true",
+    "2|false"
+   ]
+  },
+  {
+   "id": "csv_with_header",
+   "spark_partition_dirs": [
+    "p=a",
+    "p=b"
+   ],
+   "schema": "struct<id:string,s:string,p:string>",
+   "nullable": [
+    true,
+    true,
+    true
+   ],
+   "rows": [
+    "1|one|a",
+    "2|two|b"
+   ],
+   "spark_rows": [
+    "1|one|a",
+    "2|two|b"
+   ]
+  },
+  {
+   "id": "json_lines",
+   "spark_partition_dirs": [
+    "p=10",
+    "p=20"
+   ],
+   "schema": "struct<id:bigint,s:string,p:int>",
+   "nullable": [
+    true,
+    true,
+    true
+   ],
+   "rows": [
+    "1|one|10",
+    "2|two|20"
+   ],
+   "spark_rows": [
+    "1|one|10",
+    "2|two|20"
+   ]
+  },
+  {
+   "id": "string_escapes_spark_list",
+   "spark_partition_dirs": [
+    "p=%5Bs%5D",
+    "p=%7Bb}",
+    "p=a%27b",
+    "p=back%5Cslash",
+    "p=c%5Er",
+    "p=co%3Alon",
+    "p=q%22q",
+    "p=st%2Ar",
+    "p=tab%09x",
+    "p=wh%3F"
+   ],
+   "schema": "struct<id:int,p:string>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "10|tab\tx",
+    "1|q\"q",
+    "2|a'b",
+    "3|st*r",
+    "4|wh?",
+    "5|back\\slash",
+    "6|{b}",
+    "7|[s]",
+    "8|c^r",
+    "9|co:lon"
+   ],
+   "spark_rows": [
+    "10|tab\tx",
+    "1|q\"q",
+    "2|a'b",
+    "3|st*r",
+    "4|wh?",
+    "5|back\\slash",
+    "6|{b}",
+    "7|[s]",
+    "8|c^r",
+    "9|co:lon"
+   ]
+  },
+  {
+   "id": "timestamp_partition",
+   "spark_partition_dirs": [
+    "ts=2024-01-02 03%3A04%3A05",
+    "ts=2024-01-02 03%3A04%3A05.123456",
+    "ts=__HIVE_DEFAULT_PARTITION__"
+   ],
+   "schema": "struct<id:int,ts:string>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "1|2024-01-02 03:04:05",
+    "2|2024-01-02 03:04:05.123456",
+    "3|NULL"
+   ],
+   "spark_rows": [
+    "1|2024-01-02 03:04:05",
+    "2|2024-01-02 03:04:05.123456",
+    "3|NULL"
+   ]
+  },
+  {
+   "id": "double_nan_and_negative_zero",
+   "spark_partition_dirs": [
+    "p=0.0",
+    "p=1.5",
+    "p=NaN"
+   ],
+   "schema": "struct<id:int,p:double>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "1|NaN",
+    "2|0.0",
+    "3|1.5"
+   ],
+   "spark_rows": [
+    "1|NaN",
+    "2|0.0",
+    "3|1.5"
+   ]
+  },
+  {
+   "id": "bigint_partition",
+   "spark_partition_dirs": [
+    "p=-3",
+    "p=10000000000"
+   ],
+   "schema": "struct<id:int,p:bigint>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "1|10000000000",
+    "2|-3"
+   ],
+   "spark_rows": [
+    "1|10000000000",
+    "2|-3"
+   ]
+  },
+  {
+   "id": "append_new_and_existing_partition",
+   "spark_partition_dirs": [
+    "p=a",
+    "p=b",
+    "p=c"
+   ],
+   "schema": "struct<id:int,p:string>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "1|a",
+    "2|b",
+    "3|b",
+    "4|c"
+   ],
+   "spark_rows": [
+    "1|a",
+    "2|b",
+    "3|b",
+    "4|c"
+   ]
+  },
+  {
+   "id": "overwrite_replaces_every_partition",
+   "spark_partition_dirs": [
+    "p=b",
+    "p=c"
+   ],
+   "schema": "struct<id:int,p:string>",
+   "nullable": [
+    true,
+    true
+   ],
+   "rows": [
+    "3|b",
+    "4|c"
+   ],
+   "spark_rows": [
+    "3|b",
+    "4|c"
+   ]
+  }
+ ]
+}

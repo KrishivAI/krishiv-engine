@@ -728,7 +728,7 @@ impl Resolver<'_> {
                 self.bind(e, &cx)?
             };
             let written_identifier = matches!(&e.node, ExprNode::Column(c) if c.by_identifier);
-            let b = self.named(b, !written_identifier)?;
+            let b = Self::without_internal_identity_cast(self.named(b, !written_identifier)?, e);
             // Before the next item binds: it may read this alias (a lateral column alias).
             self.carry_declared_item(&b, Some(e));
             if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &b.expr.node {
@@ -776,10 +776,16 @@ impl Resolver<'_> {
     /// With `bare` false (an item written `IDENTIFIER(..)`), a variable or a field of a dotted
     /// path is named by its full shown form (`variablereference(..)`, `c1.c2`).
     fn named(&mut self, b: Bound, bare: bool) -> Result<Bound, AnalysisError> {
-        if let ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::Alias { .. }) =
-            &b.expr.node
-        {
-            return Ok(b);
+        // A column names itself, unless it stands for a call written in its
+        // place (a SQL function whose body is its parameter, `f(c1)`).
+        let written_call = b
+            .shown
+            .as_ref()
+            .is_some_and(|s| matches!(s.node, ExprNode::Function(_)));
+        match &b.expr.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { .. }) => return Ok(b),
+            ExprNode::Resolved(ResolvedExpr::Column(_)) if !written_call => return Ok(b),
+            _ => {}
         }
         let shown = b.shown();
         let bare = super::exprs::bare_name(&shown).filter(|_| bare);

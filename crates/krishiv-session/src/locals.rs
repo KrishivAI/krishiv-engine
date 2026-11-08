@@ -50,7 +50,7 @@ mod tests {
                         (*k).to_owned(),
                         SessionVariable {
                             data_type: DataType::Integer,
-                            value: Literal::Integer(*v),
+                            value: Literal::Integer(*v).into(),
                         },
                     )
                 })
