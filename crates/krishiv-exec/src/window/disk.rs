@@ -20,9 +20,13 @@
 //!
 //! # Memory
 //! Each reader's frame is in the headroom the flush phase reserves
-//! ([`readers`]). What this module holds beyond that (batches kept past their
-//! read, states) is charged to the pool directly, never drawing the credit
-//! the readers need. Batches a frame holds are optional, since it can fold
+//! ([`readers`]). So are what an offset function's values span and the
+//! states of folds as they open ([`opened`]): they take it from the lent
+//! credit when the evaluation opens, and keep it to the partition's end, so
+//! a pool another consumer took whole does not refuse them. What this module
+//! holds beyond that (more batches kept past their read, a state's growth)
+//! is charged to the pool directly, never drawing the credit the readers
+//! need. Batches a frame holds are optional, since it can fold
 //! from the file: a charge with no such way back ([`Shed`]) takes them back
 //! from the partition's other frames before it fails the query.
 
@@ -363,7 +367,10 @@ struct Values {
     seen: usize,
     done: bool,
     held: VecDeque<Chunk>,
+    /// At least `floor` bytes, taken from the flush phase's lent headroom
+    /// at open; past it, from the pool.
     charge: Reservation,
+    floor: usize,
     /// The bytes charged per chunk: it may hold its whole batch.
     frame: usize,
     data_type: arrow_schema::DataType,
@@ -375,8 +382,11 @@ impl Values {
         skip_nulls: bool,
         data_type: &arrow_schema::DataType,
         file: &SpillFile,
+        chunks: usize,
         consumer: &Arc<ConsumerHandle>,
     ) -> Result<Self> {
+        let frame = file.max_read_reservation();
+        let floor = frame.saturating_mul(chunks);
         Ok(Self {
             stream: Stream::open(file, consumer)?,
             input,
@@ -384,8 +394,9 @@ impl Values {
             seen: 0,
             done: false,
             held: VecDeque::new(),
-            charge: direct(consumer).unguarded(),
-            frame: file.max_read_reservation(),
+            charge: consumer.reservation_from_credit(floor).unguarded(),
+            floor,
+            frame,
             data_type: data_type.clone(),
         })
     }
@@ -397,8 +408,9 @@ impl Values {
             .is_some_and(|c| c.first + c.values.len() <= min)
         {
             self.held.pop_front();
-            self.charge.shrink(self.frame);
         }
+        let keep = self.frame.saturating_mul(self.held.len()).max(self.floor);
+        self.charge.shrink(self.charge.size().saturating_sub(keep));
     }
 
     /// Reads a batch, keeping values from number `min` on.
@@ -430,7 +442,9 @@ impl Values {
         self.seen += values.len();
         self.drop_before(min);
         if !values.is_empty() && first + values.len() > min {
-            shed.grow(&mut self.charge, self.frame)?;
+            let held = self.frame.saturating_mul(self.held.len() + 1);
+            let more = held.saturating_sub(self.charge.size());
+            shed.grow(&mut self.charge, more)?;
             self.held.push_back(Chunk {
                 first,
                 values,
@@ -636,7 +650,7 @@ fn fold_from_file(
         let fold = Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?;
         // An aggregate UDF's state is opaque: each frame's fold charges it.
         folds.push(if super::udaf::is_udf(a) {
-            fold.charged(a, consumer)
+            fold.charged(a, consumer, false)
         } else {
             fold
         });
@@ -757,6 +771,41 @@ pub(super) fn headroom(plan: &WindowPlan, rows: usize) -> Result<usize> {
         .saturating_add(rows.saturating_mul(key_copies.saturating_mul(frames::RANGE_KEY_BYTES))))
 }
 
+/// The batches an offset or `nth_value` function's [`Values`] holds out of
+/// the flush phase's headroom: the batch read and the one before, which
+/// cover an offset within a batch. A wider span takes more from the pool
+/// (the batches of a file vary in size, so its span is not known before
+/// they are read).
+const VALUE_CHUNKS: usize = 2;
+
+/// The bytes the partition's functions take from the flush phase's lent
+/// headroom as its evaluation opens ([`super::stream::Emit::open`]): the
+/// values offset and `nth_value` functions hold ([`VALUE_CHUNKS`] frames of
+/// `frame` bytes), and the states of the folds that charge theirs
+/// ([`Fold::charged`]). The headroom counts them, so on a pool another
+/// consumer took whole, they do not fail the query.
+pub(super) fn opened(env: &Env, frame: usize) -> Result<usize> {
+    let mut bytes = 0_usize;
+    for f in &env.plan.functions {
+        let fold = match &f.function {
+            WindowFunction::Aggregate(a) => match f.shape()? {
+                Shape::RunningRows | Shape::RunningPeers => Fold::opened_bytes(a, env)?,
+                Shape::Frame
+                    if f.frame.lower == FrameBound::UnboundedPreceding
+                        && super::udaf::is_udf(a) =>
+                {
+                    Fold::opened_bytes(a, env)?
+                }
+                _ => 0,
+            },
+            _ if framed(f)? => frame.saturating_mul(VALUE_CHUNKS),
+            _ => 0,
+        };
+        bytes = bytes.saturating_add(fold);
+    }
+    Ok(bytes)
+}
+
 /// The readers `f` opens beyond the partition's own.
 pub(super) fn readers(f: &WindowFunctionPlan) -> Result<usize> {
     if !framed(f)? {
@@ -781,6 +830,7 @@ impl Framed {
         file: &SpillFile,
         consumer: &Arc<ConsumerHandle>,
     ) -> Result<Option<Self>> {
+        let chunks = VALUE_CHUNKS;
         if !framed(f)? {
             return Ok(None);
         }
@@ -796,7 +846,7 @@ impl Framed {
                 let skip = *ignore_nulls && *offset != 0;
                 Self::Offset {
                     values: Box::new(OffsetFn {
-                        values: Values::open(*input, skip, data_type, file, consumer)?,
+                        values: Values::open(*input, skip, data_type, file, chunks, consumer)?,
                         offset: *offset,
                         default: *default,
                         ignore_nulls: skip,
@@ -812,7 +862,7 @@ impl Framed {
                 data_type,
             } => Self::Nth(Box::new(Nth {
                 edges: Edges::open(env, f, file, consumer)?,
-                values: Values::open(*input, *ignore_nulls, data_type, file, consumer)?,
+                values: Values::open(*input, *ignore_nulls, data_type, file, chunks, consumer)?,
                 counter: if *ignore_nulls {
                     Some(Counter {
                         stream: Stream::open(file, consumer)?,
@@ -830,7 +880,8 @@ impl Framed {
                     edges: Edges::open(env, f, file, consumer)?,
                     stream: Stream::open(file, consumer)?,
                     fold: if super::udaf::is_udf(a) {
-                        Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?.charged(a, consumer)
+                        Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?
+                            .charged(a, consumer, true)
                     } else {
                         Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?
                     },

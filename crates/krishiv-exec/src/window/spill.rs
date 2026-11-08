@@ -490,6 +490,12 @@ impl Window {
             .file
             .max_read_reservation()
             .saturating_mul(readers);
+        // What the functions hold as they open: offset functions' values,
+        // folds' states.
+        let frames = frames.saturating_add(super::disk::opened(
+            &self.env,
+            copied.disk.file.max_read_reservation(),
+        )?);
         let need = |n: usize| -> Result<usize> {
             Ok(frames.saturating_add(super::disk::headroom(&self.env.plan, n)?))
         };
