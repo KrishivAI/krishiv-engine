@@ -221,6 +221,7 @@ pub(crate) fn refuse_calendar_intervals(
         use arrow_schema::DataType as D;
         match t {
             D::Interval(arrow_schema::IntervalUnit::MonthDayNano) => true,
+            t if krishiv_types::arrow::is_calendar_struct(t) => true,
             D::Struct(f) => f.iter().any(|c| holds(c.data_type())),
             D::List(e) | D::LargeList(e) | D::Map(e, _) => holds(e.data_type()),
             _ => false,

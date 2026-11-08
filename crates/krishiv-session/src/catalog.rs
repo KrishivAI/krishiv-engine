@@ -46,6 +46,7 @@ use crate::cache::{RelationCache, is_cache_name};
 
 mod file_tables;
 mod ndv_sampling;
+mod script_results;
 
 use self::file_tables::FileScanOf;
 
@@ -79,6 +80,11 @@ pub(crate) enum TempTable {
         /// it lists its files without inferring a schema, and a table with
         /// no files is empty.
         known: bool,
+        /// A permanent table's partition columns and registered partitions
+        /// (`None` when they are not all at their default directories, so a
+        /// listing under the root cannot read them as Spark does). Empty
+        /// otherwise.
+        partitions: Option<krishiv_exec::files::KnownPartitions>,
     },
     /// A view over a query: the unresolved plan and the output columns it
     /// had when it was created (renamed when the view declares aliases).
@@ -202,8 +208,7 @@ impl SessionCatalog {
         self.epoch.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Removes every hidden entry no live view pins anymore. The caller
-    /// holds the write lock and bumps the epoch itself.
+    /// Removes the hidden entries nothing needs; the caller holds the write lock and bumps the epoch.
     fn collect_garbage(tables: &mut BTreeMap<String, (String, Arc<TempTable>)>) {
         let mut live = BTreeSet::new();
         for (_, table) in tables.values() {
@@ -211,7 +216,7 @@ impl SessionCatalog {
                 live.extend(pins.iter().cloned());
             }
         }
-        tables.retain(|key, _| !is_hidden_name(key) || live.contains(key));
+        script_results::retain(tables, &live);
     }
 
     /// Hands out the next hidden name snapshot pins use: no SQL text
@@ -892,6 +897,7 @@ impl QueryCatalog {
             source: table_source(&table),
             columns: columns.clone(),
             known: true,
+            partitions: file_tables::known_partitions(&table),
         });
         let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         // Keys are lower case whatever the session's case sensitivity: `entry_key` spells scans that way.
@@ -912,6 +918,11 @@ impl QueryCatalog {
             version: None,
             kind: TableKind::Table,
             file_metadata: file_metadata(&table.provider),
+            column_comments: table
+                .columns
+                .iter()
+                .filter_map(|c| Some((c.name.clone(), c.comment.clone()?)))
+                .collect(),
         })
     }
 }
@@ -1014,6 +1025,7 @@ impl Catalog for QueryCatalog {
                 version: None,
                 kind,
                 file_metadata,
+                column_comments: BTreeMap::new(),
             }))
         })
     }
@@ -2050,6 +2062,7 @@ mod tests {
     fn files(col: &str) -> TempTable {
         TempTable::Files {
             known: false,
+            partitions: Some(Default::default()),
             source: ReadSource::Files {
                 format: "parquet".to_owned(),
                 paths: vec![],
@@ -2816,6 +2829,7 @@ mod tests {
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
+                binary_output_style: None,
             },
         )
     }

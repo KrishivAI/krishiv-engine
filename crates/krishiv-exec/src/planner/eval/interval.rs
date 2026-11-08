@@ -36,9 +36,19 @@ pub(super) fn is_ansi(t: &ArrowType) -> bool {
     )
 }
 
-/// Whether `t` carries a calendar interval.
+/// Whether `t` carries a calendar interval (its struct of microseconds, ADR 0009 update 2026-11-06).
 pub(super) fn is_calendar(t: &ArrowType) -> bool {
-    matches!(t, ArrowType::Interval(IntervalUnit::MonthDayNano))
+    krishiv_types::arrow::is_calendar_struct(t)
+}
+
+/// The calendar interval column of `a` (a one-row column stands for every row).
+fn calendars(a: &ArrayRef) -> Result<krishiv_kernels::interval_calendar::Calendars<'_>> {
+    krishiv_kernels::interval_calendar::Calendars::of(a.as_ref()).ok_or_else(|| {
+        internal(&format!(
+            "a calendar interval operand of type {}",
+            a.data_type()
+        ))
+    })
 }
 
 /// A two-operand interval operator.
@@ -178,23 +188,24 @@ impl Binary {
                 )
             }
             Builtin::TimestampAddInterval if is_calendar(r.array().data_type()) => Arc::new(
-                timestamp_add_calendar(prim(l), prim(r), zone)?.with_data_type(self.out.clone()),
+                timestamp_add_calendar(prim(l), &calendars(r.array())?, zone)?
+                    .with_data_type(self.out.clone()),
             ),
             Builtin::DateAddInterval => Arc::new(date_add_calendar(
                 prim(l),
-                prim(r),
+                &calendars(r.array())?,
                 self.exact,
                 zone,
                 &self.kernels,
             )?),
-            b @ (Builtin::CalendarAdd | Builtin::CalendarSubtract) => Arc::new(add_calendar(
-                l.array().as_primitive(),
-                r.array().as_primitive(),
+            b @ (Builtin::CalendarAdd | Builtin::CalendarSubtract) => add_calendar(
+                &calendars(l.array())?,
+                &calendars(r.array())?,
                 b == Builtin::CalendarSubtract,
                 self.exact,
-            )?),
-            b @ (Builtin::MultiplyInterval | Builtin::DivideInterval) => Arc::new(scale_calendar(
-                l.array().as_primitive(),
+            )?,
+            b @ (Builtin::MultiplyInterval | Builtin::DivideInterval) => scale_calendar(
+                &calendars(l.array())?,
                 r.array().as_primitive::<Float64Type>(),
                 if b == Builtin::MultiplyInterval {
                     ScaleOp::Multiply
@@ -202,7 +213,7 @@ impl Binary {
                     ScaleOp::Divide
                 },
                 self.exact,
-            )?),
+            )?,
             Builtin::TimestampAddInterval => {
                 let r = micros(r);
                 Arc::new(
@@ -350,9 +361,7 @@ impl PhysExpr for Unary {
             (Builtin::ExtractAnsiIntervalDays, ArrowType::Duration(_)) => {
                 Arc::new(extract_days(a.as_primitive()))
             }
-            (Builtin::CalendarNegate, _) => {
-                Arc::new(negate_calendar(a.as_primitive(), self.exact)?)
-            }
+            (Builtin::CalendarNegate, _) => negate_calendar(&calendars(a)?, self.exact)?,
             (_, ArrowType::Interval(_)) => Arc::new(negate_year_month(a.as_primitive())?),
             (_, ArrowType::Duration(_)) => Arc::new(negate_day_time(a.as_primitive())?),
             (_, t) => return Err(internal(&format!("an interval operator on {t}"))),

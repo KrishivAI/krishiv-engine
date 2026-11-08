@@ -837,7 +837,8 @@ fn the_planners_exchange_schemas_are_the_instantiated_ones() {
 /// reserve a batch's worst case (~790 KB) and give most of it back. A
 /// driver refused while the others hold grants for their retries waits for
 /// those retries rather than failing (6 MiB failed 6/8 before; ADR 0007
-/// update 2026-11-06).
+/// update 2026-11-06). A batch whose worst case is refused is applied in
+/// slices (5 MiB failed ~1/50 before).
 #[test]
 fn a_join_and_aggregate_run_in_pools_between_spilling_and_fitting() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -869,7 +870,7 @@ fn a_join_and_aggregate_run_in_pools_between_spilling_and_fitting() {
     let roomy: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
     let want = sorted(run(&runner, &plan, &worker, &roomy, 0).unwrap());
     let mut id = 1;
-    for mib in [3, 4, 6, 8] {
+    for mib in [3, 4, 5, 6, 8] {
         for _ in 0..4 {
             let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
                 limit: Some(mib << 20),

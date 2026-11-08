@@ -441,12 +441,11 @@ fn review_findings_stay_fixed() {
         1
     );
     s.conf().set("spark.sql.caseSensitive", "false").unwrap();
-    // A result over the cap is refused, not truncated, and not read in full.
+    // A result has no row cap: memory is the limit.
     assert_eq!(
-        class(&s, "BEGIN SELECT id FROM range(100000); END"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        rows(&s, "BEGIN SELECT id FROM range(100000); END").len(),
+        100_000
     );
-    assert_eq!(rows(&s, "BEGIN SELECT id FROM range(256); END").len(), 256);
 }
 
 /// Scripts nest at most 32 levels (a divergence: Spark has no limit), at parse time, so neither
@@ -672,11 +671,10 @@ fn datediff_with_a_unit_is_timestampdiff() {
     );
 }
 
-/// Declared divergence (ADR 0008): Spark 4.2 ends the whole script silently when the compound whose
-/// `EXIT` handler fires is the last statement of an `IF`/`WHILE` body; this engine continues after the
-/// compound, as for any other position (design note T196, section 2.4).
+/// Spark 4.2.0: an `EXIT` handler whose compound is the last statement of an `IF` branch ends the whole
+/// script, silently (record: `exit_last_in_*`); a `FOR` body does not.
 #[test]
-fn an_exit_handler_continues_after_its_compound_even_at_the_end_of_a_body() {
+fn an_exit_handler_ends_the_script_at_the_end_of_an_if_body_but_not_a_for_body() {
     let s = Session::new().unwrap();
     assert_eq!(
         rows(
@@ -685,19 +683,16 @@ fn an_exit_handler_continues_after_its_compound_even_at_the_end_of_a_body() {
              IF TRUE THEN c: BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SET x = 1; SELECT 1 / 0; END c; END IF; \
              SELECT x; END"
         ),
-        ok(&[&["1"]])
+        ok(&[])
     );
-}
-
-#[test]
-fn a_for_loop_over_too_many_rows_is_refused() {
-    let s = Session::new().unwrap();
     assert_eq!(
-        class(
+        rows(
             &s,
-            "BEGIN FOR r AS SELECT id FROM range(100001) DO SELECT 1; END FOR; END"
+            "BEGIN DECLARE x INT DEFAULT 0; \
+             FOR r AS SELECT 1 AS a DO BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SET x = 1; SELECT 1 / 0; END; END FOR; \
+             SELECT x; END"
         ),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        ok(&[&["1"]])
     );
 }
 
@@ -723,38 +718,20 @@ fn nested_execute_immediate_and_row_assignment_follow_spark() {
 }
 
 #[test]
-fn a_result_of_a_type_literals_cannot_hold_fails_where_it_is_produced() {
+fn scripts_return_ansi_interval_results_but_a_for_loop_refuses_them() {
     let s = Session::new().unwrap();
-    rows(
-        &s,
-        "CREATE TEMPORARY VIEW spans AS SELECT INTERVAL '1' DAY AS a",
-    );
-    rows(&s, "DECLARE ran INT DEFAULT 0");
-    // The error comes from the query, before the statements that follow it.
-    // (Arrays, structs and maps are returned: `nested_variables.rs`.)
+    // A result goes through an in-memory table: any column type the engine holds.
+    let df =
+        block_on(s.sql("BEGIN SELECT INTERVAL '3' DAY AS i, array(INTERVAL '1' DAY) AS a; END"))
+            .unwrap();
     assert_eq!(
-        class(&s, "BEGIN SELECT a FROM spans; SET session.ran = 1; END"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        block_on(df.collect())
+            .unwrap()
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1
     );
-    assert_eq!(rows(&s, "SELECT ran"), ok(&[&["0"]]));
-}
-
-/// A script's result and its loop variables cannot hold an ANSI interval
-/// yet: Arrow carries no interval fields there, and Spark's defaults would
-/// change `INTERVAL '3' DAY` into `interval day to second`. Refused, not
-/// rewritten (the session variable paths keep the analyzed fields).
-#[test]
-fn scripts_refuse_ansi_interval_results() {
-    let s = Session::new().unwrap();
-    for sql in [
-        "BEGIN SELECT INTERVAL '3' DAY AS i; END",
-        "BEGIN FOR r AS SELECT INTERVAL '1' YEAR AS i DO SELECT typeof(r.i); END FOR; END",
-    ] {
-        assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
-    }
-    // Inside a nested column too, before the rest of the script runs (review of #505).
-    rows(&s, "DECLARE ran INT DEFAULT 0");
-    let sql = "BEGIN SELECT array(INTERVAL '1' DAY) AS a; SET ran = 1; END";
+    let sql = "BEGIN FOR r AS SELECT INTERVAL '1' YEAR AS i DO SELECT typeof(r.i); END FOR; END";
     assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
-    assert_eq!(rows(&s, "SELECT ran"), ok(&[&["0"]]));
 }

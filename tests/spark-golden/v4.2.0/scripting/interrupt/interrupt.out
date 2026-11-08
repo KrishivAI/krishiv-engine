@@ -1,0 +1,25 @@
+CASE loop-nohandler interrupt=all returned_ids=1 finished=True
+  outcome={'err': 'UnknownException: (org.apache.spark.SparkSQLException) [OPERATION_CANCELED] Operation has been canceled. SQLSTATE: HY008', 'cls': 'OPERATION_CANCELED', 'secs': 4.1}
+  r3_log=[]
+CASE loop-nohandler interrupt=tag returned_ids=1 finished=True
+  outcome={'err': 'UnknownException: (org.apache.spark.SparkSQLException) [OPERATION_CANCELED] Operation has been canceled. SQLSTATE: HY008', 'cls': 'OPERATION_CANCELED', 'secs': 4.0}
+  r3_log=[]
+CASE loop-handler interrupt=all returned_ids=1 finished=True
+  outcome={'err': 'UnknownException: (org.apache.spark.SparkSQLException) [OPERATION_CANCELED] Operation has been canceled. SQLSTATE: HY008', 'cls': 'OPERATION_CANCELED', 'secs': 4.0}
+  r3_log=[]
+CASE loop-handler interrupt=tag returned_ids=1 finished=True
+  outcome={'err': 'UnknownException: (org.apache.spark.SparkSQLException) [OPERATION_CANCELED] Operation has been canceled. SQLSTATE: HY008', 'cls': 'OPERATION_CANCELED', 'secs': 4.0}
+  r3_log=[]
+CASE select-nohandler interrupt=all returned_ids=1 finished=True
+  outcome={'err': 'UnknownException: (org.apache.spark.SparkSQLException) [OPERATION_CANCELED] Operation has been canceled. SQLSTATE: HY008', 'cls': 'OPERATION_CANCELED', 'secs': 4.0}
+  r3_log=[]
+CASE select-nohandler interrupt=tag returned_ids=1 finished=True
+  outcome={'err': 'UnknownException: (org.apache.spark.SparkSQLException) [OPERATION_CANCELED] Operation has been canceled. SQLSTATE: HY008', 'cls': 'OPERATION_CANCELED', 'secs': 4.0}
+  r3_log=[]
+CASE select-handler interrupt=all returned_ids=1 finished=True
+  outcome={'err': 'UnknownException: (org.apache.spark.SparkSQLException) [OPERATION_CANCELED] Operation has been canceled. SQLSTATE: HY008', 'cls': 'OPERATION_CANCELED', 'secs': 4.0}
+  r3_log=[]
+CASE select-handler interrupt=tag returned_ids=1 finished=True
+  outcome={'err': 'UnknownException: (org.apache.spark.SparkSQLException) [OPERATION_CANCELED] Operation has been canceled. SQLSTATE: HY008', 'cls': 'OPERATION_CANCELED', 'secs': 4.0}
+  r3_log=[]
+SESSION still usable: [Row(1=1)]

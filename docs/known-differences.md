@@ -34,6 +34,32 @@ that does not parse fails the `SET` with `KRISHIV_INVALID_CONFIG_VALUE`.
 Spark stores the string and fails when a query reads it, with
 `INVALID_CONF_VALUE.TYPE_MISMATCH` (SQLSTATE 22022).
 
+## `DISTRIBUTE BY` under a `LIMIT`, and partition numbers
+
+`DISTRIBUTE BY exprs` (Spark's `RepartitionByExpression`, also under `CLUSTER BY` and `SORT BY ...
+DISTRIBUTE BY`) places a hash exchange on the expressions' values, so they are evaluated, and raise,
+on every row as Spark's shuffle evaluates them. Two things differ:
+
+- On one worker the exchange runs inside each driver's pipeline, so a `LIMIT` above it stops reading
+  after the rows it needs: `SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1`
+  returns a row where Spark's shuffle first evaluates every row and raises `CAST_INVALID_INPUT`. A
+  distributed run's map stage reads every row, so there it raises as Spark does.
+- Rows go to partitions by Krishiv's routing hash, not Spark's `pmod(murmur3(exprs), n)`, so what
+  depends on the partition numbers (`spark_partition_id()`) can differ.
+
+Pinned by `crates/krishiv-session/tests/distribute_by_goldens.rs` (`DIFFERENT`), against a Spark
+4.2.0 run (3.5, 4.0 and 4.1 not run).
+
+## Filters move below only their deterministic prefix
+
+Spark's predicate pushdown moves every deterministic conjunct of a filter below a node it can pass
+(`splitConjunctivePredicates(condition).partition(_.deterministic)`), wherever the conjunct stands.
+Krishiv moves only the conjuncts before the first nondeterministic one: in `WHERE rand() < 2 AND
+x <> 'x'` over a `DISTRIBUTE BY CAST(x AS INT)`, Spark filters `x <> 'x'` before the shuffle and
+returns rows, Krishiv keeps it above and raises `CAST_INVALID_INPUT`. Results differ only where a
+conjunct after a nondeterministic one would have kept a raising expression from a row. Pinned by
+`distribute_by_goldens.rs` (`DIFFERENT`).
+
 ## PySpark's `VariantVal`
 
 Krishiv's Python `VariantVal` (`krishiv.sql.variant`) decodes a value as Spark's JVM `Variant` and `VariantUtil` do, so
@@ -92,3 +118,13 @@ aggregate below another operator, as in `SELECT (SELECT sum(c) FROM (SELECT coun
 which stays refused with `KRISHIV_UNSUPPORTED_FEATURE`, as it does under `spark.sql.legacy.scalarSubqueryCountBugBehavior`
 and `spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`. Every other correlated shape is answered
 as with the setting on, including those Spark would refuse with an analysis error.
+
+## SQL scripting
+
+The interpreter follows Spark 4.2.0 (`tests/spark-golden/v4.2.0/scripting`) except for these:
+
+- A `FOR` loop runs its query to the end and holds the rows in memory for the loop (Spark reads them lazily). A script's rows are limited by memory only: `UNABLE_TO_ACQUIRE_MEMORY`.
+- A handler declared inside an `IF` body, and a `DECLARE ... CONDITION` after a handler, fail with the intended error classes (`INVALID_HANDLER_DECLARATION.WRONG_PLACE_OF_DECLARATION`, `INVALID_ERROR_CONDITION_DECLARATION.NOT_AT_START_OF_COMPOUND_STATEMENT`) where Spark 4.2 crashes with a Java `NoSuchElementException`.
+- An unaliased output column over a local variable is named from the expression as written, not with Spark's random scope id.
+- `KRISHIV_*` errors, `OPERATION_CANCELED` and internal errors are never caught by a handler. Cancelling or timing out a script (`krishiv.query.maxExecutionTime`) ends the whole script, between statements too.
+- Locals, labels and `FOR` columns are lower-cased whatever `spark.sql.caseSensitive` says.

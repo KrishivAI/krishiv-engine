@@ -499,3 +499,30 @@ fn a_reused_window_order_gives_the_rows_of_a_new_sort() {
     assert_eq!(rows.len(), 20_000);
     assert_eq!(rows, again);
 }
+
+/// `DISTRIBUTE BY` (Spark's `RepartitionByExpression`) always places a hash
+/// exchange on its expressions, computed below it and dropped above it; a
+/// grouping on the same column above needs no second one, as in Spark.
+#[test]
+fn distribute_by_places_a_hash_exchange_on_its_expressions() {
+    let env = env();
+    insta::assert_snapshot!(explain(&env, "SELECT a FROM t DISTRIBUTE BY b + 1"), @"
+    Project [a#0]
+    +- Project [a#0, b#1]
+       +- Exchange hashpartitioning(_key2#4611686018427387904)
+          +- Project [(b#1 + 1L)]
+             +- Scan spark_catalog.default.t [a#0, b#1]
+    ");
+    assert_eq!(
+        exchanges_of(
+            &env,
+            "SELECT a, count(*) FROM (SELECT a FROM big DISTRIBUTE BY a) GROUP BY a"
+        ),
+        ["Exchange hashpartitioning(a#0)"]
+    );
+    let (_, mut rows) = env.rows("SELECT a, s FROM t DISTRIBUTE BY s SORT BY a");
+    rows.sort();
+    let (_, mut want) = env.rows("SELECT a, s FROM t");
+    want.sort();
+    assert_eq!(rows, want);
+}
