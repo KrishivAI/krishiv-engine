@@ -30,7 +30,7 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::testing::{Break, Breaker, Scan};
 use krishiv_exec::{
     ExecConfig, ExecNode, ExecutorConfig, MemoryScan, QueryContext, QueryId, QueryRunner, Result,
-    Sort, SortKey, Source, TokioClock, TokioExecutor, TopN, WorkloadClass,
+    Sort, SortKey, SortMetrics, Source, TokioClock, TokioExecutor, TopN, WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_types::batch::{Batch, Weights};
@@ -1140,4 +1140,66 @@ async fn two_sorts_finish_when_their_spill_writes_fill_the_pool() {
         }
     }
     assert!(failed.is_empty(), "{} failed: {failed:?}", failed.len());
+}
+
+/// One query sorting [`table`] (`rows` rows) by `k` and then the result by
+/// `i` (`chained`), or the first sort alone; `(first, second)` metrics.
+async fn sort_then_sort(
+    rows: u64,
+    limit: usize,
+    chained: bool,
+) -> (SortMetrics, Option<SortMetrics>) {
+    let root = root();
+    let q = query(&root, batch_rows(1024), Some(limit));
+    let (_m, scope) = spill();
+    let schema = table(1, 100)[0].schema();
+    let sort = |key| {
+        let sort = Sort::new(
+            Arc::clone(&schema),
+            &[SortKey::asc(key)],
+            Some(scope.clone()),
+        );
+        Arc::new(sort.unwrap().with_max_fan_in(64))
+    };
+    let (a, b) = (sort(0), sort(1));
+    let mut node = plan(table(rows, 100), &a);
+    if chained {
+        node = Arc::new(Break(node, Arc::clone(&b), true));
+    }
+    let out = run(&deterministic(2), node, &q).await.unwrap();
+    if chained {
+        let i = column::<Int64Type>(&out, 1);
+        assert!(i.iter().copied().eq(0..rows as i64), "sorted by i");
+    } else {
+        check_sorted(rows, &out, false);
+    }
+    assert_released(&root);
+    let sorts = q.pool().cohort("sorts").map_or(0, |c| c.members());
+    assert_eq!(sorts, 0, "a sort's state outlived the query");
+    (a.metrics(), chained.then(|| b.metrics()))
+}
+
+/// The half-pool cap on a final merge follows the sorts present when the
+/// merge opens, not only at finalize. A sort read by a second sort of the
+/// query finalizes before the second exists (a later dependency wave):
+/// when its merge opens, the second is there, so it merges more first. The
+/// second finalizes after the first's result was read: it is not capped
+/// for it. At 3 MiB a lone sort's final merge reads 5 runs; with the gate
+/// always on it would read 2, and the second sort (8 runs) too; with it
+/// always off the first would read 5 next to the second sort.
+#[tokio::test(start_paused = true)]
+async fn the_final_merge_cap_follows_the_sorts_present_when_it_opens() {
+    let (rows, limit) = (65_536, 3072 * KIB);
+    let (lone, _) = sort_then_sort(rows, limit, false).await;
+    assert!(lone.final_fan_in > 2, "a lone sort is not capped: {lone:?}");
+    let (first, second) = sort_then_sort(rows, limit, true).await;
+    let second = second.unwrap();
+    assert!(
+        first.final_fan_in < lone.final_fan_in && first.merge_passes > lone.merge_passes,
+        "the first sort's merge kept to half the pool: {first:?} vs {lone:?}"
+    );
+    assert!(
+        second.final_fan_in > 2,
+        "a read sort no longer caps the second: {second:?}"
+    );
 }

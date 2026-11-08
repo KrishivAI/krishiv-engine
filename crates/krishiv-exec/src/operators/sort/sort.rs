@@ -475,11 +475,19 @@ struct Live {
 }
 
 impl SortGlobal {
-    /// Whether another sort of the query is alive (its state exists).
+    /// Whether another sort of the query is present: its state exists and
+    /// its spilled result is not read to the end yet. Every `Sort` sink is
+    /// a member, bucketed (a merge join's or a window's) or not.
     fn shares_query(&self) -> bool {
-        self.present
+        lock(&self.present)
             .as_ref()
             .is_some_and(|s| s.cohort().members() > 1)
+    }
+
+    /// This sort's spilled result is read: its merges' budgets are gone,
+    /// so it no longer counts as present for the query's other sorts.
+    fn leave(&self) {
+        drop(lock(&self.present).take());
     }
 
     /// Reports the bytes driver `live` could spill: its buffer's `own`
@@ -520,8 +528,10 @@ struct SortGlobal {
     bucketing: Option<Arc<Bucketing>>,
     buckets: usize,
     /// This sort's idle seat in the query's [`SORTS_COHORT`] (none outside
-    /// a query), while the state lives.
-    present: Option<Seat>,
+    /// a query), while the state lives and until its spilled result is
+    /// read ([`SortGlobal::leave`]). A merge join's bucket readers and an
+    /// in-memory result keep it while the state lives.
+    present: Mutex<Option<Seat>>,
 }
 
 /// The readers of a spilled result: the buckets left to merge, and the
@@ -831,20 +841,18 @@ impl Sort {
         &self,
         spilled: Vec<SpillRun>,
         rows: usize,
-        handle: &Arc<ConsumerHandle>,
-        ctx: &TaskContext,
+        env: &MergeEnv<'_>,
     ) -> Result<Result<SpillRun, MemoryError>> {
         let scope = self.spill.clone();
         let scope = scope.ok_or_else(|| internal("a sort spilled without a scope".to_owned()))?;
         let (schema, encoder) = (Arc::clone(&self.schema), Arc::clone(&self.encoder));
-        let (h, query) = (Arc::clone(handle), Arc::clone(ctx.query()));
-        let written = ctx
-            .run_blocking(move || {
-                let mut merger = Merger::new(schema, encoder, Vec::new(), &spilled, &h)?;
-                let scratch = h.reservation().releasing_to_credit().for_spill_scratch();
-                write_run(&mut merger, &scope, scratch, rows, &query)
-            })
-            .await?;
+        let (h, query) = (Arc::clone(env.handle), Arc::clone(env.query));
+        let written = blocking(env.query, env.executor, move || {
+            let mut merger = Merger::new(schema, encoder, Vec::new(), &spilled, &h)?;
+            let scratch = h.reservation().releasing_to_credit().for_spill_scratch();
+            write_run(&mut merger, &scope, scratch, rows, &query)
+        })
+        .await?;
         if let Ok(run) = &written {
             self.counters
                 .bytes
@@ -866,14 +874,14 @@ impl Sort {
         &self,
         runs: &mut Vec<SpillRun>,
         batch_rows: usize,
-        ctx: &TaskContext,
+        env: &MergeEnv<'_>,
         mut seat: Option<&mut Seat>,
         shares_query: bool,
     ) -> Result<()> {
         if runs.len() <= 2 {
             return Ok(());
         }
-        let handle = Arc::clone(ctx.consumer().consumer());
+        let handle = Arc::clone(env.handle);
         let mut max_fan_in = self.max_fan_in;
         // With another sort in the query, the final merge keeps to half the
         // pool, which stays for that sort (a merge holds its budget until it
@@ -920,7 +928,7 @@ impl Sort {
                 let group: Vec<SpillRun> = level.by_ref().take(take).collect();
                 let row_bytes = group.iter().map(|r| r.row_bytes).max().unwrap_or(1);
                 let rows = spill_rows(row_bytes, batch_rows);
-                let merged = self.write(group, rows, &handle, ctx);
+                let merged = self.write(group, rows, env);
                 let run = lending_for_write(&mut budget, &handle, target, merged).await?;
                 runs.push(run.map_err(KrishivError::from)?);
             }
@@ -932,6 +940,15 @@ impl Sort {
         }
         Ok(())
     }
+}
+
+/// What a merge pass runs with: the query, its executor (the blocking
+/// pool) and the consumer whose memory the merges take. A sink's finalize
+/// and a source's reader both have one.
+struct MergeEnv<'a> {
+    query: &'a Arc<QueryContext>,
+    executor: &'a Arc<dyn Executor>,
+    handle: &'a Arc<ConsumerHandle>,
 }
 
 /// Runs to merge next when `total` remain at a level (more than `fan_in`):
@@ -968,7 +985,14 @@ impl Sink for Sort {
             readers: Arc::default(),
             bucketing,
             buckets,
-            present: ctx.consumer().consumer().join_cohort(SORTS_COHORT),
+            present: Mutex::new(
+                // Always idle: no grant credit (`Cohort::join`).
+                ctx.consumer()
+                    .consumer()
+                    .pool()
+                    .cohort(SORTS_COHORT)
+                    .map(|c| c.join()),
+            ),
         }))
     }
 
@@ -1147,8 +1171,13 @@ impl Sink for Sort {
             if let Some(seat) = &mut seat {
                 seat.set(SeatState::Idle);
             }
+            let env = MergeEnv {
+                query: ctx.query(),
+                executor: ctx.executor(),
+                handle: ctx.consumer().consumer(),
+            };
             for runs in &mut spilled {
-                self.reduce(runs, batch_rows, ctx, seat.as_mut(), g.shares_query())
+                self.reduce(runs, batch_rows, &env, seat.as_mut(), g.shares_query())
                     .await?;
             }
             if self.read_by_bucket {
@@ -1342,7 +1371,7 @@ impl Source for Sort {
                                 if runs.is_empty() {
                                     return Ok(None);
                                 }
-                                let merging = self.open_runs(l, runs, None).await?;
+                                let merging = self.open_runs(l, g, runs, None).await?;
                                 let merging = merging.map_err(|_| {
                                     internal("a waiting merge was refused memory".to_owned())
                                 })?;
@@ -1367,7 +1396,7 @@ impl Source for Sort {
                             }
                             Step::Done => l.state = SourceState::Held(held, None),
                             Step::Run(run) => {
-                                let merging = self.open_runs(l, vec![run], None).await?;
+                                let merging = self.open_runs(l, g, vec![run], None).await?;
                                 let merging = merging.map_err(|_| {
                                     internal("a waiting merge was refused memory".to_owned())
                                 })?;
@@ -1382,13 +1411,18 @@ impl Source for Sort {
                         // between is not missed.
                         let changed = g.readers.changed.listen();
                         match g.readers.claim() {
-                            Claim::Done => {}
+                            // The last reader is done: the result is read.
+                            Claim::Done => {
+                                if lock(&g.readers.state).active == 0 {
+                                    g.leave();
+                                }
+                            }
                             Claim::Wait => {
                                 changed.await;
                                 l.state = SourceState::Spilled;
                             }
                             Claim::Bucket(runs, slot) => {
-                                match self.open_runs(l, runs, Some(slot)).await? {
+                                match self.open_runs(l, g, runs, Some(slot)).await? {
                                     Ok(merging) => {
                                         l.state = SourceState::Merging(merging, After::Spilled);
                                     }
@@ -1453,12 +1487,39 @@ impl Source for Sort {
 }
 
 impl Sort {
+    /// Whether a final merge of `runs` must first be reduced to half the
+    /// pool: another sort of the query is present now and the merge needs
+    /// more. Not for a merge join's sorts, which finalize keeps to a
+    /// quarter whatever is present.
+    fn recheck_share(
+        &self,
+        g: &SortGlobal,
+        runs: &[SpillRun],
+        batch_rows: usize,
+        handle: &ConsumerHandle,
+    ) -> bool {
+        if self.read_by_bucket || runs.len() <= 2 {
+            return false;
+        }
+        handle.pool().effective_limit().is_some_and(|limit| {
+            g.shares_query() && merge_need(runs, runs.len(), batch_rows, false) > limit / 2
+        })
+    }
+
     /// Opens the final merge of spilled `runs`. A reader `slot` not alone
     /// takes only free memory: refused, it gets the runs and slot back.
+    ///
+    /// A reader that may wait (alone, or the rest of an in-memory result)
+    /// first checks the query's other sorts again: finalize decided the
+    /// fan-in by the sorts present then, and one may have started since (a
+    /// later dependency wave, or a task of the query started later). If one
+    /// is present now and the merge needs over half the pool, more passes
+    /// bring it down to half first, as finalize would have.
     async fn open_runs(
         &self,
         l: &SortSource,
-        runs: Vec<SpillRun>,
+        g: &SortGlobal,
+        mut runs: Vec<SpillRun>,
         slot: Option<ReaderSlot>,
     ) -> Result<std::result::Result<Merging, (Vec<SpillRun>, ReaderSlot)>> {
         let (schema, encoder) = (Arc::clone(&self.schema), Arc::clone(&self.encoder));
@@ -1495,6 +1556,24 @@ impl Sort {
                 } else {
                     None
                 };
+                if self.recheck_share(g, &runs, l.batch_rows, &handle) {
+                    let env = MergeEnv {
+                        query: &l.query,
+                        executor: &l.executor,
+                        handle: &handle,
+                    };
+                    let reduced = self
+                        .reduce(&mut runs, l.batch_rows, &env, seat.as_mut(), true)
+                        .await;
+                    if let Err(e) = reduced {
+                        // The reader's wait is over; the seat's drop wakes
+                        // the cohort.
+                        if let Some(slot) = &slot {
+                            slot.reserved();
+                        }
+                        return Err(e);
+                    }
+                }
                 let waits = &self.counters.merge_waits;
                 let budget = merge_budget(
                     &runs,

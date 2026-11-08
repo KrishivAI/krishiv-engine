@@ -103,11 +103,12 @@ where
     F: FnOnce() -> Result<T> + Send + 'static,
 {
     let guard = query.blocking_started();
-    run_blocking(&**executor, move || {
-        let _guard = guard;
-        f()
-    })
-    .await
+    // As [`TaskContext::run_blocking`]: the guard travels with the result,
+    // so a result holding memory and dropped by a cancelled caller is
+    // dropped before the query counts the closure as done.
+    let (out, guard) = run_blocking(&**executor, move || f().map(|v| (v, guard))).await?;
+    drop(guard);
+    Ok(out)
 }
 
 /// A breaker's source-side global state: its sink's finalized state.
