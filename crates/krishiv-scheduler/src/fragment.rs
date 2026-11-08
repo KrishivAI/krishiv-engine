@@ -164,7 +164,7 @@ impl Cutter<'_> {
         let mut holds = Holds::default();
         let (cut, schema) = match output {
             Some(e) => {
-                check_scheme(&e.partitioning)?;
+                check_scheme(&e.partitioning, &self.schema(e)?)?;
                 let input = self.cut(&e.input, &mut holds, false)?;
                 (
                     PhysNode::Exchange(ExchangePlan {
@@ -450,16 +450,36 @@ fn local_filters(roots: &mut [&mut PhysNode], crossing: &BTreeSet<FilterId>) {
     }
 }
 
-fn check_scheme(p: &Partitioning) -> Result<()> {
-    match p {
-        Partitioning::Hash {
-            scheme: HashScheme::Unpinned,
-            ..
-        } => Err(unsupported(
+/// Refuses, before any task runs, a hash exchange no task could route: one
+/// without a routing function, or with a key column whose type the routing
+/// hash does not cover (a nested key: list, map, struct, the calendar
+/// interval; `input` is the exchange's input columns). On one worker the
+/// exchange is lowered and never routes, so only a cut plan is refused.
+fn check_scheme(p: &Partitioning, input: &SchemaRef) -> Result<()> {
+    let Partitioning::Hash { keys, scheme } = p else {
+        return Ok(());
+    };
+    if *scheme == HashScheme::Unpinned {
+        return Err(unsupported(
             "a hash exchange without a routing function across stages",
-        )),
-        _ => Ok(()),
+        ));
     }
+    for &k in keys {
+        let field = input.fields().get(k).ok_or_else(|| InternalError {
+            message: format!(
+                "hash exchange key {k} is past its input's {} columns",
+                input.fields().len()
+            ),
+        })?;
+        if !scheme.routes(field.data_type()) {
+            return Err(unsupported(&format!(
+                "a hash exchange across stages on a key of type {} (column `{}`)",
+                field.data_type(),
+                field.name()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn unsupported(feature: &str) -> KrishivError {
