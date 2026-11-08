@@ -72,13 +72,15 @@ impl QueryCatalog {
 
 impl QueryCatalog {
     /// One line per sampled table of the query, in sampling order:
-    /// `<table>: <columns>: <what happened>` ([`SampleOutcome`]'s text),
-    /// for `EXPLAIN COST` and `EXPLAIN VERBOSE`. Empty when nothing was
+    /// `<table>: <columns>: <what happened>` ([`SampleOutcome`]'s text, with
+    /// the read's time when `timed`: `EXPLAIN VERBOSE`; without it for
+    /// `EXPLAIN COST`, which then reads the same from run to run). A line
+    /// repeated (a table scanned twice) is kept once. Empty when nothing was
     /// sampled. A read by path names its paths as `Display` prints them
     /// (credentials redacted).
     ///
     /// [`SampleOutcome`]: krishiv_exec::planner::SampleOutcome
-    pub(crate) fn sample_notes(&self) -> Vec<String> {
+    pub(crate) fn sample_notes(&self, timed: bool) -> Vec<String> {
         let opened = self
             .opened
             .lock()
@@ -100,7 +102,15 @@ impl QueryCatalog {
                 super::FilesKey::Read(_) => "a read".to_owned(),
             };
             for outcome in table.sample_outcomes() {
-                notes.push(format!("{name}: {outcome}"));
+                let text = if timed {
+                    outcome.with_time()
+                } else {
+                    outcome.to_string()
+                };
+                let note = format!("{name}: {text}");
+                if !notes.contains(&note) {
+                    notes.push(note);
+                }
             }
         }
         notes

@@ -412,7 +412,7 @@ impl DataFrame {
         // Which estimates came from distinct-value samples and which stayed
         // the defaults (only when a table was sampled, so a query that
         // samples nothing prints Spark's text).
-        let samples = planned.analysis.env.catalog.sample_notes();
+        let samples = planned.analysis.env.catalog.sample_notes(false);
         if mode == ExplainMode::Cost && !samples.is_empty() {
             let _ = write!(
                 text,

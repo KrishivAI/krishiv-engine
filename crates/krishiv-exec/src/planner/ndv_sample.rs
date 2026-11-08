@@ -79,34 +79,48 @@ pub enum SampleResult {
         /// The time it had.
         after: Duration,
     },
-    /// An earlier query's sample of the same files did not finish within
-    /// as much time as this one has: the defaults stay, nothing is read.
-    TimedOutBefore,
-    /// The query's sampling time was spent on its other tables: the
+    /// An earlier query's sample of the same files did not finish (out of
+    /// time, or a read error) within as much time as this one has: the
     /// defaults stay, nothing is read.
+    TimedOutBefore,
+    /// The read failed: the defaults stay.
+    Failed,
+    /// No sampling time was left for this table (the query's other tables
+    /// spent it, or the budget is zero): the defaults stay, nothing is read.
     NoTime,
+}
+
+impl SampleOutcome {
+    /// The outcome's text with the read's time (`EXPLAIN VERBOSE`); the
+    /// `Display` text leaves it out, so `EXPLAIN COST` reads the same from
+    /// run to run.
+    #[must_use]
+    pub fn with_time(&self) -> String {
+        match self.result {
+            SampleResult::Sampled { took, .. } => format!("{self} in {} ms", took.as_millis()),
+            _ => self.to_string(),
+        }
+    }
 }
 
 impl fmt::Display for SampleOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: ", self.columns.join(", "))?;
         match self.result {
-            SampleResult::Sampled { rows, whole, took } => write!(
+            SampleResult::Sampled { rows, whole, .. } => write!(
                 f,
-                "sampled {rows} rows{} in {} ms",
+                "sampled {rows} rows{}",
                 if whole { " (the whole table)" } else { "" },
-                took.as_millis()
             ),
             SampleResult::Cached => f.write_str("sampled by an earlier query"),
             SampleResult::TimedOut { after } => {
                 write!(f, "timed out after {} ms, defaults kept", after.as_millis())
             }
-            SampleResult::TimedOutBefore => {
-                f.write_str("timed out in an earlier query with as much time, defaults kept")
-            }
-            SampleResult::NoTime => {
-                f.write_str("not sampled, the query's sampling time was spent, defaults kept")
-            }
+            SampleResult::TimedOutBefore => f.write_str(
+                "an earlier query's sample with as much time did not finish, defaults kept",
+            ),
+            SampleResult::Failed => f.write_str("the read failed, defaults kept"),
+            SampleResult::NoTime => f.write_str("no sampling time left, defaults kept"),
         }
     }
 }
@@ -295,7 +309,13 @@ impl FileTable {
                     self.keep_sample(c, &failure, stats.rows);
                 }
                 return match failed {
-                    Ok(Err(e)) => Err(e),
+                    Ok(Err(e)) => {
+                        self.note_sample(SampleOutcome {
+                            columns: missing,
+                            result: SampleResult::Failed,
+                        });
+                        Err(e)
+                    }
                     _ => {
                         tracing::debug!(columns = ?missing, "distinct-value sample timed out");
                         self.note_sample(SampleOutcome {
@@ -505,15 +525,24 @@ mod tests {
                 whole: false,
                 took: Duration::from_millis(12),
             }),
-            "a, b: sampled 4096 rows in 12 ms"
+            "a, b: sampled 4096 rows"
         );
+        let timed = SampleOutcome {
+            columns: vec!["a".into()],
+            result: SampleResult::Sampled {
+                rows: 1,
+                whole: false,
+                took: Duration::from_millis(12),
+            },
+        };
+        assert_eq!(timed.with_time(), "a: sampled 1 rows in 12 ms");
         assert_eq!(
             line(SampleResult::Sampled {
                 rows: 25,
                 whole: true,
                 took: Duration::ZERO,
             }),
-            "a, b: sampled 25 rows (the whole table) in 0 ms"
+            "a, b: sampled 25 rows (the whole table)"
         );
         assert_eq!(
             line(SampleResult::Cached),
@@ -527,11 +556,15 @@ mod tests {
         );
         assert_eq!(
             line(SampleResult::TimedOutBefore),
-            "a, b: timed out in an earlier query with as much time, defaults kept"
+            "a, b: an earlier query's sample with as much time did not finish, defaults kept"
+        );
+        assert_eq!(
+            line(SampleResult::Failed),
+            "a, b: the read failed, defaults kept"
         );
         assert_eq!(
             line(SampleResult::NoTime),
-            "a, b: not sampled, the query's sampling time was spent, defaults kept"
+            "a, b: no sampling time left, defaults kept"
         );
     }
 }

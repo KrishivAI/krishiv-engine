@@ -183,8 +183,7 @@ fn explain_cost_names_what_each_sample_did() {
     assert_eq!(first.len(), 1, "{first:?}");
     assert!(
         first[0].starts_with("parquet.`")
-            && first[0].contains("nation`: n_name: sampled 25 rows (the whole table) in ")
-            && first[0].ends_with(" ms"),
+            && first[0].ends_with("nation`: n_name: sampled 25 rows (the whole table)"),
         "{first:?}"
     );
     let again = sample_lines(&explain(&s, "COST", &sql));
@@ -221,9 +220,7 @@ fn tables_with_no_time_left_keep_their_defaults_and_say_so() {
     assert_eq!(lines.len(), 2, "{lines:?}");
     for (line, column) in lines.iter().zip(["n_name", "status"]) {
         assert!(
-            line.ends_with(&format!(
-                "{column}: not sampled, the query's sampling time was spent, defaults kept"
-            )),
+            line.ends_with(&format!("{column}: no sampling time left, defaults kept")),
             "{lines:?}"
         );
     }
@@ -244,7 +241,7 @@ fn explain_verbose_lists_the_samples_as_a_statistics_step() {
         .find(|l| l.starts_with("== Optimizer: Statistics round 1, ndvSampling: "))
         .unwrap_or_else(|| panic!("no samples step in\n{text}"));
     assert!(
-        step.contains("n_name: sampled 25 rows (the whole table)"),
+        step.contains("n_name: sampled 25 rows (the whole table) in ") && step.ends_with(" ms =="),
         "{step}"
     );
     let first_step = text.lines().find(|l| l.starts_with("== Optimizer: "));
