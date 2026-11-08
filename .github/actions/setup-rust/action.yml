@@ -4,7 +4,7 @@ description: >-
   and github.com).
 inputs:
   toolchain:
-    description: toolchain specification (dtolnay/rust-toolchain, pinned by SHA, requires one: `stable` when unset)
+    description: "toolchain specification (dtolnay/rust-toolchain, pinned by SHA, requires one; `stable` when unset)"
     default: stable
   components:
     description: comma-separated components
