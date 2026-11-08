@@ -7,6 +7,7 @@
 //! `DATA_DIR` holds the TPC-H Parquet files (`lineitem.parquet`, ...). Prints `URL=<url with token>` once the
 //! queries have run, then serves until killed.
 #![expect(
+    clippy::expect_used,
     clippy::print_stdout,
     clippy::unwrap_used,
     reason = "a command-line tool"
