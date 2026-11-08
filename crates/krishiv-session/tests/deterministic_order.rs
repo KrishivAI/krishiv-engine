@@ -158,6 +158,7 @@ fn the_result_does_not_depend_on_the_thread_count() {
         "SELECT id FROM range(0, 400000, 1, 24) WHERE id % 5 = 0 LIMIT 100",
         "SELECT collect_list(id) FROM (SELECT id FROM range(0, 5000, 1, 24))",
         "SELECT id, id % 7 AS k FROM range(0, 400000, 1, 24) ORDER BY k LIMIT 50",
+        "SELECT id, id % 7 AS k, CAST(id AS DOUBLE) / 3 AS x FROM range(0, 300000, 1, 24) ORDER BY k",
     ];
     let mut shapes: Vec<Vec<String>> = Vec::new();
     for threads in [1, 4, 12] {
