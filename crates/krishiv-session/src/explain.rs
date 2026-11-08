@@ -409,6 +409,17 @@ impl DataFrame {
             Arc::clone(&planned.analysis.env.catalog) as Arc<dyn TableProviderResolver>
         );
         let mut text = render(mode, &parsed, &planned, &stats);
+        // Which estimates came from distinct-value samples and which stayed
+        // the defaults (only when a table was sampled, so a query that
+        // samples nothing prints Spark's text).
+        let samples = planned.analysis.env.catalog.sample_notes();
+        if mode == ExplainMode::Cost && !samples.is_empty() {
+            let _ = write!(
+                text,
+                "\n== Distinct-Value Samples ==\n{}\n",
+                samples.join("\n")
+            );
+        }
         // Only when the cache is on for the query, so the plan text stays Spark's by default.
         if let Some(note) = self.session.result_cache_note(&planned.analysis) {
             let _ = write!(text, "\n== Result Cache ==\n{note}\n");

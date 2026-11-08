@@ -9,8 +9,23 @@ use krishiv_session::Session;
 
 /// The `rowCount` `EXPLAIN COST` gives the first `Filter` line of `sql`.
 fn filter_rows(s: &Session, sql: &str) -> f64 {
-    let text = block_on(async {
-        let df = s.sql(&format!("EXPLAIN COST {sql}")).await.unwrap();
+    let text = explain(s, "COST", sql);
+    let line = text
+        .lines()
+        .find(|l| l.contains("Filter ("))
+        .unwrap_or_else(|| panic!("no Filter in\n{text}"));
+    let count = line
+        .split("rowCount=")
+        .nth(1)
+        .and_then(|r| r.split(')').next())
+        .unwrap_or_else(|| panic!("no rowCount in {line}"));
+    count.parse().unwrap_or_else(|e| panic!("{count}: {e}"))
+}
+
+/// The text `EXPLAIN <mode> <sql>` returns.
+fn explain(s: &Session, mode: &str, sql: &str) -> String {
+    block_on(async {
+        let df = s.sql(&format!("EXPLAIN {mode} {sql}")).await.unwrap();
         let batches = df.collect().await.unwrap();
         let mut text = String::new();
         for b in &batches {
@@ -25,17 +40,18 @@ fn filter_rows(s: &Session, sql: &str) -> f64 {
             }
         }
         text
-    });
-    let line = text
-        .lines()
-        .find(|l| l.contains("Filter ("))
-        .unwrap_or_else(|| panic!("no Filter in\n{text}"));
-    let count = line
-        .split("rowCount=")
-        .nth(1)
-        .and_then(|r| r.split(')').next())
-        .unwrap_or_else(|| panic!("no rowCount in {line}"));
-    count.parse().unwrap_or_else(|e| panic!("{count}: {e}"))
+    })
+}
+
+/// The lines of the `== Distinct-Value Samples ==` section of `text` (none
+/// when it has no such section).
+fn sample_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .skip_while(|l| *l != "== Distinct-Value Samples ==")
+        .skip(1)
+        .take_while(|l| !l.is_empty() && !l.starts_with("=="))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The file table `name` under `dir`, as a query reads it.
@@ -146,10 +162,91 @@ fn a_sample_out_of_time_keeps_the_default_and_is_tried_again_with_more_time() {
     assert_eq!(
         filter_rows(&s, &nation),
         5.0,
-        "recorded: not tried again with no more time"
+        "no time again: still the default (nothing was recorded)"
     );
     s.conf()
         .set("krishiv.optimizer.ndvSampling.timeout", "10s")
         .unwrap();
     assert_eq!(filter_rows(&s, &nation), 1.0, "more time: sampled");
+}
+
+/// `EXPLAIN COST` says, per sampled table, whether its estimates come from a
+/// sample, an earlier query's sample, or stayed the defaults; a query that
+/// samples nothing prints no such section (Spark's text).
+#[test]
+fn explain_cost_names_what_each_sample_did() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    let nation = table(dir.path(), "nation");
+    let sql = format!("SELECT * FROM {nation} WHERE n_name = 'NATION7'");
+    let first = sample_lines(&explain(&s, "COST", &sql));
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert!(
+        first[0].starts_with("parquet.`")
+            && first[0].contains("nation`: n_name: sampled 25 rows (the whole table) in ")
+            && first[0].ends_with(" ms"),
+        "{first:?}"
+    );
+    let again = sample_lines(&explain(&s, "COST", &sql));
+    assert_eq!(again.len(), 1, "{again:?}");
+    assert!(
+        again[0].ends_with("n_name: sampled by an earlier query"),
+        "{again:?}"
+    );
+    let none = explain(
+        &s,
+        "COST",
+        &format!("SELECT * FROM {nation} WHERE n_name > 'N'"),
+    );
+    assert!(!none.contains("Distinct-Value Samples"), "{none}");
+    let off = session(dir.path(), false);
+    assert!(sample_lines(&explain(&off, "COST", &sql)).is_empty());
+}
+
+/// The tables of a query share one budget: with none, every table keeps its
+/// defaults and says so, and nothing is recorded against a later query.
+#[test]
+fn tables_with_no_time_left_keep_their_defaults_and_say_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    s.conf()
+        .set("krishiv.optimizer.ndvSampling.timeout", "0s")
+        .unwrap();
+    let sql = format!(
+        "SELECT * FROM {} n JOIN {} o ON n.n_name = o.status WHERE n.n_name = 'NATION7' AND o.status = 'F'",
+        table(dir.path(), "nation"),
+        table(dir.path(), "orders")
+    );
+    let lines = sample_lines(&explain(&s, "COST", &sql));
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    for (line, column) in lines.iter().zip(["n_name", "status"]) {
+        assert!(
+            line.ends_with(&format!(
+                "{column}: not sampled, the query's sampling time was spent, defaults kept"
+            )),
+            "{lines:?}"
+        );
+    }
+}
+
+/// `EXPLAIN VERBOSE` lists the samples as a step before the optimizer's.
+#[test]
+fn explain_verbose_lists_the_samples_as_a_statistics_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    let sql = format!(
+        "SELECT * FROM {} WHERE n_name = 'NATION7'",
+        table(dir.path(), "nation")
+    );
+    let text = explain(&s, "VERBOSE", &sql);
+    let step = text
+        .lines()
+        .find(|l| l.starts_with("== Optimizer: Statistics round 1, ndvSampling: "))
+        .unwrap_or_else(|| panic!("no samples step in\n{text}"));
+    assert!(
+        step.contains("n_name: sampled 25 rows (the whole table)"),
+        "{step}"
+    );
+    let first_step = text.lines().find(|l| l.starts_with("== Optimizer: "));
+    assert_eq!(first_step, Some(step), "the samples come first");
 }

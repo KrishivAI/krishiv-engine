@@ -14,7 +14,9 @@ impl QueryCatalog {
     /// `IN` in `plan` compares with values (P2-T164 U6), so the optimizer
     /// reads a distinct count where the files store none. Off with
     /// `krishiv.optimizer.ndvSampling.enabled`; a failed or slow sample keeps
-    /// the default estimates and never fails the query.
+    /// the default estimates and never fails the query. The tables share one
+    /// budget, `krishiv.optimizer.ndvSampling.timeout` per query: each gets
+    /// what the tables before it left ([`Self::sample_notes`] reports it).
     pub(super) async fn sample_distinct(&self, plan: &LogicalPlan, scans: &[FileScanOf]) {
         use krishiv_common::config::{
             NDV_SAMPLING_ENABLED, NDV_SAMPLING_ROWS, NDV_SAMPLING_TIMEOUT,
@@ -30,7 +32,7 @@ impl QueryCatalog {
         {
             return;
         }
-        let options = krishiv_exec::planner::SampleOptions {
+        let mut options = krishiv_exec::planner::SampleOptions {
             rows: config
                 .get(&NDV_SAMPLING_ROWS)
                 .and_then(krishiv_common::config::ConfigValue::as_int)
@@ -41,6 +43,7 @@ impl QueryCatalog {
                 .and_then(krishiv_common::config::ConfigValue::as_duration)
                 .unwrap_or_default(),
         };
+        let deadline = std::time::Instant::now() + options.timeout;
         let mut compared = std::collections::HashSet::new();
         compared_columns(plan, &mut compared);
         if compared.is_empty() {
@@ -55,6 +58,7 @@ impl QueryCatalog {
             let Some(table) = (!names.is_empty()).then(|| self.opened(key)).flatten() else {
                 continue;
             };
+            options.timeout = deadline.saturating_duration_since(std::time::Instant::now());
             let sampled = run_on(&self.scans.runtime, async move {
                 table.sample_distinct(&names, options).await
             })
@@ -63,6 +67,43 @@ impl QueryCatalog {
                 tracing::debug!("distinct-value sample skipped: {e}");
             }
         }
+    }
+}
+
+impl QueryCatalog {
+    /// One line per sampled table of the query, in sampling order:
+    /// `<table>: <columns>: <what happened>` ([`SampleOutcome`]'s text),
+    /// for `EXPLAIN COST` and `EXPLAIN VERBOSE`. Empty when nothing was
+    /// sampled. A read by path names its paths as `Display` prints them
+    /// (credentials redacted).
+    ///
+    /// [`SampleOutcome`]: krishiv_exec::planner::SampleOutcome
+    pub(crate) fn sample_notes(&self) -> Vec<String> {
+        let opened = self
+            .opened
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut notes = Vec::new();
+        for (key, table) in opened {
+            let name = match &key {
+                super::FilesKey::View(n) | super::FilesKey::Table(n) => n.clone(),
+                super::FilesKey::Read(krishiv_plan::ReadSource::Files {
+                    format, paths, ..
+                }) => {
+                    let paths: Vec<String> = paths.iter().map(ToString::to_string).collect();
+                    format!("{format}.`{}`", paths.join("`, `"))
+                }
+                super::FilesKey::Read(krishiv_plan::ReadSource::Table { name, .. }) => {
+                    name.join(".")
+                }
+                super::FilesKey::Read(_) => "a read".to_owned(),
+            };
+            for outcome in table.sample_outcomes() {
+                notes.push(format!("{name}: {outcome}"));
+            }
+        }
+        notes
     }
 }
 

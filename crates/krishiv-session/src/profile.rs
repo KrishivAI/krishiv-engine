@@ -435,7 +435,21 @@ impl DataFrame {
         let (optimized, physical, rules) =
             self.session.physical_traced(analyzed, &a.env, true).await?;
         let mut before = analyzed_text.clone();
-        let mut steps = Vec::new();
+        // The distinct-value samples taken before the optimizer ran: one
+        // step per table, with no plan change (the rule's decision is the note).
+        let mut steps: Vec<OptimizerStep> = a
+            .env
+            .catalog
+            .sample_notes()
+            .into_iter()
+            .map(|note| OptimizerStep {
+                batch: "Statistics".to_owned(),
+                round: 1,
+                rule: format!("ndvSampling: {note}"),
+                plan: analyzed_text.clone(),
+                diff: String::new(),
+            })
+            .collect();
         for r in rules {
             let plan = r.plan.to_string();
             if plan == before && r.note.is_empty() {
