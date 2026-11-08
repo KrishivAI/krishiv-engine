@@ -60,6 +60,24 @@ enum Flow {
     Leave(String),
     /// `ITERATE label` is on its way to the labelled loop.
     Iterate(String),
+    /// An `EXIT` handler ran and ended its compound, and nothing follows that compound in the
+    /// compounds around it; the statement that holds them decides what happens next (see [`Body`]).
+    Exited,
+    /// The whole script ends here, silently.
+    Halt,
+}
+
+/// What a list of statements is the body of. It matters only to an `EXIT` handler whose compound
+/// is the last statement of the body (Spark 4.2.0: the `exit_last_in_*` cases of the record).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Body {
+    /// A `BEGIN ... END`: the exit carries on to the statement that holds the compound.
+    Compound,
+    /// An `IF` branch, a `WHILE` or `REPEAT` body or a searched `CASE` branch: Spark ends the whole
+    /// script, silently.
+    EndsScript,
+    /// A `FOR`, `LOOP` or simple `CASE` body (and the rest): the script goes on after the statement.
+    Plain,
 }
 
 /// A local variable: its value and the query that re-evaluates its default.
@@ -154,10 +172,10 @@ impl Run<'_> {
 
     // ---- statements ------------------------------------------------------------------------
 
-    /// Runs a compound. After an `EXIT` handler the script goes on after the compound that declared it,
-    /// as design note T196 section 2.4 says. A divergence, stated: Spark 4.2 ends the whole script
-    /// silently when that compound is the last statement of an `IF` or `WHILE` body (the record's
-    /// `exit_handler_in_loop_body_compound` cases); this engine continues after the compound there too.
+    /// Runs a compound. After an `EXIT` handler the script goes on after the compound that declared it
+    /// (design note T196 section 2.4), except as Spark 4.2.0 does it: when that compound is the last
+    /// statement of an `IF` branch, a `WHILE` or `REPEAT` body or a searched `CASE` branch (through any
+    /// number of compounds that end the same way) the whole script ends silently; see [`Body`].
     async fn compound(&mut self, c: &Compound) -> Result<Flow, KrishivError> {
         let label = c.label.as_ref().map(|l| self.fold(&l.value));
         let depth = self.scopes.len();
@@ -175,12 +193,14 @@ impl Run<'_> {
             vars: BTreeMap::new(),
             handlers,
         });
-        let mut flow = Box::pin(self.items(&c.body)).await;
+        let mut flow = Box::pin(self.items(&c.body, Body::Compound)).await;
         if let Err(error) = &flow {
             // The scopes inside this one are gone when its handler runs.
             self.scopes.truncate(depth + 1);
             if let Some(handler) = self.find_handler(depth, error) {
-                flow = Box::pin(self.exit_handler(&handler)).await;
+                flow = Box::pin(self.exit_handler(&handler))
+                    .await
+                    .map(|_| Flow::Exited);
             }
         }
         self.scopes.truncate(depth);
@@ -239,12 +259,22 @@ impl Run<'_> {
         Ok(Flow::Normal)
     }
 
-    /// Runs `items` in order until one asks to leave or iterate.
-    async fn items(&mut self, items: &[ScriptStatement]) -> Result<Flow, KrishivError> {
-        for item in items {
+    /// Runs `items`, the statements of a `body`, in order until one asks to leave, iterate or end the script.
+    async fn items(&mut self, items: &[ScriptStatement], body: Body) -> Result<Flow, KrishivError> {
+        for (at, item) in items.iter().enumerate() {
             // Where a dropped `sql()` future lands: the script stops at the next statement.
             tokio::task::yield_now().await;
             let flow = Box::pin(self.item(item)).await?;
+            let flow = match flow {
+                // An exit with statements after it is an ordinary end of the compound.
+                Flow::Exited if at + 1 < items.len() => Flow::Normal,
+                Flow::Exited => match body {
+                    Body::Compound => Flow::Exited,
+                    Body::EndsScript => Flow::Halt,
+                    Body::Plain => Flow::Normal,
+                },
+                other => other,
+            };
             if flow != Flow::Normal {
                 return Ok(flow);
             }
@@ -267,33 +297,41 @@ impl Run<'_> {
             S::If(i) => {
                 for branch in &i.branches {
                     if Box::pin(self.condition(&branch.condition)).await? {
-                        return Box::pin(self.items(&branch.body)).await;
+                        return Box::pin(self.items(&branch.body, Body::EndsScript)).await;
                     }
                 }
                 match &i.else_body {
-                    Some(body) => Box::pin(self.items(body)).await,
+                    Some(body) => Box::pin(self.items(body, Body::EndsScript)).await,
                     None => Ok(Flow::Normal),
                 }
             }
             S::Case(c) => {
+                // Only a searched `CASE` ends the script after an exit (record: `exit_last_in_*_case_body`).
+                let case_body = if c.subject.is_some() {
+                    Body::Plain
+                } else {
+                    Body::EndsScript
+                };
                 for branch in &c.branches {
                     let matched = match &c.subject {
                         Some(subject) => Box::pin(self.equal(subject, &branch.condition)).await?,
                         None => Box::pin(self.condition(&branch.condition)).await?,
                     };
                     if matched {
-                        return Box::pin(self.items(&branch.body)).await;
+                        return Box::pin(self.items(&branch.body, case_body)).await;
                     }
                 }
                 match &c.else_body {
-                    Some(body) => Box::pin(self.items(body)).await,
+                    Some(body) => Box::pin(self.items(body, case_body)).await,
                     None => Ok(Flow::Normal),
                 }
             }
             S::While(w) => {
                 let label = w.label.as_ref().map(|l| self.fold(&l.value));
                 while Box::pin(self.condition(&w.condition)).await? {
-                    if let Some(flow) = Box::pin(self.round(&label, &w.body)).await? {
+                    if let Some(flow) =
+                        Box::pin(self.round(&label, &w.body, Body::EndsScript)).await?
+                    {
                         return Ok(flow);
                     }
                 }
@@ -302,7 +340,9 @@ impl Run<'_> {
             S::Repeat(r) => {
                 let label = r.label.as_ref().map(|l| self.fold(&l.value));
                 loop {
-                    if let Some(flow) = Box::pin(self.round(&label, &r.body)).await? {
+                    if let Some(flow) =
+                        Box::pin(self.round(&label, &r.body, Body::EndsScript)).await?
+                    {
                         return Ok(flow);
                     }
                     if Box::pin(self.condition(&r.condition)).await? {
@@ -313,7 +353,7 @@ impl Run<'_> {
             S::Loop(l) => {
                 let label = l.label.as_ref().map(|x| self.fold(&x.value));
                 loop {
-                    if let Some(flow) = Box::pin(self.round(&label, &l.body)).await? {
+                    if let Some(flow) = Box::pin(self.round(&label, &l.body, Body::Plain)).await? {
                         return Ok(flow);
                     }
                 }
@@ -379,7 +419,7 @@ impl Run<'_> {
                     handlers: Vec::new(),
                 });
                 let depth = self.scopes.len();
-                let pass = Box::pin(self.round(&label, &f.body)).await;
+                let pass = Box::pin(self.round(&label, &f.body, Body::Plain)).await;
                 self.scopes.truncate(depth - 1);
                 if let Some(flow) = pass? {
                     return Ok(flow);
@@ -395,10 +435,11 @@ impl Run<'_> {
         &mut self,
         label: &Option<String>,
         body: &[ScriptStatement],
+        kind: Body,
     ) -> Result<Option<Flow>, KrishivError> {
         // An empty body must not spin past a dropped future.
         tokio::task::yield_now().await;
-        Ok(match Box::pin(self.items(body)).await? {
+        Ok(match Box::pin(self.items(body, kind)).await? {
             Flow::Normal => None,
             Flow::Leave(l) if label.as_deref() == Some(l.as_str()) => Some(Flow::Normal),
             Flow::Iterate(l) if label.as_deref() == Some(l.as_str()) => None,

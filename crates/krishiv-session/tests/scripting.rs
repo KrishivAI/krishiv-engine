@@ -672,17 +672,25 @@ fn datediff_with_a_unit_is_timestampdiff() {
     );
 }
 
-/// Declared divergence (ADR 0008): Spark 4.2 ends the whole script silently when the compound whose
-/// `EXIT` handler fires is the last statement of an `IF`/`WHILE` body; this engine continues after the
-/// compound, as for any other position (design note T196, section 2.4).
+/// Spark 4.2.0: an `EXIT` handler whose compound is the last statement of an `IF` branch ends the whole
+/// script, silently (record: `exit_last_in_*`); a `FOR` body does not.
 #[test]
-fn an_exit_handler_continues_after_its_compound_even_at_the_end_of_a_body() {
+fn an_exit_handler_ends_the_script_at_the_end_of_an_if_body_but_not_a_for_body() {
     let s = Session::new().unwrap();
     assert_eq!(
         rows(
             &s,
             "BEGIN DECLARE x INT DEFAULT 0; \
              IF TRUE THEN c: BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SET x = 1; SELECT 1 / 0; END c; END IF; \
+             SELECT x; END"
+        ),
+        ok(&[])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE x INT DEFAULT 0; \
+             FOR r AS SELECT 1 AS a DO BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SET x = 1; SELECT 1 / 0; END; END FOR; \
              SELECT x; END"
         ),
         ok(&[&["1"]])
