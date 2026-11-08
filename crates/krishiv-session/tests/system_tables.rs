@@ -746,3 +746,15 @@ fn a_temp_view_still_resolves_under_system() {
     let e = run(&s, "SELECT * FROM nosuch").unwrap_err();
     assert!(e.contains("TABLE_OR_VIEW_NOT_FOUND"), "{e}");
 }
+
+#[test]
+fn show_catalogs_lists_both_and_follows_use() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        column_of(&s, "SHOW CATALOGS", 0),
+        ["spark_catalog", "system"]
+    );
+    assert_eq!(column_of(&s, "SHOW CATALOGS LIKE 'sys*'", 0), ["system"]);
+    run(&s, "USE system").unwrap();
+    assert_eq!(column_of(&s, "SHOW CATALOGS", 0).len(), 2);
+}
