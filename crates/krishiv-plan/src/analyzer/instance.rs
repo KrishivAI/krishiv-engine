@@ -150,6 +150,10 @@ pub(super) fn renumbered(
                 input: renumbered(input, s, memo)?,
                 limit: Arc::clone(limit),
             },
+            PlanNode::Repartition { input, exprs } => PlanNode::Repartition {
+                input: renumbered(input, s, memo)?,
+                exprs: exprs.iter().map(ex).collect::<R<_>>()?,
+            },
             PlanNode::Offset { input, offset } => PlanNode::Offset {
                 input: renumbered(input, s, memo)?,
                 offset: Arc::clone(offset),

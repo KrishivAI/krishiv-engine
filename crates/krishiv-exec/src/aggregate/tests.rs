@@ -948,62 +948,6 @@ async fn unspillable_out_of_memory_fails_cleanly() {
     assert!(exec(single(&s, &b), o).await.is_err());
 }
 
-/// `spill_global` during `finalize` (an arbitration request after the last
-/// driver combined) moves the merge to disk; the result is unchanged.
-#[tokio::test]
-async fn spill_global_during_finalize() {
-    let (s, b) = grouped_input(30_000, 20_000);
-    let expected = run_rows(single(&s, &b)).await;
-    for rows_layout in [false, true] {
-        let (_m, scope) = spill_dir();
-        let mut sp = spec(&s, vec![0], grouped_aggs(&s));
-        sp.spill = Some(scope);
-        let agg = HashAggregate::new(sp).unwrap();
-        let root = pool(1 << 30);
-        let config = ExecConfig {
-            agg_row_layout: rows_layout,
-            ..ExecConfig::default()
-        };
-        let q = QueryContext::new(
-            QueryId(9),
-            WorkloadClass::Batch,
-            config,
-            root.child("q", None),
-        );
-        let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
-        let ctx = |id, name| {
-            let e = Arc::clone(&executor);
-            TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), name)
-        };
-        let sink_ctx = ctx(0, "agg");
-        let g = Sink::global_state(&*agg, &sink_ctx).unwrap();
-        for part in b.chunks(10) {
-            let mut l = Sink::local_state(&*agg, &sink_ctx, &g).unwrap();
-            for cols in part {
-                let batch = Batch::new(RecordBatch::try_new(Arc::clone(&s), cols.clone()).unwrap());
-                agg.sink(batch, &mut l, &g).unwrap();
-            }
-            agg.combine(l, &g).unwrap();
-        }
-        assert!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap() > 0);
-        assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
-        agg.finalize(&g, &sink_ctx).await.unwrap();
-        assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
-        let src = ctx(1, "src").with_dependency(Arc::clone(&g));
-        let sg = Source::global_state(&*agg, &src).unwrap();
-        assert!(agg.max_parallelism(&sg) > 1, "a file per disk task");
-        let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
-        let mut out = Vec::new();
-        while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
-            out.push(b);
-        }
-        assert_eq!(rows(&out), expected);
-        assert!(agg.metrics().spill_runs >= 2);
-        drop((sl, sg, src, g, sink_ctx));
-        assert_eq!(root.reserved(), 0);
-    }
-}
-
 /// Same seed, same output order and metrics (deterministic mode).
 #[tokio::test]
 async fn deterministic_replay() {
@@ -1356,6 +1300,74 @@ async fn local_spill_keeps_an_unspilled_table_accounted() {
     assert_eq!(root.reserved(), 0);
 }
 
+/// An aggregate's spill writes (a driver's table, and the tables combined
+/// into the global state) run under the writing driver's `spilling` guard,
+/// in both table layouts, with another driver's combined table charged to
+/// the writer for the write: the bytes a round waits for are the writer's
+/// own, so another driver's round that cannot spill waits for them.
+#[tokio::test]
+async fn a_spill_write_holds_the_spilling_guard() {
+    let (s, b) = grouped_input(1_000, 1_000);
+    for rows_layout in [false, true] {
+        let (_m, scope) = spill_dir();
+        let root = pool(1 << 30);
+        let q = QueryContext::new(
+            QueryId(10),
+            WorkloadClass::Batch,
+            ExecConfig {
+                agg_row_layout: rows_layout,
+                ..ExecConfig::default()
+            },
+            root.child("q", Some(1 << 30)),
+        );
+        let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+        let ctx = |op| {
+            let e = Arc::clone(&executor);
+            TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(op), "agg")
+        };
+        // `other` only combines; `writer` spills.
+        let (other, writer) = (ctx(0), ctx(1));
+        let (o, w) = (
+            Arc::clone(other.consumer().consumer()),
+            Arc::clone(writer.consumer().consumer()),
+        );
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        scope.set_test_writer_hook(Arc::new({
+            let seen = Arc::clone(&seen);
+            move || seen.lock().unwrap().push((w.is_spilling(), o.held()))
+        }));
+        let mut sp = spec(&s, vec![], grouped_aggs(&s));
+        sp.spill = Some(scope);
+        let agg = HashAggregate::new(sp).unwrap();
+        let g = Sink::global_state(&*agg, &writer).unwrap();
+        let batch = || Batch::new(RecordBatch::try_new(Arc::clone(&s), b[0].clone()).unwrap());
+        let combine_other = || async {
+            let mut l = Sink::local_state(&*agg, &other, &g).unwrap();
+            agg.sink(batch(), &mut l, &g).unwrap();
+            agg.combine(l, &g).unwrap();
+            assert!(other.consumer().consumer().held() > 0);
+        };
+        // A driver's spill writes its own table and the combined one.
+        combine_other().await;
+        let mut mine = Sink::local_state(&*agg, &writer, &g).unwrap();
+        agg.sink(batch(), &mut mine, &g).unwrap();
+        assert!(agg.spill(&mut mine, 1, &writer).await.unwrap() > 0);
+        agg.combine(mine, &g).unwrap();
+        // The global spill writes the tables combined since.
+        combine_other().await;
+        assert!(agg.spill_global(&g, 1, &writer).await.unwrap() > 0);
+        let seen = seen.lock().unwrap().clone();
+        assert!(
+            seen.len() >= 2 && seen.iter().all(|&(writing, held)| writing && held == 0),
+            "rows layout {rows_layout}: (writing, other's bytes) {seen:?}"
+        );
+        assert!(!writer.consumer().consumer().is_spilling());
+        drop((g, agg));
+        drop((other, writer));
+        assert_eq!(root.reserved(), 0, "rows layout {rows_layout}");
+    }
+}
+
 /// The spill headroom a spillable table keeps reserved (`sink::HEADROOM`).
 const HEADROOM_FOR_TESTS: usize = 128 << 10;
 
@@ -1617,6 +1629,7 @@ mod collect;
 mod disk;
 mod misc;
 mod simple;
+mod spill_writers;
 mod structs;
 
 #[test]
