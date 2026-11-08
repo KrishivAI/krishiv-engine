@@ -489,9 +489,13 @@ impl<'a> Estimator<'a> {
             _ => None,
         };
         let mut v = View::new(&cols, self.propagate);
-        let sel = pred
-            .as_ref()
-            .map_or(1.0, |c| join_selectivity(c, l, r, &mut v));
+        let sel = pred.as_ref().map_or(1.0, |c| {
+            if kind == JoinKind::Inner {
+                join_selectivity(c, l, r, &mut v)
+            } else {
+                apply(c, &mut v)
+            }
+        });
         // `inf * 0` is NaN: a zero selectivity is zero rows.
         let inner = if v.empty || sel <= 0.0 {
             0.0
