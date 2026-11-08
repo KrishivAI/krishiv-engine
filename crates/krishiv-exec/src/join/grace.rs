@@ -28,8 +28,8 @@ use arrow_array::{ArrayRef, UInt32Array};
 use arrow_schema::SchemaRef;
 use krishiv_common::error::KrishivJoinPartitionTooLarge;
 use krishiv_memory::{
-    ConsumerHandle, ConsumerId, MemoryError, Reservation, SpillError, SpillFile, SpillReader,
-    SpillScope, SpillWriter,
+    ConsumerHandle, ConsumerId, MemoryError, Reservation, Seat, SeatState, SpillError, SpillFile,
+    SpillReader, SpillScope, SpillWriter,
 };
 use krishiv_types::batch::Batch;
 
@@ -459,6 +459,24 @@ struct Active {
     /// Every probe row is joined: a right join emits the build rows by
     /// their marks, from this row on.
     emit: Option<u32>,
+    /// Holding in [`TABLE_COHORT`] while the table lives: the table frees
+    /// its memory on its own once the partition's probe rows are joined,
+    /// so another task's round that finds nothing to spill waits for it
+    /// instead of failing. Last, so it goes idle after the memory above is
+    /// released.
+    _seat: Option<Seat>,
+}
+
+/// The cohort of a query's grace joins loading or holding a partition
+/// table ([`Loading`], [`Active`]).
+const TABLE_COHORT: &str = "grace join tables";
+
+/// A seat of this driver's consumer holding in [`TABLE_COHORT`] (`None`
+/// outside a query).
+fn holding_seat(ctx: &TaskContext) -> Option<Seat> {
+    let mut seat = ctx.consumer().consumer().join_cohort(TABLE_COHORT)?;
+    seat.set(SeatState::Holding);
+    Some(seat)
 }
 
 /// What a [`Claim`] holds in [`Grace`].
@@ -890,9 +908,7 @@ pub(crate) async fn step(
             let (out, done) =
                 super::probe::emit_build(shared, hashing.rows(), &a.table, from, limit)?;
             if done {
-                st.active = None;
-                st.slot = None;
-                ctx.consumer().consumer().release_credit();
+                end_partition(st, ctx);
             }
             return Ok(out.map_or(FlushOutput::Continue, FlushOutput::Batch));
         }
@@ -915,12 +931,7 @@ pub(crate) async fn step(
                 // build rows by their marks next.
                 a.emit = Some(0);
             }
-            None => {
-                st.active = None;
-                st.slot = None;
-                // The headroom parked for reading the probe rows.
-                ctx.consumer().consumer().release_credit();
-            }
+            None => end_partition(st, ctx),
         }
         return Ok(FlushOutput::Continue);
     }
@@ -976,7 +987,7 @@ pub(crate) async fn step(
     let Some((loading, held)) = st.task.take() else {
         return Err(internal("grace join claimed no task".to_owned()));
     };
-    let (loading, loaded) = load(shared, hashing, loading, ctx).await?;
+    let (mut loading, loaded) = load(shared, hashing, loading, ctx).await?;
     match loaded {
         Loaded::Need(bytes) => {
             st.task = Some((loading, held));
@@ -996,8 +1007,12 @@ pub(crate) async fn step(
         }
         Loaded::TooLarge => {
             let arbitrated = loading.arbitrate;
+            // The rows go back, then the credit, then the seat goes idle
+            // (waking the rounds waiting for it).
+            let seat = loading.seat.take();
             let task = loading.into_task();
             ctx.consumer().consumer().release_credit();
+            drop(seat);
             st.slot = None;
             if !arbitrated {
                 let me = ctx.consumer().id();
@@ -1044,6 +1059,16 @@ pub(crate) async fn step(
             Ok(FlushOutput::Continue)
         }
     }
+}
+
+/// The partition being joined is done: the headroom parked for reading its
+/// probe rows goes back, then the table, then its seat goes idle (waking
+/// the rounds waiting for it).
+fn end_partition(st: &mut Flush, ctx: &TaskContext) {
+    let active = st.active.take();
+    ctx.consumer().consumer().release_credit();
+    drop(active);
+    st.slot = None;
 }
 
 async fn next_probe(a: &mut Active, ctx: &TaskContext) -> Result<Option<Batch>> {
@@ -1124,6 +1149,19 @@ struct Loading {
     /// The arbitrator refused an estimate of the rest: ask for what is
     /// missing now only from then on.
     estimate_refused: bool,
+    /// Holding in [`TABLE_COHORT`] from its creation: the load ends in a
+    /// table, which [`Active`] keeps with this seat, or gives every row back
+    /// ([`Loaded::TooLarge`]). A first load asks for no memory in a round of
+    /// its own. A load retried alone holds while it waits for the task's
+    /// other partitions too, then asks rounds (while its driver waits in one,
+    /// arbitration does not wait for it). Measured in `two_grace_joins_*` at
+    /// 1.5 MiB: no seat on alone loads, 41 of 80 runs failed; a seat from
+    /// the slot's claim, 13 of 80; from creation, 2 of 144. The cost (ADR
+    /// 0007 update 2026-11-08, item 6): a round of another driver of the
+    /// same task, which the waiting load waits for, waits up to
+    /// `abortReleaseTimeout` before it fails. Last, so it goes idle after
+    /// the memory above is released.
+    seat: Option<Seat>,
 }
 
 /// A `NeedMemory` a loading step returned.
@@ -1161,6 +1199,7 @@ impl Loading {
             asked: None,
             arbitrate,
             estimate_refused: false,
+            seat: holding_seat(ctx),
         }
     }
 
@@ -1187,6 +1226,7 @@ impl Loading {
             reader: None,
             cursor: None,
             emit: None,
+            _seat: self.seat,
         }
     }
 
@@ -2187,6 +2227,40 @@ mod tests {
         assert!(loading.check_grant(100).is_none());
         drop(loading);
         ctx.consumer().consumer().release_credit();
+    }
+
+    /// A load holds its seat in the table cohort from its creation, first
+    /// try or alone retry; the seat goes idle when the load gives its task
+    /// back.
+    #[tokio::test]
+    async fn a_load_holds_its_table_seat_until_it_gives_the_task_back() {
+        let root = TreePool::new(&MemoryConfig::default());
+        let q = root.child("q", None);
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            Arc::clone(&q),
+        );
+        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
+        let peer = q.cohort(TABLE_COHORT).unwrap().join();
+        let cohort = Arc::clone(peer.cohort());
+        let task = || Task {
+            depth: 0,
+            no_shrink: false,
+            build: Part::default(),
+            probe: Part::default(),
+        };
+        let first = Loading::new(task(), false, &ctx);
+        assert!(cohort.others_active(&peer), "a first load holds");
+        drop(first.into_task());
+        assert!(!cohort.others_active(&peer), "idle once given back");
+        let alone = Loading::new(task(), true, &ctx);
+        assert!(cohort.others_active(&peer), "an alone retry holds");
+        assert_eq!(cohort.members(), 2);
+        drop(alone);
+        assert!(!cohort.others_active(&peer));
     }
 
     /// A spill picks at least `SPILL_MIN` bytes when it can, never a part

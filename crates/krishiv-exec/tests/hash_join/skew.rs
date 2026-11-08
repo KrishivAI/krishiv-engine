@@ -387,10 +387,12 @@ async fn two_inner_joins(build_keys: &[i64], probe_rows: usize, limit: usize) ->
 /// Two grace joins of one query under one small pool both finish: a request
 /// that finds nothing spillable while the other task writes partitions out
 /// waits for that write instead of failing the query (at 1.5 MiB, 3 of 8
-/// runs failed without the wait, 1 of 8 with it). The failures left at
-/// 1.5 MiB are of another kind: a task's flush phase asks for a partition
-/// table while the other's loaded table, not spillable, holds the pool.
-/// `KRISHIV_JOIN_TWO_TASK_RUNS` repeats each limit (a stress loop).
+/// runs failed without the wait, 1 of 8 with it), and a flush-phase load
+/// refused while the other task loads or holds a partition table waits for
+/// it (a seat holding in the query's grace table cohort: at 1.5 MiB, 2 of
+/// 144 runs failed with it, 8 of 24 without; at 1 MiB most runs still
+/// fail, two tables do not fit). `KRISHIV_JOIN_TWO_TASK_RUNS` repeats each
+/// limit (a stress loop); the limits list is the place to try others.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_grace_joins_finish_when_their_spill_writes_fill_the_pool() {
     const ROWS: usize = 100_000;
@@ -406,7 +408,7 @@ async fn two_grace_joins_finish_when_their_spill_writes_fill_the_pool() {
                         assert_eq!(run.sums, want);
                         assert!(run.spilled > 0);
                     }
-                    Err(e) => failed.push(format!("{} MiB: {e}", limit / MIB)),
+                    Err(e) => failed.push(format!("{} KiB: {e}", limit >> 10)),
                 }
             }
         }
