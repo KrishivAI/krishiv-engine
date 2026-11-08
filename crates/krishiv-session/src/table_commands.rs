@@ -762,6 +762,7 @@ impl Session {
                 source,
                 columns,
                 known: true,
+                permanent: false,
                 partitions: Some(Default::default()),
             },
         );
