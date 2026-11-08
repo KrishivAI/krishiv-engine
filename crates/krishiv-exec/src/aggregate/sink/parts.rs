@@ -37,7 +37,7 @@ use crate::error::{Result, internal};
 use crate::hash::PARTITIONS;
 
 /// Writers of one run at most, the calling thread included.
-const MAX_WRITERS: usize = 8;
+pub(super) const MAX_WRITERS: usize = 8;
 
 /// An extra writer starts only while the pool has this many
 /// [`HEADROOM`]s free.
@@ -81,6 +81,16 @@ impl Drop for Helpers {
     }
 }
 
+/// One extra writer's consumer, holding [`HEADROOM`] of credit; counted in
+/// [`LIVE_HELPERS`] while it lives (X2b': the final phase's runs).
+pub(super) struct Helper(Arc<ConsumerHandle>);
+
+impl Drop for Helper {
+    fn drop(&mut self) {
+        LIVE_HELPERS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// Takes one place among the process's extra writers, if fewer than
 /// `max` run.
 fn take_place(max: usize) -> bool {
@@ -107,6 +117,7 @@ impl Spiller {
         state: &(dyn Fn(&[u32]) -> Result<RecordBatch> + Sync),
         partition: u32,
     ) -> Result<Run> {
+        let started = std::time::Instant::now();
         let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
         let todo: Vec<usize> = (0..parts.len()).filter(|&p| !parts[p].is_empty()).collect();
         let helpers = self.helpers(table.memory_size(), todo.len());
@@ -168,6 +179,7 @@ impl Spiller {
             let w = self.run_writer()?;
             files[p] = Some(self.write_part(w, &parts[p], chunk, table, state)??);
         }
+        self.time_run(started);
         bump(&self.counters.spill_runs, 1);
         Ok(Run::new(files, partition))
     }
@@ -212,6 +224,45 @@ impl Spiller {
             r.shrink_to_credit(HEADROOM);
         }
         out
+    }
+
+    /// One extra writer, if the process has a place for it and the pool
+    /// the room for its scratch now (as [`Self::helpers`] admits them, one
+    /// at a time: the final phase asks again as each run frees its task's
+    /// memory).
+    pub(super) fn one_helper(&self) -> Option<Helper> {
+        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let pool = self.consumer.pool();
+        if pool
+            .available()
+            .is_some_and(|free| free < MARGIN * HEADROOM)
+            || !take_place(threads)
+        {
+            return None;
+        }
+        // Counted from here: dropping `h` gives the place back.
+        let h = Helper(ConsumerHandle::register_counted(
+            Arc::clone(pool),
+            "HashAggregate spill writer",
+            None,
+            Arc::clone(self.consumer.spill_stats()),
+        ));
+        let mut r = h.0.reservation();
+        if r.try_grow(HEADROOM).is_err() {
+            return None;
+        }
+        r.shrink_to_credit(HEADROOM);
+        Some(h)
+    }
+
+    /// A spill writer of the state schema whose scratch is `h`'s credit
+    /// (then ordinary reservations, no wait); a refusal is
+    /// `SpillError::Memory`.
+    pub(super) fn helper_writer(&self, h: &Helper) -> std::result::Result<SpillWriter, SpillError> {
+        self.scope.writer(
+            Arc::clone(&self.core.state_schema),
+            h.0.reservation().releasing_to_credit(),
+        )
     }
 
     /// The calling thread's share: every partition it claims, its writer's
@@ -278,7 +329,7 @@ impl Spiller {
     /// Whether a test asked this query's extra writers to hand back one
     /// more partition ([`HANDBACKS`]); takes it from the count.
     #[cfg(test)]
-    fn refused_in_test(&self) -> bool {
+    pub(super) fn refused_in_test(&self) -> bool {
         let id = self.query.id();
         HANDBACKS.lock().is_ok_and(|mut v| {
             v.iter_mut()
@@ -289,7 +340,7 @@ impl Spiller {
     }
 
     #[cfg(not(test))]
-    fn refused_in_test(&self) -> bool {
+    pub(super) fn refused_in_test(&self) -> bool {
         false
     }
 

@@ -25,13 +25,14 @@
 //! last chunk's reader is done with them.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock, Weak};
 
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_memory::{
-    ConsumerHandle, Reservation, SpillFile, SpillReader, SpillScope, SpillSignal, SpillWriter,
+    ConsumerHandle, Reservation, SpillError, SpillFile, SpillReader, SpillScope, SpillSignal,
+    SpillWriter,
 };
 use krishiv_types::batch::{Batch, Weights};
 
@@ -106,12 +107,24 @@ struct Counters {
     disk_tasks: AtomicU64,
     /// Most disk tasks running at once.
     disk_peak: AtomicU64,
-    /// Most threads that wrote one run's partition files at once
-    /// (`sink/parts.rs`). Reported as `spill_writers` when above 1.
+    /// Most threads that wrote spill runs at once: one run's partition
+    /// files (`sink/parts.rs`), or the final phase's task runs
+    /// (`sink/parallel.rs`). Reported as `spill_writers` when above 1.
     spill_writers: AtomicU64,
     /// Partitions an extra writer handed back for want of scratch, written
     /// again by the calling thread. Reported as `spill_handbacks` when set.
     spill_handbacks: AtomicU64,
+    /// Final-phase task runs an extra writer finished (`sink/parallel.rs`).
+    /// Reported as `spill_helper_runs` when set.
+    spill_helper_runs: AtomicU64,
+    /// Nanoseconds writers spent writing spill runs (`write_parts`, and
+    /// each writer's time on a run of `write_run_sources`), summed over
+    /// writers: with several writing at once it can exceed the elapsed
+    /// time. Reported as `spill_write_ns` when set.
+    spill_write_ns: AtomicU64,
+    /// The longest single run's write, in nanoseconds. Reported as
+    /// `spill_write_max_ns` when set.
+    spill_write_max_ns: AtomicU64,
     /// Times a disk task was refused memory while others ran (it waited);
     /// a task refused several times counts each time, so this counts
     /// stalls, not tasks (review m5). Reported as `disk_stalls`.
@@ -446,11 +459,24 @@ impl Spiller {
     /// partition files at `level`: per partition file, the sources in
     /// order (their merge order; blocking I/O). The sources mix driver
     /// partitions, so the run keeps its insertion order.
+    ///
+    /// `files` holds the run's partition files so far: partitions already
+    /// written are skipped, so a run that stopped (its writer refused) is
+    /// resumed by another writer without writing or counting a file twice.
+    /// Each file's writer comes from `writer`; the inner error is a
+    /// writer's (a refused scratch among them: the partition being written
+    /// is dropped, the finished ones stay in `files`). `stop` set by another
+    /// writer's failure ends the run at its next chunk (an error, which
+    /// loses to that failure).
     fn write_run_sources(
         &self,
         sources: &[(&RowTable, &dyn Fn(u32) -> bool)],
         level: u32,
-    ) -> Result<Run> {
+        writer: &dyn Fn() -> std::result::Result<SpillWriter, SpillError>,
+        files: &mut [Option<SpillFile>],
+        stop: &AtomicBool,
+    ) -> Result<std::result::Result<(), SpillError>> {
+        let started = std::time::Instant::now();
         let per: Vec<Vec<Vec<u32>>> = sources
             .iter()
             .map(|(t, keep)| {
@@ -461,25 +487,45 @@ impl Spiller {
                 parts
             })
             .collect();
-        let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
-        for (p, file) in files.iter_mut().enumerate() {
-            if per.iter().all(|parts| parts[p].is_empty()) {
-                continue;
-            }
-            let mut writer = self.run_writer()?;
-            for ((t, _), parts) in sources.iter().zip(&per) {
-                let chunk = spill_chunk(t.memory_size(), t.len());
-                for ids in row_chunks(&parts[p], chunk, t) {
-                    self.query.check_cancelled()?;
-                    writer
-                        .write(&Batch::new(t.state_batch(ids)?))
-                        .map_err(KrishivError::from)?;
+        let outcome = (|| {
+            for (p, file) in files.iter_mut().enumerate() {
+                if file.is_some() || per.iter().all(|parts| parts[p].is_empty()) {
+                    continue;
                 }
+                let mut w = match writer() {
+                    Ok(w) => w,
+                    Err(e) => return Ok(Err(e)),
+                };
+                for ((t, _), parts) in sources.iter().zip(&per) {
+                    let chunk = spill_chunk(t.memory_size(), t.len());
+                    for ids in row_chunks(&parts[p], chunk, t) {
+                        self.query.check_cancelled()?;
+                        if stop.load(AtomicOrdering::Acquire) {
+                            return Err(internal(
+                                "stopped: another spill writer failed".to_owned(),
+                            ));
+                        }
+                        if let Err(e) = w.write(&Batch::new(t.state_batch(ids)?)) {
+                            return Ok(Err(e));
+                        }
+                    }
+                }
+                *file = Some(self.finish(w)?);
             }
-            *file = Some(self.finish(writer)?);
-        }
-        bump(&self.counters.spill_runs, 1);
-        Ok(Run::new(files, u32::MAX))
+            Ok(Ok(()))
+        })();
+        self.time_run(started);
+        outcome
+    }
+
+    /// Adds one writer's time on a run, since `started`, to
+    /// `spill_write_ns` and `spill_write_max_ns`.
+    pub(super) fn time_run(&self, started: std::time::Instant) {
+        let ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        bump(&self.counters.spill_write_ns, ns);
+        self.counters
+            .spill_write_max_ns
+            .fetch_max(ns, AtomicOrdering::Relaxed);
     }
 
     /// Writes `chunks` of an in-memory result to one output file
@@ -1483,6 +1529,18 @@ impl Sink for HashAggregate {
         let handbacks = c.spill_handbacks.load(AtomicOrdering::Relaxed);
         if handbacks > 0 {
             out.extend(crate::metrics::counts([("spill_handbacks", handbacks)]));
+        }
+        let helper_runs = c.spill_helper_runs.load(AtomicOrdering::Relaxed);
+        if helper_runs > 0 {
+            out.extend(crate::metrics::counts([("spill_helper_runs", helper_runs)]));
+        }
+        let write_ns = c.spill_write_ns.load(AtomicOrdering::Relaxed);
+        if write_ns > 0 {
+            out.extend(crate::metrics::counts([("spill_write_ns", write_ns)]));
+            out.push((
+                std::borrow::Cow::Borrowed("spill_write_max_ns"),
+                crate::metrics::Metric::Max(c.spill_write_max_ns.load(AtomicOrdering::Relaxed)),
+            ));
         }
         let disk_tasks = c.disk_tasks.load(AtomicOrdering::Relaxed);
         if disk_tasks > 0 {
