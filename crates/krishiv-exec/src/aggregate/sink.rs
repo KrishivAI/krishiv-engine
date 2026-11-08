@@ -894,6 +894,11 @@ impl SpillUnread for Output {
             let groups = ranges(from..mem.chunks.len(), self.executor.parallelism());
             let query = Arc::clone(&s.query);
             let guard = query.blocking_started();
+            // Until the memory written is freed, it counts as about to be released,
+            // so another driver's round that cannot spill waits for it instead of
+            // failing (`ConsumerHandle::spilling`). No arbitration inside: the
+            // writes run on the blocking pool, their scratch a sync grow.
+            let _writing = s.consumer.spilling();
             #[cfg(test)]
             let gate = self.gate.clone();
             let written = run_blocking(&*self.executor, move || {
@@ -1016,6 +1021,27 @@ fn shrink_to(r: &mut Reservation, keep: usize) {
     r.shrink(r.size().saturating_sub(keep));
 }
 
+/// Moves the combined tables' bytes to the spilling driver's consumer
+/// (another driver's, combined into the global state, without passing
+/// through the pool) and marks that consumer as writing until the returned
+/// guard drops: until the tables are freed, their bytes count as about to
+/// be released, so another driver's round that cannot spill waits for them
+/// instead of failing (`ConsumerHandle::spilling`). Take it only for a
+/// write with no arbitration inside (a blocking job). A table whose
+/// transfer is refused keeps its consumer and is freed all the same.
+fn charged_to_writer(
+    tables: &mut [(u32, Table, Reservation)],
+    ctx: &TaskContext,
+) -> krishiv_memory::SpillWriting {
+    let own = ctx.consumer().consumer();
+    for (_, _, r) in tables.iter_mut() {
+        if r.consumer() != own.id() {
+            let _ = r.transfer_to(own);
+        }
+    }
+    own.spilling()
+}
+
 /// Releases the headroom of `r` for a spill file's scratch memory (see
 /// [`HEADROOM`]); the writer or reader of the same consumer reserves it
 /// right after.
@@ -1090,14 +1116,17 @@ impl HashAggregate {
             return None;
         }
         inner.busy = true;
-        let tables = std::mem::take(&mut inner.tables);
+        let mut tables = std::mem::take(&mut inner.tables);
         let merged = std::mem::take(&mut inner.merged);
+        let writing = charged_to_writer(&mut tables, ctx);
         Some(Box::new(move || {
             let mut runs = Vec::new();
             for (i, (p, t, mut r)) in tables.into_iter().enumerate() {
                 lend_headroom(&mut r);
                 runs.push(s.write_run(&t, if i == 1 { merged } else { 0 }, 0, p)?);
             }
+            // Every table's memory is back in the pool.
+            drop(writing);
             Ok(Box::new(move |inner: &mut Inner| {
                 inner.disk = true;
                 // Runs merge grouped by driver partition (stable, so
@@ -1483,7 +1512,7 @@ impl Sink for HashAggregate {
                 return Ok(0);
             };
             let g = global(&l.global)?;
-            let combined = {
+            let mut combined = {
                 let mut inner = lock(&g.inner);
                 g.combined.store(0, AtomicOrdering::Relaxed);
                 std::mem::take(&mut inner.tables)
@@ -1507,6 +1536,11 @@ impl Sink for HashAggregate {
             let own_partition = l.partition;
             // The table spilled is part of this driver's map-task report.
             let mut report = l.exchange.as_ref().map(|_| ExchangeStats::new(PARTS));
+            // Until the memory written is freed, it counts as about to be released,
+            // so another driver's round that cannot spill waits for it instead of
+            // failing. No arbitration inside: the writes run on the blocking pool,
+            // their scratch a sync grow.
+            let _writing = charged_to_writer(&mut combined, ctx);
             let (runs, report) = ctx
                 .run_blocking(move || {
                     let mut runs = Vec::new();
