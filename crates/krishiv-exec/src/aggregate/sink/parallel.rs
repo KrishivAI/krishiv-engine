@@ -413,6 +413,11 @@ impl HashAggregate {
     ) -> Result<()> {
         bump(&self.counters.row_final_spills, 1);
         let s = s.clone();
+        // Until the memory written is freed, it counts as about to be released,
+        // so another driver's round that cannot spill waits for it instead of
+        // failing (`ConsumerHandle::spilling`). No arbitration inside: the
+        // writes run on the blocking pool, their scratch a sync grow.
+        let _writing = ctx.consumer().consumer().spilling();
         let runs = ctx
             .run_blocking(move || {
                 let mut runs = Vec::with_capacity(inputs.len());
@@ -508,6 +513,11 @@ impl HashAggregate {
         bump(&self.counters.row_final_flushes, 1);
         let lent = spare.as_mut().map_or(0, lend_headroom);
         let s = s.clone();
+        // The finished tables count as about to be released until they are
+        // written and dropped. Only across this job: the output writer lives
+        // on between flushes, and a guard tied to it would span the final
+        // phase's arbitrations (review H1 of the nested-loop flake).
+        let writing = ctx.consumer().consumer().spilling();
         let out = ctx
             .run_blocking(move || {
                 let mut out = match out {
@@ -522,7 +532,9 @@ impl HashAggregate {
                 }
                 Ok(out)
             })
-            .await?;
+            .await;
+        drop(writing);
+        let out = out?;
         if let Some(r) = spare.as_mut() {
             super::regrow(r, lent);
         }
@@ -544,6 +556,11 @@ impl HashAggregate {
         bump(&self.counters.row_final_spills, 1);
         let s = s.clone();
         let mut spare = spare;
+        // Until the memory written is freed, it counts as about to be released,
+        // so another driver's round that cannot spill waits for it instead of
+        // failing (`ConsumerHandle::spilling`). No arbitration inside: the
+        // writes run on the blocking pool, their scratch a sync grow.
+        let _writing = ctx.consumer().consumer().spilling();
         let runs = ctx
             .run_blocking(move || {
                 if let Some(r) = spare.as_mut() {

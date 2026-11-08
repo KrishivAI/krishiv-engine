@@ -36,25 +36,21 @@
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 # +6 lines over main: a stored table's column comments reach the analyzer (TableMeta.column_comments, PR #589)
-# +4 lines over main: a stored view lowers with its IDENTIFIER(..) spans (PR #576)
 # +7 lines: a file table's registered partitions (`TempTable::Files::partitions`, reading partitioned tables)
-2920 crates/krishiv-session/src/catalog.rs
+2916 crates/krishiv-session/src/catalog.rs
 # +43 lines over main: nested session and script variables (T196, PR #505)
-# +10 lines over main: EXPLAIN and DESCRIBE QUERY name IDENTIFIER(..) items (PR #576)
-2304 crates/krishiv-session/src/command.rs
+2294 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 # +20 lines: collect_engine (unstable-ir) reads results on the engine carriers for the golden harness (calendar carrier)
-# +1 line: the file view's `partitions` field (reading partitioned tables)
-2661 crates/krishiv-session/src/dataframe.rs
+2539 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
-# +33 lines over main: IDENTIFIER(..) names for CTAS, views, CACHE TABLE and INSERT queries, the inner query call boxed (PR #576)
-2814 crates/krishiv-session/src/session.rs
+# +5 lines (this branch): Parquet writes a top-level GEOMETRY or GEOGRAPHY column as WKB with a logical type (T181 U3)
+2781 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
 # +4 lines over main: a view column list without a comment keeps the query column's comment (Spark's aliasPlan, PR #589)
-# +17 lines over main: INSERT clauses lower with IDENTIFIER(..)-substituted spans (PR #576)
 # +1 line: the temporary table's `partitions` field (reading partitioned tables)
-3396 crates/krishiv-session/src/table_commands.rs
+3379 crates/krishiv-session/src/table_commands.rs
 # +6 lines over main: CREATE NAMESPACE records a clause written twice and PROPERTIES with DBPROPERTIES (DUPLICATE_CLAUSES, PR #572)
 3879 crates/krishiv-sql/src/ast.rs
 2554 crates/krishiv-sql/src/lower.rs
