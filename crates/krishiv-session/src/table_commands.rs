@@ -419,6 +419,49 @@ impl Session {
     /// `USE [NAMESPACE|DATABASE|SCHEMA] name`.
     pub(crate) async fn exec_use(&self, u: &Use) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        // Spark's catalog-first rule: unless the statement says NAMESPACE, a
+        // first part that names a catalog is the catalog.
+        let parts = crate::access::ddl_parts(&u.name, &env)?;
+        let canonical = |p: &str| {
+            if crate::system::is_system(p) {
+                Some("system")
+            } else if p.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+                Some(crate::catalog::CATALOG)
+            } else {
+                None
+            }
+        };
+        let quoted = |ps: &[String]| format!("`{}`", ps.join("`.`"));
+        if u.kind.is_none()
+            && let Some(catalog) = parts.first().and_then(|p| canonical(p))
+        {
+            match (catalog, &parts[1..]) {
+                (_, []) => {
+                    self.state.catalog.use_catalog(catalog);
+                    return self.empty_frame().await;
+                }
+                ("system", rest) => {
+                    return Err(SchemaNotFound {
+                        schema_name: quoted(&[vec!["system".to_owned()], rest.to_vec()].concat()),
+                    }
+                    .into());
+                }
+                (_, [_]) => {}
+                (_, rest) => {
+                    return Err(SchemaNotFound {
+                        schema_name: quoted(
+                            &[vec![crate::catalog::CATALOG.to_owned()], rest.to_vec()].concat(),
+                        ),
+                    }
+                    .into());
+                }
+            }
+        } else if crate::system::is_system(&self.state.catalog.current_catalog()) {
+            return Err(SchemaNotFound {
+                schema_name: quoted(&[vec!["system".to_owned()], parts].concat()),
+            }
+            .into());
+        }
         let name = self.namespace_name(&u.name, &env)?;
         if !self.state.catalog.store.has_namespace(&name) {
             return Err(SchemaNotFound {
@@ -426,6 +469,7 @@ impl Session {
             }
             .into());
         }
+        self.state.catalog.use_catalog(crate::catalog::CATALOG);
         self.state.catalog.use_namespace(&name);
         self.empty_frame().await
     }

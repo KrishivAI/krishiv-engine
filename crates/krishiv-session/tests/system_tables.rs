@@ -693,3 +693,36 @@ fn show_tables_in_system_lists_the_tables() {
         "{dbs:?}"
     );
 }
+
+fn run(s: &Session, sql: &str) -> Result<Vec<arrow_array::RecordBatch>, String> {
+    block_on(async { s.sql(sql).await?.collect().await }).map_err(|e| e.to_string())
+}
+
+#[test]
+fn use_system_switches_the_current_catalog() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT current_catalog()", 0),
+        ["spark_catalog"]
+    );
+    run(&s, "USE SYSTEM").unwrap();
+    assert_eq!(column_of(&s, "SELECT current_catalog()", 0), ["system"]);
+    // A bare name now reads the system catalog.
+    assert!(!column_of(&s, "SELECT name FROM capabilities LIMIT 1", 0).is_empty());
+    // Using the current catalog again is a no-op; a namespace of it is not found.
+    run(&s, "USE system").unwrap();
+    let e = run(&s, "USE x").unwrap_err();
+    assert!(
+        e.contains("SCHEMA_NOT_FOUND") && e.contains("`system`.`x`"),
+        "{e}"
+    );
+    let e = run(&s, "USE spark_catalog.a.b").unwrap_err();
+    assert!(e.contains("`spark_catalog`.`a`.`b`"), "{e}");
+    // Back to the session catalog, in its default database.
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT current_catalog()", 0),
+        ["spark_catalog"]
+    );
+    assert_eq!(column_of(&s, "SELECT current_schema()", 0), ["default"]);
+}
