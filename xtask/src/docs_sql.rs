@@ -176,6 +176,29 @@ fn shown_result(captured: Option<&serde_json::Value>, spark: &str) -> String {
     )
 }
 
+/// The characters of an answer without whitespace, sorted, for comparing against Spark's documented
+/// one: row order of an unordered query, row breaks and spacing do not count, a changed digit does.
+fn squash(text: &str) -> Vec<char> {
+    let mut v: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
+    v.sort_unstable();
+    v
+}
+
+/// Whether the engine's captured answer differs from the result Spark documents for the example.
+/// Examples without a documented result, failed examples and volatile ones never differ.
+fn differs_from_spark(captured: Option<&serde_json::Value>, spark: &str) -> bool {
+    let Some(c) = captured else { return false };
+    if spark.trim().is_empty()
+        || spark.trim_start().starts_with('+')
+        || c.get("volatile").and_then(serde_json::Value::as_bool) == Some(true)
+        || c.get("ok").and_then(serde_json::Value::as_bool) != Some(true)
+    {
+        return false;
+    }
+    let ours = shown_result(Some(c), "");
+    squash(&ours.replace(" | ", "\t")) != squash(spark)
+}
+
 /// Every example of every function page as `(id, sql)`.
 ///
 /// # Errors
@@ -325,6 +348,9 @@ fn page(
                 let _ = writeln!(m, "> {l}");
             }
             m.push_str(&shown_result(captured.get(&id), spark_result));
+            if differs_from_spark(captured.get(&id), spark_result) {
+                let _ = writeln!(m, "-- Spark documents: {}", spark_result.replace('\n', " "));
+            }
             m.push_str("```\n\n");
         }
     }

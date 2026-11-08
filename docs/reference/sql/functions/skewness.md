@@ -36,6 +36,7 @@ skewness(expr)
 -- skewness, example 2
 > SELECT skewness(col) FROM VALUES (-1000), (-100), (10), (20) AS tab(col);
 -1.113565746902201
+-- Spark documents: -1.1135657469022011
 ```
 
 ## Version history

@@ -30,6 +30,7 @@ regr_r2(y, x)
 -- regr_r2, example 1
 > SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
 0.2727272727272726
+-- Spark documents: 0.2727272727272727
 ```
 
 ```sql

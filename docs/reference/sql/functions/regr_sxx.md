@@ -30,6 +30,7 @@ regr_sxx(y, x)
 -- regr_sxx, example 1
 > SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
 2.7499999999999996
+-- Spark documents: 2.75
 ```
 
 ```sql

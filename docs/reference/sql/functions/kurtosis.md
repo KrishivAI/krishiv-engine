@@ -30,12 +30,14 @@ kurtosis(expr)
 -- kurtosis, example 1
 > SELECT kurtosis(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);
 -0.7014368047529609
+-- Spark documents: -0.7014368047529627
 ```
 
 ```sql
 -- kurtosis, example 2
 > SELECT kurtosis(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col);
 0.19432323191698986
+-- Spark documents: 0.19432323191699075
 ```
 
 ## Version history
