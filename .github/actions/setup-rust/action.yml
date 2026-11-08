@@ -1,0 +1,30 @@
+name: Set up Rust, with one retry
+description: >-
+  dtolnay/rust-toolchain, retried once after 20 seconds (it downloads rustup and the toolchain from static.rust-lang.org
+  and github.com).
+inputs:
+  toolchain:
+    description: toolchain specification (empty: the action's default)
+    default: ""
+  components:
+    description: comma-separated components
+    default: ""
+runs:
+  using: composite
+  steps:
+    - id: first
+      uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      continue-on-error: true
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+    - name: Wait before the retry
+      if: steps.first.outcome == 'failure'
+      shell: bash
+      run: sleep 20
+    - name: Retry the toolchain install
+      if: steps.first.outcome == 'failure'
+      uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
