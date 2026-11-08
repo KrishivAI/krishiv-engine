@@ -970,6 +970,10 @@ fn an_unknown_count_compared_with_one_value_keeps_about_one_row() {
     let one = over("m = (SELECT max(a) FROM t)");
     close(one.rows(), 1.0, "a scalar subquery");
     assert_eq!(one.col("m").ndv, 1.0, "one value left");
+    assert_eq!(one.col("m").null_frac, 0.0, "= leaves no NULL");
+    // `a` is 10% NULL: `<=>` keeps those rows, which a NULL result matches.
+    let safe = filter("SELECT a FROM t WHERE a <=> (SELECT max(b) FROM t)");
+    assert!(safe.col("a").null_frac > 0.0, "<=> keeps the NULL rows");
     close(
         over("m <=> (SELECT max(a) FROM t)").rows(),
         1.0,

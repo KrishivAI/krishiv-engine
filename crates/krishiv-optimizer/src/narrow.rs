@@ -17,7 +17,7 @@ use std::collections::HashSet;
 
 use krishiv_plan::{AttrId, Builtin, Expr, ExprNode, Literal, ResolvedExpr};
 
-use crate::expr::{builtin, is_deterministic, references};
+use crate::expr::{builtin, has_subquery, is_deterministic, references};
 use crate::stats::{AttrStats, DEFAULT_SELECTIVITY, RelStats, number, to_f64};
 
 /// The columns of a relation as a predicate sees them: the base estimates
@@ -237,9 +237,10 @@ fn equality(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
             match literal(other).filter(|l| !matches!(l, Literal::Null(_))) {
                 None if literal(other).is_some() => DEFAULT_SELECTIVITY,
                 None => {
-                    // `col = <one value>`: an uncorrelated scalar subquery
-                    // (an expression over one that reads no column and is
-                    // deterministic). One value selects `rows / ndv` rows,
+                    // `col = <one value>`: an uncorrelated subquery (an
+                    // expression over one that reads no column and is
+                    // deterministic; scalar in practice, an uncorrelated
+                    // EXISTS or IN is one value too). One value selects `rows / ndv` rows,
                     // and a guessed count is read as the rows (T166 section
                     // 2's rule for `col = col`, extended: study 26, E10), so
                     // an aggregate output compared with `(SELECT max(..))`
@@ -251,9 +252,13 @@ fn equality(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
                         && references(other).is_empty()
                         && is_deterministic(other);
                     if one_value {
+                        // `<=>` with a NULL result keeps the NULL rows, as
+                        // the `col = col` arm keeps them for `<=>`.
                         v.update(id, |c| {
                             c.ndv = 1.0;
-                            c.null_frac = 0.0;
+                            if op == Builtin::Eq {
+                                c.null_frac = 0.0;
+                            }
                         });
                     }
                     if c.ndv_known() || one_value {
@@ -290,20 +295,6 @@ fn equality(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
         }
         (None, None) => DEFAULT_SELECTIVITY,
     }
-}
-
-/// Whether `e` holds a subquery expression.
-fn has_subquery(e: &Expr) -> bool {
-    let mut found = false;
-    let mut stack = vec![e];
-    while let Some(x) = stack.pop() {
-        if matches!(x.node, ExprNode::Subquery { .. }) {
-            found = true;
-            break;
-        }
-        x.for_each_child(&mut |c| stack.push(c));
-    }
-    found
 }
 
 fn flip(op: Builtin) -> Builtin {
