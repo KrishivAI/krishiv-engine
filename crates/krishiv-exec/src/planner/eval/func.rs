@@ -11,7 +11,7 @@ use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_
 use krishiv_kernels::map::DedupPolicy;
 use krishiv_kernels::string::CharsetOptions;
 use krishiv_plan::{Expr, ExprNode, Literal, ResolvedFunction};
-use krishiv_types::arrow::client_arrow_type;
+use krishiv_types::arrow::{client_arrow_type, edge_arrow_type};
 use krishiv_udf_sdk::ScalarUdf;
 
 use super::strings::to_view;
@@ -30,15 +30,24 @@ pub(super) fn compile_udf(
     input: Input<'_>,
     _e: &Expr,
 ) -> Result<Arc<dyn PhysExpr>> {
-    let args = wide_args(args);
+    // A UDF sees the session edge's carriers (`edge_arrow_type`): decimals on
+    // `Decimal128` and calendar intervals on `Interval(MonthDayNano)`, as Spark
+    // hands them to Arrow UDFs.
+    let args: Vec<Arc<dyn PhysExpr>> = args
+        .into_iter()
+        .map(|a| {
+            let to = edge_arrow_type(a.data_type());
+            on_carrier(a, to)
+        })
+        .collect();
     let bind_args = f
         .args
         .iter()
         .zip(&args)
         .map(|(ir, compiled)| match &ir.node {
-            ExprNode::Literal(l) => wide_literal(l).map(BindArg::Literal),
+            ExprNode::Literal(l) => edge_literal(l).map(BindArg::Literal),
             _ => Ok(BindArg::Column {
-                ty: client_arrow_type(compiled.data_type()),
+                ty: edge_arrow_type(compiled.data_type()),
                 nullable: compiled.nullable(),
             }),
         })
@@ -56,7 +65,7 @@ pub(super) fn compile_udf(
         input.env.zone,
     )?;
     let canonical = f.data_type.to_arrow();
-    let out = client_arrow_type(&canonical);
+    let out = edge_arrow_type(&canonical);
     // The binding returns plain carriers; Spark's `STRING` and `BINARY`
     // are views here. Both derive from the analyzer's type, so they only
     // ever match or convert to a view (by construction, no mismatch).
@@ -125,6 +134,11 @@ fn wide_args(args: Vec<Arc<dyn PhysExpr>>) -> Vec<Arc<dyn PhysExpr>> {
             on_carrier(a, to)
         })
         .collect()
+}
+
+fn edge_literal(l: &Literal) -> Result<ArrayRef> {
+    let a = literal_array(l)?;
+    recarried_array(&a, &edge_arrow_type(a.data_type()))
 }
 
 fn wide_literal(l: &Literal) -> Result<ArrayRef> {

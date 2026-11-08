@@ -6,7 +6,6 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray as _;
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::DataType as ArrowType;
-use krishiv_common::error::KrishivUnsupportedFeature;
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
 use krishiv_plan::CastMode;
 use krishiv_types::{DataType, DayTimeField, YearMonthField};
@@ -560,10 +559,7 @@ pub(super) fn interval_to_string(e: Arc<dyn PhysExpr>, from: DataType) -> Arc<dy
 
 /// `a`, of the interval type `from`, as `CAST(.. AS STRING)` writes it.
 pub(super) fn render_interval(from: &DataType, a: &dyn Array) -> Result<ArrayRef> {
-    use arrow_array::types::{
-        ArrowPrimitiveType, DurationMicrosecondType, IntervalMonthDayNanoType,
-        IntervalYearMonthType,
-    };
+    use arrow_array::types::{ArrowPrimitiveType, DurationMicrosecondType, IntervalYearMonthType};
     use arrow_array::{PrimitiveArray, StringViewArray, builder::StringViewBuilder};
     use krishiv_types::interval::{calendar_string, write_day_time, write_year_month};
 
@@ -598,10 +594,12 @@ pub(super) fn render_interval(from: &DataType, a: &dyn Array) -> Result<ArrayRef
                 write_day_time(text, m, *start, *end);
             })
         }
-        (DataType::CalendarInterval, ArrowType::Interval(_)) => {
-            rendered(a.as_primitive::<IntervalMonthDayNanoType>(), |text, i| {
-                text.push_str(&calendar_string(i.months, i.days, i.nanoseconds / 1000));
-            })
+        (DataType::CalendarInterval, t) if krishiv_types::arrow::is_calendar_struct(t) => {
+            let c = krishiv_types::calendar::Calendars::of(a)
+                .ok_or_else(|| internal("a calendar interval that is not one"))?;
+            c.iter()
+                .map(|v| v.map(|v| calendar_string(v.months, v.days, v.micros)))
+                .collect::<StringViewArray>()
         }
         (from, carrier) => {
             return Err(internal(&format!("a {from} value carried as {carrier}")));
@@ -796,10 +794,7 @@ impl IntervalCast {
 /// A string column as `to`. A string that is no calendar interval is NULL in
 /// every mode; for an ANSI interval only `TRY_CAST` gives NULL.
 fn string_to_interval(a: &ArrayRef, to: &DataType, try_cast: bool) -> Result<ArrayRef> {
-    use arrow_array::builder::{
-        DurationMicrosecondBuilder, IntervalMonthDayNanoBuilder, IntervalYearMonthBuilder,
-    };
-    use arrow_array::types::IntervalMonthDayNano;
+    use arrow_array::builder::{DurationMicrosecondBuilder, IntervalYearMonthBuilder};
     use krishiv_types::interval_parse::{cast_to_day_time, cast_to_year_month, parse_string};
     let view = to_view(a)?;
     let strings = view.as_string_view();
@@ -827,23 +822,14 @@ fn string_to_interval(a: &ArrayRef, to: &DataType, try_cast: bool) -> Result<Arr
             Arc::new(out.finish())
         }
         DataType::CalendarInterval => {
-            let mut out = IntervalMonthDayNanoBuilder::with_capacity(strings.len());
-            for v in strings {
+            krishiv_types::calendar::calendar_array(strings.into_iter().map(|v| {
                 match v.map(parse_string) {
-                    Some(Ok((c, _))) => {
-                        let nanos = c.micros.checked_mul(1_000).ok_or_else(|| {
-                            KrishivUnsupportedFeature {
-                                feature: "a calendar interval whose microseconds overflow the \
-                                          nanosecond field of its Arrow type"
-                                    .to_owned(),
-                            }
-                        })?;
-                        out.append_value(IntervalMonthDayNano::new(c.months, c.days, nanos));
-                    }
-                    _ => out.append_null(),
+                    Some(Ok((c, _))) => Some(krishiv_types::calendar::CalendarValue::new(
+                        c.months, c.days, c.micros,
+                    )),
+                    _ => None,
                 }
-            }
-            Arc::new(out.finish())
+            }))
         }
         other => return Err(internal(&format!("a string cast to {other:?}"))),
     })

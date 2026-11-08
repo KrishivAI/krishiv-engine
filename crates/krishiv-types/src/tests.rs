@@ -972,7 +972,7 @@ fn interval_arrow_mapping_keeps_fields_in_the_tag() {
         ),
         (
             DataType::CalendarInterval,
-            ArrowType::Interval(IntervalUnit::MonthDayNano),
+            crate::arrow::calendar_struct(),
             false,
         ),
     ] {
@@ -1015,5 +1015,62 @@ fn interval_constructors_refuse_fields_that_decrease() {
             start: Y::Year,
             end: Y::Year
         }
+    );
+}
+
+#[test]
+fn calendar_intervals_ride_a_marked_struct_and_month_day_nano_only_at_the_edges() {
+    use crate::arrow::{
+        calendar_struct, canonical_arrow_type, edge_arrow_type, is_calendar_struct,
+    };
+    use crate::calendar::{
+        CalendarValue, Calendars, calendar_array, from_month_day_nano, to_month_day_nano,
+    };
+    let mdn = ArrowType::Interval(arrow_schema::IntervalUnit::MonthDayNano);
+    assert!(is_calendar_struct(&DataType::CalendarInterval.to_arrow()));
+    assert_eq!(
+        DataType::from_arrow(&calendar_struct()).unwrap(),
+        DataType::CalendarInterval
+    );
+    assert_eq!(
+        DataType::from_arrow(&mdn).unwrap(),
+        DataType::CalendarInterval
+    );
+    // A user struct with the same names and types is a struct, not an interval.
+    let plain = ArrowType::Struct(arrow_schema::Fields::from(vec![
+        arrow_schema::Field::new("months", ArrowType::Int32, false),
+        arrow_schema::Field::new("days", ArrowType::Int32, false),
+        arrow_schema::Field::new("microseconds", ArrowType::Int64, false),
+    ]));
+    assert!(!is_calendar_struct(&plain));
+    assert!(matches!(
+        DataType::from_arrow(&plain).unwrap(),
+        DataType::Struct(_)
+    ));
+    // The edges: struct to MonthDayNano and back, nested too.
+    let list = |t: ArrowType| {
+        ArrowType::List(std::sync::Arc::new(arrow_schema::Field::new(
+            "element", t, true,
+        )))
+    };
+    assert_eq!(edge_arrow_type(&list(calendar_struct())), list(mdn.clone()));
+    assert_eq!(canonical_arrow_type(&list(mdn)), list(calendar_struct()));
+    let a = calendar_array([
+        Some(CalendarValue::new(1, 2, 3)),
+        None,
+        Some(CalendarValue::new(0, 0, i64::MAX)),
+    ]);
+    let c = Calendars::of(a.as_ref()).unwrap();
+    assert_eq!(to_month_day_nano(&c), Err(2));
+    let small = calendar_array([Some(CalendarValue::new(1, 2, -3)), None]);
+    let m = to_month_day_nano(&Calendars::of(small.as_ref()).unwrap()).unwrap();
+    assert_eq!(m.value(0).nanoseconds, -3_000);
+    let back = from_month_day_nano(&m);
+    assert_eq!(
+        Calendars::of(back.as_ref())
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>(),
+        [Some(CalendarValue::new(1, 2, -3)), None]
     );
 }

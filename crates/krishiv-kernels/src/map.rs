@@ -78,6 +78,8 @@ impl DedupPolicy {
 #[must_use]
 pub fn supports_key(t: &DataType) -> bool {
     match t {
+        // Spark dedups a calendar interval key but does not order it.
+        t if krishiv_types::arrow::is_calendar_struct(t) => false,
         DataType::Null
         | DataType::Boolean
         | DataType::Int8
@@ -113,7 +115,7 @@ pub fn supports_key(t: &DataType) -> bool {
 /// Whether `t` holds a calendar interval somewhere.
 fn holds_calendar(t: &DataType) -> bool {
     match t {
-        DataType::Interval(IntervalUnit::MonthDayNano) => true,
+        t if krishiv_types::arrow::is_calendar_struct(t) => true,
         DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
             holds_calendar(f.data_type())
         }
@@ -128,7 +130,7 @@ fn holds_calendar(t: &DataType) -> bool {
 /// `map_concat` meet it, never as an array element).
 #[must_use]
 pub fn supports_map_key(t: &DataType) -> bool {
-    matches!(t, DataType::Interval(IntervalUnit::MonthDayNano)) || supports_key(t)
+    krishiv_types::arrow::is_calendar_struct(t) || supports_key(t)
 }
 
 /// Whether the kernel stores values of Arrow type `t`: the key types, plus
@@ -136,7 +138,7 @@ pub fn supports_map_key(t: &DataType) -> bool {
 #[must_use]
 pub fn supports_value(t: &DataType) -> bool {
     match t {
-        DataType::Interval(IntervalUnit::MonthDayNano) => true,
+        t if krishiv_types::arrow::is_calendar_struct(t) => true,
         DataType::List(f) | DataType::LargeList(f) => supports_value(f.data_type()),
         DataType::Struct(fs) => fs.iter().all(|f| supports_value(f.data_type())),
         DataType::Map(entries, _) => match entries.data_type() {
@@ -649,13 +651,11 @@ fn key_text(keys: &dyn Array, key: usize) -> Result<String, KernelError> {
             .as_primitive::<DurationMicrosecondType>()
             .value(key)
             .to_string()),
-        T::Interval(IntervalUnit::MonthDayNano) => {
-            let v = keys.as_primitive::<IntervalMonthDayNanoType>().value(key);
-            Ok(calendar_string(
-                v.months,
-                v.days,
-                v.nanoseconds.wrapping_div(1_000),
-            ))
+        t if krishiv_types::arrow::is_calendar_struct(t) => {
+            let v = krishiv_types::calendar::Calendars::of(keys)
+                .ok_or_else(|| internal("a calendar key that is not one".to_owned()))?
+                .value(key);
+            Ok(calendar_string(v.months, v.days, v.micros))
         }
         T::List(_) | T::LargeList(_) => {
             let (from, to) = list_range(keys, key)?;
@@ -1175,13 +1175,19 @@ fn hashable(array: &dyn Array) -> Result<ArrayRef, KernelError> {
     Ok(match array.data_type() {
         // The hash kernel has no calendar form, and this one is only for dedup:
         // equal intervals mix to one `bigint`.
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            let mixed: PrimitiveArray<Int64Type> =
-                array.as_primitive::<IntervalMonthDayNanoType>().unary(|v| {
-                    i64::from(v.months).rotate_left(40)
-                        ^ i64::from(v.days).rotate_left(20)
-                        ^ v.nanoseconds
-                });
+        t if krishiv_types::arrow::is_calendar_struct(t) => {
+            let c = krishiv_types::calendar::Calendars::of(array)
+                .ok_or_else(|| internal("a calendar key that is not one".to_owned()))?;
+            let mixed: PrimitiveArray<Int64Type> = c
+                .iter()
+                .map(|v| {
+                    v.map(|v| {
+                        i64::from(v.months).rotate_left(40)
+                            ^ i64::from(v.days).rotate_left(20)
+                            ^ v.micros
+                    })
+                })
+                .collect();
             Arc::new(mixed)
         }
         DataType::Utf8View => Arc::new(arrow_array::StringArray::from_iter(
@@ -2174,7 +2180,7 @@ mod tests {
             assert!(supports_key(&t), "{t}");
             assert!(supports_value(&t), "{t}");
         }
-        let calendar = DataType::Interval(IntervalUnit::MonthDayNano);
+        let calendar = krishiv_types::arrow::calendar_struct();
         let calendars = DataType::List(Arc::new(Field::new("element", calendar.clone(), true)));
         assert!(!supports_key(&calendar));
         assert!(supports_map_key(&calendar));
