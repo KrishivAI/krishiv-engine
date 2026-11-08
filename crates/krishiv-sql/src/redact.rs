@@ -267,20 +267,23 @@ fn set_statement(sql: &str, code: &[&Token], end: usize, marks: &mut Vec<Mark>) 
         .iter()
         .position(|t| t.kind == TokenKind::Sym(Sym::Eq));
     // Without `=` (`SET password x`) the value starts where a complete key
-    // ends; Spark reads the text as a key lookup, but it is still logged.
-    let (eq, key_end) = eq.map_or_else(
-        || {
-            let mut key = String::new();
-            for i in 1..stmt {
-                if value_starts(code, i, &key) {
-                    return (i - 1, i);
-                }
-                key.push_str(&key_text(sql, code[i])[0]);
+    // ends; Spark reads the text as a key lookup, but it is still logged. An
+    // `=` after such a point belongs to the value (`SET password abc==`), so
+    // the bare reading wins whenever it starts before the `=`.
+    let bare = |upto: usize| {
+        let mut key = String::new();
+        for i in 1..upto {
+            if value_starts(code, i, &key) {
+                return Some((i - 1, i));
             }
-            (code.len(), stmt)
-        },
-        |e| (e, e),
-    );
+            key.push_str(&key_text(sql, code[i])[0]);
+        }
+        None
+    };
+    let (eq, key_end) = match eq {
+        Some(e) => bare(e).unwrap_or((e, e)),
+        None => bare(stmt).unwrap_or((code.len(), stmt)),
+    };
     let mut key: [String; 4] = Default::default();
     for t in &code[1..key_end.min(stmt)] {
         for (k, part) in key.iter_mut().zip(key_text(sql, t)) {
@@ -416,5 +419,27 @@ fn url_marks(sql: &str, t: &Token, marks: &mut Vec<Mark>) {
             }
         };
         at += len;
+    }
+}
+
+#[cfg(test)]
+mod bare_value_tests {
+    use super::redact_sql;
+
+    #[test]
+    fn a_bare_value_containing_equals_is_hidden() {
+        for sql in [
+            "SET password Canary7f3a9c=",
+            "SET password abc==",
+            "SET password abc=def",
+            "SET spark.hadoop.fs.s3a.secret.key AbC123/xyz=",
+        ] {
+            let out = redact_sql(sql);
+            let out = out.as_str();
+            assert!(
+                !out.contains("Canary7f3a9c") && !out.contains("abc") && !out.contains("AbC123"),
+                "{sql} -> {out}"
+            );
+        }
     }
 }
