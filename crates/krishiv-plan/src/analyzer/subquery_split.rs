@@ -480,7 +480,8 @@ pub(super) fn fixed(k: &Arc<Expr>, input: &LogicalPlan) -> bool {
         }
         PlanNode::Project { input, .. }
         | PlanNode::SubqueryAlias { input, .. }
-        | PlanNode::Sort { input, .. } => fixed(k, input),
+        | PlanNode::Sort { input, .. }
+        | PlanNode::Repartition { input, .. } => fixed(k, input),
         PlanNode::Join {
             left, right, kind, ..
         } => match kind {
@@ -564,7 +565,8 @@ fn at_most_one_row(p: &LogicalPlan) -> bool {
         PlanNode::Project { input, .. }
         | PlanNode::SubqueryAlias { input, .. }
         | PlanNode::Filter { input, .. }
-        | PlanNode::Sort { input, .. } => at_most_one_row(input),
+        | PlanNode::Sort { input, .. }
+        | PlanNode::Repartition { input, .. } => at_most_one_row(input),
         _ => false,
     }
 }
@@ -888,6 +890,7 @@ fn reads_inner(p: &LogicalPlan) -> bool {
         }
         PlanNode::Project { input, .. }
         | PlanNode::Sort { input, .. }
+        | PlanNode::Repartition { input, .. }
         | PlanNode::SubqueryAlias { input, .. } => reads_inner(input),
         _ => true,
     }

@@ -539,7 +539,17 @@ fn check_geography(spatial: &ArrayRef) -> Result<()> {
             "a cast to geography of a value that is no spatial struct",
         ));
     };
+    // The SRID column: a value taken from `GEOMETRY(ANY)` may carry any SRID.
+    let Some(srids) = s
+        .column(0)
+        .as_primitive_opt::<arrow_array::types::Int32Type>()
+    else {
+        return Err(internal("a spatial value whose SRID child is not Int32"));
+    };
     for row in (0..s.len()).filter(|r| s.is_valid(*r)) {
+        if srids.is_valid(row) {
+            krishiv_types::geo::check_geographic_srid(srids.value(row))?;
+        }
         rewrite(wkb.value(row), SpatialKind::Geography, ByteOrder::Ndr)?;
     }
     Ok(())

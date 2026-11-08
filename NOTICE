@@ -29,6 +29,8 @@ Apache Spark
   file keeps its license header). The Rust types in crates/krishiv-connect/src/proto/
   and the descriptor set under crates/krishiv-connect/tests/fixtures/ are generated
   from them by tools/connect-protogen.
+  crates/krishiv-types/vendored/srs_registry.csv, the SRS registry copied from Spark 4.2.0
+  and generated from PROJ 9.8.1 data.
 
 --------------------------------------------------------------------------------
 (Further entries: DataFusion, Feldera and others, if code is copied. Currently
