@@ -106,11 +106,6 @@ pub(super) async fn write(
             .transfer_to(ctx.consumer().consumer())
             .map_err(KrishivError::from)?;
     }
-    // From here until the freed credit is back in the pool, the rows count
-    // as about to be released: another driver's round that cannot spill
-    // waits for them instead of failing (the writer's own count ends a
-    // little before `release_credit` below).
-    let _writing = ctx.consumer().consumer().spilling();
     let lent = reservation.size().min(SCRATCH_BYTES);
     let short = write_scratch(&batches).saturating_sub(lent);
     if must && short > 0 {
@@ -128,6 +123,12 @@ pub(super) async fn write(
         }
         topup.shrink_to_credit(topup.size());
     }
+    // From here until the freed credit is back in the pool, the rows count
+    // as about to be released: another driver's round that cannot spill
+    // waits for them instead of failing (the writer's own count ends a
+    // little before `release_credit` below). Not before the top-up: two
+    // drivers topping up would each wait for the other's rows.
+    let _writing = ctx.consumer().consumer().spilling();
     reservation.shrink_to_credit(lent);
     // The scratch returns to credit when dropped, so a refused write can
     // always take back what was lent.
