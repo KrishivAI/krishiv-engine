@@ -15,6 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
 use futures::executor::block_on;
@@ -53,15 +54,13 @@ fn table_files(dir: &Path, table: &str) -> Vec<PathBuf> {
     parts
 }
 
-/// The result as text: its batches concatenated (so batch boundaries do not
-/// matter), in their `Debug` form, which is deterministic.
-fn rows(s: &Session, sql: &str) -> String {
+/// The result as one batch (so batch boundaries do not matter); `None` for
+/// no batch.
+fn rows(s: &Session, sql: &str) -> Option<RecordBatch> {
     let df = block_on(s.sql(sql)).unwrap();
     let batches = block_on(df.collect()).unwrap();
-    match batches.first() {
-        Some(b) => format!("{:?}", concat_batches(&b.schema(), &batches).unwrap()),
-        None => String::new(),
-    }
+    let first = batches.first()?;
+    Some(concat_batches(&first.schema(), &batches).unwrap())
 }
 
 #[test]
@@ -128,8 +127,16 @@ fn tpch_over_s3_equals_tpch_over_local_files() {
     }
     for q in 1..=22 {
         let sql = query(q);
-        let over_s3 = rows(&remote, &sql);
-        assert!(!over_s3.is_empty(), "q{q:02} returned no batch");
-        assert_eq!(over_s3, rows(&local, &sql), "q{q:02}");
+        let over_s3 = rows(&remote, &sql).unwrap_or_else(|| panic!("q{q:02}: no batch"));
+        assert!(over_s3.num_rows() > 0, "q{q:02} returned no rows");
+        // Compared as values: a batch's `Debug` text shows only the first
+        // and last rows of a long column.
+        let over_files = rows(&local, &sql).unwrap_or_else(|| panic!("q{q:02}: no local batch"));
+        assert!(
+            over_s3 == over_files,
+            "q{q:02}: {} rows over S3, {} over the files differ",
+            over_s3.num_rows(),
+            over_files.num_rows()
+        );
     }
 }

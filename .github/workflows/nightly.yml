@@ -381,7 +381,10 @@ jobs:
     timeout-minutes: 90
     env:
       MINIO_IMAGE: cgr.dev/chainguard/minio@sha256:a1ac4589a5f8136b616e667b48a0bea9719bb10bd45799ea946f24bbedfafde4
-      KRISHIV_TPCH_DIR: ${{ github.workspace }}/tpch-sf1
+      AZURITE_IMAGE: mcr.microsoft.com/azure-storage/azurite@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5 # 3.37.0
+      AZ_CLI_IMAGE: mcr.microsoft.com/azure-cli@sha256:a4e2660b4099b76f02001a9316a0eb0dc56e330b5f7d1d1312c932200645bf26
+      # 22 queries over S3 and over the files take about a minute in a debug build (SF1, 12 cores).
+      KRISHIV_TPCH_DIR: ${{ runner.temp }}/tpch-sf1
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -400,12 +403,14 @@ jobs:
       - name: Generate TPC-H SF1 (DuckDB dbgen)
         working-directory: bench
         env:
-          KRISHIV_DATA: ${{ github.workspace }}/data
+          KRISHIV_DATA: ${{ runner.temp }}/data
         run: |
           uv sync --frozen
           uv run krishiv-datasets tpch-dbgen --sf 1
           # The output directory is versioned by the generator: link whichever one holds the tables.
-          ln -s "$(dirname "$(find "$KRISHIV_DATA/tpch-dbgen" -name lineitem.parquet | head -n1)")" "$KRISHIV_TPCH_DIR"
+          lineitem="$(find "$KRISHIV_DATA/tpch-dbgen" -name lineitem.parquet | head -n1)"
+          [ -n "$lineitem" ] || { echo "no lineitem.parquet under $KRISHIV_DATA/tpch-dbgen" >&2; exit 1; }
+          ln -s "$(dirname "$lineitem")" "$KRISHIV_TPCH_DIR"
       - name: Object stores against emulators
         run: tests/scripts/object_store_emulators.sh
 
