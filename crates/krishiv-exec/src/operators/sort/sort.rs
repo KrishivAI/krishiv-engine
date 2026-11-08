@@ -1379,9 +1379,18 @@ impl Sink for Sort {
                             .await?;
                         if runs.is_err() {
                             // The scratch outgrew the headroom: widen it,
-                            // with arbitration this time, and try again.
+                            // with arbitration this time, and try again. The
+                            // buffer's consumer is an ended driver's, so the
+                            // seat goes idle meanwhile: a round never waits
+                            // for the member asking in it.
                             let more = headroom(b.row_bytes, batch_rows);
+                            if let Some(seat) = &mut seat {
+                                seat.set(SeatState::Idle);
+                            }
                             b.headroom.grow(more).await?;
+                            if let Some(seat) = &mut seat {
+                                seat.set(SeatState::Holding);
+                            }
                             runs = self
                                 .spill_buffer(&mut b, g.buckets, batch_rows, ctx)
                                 .await?;
@@ -1746,7 +1755,7 @@ impl Sort {
                 // must never wait for the other, so a bucket reader joins
                 // the cohort only once its budget is granted.
                 let mut seat = if l.bucket.is_none() {
-                    handle.pool().cohort(MERGE_COHORT).map(|c| c.join())
+                    handle.join_cohort(MERGE_COHORT)
                 } else {
                     None
                 };

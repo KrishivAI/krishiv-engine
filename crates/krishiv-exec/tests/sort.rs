@@ -1107,16 +1107,18 @@ async fn two_sorts(rows: u64, limit: usize) -> [Result<Vec<Batch>>; 2] {
 
 /// Two sorts of one query under one small pool both finish: a request that
 /// finds nothing spillable while the other task writes a buffer out waits
-/// for that write instead of failing the query, and a merge budget the pool
+/// for that write instead of failing the query, a merge budget the pool
 /// refuses while the other task finalizes or merges waits for it in the
-/// query's merge cohort (the final merge keeps to half the pool). At 3 MiB,
-/// 32 runs: 48 of 64 sorts failed without the cohort and the cap, 6 with
-/// them. What still fails (about 1 run in 100 at 3.5-4 MiB too, as before)
-/// is a sort driver's input batch, asked through the driver while the other
-/// task finalizes or merges: no cohort covers that request, so the limits
-/// here stay above it (5 MiB: 0 of 192). Below about
-/// 2.75 MiB the pool is smaller than one task's fan-in-2 merge (1.19 MB)
-/// next to the other task's two drivers buffering a batch each.
+/// query's merge cohort (the final merge keeps to half the pool), and a
+/// sort driver's input batch asked through the driver meanwhile waits for
+/// the other task's holding merge seat. At 3 MiB, 32 runs: 48 of 64 sorts
+/// failed without the cohort and the cap, 6 with them; with the wait for
+/// holding seats, 2 of 192 (3.5 MiB: 2 of 128; 4 MiB: 0 of 128). What still
+/// fails: buffers a driver combined while the task's other driver still
+/// sorts input, which no spill reaches until finalize, so the limits here
+/// stay above it. Below about 2.75 MiB the pool is smaller than one task's
+/// fan-in-2 merge (1.19 MB) next to the other task's two drivers buffering
+/// a batch each.
 /// `KRISHIV_SORT_TWO_TASK_RUNS` repeats each limit (a stress loop).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_sorts_finish_when_their_spill_writes_fill_the_pool() {
@@ -1124,7 +1126,7 @@ async fn two_sorts_finish_when_their_spill_writes_fill_the_pool() {
     let runs: usize = std::env::var("KRISHIV_SORT_TWO_TASK_RUNS").map_or(1, |v| v.parse().unwrap());
     let rows = 65_536;
     let mut failed = Vec::new();
-    for limit in [5120 * KIB, 6144 * KIB] {
+    for limit in [4096 * KIB, 5120 * KIB] {
         for _ in 0..runs {
             for out in two_sorts(rows, limit).await {
                 match out {

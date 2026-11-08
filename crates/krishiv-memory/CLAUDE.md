@@ -11,7 +11,7 @@ Paths are relative to this crate.
 - `src/lib.rs` public surface: pools, reservations, release hook
 - `src/pool.rs` memory pools (`MemoryPool::snapshot()`: the pools down to the live consumers as plain `PoolEntry` rows, for `system.memory`); `src/reservation.rs` reservation handles; `src/consumer.rs` memory consumers
 - `src/resident.rs` resident-set guard: with a probe installed, cuts what the process holds above the reservations plus an allowance from the root's limit for ordinary grants; spill I/O, `Reservation::unguarded` growth and exhausted arbitration rounds are exempt. A sync `try_grow` whose refusal fails the query must use `.unguarded()`
-- `src/cohort.rs` cohorts: members of one query sizing unspillable memory they free on their own (a nested loop's chunks, sorts' merge budgets) together; a member waits while another is active instead of failing (`MemoryPool::cohort`, `Seat`, `SeatState`)
+- `src/cohort.rs` cohorts: members of one query sizing unspillable memory they free on their own (a nested loop's chunks, sorts' merge budgets) together; a member waits while another is active instead of failing (`MemoryPool::cohort`, `Seat`, `SeatState`); a seat taken with `ConsumerHandle::join_cohort` is seen by arbitration: while it holds, another driver's round of the same query waits for that consumer (as for a spill write) before it fails or aborts, unless the member's driver waits in a round itself or either side has no driver
 - `src/arbitrate.rs` memory arbitrator; `src/limit.rs` memory-limit detection (cgroup and meminfo fixtures)
 - `src/spill.rs` spill scopes and spill accounting
 - `src/spillfile/format.rs` on-disk spill format; `src/spillfile/writer.rs` and `reader.rs` frame I/O

@@ -397,12 +397,7 @@ impl ProbeOp {
                 d.phase = if d.rows == 0 {
                     Phase::Build
                 } else {
-                    d.seat = ctx
-                        .consumer()
-                        .consumer()
-                        .pool()
-                        .cohort(CHUNK_COHORT)
-                        .map(|c| c.join());
+                    d.seat = ctx.consumer().consumer().join_cohort(CHUNK_COHORT);
                     Phase::Load
                 };
                 d.budget = chunk_budget(ctx, &ready, d.seat.as_ref());

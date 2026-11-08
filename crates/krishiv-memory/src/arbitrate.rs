@@ -33,7 +33,14 @@
 //!    (taken only across a write that ends without help: the blocking job
 //!    and the release of the credit it freed) will be released, so the
 //!    round waits for it (re-planning when a write ends) instead of failing
-//!    a request while no spill can be asked of anyone.
+//!    a request while no spill can be asked of anyone. Cohort members
+//!    holding count the same way: another driver's consumer with a seat
+//!    holding ([`crate::ConsumerHandle::join_cohort`]: a sort's merge budget,
+//!    a nested loop's chunk, freed without help) of the requester's query
+//!    will release its memory, unless its driver waits in a round of its
+//!    own; a requester or member registered without a driver
+//!    ([`crate::SpillOwner::signal`]) never waits this way. The consumer's
+//!    whole use counts, as for a write.
 //!    Otherwise abort the query furthest above its fair share. The requester's own query fails the request with
 //!    `UNABLE_TO_ACQUIRE_MEMORY` and its other tasks see
 //!    `KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY`; another victim is aborted and
@@ -51,7 +58,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use crate::pool::{Class, Consumer, Denied, Group, GroupKind, Node};
-use crate::spill::SpillTicket;
+use crate::spill::{OwnerId, SpillTicket};
 use std::time::Instant;
 
 use crate::sync::{AtomicBool, Ordering};
@@ -112,16 +119,16 @@ pub(crate) async fn reserve(
 }
 
 /// Marks a consumer as waiting in arbitration while it lives: its unsettled
-/// grant is not counted as in flight, since its driver is blocked here.
-/// Entering wakes rounds that may be waiting for that grant.
+/// grant is not counted as in flight, and its driver's holding cohort
+/// members are not waited for, since its driver is blocked here. Entering
+/// wakes rounds that may be waiting for either, so they re-plan.
 struct Waiting(Arc<Consumer>);
 
 impl Waiting {
     fn enter(consumer: Arc<Consumer>, shared: &crate::pool::Shared) -> Self {
         consumer.waiting.store(true, Ordering::Release);
-        if consumer.unsettled() > 0 {
-            shared.release.released();
-        }
+        // Unconditional: another consumer of this driver may hold a seat.
+        shared.release.released();
         Self(consumer)
     }
 }
@@ -200,18 +207,26 @@ struct Plan {
     /// Bytes of other consumers with a spill write in progress
     /// ([`crate::ConsumerHandle::spilling`]): about to be released.
     writing: usize,
+    /// Bytes of other drivers' consumers of the requester's query with a
+    /// cohort seat holding ([`crate::ConsumerHandle::join_cohort`]): memory
+    /// the member frees on its own (a sort's merge budget, a nested loop's
+    /// chunk). A driver waiting in a round of its own is left out: its
+    /// member may need that round's memory before it frees anything.
+    holding: usize,
 }
 
 impl Plan {
-    /// Pending releases, unsettled grants and spill writes in progress
-    /// cover `shortfall`, and some of it is grants or writes (a wait for
-    /// pending releases alone is the abort phase's own).
+    /// Pending releases, unsettled grants, spill writes in progress and
+    /// holding cohort members cover `shortfall`, and some of it is grants,
+    /// writes or members (a wait for pending releases alone is the abort
+    /// phase's own).
     fn covered_by_releases(&self, shortfall: usize) -> bool {
-        (self.credit > 0 || self.writing > 0)
+        (self.credit > 0 || self.writing > 0 || self.holding > 0)
             && self
                 .pending
                 .saturating_add(self.credit)
                 .saturating_add(self.writing)
+                .saturating_add(self.holding)
                 >= shortfall
     }
     fn excess(&self, group: Option<&Arc<Node>>) -> usize {
@@ -288,11 +303,13 @@ impl Round {
             let spillable = c.spillable().map(|s| s.spillable_bytes());
             let _ = write!(
                 held,
-                "[{} used={} spillable={spillable:?} unsettled={} waiting={}] ",
+                "[{} used={} spillable={spillable:?} unsettled={} waiting={} writing={} holding={}] ",
                 c.name(),
                 c.used(),
                 c.unsettled(),
                 c.waiting.load(Ordering::Acquire),
+                c.writing(),
+                c.cohort_holding(),
             );
         }
         tracing::debug!(
@@ -357,9 +374,37 @@ impl Round {
             })
             .map(|(c, _)| c.used())
             .sum();
+        // A cohort member frees its memory on its own, unless its driver
+        // waits in a round (which may be this round's wait, the other way)
+        // or is the requester's (which pulls it). Both drivers must be
+        // known: a consumer registered without one could be either. Cohorts
+        // are per query: only the requester's query's members count.
+        let holding: usize = match (me.owner, self.node.group_node()) {
+            (Some(own), Some(query)) => {
+                let waiting: Vec<OwnerId> = consumers
+                    .iter()
+                    .filter(|(c, _)| c.waiting.load(Ordering::Acquire))
+                    .filter_map(|(c, _)| c.owner)
+                    .collect();
+                consumers
+                    .iter()
+                    .filter(|(c, n)| {
+                        c.owner.is_some_and(|o| o != own && !waiting.contains(&o))
+                            && c.cohort_holding()
+                            // Counted as a write already.
+                            && !c.writing()
+                            && !aborted(n)
+                            && n.group_node().is_some_and(|g| Arc::ptr_eq(&g, &query))
+                    })
+                    .map(|(c, _)| c.used())
+                    .sum()
+            }
+            _ => 0,
+        };
         Plan {
             credit,
             writing,
+            holding,
             fair_share: binding.limit().unwrap_or(usize::MAX) / active,
             pending: groups
                 .iter()

@@ -142,7 +142,7 @@ pub(super) fn merge_need(
 /// A seat holding a merge budget in the query's [`MERGE_COHORT`] (none
 /// outside a query).
 pub(super) fn holding(handle: &ConsumerHandle) -> Option<Seat> {
-    let mut seat = handle.pool().cohort(MERGE_COHORT)?.join();
+    let mut seat = handle.join_cohort(MERGE_COHORT)?;
     seat.set(SeatState::Holding);
     Some(seat)
 }
