@@ -762,6 +762,7 @@ impl Session {
                 source,
                 columns,
                 known: true,
+                partitions: Some(Default::default()),
             },
         );
         // A replaced view must not keep serving the rows of the old one.

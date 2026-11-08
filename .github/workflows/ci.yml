@@ -325,7 +325,7 @@ jobs:
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest
-      - run: cargo nextest run -p krishiv-session -p krishiv-exec --test moment_window_spill --test nested_loop --profile quarantine --locked --no-tests=pass
+      - run: cargo nextest run -p krishiv-exec --test nested_loop --profile quarantine --locked --no-tests=pass
 
   deny:
     needs: changes
