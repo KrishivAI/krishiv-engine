@@ -523,7 +523,8 @@ impl Session {
         query: &str,
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
-        self.sql_here_inner(query, Arc::default(), spans).await
+        // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans)).await
     }
 
     /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
@@ -533,7 +534,8 @@ impl Session {
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
     ) -> Result<DataFrame, KrishivError> {
-        self.sql_here_inner(query, row, Vec::new()).await
+        // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
+        Box::pin(self.sql_here_inner(query, row, Vec::new())).await
     }
 
     async fn sql_here_inner(

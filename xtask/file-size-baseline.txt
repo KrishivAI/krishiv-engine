@@ -35,13 +35,14 @@
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 # +4 lines over main: a stored view lowers with its IDENTIFIER(..) spans (PR #576)
 2906 crates/krishiv-session/src/catalog.rs
-# +43 lines over main: nested session and script variables (T196, PR #505); +10: EXPLAIN and DESCRIBE QUERY name IDENTIFIER(..) items (PR #576)
+# +43 lines over main: nested session and script variables (T196, PR #505)
+# +10 lines over main: EXPLAIN and DESCRIBE QUERY name IDENTIFIER(..) items (PR #576)
 2304 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 2640 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
-# +31 lines over main: IDENTIFIER(..) names for CTAS, views, CACHE TABLE and INSERT queries (PR #576)
-2812 crates/krishiv-session/src/session.rs
+# +33 lines over main: IDENTIFIER(..) names for CTAS, views, CACHE TABLE and INSERT queries, the inner query call boxed (PR #576)
+2814 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
 # +17 lines over main: INSERT clauses lower with IDENTIFIER(..)-substituted spans (PR #576)
