@@ -652,7 +652,7 @@ enum Index {
 /// [`KeyTable`] (hashbrown `HashTable<u32>`, E02 decision B), or a
 /// [`JoinIndex`] in the row layout, maps each distinct key to its newest
 /// row, and older rows with the same key are chained through
-/// [`next`](Self::next).
+/// [`next_of`](Self::next_of).
 #[derive(Debug)]
 pub(crate) struct JoinTable {
     arena: RowArena,
@@ -661,6 +661,10 @@ pub(crate) struct JoinTable {
     /// One bit per row: a pair with the row matched (empty unless
     /// [`with_marks`](Self::with_marks)).
     marks: Vec<AtomicU64>,
+    /// No row has an older row with its key (every chain is one row long),
+    /// so [`next_of`](Self::next_of) never reads the chain (DuckDB's
+    /// `chains_longer_than_one`).
+    unique: bool,
 }
 
 impl JoinTable {
@@ -784,7 +788,7 @@ impl JoinTable {
         let mut r = head;
         while r != NONE {
             self.mark(r);
-            r = self.next.get(r as usize).copied().unwrap_or(NONE);
+            r = self.next_of(r);
         }
     }
 
@@ -855,11 +859,13 @@ impl JoinTable {
             },
             (false, None) => return Err(internal("join key rows without a layout".to_owned())),
         };
+        let unique = next.iter().all(|&n| n == NONE);
         Ok(Self {
             arena,
             index,
             next,
             marks: Vec::new(),
+            unique,
         })
     }
 
@@ -943,9 +949,28 @@ impl JoinTable {
         }
     }
 
-    /// `next()[r]`: the next build row with the same key as `r`, or [`NONE`].
+    /// `next()[r]`: the next build row with the same key as `r`, or [`NONE`]
+    /// (tests; readers go through [`next_of`](Self::next_of)).
+    #[cfg(test)]
     pub(crate) fn next(&self) -> &[u32] {
         &self.next
+    }
+
+    /// The row after `row` in its key's chain, or [`NONE`]; on a table whose
+    /// every key occurs once, `NONE` without reading the chain.
+    #[inline]
+    pub(crate) fn next_of(&self, row: u32) -> u32 {
+        if self.unique {
+            NONE
+        } else {
+            self.next.get(row as usize).copied().unwrap_or(NONE)
+        }
+    }
+
+    /// Whether every key occurs once (no chain is longer than one row).
+    #[cfg(test)]
+    pub(crate) fn is_unique(&self) -> bool {
+        self.unique
     }
 
     /// The rows.
@@ -974,11 +999,29 @@ mod tests {
     }
 
     #[test]
+    fn a_table_of_distinct_keys_is_unique_and_ends_every_chain() {
+        // Equal hashes, distinct keys: one-row chains only.
+        let t = JoinTable::build(arena(vec![7, 7, 9], vec![b"a", b"b", b"c"]), None, 0);
+        let t = t.unwrap_or_else(|e| panic!("{e}"));
+        assert!(t.is_unique());
+        assert!((0..3).all(|r| t.next_of(r) == NONE));
+        // Marking a head marks only that row.
+        let t = t.with_marks().unwrap_or_else(|e| panic!("{e}"));
+        t.mark_chain(1);
+        assert_eq!(
+            (0..3).map(|r| t.is_marked(r)).collect::<Vec<_>>(),
+            [false, true, false]
+        );
+    }
+
+    #[test]
     fn duplicates_chain_and_collisions_compare_keys() {
         // Rows 0 and 2 share a key; row 1 collides on the hash only.
         let t = JoinTable::build(arena(vec![7, 7, 7], vec![b"a", b"b", b"a"]), None, 0);
         let t = t.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(t.next(), &[NONE, NONE, 0]);
+        assert!(!t.is_unique());
+        assert_eq!((t.next_of(2), t.next_of(0)), (0, NONE));
         assert_eq!(t.arena().len(), 3);
         assert!(JoinTable::index_bytes(3, 3, false) > 0);
         assert!(JoinTable::index_bytes(3, 0, true) > 0);
@@ -996,76 +1039,82 @@ mod tests {
         use arrow_array::{ArrayRef, Int64Array, StringArray};
 
         let n = 3000usize;
-        let ints: ArrayRef = Arc::new(Int64Array::from_iter(
-            (0..n).map(|i| (i % 7 != 3).then_some((i % 500) as i64)),
-        ));
-        let strs: ArrayRef = Arc::new(StringArray::from_iter(
-            (0..n).map(|i| Some(format!("{}-a-long-enough-string", i % 3))),
-        ));
-        let cols = [ints, strs];
-        let types = [DataType::Int64, DataType::Utf8];
-        let codec =
-            KeyCodec::with_string_rows(&types, vec![false, true]).unwrap_or_else(|e| panic!("{e}"));
-        assert!(
-            KeyCodec::new(&types, vec![false, true])
-                .unwrap_or_else(|e| panic!("{e}"))
-                .layout()
-                .is_none()
-        );
-        let layout = codec.layout().cloned();
-        let tables = |rows: bool, choice: IndexChoice| {
-            let hashing = Hashing::new(Some(3), rows);
-            let format = match layout.as_deref().filter(|_| rows) {
-                Some(keys) => ArenaFormat::Rows {
-                    keys,
-                    payload: None,
-                    arrow_payload: false,
-                },
-                None => ArenaFormat::Arrow { payload: false },
+        // Repeated keys chain; distinct keys (every key once) make a unique
+        // table in every index kind.
+        for (m, unique) in [(500usize, false), (n, true)] {
+            let ints: ArrayRef = Arc::new(Int64Array::from_iter(
+                (0..n).map(|i| (i % 7 != 3).then_some((i % m) as i64)),
+            ));
+            let strs: ArrayRef = Arc::new(StringArray::from_iter(
+                (0..n).map(|i| Some(format!("{}-a-long-enough-string", i % 3))),
+            ));
+            let cols = [ints, strs];
+            let types = [DataType::Int64, DataType::Utf8];
+            let codec = KeyCodec::with_string_rows(&types, vec![false, true])
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert!(
+                KeyCodec::new(&types, vec![false, true])
+                    .unwrap_or_else(|e| panic!("{e}"))
+                    .layout()
+                    .is_none()
+            );
+            let layout = codec.layout().cloned();
+            let tables = |rows: bool, choice: IndexChoice| {
+                let hashing = Hashing::new(Some(3), rows);
+                let format = match layout.as_deref().filter(|_| rows) {
+                    Some(keys) => ArenaFormat::Rows {
+                        keys,
+                        payload: None,
+                        arrow_payload: false,
+                    },
+                    None => ArenaFormat::Arrow { payload: false },
+                };
+                let schema = arena_schema(format).unwrap_or_else(|e| panic!("{e}"));
+                let keys = codec
+                    .encode(&cols, &hashing)
+                    .unwrap_or_else(|e| panic!("{e}"));
+                let valid: Vec<usize> = (0..n).filter(|&i| keys.is_valid(i)).collect();
+                let chunk = |idx: &[usize]| {
+                    let mut c: Vec<arrow_array::ArrayRef> = vec![Arc::new(
+                        UInt64Array::from_iter_values(idx.iter().map(|&i| keys.hashes()[i])),
+                    )];
+                    let l = layout.as_deref().filter(|_| rows);
+                    c.extend(keys.arena_columns(l, idx).unwrap_or_else(|e| panic!("{e}")));
+                    Batch::new(
+                        RecordBatch::try_new(Arc::clone(&schema), c)
+                            .unwrap_or_else(|e| panic!("{e}")),
+                    )
+                };
+                let (a, b) = valid.split_at(valid.len() / 3);
+                let arena = RowArena::over_chunks(&schema, &[chunk(a), chunk(b)])
+                    .unwrap_or_else(|e| panic!("{e}"));
+                let l = layout.as_ref().filter(|_| rows);
+                let t = JoinTable::build_with(arena, l, hashing.g_seed(), choice, None)
+                    .unwrap_or_else(|e| panic!("{e}"));
+                let probe: Vec<u32> = (0..u32::try_from(n).unwrap_or(0))
+                    .filter(|&i| keys.is_valid(i as usize))
+                    .collect();
+                let mut heads = Vec::new();
+                t.find_heads(&keys, &probe, &mut heads);
+                // A probe in the other format finds nothing.
+                let other = codec
+                    .encode(&cols, &Hashing::new(Some(3), !rows))
+                    .unwrap_or_else(|e| panic!("{e}"));
+                let mut none = Vec::new();
+                t.find_heads(&other, &probe[..3], &mut none);
+                assert_eq!(none, [NONE; 3]);
+                assert_eq!(t.is_unique(), unique, "modulus {m}");
+                (heads, t.next().to_vec(), t.flat_index())
             };
-            let schema = arena_schema(format).unwrap_or_else(|e| panic!("{e}"));
-            let keys = codec
-                .encode(&cols, &hashing)
-                .unwrap_or_else(|e| panic!("{e}"));
-            let valid: Vec<usize> = (0..n).filter(|&i| keys.is_valid(i)).collect();
-            let chunk = |idx: &[usize]| {
-                let mut c: Vec<arrow_array::ArrayRef> = vec![Arc::new(
-                    UInt64Array::from_iter_values(idx.iter().map(|&i| keys.hashes()[i])),
-                )];
-                let l = layout.as_deref().filter(|_| rows);
-                c.extend(keys.arena_columns(l, idx).unwrap_or_else(|e| panic!("{e}")));
-                Batch::new(
-                    RecordBatch::try_new(Arc::clone(&schema), c).unwrap_or_else(|e| panic!("{e}")),
-                )
-            };
-            let (a, b) = valid.split_at(valid.len() / 3);
-            let arena = RowArena::over_chunks(&schema, &[chunk(a), chunk(b)])
-                .unwrap_or_else(|e| panic!("{e}"));
-            let l = layout.as_ref().filter(|_| rows);
-            let t = JoinTable::build_with(arena, l, hashing.g_seed(), choice, None)
-                .unwrap_or_else(|e| panic!("{e}"));
-            let probe: Vec<u32> = (0..u32::try_from(n).unwrap_or(0))
-                .filter(|&i| keys.is_valid(i as usize))
-                .collect();
-            let mut heads = Vec::new();
-            t.find_heads(&keys, &probe, &mut heads);
-            // A probe in the other format finds nothing.
-            let other = codec
-                .encode(&cols, &Hashing::new(Some(3), !rows))
-                .unwrap_or_else(|e| panic!("{e}"));
-            let mut none = Vec::new();
-            t.find_heads(&other, &probe[..3], &mut none);
-            assert_eq!(none, [NONE; 3]);
-            (heads, t.next().to_vec(), t.flat_index())
-        };
-        let (arrow_heads, arrow_next, kind) = tables(false, IndexChoice::Adaptive);
-        assert_eq!(kind, None);
-        assert!(arrow_heads.iter().all(|&h| h != NONE));
-        for choice in [IndexChoice::Flat, IndexChoice::Salted] {
-            let (heads, next, kind) = tables(true, choice);
-            assert_eq!(kind, Some(choice == IndexChoice::Flat));
-            assert_eq!(heads, arrow_heads, "{choice:?}");
-            assert_eq!(next, arrow_next, "{choice:?}");
+            let (arrow_heads, arrow_next, kind) = tables(false, IndexChoice::Adaptive);
+            assert_eq!(kind, None);
+            assert!(arrow_heads.iter().all(|&h| h != NONE));
+            for choice in [IndexChoice::Flat, IndexChoice::Salted] {
+                let (heads, next, kind) = tables(true, choice);
+                assert_eq!(kind, Some(choice == IndexChoice::Flat));
+                assert_eq!(heads, arrow_heads, "{choice:?}");
+                assert_eq!(next, arrow_next, "{choice:?}");
+            }
         }
     }
 
