@@ -21,7 +21,9 @@ impl Session {
         Session {
             state: Arc::clone(&self.state),
             locals: locals.into(),
-            operation: self.operation.clone(),
+            // The operation names the script (its own registration, `scripting/control.rs`); the
+            // statements it runs are queries of their own under minted ids.
+            operation: None,
             deadline: self.deadline,
         }
     }

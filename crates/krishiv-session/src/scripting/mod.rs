@@ -12,8 +12,9 @@
 //! handlers catch the errors raised while their compound runs (never `KRISHIV_*` errors or
 //! cancellation), then end that compound.
 
+mod control;
+
 use std::collections::{BTreeMap, HashSet};
-use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -25,8 +26,8 @@ use krishiv_common::error::{
     UnsupportedFeatureSqlScriptingDropTemporaryVariable, VariableAlreadyExists, VariableNotFound,
 };
 use krishiv_common::redact::RedactedSql;
+use krishiv_plan::Literal;
 use krishiv_plan::analyzer::{LocalFrame, SessionVariable, VariableValue};
-use krishiv_plan::{Expr as PlanExpr, ExprNode, Literal, LogicalPlan, PlanNode};
 use krishiv_sql::ast::{
     Compound, DataTypeSpec, DeclareVariable, Expr, ForStatement, Handler, HandlerBody,
     HandlerCondition, ObjectName, ScriptStatement, ScriptStatement as S, SetVariable,
@@ -34,7 +35,6 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
-use crate::column::Column;
 use crate::command::{
     arrow_value, contains_default, contains_subquery, is_bare_default, padded_select,
     unresolved_variable,
@@ -42,14 +42,7 @@ use crate::command::{
 use crate::dataframe::DataFrame;
 use crate::session::{Session, internal};
 use crate::variables::{RESOLVE_SEARCH_PATH, StoredVariable, quote_normalized};
-
-/// The most rows a script's result may have. The result is returned as literal rows, which keeps
-/// it independent of the script's session; a larger one is refused rather than truncated.
-const MAX_RESULT_ROWS: i32 = 256;
-
-/// The most rows a `FOR` loop holds. Spark reads them lazily; this engine holds the query's rows for
-/// the whole loop, so a larger one is refused rather than risking the process's memory.
-const MAX_FOR_ROWS: usize = 100_000;
+use control::ScriptRun;
 
 /// What a statement tells the statements around it to do next.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,8 +101,10 @@ struct Run<'a> {
     text: &'a str,
     redacted: &'a RedactedSql,
     scopes: Vec<Scope>,
-    /// The rows of the last query statement that ran.
-    last: Option<(SchemaRef, Vec<RecordBatch>)>,
+    /// The rows of the last query statement that ran, and the bytes reserved for them.
+    last: Option<(SchemaRef, Vec<RecordBatch>, usize)>,
+    /// The script as a registered query: cancellation, time limit, memory.
+    control: ScriptRun,
 }
 
 impl Session {
@@ -121,15 +116,25 @@ impl Session {
         text: &str,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
+        let control = self.begin_script()?;
+        let cancelled = control.watcher();
         let mut run = Run {
             session: self,
             text,
             redacted,
             scopes: Vec::new(),
             last: None,
+            control,
         };
-        run.compound(c).await?;
-        run.finish().await
+        // A cancel between two statements, or the time limit, drops the interpreter where it stands
+        // (and with it the statement running): no handler sees it.
+        let result = tokio::select! {
+            biased;
+            error = cancelled => Err(error),
+            done = run.interpret(c) => done,
+        };
+        run.control.settle(result.as_ref().map(|_| ()));
+        result
     }
 }
 
@@ -141,6 +146,12 @@ fn unsupported(feature: &str) -> KrishivError {
 }
 
 impl Run<'_> {
+    /// Runs the script and returns the rows of its last query statement.
+    async fn interpret(&mut self, c: &Compound) -> Result<DataFrame, KrishivError> {
+        self.compound(c).await?;
+        self.finish().await
+    }
+
     /// A name as the frames key it: in lower case, whatever `spark.sql.caseSensitive` says, as
     /// `VariableSnapshot::get` looks it up (a divergence when that is on: `a` and `A` are one
     /// local).
@@ -392,13 +403,24 @@ impl Run<'_> {
                 .into());
             }
         }
-        let Some(batches) = handle
-            .run_analyzed_variable_query_capped(&analysis, MAX_FOR_ROWS)
-            .await?
-        else {
-            return Err(unsupported("a FOR loop over more than 100000 rows"));
-        };
-        for batch in &batches {
+        // Spark reads the query lazily; the rows are held, in the script's pool, for the whole loop.
+        let batches = handle.run_analyzed_variable_query(&analysis).await?;
+        let held = self.control.hold(&batches)?;
+        let flow = self.for_rows(&batches, &names, &label, &variable, f).await;
+        self.control.release(held);
+        flow
+    }
+
+    /// The passes of a `FOR` loop over `batches`.
+    async fn for_rows(
+        &mut self,
+        batches: &[RecordBatch],
+        names: &[String],
+        label: &Option<String>,
+        variable: &Option<String>,
+        f: &ForStatement,
+    ) -> Result<Flow, KrishivError> {
+        for batch in batches {
             for row in 0..batch.num_rows() {
                 tokio::task::yield_now().await;
                 let mut vars = BTreeMap::new();
@@ -419,7 +441,7 @@ impl Run<'_> {
                     handlers: Vec::new(),
                 });
                 let depth = self.scopes.len();
-                let pass = Box::pin(self.round(&label, &f.body, Body::Plain)).await;
+                let pass = Box::pin(self.round(label, &f.body, Body::Plain)).await;
                 self.scopes.truncate(depth - 1);
                 if let Some(flow) = pass? {
                     return Ok(flow);
@@ -476,16 +498,14 @@ impl Run<'_> {
             Statement::Query(_) | Statement::ExecuteImmediate(_)
         ) {
             let schema = frame.schema().await?;
-            // A script's result is returned as literal rows: refuse a type they cannot hold now, not
-            // after the rest of the script has run.
-            // Nested columns (ARRAY, STRUCT, MAP) are returned through their constructors.
-            for field in schema.fields() {
-                check_result_type(field.data_type())?;
-            }
             if !schema.fields().is_empty() {
-                // One row more than the cap shows that it was exceeded; no more is read.
-                let batches = frame.limit(MAX_RESULT_ROWS + 1).collect().await?;
-                self.last = Some((schema, batches));
+                // The rows are held in the script's pool until the next query statement replaces
+                // them or the script returns them.
+                let batches = frame.collect().await?;
+                let bytes = self.control.hold(&batches)?;
+                if let Some((_, _, old)) = self.last.replace((schema, batches, bytes)) {
+                    self.control.release(old);
+                }
             }
         }
         Ok(())
@@ -908,67 +928,14 @@ impl Run<'_> {
 
     // ---- the result ------------------------------------------------------------------------
 
-    /// The script's result: the rows of the last query statement, as literal rows.
-    async fn finish(self) -> Result<DataFrame, KrishivError> {
-        let session = self.session;
-        let Some((schema, batches)) = self.last else {
-            return session.empty_frame().await;
+    /// The script's result: the rows of the last query statement, as a hidden in-memory table.
+    async fn finish(&mut self) -> Result<DataFrame, KrishivError> {
+        let Some((schema, batches, held)) = self.last.take() else {
+            return self.session.empty_frame().await;
         };
-        let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
-        if i32::try_from(rows).map_or(true, |r| r > MAX_RESULT_ROWS) {
-            return Err(unsupported("a script result of more than 256 rows"));
-        }
-        let one = || {
-            DataFrame::new(
-                session.clone(),
-                Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
-            )
-        };
-        let mut frames = Vec::with_capacity(rows);
-        for batch in &batches {
-            for row in 0..batch.num_rows() {
-                let mut columns = Vec::with_capacity(batch.num_columns());
-                for (i, field) in schema.fields().iter().enumerate() {
-                    // A nested value is returned through its constructor.
-                    let expr =
-                        match crate::nested_value::arrow_variable_value(batch.column(i), row)?.1 {
-                            VariableValue::Scalar(literal) => {
-                                PlanExpr::new(ExprNode::Literal(literal))
-                            }
-                            VariableValue::Nested(e) => Arc::unwrap_or_clone(e),
-                        };
-                    columns.push(Column::new(expr).alias(field.name()));
-                }
-                frames.push(one().select(columns));
-            }
-        }
-        let df = match frames.len() {
-            0 => {
-                let columns = schema
-                    .fields()
-                    .iter()
-                    .map(|f| {
-                        let t = DataType::from_arrow_field(f)?;
-                        Ok(
-                            Column::new(PlanExpr::new(ExprNode::Literal(Literal::Null(Some(t)))))
-                                .alias(f.name()),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, KrishivError>>()?;
-                one().select(columns).limit(0)
-            }
-            1 => frames.remove(0),
-            _ => DataFrame::new(
-                session.clone(),
-                Arc::new(LogicalPlan::new(PlanNode::Union {
-                    inputs: frames.iter().map(|f| Arc::clone(&f.plan)).collect(),
-                    by_name: false,
-                    allow_missing_columns: false,
-                })),
-            ),
-        };
-        df.analyzed_in(session.query_env()).await?;
-        Ok(df)
+        let frame = self.session.script_result(schema, batches).await;
+        self.control.release(held);
+        frame
     }
 }
 
@@ -990,24 +957,6 @@ fn distinct(targets: &[Target], names: &[String]) -> Result<(), KrishivError> {
             }
             .into());
         }
-    }
-    Ok(())
-}
-
-/// Whether a script's result can hold a column of type `t`: a scalar type a literal row can
-/// hold, or a nested type (returned through its constructor) whose every element, field, key and
-/// value can.
-fn check_result_type(t: &arrow_schema::DataType) -> Result<(), KrishivError> {
-    use arrow_schema::DataType as A;
-    match t {
-        A::List(f) | A::LargeList(f) | A::Map(f, _) => check_result_type(f.data_type()),
-        A::Struct(fields) => fields
-            .iter()
-            .try_for_each(|f| check_result_type(f.data_type())),
-        _ => crate::command::arrow_krishiv_type(t).map(|_| ()),
-    }?;
-    if crate::nested_value::is_nested(t) {
-        DataType::from_arrow(t)?;
     }
     Ok(())
 }

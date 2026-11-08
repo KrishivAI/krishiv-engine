@@ -44,3 +44,12 @@ order is Spark's file order, not ours; scripts 3, 75 and 8 of the handler record
 same effect with a proof (Spark's checksum is reproduced with an explicit `ORDER BY`). Statement 103 has no `LIMIT`; its
 branches depend on the counts per region that earlier statements left behind. None is a scripting-engine defect; they
 stay listed as order/state-dependent, and cannot be made to pass without Spark's file order.
+
+## Exit handlers at the end of a body, and interrupts (opus-2, 2026-11-08, P2b row 15 R2 and R3)
+- `semantics/handlers.sql` `exit_last_in_*` and `exit_*` cases (17, run on Spark 4.2.0): an `EXIT` handler whose compound is the
+  last statement of an `IF`/`ELSEIF`/`ELSE` branch, a `WHILE` or `REPEAT` body or a searched `CASE` branch (also through
+  compounds that end the same way) ends the whole script silently; a `FOR`, `LOOP` or simple `CASE` body, or a compound with
+  statements after it, continues after the compound. The engine implements exactly this (`Body` in `scripting/mod.rs`).
+- `semantics/control_flow.sql` `*_condition_text*`: `INVALID_BOOLEAN_STATEMENT` prints the condition's text in upper case.
+- `interrupt/`: a Connect `Interrupt` into a running script ends it with `OPERATION_CANCELED` (`HY008`), between statements
+  too, no handler fires and no later statement runs (`gen_scripting_interrupt.py`, `interrupt.out`).

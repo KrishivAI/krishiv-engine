@@ -104,6 +104,10 @@ pub(crate) enum TempTable {
 /// prefix. [`SessionCatalog::names`] hides them.
 pub(crate) const HIDDEN_PREFIX: &str = "__krishiv_snapshot_";
 
+/// The start (in lower case) of the hidden names of script results: a kind of [`HIDDEN_PREFIX`] name
+/// that no view pins and that lives as long as a frame reads it.
+const SCRIPT_RESULT_PREFIX: &str = "__krishiv_snapshot_r";
+
 /// Whether `name` is a hidden snapshot pin: it starts with
 /// [`HIDDEN_PREFIX`], in any letter case.
 pub(crate) fn is_hidden_name(name: &str) -> bool {
@@ -211,7 +215,34 @@ impl SessionCatalog {
                 live.extend(pins.iter().cloned());
             }
         }
-        tables.retain(|key, _| !is_hidden_name(key) || live.contains(key));
+        // A script's result table also stays while something besides the catalog holds it: the
+        // result frame, whose analysis keeps the table it loaded.
+        tables.retain(|key, (_, table)| {
+            !is_hidden_name(key)
+                || live.contains(key)
+                || (key.starts_with(SCRIPT_RESULT_PREFIX) && Arc::strong_count(table) > 1)
+        });
+    }
+
+    /// Adds the hidden in-memory table `table` and returns its name, which no SQL text spells. It
+    /// is removed once nothing but the catalog holds it ([`Self::collect_garbage`]), at the next
+    /// change of the catalog.
+    pub(crate) fn put_hidden_memory(
+        &self,
+        columns: Vec<TableColumn>,
+        table: Arc<MemoryTable>,
+    ) -> (String, Arc<TempTable>) {
+        let name = format!(
+            "{SCRIPT_RESULT_PREFIX}{}",
+            self.hidden.fetch_add(1, Ordering::AcqRel)
+        );
+        let entry = Arc::new(TempTable::Memory { columns, table });
+        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
+        tables.insert(name.to_lowercase(), (name.clone(), Arc::clone(&entry)));
+        // The caller's reference keeps the new entry through this collection.
+        Self::collect_garbage(&mut tables);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        (name, entry)
     }
 
     /// Hands out the next hidden name snapshot pins use: no SQL text
