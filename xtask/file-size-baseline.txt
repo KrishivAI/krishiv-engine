@@ -16,14 +16,16 @@
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 # +70 lines over main: the external-partition headroom reproducer, batches of 20 and 300/1,500 rows from a full pool (window spill flake, PR #601)
-3134 crates/krishiv-exec/src/window/tests.rs
+# +10 lines: offsets and nth_value read back from a full pool (window fold charges)
+3144 crates/krishiv-exec/src/window/tests.rs
 # +14: nth_value refuses an interval or timestamp offset as UNEXPECTED_INPUT_TYPE before its value check (T025 rest)
 2099 crates/krishiv-functions/src/registry/defs.rs
 3340 crates/krishiv-functions/src/registry/tests.rs
 # +2 lines over main: WriteOptions.zone_name (region session zones for timestamp partitions, row 36)
 4188 crates/krishiv-io/src/avro/tests.rs
-2220 crates/krishiv-kernels/src/csv.rs
-2429 crates/krishiv-kernels/src/map.rs
+2201 crates/krishiv-kernels/src/csv.rs
+# +6 lines over main: map keys and values read the calendar interval struct carrier (ADR 0009 update 2026-11-06)
+2435 crates/krishiv-kernels/src/map.rs
 # +2 over main: the implicit cast of a string to TIME(6) for the AnyTimeOrString parameter of time_trunc (T025 rest)
 2436 crates/krishiv-plan/src/analyzer/coerce.rs
 # over main: a cast of an alias keeps the alias's name (T001c, PR #491); USING-join keys (P2b row 11); char comparison padding and declared types through GROUP BY and lateral aliases (T001b)
@@ -38,7 +40,8 @@
 # +43 lines over main: nested session and script variables (T196, PR #505)
 2294 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
-2640 crates/krishiv-session/src/dataframe.rs
+# +20 lines: collect_engine (unstable-ir) reads results on the engine carriers for the golden harness (calendar carrier)
+2660 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
 2781 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
