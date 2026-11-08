@@ -34,21 +34,31 @@ that does not parse fails the `SET` with `KRISHIV_INVALID_CONFIG_VALUE`.
 Spark stores the string and fails when a query reads it, with
 `INVALID_CONF_VALUE.TYPE_MISMATCH` (SQLSTATE 22022).
 
-## `DISTRIBUTE BY` and `CLUSTER BY` do not repartition
+## `DISTRIBUTE BY` under a `LIMIT`, and partition numbers
 
 `DISTRIBUTE BY exprs` (Spark's `RepartitionByExpression`, also under `CLUSTER BY` and `SORT BY ...
-DISTRIBUTE BY`) is checked as Spark checks it: the expressions resolve, and aggregates, windows,
-generators and outer references are refused with Spark's errors. The repartition itself is then
-dropped, as the `REPARTITION`-family hints are. The rows are the same, but two things differ:
+DISTRIBUTE BY`) places a hash exchange on the expressions' values, so they are evaluated, and raise,
+on every row as Spark's shuffle evaluates them. Two things differ:
 
-- Spark evaluates the expressions while it shuffles, so one that fails at run time fails the query
-  there (`SELECT x FROM t DISTRIBUTE BY x + 'a'` raises `CAST_INVALID_INPUT` under ANSI). Krishiv
-  never evaluates them and returns the rows.
-- On a distributed run the rows are not hash-partitioned by the expressions, so what depends on the
-  partitioning (`spark_partition_id()`, the order `SORT BY` gives within each partition) can differ.
+- On one worker the exchange runs inside each driver's pipeline, so a `LIMIT` above it stops reading
+  after the rows it needs: `SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1`
+  returns a row where Spark's shuffle first evaluates every row and raises `CAST_INVALID_INPUT`. A
+  distributed run's map stage reads every row, so there it raises as Spark does.
+- Rows go to partitions by Krishiv's routing hash, not Spark's `pmod(murmur3(exprs), n)`, so what
+  depends on the partition numbers (`spark_partition_id()`) can differ.
 
-Pinned by `crates/krishiv-session/tests/distribute_by.rs` (`the_expressions_are_not_evaluated`); a real
-exchange that evaluates them is queued for the execution lane.
+Pinned by `crates/krishiv-session/tests/distribute_by_goldens.rs` (`DIFFERENT`), against a Spark
+4.2.0 run (3.5, 4.0 and 4.1 not run).
+
+## Filters move below only their deterministic prefix
+
+Spark's predicate pushdown moves every deterministic conjunct of a filter below a node it can pass
+(`splitConjunctivePredicates(condition).partition(_.deterministic)`), wherever the conjunct stands.
+Krishiv moves only the conjuncts before the first nondeterministic one: in `WHERE rand() < 2 AND
+x <> 'x'` over a `DISTRIBUTE BY CAST(x AS INT)`, Spark filters `x <> 'x'` before the shuffle and
+returns rows, Krishiv keeps it above and raises `CAST_INVALID_INPUT`. Results differ only where a
+conjunct after a nondeterministic one would have kept a raising expression from a row. Pinned by
+`distribute_by_goldens.rs` (`DIFFERENT`).
 
 ## PySpark's `VariantVal`
 

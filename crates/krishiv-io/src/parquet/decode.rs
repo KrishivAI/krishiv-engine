@@ -471,6 +471,9 @@ impl ParquetDecoder {
         if !self.meta.variants.roots.is_empty() {
             batch = variant_columns(&batch, &self.meta.schema, &self.meta.variants.roots)?;
         }
+        if !self.meta.geos.roots.is_empty() {
+            batch = super::geo::to_engine(&batch, &self.meta.schema, &self.meta.geos.roots)?;
+        }
         let projected = project_batch(&batch, &self.projection).map_err(FormatError::Other)?;
         let mut columns = projected
             .columns()

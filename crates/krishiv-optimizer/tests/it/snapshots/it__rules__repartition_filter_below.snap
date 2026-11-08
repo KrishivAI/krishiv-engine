@@ -1,0 +1,7 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT * FROM (SELECT a, b FROM t DISTRIBUTE BY CAST(b AS INT)) WHERE a > 1"
+---
+Repartition (CAST(b#1 AS INT))
++- Filter (a#0 > 1)
+   +- Scan spark_catalog.default.t [a#0, b#1]

@@ -86,12 +86,20 @@ pub(super) fn ready(global: &GlobalState) -> Result<Arc<Ready>> {
 /// writer's scratch stays within the loan whatever their width. On success
 /// the batches' bytes are released and the file returned; on failure nothing
 /// was freed and the reservation holds what it held before.
+///
+/// Rows fewer than a write's scratch ([`write_scratch`]) cannot fund it on a
+/// full pool. With `must` (the driver's own steps: rows that go to disk
+/// whatever the pool holds) the rest is reserved through arbitration first,
+/// which may wait for other drivers' spills; a spill the arbitrator asked for
+/// (`must` false, run by its service, which must not arbitrate) is refused
+/// when the writer's scratch is, freeing nothing.
 pub(super) async fn write(
     ctx: &TaskContext,
     scope: &SpillScope,
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
     reservation: &mut Reservation,
+    must: bool,
 ) -> Result<SpillFile> {
     if reservation.consumer() != ctx.consumer().id() {
         reservation
@@ -99,6 +107,28 @@ pub(super) async fn write(
             .map_err(KrishivError::from)?;
     }
     let lent = reservation.size().min(SCRATCH_BYTES);
+    let short = write_scratch(&batches).saturating_sub(lent);
+    if must && short > 0 {
+        // What the writer would draw itself (the spill-scratch floor
+        // included), else what spilling others, or waiting for their spill
+        // writes, frees; parked as grant credit, which the writer draws
+        // first. Best effort: refused, the write still tries (`short` is a
+        // bound, the writer may need less).
+        let mut topup = ctx.consumer().reservation().for_spill_scratch();
+        if topup.try_grow(short).is_err() {
+            match topup.grow_without_abort(short).await {
+                Ok(()) | Err(krishiv_memory::MemoryError::Exhausted { .. }) => {}
+                Err(e) => return Err(KrishivError::from(e)),
+            }
+        }
+        topup.shrink_to_credit(topup.size());
+    }
+    // From here until the freed credit is back in the pool, the rows count
+    // as about to be released: another driver's round that cannot spill
+    // waits for them instead of failing (the writer's own count ends a
+    // little before `release_credit` below). Not before the top-up: two
+    // drivers topping up would each wait for the other's rows.
+    let _writing = ctx.consumer().consumer().spilling();
     reservation.shrink_to_credit(lent);
     // The scratch returns to credit when dropped, so a refused write can
     // always take back what was lent.
@@ -142,6 +172,22 @@ pub(super) async fn write(
             Err(e)
         }
     }
+}
+
+/// The most scratch one write of `batches` in [`write_sliced`] slices takes:
+/// the writer's 64 KiB buffer plus twice the largest slice it encodes (see
+/// [`SPILL_SCRATCH`], the bound for a full slice).
+///
+/// [`write_sliced`]: crate::join::grace::write_sliced
+/// [`SPILL_SCRATCH`]: crate::join::grace::SPILL_SCRATCH
+fn write_scratch(batches: &[RecordBatch]) -> usize {
+    use crate::join::grace::WRITE_SLICE;
+    let slice = batches
+        .iter()
+        .map(|b| krishiv_memory::SpillWriter::frame_bytes(&Batch::new(b.clone())).min(WRITE_SLICE))
+        .max()
+        .unwrap_or(0);
+    WRITE_SLICE + 2 * slice
 }
 
 pub(super) struct BuildSink(pub(super) Arc<Shared>);
@@ -245,7 +291,7 @@ impl Sink for BuildSink {
                     {
                         let schema = Arc::clone(&self.0.spec.build_schema);
                         let batches = std::mem::take(batches);
-                        let file = write(ctx, scope, schema, batches, reservation).await?;
+                        let file = write(ctx, scope, schema, batches, reservation, true).await?;
                         self.0.counters.build_spills.fetch_add(1, Ordering::Relaxed);
                         *s = Segment::File(Arc::new(file));
                     }
@@ -327,9 +373,12 @@ impl Sink for BuildSink {
             // The batches stay in the local state until the file is complete.
             let batches = l.batches.clone();
             let schema = Arc::clone(&self.0.spec.build_schema);
-            let file = match write(ctx, scope, schema, batches, &mut l.reservation).await {
+            let file = match write(ctx, scope, schema, batches, &mut l.reservation, false).await {
                 Ok(f) => f,
-                Err(e) => return refused(e),
+                Err(e) => {
+                    tracing::debug!(held = freed, error = %e, "nested-loop build spill refused");
+                    return refused(e);
+                }
             };
             l.batches.clear();
             l.signal.set_spillable_bytes(0);
