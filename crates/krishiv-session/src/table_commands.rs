@@ -296,9 +296,7 @@ impl Session {
             location: n
                 .location
                 .as_deref()
-                .map(|l| {
-                    Ok::<_, KrishivError>(qualified_namespace_location(l, &self.warehouse_dir()?))
-                })
+                .map(|l| qualified_namespace_location(l, &self.warehouse_dir()?))
                 .transpose()?,
             properties: options_of(&n.properties, original),
         };
@@ -325,7 +323,7 @@ impl Session {
                 Box::new(move |m| m.properties.extend(properties.clone()))
             }
             AlterNamespaceAction::SetLocation(l) => {
-                let l = qualified_namespace_location(l, &self.warehouse_dir()?);
+                let l = qualified_namespace_location(l, &self.warehouse_dir()?)?;
                 Box::new(move |m| m.location = Some(l.clone()))
             }
             AlterNamespaceAction::SetComment(c) => {
