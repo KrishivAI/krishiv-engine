@@ -107,3 +107,42 @@ fn an_unknown_style_is_refused() {
     let s = Session::new().unwrap();
     assert!(block_on(s.sql("SET spark.sql.binaryOutputStyle=ROT13")).is_err());
 }
+
+fn rows(s: &Session, sql: &str) -> Result<Vec<arrow_array::RecordBatch>, String> {
+    let df = block_on(s.sql(sql)).map_err(|e| e.to_string())?;
+    block_on(df.collect()).map_err(|e| e.to_string())
+}
+
+#[test]
+fn to_xml_utf8_escapes_markup_and_prints_empty_binary_as_an_empty_element() {
+    // Spark 4.2.0: `<a>&lt;&amp;</a>` and `<b></b>`.
+    let s = with_style(Some("UTF-8"));
+    assert_eq!(
+        text(&s, "SELECT to_xml(named_struct('a', X'3C26', 'b', X''))"),
+        "<ROW>\n    <a>&lt;&amp;</a>\n    <b></b>\n</ROW>"
+    );
+}
+
+#[test]
+fn to_xml_utf8_refuses_a_nul_byte() {
+    // Spark 4.2.0: WstxIOException "Invalid null character in text to output".
+    let s = with_style(Some("UTF-8"));
+    assert!(rows(&s, "SELECT to_xml(named_struct('a', X'4100'))").is_err());
+}
+
+#[test]
+fn from_xml_reads_an_empty_or_null_value_element_into_binary_as_null() {
+    // Spark 4.2.0: `{"a":null}` for each.
+    let s = with_style(None);
+    for sql in [
+        "SELECT from_xml('<ROW><a></a></ROW>', 'a binary').a IS NULL",
+        "SELECT from_xml('<ROW><a/></ROW>', 'a binary').a IS NULL",
+        "SELECT from_xml('<ROW><a>-</a></ROW>', 'a binary', map('nullValue','-')).a IS NULL",
+    ] {
+        assert_eq!(
+            text(&s, &format!("SELECT CAST(({sql}) AS STRING)")),
+            "true",
+            "{sql}"
+        );
+    }
+}
