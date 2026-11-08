@@ -69,7 +69,8 @@ mod sum_rewrite;
 use std::sync::Arc;
 
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+    ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
+    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -381,8 +382,9 @@ fn run(
         let mut root = t.once("Restrict", &root, |r| {
             restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
         })?;
+        let joins = join_settings(udfs.map(|(_, config)| config), tracing);
         if let Some(stats) = stats {
-            root = order_and_restrict(root, stats, options.stats_propagation, &mut t)?;
+            root = order_and_restrict(root, stats, options.stats_propagation, joins, &mut t)?;
         }
         // After the plan's joins are final, so the rule reads the join it
         // moves below; before pruning, which drops what it leaves unread.
@@ -403,7 +405,7 @@ fn run(
                 if Arc::ptr_eq(&after, &root) {
                     after
                 } else {
-                    order_and_restrict(after, stats, options.stats_propagation, &mut t)?
+                    order_and_restrict(after, stats, options.stats_propagation, joins, &mut t)?
                 }
             }
             _ => root,
@@ -482,15 +484,40 @@ fn run(
     }
 }
 
-/// Join ordering alternating with restriction, until neither changes the plan.
+/// The join-ordering settings of a session configuration (defaults
+/// without one), describing each tree when `trace`.
+fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
+    let mut s = join_order::Settings {
+        trace,
+        ..join_order::Settings::default()
+    };
+    if let Some(config) = config {
+        if let Some(name) = config.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str) {
+            s.enumerator = join_order::Enumerator::parse(name);
+        }
+        if let Some(limit) = config.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int) {
+            s.dp_limit = usize::try_from(limit)
+                .unwrap_or(join_order::MAX_DP_LIMIT)
+                .min(join_order::MAX_DP_LIMIT);
+        }
+    }
+    s
+}
+
+/// Join ordering alternating with restriction, until neither changes the
+/// plan. The trees of the last ordering, the plan's own, are described in
+/// the trace.
 fn order_and_restrict(
     mut root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
+    joins: join_order::Settings,
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
+    let mut notes = Vec::new();
     for round in 1..=MAX_ITERATIONS {
-        let ordered = join_order::reorder(&root, stats, propagate);
+        let (ordered, trees) = join_order::reorder(&root, stats, propagate, joins);
+        notes = trees;
         t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
         let restricted = restrict::restrict(Arc::clone(&ordered), stats, propagate)?;
         t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
@@ -500,6 +527,7 @@ fn order_and_restrict(
             break;
         }
     }
+    t.notes("JoinOrder", &root, notes);
     Ok(root)
 }
 

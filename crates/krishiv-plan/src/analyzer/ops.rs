@@ -709,6 +709,14 @@ impl Resolver<'_> {
                     }
                     items.push(bound);
                 }
+                // A generator written with one alias is a lateral alias of the items after it
+                // (its columns keep their generator qualifier: see `Resolver::column`).
+                if s.qualifier.iter().any(|q| {
+                    q.starts_with(crate::GENERATE_QUALIFIER_PREFIX)
+                        && q.ends_with(crate::GENERATE_ALIAS_SUFFIX)
+                }) {
+                    lateral.extend(expanded.iter().cloned());
+                }
                 continue;
             }
             let b = {
@@ -720,7 +728,7 @@ impl Resolver<'_> {
                 self.bind(e, &cx)?
             };
             let written_identifier = matches!(&e.node, ExprNode::Column(c) if c.by_identifier);
-            let b = self.named(b, !written_identifier)?;
+            let b = Self::without_internal_identity_cast(self.named(b, !written_identifier)?, e);
             // Before the next item binds: it may read this alias (a lateral column alias).
             self.carry_declared_item(&b, Some(e));
             if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &b.expr.node {
@@ -768,10 +776,16 @@ impl Resolver<'_> {
     /// With `bare` false (an item written `IDENTIFIER(..)`), a variable or a field of a dotted
     /// path is named by its full shown form (`variablereference(..)`, `c1.c2`).
     fn named(&mut self, b: Bound, bare: bool) -> Result<Bound, AnalysisError> {
-        if let ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::Alias { .. }) =
-            &b.expr.node
-        {
-            return Ok(b);
+        // A column names itself, unless it stands for a call written in its
+        // place (a SQL function whose body is its parameter, `f(c1)`).
+        let written_call = b
+            .shown
+            .as_ref()
+            .is_some_and(|s| matches!(s.node, ExprNode::Function(_)));
+        match &b.expr.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { .. }) => return Ok(b),
+            ExprNode::Resolved(ResolvedExpr::Column(_)) if !written_call => return Ok(b),
+            _ => {}
         }
         let shown = b.shown();
         let bare = super::exprs::bare_name(&shown).filter(|_| bare);
@@ -1349,27 +1363,6 @@ impl Resolver<'_> {
             self.widened(c, &missing)?
         };
         Ok((bounds, wide))
-    }
-
-    /// Whether a `Generate` node sits between `plan` and the aggregate it
-    /// sorts: the search stops at the first aggregate, so a generator in
-    /// that aggregate's input does not count.
-    fn holds_generator(plan: &Arc<LogicalPlan>) -> bool {
-        let mut seen = HashSet::new();
-        let mut stack = vec![Arc::clone(plan)];
-        while let Some(p) = stack.pop() {
-            if !seen.insert(Arc::as_ptr(&p) as usize) {
-                continue;
-            }
-            if matches!(p.node, PlanNode::Generate { .. }) {
-                return true;
-            }
-            if matches!(p.node, PlanNode::Aggregate { .. }) {
-                continue;
-            }
-            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
-        }
-        false
     }
 
     /// The aggregate under `c`'s filters, sorts and limits (`HAVING`), and
