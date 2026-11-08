@@ -2619,7 +2619,7 @@ async fn an_unread_result_spills_for_its_reader() {
     let want = rows(&want);
     assert_eq!(want.len(), 20_000);
     for slots in [1, 3] {
-        for limit in (5..=10).map(|fifth| fifth * 200_000) {
+        for limit in [10, 12, 14, 16, 17, 18, 20].map(|tenth| tenth * 100_000) {
             for layout in [false, true] {
                 let o = Opts {
                     slots,
@@ -2630,7 +2630,7 @@ async fn an_unread_result_spills_for_its_reader() {
                 let r = exec_with(plan, o, layout).await;
                 let (got, m) = r.unwrap_or_else(|e| panic!("{slots} slots, {limit} B: {e}"));
                 assert_eq!(rows(&got), want, "{slots} slots, {limit} B");
-                if slots == 1 && limit == 1_800_000 && !layout {
+                if slots == 1 && limit == 1_700_000 && !layout {
                     // The aggregate finished in memory; only its result
                     // was written to disk, by its own consumer.
                     assert_eq!(extra(&m, "HashAggregate", "spill_runs"), 0);
@@ -2664,7 +2664,7 @@ async fn a_cancel_during_a_result_spill_releases_everything() {
     })
     .unwrap();
     let runner = QueryRunner::new(executor);
-    let root = pool(1_800_000);
+    let root = pool(1_700_000);
     let q = QueryContext::new(
         QueryId(1),
         WorkloadClass::Batch,
@@ -2673,7 +2673,7 @@ async fn a_cancel_during_a_result_spill_releases_everything() {
             agg_row_layout: false,
             ..ExecConfig::default()
         },
-        root.child("q", Some(1_800_000)),
+        root.child("q", Some(1_700_000)),
     );
     let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
     let drained = tokio::spawn(async move {
@@ -2722,7 +2722,7 @@ async fn a_failed_result_spill_fails_the_query() {
     let (spill, scope) = spill_dir_capped(4096);
     let o = Opts {
         slots: 1,
-        limit: 1_800_000,
+        limit: 1_700_000,
         ..Opts::default()
     };
     let r = exec_with(unread_plan(20_000, Some(scope)), o, false).await;
