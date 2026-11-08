@@ -356,7 +356,10 @@ impl Resolver<'_> {
         }
         let cs = self.ctx.conf.case_sensitive;
         let named = |name: &str| quoted(&[name.to_owned()]);
-        let is_alias = exprs.iter().any(|x| match &x.node {
+        // Only aliases written before the first generator are lateral
+        // references for it; later ones, and none at all, stay UNRESOLVED_COLUMN.
+        let first_gen = exprs.iter().position(is_generator_slot).unwrap_or(0);
+        let is_alias = exprs[..first_gen].iter().any(|x| match &x.node {
             ExprNode::Alias { name, .. } => {
                 let shown = named(name);
                 let text = e.error.to_string();
@@ -4326,6 +4329,12 @@ fn trim_alias(e: &Arc<Expr>) -> &Arc<Expr> {
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
         _ => e,
     }
+}
+
+/// Whether `e` is the star lowering leaves where a select-list generator stood.
+fn is_generator_slot(e: &Arc<Expr>) -> bool {
+    matches!(&e.node, ExprNode::Star(st)
+        if st.qualifier.first().is_some_and(|q| q.starts_with("__krishiv_generate_")))
 }
 
 /// Whether `e` is a generator call (today only `json_tuple`).

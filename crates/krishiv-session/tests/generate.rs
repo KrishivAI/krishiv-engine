@@ -947,3 +947,19 @@ fn generator_over_a_lateral_alias_is_an_internal_error() {
         assert_eq!(err.error_class(), ErrorClass::InternalError, "{sql}: {err}");
     }
 }
+
+/// Only an alias written before the generator is a lateral reference for
+/// it: an alias that merely shares the missing column's name, or follows
+/// the generator, stays an unresolved column.
+#[test]
+fn generator_over_a_missing_column_is_not_a_lateral_alias_error() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "SELECT explode(col) AS col",
+        "SELECT explode(arr) AS col, 1 AS arr",
+        "SELECT explode(t.arr) AS col",
+    ] {
+        let err = error_of(&s, sql);
+        assert_ne!(err.error_class(), ErrorClass::InternalError, "{sql}: {err}");
+    }
+}
