@@ -110,6 +110,14 @@ fn set_redaction_keeps_the_key_and_every_other_statement() {
             "SET a = 1; SET password = *********(redacted)",
         ),
         (
+            "SET password = ;Canary7f3a9c",
+            "SET password =*********(redacted)",
+        ),
+        (
+            "SET password =; Canary7f3a9c",
+            "SET password =*********(redacted)",
+        ),
+        (
             "SET spark.hadoop.fs.s3a.secret.key=Canary7f3a9c",
             "SET spark.hadoop.fs.s3a.secret.key=*********(redacted)",
         ),

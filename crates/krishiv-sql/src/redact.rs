@@ -287,7 +287,13 @@ fn set_statement(sql: &str, code: &[&Token], end: usize, marks: &mut Vec<Mark>) 
             k.push_str(&part);
         }
     }
-    let start = code.get(eq + 1).map_or(end, |t| t.span.start);
+    // A statement that ends at the `=` (`SET password = ;x`) has its value in
+    // the next statement's text: start right after the `=`.
+    let start = code
+        .get(eq + 1)
+        .map(|t| t.span.start)
+        .or_else(|| code.get(eq).map(|t| t.span.end))
+        .unwrap_or(end);
     if sensitive(&key[..]) && start < end {
         marks.push(Mark::Secret(start..end));
     }
