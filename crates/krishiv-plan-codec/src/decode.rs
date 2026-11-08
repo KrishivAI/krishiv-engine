@@ -1161,10 +1161,17 @@ fn udaf_call(u: Option<&pb::UdafCall>) -> Result<UdafCall> {
     if state.is_empty() {
         return Err(corrupt("an aggregate UDF without state columns"));
     }
+    let args = fields(&u.args)?;
+    if u.arg_types.len() != args.len() {
+        return Err(corrupt(
+            "an aggregate UDF whose argument types and columns differ",
+        ));
+    }
     Ok(UdafCall {
         name: u.name.clone(),
         version: u32::try_from(u.version).map_err(|_| corrupt("a UDF version out of range"))?,
-        args: fields(&u.args)?,
+        arg_types: u.arg_types.iter().map(spark_type).collect::<Result<_>>()?,
+        args,
         result: spark_type(
             u.result
                 .as_ref()

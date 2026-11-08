@@ -718,6 +718,60 @@ fn a_udaf_state_folded_from_disk_is_charged_to_the_pool() {
     }
 }
 
+/// An aggregate UDF that refuses every call, naming the argument type it
+/// was typed with.
+#[derive(Debug)]
+struct Probe(Signature);
+
+impl AggregateUdf for Probe {
+    fn name(&self) -> &str {
+        "probe"
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: DataType::Long,
+            nullable: true,
+        })
+    }
+    fn state_fields(&self, args: &[ArgField]) -> Result<Vec<StateField>, UdfError> {
+        let seen = args
+            .first()
+            .and_then(|a| a.data_type.as_ref())
+            .map_or_else(|| "none".to_owned(), DataType::catalog_string);
+        Err(UdfError::new(format!("typed with [{seen}]")))
+    }
+    fn accumulator(
+        &self,
+        _: &[ArgField],
+        _: &InvokeContext,
+    ) -> Result<Box<dyn GroupsAccumulator>, UdfError> {
+        Err(UdfError::new("never"))
+    }
+}
+
+#[test]
+fn a_udaf_is_typed_with_the_spark_argument_types_the_analyzer_fixed() {
+    let s = session_with(&[("spark.sql.timeType.enabled", "true")], Fault::None);
+    s.register_udaf(Probe(Signature::Exact(vec![UdfInputType::Any])))
+        .unwrap();
+    // Types the Arrow carrier alone cannot tell apart from their defaults.
+    for (arg, want) in [
+        ("CAST(TIME '09:08:01' AS TIME(3))", "[time(3)]"),
+        ("CAST(TIME '09:08:01' AS TIME(0))", "[time(0)]"),
+        ("INTERVAL '5' HOUR", "[interval hour]"),
+        ("INTERVAL '1-2' YEAR TO MONTH", "[interval year to month]"),
+    ] {
+        let e = error_of(&s, &format!("SELECT probe({arg})"));
+        assert!(e.to_string().contains(want), "{arg}: {e}");
+    }
+}
+
 #[test]
 fn a_udaf_state_folded_in_memory_is_charged_to_the_pool() {
     let dir = tempfile::tempdir().unwrap();

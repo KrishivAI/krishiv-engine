@@ -8,10 +8,11 @@
 # +1 line (and in physical/instantiate.rs, window/tests.rs): the `udafs` spec field and the `Udf` aggregate variant (ADR 0045, T060a)
 # +37 lines over main: rows of batches that take the batch-local key map equal the columnar tables' (E2 step 2)
 3277 crates/krishiv-exec/src/aggregate/tests.rs
-2182 crates/krishiv-exec/src/join/grace.rs
+# +11: the coalesce test asserts the merged-run bytes it now returns (X3' step 1, #586)
+2193 crates/krishiv-exec/src/join/grace.rs
 2003 crates/krishiv-exec/src/operators/sort/sort.rs
 2215 crates/krishiv-exec/src/physical/instantiate.rs
-2139 crates/krishiv-exec/src/planner/build.rs
+2105 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 # +70 lines over main: the external-partition headroom reproducer, batches of 20 and 300/1,500 rows from a full pool (window spill flake, PR #601)
@@ -19,21 +20,24 @@
 # +14: nth_value refuses an interval or timestamp offset as UNEXPECTED_INPUT_TYPE before its value check (T025 rest)
 2098 crates/krishiv-functions/src/registry/defs.rs
 3340 crates/krishiv-functions/src/registry/tests.rs
-4186 crates/krishiv-io/src/avro/tests.rs
+# +2 lines over main: WriteOptions.zone_name (region session zones for timestamp partitions, row 36)
+4188 crates/krishiv-io/src/avro/tests.rs
 2215 crates/krishiv-kernels/src/csv.rs
 2429 crates/krishiv-kernels/src/map.rs
 # +2 over main: the implicit cast of a string to TIME(6) for the AnyTimeOrString parameter of time_trunc (T025 rest)
-2470 crates/krishiv-plan/src/analyzer/coerce.rs
+2436 crates/krishiv-plan/src/analyzer/coerce.rs
 # over main: a cast of an alias keeps the alias's name (T001c, PR #491); USING-join keys (P2b row 11); char comparison padding and declared types through GROUP BY and lateral aliases (T001b)
 # +14: not_constant walks distinct nodes (review of #529)
-4636 crates/krishiv-plan/src/analyzer/ops.rs
+# +6 lines over main: a SQL function call keeps its written name (T184, PR #505)
+4642 crates/krishiv-plan/src/analyzer/ops.rs
 3096 crates/krishiv-plan/src/analyzer/subquery.rs
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 # +4 lines over main: a stored view lowers with its IDENTIFIER(..) spans (PR #576)
 2906 crates/krishiv-session/src/catalog.rs
+# +43 lines over main: nested session and script variables (T196, PR #505)
 # +10 lines over main: EXPLAIN and DESCRIBE QUERY name IDENTIFIER(..) items (PR #576)
-2261 crates/krishiv-session/src/command.rs
+2304 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 2640 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
@@ -51,5 +55,6 @@
 5274 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
-2153 crates/krishiv-testkit/src/file_format/mod.rs
+# +2 lines over main: WriteOptions.zone_name (region session zones for timestamp partitions, row 36)
+2155 crates/krishiv-testkit/src/file_format/mod.rs
 2535 crates/krishiv-testkit/src/kernel_eval.rs
