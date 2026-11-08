@@ -113,6 +113,9 @@ fn leaf_orderable(t: &ArrowType) -> bool {
             | A::Decimal128(..)
             | A::Date32
             | A::Timestamp(..)
+            | A::Time64(..)
+            | A::Duration(arrow_schema::TimeUnit::Microsecond)
+            | A::Interval(arrow_schema::IntervalUnit::YearMonth)
             | A::Utf8
             | A::Utf8View
             | A::LargeUtf8
@@ -332,6 +335,14 @@ mod tests {
         assert!(!comparable(&nested_bad));
         // Only structs and arrays qualify.
         assert!(!comparable(&ArrowType::Int32));
+        for leaf in [
+            ArrowType::Time64(arrow_schema::TimeUnit::Microsecond),
+            ArrowType::Duration(arrow_schema::TimeUnit::Microsecond),
+            ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth),
+        ] {
+            let st = ArrowType::Struct(Fields::from(vec![Field::new("a", leaf, true)]));
+            assert!(comparable(&st));
+        }
         assert!(comparable(&list_of_int()));
         assert!(!comparable(&map_of_int()));
     }
