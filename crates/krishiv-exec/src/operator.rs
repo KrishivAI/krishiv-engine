@@ -69,7 +69,11 @@ pub trait Source: Send + Sync {
     /// Any error fails the query.
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState>;
     /// The next batch, or `None` when no morsel is left. Awaits I/O on the
-    /// I/O runtime; never blocks a worker thread (E01/E08).
+    /// I/O runtime; never blocks a worker thread (E01/E08). An empty batch
+    /// goes to no operator: it hands the driver its turn (its position
+    /// report, a yield and its boundary: cancel, abort, spill requests), so a
+    /// source that reads long without output (a file scan buffering small
+    /// batches) returns one instead of holding the driver.
     fn get_data<'a>(
         &'a self,
         local: &'a mut LocalState,

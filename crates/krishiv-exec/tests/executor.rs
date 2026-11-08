@@ -1822,3 +1822,126 @@ async fn deterministic_order_runs_one_driver_per_pipeline() {
         assert_released(&root);
     }
 }
+
+/// A source on one driver: `data` one-row batches (`0..data`), each after
+/// `gap` empty ones; with `data == u64::MAX` it hands back empty batches
+/// only, forever.
+struct Gaps {
+    data: u64,
+    gap: u64,
+    handed: AtomicU64,
+}
+
+impl Source for Gaps {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
+        Ok(Arc::new(()))
+    }
+
+    fn max_parallelism(&self, _global: &GlobalState) -> usize {
+        1
+    }
+
+    fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+        Ok(Box::new(0_u64))
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        _global: &'a GlobalState,
+    ) -> BoxFuture<'a, Result<Option<Batch>>> {
+        let step = local.downcast_mut::<u64>().unwrap();
+        let i = *step;
+        *step += 1;
+        self.handed.fetch_add(1, Ordering::Relaxed);
+        let empty = || arrow_array::RecordBatch::new_empty(schema());
+        let next = if self.data == u64::MAX || i % (self.gap + 1) < self.gap {
+            Some(Batch::new(empty()))
+        } else if i / (self.gap + 1) < self.data {
+            let v = i64::try_from(i / (self.gap + 1)).unwrap();
+            let col = Arc::new(arrow_array::Int64Array::from(vec![v]));
+            Some(Batch::new(
+                arrow_array::RecordBatch::try_new(schema(), vec![col]).unwrap(),
+            ))
+        } else {
+            None
+        };
+        // The last gap before the end hands back empties, then ends.
+        let next = if i / (self.gap + 1) >= self.data && self.data != u64::MAX {
+            None
+        } else {
+            next
+        };
+        Box::pin(std::future::ready(Ok(next)))
+    }
+}
+
+/// An empty source batch (a source handing the driver its turn) goes to no
+/// operator: the operators see only the data batches, in order, and the
+/// source's metrics count only them; between empties the driver still runs
+/// its boundary, so a source that only hands back empties is cancelled.
+#[tokio::test]
+async fn empty_source_batches_reach_no_operator_and_keep_the_boundary() {
+    let runner = QueryRunner::new(executor(2));
+    let root = root(1 << 30);
+    let q = query(&root, 11, ExecConfig::default());
+    let gaps = Arc::new(Gaps {
+        data: 10,
+        gap: 5,
+        handed: AtomicU64::new(0),
+    });
+    let seen = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&seen);
+    let plan = pipe(
+        Arc::new(Scan(Arc::clone(&gaps) as Arc<dyn Source>)),
+        hook(move |_| {
+            counted.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }),
+    );
+    let out = run(&runner, plan, &q).await.unwrap();
+    assert_eq!(values(&out), (0..10).collect::<Vec<i64>>());
+    assert_eq!(
+        seen.load(Ordering::Relaxed),
+        10,
+        "no operator saw an empty batch"
+    );
+    assert!(gaps.handed.load(Ordering::Relaxed) > 60);
+    let source = q
+        .metrics()
+        .operators
+        .values()
+        .find(|e| e.metrics.rows_out == 10 && e.metrics.batches_in == 0)
+        .cloned()
+        .unwrap();
+    assert_eq!(source.metrics.batches_out, 10);
+    assert_released(&root);
+
+    // Only empties, forever: a cancel is seen at the next boundary.
+    let q = query(&root, 12, ExecConfig::default());
+    let forever = Arc::new(Gaps {
+        data: u64::MAX,
+        gap: 0,
+        handed: AtomicU64::new(0),
+    });
+    let plan: Arc<dyn ExecNode> = Arc::new(Scan(Arc::clone(&forever) as Arc<dyn Source>));
+    let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
+    while forever.handed.load(Ordering::Relaxed) < 1_000 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let start = Instant::now();
+    runner.cancel(QueryId(12));
+    q.finished().await;
+    assert!(
+        start.elapsed() < Duration::from_millis(100),
+        "{:?}",
+        start.elapsed()
+    );
+    let e = stream.next().await.unwrap().unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::OperationCanceled);
+    assert_released(&root);
+}
