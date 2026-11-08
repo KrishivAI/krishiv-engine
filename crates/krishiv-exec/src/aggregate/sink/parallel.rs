@@ -668,16 +668,12 @@ impl TaskRuns {
     }
 }
 
-/// Stops the other writers when an extra writer's thread panics; the
-/// panic itself becomes the run's error when the thread is joined.
-struct StopOnPanic<'a>(&'a TaskRuns);
-
-impl Drop for StopOnPanic<'_> {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            self.0.stop.store(true, Ordering::Release);
-        }
-    }
+/// The text of a panic's payload (a `&str` or `String`), else empty.
+fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
+    p.downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_default()
 }
 
 /// Counts one extra writer as running while it lives.
@@ -742,8 +738,16 @@ impl Spiller {
                         .name("krishiv-spill-write".to_owned())
                         .spawn_scoped(scope, move || {
                             let _live = live;
-                            let _stop = StopOnPanic(shared);
-                            self.help_tasks(&h, shared);
+                            // A panic is the run's error at once, with its
+                            // message (`fail` records it before setting
+                            // `stop`, so no writer's "stopped" wins).
+                            let run = std::panic::AssertUnwindSafe(|| self.help_tasks(&h, shared));
+                            if let Err(p) = std::panic::catch_unwind(run) {
+                                shared.fail(internal(format!(
+                                    "a spill writer thread panicked: {}",
+                                    panic_message(p.as_ref())
+                                )));
+                            }
                         });
                     match started {
                         Ok(j) => {
@@ -761,13 +765,13 @@ impl Spiller {
                 }
             }
             for j in handles {
+                // Helpers catch their own panics; this is for a panic outside
+                // `help_tasks` (dropping the helper or its place).
                 if let Err(p) = j.join() {
-                    let what = p
-                        .downcast_ref::<&str>()
-                        .map(|s| (*s).to_owned())
-                        .or_else(|| p.downcast_ref::<String>().cloned())
-                        .unwrap_or_default();
-                    shared.fail(internal(format!("a spill writer thread panicked: {what}")));
+                    shared.fail(internal(format!(
+                        "a spill writer thread panicked: {}",
+                        panic_message(p.as_ref())
+                    )));
                 }
             }
         });

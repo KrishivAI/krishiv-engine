@@ -249,6 +249,10 @@ async fn final_phase_runs_are_written_at_once() {
         );
         let helper_runs = sink_metric(&agg, "spill_helper_runs");
         let back = sink_metric(&agg, "spill_handbacks");
+        // The hand-back cases assume an extra writer takes a task before the
+        // calling thread has taken them all: helpers start after the first
+        // run with `tasks > 2` runs left, and each run takes far longer than
+        // a thread start.
         match handbacks {
             0 => assert_eq!(back, 0),
             // One extra writer is refused its second file: its task goes
