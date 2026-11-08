@@ -48,7 +48,7 @@ mod file_tables;
 mod ndv_sampling;
 mod script_results;
 
-use self::file_tables::FileScanOf;
+use self::file_tables::{FileScanOf, reference_key};
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -80,6 +80,9 @@ pub(crate) enum TempTable {
         /// it lists its files without inferring a schema, and a table with
         /// no files is empty.
         known: bool,
+        /// An entry of the permanent catalog: only a reference to one takes read options of its
+        /// own (`FROM t WITH (..)`); Spark drops them for a temporary view.
+        permanent: bool,
         /// A permanent table's partition columns and registered partitions
         /// (`None` when they are not all at their default directories, so a
         /// listing under the root cannot read them as Spark does). Empty
@@ -367,6 +370,13 @@ enum FilesKey {
     /// A permanent table, by `namespace.table`.
     Table(String),
     Read(ReadSource),
+    /// A reference to a file table with read options of its own: the table's identity (and
+    /// whether its columns are known) plus the files read with the merged options.
+    Reference {
+        key: String,
+        known: bool,
+        source: ReadSource,
+    },
 }
 
 /// How a query opens the file tables of its scans.
@@ -615,7 +625,7 @@ impl QueryCatalog {
         let mut assigned: Vec<(ScanId, ScanSplitsKind)> = Vec::new();
         for scan in scans {
             match &scan.scan.source {
-                ReadSource::Table { name, .. } => {
+                ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
                     let Some(table) = self.loaded(last) else {
                         return Err(InternalError {
@@ -635,8 +645,26 @@ impl QueryCatalog {
                                 ));
                             }
                         }
-                        TempTable::Files { .. } => {
-                            let key = FilesKey::View(last.to_lowercase());
+                        TempTable::Files {
+                            source,
+                            known,
+                            permanent,
+                            ..
+                        } => {
+                            let key = if options.is_empty() {
+                                FilesKey::View(last.to_lowercase())
+                            } else {
+                                // The key `open_files` and the provider build: the entry's own.
+                                reference_key(
+                                    self.entry_of(name)
+                                        .map_or_else(|| last.to_lowercase(), |(k, _)| k),
+                                    *known,
+                                    *permanent,
+                                    source,
+                                    options,
+                                )
+                                .0
+                            };
                             let table = self.opened(&key).ok_or_else(|| InternalError {
                                 message: "a scan of files that was not opened before planning"
                                     .to_owned(),
@@ -933,6 +961,7 @@ impl QueryCatalog {
             source: table_source(&table),
             columns: columns.clone(),
             known: true,
+            permanent: true,
             partitions: file_tables::known_partitions(&table),
         });
         let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1118,7 +1147,7 @@ impl TableProviderResolver for QueryCatalog {
                         .into()
                     })
             }
-            ReadSource::Table { name, .. } => {
+            ReadSource::Table { name, options } => {
                 let last = name.last().map_or("", String::as_str);
                 // Analysis loaded every table a scan names.
                 let Some(table) = self.loaded_for(name) else {
@@ -1142,15 +1171,18 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Memory { table, .. } => {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
-                    TempTable::Files { known, .. } => {
+                    TempTable::Files {
+                        known,
+                        permanent,
+                        source,
+                        ..
+                    } => {
                         let key = self
                             .entry_of(name)
                             .map_or_else(|| last.to_lowercase(), |(k, _)| k);
-                        self.files_provider(&if *known {
-                            FilesKey::Table(key)
-                        } else {
-                            FilesKey::View(key)
-                        })
+                        self.files_provider(
+                            &reference_key(key, *known, *permanent, source, options).0,
+                        )
                     }
                     // Views are inlined as subqueries before analysis, so
                     // no scan ever reads one.
@@ -2105,6 +2137,7 @@ mod tests {
     fn files(col: &str) -> TempTable {
         TempTable::Files {
             known: false,
+            permanent: false,
             partitions: Some(Default::default()),
             source: ReadSource::Files {
                 format: "parquet".to_owned(),
@@ -2510,6 +2543,45 @@ mod tests {
             union.sort_unstable();
             assert_eq!(union, whole, "{tasks} tasks");
         }
+    }
+
+    #[test]
+    fn task_specs_deal_a_reference_with_options_to_a_table_over_files() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        write_parquet(&dir.path().join("a.parquet"), 500, 100);
+        write_parquet(&dir.path().join("b.parquet"), 300, 100);
+        let session = Session::builder()
+            .config("spark.sql.files.maxPartitionBytes", "1024")
+            .build()
+            .unwrap();
+        block_on(session.sql(&format!(
+            "CREATE TABLE pt (id INT) USING parquet LOCATION '{}'",
+            dir.path().display()
+        )))
+        .unwrap();
+        // The reference's options name another listing than the bare table's: its splits come
+        // from the listing opened for the reference.
+        let df = block_on(session.sql("SELECT id FROM pt WITH ('mergeSchema' = 'false')")).unwrap();
+        let analysis = rt.block_on(df.analysis()).unwrap();
+        let (_, physical) = rt
+            .block_on(session.physical(&analysis.analyzed, &analysis.env))
+            .unwrap();
+        let specs = analysis.env.catalog.task_specs(&physical, 2, 2).unwrap();
+        assert_eq!(specs.len(), 2);
+        let mut union = Vec::new();
+        for task in &specs {
+            union.extend(ids_of(
+                &rt.block_on(session.run_task(&physical, &analysis.env, task))
+                    .unwrap(),
+            ));
+        }
+        union.sort_unstable();
+        assert_eq!(union, ids_of(&rt.block_on(df.collect()).unwrap()));
+        assert_eq!(union.len(), 800);
     }
 
     /// A streaming `Range` has no split assignment: one task is fine,

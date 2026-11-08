@@ -932,3 +932,37 @@ fn a_stack_with_an_alias_list_runs_beside_group_by() {
         table(&[&["1"], &["2"], &["2"], &["3"]])
     );
 }
+
+/// A generator reading a lateral alias of its own select list is Spark's
+/// `INTERNAL_ERROR` ("Resolved plan should not contain any
+/// LateralColumnAliasReference"), with or without a later item.
+#[test]
+fn generator_over_a_lateral_alias_is_an_internal_error() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "SELECT array(1, 2, 3) as arr, explode(arr) as col",
+        "SELECT array(1, 2, 3) as arr, explode(arr) as col, col + 1 as col2",
+    ] {
+        let err = error_of(&s, sql);
+        assert_eq!(err.error_class(), ErrorClass::InternalError, "{sql}: {err}");
+    }
+}
+
+/// Only an alias written before the generator is a lateral reference for
+/// it: an alias that merely shares the missing column's name, or follows
+/// the generator, stays an unresolved column.
+#[test]
+fn generator_over_a_missing_column_is_not_a_lateral_alias_error() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "SELECT explode(col) AS col",
+        "SELECT explode(arr) AS col, 1 AS arr",
+        "SELECT explode(t.arr) AS col",
+    ] {
+        let err = error_of(&s, sql);
+        assert!(
+            err.to_string().contains("UNRESOLVED_COLUMN"),
+            "{sql}: {err}"
+        );
+    }
+}

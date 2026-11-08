@@ -1,0 +1,87 @@
+# Data for `cargo xtask docs-compat` (renders docs/concepts/compatibility.md).
+# status is one of: supported, partial, not yet. Anything not listed is
+# "unknown, not supported". Keep notes factual and public: no plans or dates.
+
+[[surface]]
+group = "SQL"
+name = "Queries (SELECT, joins, aggregates, window functions, set operations, CTEs)"
+status = "partial"
+note = "Measured by the Spark golden suite below."
+
+[[surface]]
+group = "SQL"
+name = "Subqueries (scalar, IN, EXISTS, correlated)"
+status = "partial"
+note = "Common shapes are supported; remaining gaps appear as failures in the golden suite."
+
+[[surface]]
+group = "SQL"
+name = "DDL and DML (CREATE/INSERT/DELETE on file-backed tables and views)"
+status = "partial"
+note = "Statements the golden suite covers are counted in its pass rates."
+
+[[surface]]
+group = "User-defined functions"
+name = "Rust UDFs"
+status = "supported"
+note = ""
+
+[[surface]]
+group = "File formats"
+name = "Parquet"
+status = "supported"
+note = ""
+
+[[surface]]
+group = "File formats"
+name = "CSV"
+status = "supported"
+note = ""
+
+[[surface]]
+group = "File formats"
+name = "JSON"
+status = "supported"
+note = ""
+
+[[surface]]
+group = "File formats"
+name = "Text"
+status = "supported"
+note = ""
+
+[[surface]]
+group = "File formats"
+name = "Avro"
+status = "supported"
+note = ""
+
+[[surface]]
+group = "File formats"
+name = "ORC"
+status = "not yet"
+note = ""
+
+[[surface]]
+group = "Object stores"
+name = "Amazon S3 and S3-compatible stores"
+status = "supported"
+note = ""
+
+[[surface]]
+group = "Object stores"
+name = "Google Cloud Storage"
+status = "supported"
+note = ""
+
+[[surface]]
+group = "Object stores"
+name = "Azure Blob Storage and ADLS Gen2"
+status = "supported"
+note = ""
+
+[[surface]]
+group = "Spark Connect"
+name = "Spark Connect server (subset)"
+status = "not yet"
+note = ""

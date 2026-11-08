@@ -29,6 +29,7 @@ use crate::column::Column;
 use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_files, typed_paths};
 
 mod fill_stream;
+mod geo_gate;
 mod traced;
 
 use fill_stream::FillStream;
@@ -1750,6 +1751,7 @@ impl DataFrame {
                     source: source.clone(),
                     columns,
                     known: false,
+                    permanent: false,
                     partitions: Some(Default::default()),
                 },
             );
@@ -2067,20 +2069,7 @@ impl DataFrameWriter {
                 let mut admitted = admitted;
                 let written = async {
                     let a = df.action_analysis().await?;
-                    // Files hold a geometry or geography as a WKB column with a
-                    // Parquet logical type (P2-T181 unit U3); until it lands, a
-                    // spatial value is not written as the `{srid, wkb}` struct
-                    // Spark cannot read.
-                    if a.analyzed
-                        .output
-                        .iter()
-                        .any(|c| krishiv_types::geo::holds_spatial(&c.data_type))
-                    {
-                        return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                            feature: "writing GEOMETRY or GEOGRAPHY columns to files".to_owned(),
-                        }
-                        .into());
-                    }
+                    geo_gate::check(&a.analyzed.output, &target.format)?;
                     // A write reads the cache like any other action.
                     let (physical, _) = df.physical_cached(&a).await?;
                     let types: Vec<_> = a

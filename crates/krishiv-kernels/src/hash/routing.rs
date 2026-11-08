@@ -287,6 +287,47 @@ pub fn hash_columns(columns: &[&dyn Array], out: &mut Vec<u64>) -> Result<(), Ke
     Ok(())
 }
 
+/// Whether [`hash_columns`] hashes a key column of type `t` (version 1).
+/// `false` for the types it refuses: nested (list, map, struct, and the
+/// calendar interval's struct carrier), 256-bit decimal, time of day,
+/// month-day-nano and day-time intervals, and a dictionary of any of these.
+/// A planner checks it once per exchange instead of failing mid-query.
+#[must_use]
+pub fn routable(t: &DataType) -> bool {
+    use DataType as D;
+    match t {
+        D::Null
+        | D::Boolean
+        | D::Int8
+        | D::UInt8
+        | D::Int16
+        | D::UInt16
+        | D::Int32
+        | D::UInt32
+        | D::Int64
+        | D::UInt64
+        | D::Date32
+        | D::Date64
+        | D::Interval(IntervalUnit::YearMonth)
+        | D::Timestamp(..)
+        | D::Duration(..)
+        | D::Decimal32(..)
+        | D::Decimal64(..)
+        | D::Decimal128(..)
+        | D::Float32
+        | D::Float64
+        | D::Utf8
+        | D::LargeUtf8
+        | D::Utf8View
+        | D::Binary
+        | D::LargeBinary
+        | D::BinaryView
+        | D::FixedSizeBinary(_) => true,
+        D::Dictionary(_, values) => routable(values),
+        _ => false,
+    }
+}
+
 /// Each row's column hash of `a` into `out` (as long as `a`).
 fn column_hashes(a: &dyn Array, out: &mut [u64]) -> Result<(), KernelError> {
     fn prim<T: ArrowPrimitiveType>(a: &dyn Array, out: &mut [u64], f: impl Fn(T::Native) -> u64) {
