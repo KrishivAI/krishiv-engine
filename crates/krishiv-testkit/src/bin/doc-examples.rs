@@ -58,3 +58,29 @@ fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn answers_each_example_in_order_with_rows_or_the_error_class() {
+        let input = r#"[{"id":"a","sql":"SELECT 1 AS x, 'b' AS y"},
+                       {"id":"b","setup":["CREATE TEMPORARY VIEW v AS SELECT 5 AS n"],"sql":"SELECT n FROM v"},
+                       {"id":"c","sql":"SELECT 1/0"}]"#;
+        let out = run(input).unwrap_or_default();
+        assert_eq!(out[0], json!({"id": "a", "ok": true, "rows": ["1\tb"]}));
+        assert_eq!(out[1]["rows"], json!(["5"]));
+        assert_eq!(out[2]["ok"], json!(false));
+        assert_eq!(out[2]["class"], json!("DIVIDE_BY_ZERO"));
+    }
+
+    #[test]
+    fn malformed_input_is_refused() {
+        assert!(run("nope").is_err());
+        assert!(run(r#"[{"sql":"SELECT 1"}]"#).is_err());
+        assert!(run(r#"[{"id":"a"}]"#).is_err());
+        assert!(run(r#"[{"id":"a","setup":[1],"sql":"SELECT 1"}]"#).is_err());
+        assert!(run(r#"[{"id":"a","setup":["SELECT 1/0"],"sql":"SELECT 1"}]"#).is_err());
+    }
+}

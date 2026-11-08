@@ -493,3 +493,95 @@ pub fn run(root: &Path, check: bool) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn slug_keeps_plain_names_and_spells_operators() {
+        assert_eq!(slug("abs"), "abs");
+        assert_eq!(slug("<=>"), "op-lt-eq-gt");
+        assert_eq!(slug("!"), "op-bang");
+        assert_eq!(slug("a-B"), "op-a-minus-b");
+        assert_eq!(slug("é"), "op-ue9");
+        assert_eq!(slug(""), "op-");
+    }
+
+    #[test]
+    fn usage_splits_into_signature_and_dedented_description() {
+        let (sig, desc) = split_usage("abs(expr) - Returns it.\n      More text.\n      End.");
+        assert_eq!(sig, "abs(expr)");
+        assert_eq!(desc, "Returns it.\nMore text.\nEnd.");
+        assert_eq!(
+            split_usage("just text"),
+            (String::new(), "just text".to_owned())
+        );
+    }
+
+    #[test]
+    fn examples_pair_each_statement_with_its_result_lines() {
+        let block = "\n    Examples:\n      > SELECT 1,\n        2;\n       1\t2\n      > SELECT 3;\n       3\n       4\n";
+        let ex = parse_examples(block);
+        assert_eq!(ex.len(), 2);
+        assert_eq!(ex[0], ("SELECT 1,\n2;".to_owned(), "1\t2".to_owned()));
+        assert_eq!(ex[1].1, "3\n4");
+        assert_eq!(example_id("<=>", 1), "op-lt-eq-gt#2");
+    }
+
+    #[test]
+    fn the_shown_result_is_the_capture_or_spark_text() {
+        assert_eq!(shown_result(None, ""), "");
+        assert_eq!(shown_result(None, "1"), "1\n");
+        let vol = json!({"volatile": true});
+        assert!(shown_result(Some(&vol), "x").contains("differs on every run"));
+        let ok = json!({"ok": true, "rows": ["1\t2", "3\t4"]});
+        assert_eq!(shown_result(Some(&ok), ""), "1 | 2\n3 | 4\n");
+        let err = json!({"ok": false, "class": "DIVIDE_BY_ZERO"});
+        assert_eq!(shown_result(Some(&err), ""), "Error: DIVIDE_BY_ZERO\n");
+        assert_eq!(
+            shown_result(Some(&json!({"ok": false})), ""),
+            "Error: unclassified\n"
+        );
+    }
+
+    #[test]
+    fn a_changed_answer_differs_but_row_order_and_spacing_do_not() {
+        let ok = json!({"ok": true, "rows": ["1", "2"]});
+        assert!(!differs_from_spark(Some(&ok), "2\n1"));
+        assert!(differs_from_spark(Some(&ok), "1\n3"));
+        assert!(!differs_from_spark(None, "1"));
+        assert!(!differs_from_spark(Some(&ok), "  "));
+        assert!(!differs_from_spark(Some(&ok), "+---+"));
+        assert!(!differs_from_spark(Some(&json!({"volatile": true})), "1"));
+        assert!(!differs_from_spark(Some(&json!({"ok": false})), "1"));
+    }
+
+    #[test]
+    fn write_check_stale_and_extra_files() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        assert!(run(dir.path(), true).is_err(), "nothing written yet");
+        assert!(run(dir.path(), false).is_ok());
+        assert!(run(dir.path(), true).is_ok());
+        let out = dir.path().join(OUT_DIR);
+        std::fs::write(out.join("zzz-extra.md"), "x").unwrap_or_default();
+        let err = run(dir.path(), true).err().unwrap_or_default();
+        assert!(err.contains("stale"), "{err}");
+        assert!(run(dir.path(), false).is_ok());
+        assert!(
+            !out.join("zzz-extra.md").exists(),
+            "a stale page is removed"
+        );
+    }
+
+    #[test]
+    fn every_example_has_an_id_and_sql() {
+        let ex = examples().unwrap_or_default();
+        assert!(!ex.is_empty());
+        assert!(
+            ex.iter()
+                .all(|(id, sql)| id.contains('#') && !sql.is_empty())
+        );
+    }
+}

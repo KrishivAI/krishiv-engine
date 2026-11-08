@@ -82,9 +82,11 @@ fn is_clock(id: &str) -> bool {
 }
 
 /// The engine's answers, two runs compared.
-fn capture(root: &Path) -> Result<Value, String> {
+fn capture(
+    mut runner: impl FnMut(&[(String, String)]) -> Result<Vec<Value>, String>,
+) -> Result<Value, String> {
     let items = examples()?;
-    let (a, b) = (run_once(root, &items)?, run_once(root, &items)?);
+    let (a, b) = (runner(&items)?, runner(&items)?);
     let mut map = Map::new();
     for (x, y) in a.into_iter().zip(b) {
         let id = x["id"].as_str().unwrap_or_default().to_owned();
@@ -105,7 +107,15 @@ fn capture(root: &Path) -> Result<Value, String> {
 /// # Errors
 /// On I/O errors, a failed run, or with `check` when the recorded answers are stale.
 pub fn run(root: &Path, check: bool) -> Result<(), String> {
-    let fresh = capture(root)?;
+    run_with(root, check, |items| run_once(root, items))
+}
+
+fn run_with(
+    root: &Path,
+    check: bool,
+    runner: impl FnMut(&[(String, String)]) -> Result<Vec<Value>, String>,
+) -> Result<(), String> {
+    let fresh = capture(runner)?;
     let text = serde_json::to_string_pretty(&fresh).map_err(|e| e.to_string())? + "\n";
     let path = root.join(CAPTURED);
     if check {
@@ -125,4 +135,72 @@ pub fn run(root: &Path, check: bool) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An answer per example: `ok` with the id as the row, and `rand` varying between runs.
+    fn fake(
+        counter: &mut u32,
+    ) -> impl FnMut(&[(String, String)]) -> Result<Vec<Value>, String> + '_ {
+        move |items| {
+            *counter += 1;
+            let n = *counter;
+            Ok(items
+                .iter()
+                .map(|(id, _)| {
+                    let row = if id.starts_with("rand#") {
+                        n.to_string()
+                    } else {
+                        id.clone()
+                    };
+                    json!({"id": id, "ok": true, "rows": [row], "message": "m"})
+                })
+                .collect())
+        }
+    }
+
+    #[test]
+    fn clock_functions_are_recognised_by_page_name() {
+        assert!(is_clock("now#1"));
+        assert!(is_clock("uuid"));
+        assert!(!is_clock("abs#1"));
+    }
+
+    #[test]
+    fn a_varying_or_clock_answer_is_volatile_and_the_rest_drops_id_and_message() {
+        let mut n = 0;
+        let v = capture(fake(&mut n)).unwrap_or_default();
+        assert_eq!(v["rand#1"], json!({"volatile": true}));
+        assert_eq!(v["now#1"], json!({"volatile": true}));
+        assert_eq!(v["abs#1"], json!({"ok": true, "rows": ["abs#1"]}));
+    }
+
+    #[test]
+    fn record_then_check_then_stale() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let out = dir.path().join(CAPTURED);
+        std::fs::create_dir_all(out.parent().unwrap_or(dir.path())).unwrap_or_default();
+        let mut n = 0;
+        assert!(
+            run_with(dir.path(), true, fake(&mut n)).is_err(),
+            "nothing recorded yet"
+        );
+        assert!(run_with(dir.path(), false, fake(&mut n)).is_ok());
+        assert!(out.is_file());
+        assert!(run_with(dir.path(), true, fake(&mut n)).is_ok());
+        std::fs::write(&out, "{}\n").unwrap_or_default();
+        let err = run_with(dir.path(), true, fake(&mut n))
+            .err()
+            .unwrap_or_default();
+        assert!(err.contains("stale"), "{err}");
+    }
+
+    #[test]
+    fn a_failed_run_is_an_error() {
+        let r = run_with(Path::new("."), true, |_| Err("boom".to_owned()));
+        assert_eq!(r.err().as_deref(), Some("boom"));
+    }
 }
