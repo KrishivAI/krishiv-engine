@@ -867,3 +867,51 @@ fn the_binary_reports_a_stdout_that_cannot_be_written() {
         .unwrap();
     assert!(!out.status.success());
 }
+
+#[test]
+fn load_runs_heavy_loops_and_an_open_loop_and_reports_store_latency() {
+    let dir = data_dir();
+    let sql = dir.path().join("q.sql");
+    std::fs::write(
+        &sql,
+        "SELECT l_returnflag, count(*) AS n FROM lineitem GROUP BY l_returnflag",
+    )
+    .unwrap();
+    let q = encode_path(sql.to_str().unwrap());
+    let r = runner(&dir);
+    let reply = r.handle_line(&format!("LOAD {q} 2 {q} 10 0.5")).unwrap();
+    let json = reply
+        .strip_prefix("OK ")
+        .unwrap_or_else(|| panic!("{reply}"));
+    let v: serde_json::Value = serde_json::from_str(json).unwrap();
+    // Two heavy loops ran at least one query each; arrivals at 0, 0.1, .. 0.4 s: five short ones.
+    assert!(v["heavy"]["done"].as_u64().unwrap() >= 2, "{v}");
+    assert_eq!(v["short"]["done"], 5, "{v}");
+    assert_eq!(v["heavy"]["errors"].as_array().unwrap().len(), 0, "{v}");
+    assert_eq!(v["short"]["latencies"].as_array().unwrap().len(), 5, "{v}");
+    // A local file is not a remote store: no read is timed, so there are no quantiles (krishiv-io tests
+    // cover the remote case).
+    assert_eq!(v["io"]["requests"], 0, "{v}");
+    assert!(v["io"]["p99_us"].is_null(), "{v}");
+    // A load with nothing to run still answers; bad arguments are an error, and the runner keeps serving.
+    assert!(
+        r.handle_line(&format!("LOAD {q} 0 {q} 0 0.1"))
+            .unwrap()
+            .contains("\"done\":0")
+    );
+    assert!(
+        r.handle_line(&format!("LOAD {q} x {q} 1 1"))
+            .unwrap()
+            .starts_with("ERR LOAD: bad heavy count")
+    );
+    assert!(
+        r.handle_line(&format!("LOAD {q} 1 {q} 1 0"))
+            .unwrap()
+            .starts_with("ERR ")
+    );
+    assert!(
+        r.handle_line(&format!("RUN {q}"))
+            .unwrap()
+            .starts_with("OK 3 ")
+    );
+}

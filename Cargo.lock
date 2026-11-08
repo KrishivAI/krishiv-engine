@@ -2002,11 +2002,13 @@ dependencies = [
  "krishiv-alloc",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-io",
  "krishiv-memory",
  "krishiv-session",
  "mimalloc",
  "parquet",
  "proptest",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]

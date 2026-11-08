@@ -20,6 +20,7 @@ arrow-schema.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
+krishiv-io = { path = "../krishiv-io" }
 krishiv-alloc = { path = "../krishiv-alloc" }
 krishiv-memory = { path = "../krishiv-memory" }
 krishiv-session = { path = "../krishiv-session" }
@@ -40,4 +41,5 @@ heap-stats = ["krishiv-alloc/heap-stats"]
 [dev-dependencies]
 parquet = { workspace = true, features = ["arrow"] }
 proptest = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true

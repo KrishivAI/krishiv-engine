@@ -986,3 +986,27 @@ fn held_metadata_edges() {
     assert!(c.is_empty());
     assert!(Arc::ptr_eq(&c.get(&key, none).unwrap(), &refused));
 }
+
+#[test]
+fn read_latency_counts_every_read_attempt_to_a_remote_store_only() {
+    rt().block_on(async {
+        let s = setup(IoConfig::default());
+        let local = put(&s, "a", 1_000).await;
+        s.io.get_ranges(&local, &[0..10]).await.unwrap();
+        let none: u64 = s.sched.totals().read_latency.counts().iter().sum();
+        assert_eq!(none, 0, "a memory:// store is not remote");
+        let remote_id = StoreId::new("s3://lat");
+        s.sched.register_store(
+            remote_id.clone(),
+            Arc::clone(&s.fault) as Arc<dyn ObjectStore>,
+        );
+        let remote = FileRef::from_meta(remote_id, &s.inner.head(&Path::from("a")).await.unwrap());
+        s.io.get_ranges(&remote, &[0..10]).await.unwrap();
+        s.fault.fail_next_gets(1, None);
+        s.io.get_ranges(&remote, &[20..30]).await.unwrap();
+        // Three attempts: one read, then a failed one and its retry.
+        let total: u64 = s.sched.totals().read_latency.counts().iter().sum();
+        let own: u64 = s.io.counters().read_latency.counts().iter().sum();
+        assert_eq!((total, own), (3, 3));
+    });
+}
