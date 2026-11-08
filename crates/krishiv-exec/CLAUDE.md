@@ -11,7 +11,7 @@ Batch execution engine: operators, pipelines, morsel scheduling within a node.
 driver (yields, batch-boundary checks, NeedMemory, spill servicing, stall detector) · `runner.rs` QueryRunner /
 Scheduler (coordinator, first error wins) · `channel.rs` bounded result stream · `executor.rs` Executor seam +
 TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·
-`testing.rs` test operators (also used by benches) · `output_spill.rs` spill hook of finished breaker output · `loom_model.rs`.
+`testing.rs` test operators (also used by benches) · `output_spill.rs` spill hook of finished breaker output · `cohort.rs` `reserve_in_cohort`: a request the pool refuses waits while another member of a query cohort holds memory it frees on its own (nested-loop chunks; sort merge budgets, `operators/sort/budget.rs` `MERGE_COHORT`; grace joins' partition loads and tables, `join/grace.rs` `TABLE_COHORT`, holding seats only) · `loom_model.rs`.
 `operators/` (P2-T051) stateless operators: `scan.rs` MemoryScan + `ScanPushdown` (pushdowns decided once as an
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
@@ -96,7 +96,7 @@ source as `TaskSpec::exchanges` says; `exchange_schemas` gives a fragmenter each
 `krishiv-shuffle`'s, fragments and stages are `krishiv-scheduler`'s.
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
-only where a requirement is unmet; on one worker instantiation lowers each exchange into the operators around it.
+only where a requirement is unmet, plus one hash exchange for every `DISTRIBUTE BY` (`Planner::repartition`: key expressions computed below, dropped above, so they are evaluated as Spark's shuffle evaluates them); on one worker instantiation lowers each exchange into the operators around it.
 An aggregate over rows that must move is planned in two phases, `Aggregate{Partial}` -> exchange -> `Aggregate{Final}`
 over states (`planner/aggregate.rs`, design P2-T174 unit 2; `DISTINCT`: partial over keys and argument, exchange,
 partial merge, final, `physical::distinct_phases`, fused back by `fused_distinct`); `physical::fused_aggregate`

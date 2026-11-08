@@ -1341,6 +1341,19 @@ impl Rewriter {
                 };
                 Ok((node(node_, plan.origin), corr))
             }
+            // Spark's Category 2 (`checkCorrelationsInSubquery`): allowed on
+            // the path, its expressions free of outer references (the
+            // analyzer refused those). Unlike a sort it stays: Spark's
+            // shuffle still evaluates its expressions, over the rows below
+            // the lifted correlation.
+            PlanNode::Repartition { input, exprs } => {
+                let (inner, corr) = self.pull(input, true)?;
+                let node_ = PlanNode::Repartition {
+                    input: inner,
+                    exprs: exprs.clone(),
+                };
+                Ok((node(node_, plan.origin), corr))
+            }
             PlanNode::Sort { input, order, .. } => {
                 if !order.iter().any(|o| has_outer(Node::Expr(&o.expr))) {
                     // Without a limit, a subquery's order means nothing (as
@@ -1560,6 +1573,19 @@ impl Rewriter {
         base: Arc<LogicalPlan>,
         plan: &Arc<LogicalPlan>,
     ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
+        // A `DISTRIBUTE BY` over the subquery's value (Spark's Category 2)
+        // sets partitions a joined subquery does not have; it goes when no
+        // expression of it can raise (`DISTRIBUTE BY 1`), as nothing then
+        // observes it. One that may raise stays, and the shapes below refuse
+        // it rather than drop its evaluation. "May raise" is read as under
+        // ANSI (resolved casts carry their own mode), so with ANSI off an
+        // arithmetic expression is refused that Spark would accept: an
+        // honest refusal, never a dropped error.
+        if let PlanNode::Repartition { input, exprs } = &plan.node
+            && exprs.iter().all(|e| !crate::raises::may_raise(e, true))
+        {
+            return self.scalar(base, input);
+        }
         if let Some((agg, predicate, value)) = having_over_global(plan) {
             return self.scalar_having(base, &agg, &predicate, &value);
         }
@@ -2037,6 +2063,14 @@ impl Rewriter {
                     columns: Vec::new(),
                 };
                 Ok((node(aliased, plan.origin), renumber))
+            }
+            PlanNode::Repartition { input, exprs } => {
+                let (inner, renumber) = self.domained(input, distinct, domain)?;
+                let node_ = PlanNode::Repartition {
+                    input: inner,
+                    exprs: exprs.iter().map(|e| renumber.outer(e)).collect(),
+                };
+                Ok((node(node_, plan.origin), renumber))
             }
             PlanNode::Sort { input, order, .. } => {
                 if order.iter().any(|o| has_outer(Node::Expr(&o.expr))) {
@@ -2543,7 +2577,8 @@ pub(super) fn non_equality_correlation(p: &LogicalPlan) -> bool {
         PlanNode::Project { input, .. }
         | PlanNode::Generate { input, .. }
         | PlanNode::Window { input, .. }
-        | PlanNode::Sort { input, .. } => non_equality_correlation(input),
+        | PlanNode::Sort { input, .. }
+        | PlanNode::Repartition { input, .. } => non_equality_correlation(input),
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
             non_equality_correlation(input)
         }
@@ -2592,7 +2627,8 @@ fn deterministic_filters(p: &LogicalPlan) -> bool {
         }
         PlanNode::Project { input, .. }
         | PlanNode::Generate { input, .. }
-        | PlanNode::Sort { input, .. } => deterministic_filters(input),
+        | PlanNode::Sort { input, .. }
+        | PlanNode::Repartition { input, .. } => deterministic_filters(input),
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
             deterministic_filters(input)
         }
@@ -2621,7 +2657,8 @@ fn on_path_through(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool, global: 
         | PlanNode::Filter { input, .. }
         | PlanNode::Generate { input, .. }
         | PlanNode::Window { input, .. }
-        | PlanNode::Sort { input, .. } => on_path_through(input, hit, global),
+        | PlanNode::Sort { input, .. }
+        | PlanNode::Repartition { input, .. } => on_path_through(input, hit, global),
         PlanNode::Limit { input, .. } | PlanNode::Offset { input, .. } if global => {
             on_path_through(input, hit, global)
         }

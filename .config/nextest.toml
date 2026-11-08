@@ -1,19 +1,18 @@
 # Quarantine (owner policy 2026-11-07: a flaky test moves to a non-blocking profile with an issue and an owner,
-# fixed within 3 days). `two_tasks_of_one_query_share_their_chunks` (krishiv-exec `tests/nested_loop.rs`) fails on
-# CI with UNABLE_TO_ACQUIRE_MEMORY (584 and 64,896 bytes; 0 of 40 local runs) and failed PR #576's test job (run
-# 42433806198); owner opus-3, deadline 2026-11-11. `moment_windows_from_disk_equal_the_in_memory_result`
-# (krishiv-session `tests/moment_window_spill.rs`) is back: after its fix (#614) it fails on CI with
-# KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY (a single query aborted when its spill did not free memory in time; the
-# test retries only UNABLE_TO_ACQUIRE_MEMORY), on main (run 42501540888) and PRs #576 and #627 (runs 42491099543,
-# 42502636034); owner opus-3, deadline 2026-11-11. Every run of the default profile skips them; the `quarantine`
-# profile runs only them (CI job `test-quarantine`, not required). Take each out with its root-cause fix. A name or
-# `-E` filter on the default profile selects nothing for them: run `--profile quarantine` (or
-# `--ignore-default-filter`).
+# fixed within 3 days). Quarantine a test with `default-filter = "not test(=<name>)"` on the default profile and
+# `default-filter = "test(=<name>)"` here, an owner and a deadline in this comment, and point the CI job
+# `test-quarantine` (not required) at its test binary. A name or `-E` filter on the default profile then selects
+# nothing for it: run `--profile quarantine` (or `--ignore-default-filter`).
+# `two_tasks_of_one_query_share_their_chunks` left with its fix (spill writes in progress counted by a round, #627).
+# `moment_windows_from_disk_equal_the_in_memory_result` (krishiv-session `tests/moment_window_spill.rs`) is back:
+# after its fix (#614) it fails on CI with KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY (the test retried only
+# UNABLE_TO_ACQUIRE_MEMORY), on main (run 42501540888) and PRs #576 and #627 (runs 42491099543, 42502636034);
+# owner opus-3, deadline 2026-11-11 (fix on `p2b/ko1-window-chunk-items`: retry both classes).
 [profile.default]
-default-filter = "not (test(=moment_windows_from_disk_equal_the_in_memory_result) | test(=two_tasks_of_one_query_share_their_chunks))"
+default-filter = "not test(=moment_windows_from_disk_equal_the_in_memory_result)"
 
 [profile.quarantine]
-default-filter = "test(=moment_windows_from_disk_equal_the_in_memory_result) | test(=two_tasks_of_one_query_share_their_chunks)"
+default-filter = "test(=moment_windows_from_disk_equal_the_in_memory_result)"
 
 # Acceptance tests with stall or wall-clock bounds can flake on loaded
 # shared runners (a driver waiting on a lock held by a thread that is paging
