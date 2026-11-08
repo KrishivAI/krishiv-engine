@@ -401,8 +401,10 @@ fn the_other_forbidden_places_are_refused() {
         "SELECT n + 1, row_number() OVER (ORDER BY n) FROM r",
         "SELECT r.n + 1 FROM r FULL OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k",
         "SELECT r.n + 1 FROM r RIGHT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k",
-        "SELECT r.n + 1 FROM r LEFT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k \
-         WHERE EXISTS (SELECT 1 FROM r)",
+        // A forbidden place inside a subquery expression.
+        "SELECT n + 1 FROM r WHERE n < 3 AND EXISTS \
+         (SELECT 1 FROM (SELECT 1 k) a LEFT JOIN r ON a.k = r.n)",
+        "SELECT n + 1 FROM r WHERE n < (SELECT max(n) + 5 FROM r)",
     ] {
         let sql =
             format!("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL {term}) SELECT * FROM r LIMIT 3");
@@ -576,6 +578,30 @@ fn case_sensitive_cte_names_are_distinct_from_the_recursive_one() {
 }
 
 #[test]
+fn a_table_named_like_the_cte_in_another_case_is_not_the_recursive_reference() {
+    // Spark 4.2.0, spark.sql.caseSensitive=true: the aggregate reads the
+    // table `R`, not the recursive `r`, so the term is allowed (1, 2, 3).
+    // By default `R` is the recursive reference under an aggregate.
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let run = |sql: &str| {
+        block_on(s.sql(sql))
+            .and_then(|d| block_on(d.collect()))
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    };
+    run("SET spark.sql.caseSensitive=true");
+    run("CREATE TABLE R USING parquet AS SELECT 10 AS n");
+    let q = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT r.n + 1 FROM r \
+             CROSS JOIN (SELECT max(n) AS m FROM R) q WHERE r.n < 3) SELECT * FROM r";
+    assert_eq!(column(rows(&s, q)), ["1", "2", "3"]);
+    run("SET spark.sql.caseSensitive=false");
+    assert_eq!(class_of(&s, q), ErrorClass::InvalidRecursiveReferencePlace);
+}
+
+#[test]
 fn recursive_term_types_follow_the_anchor() {
     let s = Session::new().unwrap();
     // A narrower recursive term is cast to the anchor's type.
@@ -710,6 +736,23 @@ fn a_seeded_random_draws_every_small_round_in_row_order() {
     );
 }
 
+/// Spark 4.2.0 `cte-recursion.sql` case 27: a reference under an aggregate
+/// is a misplaced reference, reported before the outer `n` (which the
+/// aggregate's output does not name) is found unresolved.
+#[test]
+fn a_reference_under_an_aggregate_is_misplaced_before_columns_resolve() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        class_of(
+            &s,
+            "WITH t1 AS (SELECT 1 as n), t2(n) AS (WITH RECURSIVE t3(n) AS (SELECT 1 \
+             UNION ALL SELECT n+1 FROM (SELECT MAX(n) FROM t3)) SELECT * FROM t3) \
+             SELECT * FROM t2"
+        ),
+        ErrorClass::InvalidRecursiveReferencePlace
+    );
+}
+
 /// Spark 4.2.0 `cte-recursion.sql` cases 75 and 79: the recursive term's
 /// output columns read the previous round's columns, not each other.
 #[test]
@@ -743,4 +786,34 @@ fn recursive_term_columns_read_the_previous_round() {
     .map(|r| r.iter().map(ToString::to_string).collect())
     .collect();
     assert_eq!(got, want);
+}
+
+#[test]
+fn a_reference_inside_a_subquery_expression_recurses() {
+    // Spark 4.2.0 (`cte-recursion` 28 and probes): a subquery is no
+    // forbidden place of its own.
+    let s = Session::new().unwrap();
+    for (term, want) in [
+        (
+            "SELECT (SELECT n + 1 FROM r WHERE n < 5)",
+            vec!["1", "2", "3", "4", "5"],
+        ),
+        (
+            "SELECT n + 1 FROM r WHERE n IN (SELECT n FROM r WHERE n < 4)",
+            vec!["1", "2", "3", "4"],
+        ),
+        (
+            "SELECT 2 WHERE EXISTS (SELECT * FROM r WHERE n < 2)",
+            vec!["1", "2"],
+        ),
+        (
+            "SELECT r.n + 1 FROM r LEFT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k \
+             WHERE EXISTS (SELECT 1 FROM r)",
+            vec!["1", "2", "3", "4", "5"],
+        ),
+    ] {
+        let sql =
+            format!("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL {term}) SELECT * FROM r LIMIT 5");
+        assert_eq!(column(rows(&s, &sql)), want, "{sql}");
+    }
 }

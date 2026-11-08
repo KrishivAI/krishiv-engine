@@ -1329,3 +1329,31 @@ fn schema_of_csv_literals() {
     }
     assert!(ddl_type(&DataType::Int8).is_err());
 }
+
+#[test]
+fn a_binary_value_follows_the_binary_output_style_and_an_unknown_style_fails() {
+    // Spark 4.2.0: bytes 'AB' written to CSV print as below under each style.
+    let batch = RecordBatch::try_from_iter([(
+        "b",
+        Arc::new(arrow_array::BinaryViewArray::from(vec![Some(&b"AB"[..])]))
+            as arrow_array::ArrayRef,
+    )])
+    .expect("batch");
+    for (style, text) in [
+        ("UTF-8", "AB"),
+        ("BASE64", "QUI"),
+        ("HEX", "4142"),
+        ("HEX_DISCRETE", "[41 42]"),
+        ("BASIC", "\"[65, 66]\""),
+    ] {
+        let o = options(&serde_json::json!({"binaryOutputStyle": style}));
+        let bytes = encode(&batch, &o).expect(style);
+        assert_eq!(
+            String::from_utf8_lossy(&bytes),
+            format!("{text}\n"),
+            "{style}"
+        );
+    }
+    let o = options(&serde_json::json!({"binaryOutputStyle": "NOPE"}));
+    assert!(encode(&batch, &o).is_err());
+}

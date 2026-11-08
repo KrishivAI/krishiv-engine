@@ -403,6 +403,11 @@ impl Encoder {
                 self.expr(expr, bias);
                 self.text(name);
             }
+            ExprNode::Pipe { expr, clause } => {
+                self.tag("pipe");
+                self.expr(expr, bias);
+                self.debug(clause);
+            }
             ExprNode::MultiAlias { expr, names } => {
                 self.tag("multi-alias");
                 self.expr(expr, bias);
@@ -774,6 +779,11 @@ impl Encoder {
             }
             PlanNode::PipeOperator { input } => {
                 self.tag("PipeOperator");
+                self.plan(input, bias);
+            }
+            PlanNode::Repartition { input, exprs } => {
+                self.tag("Repartition");
+                self.exprs(exprs, bias);
                 self.plan(input, bias);
             }
             PlanNode::JoinHint { input, strategy } => {
@@ -1483,6 +1493,13 @@ mod tests {
                     node(PlanNode::PipeOperator { input: base() }),
                 ),
                 (
+                    "repartition",
+                    node(PlanNode::Repartition {
+                        input: base(),
+                        exprs: vec![lit(1)],
+                    }),
+                ),
+                (
                     "join-hint",
                     node(PlanNode::JoinHint {
                         input: base(),
@@ -1678,6 +1695,7 @@ mod tests {
             plan: plan.clone(),
             output: vec![bound(1, "a")],
             output_declared: Vec::new(),
+            output_comments: Vec::new(),
             pins: BTreeMap::new(),
             securables: Vec::new(),
             input_key: plan.structural_hash(),
