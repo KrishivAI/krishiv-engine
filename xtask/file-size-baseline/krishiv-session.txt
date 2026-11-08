@@ -6,7 +6,8 @@
 # +43 lines over main: nested session and script variables (T196, PR #505)
 2294 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
-2640 crates/krishiv-session/src/dataframe.rs
+# +20 lines: collect_engine (unstable-ir) reads results on the engine carriers for the golden harness (calendar carrier)
+2660 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
 2781 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
