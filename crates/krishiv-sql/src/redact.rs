@@ -244,24 +244,32 @@ fn set_value(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
     if first.kind != TokenKind::Word || !is_keyword(first.span.text(sql), "SET") {
         return;
     }
-    let eq = code.iter().position(|t| t.kind == TokenKind::Sym(Sym::Eq));
+    // The key and its `=` belong to the first statement: a later statement's
+    // `=` (`SET password x; SELECT 1 = 1`) must not move the value range.
+    let stmt = code
+        .iter()
+        .position(|t| t.kind == TokenKind::Sym(Sym::Semi))
+        .unwrap_or(code.len());
+    let eq = code[..stmt]
+        .iter()
+        .position(|t| t.kind == TokenKind::Sym(Sym::Eq));
     // Without `=` (`SET password x`) the value starts where a complete key
     // ends; Spark reads the text as a key lookup, but it is still logged.
     let (eq, key_end) = eq.map_or_else(
         || {
             let mut key = String::new();
-            for i in 1..code.len() {
+            for i in 1..stmt {
                 if value_starts(code, i, &key) {
                     return (i - 1, i);
                 }
                 key.push_str(&key_text(sql, code[i])[0]);
             }
-            (code.len(), code.len())
+            (code.len(), stmt)
         },
         |e| (e, e),
     );
     let mut key: [String; 4] = Default::default();
-    for t in &code[1..key_end.min(code.len())] {
+    for t in &code[1..key_end.min(stmt)] {
         for (k, part) in key.iter_mut().zip(key_text(sql, t)) {
             k.push_str(&part);
         }

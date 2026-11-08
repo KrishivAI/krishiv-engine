@@ -203,16 +203,34 @@ fn nested_aes_calls_redact_in_linear_time() {
 }
 
 /// A nested block comment between `SET`, the key and the value, and a
-/// value written without `=`, must not hide a secret.
+/// value written without `=`, must not hide a secret; the key stays and the
+/// value becomes the marker.
 #[test]
 fn set_with_nested_comments_or_no_equals_redacts() {
-    for sql in [
-        "SET /* a /* b */ c */ password = Canary7f3a9c",
-        "SET password /* /* x */ */ = 'Canary7f3a9c'",
-        "SET password = /* /* x */ */ Canary7f3a9c",
-        "SET password Canary7f3a9c",
+    for (sql, expected) in [
+        (
+            "SET /* a /* b */ c */ password = Canary7f3a9c",
+            "SET /* a /* b */ c */ password = *********(redacted)",
+        ),
+        (
+            "SET password /* /* x */ */ = 'Canary7f3a9c'",
+            "SET password /* /* x */ */ = *********(redacted)",
+        ),
+        (
+            "SET password = /* /* x */ */ Canary7f3a9c",
+            "SET password = /* /* x */ */ *********(redacted)",
+        ),
+        (
+            "SET password Canary7f3a9c",
+            "SET password *********(redacted)",
+        ),
+        // A later statement's `=` does not move the value range (the
+        // redaction runs to the end of the text, fail-safe).
+        (
+            "SET password Canary7f3a9c; SELECT 1 = 1",
+            "SET password *********(redacted)",
+        ),
     ] {
-        let r = redact_sql(sql);
-        assert!(!leaks(r.as_str()), "{sql} -> {}", r.as_str());
+        assert_eq!(redact_sql(sql).as_str(), expected, "{sql}");
     }
 }
