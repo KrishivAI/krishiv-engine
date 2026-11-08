@@ -13,13 +13,15 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     DatatypeMismatchStackColumnDiffTypes, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchValueOutOfRange, UdtfAliasNumberMismatch, UnresolvedColumnWithoutSuggestion,
-    UnsupportedGeneratorMultiGenerator, UnsupportedGeneratorNestedInExpressions,
+    DatatypeMismatchValueOutOfRange, ErrorClass, InternalError, UdtfAliasNumberMismatch,
+    UnresolvedColumnWithoutSuggestion, UnsupportedGeneratorMultiGenerator,
+    UnsupportedGeneratorNestedInExpressions,
 };
 use krishiv_types::DataType;
 
 use super::AnalysisError;
 use super::bind::unsupported;
+use super::catalog::quoted;
 use super::coerce::quoted_type;
 use super::exprs::{Bound, Cx, pretty};
 use super::ops::col_expr;
@@ -88,6 +90,50 @@ fn generated(kind: GeneratorKind, ty: &DataType) -> Option<Vec<(String, DataType
 }
 
 impl Resolver<'_> {
+    /// `e`, raised resolving the generators under a select list, as Spark
+    /// raises it: a generator argument naming an alias written earlier in
+    /// the same list leaves a `lateralAliasReference` in the resolved
+    /// plan, which Spark 4.2 reports as `INTERNAL_ERROR`. Select-list
+    /// generators run below the projection here, so the argument found
+    /// no column of that name.
+    pub(super) fn generator_over_lateral_alias(
+        &self,
+        exprs: &[Arc<Expr>],
+        e: AnalysisError,
+    ) -> AnalysisError {
+        let unresolved = matches!(
+            e.error.error_class(),
+            ErrorClass::UnresolvedColumnWithoutSuggestion
+        );
+        if !unresolved || !self.ctx.conf.lateral_column_alias {
+            return e;
+        }
+        let cs = self.ctx.conf.case_sensitive;
+        let named = |name: &str| quoted(&[name.to_owned()]);
+        // Only aliases written before the first generator are lateral
+        // references for it; later ones, and none at all, stay UNRESOLVED_COLUMN.
+        let first_gen = exprs.iter().position(is_generator_slot).unwrap_or(0);
+        let is_alias = exprs[..first_gen].iter().any(|x| match &x.node {
+            ExprNode::Alias { name, .. } => {
+                let shown = named(name);
+                let text = e.error.to_string();
+                text.contains(&shown)
+                    || (!cs && text.to_lowercase().contains(&shown.to_lowercase()))
+            }
+            _ => false,
+        });
+        if !is_alias {
+            return e;
+        }
+        AnalysisError::new(
+            InternalError {
+                message: "Resolved plan should not contain any LateralColumnAliasReference."
+                    .to_owned(),
+            },
+            e.origin,
+        )
+    }
+
     /// A generator over `input`: unresolved (`output` empty: the argument
     /// is bound and the columns derived) or resolved and read again (the
     /// argument bound again, the columns as they were).
@@ -727,4 +773,10 @@ impl Resolver<'_> {
         }
         Ok(None)
     }
+}
+
+/// Whether `e` is the star lowering leaves where a select-list generator stood.
+fn is_generator_slot(e: &Arc<Expr>) -> bool {
+    matches!(&e.node, ExprNode::Star(st)
+        if st.qualifier.first().is_some_and(|q| q.starts_with("__krishiv_generate_")))
 }

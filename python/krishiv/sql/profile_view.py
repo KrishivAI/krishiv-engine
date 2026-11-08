@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""An offline viewer for ``krishiv.query-profile`` documents (P2-T096).
+"""An offline viewer for ``krishiv.query-profile`` documents.
 
 :class:`ProfileView` turns the profile JSON of ``df.explain(analyze=True, json=True)``
 into one self-contained HTML page: the physical plan as a tree, each node with its
@@ -8,7 +8,7 @@ pipelines on a timeline. There is no script, no font and no network request: the
 opens from a file or a mail attachment, and ``_repr_html_`` shows the same view inline
 in a notebook. Every text from the document is HTML-escaped.
 
-The reader follows the profile format's rule (``design/P2-T140-profile-format-v1-envelope.md``):
+The reader follows the profile format's rule:
 unknown members and extras are ignored, a missing or mistyped member this viewer uses is an error.
 """
 

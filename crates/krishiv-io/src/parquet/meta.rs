@@ -85,6 +85,8 @@ pub struct ParquetMetadata {
     /// The top-level columns that are variants (see [`super::variant`]):
     /// the decoder turns their physical groups into the in-memory form.
     pub(crate) variants: super::variant::Variants,
+    /// The top-level columns that are geometries or geographies (see [`super::geo`]).
+    pub(crate) geos: super::geo::Geos,
     statistics: FileStatistics,
     heap: usize,
 }
@@ -274,6 +276,8 @@ fn describe_checked(
         meta.file_metadata().key_value_metadata(),
         &typed,
     );
+    let (fields, geos) =
+        super::geo::Geos::engine_fields(descr, meta.file_metadata().key_value_metadata(), fields)?;
     let schema = Arc::new(Schema::new_with_metadata(
         fields,
         reader.schema().metadata().clone(),
@@ -327,6 +331,7 @@ fn describe_checked(
         size,
         legacy_writer,
         variants,
+        geos,
         statistics,
         heap,
     })
@@ -399,7 +404,17 @@ fn hint_field(
     let dt = match field.data_type() {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8View,
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-            if o.binary_as_string {
+            if o.binary_as_string
+                && !leaf().is_some_and(|c| {
+                    matches!(
+                        c.logical_type_ref(),
+                        Some(
+                            parquet::basic::LogicalType::Geometry { .. }
+                                | parquet::basic::LogicalType::Geography { .. }
+                        )
+                    )
+                })
+            {
                 DataType::Utf8View
             } else {
                 DataType::BinaryView

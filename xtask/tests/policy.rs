@@ -135,7 +135,7 @@ fn ci_policy_wiring() {
     let fuzz_build = job(&ci, "fuzz-build");
     for needle in [
         "    needs: changes\n",
-        "    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && github.event_name != 'merge_group'\n",
+        "    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'\n",
         "        run: cargo \"+$NIGHTLY\" fuzz build --target x86_64-unknown-linux-gnu\n",
     ] {
         // Whole lines: a deeper-indented step-level `if:` or `run:` must not match.
@@ -144,12 +144,49 @@ fn ci_policy_wiring() {
             "fuzz-build lacks {needle:?}"
         );
     }
-    // The merge queue runs the build, tests, clippy and the cheap lints; the long checks stay
-    // on pull requests and run on main nightly. Each stays a job that reports (skipped passes).
+    // Each gate runs once (owner 2026-11-08): ci.yml has no push or schedule trigger; the nightly run is
+    // nightly.yml, which calls ci.yml; a push to main only measures (main-measure.yml, codspeed.yml).
+    let on_block: Vec<&str> = ci
+        .lines()
+        .skip_while(|l| *l != "on:")
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect();
     assert!(
-        ci.contains("  schedule:\n    - cron:"),
-        "ci.yml runs on main nightly"
+        !on_block.iter().any(|l| l.trim_start().starts_with("schedule:") || l.trim_start().starts_with("push:")),
+        "ci.yml has no push or schedule trigger: {on_block:?}"
     );
+    assert!(
+        on_block.contains(&"  workflow_call:"),
+        "nightly.yml calls ci.yml"
+    );
+    let nightly = read(".github/workflows/nightly.yml");
+    assert!(
+        nightly.contains("  ci:\n") && nightly.contains("    uses: $/.github/workflows/ci.yml"),
+        "nightly.yml runs the jobs of ci.yml on main"
+    );
+    // The merge queue runs the build, tests, clippy, docs, layering and policy only.
+    for name in [
+        "text-lint",
+        "python-quality",
+        "fmt",
+        "deny",
+        "machete",
+        "hack",
+        "connect-protos",
+        "plan-protos",
+        "msrv",
+        "release-dry-run",
+        "fuzz-build",
+        "wheels-targets",
+    ] {
+        assert!(
+            job(&ci, name).contains("github.event_name != 'merge_group'")
+                || job(&ci, name).contains("github.event_name == 'pull_request'"),
+            "{name} must not run in the merge queue"
+        );
+    }
     for name in ["miri-kernels", "wheels"] {
         let body = job(&ci, name);
         assert!(
@@ -157,7 +194,7 @@ fn ci_policy_wiring() {
             "{name} must not run in the merge queue"
         );
     }
-    for name in ["test", "clippy", "fmt", "layering"] {
+    for name in ["test", "clippy", "docs", "layering"] {
         assert!(
             !job(&ci, name).contains("merge_group"),
             "{name} must run in the merge queue"
@@ -228,8 +265,6 @@ fn ci_policy_wiring() {
         "git rev-parse HEAD^1 > target/measured-base-sha",
         // HEAD^1 needs the parent: the default depth-1 checkout has none.
         "fetch-depth: 2",
-        // Main is measured by main-measure.yml, so ci.yml builds no wheels there.
-        "github.event_name != 'push'",
     ] {
         assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
     }
@@ -383,8 +418,8 @@ fn ci_policy_wiring() {
     // label); the label-aware gate in pr-policy.yml compares the measurement.
     let ci = read(".github/workflows/ci.yml");
     assert!(
-        ci.contains("github.event_name != 'push' && github.event_name != 'merge_group'"),
-        "wheels-targets is skipped on push and in the merge queue"
+        job(&ci, "wheels-targets").contains("github.event_name != 'merge_group'"),
+        "wheels-targets runs on pull requests and in the nightly run, not in the merge queue"
     );
     let wheels = read(".github/workflows/wheels.yml");
     for needle in [

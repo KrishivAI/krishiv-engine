@@ -9,6 +9,8 @@ use proptest::prelude::*;
 use super::*;
 use crate::pool::{Usage, round_up};
 
+mod abort_waits;
+
 const Q: usize = 1 << 20;
 
 /// Arbitration deadlines on Tokio's (pausable) clock, for deterministic tests.
@@ -1801,4 +1803,5 @@ fn a_grant_credit_debug_shows_its_bytes_and_unsettled_grants() {
     assert!(shown.starts_with("GrantCredit {"), "{shown}");
     assert!(shown.contains("bytes: 0"), "{shown}");
     assert!(shown.contains("unsettled: 0"), "{shown}");
+    assert!(shown.contains("writing: 0"), "{shown}");
 }
