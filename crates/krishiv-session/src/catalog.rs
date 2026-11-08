@@ -46,6 +46,7 @@ use crate::cache::{RelationCache, is_cache_name};
 
 mod file_tables;
 mod ndv_sampling;
+mod script_results;
 
 use self::file_tables::FileScanOf;
 
@@ -207,8 +208,7 @@ impl SessionCatalog {
         self.epoch.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Removes every hidden entry no live view pins anymore. The caller
-    /// holds the write lock and bumps the epoch itself.
+    /// Removes the hidden entries nothing needs; the caller holds the write lock and bumps the epoch.
     fn collect_garbage(tables: &mut BTreeMap<String, (String, Arc<TempTable>)>) {
         let mut live = BTreeSet::new();
         for (_, table) in tables.values() {
@@ -216,7 +216,7 @@ impl SessionCatalog {
                 live.extend(pins.iter().cloned());
             }
         }
-        tables.retain(|key, _| !is_hidden_name(key) || live.contains(key));
+        script_results::retain(tables, &live);
     }
 
     /// Hands out the next hidden name snapshot pins use: no SQL text

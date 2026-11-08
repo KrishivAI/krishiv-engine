@@ -44,9 +44,7 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
-pub(crate) use crate::arrow_values::{
-    arrow_field_value, arrow_krishiv_type, arrow_value, declared_value,
-};
+pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_value};
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
@@ -1741,27 +1739,6 @@ impl Session {
             out.push(batch?);
         }
         Ok(out)
-    }
-
-    /// As [`Self::run_analyzed_variable_query`], but stops reading at the first row beyond
-    /// `max_rows` and returns `None`: a caller that holds the rows never holds more.
-    pub(crate) async fn run_analyzed_variable_query_capped(
-        &self,
-        analysis: &Arc<crate::dataframe::Analysis>,
-        max_rows: usize,
-    ) -> Result<Option<Vec<RecordBatch>>, KrishivError> {
-        let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
-        let mut stream = self.run(&physical, &analysis.env).await?;
-        let (mut out, mut rows) = (Vec::new(), 0_usize);
-        while let Some(batch) = stream.next().await {
-            let batch = batch?;
-            rows = rows.saturating_add(batch.num_rows());
-            if rows > max_rows {
-                return Ok(None);
-            }
-            out.push(batch);
-        }
-        Ok(Some(out))
     }
 
     /// The value of `sql` (a synthesized one-row `SELECT`): its single

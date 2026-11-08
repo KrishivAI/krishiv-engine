@@ -356,7 +356,9 @@ impl Interp<'_> {
                 rel.rows.drain(..skip);
                 rel
             }
-            PlanNode::SubqueryAlias { input, .. } => self.plan(input, outer),
+            PlanNode::SubqueryAlias { input, .. } | PlanNode::Repartition { input, .. } => {
+                self.plan(input, outer)
+            }
             PlanNode::WithCte { input, ctes } => {
                 for c in ctes {
                     let rel = self.plan(&c.plan, outer);
