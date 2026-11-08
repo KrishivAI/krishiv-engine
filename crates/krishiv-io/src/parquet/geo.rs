@@ -337,7 +337,6 @@ pub(super) fn to_stored(
 /// `WriteFailed` when the schema cannot be rebuilt.
 pub(super) fn annotate(
     descr: SchemaDescriptor,
-    schema: &Schema,
     spatial: &[(usize, Spatial)],
 ) -> FormatResult<SchemaDescriptor> {
     if spatial.is_empty() {
@@ -348,12 +347,10 @@ pub(super) fn annotate(
     let children = root
         .get_fields()
         .iter()
-        .map(|t| -> FormatResult<TypePtr> {
-            let found = schema
-                .fields()
-                .iter()
-                .position(|f| f.name() == t.name())
-                .and_then(|i| spatial.iter().find(|(j, _)| *j == i));
+        .enumerate()
+        .map(|(i, t)| -> FormatResult<TypePtr> {
+            // Root fields pair with Arrow fields by position: two fields may share a name.
+            let found = spatial.iter().find(|(j, _)| *j == i);
             let Some((_, s)) = found else {
                 return Ok(Arc::clone(t));
             };

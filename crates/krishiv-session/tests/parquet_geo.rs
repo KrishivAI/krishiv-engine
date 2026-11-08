@@ -77,16 +77,29 @@ fn written_columns_carry_spark_s_logical_type_and_crs() {
     )))
     .unwrap();
     block_on(df.write().parquet(out.to_str().unwrap())).unwrap();
-    let text = schema_text(&first_file(&out));
-    for want in [
-        "GEOMETRY(SRID:0)",
-        "GEOMETRY(EPSG:3857)",
-        "GEOMETRY(OGC:CRS84)",
-        "GEOMETRY(OGC:CRS83)",
-        "GEOGRAPHY(SPHERICAL, OGC:CRS84)",
-    ] {
-        assert!(text.contains(want), "{want} not in {text}");
-    }
+    let file = first_file(&out);
+    let reader =
+        parquet::file::reader::SerializedFileReader::new(File::open(&file).unwrap()).unwrap();
+    let got: Vec<_> = reader
+        .metadata()
+        .file_metadata()
+        .schema_descr()
+        .columns()
+        .iter()
+        .map(|c| (c.name().to_owned(), c.logical_type_ref().cloned()))
+        .collect();
+    let geometry = |crs: &str| Some(LogicalType::geometry(Some(crs.to_owned())));
+    let want = vec![
+        ("g0".to_owned(), geometry("SRID:0")),
+        ("g3857".to_owned(), geometry("EPSG:3857")),
+        ("g4326".to_owned(), geometry("OGC:CRS84")),
+        ("g4269".to_owned(), geometry("OGC:CRS83")),
+        (
+            "h4326".to_owned(),
+            Some(LogicalType::geography(Some("OGC:CRS84".to_owned()), None)),
+        ),
+    ];
+    assert_eq!(got, want, "{}", schema_text(&file));
 }
 
 #[test]

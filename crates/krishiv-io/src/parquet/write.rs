@@ -410,7 +410,6 @@ impl ParquetEncoder {
             Arc::clone(schema)
         };
         let spatial = super::geo::spatial_columns(&schema)?;
-        let original = Arc::clone(&schema);
         let schema = super::geo::stored_schema(&schema, &spatial);
         // The footer keeps arrow-rs's Arrow schema next to the Parquet
         // types: other engines read the Parquet types, Krishiv's reader
@@ -430,8 +429,7 @@ impl ParquetEncoder {
                 .convert(&schema)
                 .map_err(|e| FormatError::WriteFailed(e.to_string()))?;
             let descr = super::variant::annotate(descr, schema.fields())?;
-            options =
-                options.with_parquet_schema(super::geo::annotate(descr, &original, &spatial)?);
+            options = options.with_parquet_schema(super::geo::annotate(descr, &spatial)?);
         }
         let options = options.with_properties(properties);
         let writer = ArrowWriter::try_new_with_options(Vec::new(), Arc::clone(&schema), options)

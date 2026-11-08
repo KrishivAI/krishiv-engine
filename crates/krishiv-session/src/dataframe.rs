@@ -2181,6 +2181,27 @@ impl DataFrameWriter {
                     // other format, and a spatial value nested in another type, is not
                     // written as the `{srid, wkb}` struct Spark cannot read.
                     let parquet = target.format.eq_ignore_ascii_case("parquet");
+                    // `GEOMETRY(ANY)` / `GEOGRAPHY(ANY)` has no CRS to write: refused here,
+                    // before a dry check passes or an overwrite drops the existing table.
+                    if parquet
+                        && let Some(c) = a.analyzed.output.iter().find(|c| {
+                            matches!(
+                                c.data_type,
+                                krishiv_types::DataType::Geometry {
+                                    srid: krishiv_types::Srid::Any
+                                } | krishiv_types::DataType::Geography {
+                                    srid: krishiv_types::Srid::Any
+                                }
+                            )
+                        })
+                    {
+                        return Err(krishiv_common::error::UnsupportedDataTypeForDatasource {
+                            format: "Parquet".to_owned(),
+                            column_name: format!("`{}`", c.name),
+                            column_type: format!("\"{}\"", c.data_type.sql()),
+                        }
+                        .into());
+                    }
                     if a.analyzed.output.iter().any(|c| {
                         krishiv_types::geo::holds_spatial(&c.data_type)
                             && !(parquet
