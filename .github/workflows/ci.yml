@@ -333,8 +333,9 @@ jobs:
       - uses: $/.github/actions/install-tool
         with:
           tool: cargo-deny
-      - name: cargo deny check (one retry: it fetches the advisory database)
-        run: cargo deny check || { echo "::warning::cargo deny failed once; retrying"; sleep 30; cargo deny check; }
+      - name: cargo deny check (one retry, it fetches the advisory database)
+        run: |
+          cargo deny check || { echo "::warning::cargo deny failed once; retrying"; sleep 30; cargo deny check; }
 
   machete:
     needs: changes
