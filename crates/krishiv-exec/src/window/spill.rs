@@ -74,6 +74,9 @@ struct Cursor {
     files: VecDeque<SpillFile>,
     reader: Option<SpillReader>,
     consumer: Arc<ConsumerHandle>,
+    /// Frames consumed so far (batches returned, file footers passed): a refusal at the same count is the same
+    /// frame refused again.
+    progress: u64,
 }
 
 impl Cursor {
@@ -82,8 +85,15 @@ impl Cursor {
         loop {
             if let Some(r) = &mut self.reader {
                 match r.next() {
-                    Some(b) => return Ok(Some(b?.data().clone())),
-                    None => self.reader = None,
+                    Some(b) => {
+                        let b = b?;
+                        self.progress += 1;
+                        return Ok(Some(b.data().clone()));
+                    }
+                    None => {
+                        self.reader = None;
+                        self.progress += 1;
+                    }
                 }
             }
             let Some(f) = self.files.pop_front() else {
@@ -103,6 +113,27 @@ fn refused_bytes(e: &KrishivError) -> usize {
         .unwrap_or(0)
 }
 
+/// What a failed read of the cursor's next frame turns into.
+#[derive(Debug)]
+pub(super) enum Refusal {
+    /// Ask the driver for this many bytes and repeat the read.
+    Ask(usize),
+    /// The query fails with this error.
+    Fail(KrishivError),
+}
+
+/// A read of the frame after `progress` frames failed with `e`; `asked` is the progress at which the driver was
+/// last asked for memory. A memory refusal of a frame not yet asked for is asked for; the same frame refused again,
+/// or any other error, fails.
+pub(super) fn refusal(asked: &mut Option<u64>, progress: u64, e: KrishivError) -> Refusal {
+    if e.error_class() != ErrorClass::UnableToAcquireMemory || *asked == Some(progress) {
+        *asked = None;
+        return Refusal::Fail(e);
+    }
+    *asked = Some(progress);
+    Refusal::Ask(refused_bytes(&e))
+}
+
 /// The flush phase's state.
 pub(super) struct Replay {
     /// `None` while a blocking step holds it.
@@ -111,8 +142,9 @@ pub(super) struct Replay {
     carry: Option<RecordBatch>,
     /// The driver was asked for memory for `carry`.
     asked: bool,
-    /// The driver was asked for memory for the next frame of the cursor, which the pool refused.
-    read_asked: bool,
+    /// The cursor's [`progress`](Cursor::progress) when the driver was asked for memory for its next frame, which
+    /// the pool refused.
+    read_asked: Option<u64>,
     /// A partition evaluated from disk.
     emit: Option<Box<Emit>>,
     /// Lent to blocking steps (see the [module docs](self)).
@@ -287,10 +319,11 @@ impl Window {
                 files,
                 reader: None,
                 consumer: Arc::clone(ctx.consumer().consumer()),
+                progress: 0,
             }),
             carry: None,
             asked: false,
-            read_asked: false,
+            read_asked: None,
             emit: None,
             headroom,
             base,
@@ -377,20 +410,22 @@ impl Window {
                 .await?;
                 r.cursor = Some(cursor);
                 // A refused frame leaves the reader at the frame start (see `SpillReader`): the driver is asked
-                // for the frame's bytes once and the read repeats; a second refusal fails the query.
+                // for the frame's bytes once and the read repeats; a second refusal of the same frame fails.
+                let progress = r.cursor.as_ref().map_or(0, |c| c.progress);
                 let next = match next {
-                    Err(e) if e.error_class() == ErrorClass::UnableToAcquireMemory => {
-                        if std::mem::replace(&mut r.read_asked, true) {
-                            r.read_asked = false;
-                            return Err(e);
+                    Err(e) => match refusal(&mut r.read_asked, progress, e) {
+                        Refusal::Ask(bytes) => {
+                            return Ok(FlushOutput::NeedMemory {
+                                bytes: bytes.max(r.base),
+                            });
                         }
-                        return Ok(FlushOutput::NeedMemory {
-                            bytes: refused_bytes(&e).max(r.base),
-                        });
+                        Refusal::Fail(e) => return Err(e),
+                    },
+                    ok => {
+                        r.read_asked = None;
+                        ok?
                     }
-                    other => other?,
                 };
-                r.read_asked = false;
                 let Some(b) = next else {
                     l.finished = true;
                     self.flush_complete(l)?;
