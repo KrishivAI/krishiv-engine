@@ -413,11 +413,17 @@ impl HashAggregate {
         Ok(None)
     }
 
-    /// Whether spilling the driver's table would free the `missing` bytes a
-    /// slice was refused: a spilling aggregate whose table holds at least
-    /// that much spills rather than applies smaller slices.
+    /// Whether the driver's self-spill would free the `missing` bytes a
+    /// slice was refused: a spilling aggregate whose table and combined
+    /// tables (what that spill writes, as `set_spillable_bytes` counts them)
+    /// hold at least that much spills rather than applies smaller slices. A
+    /// table a spill would not shrink (a global aggregate's one group) slices.
     fn spill_makes_room(&self, l: &Local, missing: usize) -> bool {
-        self.core.spec.spill.is_some() && l.table.memory_size() >= missing
+        if self.core.spec.spill.is_none() || l.table.not_worth_spilling() {
+            return false;
+        }
+        let combined = global(&l.global).map_or(0, |g| g.combined.load(AtomicOrdering::Relaxed));
+        l.table.memory_size().saturating_add(combined) >= missing
     }
 
     fn spiller(&self, ctx: &TaskContext) -> Option<Spiller> {

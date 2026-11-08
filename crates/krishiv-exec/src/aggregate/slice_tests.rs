@@ -307,7 +307,8 @@ async fn a_spilling_table_that_frees_the_shortfall_spills_rather_than_slices() {
         ));
         let held = root.reserved();
         // Leave half of that free: the next batch of new keys (worst case
-        // about `held`) is refused whole, and the table frees the rest.
+        // about `held`, ~1.3 MB with the 128 KiB spill headroom) is refused
+        // whole, and the table (~1.2 MB) frees the rest.
         let pool = ctx.query().pool();
         let mut ballast = ConsumerHandle::register(Arc::clone(pool), "ballast", None).reservation();
         let free = match ballast.try_grow(usize::MAX >> 1) {
@@ -324,9 +325,10 @@ async fn a_spilling_table_that_frees_the_shortfall_spills_rather_than_slices() {
             );
             assert_eq!(resumes_at(&l), None, "a slice was applied before the spill");
         } else {
-            let sliced = matches!(status, SinkStatus::NeedMoreInput) || resumes_at(&l).is_some();
+            // Today's estimates refuse a later slice after 1,024 rows; a
+            // batch that fit whole would be `NeedMoreInput` with no resume.
             assert!(
-                sliced,
+                resumes_at(&l).is_some(),
                 "without a spill scope the batch is applied in slices"
             );
         }
