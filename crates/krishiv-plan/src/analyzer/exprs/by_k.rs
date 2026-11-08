@@ -115,7 +115,7 @@ impl Resolver<'_> {
             Expr::lambda(vec!["l".to_owned(), "r".to_owned()], (*compare).clone())
                 .with_origin(origin),
         );
-        let sorted = call("array_sort", vec![collected, comparator], None);
+        let sorted = call("array_sort", vec![Arc::clone(&collected), comparator], None);
         let top = call(
             "slice",
             vec![
@@ -125,15 +125,16 @@ impl Resolver<'_> {
             ],
             None,
         );
-        // NULL, not `[]`, when the frame holds no row with a `y` (Spark). `top` is one node used
-        // twice: it is bound, and its window planned, once.
+        // NULL, not `[]`, when the frame holds no row with a `y` (Spark): `collected` is the window
+        // result, used twice as one node (bound and planned once); `size` of it, not of the sorted
+        // slice, so the comparator lambda is evaluated once per row.
         Some(call(
             "if",
             vec![
                 call(
                     "<",
                     vec![
-                        call("size", vec![Arc::clone(&top)], None),
+                        call("size", vec![collected], None),
                         lit(Literal::Integer(1)),
                     ],
                     None,
