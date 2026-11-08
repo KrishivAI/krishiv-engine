@@ -93,6 +93,7 @@ pub struct StageRunner {
     /// Shared broadcast builds that did not fit, so each task built its
     /// own table (owner decision 2026-11-06), summed.
     broadcast_fallbacks: Arc<AtomicU64>,
+    broadcast_skips: Arc<AtomicU64>,
     /// Filter values carried from one stage to a later one, summed.
     cross_stage: Arc<AtomicU64>,
     /// Bytes the map tasks wrote to spill files, summed.
@@ -143,6 +144,7 @@ impl StageRunner {
             next_task: Arc::default(),
             shared_builds: Arc::default(),
             broadcast_fallbacks: Arc::default(),
+            broadcast_skips: Arc::default(),
             cross_stage: Arc::default(),
             task_spill_bytes: Arc::default(),
             task_counters: Arc::default(),
@@ -490,6 +492,8 @@ impl StageRunner {
         let fell_back = u64::try_from(broadcasts.fallbacks()).unwrap_or(u64::MAX);
         self.broadcast_fallbacks
             .fetch_add(fell_back, Ordering::Relaxed);
+        self.broadcast_skips
+            .fetch_add(broadcasts.skipped(), Ordering::Relaxed);
         drop(broadcasts);
         let mut spec = specs(root)?
             .into_iter()
@@ -526,6 +530,15 @@ impl StageRunner {
     #[must_use]
     pub fn broadcast_fallbacks(&self) -> u64 {
         self.broadcast_fallbacks.load(Ordering::Relaxed)
+    }
+
+    /// The tasks that built their own broadcast table without attempting
+    /// the shared one, because its committed bytes alone are past the
+    /// broadcast pool's limit (design `P2-row30c-m5-shared-skip`), summed
+    /// over the queries.
+    #[must_use]
+    pub fn broadcast_skips(&self) -> u64 {
+        self.broadcast_skips.load(Ordering::Relaxed)
     }
 
     /// The runtime filter values an exchange collected in one stage and
@@ -625,6 +638,7 @@ impl Scheduler for StageRunner {
             next_task: Arc::clone(&self.next_task),
             shared_builds: Arc::clone(&self.shared_builds),
             broadcast_fallbacks: Arc::clone(&self.broadcast_fallbacks),
+            broadcast_skips: Arc::clone(&self.broadcast_skips),
             task_spill_bytes: Arc::clone(&self.task_spill_bytes),
             task_counters: Arc::clone(&self.task_counters),
             cross_stage: Arc::clone(&self.cross_stage),
