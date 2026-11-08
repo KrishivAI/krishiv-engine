@@ -748,6 +748,32 @@ const PUBLISH_MARKERS: [&str; 10] = [
     "pnpm publish",
 ];
 
+/// The release workflow is a dry run: manual dispatch only, no token, no OIDC, no write permission.
+#[test]
+fn release_workflow_is_a_manual_dry_run() {
+    let wf = read(".github/workflows/release.yml");
+    let triggers: Vec<&str> = wf
+        .lines()
+        .skip_while(|l| *l != "on:")
+        .skip(1)
+        .take_while(|l| l.starts_with(' '))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        triggers,
+        ["workflow_dispatch:"],
+        "release.yml runs on dispatch only"
+    );
+    for banned in [
+        "secrets.",
+        "id-token",
+        "contents: write",
+        "attestations: write",
+    ] {
+        assert!(!wf.contains(banned), "the dry run must not use `{banned}`");
+    }
+}
+
 /// Nothing publishes on merge or on a tag (P2-T147, RELEASING.md): the only
 /// publishing path is the TestPyPI workflow, which runs on manual dispatch
 /// alone and waits for an approved environment; the release switches stay off
