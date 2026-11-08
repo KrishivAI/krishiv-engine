@@ -137,8 +137,15 @@ impl Session {
         let bound = bound.into_owned();
         let inner_text = krishiv_sql::redact_sql(&bound);
         let env = self.query_env();
-        let statement = krishiv_sql::parse_statement(&bound, &env.parser)
-            .map_err(|err| sql_context(err.error, &inner_text, err.span.start, err.span.end))?;
+        let statement = krishiv_sql::parse_statement(&bound, &env.parser).map_err(|err| {
+            let error = crate::identifier_clause::dotted_name_in_one_part_position(
+                &err,
+                &bound,
+                &identifier_spans,
+            )
+            .unwrap_or(err.error);
+            sql_context(error, &inner_text, err.span.start, err.span.end)
+        })?;
         if matches!(statement, Statement::Script(_)) {
             let shown = krishiv_sql::redact_sql(&statement_text);
             return Err(krishiv_common::error::SqlScriptInExecuteImmediate {
