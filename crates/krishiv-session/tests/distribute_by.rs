@@ -257,3 +257,49 @@ fn order_by_with_distribute_by_is_refused() {
         "UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES"
     );
 }
+
+/// A `DISTRIBUTE BY` over a correlated filter keeps the rows of the subquery it sits in: inside a set operation
+/// (decorrelated through the domain of the outer columns) and on both sides of one over a shared view (the second
+/// side a fresh instance of the first). Each query returns what it returns without the `DISTRIBUTE BY`, which
+/// only places rows.
+#[test]
+fn correlated_set_operations_through_distribute_by_keep_their_rows() {
+    let s = session();
+    block_on(async {
+        s.sql("CREATE TEMPORARY VIEW v AS SELECT * FROM VALUES (0, 'abc'), (1, 'abc'), (2, 'xyz') AS v(x, y)")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    for (with, without) in [
+        (
+            "SELECT x, (SELECT count(*) FROM (SELECT y FROM (SELECT y FROM v WHERE v.x = t.x \
+             UNION ALL SELECT y FROM v WHERE v.x = t.x + 1) DISTRIBUTE BY y)) AS n FROM t",
+            "SELECT x, (SELECT count(*) FROM (SELECT y FROM (SELECT y FROM v WHERE v.x = t.x \
+             UNION ALL SELECT y FROM v WHERE v.x = t.x + 1))) AS n FROM t",
+        ),
+        (
+            "SELECT x FROM t WHERE EXISTS (SELECT y FROM (SELECT y FROM v WHERE v.x = t.x DISTRIBUTE BY y) \
+             UNION ALL SELECT y FROM v WHERE v.x = t.x + 1)",
+            "SELECT x FROM t WHERE EXISTS (SELECT y FROM (SELECT y FROM v WHERE v.x = t.x) \
+             UNION ALL SELECT y FROM v WHERE v.x = t.x + 1)",
+        ),
+        (
+            "SELECT x, (SELECT count(*) FROM (SELECT y FROM (SELECT y FROM v WHERE v.x >= t.x DISTRIBUTE BY y) \
+             EXCEPT ALL SELECT y FROM v WHERE v.x > t.x + 1)) AS n FROM t",
+            "SELECT x, (SELECT count(*) FROM (SELECT y FROM (SELECT y FROM v WHERE v.x >= t.x) \
+             EXCEPT ALL SELECT y FROM v WHERE v.x > t.x + 1)) AS n FROM t",
+        ),
+        (
+            "SELECT x FROM t WHERE y IN ((SELECT y FROM v WHERE v.x = t.x DISTRIBUTE BY y) \
+             INTERSECT (SELECT y FROM v WHERE v.x = t.x DISTRIBUTE BY y))",
+            "SELECT x FROM t WHERE y IN ((SELECT y FROM v WHERE v.x = t.x) \
+             INTERSECT (SELECT y FROM v WHERE v.x = t.x))",
+        ),
+    ] {
+        let want = sorted(&s, without);
+        assert!(!want.is_empty(), "{without}");
+        assert_eq!(sorted(&s, with), want, "{with}");
+    }
+}
