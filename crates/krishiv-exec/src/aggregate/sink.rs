@@ -413,6 +413,13 @@ impl HashAggregate {
         Ok(None)
     }
 
+    /// Whether spilling the driver's table would free the `missing` bytes a
+    /// slice was refused: a spilling aggregate whose table holds at least
+    /// that much spills rather than applies smaller slices.
+    fn spill_makes_room(&self, l: &Local, missing: usize) -> bool {
+        self.core.spec.spill.is_some() && l.table.memory_size() >= missing
+    }
+
     fn spiller(&self, ctx: &TaskContext) -> Option<Spiller> {
         Some(Spiller {
             core: Arc::clone(&self.core),
@@ -1341,8 +1348,13 @@ impl Sink for HashAggregate {
                     None => break,
                     // The worst case of fewer rows may fit: every row of
                     // the batch counts as a new group, which few are once
-                    // the table holds the input's keys.
-                    Some(_) if len > MIN_SLICE_ROWS => {
+                    // the table holds the input's keys. Only where a spill
+                    // of the table would not make the room: otherwise the
+                    // driver spills it, as without slices, and the pool
+                    // keeps room for the operators after this one (a table
+                    // grown slice by slice to the pool's limit leaves a
+                    // finished output too large for the build reading it).
+                    Some(bytes) if len > MIN_SLICE_ROWS && !self.spill_makes_room(l, bytes) => {
                         len = (len / 2).max(MIN_SLICE_ROWS);
                         l.slice = Some(len);
                     }

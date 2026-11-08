@@ -262,6 +262,78 @@ async fn a_slice_refused_part_way_resumes_after_the_applied_rows() {
     }
 }
 
+/// A batch refused whole while the driver's table holds more than the
+/// shortfall: a spilling aggregate asks for the memory with nothing
+/// applied, so the driver spills the table (as without slices), rather
+/// than fill the pool slice by slice and leave the operators after it no
+/// room; without a spill scope the batch is applied in slices.
+#[tokio::test]
+async fn a_spilling_table_that_frees_the_shortfall_spills_rather_than_slices() {
+    for spilling in [true, false] {
+        let dir = tempfile::Builder::new()
+            .prefix("krishiv-slice-")
+            .tempdir()
+            .unwrap();
+        let manager = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
+            dir: dir.path().join("spill"),
+            ..krishiv_memory::SpillConfig::default()
+        })
+        .unwrap();
+        let root = TreePool::new(&MemoryConfig {
+            quantum: 16 << 10,
+            ..MemoryConfig::default()
+        });
+        let pool: Arc<dyn MemoryPool> = root.child("q", Some(64 << 20));
+        let q = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            pool,
+        );
+        let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+        let ctx = TaskContext::new(q, executor, SpillOwner::new(), OperatorId(0), "agg");
+        let spec = AggregateSpec {
+            spill: spilling.then(|| manager.scope().unwrap()),
+            ..spec(false)
+        };
+        let agg = HashAggregate::new(spec).unwrap();
+        let g = Sink::global_state(&*agg, &ctx).unwrap();
+        let mut l = Sink::local_state(&*agg, &ctx, &g).unwrap();
+        // A first batch of new keys fits; the table then holds `held`.
+        let a = batch(false, 0, 0..ROWS as i64);
+        assert!(matches!(
+            agg.sink(a, &mut l, &g).unwrap(),
+            SinkStatus::NeedMoreInput
+        ));
+        let held = root.reserved();
+        // Leave half of that free: the next batch of new keys (worst case
+        // about `held`) is refused whole, and the table frees the rest.
+        let pool = ctx.query().pool();
+        let mut ballast = ConsumerHandle::register(Arc::clone(pool), "ballast", None).reservation();
+        let free = match ballast.try_grow(usize::MAX >> 1) {
+            Err(krishiv_memory::MemoryError::Exhausted { available, .. }) => available,
+            other => panic!("{other:?}"),
+        };
+        ballast.try_grow(free - held / 2).unwrap();
+        let b = batch(false, 10_000, ROWS as i64..2 * ROWS as i64);
+        let status = agg.sink(b, &mut l, &g).unwrap();
+        if spilling {
+            assert!(
+                matches!(status, SinkStatus::NeedMemory { .. }),
+                "no spill asked"
+            );
+            assert_eq!(resumes_at(&l), None, "a slice was applied before the spill");
+        } else {
+            let sliced = matches!(status, SinkStatus::NeedMoreInput) || resumes_at(&l).is_some();
+            assert!(
+                sliced,
+                "without a spill scope the batch is applied in slices"
+            );
+        }
+        drop((l, g, ballast, ctx));
+    }
+}
+
 /// A slice's copy is sized by its own rows: a view array's by its views
 /// (a copy shares the data buffers), a `Utf8` array's by its offsets and
 /// bytes; neither by its parent's buffers.
