@@ -125,7 +125,7 @@ jobs:
         run: cargo xtask coverage-scope --base "$BASE_SHA" --head "$HEAD_SHA"
       # The benchmark harness tests need no built extension: plain pytest under
       # coverage.py, writing an lcov tracefile with paths relative to bench/.
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: $/.github/actions/setup-uv
         if: steps.changes.outputs.bench == 'true'
       - name: bench/ tests under coverage.py
         id: benchcov
@@ -134,7 +134,7 @@ jobs:
         run: |
           uv sync --frozen
           uv run --frozen --no-sync pytest -q --cov=src/krishiv_bench --cov-report="lcov:$RUNNER_TEMP/bench.lcov"
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         if: steps.scope.outputs.rust == 'true'
         with:
           tool: cargo-llvm-cov,cargo-nextest

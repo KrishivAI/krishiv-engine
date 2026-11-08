@@ -96,6 +96,36 @@ fn query_text_never_holds_the_canary() {
     );
 }
 
+/// The key stays and the value (to the end of the text, by design) is hidden:
+/// a later statement's `=` does not move the boundary of a `SET key value`.
+#[test]
+fn set_redaction_keeps_the_key_and_every_other_statement() {
+    for (sql, want) in [
+        (
+            "SET password Canary7f3a9c; SELECT 1 = 1",
+            "SET password *********(redacted)",
+        ),
+        (
+            "SET a = 1; SET password = Canary7f3a9c",
+            "SET a = 1; SET password = *********(redacted)",
+        ),
+        (
+            "SET password = ;Canary7f3a9c",
+            "SET password =*********(redacted)",
+        ),
+        (
+            "SET password =; Canary7f3a9c",
+            "SET password =*********(redacted)",
+        ),
+        (
+            "SET spark.hadoop.fs.s3a.secret.key=Canary7f3a9c",
+            "SET spark.hadoop.fs.s3a.secret.key=*********(redacted)",
+        ),
+    ] {
+        assert_eq!(redact_sql(sql).as_str(), want, "{sql}");
+    }
+}
+
 /// Parsing, lowering and their errors (message, parameters, `Debug`) never
 /// hold a secret, wherever it is written; nor does a lowered plan.
 #[test]
@@ -199,5 +229,47 @@ fn nested_aes_calls_redact_in_linear_time() {
     ] {
         let r = redact_sql(&sql);
         assert!(!leaks(r.as_str()));
+    }
+}
+
+/// A nested block comment between `SET`, the key and the value, and a
+/// value written without `=`, must not hide a secret; the key stays and the
+/// value becomes the marker.
+#[test]
+fn set_with_nested_comments_or_no_equals_redacts() {
+    for (sql, expected) in [
+        (
+            "SET /* a /* b */ c */ password = Canary7f3a9c",
+            "SET /* a /* b */ c */ password = *********(redacted)",
+        ),
+        (
+            "SET password /* /* x */ */ = 'Canary7f3a9c'",
+            "SET password /* /* x */ */ = *********(redacted)",
+        ),
+        (
+            "SET password = /* /* x */ */ Canary7f3a9c",
+            "SET password = /* /* x */ */ *********(redacted)",
+        ),
+        (
+            "SET password Canary7f3a9c",
+            "SET password *********(redacted)",
+        ),
+        // A later statement's `=` does not move the value range (the
+        // redaction runs to the end of the text, fail-safe).
+        (
+            "SET password Canary7f3a9c; SELECT 1 = 1",
+            "SET password *********(redacted)",
+        ),
+        // A sensitive SET after other statements is still redacted.
+        (
+            "SET a = 1; SET password = Canary7f3a9c",
+            "SET a = 1; SET password = *********(redacted)",
+        ),
+        (
+            "SELECT 1; SET password Canary7f3a9c",
+            "SELECT 1; SET password *********(redacted)",
+        ),
+    ] {
+        assert_eq!(redact_sql(sql).as_str(), expected, "{sql}");
     }
 }

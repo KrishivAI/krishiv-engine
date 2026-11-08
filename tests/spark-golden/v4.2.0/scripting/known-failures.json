@@ -1,5 +1,5 @@
 {
-  "3": "UNEXPLAINED: a table checksum differs after the script (not yet traced to a statement)",
-  "75": "UNEXPLAINED: a table checksum differs after the script (not yet traced to a statement)",
-  "8": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet"
+  "3": "NOT AN ENGINE BUG (Spark scan order): the FOR query is `FROM customers LIMIT 5` with no ORDER BY; Spark's run visited the rows in the order 3,2,1 (orders checksum -1692245526 is reproduced with ORDER BY customer_id DESC, not with ASC); ours scans in insert order",
+  "75": "NOT AN ENGINE BUG (Spark scan order): the FOR query is `FROM suppliers LIMIT 3` with no ORDER BY; Spark visited supplier_id 3,1,2 (the Murmur3 sum of the three inserted product rows reproduces Spark's products checksum only for (4,3),(5,1),(6,2)); ours visits 1,2,3",
+  "8": "NOT AN ENGINE BUG (Spark scan order; the datetime functions now exist): the FOR query is `FROM suppliers LIMIT 3` with no ORDER BY; Spark's products checksum 317645712 is reproduced with ORDER BY supplier_contact, not with supplier_id in either direction; ours scans in insert order"
 }

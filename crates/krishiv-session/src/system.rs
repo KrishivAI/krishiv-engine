@@ -1162,7 +1162,7 @@ impl QueryLog {
 }
 
 /// The state a failed query shows for its error class.
-fn outcome_state(class: &str) -> &'static str {
+pub(crate) fn outcome_state(class: &str) -> &'static str {
     match class {
         "KRISHIV_INSUFFICIENT_PERMISSIONS" => "denied",
         "OPERATION_CANCELED" | "KRISHIV_QUERY_TIMEOUT" | "KRISHIV_QUERY_KILLED" => "cancelled",
