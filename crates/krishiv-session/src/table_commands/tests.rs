@@ -20,6 +20,24 @@ fn a_namespace_location_is_qualified_against_the_warehouse() {
         qualified_namespace_location("s3a://bucket/x", wh),
         "s3a://bucket/x"
     );
+    // Hadoop `Path` normalisation (Spark 4.2.0 local run, 2026-11-08).
+    assert_eq!(
+        qualified_namespace_location("rel/dir//x/", wh),
+        "file:/w/warehouse/rel/dir/x"
+    );
+    assert_eq!(
+        qualified_namespace_location("rel/./y", wh),
+        "file:/w/warehouse/rel/y"
+    );
+    assert_eq!(
+        qualified_namespace_location("a/../b", wh),
+        "file:/w/warehouse/b"
+    );
+    assert_eq!(qualified_namespace_location("/abs//z/", wh), "file:/abs/z");
+    assert_eq!(
+        qualified_namespace_location("file:/abs2//w/", wh),
+        "file:/abs2/w"
+    );
     // A colon after a path character is not a scheme.
     assert_eq!(
         qualified_namespace_location("a/b:c", wh),
