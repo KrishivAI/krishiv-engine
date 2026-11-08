@@ -72,20 +72,61 @@ fn same_cost(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * a.abs().max(b.abs())
 }
 
+/// What [`dpsub`] asks of the graph. A set's rows, width and the bytes of a join input of it are worked
+/// out once, when the set is planned, into tables indexed by the set's bits: a split reads its halves
+/// from those, which is what it does 3^n times.
+pub(super) struct Shape<'a> {
+    /// The rows of the join of a set's inputs.
+    pub(super) rows_of: &'a dyn Fn(Set) -> f64,
+    /// The bytes per row of that join (0 when the reads are unknown).
+    pub(super) width_of: &'a dyn Fn(Set) -> f64,
+    /// What a set's join result costs, from its rows (`C_out`: the rows; bytes: a row's work).
+    pub(super) result_cost: &'a dyn Fn(f64) -> f64,
+    /// Whether plans are costed by bytes: a split then also costs its build input.
+    pub(super) by_bytes: bool,
+    /// A split's build cost from the rows and width of its halves (by bytes only).
+    pub(super) build_cost: &'a dyn Fn((f64, f64), (f64, f64)) -> f64,
+    /// Whether, costed by rows, plans of equal rows are told apart by their bytes.
+    pub(super) ties: bool,
+    /// The bytes of producing `rows` rows (the tie of a set).
+    pub(super) tie_result: &'a dyn Fn(f64) -> f64,
+    /// The bytes of building a join input of `rows` rows and `width` bytes per row.
+    pub(super) tie_bytes: &'a dyn Fn(f64, f64) -> f64,
+}
+
+/// A set that has a plan: its rows, its width and the bytes of building it.
+#[derive(Clone, Copy, Default)]
+struct Planned {
+    rows: f64,
+    width: f64,
+    bytes: f64,
+}
+
 /// Dynamic programming over every split of every subset of `n` inputs:
-/// the table of cheapest plans and the work done. `n` is below 64. A
-/// set's join costs `rows_of` of the set plus `split_of` of its two halves
-/// (the build of a hash join; zero for `C_out` by rows).
-pub(super) fn dpsub(
-    n: usize,
-    masks: &[Set],
-    rows_of: &dyn Fn(Set) -> f64,
-    split_of: &dyn Fn(Set, Set) -> f64,
-    tie_of: &dyn Fn(Set) -> f64,
-    tie_split: &dyn Fn(Set, Set) -> f64,
-) -> (HashMap<Set, Best>, Work) {
+/// the table of cheapest plans and the work done. `n` is below 64 (and the tables below 2^n entries, so
+/// at most `MAX_DP_LIMIT` inputs). A set's join costs its result plus, by bytes, the build of its two halves.
+pub(super) fn dpsub(n: usize, masks: &[Set], shape: &Shape<'_>) -> (HashMap<Set, Best>, Work) {
     let full: Set = (1 << n) - 1;
-    let mut best: HashMap<Set, Best> = singletons(n).collect();
+    let size = usize::try_from(full).map_or(usize::MAX, |f| f + 1);
+    let mut table: Vec<Option<Best>> = vec![None; size];
+    let mut planned = vec![Planned::default(); size];
+    let at = |s: Set| usize::try_from(s).unwrap_or(usize::MAX);
+    let stats = |s: Set| {
+        let (rows, width) = ((shape.rows_of)(s), (shape.width_of)(s));
+        Planned {
+            rows,
+            width,
+            bytes: if shape.ties {
+                (shape.tie_bytes)(rows, width)
+            } else {
+                0.0
+            },
+        }
+    };
+    for (s, b) in singletons(n) {
+        table[at(s)] = Some(b);
+        planned[at(s)] = stats(s);
+    }
     let mut work = Work::default();
     for s in 1..=full {
         if s.count_ones() < 2 {
@@ -100,15 +141,34 @@ pub(super) fn dpsub(
             // Each split once (the half holding the lowest input is `a`),
             // both halves planned, and joined by some conjunct.
             if a & low != 0
-                && let (Some(x), Some(y)) = (best.get(&a), best.get(&b))
+                && let (Some(x), Some(y)) = (table[at(a)], table[at(b)])
                 && connected(masks, a, b)
             {
                 work.pairs += 1;
-                let cost = x.cost + y.cost + split_of(a, b);
-                // The tie (the bytes of the split) is worked out only when it can matter: for a
-                // split that is cheaper in rows or equal to the best so far, not for the
-                // many that are dearer. The first of equal splits wins: they come largest `a` first.
-                let tie_of_split = || x.tie + y.tie + tie_split(a, b);
+                let (pa, pb) = (planned[at(a)], planned[at(b)]);
+                let build = if shape.by_bytes {
+                    (shape.build_cost)((pa.rows, pa.width), (pb.rows, pb.width))
+                } else {
+                    0.0
+                };
+                let cost = x.cost + y.cost + build;
+                // The tie (the bytes of the split: the build input is the one with fewer rows,
+                // `b` on a tie) is worked out only when it can matter: for a split that is cheaper
+                // in rows or equal to the best so far, not for the many that are dearer. The first
+                // of equal splits wins: they come largest `a` first.
+                let tie_of_split = || {
+                    if shape.ties {
+                        x.tie
+                            + y.tie
+                            + if pb.rows <= pa.rows {
+                                pb.bytes
+                            } else {
+                                pa.bytes
+                            }
+                    } else {
+                        0.0
+                    }
+                };
                 let tie = match found {
                     None => Some(tie_of_split()),
                     Some(f) if same_cost(cost, f.cost) => {
@@ -128,11 +188,22 @@ pub(super) fn dpsub(
             a = (a - 1) & s;
         }
         if let Some(mut f) = found {
-            f.cost = rows(f.cost + rows_of(s));
-            f.tie = rows(f.tie + tie_of(s));
-            best.insert(s, f);
+            let p = stats(s);
+            f.cost = rows(f.cost + (shape.result_cost)(p.rows));
+            f.tie = if shape.ties {
+                rows(f.tie + (shape.tie_result)(p.rows))
+            } else {
+                rows(f.tie)
+            };
+            table[at(s)] = Some(f);
+            planned[at(s)] = p;
         }
     }
+    let best = table
+        .into_iter()
+        .enumerate()
+        .filter_map(|(s, b)| Some((Set::try_from(s).ok()?, b?)))
+        .collect();
     (best, work)
 }
 
@@ -157,12 +228,26 @@ mod tests {
         }
     }
 
+    /// A shape costed by `C_out` alone: no widths, no ties.
+    fn by_rows(rows_of: &dyn Fn(Set) -> f64) -> Shape<'_> {
+        Shape {
+            rows_of,
+            width_of: &|_| 0.0,
+            result_cost: &|r| r,
+            by_bytes: false,
+            build_cost: &|_, _| 0.0,
+            ties: false,
+            tie_result: &|_| 0.0,
+            tie_bytes: &|_, _| 0.0,
+        }
+    }
+
     #[test]
     fn a_chain_costs_its_connected_splits() {
         let n = 10;
         let masks: Vec<Set> = (1..n).map(|i| (1 << (i - 1)) | (1 << i)).collect();
         let rows_of = estimator(vec![100.0; n], masks.iter().map(|&m| (m, 0.01)).collect());
-        let (best, work) = dpsub(n, &masks, &rows_of, &|_, _| 0.0, &|_| 0.0, &|_, _| 0.0);
+        let (best, work) = dpsub(n, &masks, &by_rows(&rows_of));
         // (n³ − n) / 6 connected pairs of a chain, among every split of
         // every subset: (3^n + 1) / 2 − 2^n.
         assert_eq!(work.pairs, 165);
@@ -176,7 +261,7 @@ mod tests {
         // Inputs 0, 1 and 2 meet only in one condition over all three.
         let masks = vec![0b111];
         let rows_of = estimator(vec![10.0; 3], vec![(0b111, 0.5)]);
-        let (best, work) = dpsub(3, &masks, &rows_of, &|_, _| 0.0, &|_| 0.0, &|_, _| 0.0);
+        let (best, work) = dpsub(3, &masks, &by_rows(&rows_of));
         assert!(!best.contains_key(&0b111));
         assert_eq!(work.pairs, 0);
     }
@@ -186,7 +271,7 @@ mod tests {
         // 0-1 joined; the hyperedge {0, 1, 2} then joins {0, 1} and {2}.
         let masks = vec![0b011, 0b111];
         let rows_of = estimator(vec![10.0; 3], vec![(0b011, 0.1), (0b111, 0.5)]);
-        let (best, _) = dpsub(3, &masks, &rows_of, &|_, _| 0.0, &|_| 0.0, &|_, _| 0.0);
+        let (best, _) = dpsub(3, &masks, &by_rows(&rows_of));
         assert_eq!(
             best.get(&0b111).map(|b| (b.left, b.right)),
             Some((0b011, 0b100))
@@ -199,14 +284,15 @@ mod tests {
         // same rows; the tie says the second is the smaller in bytes.
         let masks = vec![0b011, 0b110];
         let rows_of = estimator(vec![10.0; 3], masks.iter().map(|&m| (m, 0.1)).collect());
-        let tie_split = |a: Set, b: Set| {
-            if a | b == 0b111 && a == 0b110 || b == 0b110 {
-                1.0
-            } else {
-                5.0
-            }
+        // The join of {1, 2} is the narrowest, so building it (rows equal) is the smaller build.
+        let width_of = |s: Set| if s == 0b110 { 0.0 } else { 1.0 };
+        let shape = Shape {
+            width_of: &width_of,
+            ties: true,
+            tie_bytes: &|r, w| r * (48.0 + w),
+            ..by_rows(&rows_of)
         };
-        let (best, _) = dpsub(3, &masks, &rows_of, &|_, _| 0.0, &|_| 0.0, &tie_split);
+        let (best, _) = dpsub(3, &masks, &shape);
         assert_eq!(
             best.get(&0b111).map(|b| (b.left, b.right)),
             Some((0b001, 0b110))
@@ -222,7 +308,7 @@ mod tests {
         // same, and the largest half holding input 0 wins.
         let masks = vec![0b011, 0b110, 0b101];
         let rows_of = estimator(vec![10.0; 3], masks.iter().map(|&m| (m, 0.1)).collect());
-        let (best, work) = dpsub(3, &masks, &rows_of, &|_, _| 0.0, &|_| 0.0, &|_, _| 0.0);
+        let (best, work) = dpsub(3, &masks, &by_rows(&rows_of));
         assert_eq!(work.pairs, 6);
         assert_eq!(
             best.get(&0b111).map(|b| (b.left, b.right)),
