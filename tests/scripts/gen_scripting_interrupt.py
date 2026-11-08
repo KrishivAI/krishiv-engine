@@ -44,7 +44,7 @@ def run(spark, name, sql, how, delay=4.0):
         try:
             df = spark.sql(sql)
             out["rows"] = [tuple(r) for r in df.collect()]
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             out["err"] = f"{type(e).__name__}: {str(e).splitlines()[0][:200]}"
             out["cls"] = getattr(e, "getCondition", lambda: None)() or getattr(e, "_errorClass", None)
         out["secs"] = round(time.time() - t0, 1)
