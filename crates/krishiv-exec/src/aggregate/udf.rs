@@ -35,7 +35,7 @@ use arrow_buffer::BooleanBuffer;
 use arrow_schema::{DataType, Field};
 use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable};
 use krishiv_functions::scalar::failed_execute;
-use krishiv_types::arrow::client_arrow_type;
+use krishiv_types::arrow::edge_arrow_type;
 use krishiv_types::batch::Weights;
 use krishiv_udf_sdk::{
     AggregateUdf, ArgField, GroupsAccumulator, InvokeContext, NullHandling, UdfArg, UdfError,
@@ -148,12 +148,13 @@ pub(crate) fn arg_fields(call: &UdafCall) -> Result<Vec<ArgField>> {
 }
 
 /// The carrier a UDF returns `t` on: `Utf8` for `STRING`, `Binary` for
-/// `BINARY`, decimals on `Decimal128`, the canonical type otherwise.
+/// `BINARY`, decimals on `Decimal128`, calendar intervals on `Interval(MonthDayNano)` (the session edge's carriers;
+/// Spark hands Arrow UDFs a `CalendarInterval` the same way), the canonical type otherwise.
 fn plain_carrier(t: &krishiv_types::DataType) -> DataType {
     match t {
         krishiv_types::DataType::String => DataType::Utf8,
         krishiv_types::DataType::Binary => DataType::Binary,
-        _ => client_arrow_type(&t.to_arrow()),
+        _ => edge_arrow_type(&t.to_arrow()),
     }
 }
 
@@ -424,7 +425,7 @@ impl UdfAcc {
         }
         let wide: Vec<ArrayRef> = args
             .iter()
-            .map(|a| recarried_array(a, &client_arrow_type(a.data_type())))
+            .map(|a| recarried_array(a, &edge_arrow_type(a.data_type())))
             .collect::<std::result::Result<_, _>>()?;
         // TODO(unit 3b / P4 IVM): retracted rows fold after the added ones of
         // the batch; an order-sensitive UDAF would need the batch split at
