@@ -978,3 +978,30 @@ async fn a_build_that_fits_with_one_partition_copy_completes() {
     );
     assert_eq!(spill_files(&scope), 0);
 }
+
+/// Partitions whose chunks hold whole arena blocks (2^14 rows) keep the
+/// copied tails beside them through the probe. A spilling build reserves
+/// those up front with the indexes, so the copy it holds for one partition
+/// at a time is never used up by kept tails: under every limit from the
+/// in-memory peak down, the build either fits or spills, and never fails.
+#[tokio::test(start_paused = true)]
+async fn a_spilling_build_with_kept_tails_fits_or_spills_under_any_limit() {
+    // Two input batches over distinct keys: each of the 8 level-0
+    // partitions gets two chunks of about 24,400 rows, a whole block and a
+    // tail of about 8,000 rows each. The two tails make one copied block,
+    // kept beside the chunks: a third of the build is kept tails.
+    let build = skewed(2 * 8 * 24_384, 1 << 30);
+    let chunk = build.len() / 2;
+    let (expect, q) = run_self_join(&build, chunk, 512 * MIB, None).await;
+    let expect = expect.unwrap();
+    let single = peak(&q);
+    for step in 0..12 {
+        let limit = single - single * step / 32;
+        let (_manager, scope) = spill();
+        let (got, _) = run_self_join(&build, chunk, limit, Some(scope)).await;
+        match got {
+            Ok(got) => assert!(got == expect, "the join result differs at {limit}"),
+            Err(e) => panic!("the build failed at limit {limit} ({single} in memory): {e}"),
+        }
+    }
+}

@@ -404,10 +404,12 @@ impl BuildSink {
     }
 }
 
-/// What indexing a partition's in-memory rows reserves: its [`JoinTable`]
-/// index (and match bitmap when `marks`), and, while it indexes, the copy
-/// of the chunk tails the arena joins into blocks
-/// ([`RowArena::reblock_bytes`]); `None` if no rows are in memory.
+/// What indexing a partition's in-memory rows reserves, as `(lasting,
+/// transient)`: lasting is its [`JoinTable`] index (and match bitmap when
+/// `marks`) plus the copied chunk tails that stay beside chunks the arena
+/// also slices (held through the probe); transient is the rest of the
+/// tails' copy, which replaces chunks dropped once the arena is built
+/// ([`RowArena::reblock_bytes`]). `None` if no rows are in memory.
 fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize)> {
     if part.chunks.is_empty() {
         return None;
@@ -418,7 +420,8 @@ fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usiz
     if marks {
         index = index.saturating_add(JoinTable::marks_bytes(rows));
     }
-    Some((index, RowArena::reblock_bytes(&part.chunks, 0).0))
+    let (copy, kept) = RowArena::reblock_bytes(&part.chunks, 0);
+    Some((index.saturating_add(kept), copy.saturating_sub(kept)))
 }
 
 /// A duration in whole nanoseconds, saturating.
@@ -432,11 +435,12 @@ struct Job {
     /// Bytes of its rows in memory.
     bytes: usize,
     chunks: Vec<Batch>,
-    /// What indexing it reserves: the index and the tails' copy (see
-    /// [`build_need`]).
+    /// What indexing it reserves: lasting (index and kept tails) and the
+    /// transient copy (see [`build_need`]).
     need: (usize, usize),
-    /// Of that, the arena's copied tails that stay beside chunks it also
-    /// slices: reserved through the probe ([`RowArena::reblock_bytes`]).
+    /// Of the lasting part, the arena's copied tails that stay beside chunks
+    /// it also slices: reserved through the probe
+    /// ([`RowArena::reblock_bytes`]).
     kept: usize,
     /// Its estimated distinct keys (row layout, when sketched).
     keys: Option<usize>,
@@ -716,9 +720,9 @@ impl Sink for BuildSink {
             // Write what is left of spilled partitions; reserve the index of
             // the rest, spilling the largest while it does not fit. The arenas
             // read the blocks in place; finalize copies only the chunk tails.
-            // A spilling build reserves every index and the largest copy, so
-            // one partition can always run and the copies never need the
-            // build's size again.
+            // A spilling build reserves every index and kept tail and the
+            // largest transient copy, so one partition can always run and the
+            // copies never need the build's size again.
             let mut index = ctx.consumer().reservation();
             let mut held_copy = 0;
             if s.spill.is_some() {
@@ -788,7 +792,7 @@ impl Sink for BuildSink {
             // One blocking task per partition (the executor's blocking pool
             // bounds how many run at once), each started only once its tails'
             // copy is reserved. A spilling build's reservation already funds
-            // the largest copy (`spare`), so one partition can always run;
+            // the largest transient copy (`spare`), so one partition can always run;
             // without a spill scope a partition's index and copy are asked
             // for through arbitration when nothing else runs.
             let spill = s.spill.is_some();
@@ -867,20 +871,19 @@ impl Sink for BuildSink {
                 let Some(done) = futures::StreamExt::next(&mut running).await else {
                     break;
                 };
-                let (p, table, index_bytes, copy, kept) = done?;
+                let (p, table, lasting, transient, kept) = done?;
                 // The index was reserved for one key per row: keep what it
-                // holds.
+                // holds. The copied tails beside chunks the arena also slices
+                // (`kept`, part of `lasting`) stay reserved through the probe.
                 index.shrink(
-                    index_bytes
+                    lasting
+                        .saturating_sub(kept)
                         .saturating_sub(table.index_memory())
                         .min(index.size()),
                 );
-                // The copied tails beside chunks the arena also slices stay
-                // reserved through the probe; the rest of the copy replaced
-                // chunks that are gone now.
-                let transient = copy.saturating_sub(kept);
+                // The transient copy replaced chunks that are gone now.
                 if spill {
-                    // Keep the largest copy funded; return the rest.
+                    // Keep the largest transient copy funded; return the rest.
                     spare = spare.saturating_add(transient);
                     if spare > held_copy {
                         index.shrink((spare - held_copy).min(index.size()));
