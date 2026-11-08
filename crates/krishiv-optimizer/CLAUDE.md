@@ -11,7 +11,7 @@ Paths are relative to this crate.
 - `src/lib.rs` rule batches and the `optimize` entry point
 - `src/dag.rs` `dag::Rewriter`, the rewrite-once rule for shared subtrees
 - `src/fold.rs` constant folding; `src/pushdown.rs` predicate pushdown (below a window only on partition keys); `src/prune.rs` column pruning (removes unused window columns)
-- `src/project.rs` projection rules; `src/limit.rs` limit rules; `src/group_limit.rs` Spark's
+- `src/project.rs` projection rules; `src/repartition.rs` Spark's `CollapseRepartition` (a `DISTRIBUTE BY` directly over another drops the inner one; filters move below one in `pushdown.rs`, pruning keeps the columns its expressions read); `src/limit.rs` limit rules; `src/group_limit.rs` Spark's
   `InferWindowGroupLimit` decision (applied by the physical planner)
 - `src/restrict.rs` subquery restriction rules
 - `src/inline_cte.rs` CTE inlining (a nondeterministic definition read twice stays a `CteRef`); `src/share_cte.rs` `ShareCte` (P2-T198): equal deterministic instances with a pipeline breaker become one `WITH` definition, only when a session configuration is given and `krishiv.sql.optimizer.shareCteInstances` is on

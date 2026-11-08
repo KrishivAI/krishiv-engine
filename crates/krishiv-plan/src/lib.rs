@@ -79,7 +79,7 @@
 //! | `PlanNode::Shift` | R | - | - |
 //! | `PlanNode::Hint` | U | - | - |
 //! | `PlanNode::PipeOperator` | U | - | - |
-//! | `PlanNode::Repartition` | U | - | - |
+//! | `PlanNode::Repartition` | U, R | - | - |
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |

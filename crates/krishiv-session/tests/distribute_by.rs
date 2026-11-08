@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `DISTRIBUTE BY`, `CLUSTER BY` and `SORT BY ... DISTRIBUTE BY` (Spark's `RepartitionByExpression`), in queries
-//! and after `|>`. The expressions are checked as Spark checks them; the rows are the input's. Expected results
-//! and errors are from a Spark 4.2.0 run.
+//! and after `|>`. The expressions are checked as Spark checks them and evaluated as its shuffle evaluates them;
+//! the rows are the input's. Expected results and errors are from a Spark 4.2.0 run.
 #![cfg(test)]
 
 use arrow_array::Array;
@@ -83,13 +83,20 @@ fn params(s: &Session, sql: &str) -> (String, Vec<String>) {
     }
 }
 
-/// A recorded difference (`docs/known-differences.md`): Spark evaluates the
-/// partitioning expressions while it shuffles, so `x + 'a'` fails there
-/// with `CAST_INVALID_INPUT`; the repartition is dropped here and the rows
-/// come back. Remove with the exchange queued for the execution lane.
+/// Spark evaluates the partitioning expressions while it shuffles, so
+/// `x + 'a'` (`'a'` cast to a number) fails with `CAST_INVALID_INPUT`
+/// under ANSI, also under a `count(*)` that reads no column; the other
+/// cases are in `distribute_by_goldens.rs`.
 #[test]
-fn the_expressions_are_not_evaluated() {
+fn the_expressions_are_evaluated() {
     let s = session();
+    for sql in [
+        "SELECT x FROM t DISTRIBUTE BY x + 'a'",
+        "SELECT count(*) FROM (SELECT x FROM t DISTRIBUTE BY x + 'a')",
+    ] {
+        assert_eq!(error(&s, sql).0, "CAST_INVALID_INPUT", "{sql}");
+    }
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
     assert_eq!(
         sorted(&s, "SELECT x FROM t DISTRIBUTE BY x + 'a'"),
         ["0", "1"]
