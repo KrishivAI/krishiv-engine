@@ -357,3 +357,113 @@ async fn a_member_whose_driver_waits_in_a_sibling_pool_is_not_waited_for() {
     c_seat.set(SeatState::Idle);
     b_waits.await.unwrap().unwrap();
 }
+
+/// What a `SpillOnly` request waits for: another driver's spill write, or
+/// its holding cohort member.
+#[derive(Clone, Copy, Debug)]
+enum Awaited {
+    Write,
+    Member,
+}
+
+/// Makes `h` hold `3 * Q` while `what` is in progress; the guard ends it
+/// (none if the pool refused the bytes or has no cohorts).
+fn hold(
+    h: &Arc<ConsumerHandle>,
+    what: Awaited,
+) -> Option<(Reservation, Box<dyn std::any::Any + Send>)> {
+    let mut held = h.reservation();
+    held.try_grow(3 * Q).ok()?;
+    let guard: Box<dyn std::any::Any + Send> = match what {
+        Awaited::Write => Box::new(h.spilling()),
+        Awaited::Member => {
+            let mut seat = h.join_cohort("merges")?;
+            seat.set(SeatState::Holding);
+            Box::new(seat)
+        }
+    };
+    Some((held, guard))
+}
+
+/// A request made without abort (`reserve_for_without_abort`, the sort's
+/// intermediate merge) whose binding is outside its query group (the
+/// root's limit, the query has none) waits for another driver's spill
+/// write or holding cohort member like a plain request, and succeeds once
+/// it frees the memory; no query is aborted.
+#[tokio::test(start_paused = true)]
+async fn a_request_without_abort_waits_for_a_write_or_a_holding_member() {
+    for what in [Awaited::Write, Awaited::Member] {
+        let root = root(Some(4 * Q), Q);
+        let q = root.child_pool("q", None);
+        let (a, b) = (SpillOwner::new(), SpillOwner::new());
+        let ha = ConsumerHandle::register(
+            Arc::clone(&q) as Arc<dyn MemoryPool>,
+            "a",
+            Some(a.signal() as Arc<dyn Spillable>),
+        );
+        let hb = ConsumerHandle::register(
+            Arc::clone(&q) as Arc<dyn MemoryPool>,
+            "b",
+            Some(b.signal() as Arc<dyn Spillable>),
+        );
+        let (mut held, guard) = hold(&hb, what).unwrap();
+        let started = tokio::time::Instant::now();
+        let want = tokio::spawn({
+            let ha = Arc::clone(&ha);
+            async move { a.reserve_for_without_abort(&ha, 2 * Q, || async {}).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!want.is_finished(), "{what:?}: the request did not wait");
+        held.shrink(3 * Q);
+        drop(guard);
+        want.await.unwrap().unwrap();
+        assert_eq!(ha.credit(), 2 * Q, "{what:?}");
+        assert!(started.elapsed() < Duration::from_secs(1), "{what:?}");
+        assert_eq!(root.stats().aborts, 0, "{what:?}");
+    }
+}
+
+/// The same request fails at once, with no query aborted, when the write
+/// ends or the member goes idle without freeing anything: where a plain
+/// request with its binding outside the group would abort a query, the
+/// `SpillOnly` exit refuses instead.
+#[tokio::test(start_paused = true)]
+async fn a_request_without_abort_fails_at_once_when_the_awaited_frees_nothing() {
+    for what in [Awaited::Write, Awaited::Member] {
+        let root = root(Some(4 * Q), Q);
+        let q = root.child_pool("q", None);
+        let (a, b) = (SpillOwner::new(), SpillOwner::new());
+        let ha = ConsumerHandle::register(
+            Arc::clone(&q) as Arc<dyn MemoryPool>,
+            "a",
+            Some(a.signal() as Arc<dyn Spillable>),
+        );
+        let hb = ConsumerHandle::register(
+            Arc::clone(&q) as Arc<dyn MemoryPool>,
+            "b",
+            Some(b.signal() as Arc<dyn Spillable>),
+        );
+        let (held, guard) = hold(&hb, what).unwrap();
+        let started = tokio::time::Instant::now();
+        let want = tokio::spawn({
+            let ha = Arc::clone(&ha);
+            async move { a.reserve_for_without_abort(&ha, 2 * Q, || async {}).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!want.is_finished(), "{what:?}: the request did not wait");
+        drop(guard);
+        let e = want.await.unwrap().unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnableToAcquireMemory,
+            "{what:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{what:?}: waited {:?} after it ended",
+            started.elapsed()
+        );
+        assert_eq!(root.stats().aborts, 0, "{what:?}: a query was aborted");
+        drop(held);
+    }
+}
