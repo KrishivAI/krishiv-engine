@@ -1021,9 +1021,10 @@ async fn a_built_table_keeps_reserved_what_its_arena_holds() {
     let steady = metric(&q, "HashJoinBuild", "steady_reserved_bytes");
     let arena = metric(&q, "HashJoinBuild", "arena_bytes");
     assert!(arena > 0);
-    // Exact blocks round each buffer up to 64 bytes, nothing more.
+    // Exact blocks round each buffer up to 64 bytes, nothing more; and
+    // the true-up never leaves the arena under-reserved.
     assert!(
-        steady <= arena + arena / 20,
+        steady >= arena - arena / 20 && steady <= arena + arena / 20,
         "steady {steady} B against an arena of {arena} B"
     );
 }

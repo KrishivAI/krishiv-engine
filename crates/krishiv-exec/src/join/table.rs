@@ -448,7 +448,9 @@ impl RowArena {
     /// allocated size, builder slack included; once finalize copies the
     /// tails into exact blocks and drops the chunks, this is what the
     /// arena still holds (study 21 §4.4: the slack of the tails kept
-    /// reserved was ~27 MB per build at 12 threads).
+    /// reserved was ~27 MB per build at 12 threads). Once per partition at
+    /// finalize: it clones each column's `ArrayData`, so it stays off hot
+    /// paths.
     pub(crate) fn held_bytes(&self) -> usize {
         fn walk(
             data: &arrow_data::ArrayData,
@@ -465,7 +467,11 @@ impl RowArena {
                 walk(child, seen, sum);
             }
         }
-        let mut seen = std::collections::HashSet::new();
+        let columns = self
+            .parts
+            .first()
+            .map_or(0, |p| p.batch.data().num_columns());
+        let mut seen = std::collections::HashSet::with_capacity(self.parts.len() * columns * 3);
         let mut sum = 0usize;
         for part in &self.parts {
             for column in part.batch.data().columns() {

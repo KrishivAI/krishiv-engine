@@ -429,8 +429,9 @@ fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usiz
 /// charged at the chunk they were sliced from), the arena copied the tails
 /// into exact blocks and the chunks are gone, so the reservation keeps
 /// `bytes`, the arena's allocated bytes ([`RowArena::held_bytes`]), less
-/// the `kept` tails reserved with the index. Never below zero, and only
-/// ever shrinks.
+/// the `kept` tail bytes the index reservation still holds (so the two
+/// together cover the arena; `kept` may be all of it, leaving the chunks'
+/// reservation nothing). Never below zero, and only ever shrinks.
 fn trim_to_arena(part: &mut Part, kept: usize, bytes: usize) {
     let mut excess = part.bytes().saturating_sub(bytes.saturating_sub(kept));
     for m in part.memory.iter_mut() {
@@ -816,8 +817,9 @@ impl Sink for BuildSink {
             let mut jobs = std::collections::VecDeque::from(jobs);
             let mut running = futures::stream::FuturesUnordered::new();
             let mut tables = Vec::with_capacity(jobs.len());
-            // Per built partition: its kept tails and its arena's allocated
-            // bytes, to true up its chunks' reservation once they are gone.
+            // Per built partition: the kept tails its index reservation
+            // holds and its arena's allocated bytes, to true up its chunks'
+            // reservation once they are gone.
             let mut held = Vec::with_capacity(jobs.len());
             loop {
                 if let Some(&Job {
@@ -924,7 +926,10 @@ impl Sink for BuildSink {
                 self.0.counters.or(Counter::IndexKinds, kind as u64);
                 self.0.counters.add(Counter::HashEntries, keys as u64);
                 self.0.counters.add(Counter::HashBuckets, buckets as u64);
-                held.push((p, kept, table.arena().held_bytes()));
+                // Of `kept`, what the index reservation still holds once the
+                // index is paid: an index past its estimate took the rest.
+                let covered = lasting.saturating_sub(table.index_memory()).min(kept);
+                held.push((p, covered, table.arena().held_bytes()));
                 tables.push((p, table));
             }
             index.shrink(spare.min(index.size()));
