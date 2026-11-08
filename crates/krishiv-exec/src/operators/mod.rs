@@ -38,6 +38,7 @@ mod range;
 mod replicate;
 mod runtime_filter;
 mod scan;
+mod scan_coalesce;
 mod sort;
 mod union;
 

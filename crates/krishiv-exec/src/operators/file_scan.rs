@@ -535,6 +535,9 @@ struct FileScanLocal {
     /// again.
     row_filter: Option<(usize, bool)>,
     rows: super::RowStage,
+    /// Small filtered batches joined toward the query's batch size; flushed
+    /// before the driver claims another morsel and at the scan's end.
+    out: super::scan_coalesce::ScanCoalesce,
     /// The scan's totals, to record a split this driver abandons (a limit above
     /// stopped it before the split's end): its reads were made and paid for. The
     /// split's rows, bytes and unit counts are added with them; the decode
@@ -1107,12 +1110,17 @@ impl FileScanSource {
         let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
         let local = local_mut::<FileScanLocal>(local, "FileScan")?;
         loop {
+            if let Some(b) = local.out.next() {
+                return Ok(Some(Batch::new(b)));
+            }
             if self
                 .request
                 .limit
                 .is_some_and(|l| g.returned.load(Ordering::Relaxed) >= l)
             {
-                return Ok(None);
+                // Rows count when they are buffered: what is held goes out.
+                local.out.finish()?;
+                return Ok(local.out.next().map(Batch::new));
             }
             if let Some(cur) = local.current.as_mut() {
                 match cur.stream.next_batch().await? {
@@ -1125,7 +1133,8 @@ impl FileScanSource {
                             None => self.append_metadata(b, file, cur.split)?,
                         };
                         g.returned.fetch_add(b.num_rows() as u64, Ordering::Relaxed);
-                        return Ok(Some(Batch::new(b)));
+                        local.out.push(b)?;
+                        continue;
                     }
                     None => {
                         if let Some(done) = local.current.take() {
@@ -1146,6 +1155,12 @@ impl FileScanSource {
                 self.open(local, &g.request, &g.partition_filters, piece)
                     .await?;
                 continue;
+            }
+            // The buffered rows belong to the claimed morsel: they go out
+            // before the position moves on.
+            local.out.finish()?;
+            if let Some(b) = local.out.next() {
+                return Ok(Some(Batch::new(b)));
             }
             let Some((ordinal, m)) = g.cursor.claim_ordered() else {
                 return Ok(None);
@@ -1502,6 +1517,7 @@ impl Source for FileScanSource {
         let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
         Ok(Box::new(FileScanLocal {
             rows: super::RowStage::new(&g.request.dynamic, &self.mapped, self.runtime.settings()),
+            out: super::scan_coalesce::ScanCoalesce::new(ctx.query().config().batch_size),
             consumer: Arc::clone(ctx.consumer().consumer()),
             gate: Arc::clone(ctx.query().scan_gate()),
             morsel: None,
