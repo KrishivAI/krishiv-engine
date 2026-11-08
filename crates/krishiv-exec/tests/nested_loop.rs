@@ -776,6 +776,11 @@ fn run_two_tasks(
 /// every row, and together they read more chunks than one alone (their
 /// chunks split one budget). Under part 1 alone (no cohort) the second
 /// loop's first batch could fail the query.
+// QUARANTINED (owner policy 2026-11-07; owner opus-3; deadline 2026-11-11): fails on CI with
+// UNABLE_TO_ACQUIRE_MEMORY (584 and 64,896 bytes; PR #576 run 42433806198), 0 of 40 local runs. Skipped by the
+// default nextest profile, run by `--profile quarantine` (CI job `test-quarantine`, not required); krishiv-internal
+// `open-issues.md`. Comes back with the root-cause fix. To run it: `cargo nextest run -p krishiv-exec --test
+// nested_loop --profile quarantine` (a plain `-E` or name filter selects nothing).
 #[test]
 fn two_tasks_of_one_query_share_their_chunks() {
     let _ = tracing::subscriber::set_global_default(StderrEvents);

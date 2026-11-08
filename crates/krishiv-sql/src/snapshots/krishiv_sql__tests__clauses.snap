@@ -160,6 +160,7 @@ Query {
                         windows: [],
                         limit: None,
                         offset: None,
+                        organization_span: None,
                         span: 48..86,
                     },
                     span: 15..87,
@@ -241,6 +242,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..103,
 }
 -- SELECT 1 UNION SELECT 2 INTERSECT DISTINCT SELECT 3 EXCEPT SELECT 4 MINUS SELECT 5
@@ -449,6 +451,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..82,
 }
 -- VALUES (1, 'a'), (2, 'b') AS t(x, y)
@@ -560,6 +563,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..36,
 }
 -- TABLE db.t
@@ -593,6 +597,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..10,
 }
 -- (SELECT 1) ORDER BY 1 DESC NULLS LAST, 2 ASC NULLS FIRST LIMIT ALL OFFSET 3
@@ -643,6 +648,7 @@ Query {
                 windows: [],
                 limit: None,
                 offset: None,
+                organization_span: None,
                 span: 1..9,
             },
         ),
@@ -709,6 +715,9 @@ Query {
             ),
             span: 74..75,
         },
+    ),
+    organization_span: Some(
+        11..75,
     ),
     span: 0..75,
 }
@@ -887,6 +896,9 @@ Query {
         },
     ),
     offset: None,
+    organization_span: Some(
+        16..87,
+    ),
     span: 0..87,
 }
 -- FROM t SELECT a WHERE a > 1 SELECT b ORDER BY b
@@ -1002,6 +1014,7 @@ Query {
                         windows: [],
                         limit: None,
                         offset: None,
+                        organization_span: None,
                         span: 7..27,
                     },
                     Query {
@@ -1070,6 +1083,9 @@ Query {
                         windows: [],
                         limit: None,
                         offset: None,
+                        organization_span: Some(
+                            37..47,
+                        ),
                         span: 28..47,
                     },
                 ],
@@ -1086,6 +1102,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..47,
 }
 -- FROM t LATERAL VIEW explode(x) e AS c
@@ -1181,6 +1198,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..37,
 }
 -- SELECT /*+ BROADCAST(t), REPARTITION(3, a) */ /*+ COALESCE(1) */ DISTINCT a b, c AS d, e AS (f, g), h (i) FROM t
@@ -1447,6 +1465,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..112,
 }
 -- SELECT all, distinct FROM t
@@ -1545,6 +1564,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..27,
 }
 -- SELECT a FROM t GROUP BY ALL HAVING count(*) > 1 QUALIFY row_number() OVER w = 1 WINDOW w AS (PARTITION BY a)
@@ -1787,6 +1807,9 @@ Query {
     ],
     limit: None,
     offset: None,
+    organization_span: Some(
+        81..109,
+    ),
     span: 0..109,
 }
 -- SELECT a FROM t GROUP BY a, ROLLUP (b, (c, d)), CUBE (e), GROUPING SETS ((a), (), ROLLUP (b), GROUPING SETS (c))
@@ -2061,6 +2084,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..112,
 }
 -- SELECT a FROM t GROUP BY a, b WITH ROLLUP
@@ -2186,6 +2210,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..41,
 }
 -- SELECT a FROM t GROUP BY a WITH CUBE
@@ -2294,6 +2319,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..36,
 }
 -- SELECT a FROM t GROUP BY a, b GROUPING SETS ((a), (a + b) * 2)
@@ -2494,6 +2520,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..62,
 }
 -- SELECT a FROM t ORDER BY ALL
@@ -2596,6 +2623,9 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: Some(
+        16..28,
+    ),
     span: 0..28,
 }
 -- SELECT a FROM, b AS, c NOT
@@ -2701,5 +2731,6 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..26,
 }
