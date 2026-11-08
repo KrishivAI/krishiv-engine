@@ -1449,9 +1449,8 @@ impl<'s> Parser<'s> {
     /// ANTLR reads it); `strict` admits the strict-non-reserved words
     /// (`UNION`, `JOIN`, ...), which only a column alias may be.
     fn implicit_alias(&mut self, strict: bool) -> PR<Option<Ident>> {
-        // In a script `DO` ends the query of `FOR ... DO`.
-        if self.in_script > 0 && self.kw_at(0, "DO") {
-            return Ok(None);
+        if let Some(done) = self.script_alias(strict)? {
+            return Ok(done);
         }
         // `APPROX NEAREST ...` after a join's relation is its ranking clause.
         if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
@@ -1462,17 +1461,6 @@ impl<'s> Parser<'s> {
             && (self.kw_at(1, "INTO") || self.kw_at(1, "OVERWRITE"))
         {
             return Ok(None);
-        }
-        // `SELECT 1 INTO x` in a script: ANTLR reads `INTO` as the alias and fails at `x`.
-        if self.in_script > 0
-            && strict
-            && !self.opts.enforce_reserved_keywords
-            && self.kw_at(0, "INTO")
-        {
-            let alias = self.ident_with(true)?;
-            // The token after it is dropped as "extra input" in the error.
-            self.extra = Some(self.pos);
-            return Ok(Some(alias));
         }
         let keyword = !self.opts.enforce_reserved_keywords
             && self.kind(0) == Some(TokenKind::Word)

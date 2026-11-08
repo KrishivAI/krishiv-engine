@@ -46,6 +46,7 @@ use crate::cache::{RelationCache, is_cache_name};
 
 mod file_tables;
 mod ndv_sampling;
+mod script_results;
 
 use self::file_tables::FileScanOf;
 
@@ -108,13 +109,6 @@ pub(crate) enum TempTable {
 /// name fails with `KRISHIV_RESERVED_TEMP_VIEW_NAME`, which names this
 /// prefix. [`SessionCatalog::names`] hides them.
 pub(crate) const HIDDEN_PREFIX: &str = "__krishiv_snapshot_";
-
-/// The start (in lower case) of the hidden names of script results: a kind of [`HIDDEN_PREFIX`] name
-/// that no view pins and that lives as long as a frame reads it.
-const SCRIPT_RESULT_PREFIX: &str = "__krishiv_snapshot_r";
-
-/// How many of the newest script results the catalog keeps whether or not a frame holds them.
-const RECENT_SCRIPT_RESULTS: usize = 16;
 
 /// Whether `name` is a hidden snapshot pin: it starts with
 /// [`HIDDEN_PREFIX`], in any letter case.
@@ -214,8 +208,7 @@ impl SessionCatalog {
         self.epoch.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Removes every hidden entry no live view pins anymore. The caller
-    /// holds the write lock and bumps the epoch itself.
+    /// Removes the hidden entries nothing needs; the caller holds the write lock and bumps the epoch.
     fn collect_garbage(tables: &mut BTreeMap<String, (String, Arc<TempTable>)>) {
         let mut live = BTreeSet::new();
         for (_, table) in tables.values() {
@@ -223,48 +216,7 @@ impl SessionCatalog {
                 live.extend(pins.iter().cloned());
             }
         }
-        // A script's result table also stays while something besides the catalog holds it: the
-        // result frame, whose analysis keeps the table it loaded.
-        // The newest few stay whatever holds them: a frame derived from a result (`limit`, `filter`)
-        // has no analysis yet and reads the table by its name.
-        let mut results: Vec<u64> = tables
-            .keys()
-            .filter_map(|k| k.strip_prefix(SCRIPT_RESULT_PREFIX)?.parse().ok())
-            .collect();
-        results.sort_unstable();
-        let newest = results
-            .len()
-            .checked_sub(RECENT_SCRIPT_RESULTS)
-            .map_or(0, |n| results[n]);
-        tables.retain(|key, (_, table)| {
-            !is_hidden_name(key)
-                || live.contains(key)
-                || key
-                    .strip_prefix(SCRIPT_RESULT_PREFIX)
-                    .and_then(|n| n.parse::<u64>().ok())
-                    .is_some_and(|n| n >= newest || Arc::strong_count(table) > 1)
-        });
-    }
-
-    /// Adds the hidden in-memory table `table` and returns its name, which no SQL text spells. It
-    /// is removed once nothing but the catalog holds it ([`Self::collect_garbage`]), at the next
-    /// change of the catalog.
-    pub(crate) fn put_hidden_memory(
-        &self,
-        columns: Vec<TableColumn>,
-        table: Arc<MemoryTable>,
-    ) -> (String, Arc<TempTable>) {
-        let name = format!(
-            "{SCRIPT_RESULT_PREFIX}{}",
-            self.hidden.fetch_add(1, Ordering::AcqRel)
-        );
-        let entry = Arc::new(TempTable::Memory { columns, table });
-        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
-        tables.insert(name.to_lowercase(), (name.clone(), Arc::clone(&entry)));
-        // The caller's reference keeps the new entry through this collection.
-        Self::collect_garbage(&mut tables);
-        self.epoch.fetch_add(1, Ordering::AcqRel);
-        (name, entry)
+        script_results::retain(tables, &live);
     }
 
     /// Hands out the next hidden name snapshot pins use: no SQL text

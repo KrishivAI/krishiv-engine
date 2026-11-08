@@ -11,7 +11,7 @@ Needs a Spark Connect server and the `pyspark-client==4.2.0` package on the host
 
 Per case: the script runs on a thread through `spark.sql(...).collect()`; after a delay the main thread sends
 interruptAll / interruptTag / interruptOperation; the outcome (error class, rows, side table) is printed.
-A side table `r3_log(tag STRING)` records which leaves ran (INSERTs), so "a later leaf still runs" is observable.
+A side table `r3_log(tag STRING)` records which leaves ran (INSERT statements), so "a later leaf still runs" is observable.
 """
 
 import sys

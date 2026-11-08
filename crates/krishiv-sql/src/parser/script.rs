@@ -169,6 +169,24 @@ impl Parser<'_> {
         result
     }
 
+    /// What a script changes about an alias without `AS` (`Some(alias)` ends [`Parser::implicit_alias`]): `DO`
+    /// ends the query of `FOR ... DO`; in `SELECT 1 INTO x` ANTLR reads `INTO` as the alias and fails at `x`.
+    pub(super) fn script_alias(&mut self, strict: bool) -> PR<Option<Option<Ident>>> {
+        if self.in_script == 0 {
+            return Ok(None);
+        }
+        if self.kw_at(0, "DO") {
+            return Ok(Some(None));
+        }
+        if strict && !self.opts.enforce_reserved_keywords && self.kw_at(0, "INTO") {
+            let alias = self.ident_with(true)?;
+            // The token after it is dropped as "extra input" in the error.
+            self.extra = Some(self.pos);
+            return Ok(Some(Some(alias)));
+        }
+        Ok(None)
+    }
+
     /// `SET` in a script, always an assignment. `SET VARIABLE x = 1` and `SET TIME ZONE 'UTC'` read
     /// their second word as the variable and fail at the next token, which ANTLR then recovers from:
     /// by dropping the token when the one after it is the `=` ("extra input"), else by inserting
