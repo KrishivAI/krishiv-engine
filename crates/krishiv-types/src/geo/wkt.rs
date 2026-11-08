@@ -162,6 +162,19 @@ impl Reader<'_> {
                     let mut out = Vec::new();
                     for _ in 0..n {
                         let (mbig, mcode, mdims) = self.header()?;
+                        // A member is the single type the multi-geometry holds; this also
+                        // keeps a multi-geometry from nesting in another (unbounded recursion).
+                        let member = match code {
+                            MULTI_POINT => POINT,
+                            MULTI_LINE_STRING => LINE_STRING,
+                            _ => POLYGON,
+                        };
+                        if mcode != member {
+                            return Err(error::wkb(
+                                format!("Invalid or unsupported type {mcode}"),
+                                self.pos,
+                            ));
+                        }
                         out.push(
                             self.body(mbig, mcode, mdims, depth + 1)?
                                 .unwrap_or_else(|| "EMPTY".to_owned()),

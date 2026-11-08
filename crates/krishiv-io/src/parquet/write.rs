@@ -476,7 +476,7 @@ impl Encoder for ParquetEncoder {
         let batch = if self.spatial.is_empty() {
             batch
         } else {
-            stored = super::geo::to_stored(batch, &self.spatial, &self.schema)?;
+            stored = super::geo::to_stored(batch, &self.spatial)?;
             &stored
         };
         let converted;

@@ -404,7 +404,17 @@ fn hint_field(
     let dt = match field.data_type() {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8View,
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-            if o.binary_as_string {
+            if o.binary_as_string
+                && !leaf().is_some_and(|c| {
+                    matches!(
+                        c.logical_type_ref(),
+                        Some(
+                            parquet::basic::LogicalType::Geometry { .. }
+                                | parquet::basic::LogicalType::Geography { .. }
+                        )
+                    )
+                })
+            {
                 DataType::Utf8View
             } else {
                 DataType::BinaryView

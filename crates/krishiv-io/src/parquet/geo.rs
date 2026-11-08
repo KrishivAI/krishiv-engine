@@ -295,8 +295,9 @@ pub(super) fn stored_schema(schema: &SchemaRef, spatial: &[(usize, Spatial)]) ->
 pub(super) fn to_stored(
     batch: &RecordBatch,
     spatial: &[(usize, Spatial)],
-    stored: &SchemaRef,
 ) -> FormatResult<RecordBatch> {
+    // Built from the batch itself: the writer's schema has its other columns already converted.
+    let stored = stored_schema(&batch.schema(), spatial);
     let bad = |what: &str| FormatError::WriteFailed(what.to_owned());
     let columns = batch
         .columns()
@@ -322,7 +323,7 @@ pub(super) fn to_stored(
         })
         .collect::<FormatResult<Vec<_>>>()?;
     RecordBatch::try_new_with_options(
-        Arc::clone(stored),
+        stored,
         columns,
         &arrow_array::RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
     )

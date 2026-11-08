@@ -213,4 +213,13 @@ fn text_of_a_malformed_value_is_an_error_not_a_panic() {
     }
     deep.extend_from_slice(&[1, 7, 0, 0, 0, 0, 0, 0, 0]);
     assert!(to_ewkt(0, &deep).is_err());
+    // A multi-geometry holds only its own member type, and never another multi-geometry.
+    let mut mixed = vec![1, 4, 0, 0, 0, 1, 0, 0, 0];
+    mixed.extend_from_slice(&[1, 2, 0, 0, 0, 0, 0, 0, 0]);
+    assert!(to_ewkt(0, &mixed).is_err());
+    let mut nested = Vec::new();
+    for _ in 0..200 {
+        nested.extend_from_slice(&[1, 4, 0, 0, 0, 1, 0, 0, 0]);
+    }
+    assert!(to_ewkt(0, &nested).is_err());
 }

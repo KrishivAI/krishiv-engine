@@ -324,8 +324,6 @@ fn a_nested_geometry_in_a_file_is_refused_not_read_as_binary() {
     w.close().unwrap();
     let s = Session::new().unwrap();
     let e = rows(&s, &format!("SELECT * FROM parquet.`{}`", file.display())).unwrap_err();
-    assert!(
-        e.contains("KRISHIV_UNSUPPORTED_FEATURE") || e.contains("not supported"),
-        "{e}"
-    );
+    assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{e}");
+    assert!(e.contains("nested in the column `g`"), "{e}");
 }
