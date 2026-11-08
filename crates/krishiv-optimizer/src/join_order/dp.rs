@@ -156,18 +156,18 @@ pub(super) fn dpsub(n: usize, masks: &[Set], shape: &Shape<'_>) -> (HashMap<Set,
                 // `b` on a tie) is worked out only when it can matter: for a split that is cheaper
                 // in rows or equal to the best so far, not for the many that are dearer. The first
                 // of equal splits wins: they come largest `a` first.
+                // (The halves' stored ties count even with ties off: a combined set's is clamped to
+                // at least 1.0, so of equal splits the one with fewer combined halves wins.)
                 let tie_of_split = || {
-                    if shape.ties {
-                        x.tie
-                            + y.tie
-                            + if pb.rows <= pa.rows {
-                                pb.bytes
-                            } else {
-                                pa.bytes
-                            }
-                    } else {
-                        0.0
-                    }
+                    x.tie
+                        + y.tie
+                        + if !shape.ties {
+                            0.0
+                        } else if pb.rows <= pa.rows {
+                            pb.bytes
+                        } else {
+                            pa.bytes
+                        }
                 };
                 let tie = match found {
                     None => Some(tie_of_split()),
@@ -314,5 +314,140 @@ mod tests {
             best.get(&0b111).map(|b| (b.left, b.right)),
             Some((0b101, 0b010))
         );
+    }
+
+    /// The enumeration as it was before the tables: a map, and closures for every size. The split
+    /// loop and tie rules are the specification the fast version must keep.
+    fn reference(n: usize, masks: &[Set], shape: &Shape<'_>) -> HashMap<Set, Best> {
+        let full: Set = (1 << n) - 1;
+        let mut best: HashMap<Set, Best> = singletons(n).collect();
+        let size = |s: Set| ((shape.rows_of)(s), (shape.width_of)(s));
+        for s in 1..=full {
+            if s.count_ones() < 2 {
+                continue;
+            }
+            let mut found: Option<Best> = None;
+            let low = s.isolate_lowest_one();
+            let mut a = (s - 1) & s;
+            while a > 0 {
+                let b = s & !a;
+                if a & low != 0
+                    && let (Some(x), Some(y)) = (best.get(&a), best.get(&b))
+                    && connected(masks, a, b)
+                {
+                    let (sa, sb) = (size(a), size(b));
+                    let build = if shape.by_bytes {
+                        (shape.build_cost)(sa, sb)
+                    } else {
+                        0.0
+                    };
+                    let cost = x.cost + y.cost + build;
+                    let tie_split = if shape.ties {
+                        let build = if sb.0 <= sa.0 { sb } else { sa };
+                        (shape.tie_bytes)(build.0, build.1)
+                    } else {
+                        0.0
+                    };
+                    let tie = x.tie + y.tie + tie_split;
+                    if found.is_none_or(|f| cheaper((cost, tie), (f.cost, f.tie))) {
+                        found = Some(Best {
+                            cost,
+                            tie,
+                            left: a,
+                            right: b,
+                        });
+                    }
+                }
+                a = (a - 1) & s;
+            }
+            if let Some(mut f) = found {
+                let r = (shape.rows_of)(s);
+                f.cost = rows(f.cost + (shape.result_cost)(r));
+                f.tie = rows(
+                    f.tie
+                        + if shape.ties {
+                            (shape.tie_result)(r)
+                        } else {
+                            0.0
+                        },
+                );
+                best.insert(s, f);
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn the_tables_plan_exactly_as_the_map_and_closures_did() {
+        // A small deterministic generator: random graphs of up to 8 inputs, costed by rows with ties
+        // off and on, and by bytes.
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move |m: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        let pick = |v: &[f64], i: u64| v[usize::try_from(i).unwrap()];
+        for _ in 0..3000 {
+            let n = 3 + usize::try_from(next(6)).unwrap();
+            let mut masks: Vec<Set> = Vec::new();
+            for i in 1..n {
+                // A spanning tree, then a few more edges and sometimes a hyperedge.
+                masks.push((1 << i) | (1 << next(i as u64)));
+            }
+            for _ in 0..next(3) {
+                masks.push((1 << next(n as u64)) | (1 << next(n as u64)));
+            }
+            if next(4) == 0 {
+                masks.push((1 << next(n as u64)) | (1 << next(n as u64)) | (1 << next(n as u64)));
+            }
+            masks.retain(|m| m.count_ones() >= 2);
+            let input_rows: Vec<f64> = (0..n).map(|_| pick(&[1.0, 10.0, 100.0], next(3))).collect();
+            let conds: Vec<(Set, f64)> = masks
+                .iter()
+                .map(|&m| (m, pick(&[0.1, 0.01, 1.0, 0.001], next(4))))
+                .collect();
+            let rows_of = estimator(input_rows, conds);
+            let widths: Vec<f64> = (0..n).map(|_| next(40) as f64).collect();
+            let width_of = move |s: Set| {
+                (0..n)
+                    .filter(|&i| s & (1 << i) != 0)
+                    .map(|i| widths[i])
+                    .sum::<f64>()
+            };
+            for (by_bytes, ties) in [(false, false), (false, true), (true, false)] {
+                let shape = Shape {
+                    width_of: &width_of,
+                    by_bytes,
+                    build_cost: &|a, b| {
+                        let build = if b.0 <= a.0 { b } else { a };
+                        build.0 * (48.0 + build.1)
+                    },
+                    ties,
+                    tie_result: &|r| r * 48.0,
+                    tie_bytes: &|r, w| rows(r * (48.0 + w)),
+                    ..by_rows(&rows_of)
+                };
+                let (fast, _) = dpsub(n, &masks, &shape);
+                let slow = reference(n, &masks, &shape);
+                assert_eq!(fast.len(), slow.len(), "sets with plans: {masks:?}");
+                for (s, b) in &slow {
+                    let f = fast
+                        .get(s)
+                        .unwrap_or_else(|| panic!("{s:b} missing: {masks:?}"));
+                    assert_eq!(
+                        (f.left, f.right),
+                        (b.left, b.right),
+                        "{s:b} {masks:?} bytes={by_bytes} ties={ties}"
+                    );
+                    assert_eq!(
+                        (f.cost.to_bits(), f.tie.to_bits()),
+                        (b.cost.to_bits(), b.tie.to_bits()),
+                        "{s:b}"
+                    );
+                }
+            }
+        }
     }
 }
