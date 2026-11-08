@@ -34,7 +34,7 @@ use krishiv_types::{DataType, DecimalType};
 
 use crate::expr::{builtin, conjuncts, output_of, references, strip_alias};
 use crate::limit::limit_value;
-use crate::narrow::{View, apply};
+use crate::narrow::{View, apply, join_selectivity};
 use crate::stats::{
     AttrStats, DEFAULT_ROWS, RelStats, StatSource, Statistics, cap, cse_definitions, number,
     reads_cse, resolve_cse, to_f64,
@@ -489,7 +489,9 @@ impl<'a> Estimator<'a> {
             _ => None,
         };
         let mut v = View::new(&cols, self.propagate);
-        let sel = pred.as_ref().map_or(1.0, |c| apply(c, &mut v));
+        let sel = pred
+            .as_ref()
+            .map_or(1.0, |c| join_selectivity(c, l, r, &mut v));
         // `inf * 0` is NaN: a zero selectivity is zero rows.
         let inner = if v.empty || sel <= 0.0 {
             0.0
