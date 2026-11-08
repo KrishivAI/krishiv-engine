@@ -11,13 +11,14 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Cache the mold tarball
+    - name: Restore the mold tarball
       id: cache
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/mold-cache
         key: mold-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
     - name: Install mold (cache, download, apt, or the default linker)
+      id: install
       shell: bash
       env:
         MOLD_VERSION: ${{ inputs.version }}
@@ -30,16 +31,18 @@ runs:
         if [ ! -s "$tarball" ]; then
           rm -f "$tarball"
           curl --proto '=https' --tlsv1.2 --location --silent --show-error --fail \
-            --retry 5 --retry-delay 3 --retry-all-errors --connect-max-time 20 --max-time 90 \
+            --retry 5 --retry-delay 3 --retry-max-time 120 --retry-all-errors --connect-max-time 20 --max-time 90 \
             -o "$tarball" "https://github.com/rui314/mold/releases/download/v$MOLD_VERSION/mold-$MOLD_VERSION-$arch-linux.tar.gz" \
             || { echo "::warning::mold $MOLD_VERSION download failed"; rm -f "$tarball"; }
         fi
         if [ -s "$tarball" ] && sudo tar -C /usr/local --strip-components=1 --no-overwrite-dir -xzf "$tarball"; then
           mold=/usr/local/bin/mold
+          # Only a tarball that unpacked is worth saving to the cache.
+          echo "good-tarball=true" >> "$GITHUB_OUTPUT"
         else
           # A tarball that does not unpack is not worth caching.
           rm -f "$tarball"
-          if sudo apt-get install -y --no-install-recommends mold >/dev/null 2>&1; then
+          if { sudo timeout 120 apt-get update -qq && sudo timeout 180 apt-get install -y --no-install-recommends mold; } >/dev/null 2>&1; then
             mold=$(command -v mold)
           else
             echo "::warning::mold is unavailable (download and apt both failed): linking with the default linker"
@@ -47,4 +50,10 @@ runs:
           fi
         fi
         sudo ln -sf "$mold" "$(realpath /usr/bin/ld)"
-        "$mold" --version
+        "$mold" --version || echo "::warning::mold --version failed"
+    - name: Save the mold tarball
+      if: steps.install.outputs.good-tarball == 'true' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/mold-cache
+        key: mold-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}

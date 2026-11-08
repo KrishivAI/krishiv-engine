@@ -921,8 +921,9 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
         with:
           toolchain: 1.99.1
+      # The gate checks out the base commit, which has the local action only once this change is on main.
       - uses: $/.github/actions/setup-mold
-        if: steps.measure.outputs.result == 'measured'
+        if: steps.measure.outputs.result == 'measured' && hashFiles('.github/actions/setup-mold/action.yml') != ''
       - name: Values the budget approvals are recorded against
         if: steps.measure.outputs.result == 'measured'
         # A base that predates the script has no recorded values: the label then counts only
@@ -1073,8 +1074,9 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
         with:
           toolchain: 1.99.1
+      # The gate checks out the base commit, which has the local action only once this change is on main.
       - uses: $/.github/actions/setup-mold
-        if: steps.measure.outputs.result == 'measured'
+        if: steps.measure.outputs.result == 'measured' && hashFiles('.github/actions/setup-mold/action.yml') != ''
       - name: Values the wheel-size approval is recorded against
         if: steps.measure.outputs.result == 'measured'
         # A base that predates the script has no recorded values: the label then counts only
