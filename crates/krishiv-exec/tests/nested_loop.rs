@@ -810,14 +810,20 @@ fn two_tasks_of_one_query_share_their_chunks() {
 /// (the probe rows at the end of input, the build's last batches) fund their
 /// writer's scratch first. Before, about one run in eight failed with
 /// `UNABLE_TO_ACQUIRE_MEMORY` at this limit (`two_tasks_of_one_query_share_their_chunks`
-/// on CI, at twice the limit, more rarely).
+/// on CI, at twice the limit, more rarely). One run is a stress smoke test
+/// that the old code passed most of the time: the waits are covered
+/// deterministically by `krishiv-memory`'s `tests/abort_waits.rs`.
+/// `KRISHIV_NLJ_TWO_TASK_RUNS` repeats it (a stress loop).
 #[test]
 fn two_tasks_finish_when_their_spill_writes_fill_the_pool() {
     let _ = tracing::subscriber::set_global_default(StderrEvents);
+    let runs: usize = std::env::var("KRISHIV_NLJ_TWO_TASK_RUNS").map_or(1, |v| v.parse().unwrap());
     let probe: Vec<Option<i64>> = (0..64).map(|i| Some((i * 499) % 100_000)).collect();
     let build: Vec<Option<i64>> = (0..300_000).map(|i| Some((i * 7) % 100_000)).collect();
     let want = expected_by(JoinType::FullOuter, &is_near, &probe, &build);
-    let [(a, _), (b, _)] = run_two_tasks(&probe, &build, 320 << 10);
-    assert_eq!(a, want);
-    assert_eq!(b, want);
+    for _ in 0..runs {
+        let [(a, _), (b, _)] = run_two_tasks(&probe, &build, 320 << 10);
+        assert_eq!(a, want);
+        assert_eq!(b, want);
+    }
 }

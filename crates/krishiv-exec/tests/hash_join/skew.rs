@@ -391,8 +391,12 @@ async fn two_inner_joins(build_keys: &[i64], probe_rows: usize, limit: usize) ->
 /// refused while the other task loads or holds a partition table waits for
 /// it (a seat holding in the query's grace table cohort: at 1.5 MiB, 2 of
 /// 144 runs failed with it, 8 of 24 without; at 1 MiB most runs still
-/// fail, two tables do not fit). `KRISHIV_JOIN_TWO_TASK_RUNS` repeats each
-/// limit (a stress loop); the limits list is the place to try others.
+/// fail, two tables do not fit). At the 2 and 3 MiB limits below the old
+/// code's failure rate was not measured: one run each is a stress smoke
+/// test, and the waits are covered deterministically by `krishiv-memory`'s
+/// `tests/abort_waits.rs` and `cohort.rs`'s unit tests.
+/// `KRISHIV_JOIN_TWO_TASK_RUNS` repeats each limit (a stress loop); the
+/// limits list is the place to try others.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_grace_joins_finish_when_their_spill_writes_fill_the_pool() {
     const ROWS: usize = 100_000;

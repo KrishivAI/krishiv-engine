@@ -281,8 +281,17 @@ async fn two_holding_drivers_asking_do_not_wait_for_each_other() {
         }));
     }
     let started = tokio::time::Instant::now();
+    // The first refusal aborts the shared query, so the other ask may see
+    // that abort instead of its own refusal; both fail without waiting.
     for ask in asks {
-        assert!(ask.await.unwrap().is_err());
+        let class = ask.await.unwrap().unwrap_err().error_class();
+        assert!(
+            matches!(
+                class,
+                ErrorClass::UnableToAcquireMemory | ErrorClass::KrishivQueryAbortedOutOfMemory
+            ),
+            "{class:?}"
+        );
     }
     assert!(
         started.elapsed() < Duration::from_secs(1),
@@ -290,4 +299,61 @@ async fn two_holding_drivers_asking_do_not_wait_for_each_other() {
         started.elapsed()
     );
     drop(kept);
+}
+
+/// A holding member whose driver waits in a round of a sibling pool (one
+/// outside the requester's binding pool) is not waited for: that driver
+/// cannot free it while it waits, so the request fails at once instead of
+/// at `abortReleaseTimeout`.
+#[tokio::test(start_paused = true)]
+async fn a_member_whose_driver_waits_in_a_sibling_pool_is_not_waited_for() {
+    let root = root(Some(16 * Q), Q);
+    let q = root.child_pool("q", None);
+    let (s1, s2) = (
+        q.child_pool("s1", Some(4 * Q)),
+        q.child_pool("s2", Some(2 * Q)),
+    );
+    let (a, b, c) = (SpillOwner::new(), SpillOwner::new(), SpillOwner::new());
+    let register = |pool: &Arc<TreePool>, owner: &Arc<SpillOwner>| {
+        ConsumerHandle::register(
+            Arc::clone(pool) as Arc<dyn MemoryPool>,
+            "c",
+            Some(owner.signal() as Arc<dyn Spillable>),
+        )
+    };
+    // In s2, c's member holds; b's request there waits for it.
+    let hc = register(&s2, &c);
+    let mut c_seat = hc.join_cohort("merges").unwrap();
+    c_seat.set(SeatState::Holding);
+    let mut c_held = hc.reservation();
+    c_held.try_grow(Q).unwrap();
+    let hb2 = register(&s2, &b);
+    let b_waits = tokio::spawn({
+        let (b, hb2) = (Arc::clone(&b), Arc::clone(&hb2));
+        async move { b.reserve_for(&hb2, 2 * Q, || async {}).await }
+    });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(
+        !b_waits.is_finished(),
+        "b's request should wait for c's member"
+    );
+    // In s1, b's member holds what a's request needs.
+    let hb = register(&s1, &b);
+    let mut b_seat = hb.join_cohort("merges").unwrap();
+    b_seat.set(SeatState::Holding);
+    let mut b_held = hb.reservation();
+    b_held.try_grow(3 * Q).unwrap();
+    let ha = register(&s1, &a);
+    let started = tokio::time::Instant::now();
+    let e = a.reserve_for(&ha, 2 * Q, || async {}).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "waited {:?} for a member whose driver waits",
+        started.elapsed()
+    );
+    drop((b_held, b_seat));
+    c_held.shrink(Q);
+    c_seat.set(SeatState::Idle);
+    b_waits.await.unwrap().unwrap();
 }

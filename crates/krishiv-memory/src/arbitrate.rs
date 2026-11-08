@@ -381,10 +381,15 @@ impl Round {
         // are per query: only the requester's query's members count.
         let holding: usize = match (me.owner, self.node.group_node()) {
             (Some(own), Some(query)) => {
-                let waiting: Vec<OwnerId> = consumers
-                    .iter()
-                    .filter(|(c, _)| c.waiting.load(Ordering::Acquire))
-                    .filter_map(|(c, _)| c.owner)
+                // Drivers waiting anywhere, not only in `binding`: a member's
+                // driver may wait in a round for a consumer of a sibling pool.
+                let waiting: Vec<OwnerId> = self
+                    .node
+                    .shared
+                    .consumers()
+                    .into_iter()
+                    .filter(|c| c.waiting.load(Ordering::Acquire))
+                    .filter_map(|c| c.owner)
                     .collect();
                 consumers
                     .iter()
