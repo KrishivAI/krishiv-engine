@@ -84,7 +84,8 @@ pub(crate) fn parse_integral(s: &[u8], exact: bool) -> Option<i64> {
 
 /// The zero of every Unicode `Nd` run Java 21 knows (`Character.digit(c,
 /// 10) == 0`); each run is ten consecutive digits. Java's `BigDecimal`
-/// accepts them all.
+/// reads UTF-16 units, so only the runs in the Basic Multilingual Plane count
+/// there (`bigdecimal_digit`); the supplementary-plane runs do not.
 const DIGIT_ZEROS: [u32; 68] = [
     0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66,
     0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90,
