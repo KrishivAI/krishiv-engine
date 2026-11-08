@@ -117,6 +117,18 @@ pub struct Exclusion {
     pub note: Option<String>,
     /// Added after the manifest was frozen.
     pub added_after_freeze: bool,
+    /// The Spark tags whose golden set holds the file; empty means every tag. An entry is checked
+    /// only against a set of one of its tags, so a tag that lacks the file does not fail validation.
+    pub tags: Vec<String>,
+}
+
+impl Exclusion {
+    /// Whether the entry covers the golden set of Spark tag `tag` (an unscoped entry covers all;
+    /// so does an unknown, empty tag).
+    #[must_use]
+    pub fn applies_to(&self, tag: &str) -> bool {
+        self.tags.is_empty() || tag.is_empty() || self.tags.iter().any(|t| t == tag)
+    }
 }
 
 /// The exclusion manifest.
@@ -190,6 +202,16 @@ impl ExclusionManifest {
                 reason,
                 note: text("note").map(str::to_owned),
                 added_after_freeze,
+                tags: e
+                    .get("tags")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             });
         }
         Ok(Self { frozen, entries })
@@ -206,7 +228,7 @@ impl ExclusionManifest {
         match self
             .entries
             .iter()
-            .find(|e| !known.contains(e.file.as_str()))
+            .find(|e| e.applies_to(&set.tag) && !known.contains(e.file.as_str()))
         {
             Some(e) => Err(ManifestError::UnknownFile(e.file.clone())),
             None => Ok(()),
@@ -240,6 +262,27 @@ mod tests {
             r#"{"format_version":1,"frozen":false,"exclusions":[{"file":"a","reason":"because"}]}"#,
         );
         assert!(matches!(err, Err(ManifestError::UnknownReason { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn a_tag_scoped_entry_is_checked_only_against_its_tags() -> Result<(), ManifestError> {
+        let m = ExclusionManifest::parse(
+            r#"{"format_version":1,"frozen":false,"exclusions":[{"file":"zzz","reason":"jvm_udf","tags":["v4.2.0"]}]}"#,
+        )?;
+        let other = GoldenSet {
+            tag: "v4.1.0".to_owned(),
+            ..GoldenSet::default()
+        };
+        assert!(m.validate(&other).is_ok());
+        let own = GoldenSet {
+            tag: "v4.2.0".to_owned(),
+            ..GoldenSet::default()
+        };
+        assert!(matches!(
+            m.validate(&own),
+            Err(ManifestError::UnknownFile(_))
+        ));
         Ok(())
     }
 

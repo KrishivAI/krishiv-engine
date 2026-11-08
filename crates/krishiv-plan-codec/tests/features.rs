@@ -1902,3 +1902,18 @@ fn a_decoded_collation_is_checked() {
         "a collation on a type that is not a collated string",
     );
 }
+
+#[test]
+fn an_unknown_binary_output_style_is_refused_at_encode() {
+    for style in ["hex", "HEX_DISCRETE", "nonsense", ""] {
+        let plan = plan_of_env(inventory::scan(), {
+            let mut env = inventory::env();
+            env.binary_output_style = Some(std::sync::Arc::from(style));
+            env
+        });
+        assert!(
+            matches!(to_message(&plan), Err(CodecError::Unsupported(_))),
+            "{style:?}"
+        );
+    }
+}

@@ -72,6 +72,8 @@ pub struct GoldenPair {
 /// All files of one golden directory.
 #[derive(Debug, Clone, Default)]
 pub struct GoldenSet {
+    /// The Spark tag the directory is named for (`v4.2.0`); empty when unknown.
+    pub tag: String,
     /// JDK the results were chosen for.
     pub jdk: Jdk,
     /// Paired inputs/results.
@@ -99,6 +101,10 @@ impl GoldenSet {
         let inputs = collect(&dir.join("inputs"), ".sql")?;
         let outputs = collect(&dir.join("results"), ".sql.out")?;
         let mut set = Self {
+            tag: dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             jdk,
             ..Self::default()
         };

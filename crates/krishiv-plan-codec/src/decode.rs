@@ -305,7 +305,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         .ok_or_else(|| corrupt("no expression environment"))?;
     // A writer sets the style only when it is not the default, and by its exact name.
     if let Some(style) = env.binary_output_style.as_deref()
-        && !matches!(style, "UTF-8" | "BASIC" | "BASE64" | "HEX")
+        && !crate::is_wire_binary_style(style)
     {
         return Err(corrupt("an unknown binary output style"));
     }

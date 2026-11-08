@@ -99,7 +99,7 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
         explain,
         explain_root,
         warnings: plan.warnings().to_vec(),
-        env: Some(env(plan.env())),
+        env: Some(env(plan.env())?),
         exprs: e.exprs,
         features: features.iter().map(|f| f.id().to_owned()).collect(),
         epoch: EPOCH,
@@ -149,8 +149,15 @@ fn index(n: usize) -> Result<u32> {
     u32::try_from(n).map_err(|_| CodecError::Unsupported("more than 2^32 entries".to_owned()))
 }
 
-fn env(env: &ExprEnv) -> pb::ExprEnv {
-    pb::ExprEnv {
+fn env(env: &ExprEnv) -> Result<pb::ExprEnv> {
+    if let Some(style) = env.binary_output_style.as_deref()
+        && !crate::is_wire_binary_style(style)
+    {
+        return Err(CodecError::Unsupported(format!(
+            "the binary output style `{style}` has no wire name"
+        )));
+    }
+    Ok(pb::ExprEnv {
         ansi: env.ansi,
         zone: env.zone,
         zone_name: env.zone_name.as_deref().map(str::to_owned),
@@ -162,7 +169,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
         legacy_time_parser: env.legacy_time_parser.then_some(true),
         binary_output_style: env.binary_output_style.as_deref().map(str::to_owned),
-    }
+    })
 }
 
 #[derive(Default)]

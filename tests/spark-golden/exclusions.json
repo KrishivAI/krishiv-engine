@@ -6,6 +6,7 @@
       "file": "try_reflect",
       "reason": "jvm_only_api",
       "added_after_freeze": true,
+      "tags": ["v4.2.0"],
       "note": "reflect/try_reflect call arbitrary JVM static methods (java.util.UUID, java.lang.Math, java.net.URLDecoder, ...); Krishiv has no JVM (owner decision 2026-11-06)."
     }
   ]

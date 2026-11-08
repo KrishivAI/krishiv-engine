@@ -115,3 +115,10 @@ impl Default for Limits {
         }
     }
 }
+
+/// Whether `style` is a name a writer puts on the wire for `binary_output_style`: the four non-default
+/// styles, spelled exactly. The default `HEX_DISCRETE` is never written (an absent field means it).
+/// Encode and decode share this one list.
+pub(crate) fn is_wire_binary_style(style: &str) -> bool {
+    matches!(style, "UTF-8" | "BASIC" | "BASE64" | "HEX")
+}

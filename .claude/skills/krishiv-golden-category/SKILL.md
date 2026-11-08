@@ -13,7 +13,7 @@ or by hand (ADR 0008). Three kinds exist; pick the one that fits.
 - The runner is `crates/krishiv-testkit/src/golden/` (`parse.rs` reads `.sql.out`, `run.rs` has the `Engine` trait and
   the report's three numbers: parse, negative, result). `cargo xtask golden [--engine reject-all|sql-parse]` writes
   `target/golden-report.json` through `crates/krishiv-testkit/src/bin/golden-report.rs`.
-- **Exclusions.** A file the engine will not run goes into `tests/spark-golden/exclusions.json` with a reason class
+- **Exclusions.** A file the engine will not run goes into `tests/spark-golden/exclusions.json` (optional `"tags": ["v4.2.0"]` limits it to the Spark tags that hold the file) with a reason class
   from the fixed list in `crates/krishiv-testkit/src/golden/manifest.rs` (`ReasonClass`: `jvm_udf`, `python_udf`,
   `jvm_only_api`, `external_system`, `jdk_specific`, `nondeterministic_environment`, `unsupported_by_design`,
   `upstream_defect`). An unknown class, an unknown file or a duplicate is an error. Once `frozen` is true, new
