@@ -10,6 +10,7 @@
 
 pub mod arrow;
 pub mod batch;
+pub mod calendar;
 mod collation;
 mod data_type;
 mod ddl;

@@ -10,41 +10,36 @@
 //! | `/ 0` | `INTERVAL_DIVIDED_BY_ZERO` | NULL |
 //! | `date + time` | `INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION` | added in UTC, then the day |
 //!
-//! A value holds more time than the nanosecond field of its Arrow type can
-//! (about 292 years) only where Spark's `long` of microseconds still can, so
-//! it is refused by name whatever `exact` says: Spark answers it, so NULL
-//! would be a wrong result.
+//! Values are Spark's `(months, days, microseconds)` on the struct carrier
+//! (`krishiv_types::calendar`, ADR 0009 update 2026-11-06). The microseconds
+//! follow the months and days: `ARITHMETIC_OVERFLOW` ("long overflow") when
+//! `exact`, wrapping otherwise, as `IntervalUtils.addExact`/`add` do.
 
 use arrow_array::builder::PrimitiveBuilder;
-use arrow_array::types::{Date32Type, IntervalMonthDayNanoType, TimestampMicrosecondType};
-use arrow_array::{
-    Array, ArrowPrimitiveType, Date32Array, Float64Array, IntervalMonthDayNanoArray,
-    PrimitiveArray, TimestampMicrosecondArray,
-};
-use arrow_buffer::IntervalMonthDayNano;
+use arrow_array::types::{Date32Type, TimestampMicrosecondType};
+use arrow_array::{Array, ArrayRef, Date32Array, Float64Array, TimestampMicrosecondArray};
+pub use krishiv_types::calendar::{CalendarValue, Calendars, calendar_array};
 
 use crate::cast::datetime::{MICROS_PER_DAY, local_to_utc, utc_to_local};
-use crate::datetime::{TimeZoneRules, add_months, at, local_to_utc_keeping, map2};
+use crate::datetime::{TimeZoneRules, add_months, at, local_to_utc_keeping};
 use crate::dispatch::KernelCtx;
 use crate::error::KernelError;
 use crate::interval::ScaleOp;
 use crate::ops::Operand;
 use crate::version::IntWidth;
 
-const NANOS_PER_MICRO: i64 = 1000;
-
 /// Java's `ArithmeticException` message for `Math.toIntExact` and friends.
 const INT_OVERFLOW: &str = "integer overflow";
-
-fn past_nanos() -> KernelError {
-    KernelError::unsupported(
-        "a calendar interval whose microseconds overflow the nanosecond field of its Arrow type",
-    )
-}
+/// Java's `ArithmeticException` message for `Math.addExact(long, long)` and friends.
+const LONG_OVERFLOW: &str = "long overflow";
 
 /// The value at row `i` of a column of `len` rows; a one-row column stands
 /// for every row.
-fn broadcast<T: ArrowPrimitiveType>(a: &PrimitiveArray<T>, i: usize) -> Option<T::Native> {
+fn broadcast(a: &Calendars<'_>, i: usize) -> Option<CalendarValue> {
+    a.get(if a.len() == 1 { 0 } else { i })
+}
+
+fn broadcast_f64(a: &Float64Array, i: usize) -> Option<f64> {
     let i = if a.len() == 1 { 0 } else { i };
     a.is_valid(i).then(|| a.value(i))
 }
@@ -67,20 +62,20 @@ fn rows(a: usize, b: usize) -> Result<usize, KernelError> {
 /// # Errors
 /// As in the module docs; `INTERNAL_ERROR` for operands of different lengths.
 pub fn add_calendar(
-    l: &IntervalMonthDayNanoArray,
-    r: &IntervalMonthDayNanoArray,
+    l: &Calendars<'_>,
+    r: &Calendars<'_>,
     subtract: bool,
     exact: bool,
-) -> Result<IntervalMonthDayNanoArray, KernelError> {
+) -> Result<ArrayRef, KernelError> {
     let len = rows(l.len(), r.len())?;
-    let mut out = PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(len);
+    let mut out = Vec::with_capacity(len);
     for row in 0..len {
         let Some((a, b)) = broadcast(l, row).zip(broadcast(r, row)) else {
-            out.append_null();
+            out.push(None);
             continue;
         };
-        let (months, days, nanos) = if subtract {
-            (
+        let value = if subtract {
+            CalendarValue::new(
                 field(
                     a.months,
                     b.months,
@@ -97,10 +92,17 @@ pub fn add_calendar(
                     exact,
                     row,
                 )?,
-                a.nanoseconds.checked_sub(b.nanoseconds),
+                long(
+                    a.micros,
+                    b.micros,
+                    i64::checked_sub,
+                    i64::wrapping_sub,
+                    exact,
+                    row,
+                )?,
             )
         } else {
-            (
+            CalendarValue::new(
                 field(
                     a.months,
                     b.months,
@@ -117,13 +119,19 @@ pub fn add_calendar(
                     exact,
                     row,
                 )?,
-                a.nanoseconds.checked_add(b.nanoseconds),
+                long(
+                    a.micros,
+                    b.micros,
+                    i64::checked_add,
+                    i64::wrapping_add,
+                    exact,
+                    row,
+                )?,
             )
         };
-        let nanos = nanos.ok_or_else(past_nanos)?;
-        out.append_value(IntervalMonthDayNano::new(months, days, nanos));
+        out.push(Some(value));
     }
-    Ok(out.finish())
+    Ok(calendar_array(out))
 }
 
 fn field(
@@ -141,27 +149,39 @@ fn field(
     }
 }
 
+fn long(
+    a: i64,
+    b: i64,
+    checked: fn(i64, i64) -> Option<i64>,
+    wrapping: fn(i64, i64) -> i64,
+    exact: bool,
+    row: usize,
+) -> Result<i64, KernelError> {
+    if exact {
+        checked(a, b).ok_or_else(|| KernelError::arithmetic_overflow(row, LONG_OVERFLOW, None))
+    } else {
+        Ok(wrapping(a, b))
+    }
+}
+
 /// `- a`, field by field.
 ///
 /// # Errors
 /// As in the module docs.
-pub fn negate_calendar(
-    a: &IntervalMonthDayNanoArray,
-    exact: bool,
-) -> Result<IntervalMonthDayNanoArray, KernelError> {
-    let mut out = PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(a.len());
+pub fn negate_calendar(a: &Calendars<'_>, exact: bool) -> Result<ArrayRef, KernelError> {
+    let mut out = Vec::with_capacity(a.len());
     for row in 0..a.len() {
-        if a.is_null(row) {
-            out.append_null();
+        let Some(v) = a.get(row) else {
+            out.push(None);
             continue;
-        }
-        let v = a.value(row);
-        let months = field(0, v.months, i32::checked_sub, i32::wrapping_sub, exact, row)?;
-        let days = field(0, v.days, i32::checked_sub, i32::wrapping_sub, exact, row)?;
-        let nanos = v.nanoseconds.checked_neg().ok_or_else(past_nanos)?;
-        out.append_value(IntervalMonthDayNano::new(months, days, nanos));
+        };
+        out.push(Some(CalendarValue::new(
+            field(0, v.months, i32::checked_sub, i32::wrapping_sub, exact, row)?,
+            field(0, v.days, i32::checked_sub, i32::wrapping_sub, exact, row)?,
+            long(0, v.micros, i64::checked_sub, i64::wrapping_sub, exact, row)?,
+        )));
     }
-    Ok(out.finish())
+    Ok(calendar_array(out))
 }
 
 /// Java's `Math.round(double)`: halves go up, NaN is 0, and past the `long`
@@ -187,30 +207,31 @@ fn exact_int(x: f64, row: usize) -> Result<i32, KernelError> {
 
 /// The fields of `v` scaled by a function of each field as a double. A
 /// fraction of a month is dropped; a fraction of a day moves to the
-/// microseconds.
+/// microseconds, which round as Java's `Math.round` (saturating).
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     reason = "Spark works in doubles here, and saturating casts are Java's rule"
 )]
 fn scaled(
-    v: IntervalMonthDayNano,
+    v: CalendarValue,
     by: impl Fn(f64) -> f64,
     exact: bool,
     row: usize,
-) -> Result<IntervalMonthDayNano, KernelError> {
+) -> Result<CalendarValue, KernelError> {
     let (months, days) = (by(f64::from(v.months)), by(f64::from(v.days)));
-    let micros = by((v.nanoseconds / NANOS_PER_MICRO) as f64);
+    let micros = by(v.micros as f64);
     let (whole_months, whole_days) = if exact {
         (exact_int(months, row)?, exact_int(days, row)?)
     } else {
         (months as i32, days as i32)
     };
     let micros = micros + (MICROS_PER_DAY as f64) * (days - f64::from(whole_days));
-    let nanos = java_round(micros)
-        .checked_mul(NANOS_PER_MICRO)
-        .ok_or_else(past_nanos)?;
-    Ok(IntervalMonthDayNano::new(whole_months, whole_days, nanos))
+    Ok(CalendarValue::new(
+        whole_months,
+        whole_days,
+        java_round(micros),
+    ))
 }
 
 /// `a * by` or `a / by`. Spark multiplies each field as a double.
@@ -218,16 +239,16 @@ fn scaled(
 /// # Errors
 /// As in the module docs; `INTERNAL_ERROR` for operands of different lengths.
 pub fn scale_calendar(
-    a: &IntervalMonthDayNanoArray,
+    a: &Calendars<'_>,
     by: &Float64Array,
     op: ScaleOp,
     exact: bool,
-) -> Result<IntervalMonthDayNanoArray, KernelError> {
+) -> Result<ArrayRef, KernelError> {
     let len = rows(a.len(), by.len())?;
-    let mut out = PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(len);
+    let mut out = Vec::with_capacity(len);
     for row in 0..len {
-        let Some((v, n)) = broadcast(a, row).zip(broadcast(by, row)) else {
-            out.append_null();
+        let Some((v, n)) = broadcast(a, row).zip(broadcast_f64(by, row)) else {
+            out.push(None);
             continue;
         };
         let value = match op {
@@ -236,14 +257,14 @@ pub fn scale_calendar(
                 if exact {
                     return Err(KernelError::interval_divided_by_zero(row));
                 }
-                out.append_null();
+                out.push(None);
                 continue;
             }
             ScaleOp::Divide => scaled(v, |f| f / n, exact, row)?,
         };
-        out.append_value(value);
+        out.push(Some(value));
     }
-    Ok(out.finish())
+    Ok(calendar_array(out))
 }
 
 /// `ZonedDateTime.plusMonths(months).plusDays(days).plus(micros)`: each step
@@ -279,6 +300,17 @@ fn add_to_instant(
     t.checked_add(micros)
 }
 
+/// The row count of a temporal operand and an interval column, either of which may stand for every row.
+fn operand_rows<T: arrow_array::ArrowPrimitiveType>(
+    start: &Operand<'_, T>,
+    i: &Calendars<'_>,
+) -> Result<usize, KernelError> {
+    match start {
+        Operand::Array(a) => rows(a.len(), i.len()),
+        Operand::Scalar(_) => Ok(i.len()),
+    }
+}
+
 /// `timestamp + interval`, in `zone` (`None` for `TIMESTAMP_NTZ`). Unlike a
 /// day-time interval's, only the days field is calendar days: `24 hours` is
 /// elapsed time. A result outside the timestamp range is `DATETIME_OVERFLOW`
@@ -286,19 +318,24 @@ fn add_to_instant(
 ///
 /// # Errors
 /// `DATETIME_OVERFLOW` as above; `INTERNAL_ERROR` for operands of different
-/// lengths or two literals.
+/// lengths.
 pub fn timestamp_add_calendar(
     start: Operand<'_, TimestampMicrosecondType>,
-    i: Operand<'_, IntervalMonthDayNanoType>,
+    i: &Calendars<'_>,
     zone: Option<&dyn TimeZoneRules>,
 ) -> Result<TimestampMicrosecondArray, KernelError> {
-    map2(
-        start,
-        i,
-        |t, v| add_to_instant(t, v.months, v.days, v.nanoseconds / NANOS_PER_MICRO, zone),
-        false,
-        |row| KernelError::datetime_overflow(row, "timestamp + interval"),
-    )
+    let len = operand_rows(&start, i)?;
+    let mut out = PrimitiveBuilder::<TimestampMicrosecondType>::with_capacity(len);
+    for row in 0..len {
+        let Some((t, v)) = at(&start, row).zip(broadcast(i, row)) else {
+            out.append_null();
+            continue;
+        };
+        let moved = add_to_instant(t, v.months, v.days, v.micros, zone)
+            .ok_or_else(|| KernelError::datetime_overflow(row, "timestamp + interval"))?;
+        out.append_value(moved);
+    }
+    Ok(out.finish())
 }
 
 /// `date + interval`. Without `exact`, time in the interval is added to the
@@ -309,34 +346,23 @@ pub fn timestamp_add_calendar(
 /// As in the module docs; `ARITHMETIC_OVERFLOW` for a result outside the
 /// `DATE` range; `DATETIME_OVERFLOW` for one outside the timestamp range on
 /// the path through a timestamp; `INTERNAL_ERROR` for operands of different
-/// lengths or two literals.
+/// lengths.
 pub fn date_add_calendar(
     start: Operand<'_, Date32Type>,
-    i: Operand<'_, IntervalMonthDayNanoType>,
+    i: &Calendars<'_>,
     exact: bool,
     zone: Option<&dyn TimeZoneRules>,
     ctx: &KernelCtx,
 ) -> Result<Date32Array, KernelError> {
-    let len = match (&start, &i) {
-        (Operand::Array(a), Operand::Array(b)) if a.len() != b.len() => {
-            return Err(KernelError::internal(format!(
-                "operands differ in length: {} vs {}",
-                a.len(),
-                b.len()
-            )));
-        }
-        (Operand::Array(a), _) => a.len(),
-        (_, Operand::Array(b)) => b.len(),
-        _ => return Err(KernelError::internal("a kernel needs a column operand")),
-    };
+    let len = operand_rows(&start, i)?;
     let message = ctx.spark_version().overflow_message(IntWidth::Int);
     let mut out = PrimitiveBuilder::<Date32Type>::with_capacity(len);
     for row in 0..len {
-        let Some((d, v)) = at(&start, row).zip(at(&i, row)) else {
+        let Some((d, v)) = at(&start, row).zip(broadcast(i, row)) else {
             out.append_null();
             continue;
         };
-        if v.nanoseconds == 0 {
+        if v.micros == 0 {
             let moved = add_months(i64::from(d), i64::from(v.months))
                 .and_then(|m| m.checked_add(i64::from(v.days)))
                 .and_then(|m| i32::try_from(m).ok())
@@ -351,9 +377,7 @@ pub fn date_add_calendar(
                     Some(tz) => local_to_utc(midnight, tz),
                     None => Some(midnight),
                 })
-                .and_then(|t| {
-                    add_to_instant(t, v.months, v.days, v.nanoseconds / NANOS_PER_MICRO, zone)
-                })
+                .and_then(|t| add_to_instant(t, v.months, v.days, v.micros, zone))
                 .and_then(|t| match zone {
                     Some(tz) => utc_to_local(t, tz),
                     None => Some(t),
@@ -376,26 +400,26 @@ mod tests {
 
     use super::*;
 
-    fn cal(months: i32, days: i32, micros: i64) -> IntervalMonthDayNanoArray {
-        IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(
-            months,
-            days,
-            micros.wrapping_mul(NANOS_PER_MICRO),
-        )])
+    fn cal(months: i32, days: i32, micros: i64) -> ArrayRef {
+        calendar_array([Some(CalendarValue::new(months, days, micros))])
     }
 
-    fn fields(a: &IntervalMonthDayNanoArray) -> (i32, i32, i64) {
-        let v = a.value(0);
-        (v.months, v.days, v.nanoseconds / NANOS_PER_MICRO)
+    fn view(a: &ArrayRef) -> Calendars<'_> {
+        Calendars::of(a.as_ref()).unwrap()
+    }
+
+    fn fields(a: &ArrayRef) -> (i32, i32, i64) {
+        let v = view(a).value(0);
+        (v.months, v.days, v.micros)
     }
 
     fn scale(
-        v: &IntervalMonthDayNanoArray,
+        v: &ArrayRef,
         n: f64,
         op: ScaleOp,
         exact: bool,
     ) -> Result<(i32, i32, i64), ErrorClass> {
-        scale_calendar(v, &Float64Array::from(vec![n]), op, exact)
+        scale_calendar(&view(v), &Float64Array::from(vec![n]), op, exact)
             .map(|a| fields(&a))
             .map_err(|e| e.error_class())
     }
@@ -448,51 +472,62 @@ mod tests {
         let class = scale(&v, -0.0, ScaleOp::Divide, true).unwrap_err();
         assert_eq!(class.name(), "INTERVAL_DIVIDED_BY_ZERO");
         let by = Float64Array::from(vec![0.0]);
-        assert!(scale_calendar(&v, &by, ScaleOp::Divide, false).is_ok_and(|a| a.is_null(0)));
+        assert!(scale_calendar(&view(&v), &by, ScaleOp::Divide, false).is_ok_and(|a| a.is_null(0)));
     }
 
     #[test]
-    fn time_past_the_nanosecond_field_is_refused_whatever_the_mode() {
+    fn microseconds_past_the_old_nanosecond_field_are_values() {
+        // 9e15 us (about 285 years) doubled is 1.8e16 us: past i64 nanoseconds, a value in Spark.
         let v = cal(0, 0, 9_000_000_000_000_000);
-        let by = Float64Array::from(vec![2.0]);
         for exact in [true, false] {
-            let e = scale_calendar(&v, &by, ScaleOp::Multiply, exact).map_err(|e| e.error_class());
             assert_eq!(
-                e.map(|_| ()).unwrap_err().name(),
-                "KRISHIV_UNSUPPORTED_FEATURE",
+                scale(&v, 2.0, ScaleOp::Multiply, exact),
+                Ok((0, 0, 18_000_000_000_000_000))
             );
         }
-        let big = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(0, 0, i64::MAX)]);
-        assert!(add_calendar(&big, &big, false, false).is_err());
-        assert!(add_calendar(&big, &big, true, false).is_ok());
-        let min = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(0, 0, i64::MIN)]);
-        assert!(negate_calendar(&min, false).is_err());
+    }
+
+    #[test]
+    fn microseconds_overflow_raises_when_exact_and_wraps_otherwise() {
+        // `IntervalUtils.addExact` / `add`: `Math.addExact` on the long, or a plain `+`.
+        let big = cal(0, 0, i64::MAX);
+        let class =
+            add_calendar(&view(&big), &view(&big), false, true).map_err(|e| e.error_class());
+        assert_eq!(class.map(|_| ()).unwrap_err().name(), "ARITHMETIC_OVERFLOW");
+        assert!(
+            add_calendar(&view(&big), &view(&big), false, false).is_ok_and(|a| fields(&a).2 == -2)
+        );
+        assert!(
+            add_calendar(&view(&big), &view(&big), true, true).is_ok_and(|a| fields(&a).2 == 0)
+        );
+        let min = cal(0, 0, i64::MIN);
+        assert!(negate_calendar(&view(&min), true).is_err());
+        assert!(negate_calendar(&view(&min), false).is_ok_and(|a| fields(&a).2 == i64::MIN));
     }
 
     #[test]
     fn addition_wraps_unless_exact() {
         let (a, b) = (cal(i32::MAX, 0, 0), cal(1, 0, 0));
-        let wrapped = add_calendar(&a, &b, false, false).map(|r| fields(&r));
+        let wrapped = add_calendar(&view(&a), &view(&b), false, false).map(|r| fields(&r));
         assert!(wrapped.is_ok_and(|f| f == (i32::MIN, 0, 0)));
-        assert!(add_calendar(&a, &b, false, true).is_err());
+        assert!(add_calendar(&view(&a), &view(&b), false, true).is_err());
         let min = cal(i32::MIN, i32::MIN, 0);
-        let negated = negate_calendar(&min, false).map(|r| fields(&r));
+        let negated = negate_calendar(&view(&min), false).map(|r| fields(&r));
         assert!(negated.is_ok_and(|f| f == (i32::MIN, i32::MIN, 0)));
-        assert!(negate_calendar(&min, true).is_err());
+        assert!(negate_calendar(&view(&min), true).is_err());
     }
 
     #[test]
     fn a_null_on_either_side_is_null_and_a_single_row_stands_for_every_row() {
-        let a =
-            IntervalMonthDayNanoArray::from(vec![Some(IntervalMonthDayNano::new(1, 0, 0)), None]);
-        let added = add_calendar(&a, &cal(1, 0, 0), true, true);
-        assert!(added.is_ok_and(|r| r.value(0).months == 0 && r.is_null(1)));
-        let short = cal(1, 0, 0);
+        let a = calendar_array([Some(CalendarValue::new(1, 0, 0)), None]);
+        let one = cal(1, 0, 0);
+        let added = add_calendar(&view(&a), &view(&one), true, true);
+        assert!(added.is_ok_and(|r| view(&r).value(0).months == 0 && r.is_null(1)));
         let by = Float64Array::from(vec![Some(2.0), None, Some(3.0)]);
-        let scaled = scale_calendar(&short, &by, ScaleOp::Multiply, true);
-        assert!(scaled.is_ok_and(|r| r.value(2).months == 3 && r.is_null(1)));
-        let three = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::ZERO; 3]);
-        assert!(add_calendar(&three, &a, false, true).is_err());
+        let scaled = scale_calendar(&view(&one), &by, ScaleOp::Multiply, true);
+        assert!(scaled.is_ok_and(|r| view(&r).value(2).months == 3 && r.is_null(1)));
+        let three = calendar_array([Some(CalendarValue::default()); 3]);
+        assert!(add_calendar(&view(&three), &view(&a), false, true).is_err());
     }
 
     #[test]
@@ -503,7 +538,7 @@ mod tests {
             let i = cal(0, 0, hours * 3_600_000_000);
             date_add_calendar(
                 Operand::Scalar(Some(day)),
-                Operand::Array(&i),
+                &view(&i),
                 false,
                 Some(&tz),
                 &ctx,
@@ -521,45 +556,26 @@ mod tests {
     fn a_date_takes_months_then_days_and_time_only_without_exact() {
         let ctx = KernelCtx::default();
         let day = 19_753; // 2024-01-31
-        let start = Operand::Scalar(Some(day));
         let i = cal(1, 1, 0);
-        let moved = date_add_calendar(start, Operand::Array(&i), true, None, &ctx);
+        let moved = date_add_calendar(Operand::Scalar(Some(day)), &view(&i), true, None, &ctx);
         // 2024-02-29, then a day.
         assert!(moved.is_ok_and(|a| a.value(0) == 19_783));
         let hour = cal(0, 0, -3_600_000_000);
-        let e = date_add_calendar(
-            Operand::Scalar(Some(day)),
-            Operand::Array(&hour),
-            true,
-            None,
-            &ctx,
-        )
-        .map_err(|e| e.error_class());
+        let e = date_add_calendar(Operand::Scalar(Some(day)), &view(&hour), true, None, &ctx)
+            .map_err(|e| e.error_class());
         assert_eq!(
             e.map(|_| ()).unwrap_err().name(),
             "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
         );
-        let floored = date_add_calendar(
-            Operand::Scalar(Some(day)),
-            Operand::Array(&hour),
-            false,
-            None,
-            &ctx,
-        );
+        let floored =
+            date_add_calendar(Operand::Scalar(Some(day)), &view(&hour), false, None, &ctx);
         assert!(floored.is_ok_and(|a| a.value(0) == 19_752));
         let far = cal(0, i32::MAX, 0);
         assert!(
-            date_add_calendar(
-                Operand::Scalar(Some(day)),
-                Operand::Array(&far),
-                false,
-                None,
-                &ctx
-            )
-            .is_err()
+            date_add_calendar(Operand::Scalar(Some(day)), &view(&far), false, None, &ctx).is_err()
         );
         let null = Date32Array::from(vec![None]);
-        let out = date_add_calendar(Operand::Array(&null), Operand::Array(&i), true, None, &ctx);
+        let out = date_add_calendar(Operand::Array(&null), &view(&i), true, None, &ctx);
         assert!(out.is_ok_and(|a| a.is_null(0)));
     }
 
@@ -568,10 +584,10 @@ mod tests {
         let day = 86_400_000_000_i64;
         let t = 19_753_i64.wrapping_mul(day);
         let i = cal(1, 1, 1);
-        let moved = timestamp_add_calendar(Operand::Scalar(Some(t)), Operand::Array(&i), None);
+        let moved = timestamp_add_calendar(Operand::Scalar(Some(t)), &view(&i), None);
         assert!(moved.is_ok_and(|a| a.value(0) == 19_783_i64.wrapping_mul(day).wrapping_add(1)));
         let far = cal(i32::MAX, 0, 0);
-        let e = timestamp_add_calendar(Operand::Scalar(Some(t)), Operand::Array(&far), None);
+        let e = timestamp_add_calendar(Operand::Scalar(Some(t)), &view(&far), None);
         assert!(e.is_err());
     }
 }

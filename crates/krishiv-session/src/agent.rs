@@ -858,6 +858,15 @@ pub fn cell(a: &dyn Array, i: usize, null: &str, tz: &ZoneRef) -> String {
             let v = a.as_primitive::<IntervalMonthDayNanoType>().value(i);
             krishiv_types::interval::calendar_string(v.months, v.days, v.nanoseconds / 1_000)
         }
+        t if krishiv_types::arrow::is_calendar_struct(t) => {
+            match krishiv_types::calendar::Calendars::of(a) {
+                Some(c) => {
+                    let v = c.value(i);
+                    krishiv_types::interval::calendar_string(v.months, v.days, v.micros)
+                }
+                None => String::new(),
+            }
+        }
         ArrowType::List(_) => {
             let inner = a.as_list::<i32>().value(i);
             let items: Vec<String> = (0..inner.len())
