@@ -29,7 +29,7 @@ Spark data type ↔ Arrow mapping.
 | `time(p)` | `Time64(Nanosecond)`, tagged when `p < 6` | |
 | `interval year to month` | `Interval(YearMonth)`, tagged for other fields | |
 | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
-| `interval` | `Interval(MonthDayNano)` | |
+| `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`; ADR 0009 update 2026-11-06) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
 | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
 | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
 | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
@@ -83,6 +83,32 @@ pub mod arrow { /* ... */ }
 
 ### Functions
 
+#### Function `calendar_struct`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+The Arrow carrier of `CALENDAR INTERVAL`: Spark's `CalendarInterval` layout, so microseconds past the `i64`
+nanoseconds of `Interval(MonthDayNano)` are representable. The children are marked, so a user struct with the
+same names is never read as an interval.
+
+```rust
+pub fn calendar_struct() -> arrow_schema::DataType { /* ... */ }
+```
+
+#### Function `is_calendar_struct`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+Whether `arrow` is the struct of a calendar interval.
+
+```rust
+pub fn is_calendar_struct(arrow: &arrow_schema::DataType) -> bool { /* ... */ }
+```
+
 #### Function `is_variant_struct`
 
 **Attributes:**
@@ -111,8 +137,8 @@ pub fn normalize_ingest_type(arrow: &arrow_schema::DataType) -> arrow_schema::Da
 
 - `MustUse { reason: None }`
 
-`arrow` with each decimal on the canonical carrier of its precision: what an
-Arrow value of any carrier becomes when it enters a query.
+`arrow` with each decimal on the canonical carrier of its precision and each calendar interval on its struct:
+what an Arrow value of any carrier becomes when it enters a query.
 
 ```rust
 pub fn canonical_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::DataType { /* ... */ }
@@ -128,6 +154,19 @@ pub fn canonical_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::Dat
 
 ```rust
 pub fn client_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::DataType { /* ... */ }
+```
+
+#### Function `edge_arrow_type`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+`arrow` as a caller outside the engine reads it: [`client_arrow_type`], and each calendar interval as Arrow's
+`Interval(MonthDayNano)` (Spark's own Arrow form of it; ADR 0009 update 2026-11-06).
+
+```rust
+pub fn edge_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::DataType { /* ... */ }
 ```
 
 ### Constants and Statics
@@ -216,6 +255,38 @@ The largest precision on the `Decimal64` carrier; above it a decimal is on
 
 ```rust
 pub const DECIMAL64_MAX_PRECISION: u8 = 18;
+```
+
+#### Constant `CALENDAR_CHILD_METADATA_KEY`
+
+The child marker of a calendar interval's struct (its value is the child's name).
+
+```rust
+pub const CALENDAR_CHILD_METADATA_KEY: &str = "krishiv.calendar";
+```
+
+#### Constant `CALENDAR_MONTHS_FIELD`
+
+The months child of a calendar interval's struct.
+
+```rust
+pub const CALENDAR_MONTHS_FIELD: &str = "months";
+```
+
+#### Constant `CALENDAR_DAYS_FIELD`
+
+The days child of a calendar interval's struct.
+
+```rust
+pub const CALENDAR_DAYS_FIELD: &str = "days";
+```
+
+#### Constant `CALENDAR_MICROS_FIELD`
+
+The microseconds child of a calendar interval's struct.
+
+```rust
+pub const CALENDAR_MICROS_FIELD: &str = "microseconds";
 ```
 
 ## Module `batch`
@@ -575,6 +646,460 @@ type as [`Batch`], so batch, streaming and IVM share one data path.
 
 ```rust
 pub type ChangeBatch = Batch;
+```
+
+## Module `calendar`
+
+Calendar interval columns: the struct carrier of [`crate::arrow::calendar_struct`] (months, days,
+microseconds, as Spark's `CalendarInterval`; ADR 0009 update 2026-11-06), read through [`Calendars`] and built
+with [`calendar_array`], and the conversions to and from Arrow's `Interval(MonthDayNano)`, which only the
+session edges use: [`to_month_day_nano`] multiplies the microseconds by 1,000 and reports the first row that
+overflows (Spark's `ArrowWriter` overflows there with `Math.multiplyExact`), [`from_month_day_nano`] divides
+toward zero (Spark's `ArrowColumnVector` reads `nanoseconds / 1000`).
+
+```rust
+pub mod calendar { /* ... */ }
+```
+
+### Types
+
+#### Struct `CalendarValue`
+
+One calendar interval value.
+
+```rust
+pub struct CalendarValue {
+    pub months: i32,
+    pub days: i32,
+    pub micros: i64,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `months` | `i32` | Months. |
+| `days` | `i32` | Days. |
+| `micros` | `i64` | Microseconds. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub const fn new(months: i32, days: i32, micros: i64) -> Self { /* ... */ }
+  ```
+  `months, days, micros`.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> CalendarValue { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Default**
+  - ```rust
+    fn default() -> CalendarValue { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Hash**
+  - ```rust
+    fn hash<__H: $crate::hash::Hasher>(self: &Self, state: &mut __H) { /* ... */ }
+    ```
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &CalendarValue) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `Calendars`
+
+A read view of a calendar interval column.
+
+```rust
+pub struct Calendars<''a> {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn of(a: &''a dyn Array) -> Option<Self> { /* ... */ }
+  ```
+  The view of `a`, when it is a calendar interval column.
+
+- ```rust
+  pub fn len(self: &Self) -> usize { /* ... */ }
+  ```
+  The number of rows.
+
+- ```rust
+  pub fn is_empty(self: &Self) -> bool { /* ... */ }
+  ```
+  Whether there are no rows.
+
+- ```rust
+  pub fn is_null(self: &Self, i: usize) -> bool { /* ... */ }
+  ```
+  Whether row `i` is NULL.
+
+- ```rust
+  pub fn get(self: &Self, i: usize) -> Option<CalendarValue> { /* ... */ }
+  ```
+  Row `i` (a NULL row is `None`).
+
+- ```rust
+  pub fn value(self: &Self, i: usize) -> CalendarValue { /* ... */ }
+  ```
+  Row `i`'s stored value, NULL or not.
+
+- ```rust
+  pub fn iter(self: &Self) -> impl Iterator<Item = Option<CalendarValue>> + ''_ { /* ... */ }
+  ```
+  Every row, in order.
+
+###### Trait Implementations
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Calendars<''a> { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Send**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `CalendarBuilder`
+
+Builds a calendar interval column row by row.
+
+```rust
+pub struct CalendarBuilder {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new() -> Self { /* ... */ }
+  ```
+  An empty builder.
+
+- ```rust
+  pub fn with_capacity(n: usize) -> Self { /* ... */ }
+  ```
+  A builder with room for `n` rows.
+
+- ```rust
+  pub fn append_value(self: &mut Self, v: CalendarValue) { /* ... */ }
+  ```
+  Adds `v`.
+
+- ```rust
+  pub fn append_null(self: &mut Self) { /* ... */ }
+  ```
+  Adds a NULL.
+
+- ```rust
+  pub fn append_option(self: &mut Self, v: Option<CalendarValue>) { /* ... */ }
+  ```
+  Adds `v`, NULL for `None`.
+
+- ```rust
+  pub fn len(self: &Self) -> usize { /* ... */ }
+  ```
+  The rows added so far.
+
+- ```rust
+  pub fn is_empty(self: &Self) -> bool { /* ... */ }
+  ```
+  Whether no row was added.
+
+- ```rust
+  pub fn finish(self: &mut Self) -> ArrayRef { /* ... */ }
+  ```
+  The column, leaving the builder empty.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Default**
+  - ```rust
+    fn default() -> CalendarBuilder { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Send**
+- **Sync**
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+### Functions
+
+#### Function `calendar_array`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+A calendar interval column of `values`.
+
+```rust
+pub fn calendar_array</* synthetic */ impl IntoIterator<Item = Option<CalendarValue>>: IntoIterator<Item = Option<CalendarValue>>>(values: impl IntoIterator<Item = Option<CalendarValue>>) -> arrow_array::ArrayRef { /* ... */ }
+```
+
+#### Function `null_calendar_array`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+A calendar interval column of `len` NULLs.
+
+```rust
+pub fn null_calendar_array(len: usize) -> arrow_array::ArrayRef { /* ... */ }
+```
+
+#### Function `to_month_day_nano`
+
+`a` (a calendar interval column) as Arrow's `Interval(MonthDayNano)`, for the session edges.
+
+# Errors
+The first row whose microseconds overflow `i64` nanoseconds.
+
+```rust
+pub fn to_month_day_nano(a: &Calendars<''_>) -> Result<arrow_array::IntervalMonthDayNanoArray, usize> { /* ... */ }
+```
+
+#### Function `from_month_day_nano`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+An Arrow `Interval(MonthDayNano)` column as a calendar interval column (nanoseconds divided toward zero).
+
+```rust
+pub fn from_month_day_nano(a: &arrow_array::IntervalMonthDayNanoArray) -> arrow_array::ArrayRef { /* ... */ }
+```
+
+#### Function `calendar_fields`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+The fields of the carrier, for builders that need them.
+
+```rust
+pub fn calendar_fields() -> arrow_schema::Fields { /* ... */ }
 ```
 
 ## Module `error`
