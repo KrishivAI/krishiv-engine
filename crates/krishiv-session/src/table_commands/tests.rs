@@ -31,7 +31,17 @@ fn a_namespace_location_keeps_a_dotdot_above_the_root_and_refuses_an_empty_one()
     // Spark 4.2.0: `CREATE NAMESPACE n LOCATION '/../x'` is `file:/../x`; `''` is INVALID_EMPTY_LOCATION.
     assert_eq!(q("/../x", wh), "file:/../x");
     assert_eq!(q("/a/../../x", wh), "file:/../x");
-    assert!(qualified_namespace_location("", wh).is_err());
+    let err = qualified_namespace_location("", wh).unwrap_err();
+    assert!(err.to_string().contains("INVALID_EMPTY_LOCATION"), "{err}");
+    // `new Path(..)` normalises every scheme (Spark 4.2.0 run through `org.apache.hadoop.fs.Path`).
+    assert_eq!(q("s3a://b/x//y/", wh), "s3a://b/x/y");
+    assert_eq!(q("s3a://b/x/./y/../z", wh), "s3a://b/x/z");
+    assert_eq!(q("hdfs://nn:8020/a//b/", wh), "hdfs://nn:8020/a/b");
+    assert_eq!(q("s3a://B/Up", wh), "s3a://B/Up");
+    assert_eq!(q("s3a://b", wh), "s3a://b");
+    assert_eq!(q("s3a://b/../x", wh), "s3a://b/../x");
+    assert_eq!(q("file:///tmp/x//y/", wh), "file:/tmp/x/y");
+    assert_eq!(q("file://host/a//b", wh), "file://host/a/b");
 }
 
 #[test]

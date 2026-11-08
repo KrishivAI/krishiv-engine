@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The location of a namespace, qualified as Spark qualifies it.
 
-/// Spark's `CatalogUtils.makeQualifiedDBObjectPath` on the local file system: a location with a URI scheme
-/// other than `file` stays as written; any other is resolved against the warehouse directory (an absolute
-/// path stays itself) and qualified as a `file:` URI. A local path is normalised as Hadoop's `Path` does:
-/// no empty, `.` or `..` segment, no trailing slash (Spark 4.2.0: `rel/dir//x/` and `a/../b` are
-/// `<warehouse>/rel/dir/x` and `<warehouse>/b`, `file:/abs2//w/` is `file:/abs2/w`, `/../x` is `file:/../x`, an empty location is `INVALID_EMPTY_LOCATION`).
+/// Spark's `CatalogUtils.makeQualifiedDBObjectPath`: a location without a scheme is resolved against the
+/// warehouse directory (an absolute path stays itself) and qualified as a `file:` URI. Every location,
+/// whatever its scheme, is then normalised as Hadoop's `Path` does: no empty, `.` or trailing segment, a
+/// `..` removes the segment before it and is kept when there is none; the scheme and authority stay as
+/// written (Spark 4.2.0, `new Path(..)`: `s3a://b/x//y/` is `s3a://b/x/y`, `file:///a/b//c/` is
+/// `file:/a/b/c`, `/../x` is `file:/../x`). An empty location is `INVALID_EMPTY_LOCATION`. A scheme whose
+/// file system Spark cannot open (`s3a`, `hdfs` without the connector) is refused by Spark itself; here it is
+/// only normalised, which is not checked against a real Spark run with that file system.
 pub(super) fn qualified_namespace_location(
     location: &str,
     warehouse: &std::path::Path,
@@ -21,12 +24,22 @@ pub(super) fn qualified_namespace_location(
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
     });
-    let path = match scheme {
-        Some((s, rest)) if s.eq_ignore_ascii_case("file") && !rest.starts_with("//") => {
-            rest.to_owned()
-        }
-        Some(_) => return Ok(location.to_owned()),
-        None => warehouse.join(location).display().to_string(),
+    let (prefix, path) = match scheme {
+        Some((s, rest)) => match rest.strip_prefix("//") {
+            Some(after) => {
+                let (authority, path) = after.split_at(after.find('/').unwrap_or(after.len()));
+                if authority.is_empty() {
+                    (format!("{s}:"), path.to_owned())
+                } else {
+                    (format!("{s}://{authority}"), path.to_owned())
+                }
+            }
+            None => (format!("{s}:"), rest.to_owned()),
+        },
+        None => (
+            "file:".to_owned(),
+            warehouse.join(location).display().to_string(),
+        ),
     };
     let mut parts: Vec<&str> = Vec::new();
     for segment in path.split('/') {
@@ -44,5 +57,8 @@ pub(super) fn qualified_namespace_location(
             other => parts.push(other),
         }
     }
-    Ok(format!("file:/{}", parts.join("/")))
+    if parts.is_empty() && prefix.contains("//") {
+        return Ok(prefix);
+    }
+    Ok(format!("{prefix}/{}", parts.join("/")))
 }
