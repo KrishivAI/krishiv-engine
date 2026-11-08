@@ -33,3 +33,14 @@ for a new failure and for a listed script that now passes (`KRISHIV_RATCHET_UPDA
 keeps existing reasons). A script with a `FOR` over `DISTINCT`/`GROUP BY` and no `ORDER BY` depends on the
 engine's row order, which differs between machines: it is compared and printed, never asserted.
 `semantics/*.json` is checked by `tests/scripting_semantics.rs`.
+
+## Triage of the `randomly_generated_scripts` golden remainders (opus-2, 2026-11-08, P2b row 15 unit R1)
+
+The 7 statements still listed in `known-failures-cases/scripting/randomly_generated_scripts.json` (0-based 36, 61, 67,
+69, 88, 103, 112) all fail on the result schema only: the script's `EXIT` handler fires in one engine and not in the other.
+They run in sequence on shared tables, so a row inserted or deleted by an earlier script changes what a later one sees.
+Six of the seven (36, 61, 67, 69, 88, 112) have a `FOR` query or scalar subquery with `LIMIT` and no `ORDER BY`, whose row
+order is Spark's file order, not ours; scripts 3, 75 and 8 of the handler record (`known-failures.json`) are the
+same effect with a proof (Spark's checksum is reproduced with an explicit `ORDER BY`). Statement 103 has no `LIMIT`; its
+branches depend on the counts per region that earlier statements left behind. None is a scripting-engine defect; they
+stay listed as order/state-dependent, and cannot be made to pass without Spark's file order.
