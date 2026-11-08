@@ -221,9 +221,13 @@ impl ConsumerHandle {
     /// the writer's scratch) counts as about to be released, so a round that
     /// cannot spill enough waits for it (re-planning on every release, up to
     /// `abortReleaseTimeout`) before it fails a request or aborts a query.
-    /// Every [`crate::SpillWriter`] holds one while it lives; a caller that
-    /// releases the freed credit after the writer finished holds its own
-    /// across the release, so the bytes never look idle in between.
+    ///
+    /// Hold it only across a write that ends without help: the blocking
+    /// write job and the release of the credit it freed, with no
+    /// arbitration (no `grow`, no wait for memory or input) inside. A writer
+    /// kept open between batches that arrive only after a reservation of the
+    /// same driver (a merge join's group file) must not hold one: two such
+    /// drivers would wait for each other until the deadline.
     #[must_use]
     pub fn spilling(&self) -> SpillWriting {
         self.credit.writing.fetch_add(1, Ordering::AcqRel);

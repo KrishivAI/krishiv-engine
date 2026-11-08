@@ -29,8 +29,9 @@
 //!    memory is released or a grant settles: a consumer whose driver waits in
 //!    a round of its own, and the requester's own driver, do not count.
 //!    Spill writes in progress count too: the memory of another driver's
-//!    consumer while it writes a spill ([`crate::ConsumerHandle::spilling`],
-//!    held by every `SpillWriter`) will be released without help, so the
+//!    consumer while it holds a [`crate::ConsumerHandle::spilling`] guard
+//!    (taken only across a write that ends without help: the blocking job
+//!    and the release of the credit it freed) will be released, so the
 //!    round waits for it (re-planning when a write ends) instead of failing
 //!    a request while no spill can be asked of anyone.
 //!    Otherwise abort the query furthest above its fair share. The requester's own query fails the request with
