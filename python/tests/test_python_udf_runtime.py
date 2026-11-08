@@ -103,6 +103,37 @@ def test_a_result_of_another_type_is_refused() -> None:
         spark.sql("SELECT py_wrong(id) FROM range(3)").collect()
 
 
+def test_a_sliced_result_keeps_its_offset() -> None:
+    # Design P2-T059 §7 (review I3): a result that is a slice of a larger array (non-zero offset, its validity
+    # bitmap at a bit offset) comes back row for row.
+    def sliced(x: pa.Array) -> pa.Array:
+        values = [None if i % 3 == 0 else i for i in x.to_pylist()]
+        return pa.array([7] * 5 + values + [None] * 7, pa.int64()).slice(5, len(x))
+
+    spark = _spark()
+    spark._native.register_python_udf("py_sliced", ARROW_BATCHED, "bigint", True, True, sliced)
+    rows = spark.sql("SELECT id, py_sliced(id) FROM range(20) ORDER BY id").collect()
+    assert [r[1] for r in rows] == [None if i % 3 == 0 else i for i in range(20)]
+
+
+@pytest.mark.parametrize(
+    "encode",
+    [
+        pytest.param(lambda a: a.dictionary_encode(), id="dictionary"),
+        pytest.param(lambda a: pc.call_function("run_end_encode", [a]), id="run-end"),
+    ],
+)
+def test_an_encoded_result_of_a_plain_declared_type_is_refused(encode) -> None:
+    # Review I3: the engine imports only the declared layout; a dictionary or run-end encoded result of a
+    # `string` UDF is refused with the types named, never read as the wrong layout.
+    spark = _spark()
+    spark._native.register_python_udf(
+        "py_encoded", ARROW_BATCHED, "string", True, True, lambda x: encode(pa.array(["a"] * len(x)))
+    )
+    with pytest.raises(Exception, match="was declared"):
+        spark.sql("SELECT py_encoded(id) FROM range(3)").collect()
+
+
 @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
 def test_a_forked_child_runs_udfs_on_a_pool_of_its_own() -> None:
     # The child's copy of the parent's pool has no threads (review B2): its call must not hang. The child
