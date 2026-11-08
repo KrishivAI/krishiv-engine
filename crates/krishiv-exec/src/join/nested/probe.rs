@@ -193,7 +193,15 @@ async fn reserve_in_cohort(
         let changed = cohort.changed();
         if !cohort.others_active(asking.0) {
             asking.0.set(SeatState::Reserving);
-            break r.grow(bytes).await;
+            let out = r.grow(bytes).await;
+            if out.is_err() {
+                tracing::debug!(
+                    bytes,
+                    members = cohort.members(),
+                    "nested-loop cohort: no other member active, request refused"
+                );
+            }
+            break out;
         }
         waits.fetch_add(1, Ordering::Relaxed);
         changed.await;
@@ -346,7 +354,7 @@ impl Operator for ProbeOp {
             let freed = d.reservation.size();
             let batches = d.buffered.clone();
             let schema = Arc::clone(&self.0.spec.probe_schema);
-            let file = match write(ctx, scope, schema, batches, &mut d.reservation).await {
+            let file = match write(ctx, scope, schema, batches, &mut d.reservation, false).await {
                 Ok(f) => f,
                 Err(e) => return crate::output_spill::refused(e),
             };
@@ -394,7 +402,7 @@ impl Operator for ProbeOp {
                 let batches = std::mem::take(&mut d.buffered);
                 let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
                 let schema = Arc::clone(&self.0.spec.probe_schema);
-                let file = write(ctx, scope, schema, batches, &mut d.reservation).await?;
+                let file = write(ctx, scope, schema, batches, &mut d.reservation, true).await?;
                 d.rows += rows;
                 d.signal.set_spillable_bytes(0);
                 d.files.push(Arc::new(file));

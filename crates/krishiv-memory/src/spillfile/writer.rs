@@ -80,6 +80,9 @@ pub struct SpillWriter {
     started: u64,
     committed: bool,
     failed: bool,
+    /// The write in progress, counted on the consumer until the writer
+    /// drops (after `reservation`, so its scratch is back first).
+    _writing: Option<crate::SpillWriting>,
 }
 
 impl SpillWriter {
@@ -97,6 +100,7 @@ impl SpillWriter {
         let weighted_schema =
             Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
         let window = scope.manager().drop_behind;
+        let writing = reservation.handle().map(|h| h.spilling());
         let mut w = Self {
             scope,
             tmp,
@@ -115,6 +119,7 @@ impl SpillWriter {
             started: 0,
             committed: false,
             failed: false,
+            _writing: writing,
         };
         // A failure here drops `w`, which removes the temp file.
         w.put_raw(&file_header())?;

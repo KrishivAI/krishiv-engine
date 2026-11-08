@@ -69,6 +69,10 @@ pub struct GrantCredit {
     /// Bytes granted by [`crate::SpillOwner::reserve_for`] whose retry has
     /// not ended yet ([`ConsumerHandle::settle_grant`]).
     unsettled: AtomicUsize,
+    /// Spill writes of this consumer in progress ([`SpillWriting`]): its
+    /// memory is about to be released, so rounds wait for it before they
+    /// fail a request.
+    writing: AtomicUsize,
     /// The pool tree whose waiting rounds re-plan when a grant settles.
     shared: OnceLock<Weak<Shared>>,
 }
@@ -84,6 +88,11 @@ impl GrantCredit {
         self.unsettled.load(Ordering::Acquire)
     }
 
+    /// Whether a spill write of the consumer is in progress.
+    pub(crate) fn writing(&self) -> bool {
+        self.writing.load(Ordering::Acquire) > 0
+    }
+
     /// Wakes `shared`'s release waiters when a grant settles. Set once, by
     /// the pool the consumer registers with.
     pub(crate) fn notify(&self, shared: Weak<Shared>) {
@@ -96,7 +105,22 @@ impl fmt::Debug for GrantCredit {
         f.debug_struct("GrantCredit")
             .field("bytes", &self.bytes())
             .field("unsettled", &self.unsettled())
+            .field("writing", &self.writing.load(Ordering::Acquire))
             .finish_non_exhaustive()
+    }
+}
+
+/// A spill write in progress ([`ConsumerHandle::spilling`]); dropping it
+/// ends the write's count and wakes the rounds waiting for it.
+#[derive(Debug)]
+pub struct SpillWriting(Arc<GrantCredit>);
+
+impl Drop for SpillWriting {
+    fn drop(&mut self) {
+        self.0.writing.fetch_sub(1, Ordering::AcqRel);
+        if let Some(shared) = self.0.shared.get().and_then(Weak::upgrade) {
+            shared.release.released();
+        }
     }
 }
 
@@ -190,6 +214,20 @@ impl ConsumerHandle {
     /// be used or returned.
     pub(crate) fn add_unsettled(&self, bytes: usize) {
         self.credit.unsettled.fetch_add(bytes, Ordering::AcqRel);
+    }
+
+    /// Marks a spill write of this consumer as in progress until the guard
+    /// drops: the memory the write frees (the rows lent to it as credit and
+    /// the writer's scratch) counts as about to be released, so a round that
+    /// cannot spill enough waits for it (re-planning on every release, up to
+    /// `abortReleaseTimeout`) before it fails a request or aborts a query.
+    /// Every [`crate::SpillWriter`] holds one while it lives; a caller that
+    /// releases the freed credit after the writer finished holds its own
+    /// across the release, so the bytes never look idle in between.
+    #[must_use]
+    pub fn spilling(&self) -> SpillWriting {
+        self.credit.writing.fetch_add(1, Ordering::AcqRel);
+        SpillWriting(Arc::clone(&self.credit))
     }
 
     /// The retry a grant was for has ended: returns unused credit to the

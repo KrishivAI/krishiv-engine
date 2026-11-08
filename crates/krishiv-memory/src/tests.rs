@@ -1642,6 +1642,86 @@ async fn a_round_waits_for_another_drivers_unsettled_grant() {
     assert_eq!(root.stats().aborts, 0);
 }
 
+/// Another driver's consumer is writing a spill (its rows are lent to the
+/// writer, nothing is spillable): a request that needs those bytes waits for
+/// the write to end and release them, instead of failing at once while no
+/// spill can be asked of anyone.
+#[tokio::test(start_paused = true)]
+async fn a_round_waits_for_another_consumers_spill_write() {
+    let root = root(Some(4 * Q), Q);
+    let q = root.child_pool("q", None);
+    let (a, b) = (SpillOwner::new(), SpillOwner::new());
+    let ha = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "a",
+        Some(a.signal() as Arc<dyn Spillable>),
+    );
+    let hb = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "b",
+        Some(b.signal() as Arc<dyn Spillable>),
+    );
+    let mut rows = hb.reservation();
+    rows.try_grow(3 * Q).unwrap();
+    let writing = hb.spilling();
+    let started = tokio::time::Instant::now();
+    let want = tokio::spawn({
+        let ha = Arc::clone(&ha);
+        async move { a.reserve_for(&ha, 2 * Q, || async {}).await }
+    });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(
+        !want.is_finished(),
+        "the request failed while b's spill write was in progress"
+    );
+    // The write ends: the rows' bytes go back, then the count.
+    rows.shrink(3 * Q);
+    drop(writing);
+    want.await.unwrap().unwrap();
+    assert_eq!(ha.credit(), 2 * Q);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(root.stats().aborts, 0);
+}
+
+/// A spill write that ends without freeing anything (it failed, the rows
+/// stay) ends the wait at once: the request fails then, not at
+/// `abortReleaseTimeout`.
+#[tokio::test(start_paused = true)]
+async fn a_spill_write_that_frees_nothing_fails_the_wait_at_once() {
+    let root = root(Some(4 * Q), Q);
+    let q = root.child_pool("q", Some(4 * Q));
+    let (a, b) = (SpillOwner::new(), SpillOwner::new());
+    let ha = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "a",
+        Some(a.signal() as Arc<dyn Spillable>),
+    );
+    let hb = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "b",
+        Some(b.signal() as Arc<dyn Spillable>),
+    );
+    let mut rows = hb.reservation();
+    rows.try_grow(3 * Q).unwrap();
+    let writing = hb.spilling();
+    let started = tokio::time::Instant::now();
+    let want = tokio::spawn({
+        let ha = Arc::clone(&ha);
+        async move { a.reserve_for(&ha, 2 * Q, || async {}).await }
+    });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(!want.is_finished());
+    drop(writing);
+    let e = want.await.unwrap().unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "waited {:?} after the write ended",
+        started.elapsed()
+    );
+    drop(rows);
+}
+
 /// A retry that keeps everything it was granted settles its grant: a round
 /// waiting for it fails then, not at `abortReleaseTimeout`.
 #[tokio::test(start_paused = true)]
@@ -1775,4 +1855,5 @@ fn a_grant_credit_debug_shows_its_bytes_and_unsettled_grants() {
     assert!(shown.starts_with("GrantCredit {"), "{shown}");
     assert!(shown.contains("bytes: 0"), "{shown}");
     assert!(shown.contains("unsettled: 0"), "{shown}");
+    assert!(shown.contains("writing: 0"), "{shown}");
 }

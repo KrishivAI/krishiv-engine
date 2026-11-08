@@ -645,6 +645,40 @@ fn nested_loops_of_one_query_share_the_chunk_budget() {
     );
 }
 
+/// Prints `krishiv_*` debug events to stderr (shown for a failed test), so a
+/// refused reservation names what held the pool (`trace_exhausted`).
+struct StderrEvents;
+
+impl tracing::Subscriber for StderrEvents {
+    fn enabled(&self, m: &tracing::Metadata<'_>) -> bool {
+        m.target().starts_with("krishiv_") && *m.level() <= tracing::Level::DEBUG
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, e: &tracing::Event<'_>) {
+        struct Fields(String);
+        impl tracing::field::Visit for Fields {
+            fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                self.0.push_str(&format!(" {}={v:?}", f.name()));
+            }
+        }
+        let mut fields = Fields(String::new());
+        e.record(&mut fields);
+        #[expect(
+            clippy::print_stderr,
+            reason = "test diagnostics: nextest shows a failed test's stderr"
+        )]
+        {
+            eprintln!("[{}]{}", e.metadata().target(), fields.0);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
 /// Runs two copies of one spilled nested loop at once as two tasks of one
 /// query (two task pools below one query pool under `limit`, as a stage's
 /// split tasks run); the sorted rows and counters of each.
@@ -744,6 +778,7 @@ fn run_two_tasks(
 /// loop's first batch could fail the query.
 #[test]
 fn two_tasks_of_one_query_share_their_chunks() {
+    let _ = tracing::subscriber::set_global_default(StderrEvents);
     let probe: Vec<Option<i64>> = (0..64).map(|i| Some((i * 499) % 100_000)).collect();
     let build: Vec<Option<i64>> = (0..300_000).map(|i| Some((i * 7) % 100_000)).collect();
     let want = expected_by(JoinType::FullOuter, &is_near, &probe, &build);
@@ -767,4 +802,22 @@ fn two_tasks_of_one_query_share_their_chunks() {
         together > 2 * alone,
         "alone {alone} chunks, together {together}: {ca:?} {cb:?}"
     );
+}
+
+/// Two tasks of one query under a limit where each one's spill writes leave
+/// the other nothing to spill: a request waits for the other task's write in
+/// progress instead of failing, and rows written whatever the pool holds
+/// (the probe rows at the end of input, the build's last batches) fund their
+/// writer's scratch first. Before, about one run in eight failed with
+/// `UNABLE_TO_ACQUIRE_MEMORY` at this limit (`two_tasks_of_one_query_share_their_chunks`
+/// on CI, at twice the limit, more rarely).
+#[test]
+fn two_tasks_finish_when_their_spill_writes_fill_the_pool() {
+    let _ = tracing::subscriber::set_global_default(StderrEvents);
+    let probe: Vec<Option<i64>> = (0..64).map(|i| Some((i * 499) % 100_000)).collect();
+    let build: Vec<Option<i64>> = (0..300_000).map(|i| Some((i * 7) % 100_000)).collect();
+    let want = expected_by(JoinType::FullOuter, &is_near, &probe, &build);
+    let [(a, _), (b, _)] = run_two_tasks(&probe, &build, 320 << 10);
+    assert_eq!(a, want);
+    assert_eq!(b, want);
 }
