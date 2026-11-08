@@ -765,13 +765,9 @@ pub(crate) fn refuse_secret_options(
 ) -> Result<(), KrishivError> {
     let is_secret = |o: &TableOption| {
         o.value.as_ref().is_some_and(|v| {
-            original.get(v.span.start..v.span.end).is_some_and(|t| {
-                let t = t.trim_start();
-                t.len() > 6
-                    && t.is_char_boundary(6)
-                    && t[..6].eq_ignore_ascii_case("secret")
-                    && t[6..].trim_start().starts_with('(')
-            })
+            original
+                .get(v.span.start..v.span.end)
+                .is_some_and(calls_secret)
         })
     };
     if options.iter().any(is_secret) {
@@ -781,4 +777,41 @@ pub(crate) fn refuse_secret_options(
         .into());
     }
     Ok(())
+}
+
+/// Whether expression text `t` calls `secret` anywhere: the name bare or back-quoted, in any case,
+/// followed by `(`, inside parentheses, casts or other calls too. String literals are skipped;
+/// anything else that looks like a call counts (the check fails closed).
+fn calls_secret(t: &str) -> bool {
+    let b = t.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\'' || c == b'"' {
+            // A string literal, with backslash escapes.
+            i += 1;
+            while i < b.len() && b[i] != c {
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+            continue;
+        }
+        let (name, end) = if c == b'`' {
+            let close = t[i + 1..].find('`').map_or(b.len(), |n| i + 1 + n);
+            (&t[(i + 1).min(close)..close], (close + 1).min(b.len()))
+        } else if c.is_ascii_alphanumeric() || c == b'_' {
+            let end = t[i..]
+                .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .map_or(b.len(), |n| i + n);
+            (&t[i..end], end)
+        } else {
+            i += 1;
+            continue;
+        };
+        if name.eq_ignore_ascii_case("secret") && t[end..].trim_start().starts_with('(') {
+            return true;
+        }
+        i = end;
+    }
+    false
 }

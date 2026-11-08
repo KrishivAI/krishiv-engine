@@ -327,64 +327,62 @@ pub(crate) fn estimate_of(
     physical: &PhysicalPlan,
     catalog: &Arc<crate::catalog::QueryCatalog>,
 ) -> Estimate {
-    {
-        let stats = ProviderStatistics(Arc::clone(catalog) as Arc<dyn TableProviderResolver>);
-        let estimates = PlanStats::compute(optimized.root(), &stats);
-        // Each scan counts once per path that reaches it: the two sides of a self-join share one subtree and read
-        // it twice.
-        let mut order: Vec<Arc<LogicalPlan>> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let mut stack = vec![(Arc::clone(optimized.root()), false)];
-        while let Some((p, expanded)) = stack.pop() {
-            if expanded {
-                order.push(p);
-                continue;
-            }
-            if !seen.insert(Arc::as_ptr(&p)) {
-                continue;
-            }
-            stack.push((Arc::clone(&p), true));
-            for c in plan_children(&p) {
-                stack.push((c, false));
-            }
+    let stats = ProviderStatistics(Arc::clone(catalog) as Arc<dyn TableProviderResolver>);
+    let estimates = PlanStats::compute(optimized.root(), &stats);
+    // Each scan counts once per path that reaches it: the two sides of a self-join share one subtree and read
+    // it twice.
+    let mut order: Vec<Arc<LogicalPlan>> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![(Arc::clone(optimized.root()), false)];
+    while let Some((p, expanded)) = stack.pop() {
+        if expanded {
+            order.push(p);
+            continue;
         }
-        let mut paths: std::collections::HashMap<*const LogicalPlan, u64> =
-            std::collections::HashMap::new();
-        paths.insert(Arc::as_ptr(optimized.root()), 1);
-        let mut scan_bytes = Some(0.0_f64);
-        for p in order.iter().rev() {
-            let n = paths.get(&Arc::as_ptr(p)).copied().unwrap_or(0);
-            if matches!(p.node, krishiv_plan::PlanNode::Scan(_)) {
-                scan_bytes = match (
-                    scan_bytes,
-                    estimates.has_statistics(p),
-                    estimates.size_bytes(p),
-                ) {
-                    (Some(total), true, Some(size)) => Some(total + size * (n as f64)),
-                    _ => None,
-                };
-            }
-            for c in plan_children(p) {
-                let slot = paths.entry(Arc::as_ptr(&c)).or_insert(0);
-                *slot = slot.saturating_add(n);
-            }
+        if !seen.insert(Arc::as_ptr(&p)) {
+            continue;
         }
-        let root = optimized.root();
-        let rows = estimates
-            .has_statistics(root)
-            .then(|| estimates.rows(root))
-            .map(f64_to_u64);
-        let plan = physical
-            .explain_all()
-            .to_string()
-            .lines()
-            .map(str::to_owned)
-            .collect();
-        Estimate {
-            scan_bytes: scan_bytes.map(f64_to_u64),
-            rows,
-            plan,
+        stack.push((Arc::clone(&p), true));
+        for c in plan_children(&p) {
+            stack.push((c, false));
         }
+    }
+    let mut paths: std::collections::HashMap<*const LogicalPlan, u64> =
+        std::collections::HashMap::new();
+    paths.insert(Arc::as_ptr(optimized.root()), 1);
+    let mut scan_bytes = Some(0.0_f64);
+    for p in order.iter().rev() {
+        let n = paths.get(&Arc::as_ptr(p)).copied().unwrap_or(0);
+        if matches!(p.node, krishiv_plan::PlanNode::Scan(_)) {
+            scan_bytes = match (
+                scan_bytes,
+                estimates.has_statistics(p),
+                estimates.size_bytes(p),
+            ) {
+                (Some(total), true, Some(size)) => Some(total + size * (n as f64)),
+                _ => None,
+            };
+        }
+        for c in plan_children(p) {
+            let slot = paths.entry(Arc::as_ptr(&c)).or_insert(0);
+            *slot = slot.saturating_add(n);
+        }
+    }
+    let root = optimized.root();
+    let rows = estimates
+        .has_statistics(root)
+        .then(|| estimates.rows(root))
+        .map(f64_to_u64);
+    let plan = physical
+        .explain_all()
+        .to_string()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    Estimate {
+        scan_bytes: scan_bytes.map(f64_to_u64),
+        rows,
+        plan,
     }
 }
 

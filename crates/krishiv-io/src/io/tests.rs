@@ -764,7 +764,8 @@ fn secrets_are_resolved_once_per_context() {
     let counting = Arc::new(Counting::default());
     let s = setup(IoConfig::default());
     let io =
-        s.io.with_secrets(Arc::clone(&counting) as Arc<dyn SecretResolver>)
+        s.io.clone()
+            .with_secrets(Arc::clone(&counting) as Arc<dyn SecretResolver>)
             .with_principal(Arc::new(krishiv_common::Principal::local_user()));
     rt().block_on(async {
         for _ in 0..3 {
@@ -784,6 +785,19 @@ fn secrets_are_resolved_once_per_context() {
         // Another principal never gets a value cached for the first.
         let other = krishiv_common::Principal::new("other", krishiv_common::PrincipalKind::User);
         io.secrets().resolve(&other, "sc", "k").await.unwrap();
+        // A context nobody told who it acts for resolves nothing and never asks the resolver.
+        let unset =
+            s.io.with_secrets(Arc::clone(&counting) as Arc<dyn SecretResolver>);
+        assert!(unset.principal().is_unset());
+        let e = unset
+            .secrets()
+            .resolve(unset.principal(), "sc", "k")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivInsufficientPermissions
+        );
     });
     assert_eq!(counting.0.load(Ordering::Relaxed), 3);
 }

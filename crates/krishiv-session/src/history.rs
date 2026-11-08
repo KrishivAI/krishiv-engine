@@ -362,8 +362,9 @@ impl QueryHistory {
         }
     }
 
-    /// When the query `id` of session `session` was submitted, if it is still remembered.
-    pub(crate) fn submitted_ms(&self, session: &str, id: &str) -> Option<i64> {
+    /// When the query `id` of session `session` was submitted (monotonic clock), if it is still
+    /// remembered.
+    pub(crate) fn submitted_at(&self, session: &str, id: &str) -> Option<std::time::Instant> {
         self.rows
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -371,7 +372,7 @@ impl QueryHistory {
             .iter()
             .rev()
             .find(|r| r.id == id && r.session_id == session)
-            .map(|r| r.submitted_ms)
+            .map(|r| r.submitted_at)
     }
 
     /// Marks the query `id` of session `session` finished.

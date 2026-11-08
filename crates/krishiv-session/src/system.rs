@@ -734,6 +734,9 @@ pub(crate) struct QueryRow {
     pub(crate) text: Option<String>,
     pub(crate) truncated: bool,
     pub(crate) submitted_ms: i64,
+    /// When it was submitted on the monotonic clock: a queued query's wait
+    /// does not move with the system clock.
+    pub(crate) submitted_at: std::time::Instant,
     pub(crate) ended_ms: Option<i64>,
     pub(crate) wall_ns: Option<i64>,
     pub(crate) peak_memory_bytes: Option<i64>,
@@ -979,6 +982,7 @@ impl QueryLog {
             text,
             truncated,
             submitted_ms: ms,
+            submitted_at: std::time::Instant::now(),
             ended_ms: None,
             wall_ns: None,
             peak_memory_bytes: None,
@@ -1062,15 +1066,17 @@ impl QueryLog {
     /// or ended before its run): its wall time is the time since it was submitted, so the
     /// queue time is not lost.
     pub(crate) fn close_unrun(&self, id: &str, state: &'static str, error_class: Option<&str>) {
-        let waited_ms = self
+        let waited = self
             .history
-            .submitted_ms(&self.session_id, id)
-            .map_or(0, |at| now_ms().saturating_sub(at).max(0));
+            .submitted_at(&self.session_id, id)
+            .map_or(0, |at| {
+                i64::try_from(at.elapsed().as_nanos()).unwrap_or(i64::MAX)
+            });
         self.finish(
             id,
             &Finished {
                 state,
-                wall_ns: waited_ms.saturating_mul(1_000_000),
+                wall_ns: waited,
                 peak_memory_bytes: 0,
                 error_class,
                 operators: Vec::new(),

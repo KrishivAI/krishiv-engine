@@ -413,6 +413,7 @@ async fn a_cancelled_queued_query_counts_its_queue_time_in_wall_ns() {
         .build()
         .unwrap();
     let runner = s.clone();
+    let started = std::time::Instant::now();
     let query = tokio::spawn(async move {
         let _ = runner
             .sql("SELECT 5 AS five")
@@ -443,9 +444,12 @@ async fn a_cancelled_queued_query_counts_its_queue_time_in_wall_ns() {
         })
         .next()
         .expect("one row");
+    // At least the 60 ms it slept while queued, at most the time since before it was submitted
+    // (both on the monotonic clock).
+    let most = i64::try_from(started.elapsed().as_nanos()).unwrap();
     assert!(
-        wall >= 50_000_000,
-        "the 60 ms in the queue count: {wall} ns"
+        (60_000_000..=most).contains(&wall),
+        "the 60 ms in the queue count: {wall} ns, at most {most}"
     );
 }
 
@@ -498,7 +502,8 @@ async fn the_request_carries_the_estimate_for_a_controller_that_wants_it() {
         .unwrap();
     let seen = gate.estimates.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
-    assert!(seen[0].is_some(), "an estimate was computed: {seen:?}");
+    // An estimate was computed: a query with no table scan reads no bytes.
+    assert_eq!(seen, vec![Some(Some(0))]);
     assert!(!krishiv_session::Unlimited.uses_estimate());
     assert!(gate.uses_estimate());
 }
