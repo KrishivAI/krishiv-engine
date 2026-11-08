@@ -155,7 +155,8 @@ impl Session {
         }
         // Analysed now, so the frame holds the table before the catalog can let it go.
         df.analyzed_in(self.query_env()).await?;
-        drop(entry);
+        // The frame, and every frame derived from it, owns the table.
+        df.keep.push(entry);
         Ok(df)
     }
 }

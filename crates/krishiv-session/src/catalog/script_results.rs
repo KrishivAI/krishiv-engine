@@ -15,9 +15,6 @@ use super::{SessionCatalog, TempTable, is_hidden_name};
 /// that no view pins and that lives as long as a frame reads it.
 const SCRIPT_RESULT_PREFIX: &str = "__krishiv_snapshot_r";
 
-/// How many of the newest script results the catalog keeps whether or not a frame holds them.
-const RECENT_SCRIPT_RESULTS: usize = 16;
-
 impl SessionCatalog {
     /// Adds the hidden in-memory table `table` and returns its name, which no SQL text spells. It
     /// is removed once nothing but the catalog holds it ([`Self::collect_garbage`]), at the next
@@ -42,28 +39,15 @@ impl SessionCatalog {
 }
 
 /// Drops the hidden entries nothing needs: those no live view pins (`live`) and, of the script
-/// results, all but the newest few and those something besides the catalog holds (the result
-/// frame, whose analysis keeps the table it loaded; a frame derived from a result, `limit` or
-/// `filter`, has no analysis yet and reads the table by its name, hence the newest few).
+/// results, those nothing but the catalog holds: a result frame, and every frame derived from it
+/// (`DataFrame::keep`), owns its table.
 pub(super) fn retain(
     tables: &mut BTreeMap<String, (String, Arc<TempTable>)>,
     live: &BTreeSet<String>,
 ) {
-    let mut results: Vec<u64> = tables
-        .keys()
-        .filter_map(|k| k.strip_prefix(SCRIPT_RESULT_PREFIX)?.parse().ok())
-        .collect();
-    results.sort_unstable();
-    let newest = results
-        .len()
-        .checked_sub(RECENT_SCRIPT_RESULTS)
-        .map_or(0, |n| results[n]);
     tables.retain(|key, (_, table)| {
         !is_hidden_name(key)
             || live.contains(key)
-            || key
-                .strip_prefix(SCRIPT_RESULT_PREFIX)
-                .and_then(|n| n.parse::<u64>().ok())
-                .is_some_and(|n| n >= newest || Arc::strong_count(table) > 1)
+            || (key.starts_with(SCRIPT_RESULT_PREFIX) && Arc::strong_count(table) > 1)
     });
 }

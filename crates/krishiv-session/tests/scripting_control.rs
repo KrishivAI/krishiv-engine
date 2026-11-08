@@ -170,14 +170,21 @@ fn a_result_has_no_fixed_cap_on_rows_or_types() {
 
 #[test]
 fn a_for_loop_has_no_fixed_cap_on_rows() {
+    // 600 passes, each a statement of its own: the rows are held in the script's pool, and the
+    // loop's own count is checked (the old `FOR` cap, 100,000 rows, would take minutes to cross).
     let s = Session::new().unwrap();
     let df = block_on(s.sql(
         "BEGIN DECLARE n INT DEFAULT 0; FOR r AS SELECT id FROM range(600) DO SET n = n + 1; END FOR; SELECT n; END",
     ))
     .unwrap();
     let batches: Vec<RecordBatch> = block_on(df.collect()).unwrap();
-    assert_eq!(batches[0].num_rows(), 1);
-    assert_eq!(count(&s, "SELECT 600"), 600);
+    let n = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::Int32Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(n, 600);
 }
 
 #[test]
@@ -212,4 +219,21 @@ fn execute_immediate_outside_a_script_keeps_the_operation_id() {
             "SELECT count(*) FROM system.queries WHERE query_id = '00112233-4455-6677-8899-aabbccddeeff'"
         ) >= 1
     );
+}
+
+#[test]
+fn a_derived_frame_keeps_its_result_however_many_scripts_run_before_it_is_collected() {
+    let s = Session::new().unwrap();
+    let derived = block_on(s.sql("BEGIN SELECT id FROM range(5); END"))
+        .unwrap()
+        .limit(2);
+    let joined = block_on(s.sql("BEGIN SELECT id FROM range(3); END"))
+        .unwrap()
+        .union(&block_on(s.sql("BEGIN SELECT id FROM range(4); END")).unwrap());
+    for _ in 0..40 {
+        block_on(s.sql("BEGIN SELECT 1; END")).unwrap();
+    }
+    block_on(s.sql("CREATE TEMP VIEW churn AS SELECT 1 AS a")).unwrap();
+    assert_eq!(total(&block_on(derived.collect()).unwrap()), 2);
+    assert_eq!(total(&block_on(joined.collect()).unwrap()), 7);
 }
