@@ -17,7 +17,7 @@
 //! are one object with the first's names (`findTypeForComplex`). The names
 //! always compare ignoring case: Spark's default, `spark.sql.caseSensitive`
 //! is not read here (with it on Spark keeps both spellings;
-//! `docs/known-differences.md`). [`Schema::merge`] is also the merge
+//! `docs/explanation/known-differences.md`). [`Schema::merge`] is also the merge
 //! `schema_of_variant_agg` needs.
 
 use krishiv_common::error::{KrishivError, MalformedVariant};

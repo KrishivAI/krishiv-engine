@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Krishiv sessions (layer L5): Spark SQL and DataFrames over the engine.
+//! Krishiv sessions: Spark SQL and DataFrames over the engine.
 //!
 //! A [`Session`] holds the configuration, the temporary tables and views,
 //! and the engine that runs queries. [`Session::sql`] and the

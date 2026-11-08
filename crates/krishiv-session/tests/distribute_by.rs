@@ -83,7 +83,7 @@ fn params(s: &Session, sql: &str) -> (String, Vec<String>) {
     }
 }
 
-/// A recorded difference (`docs/known-differences.md`): Spark evaluates the
+/// A recorded difference (`docs/explanation/known-differences.md`): Spark evaluates the
 /// partitioning expressions while it shuffles, so `x + 'a'` fails there
 /// with `CAST_INVALID_INPUT`; the repartition is dropped here and the rows
 /// come back. Remove with the exchange queued for the execution lane.
