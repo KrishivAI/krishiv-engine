@@ -396,6 +396,9 @@ impl QueryContext {
             let om = &mut m.operators.entry(*id).or_default().metrics;
             om.spill_files = stats.files();
             om.spill_write_bytes = stats.bytes();
+            // The drivers' peaks fall at different moments, so their sum can
+            // pass the query limit; the shared stats saw them together.
+            om.peak_reserved = stats.peak_held() as u64;
         }
         m.memory = QueryMemory {
             limit: self.pool.effective_limit().map(|l| l as u64),

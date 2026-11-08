@@ -38,6 +38,10 @@ use crate::{ConsumerId, MemoryPool, Reservation, Spillable};
 pub struct SpillStats {
     files: AtomicU64,
     bytes: AtomicU64,
+    /// Bytes held by reservations of every consumer sharing these stats, and
+    /// the most they held at once.
+    held: AtomicUsize,
+    peak: AtomicUsize,
 }
 
 impl SpillStats {
@@ -49,6 +53,12 @@ impl SpillStats {
     /// Bytes written to spill files (as stored: compressed, with framing).
     pub fn bytes(&self) -> u64 {
         self.bytes.load(Ordering::Relaxed)
+    }
+
+    /// The most bytes the reservations of all consumers sharing these stats
+    /// held at the same moment (a true peak, not a sum of per-consumer peaks).
+    pub fn peak_held(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
     }
 
     pub(crate) fn record(&self, bytes: u64) {
@@ -244,10 +254,13 @@ impl ConsumerHandle {
         // Statistics only: no other memory is published through these.
         let held = self.held.fetch_add(bytes, Ordering::Relaxed) + bytes;
         self.peak.fetch_max(held, Ordering::Relaxed);
+        let shared = self.spill_stats.held.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        self.spill_stats.peak.fetch_max(shared, Ordering::Relaxed);
     }
 
     pub(crate) fn shrank(&self, bytes: usize) {
         self.held.fetch_sub(bytes, Ordering::Relaxed);
+        self.spill_stats.held.fetch_sub(bytes, Ordering::Relaxed);
     }
 
     /// Takes up to `max` bytes of credit.

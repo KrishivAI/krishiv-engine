@@ -47,8 +47,9 @@ pub struct OperatorMetrics {
     pub max_driver_blocked_on_io: Duration,
     /// Morsels claimed (sources; reported by the source itself).
     pub morsels: u64,
-    /// Peak bytes reserved through the operator's memory consumer, summed
-    /// over its drivers (an upper bound of the true peak).
+    /// Peak bytes the operator's reservations held at once, over all its
+    /// drivers (`QueryContext::metrics` sets it from the shared consumer
+    /// stats; merging driver counters alone sums their peaks, an upper bound).
     pub peak_reserved: u64,
     /// Spill requests serviced (from the memory arbitrator).
     pub spills: u64,
