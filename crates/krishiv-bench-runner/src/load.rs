@@ -13,7 +13,8 @@
 //! queue counts; a heavy one's from its start), `"max_slice_seconds"` (the longest driver poll of any
 //! of them), `"stalls"` (polls over the stall threshold, summed; wall time, so a thread kept off a
 //! CPU counts), `"stalled_pipelines"` (each pipeline that stalled, named by its operators joined with
-//! `>`, with its stalls and longest poll), and `"errors"` (the first message
+//! `>`, with its stalls and longest poll), `"fetch_mean_seconds"` (each query's mean file-read time,
+//! its scans' `scan_read_inflight_ns` over `scan_reads`: its own reads only), and `"errors"` (the first message
 //! of each failed query). `io` is the change of the runtime's read-latency histogram over the run,
 //! remote stores only (`krishiv_io::LatencyHistogram`): `"requests"` and `"p50_us"`, `"p99_us"`,
 //! `"max_us"`, each the upper bound of its power-of-two microsecond bucket, `null` with no request.
@@ -34,6 +35,10 @@ struct Class {
     /// Per pipeline that stalled, named by its operators (in operator-id
     /// order, `>`-joined): its stalls and longest poll.
     stalled: std::collections::BTreeMap<String, (u64, Duration)>,
+    /// Per query with file reads, its mean read time in seconds: its scans'
+    /// `scan_read_inflight_ns` over their `scan_reads` (each read timed
+    /// inside its own future, so another query's reads are not in it).
+    fetch_means: Vec<f64>,
     errors: Vec<String>,
 }
 
@@ -56,13 +61,15 @@ impl Class {
                 )
             })
             .collect();
+        let fetch: Vec<String> = self.fetch_means.iter().map(|s| format!("{s:.6}")).collect();
         format!(
-            "{{\"done\":{},\"latencies\":[{}],\"max_slice_seconds\":{:.6},\"stalls\":{},\"stalled_pipelines\":[{}],\"errors\":[{}]}}",
+            "{{\"done\":{},\"latencies\":[{}],\"max_slice_seconds\":{:.6},\"stalls\":{},\"stalled_pipelines\":[{}],\"fetch_mean_seconds\":[{}],\"errors\":[{}]}}",
             self.latencies.len(),
             lat.join(","),
             self.max_slice.as_secs_f64(),
             self.stalls,
             stalled.join(","),
+            fetch.join(","),
             errors.join(",")
         )
     }
@@ -126,6 +133,26 @@ fn one(runner: &Runner, sql: &str, from: Instant, class: &Mutex<Class>) {
                     let e = c.stalled.entry(name.join(">")).or_default();
                     e.0 = e.0.saturating_add(p.stalls);
                     e.1 = e.1.max(p.max_slice);
+                }
+                let count = |name: &str| -> u64 {
+                    m.operators
+                        .values()
+                        .flat_map(|o| &o.extra)
+                        .filter(|(k, _)| k == name)
+                        .map(|(_, v)| match v {
+                            krishiv_exec::Metric::Count(n) | krishiv_exec::Metric::Max(n) => *n,
+                            krishiv_exec::Metric::Text(_) => 0,
+                        })
+                        .sum()
+                };
+                let reads = count("scan_reads");
+                if reads > 0 {
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "a mean in seconds of nanosecond sums"
+                    )]
+                    c.fetch_means
+                        .push(count("scan_read_inflight_ns") as f64 / reads as f64 / 1e9);
                 }
             }
         }

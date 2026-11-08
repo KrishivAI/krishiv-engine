@@ -888,6 +888,12 @@ fn load_runs_heavy_loops_and_an_open_loop_and_reports_store_latency() {
     assert!(v["heavy"]["done"].as_u64().unwrap() >= 2, "{v}");
     assert_eq!(v["short"]["done"], 5, "{v}");
     assert_eq!(v["heavy"]["errors"].as_array().unwrap().len(), 0, "{v}");
+    // Each short query that read its file reports its mean read time.
+    let fetch = v["short"]["fetch_mean_seconds"].as_array().unwrap();
+    assert!(
+        fetch.len() <= 5 && fetch.iter().all(|s| s.as_f64().unwrap() >= 0.0),
+        "{v}"
+    );
     // Pipelines that stalled are listed by their operators (often none at all here).
     for p in v["heavy"]["stalled_pipelines"].as_array().unwrap() {
         assert!(p["stalls"].as_u64().unwrap() > 0, "{v}");
