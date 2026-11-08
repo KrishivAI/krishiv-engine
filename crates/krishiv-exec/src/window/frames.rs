@@ -1387,14 +1387,16 @@ mod chunk_tests {
         assert_eq!(chunk_items(&far, 1), CHUNK + 127);
         let far = sum(rows, B::CurrentRow, B::Offset(i64::MAX));
         assert_eq!(chunk_items(&far, 3), CHUNK + 127);
-        // Unbounded and RANGE frames hold a whole chunk.
+        // Unbounded and RANGE frames hold a whole chunk and one more frame
+        // query's nodes less one.
+        let wide = CHUNK + 129;
         assert_eq!(
             chunk_items(&sum(rows, B::UnboundedPreceding, B::CurrentRow), 10),
-            CHUNK
+            wide
         );
         assert_eq!(
             chunk_items(&sum(FrameUnits::Range, B::CurrentRow, B::CurrentRow), 10),
-            CHUNK
+            wide
         );
     }
 }
