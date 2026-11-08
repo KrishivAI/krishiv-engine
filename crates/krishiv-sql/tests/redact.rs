@@ -230,6 +230,15 @@ fn set_with_nested_comments_or_no_equals_redacts() {
             "SET password Canary7f3a9c; SELECT 1 = 1",
             "SET password *********(redacted)",
         ),
+        // A sensitive SET after other statements is still redacted.
+        (
+            "SET a = 1; SET password = Canary7f3a9c",
+            "SET a = 1; SET password = *********(redacted)",
+        ),
+        (
+            "SELECT 1; SET password Canary7f3a9c",
+            "SELECT 1; SET password *********(redacted)",
+        ),
     ] {
         assert_eq!(redact_sql(sql).as_str(), expected, "{sql}");
     }

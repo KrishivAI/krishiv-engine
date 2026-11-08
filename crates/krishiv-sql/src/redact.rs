@@ -236,8 +236,21 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
 }
 
 /// `SET key = value` with a sensitive key: the value (raw text to the end
-/// of the statement) is a secret.
+/// of the statement) is a secret. Every `;`-separated statement is read on
+/// its own, so `SET a = 1; SET password = x` hides the second value too.
 fn set_value(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
+    // A secret value is redacted to the end of the text (fail-safe).
+    let end = code
+        .iter()
+        .rposition(|t| t.kind != TokenKind::Sym(Sym::Semi))
+        .map_or(sql.len(), |j| code[j].span.end);
+    for stmt in code.split(|t| t.kind == TokenKind::Sym(Sym::Semi)) {
+        set_statement(sql, stmt, end, marks);
+    }
+}
+
+/// One statement's `SET key = value` (see [`set_value`]).
+fn set_statement(sql: &str, code: &[&Token], end: usize, marks: &mut Vec<Mark>) {
     let Some(first) = code.first() else {
         return;
     };
@@ -274,10 +287,6 @@ fn set_value(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
             k.push_str(&part);
         }
     }
-    let end = code
-        .iter()
-        .rposition(|t| t.kind != TokenKind::Sym(Sym::Semi))
-        .map_or(sql.len(), |j| code[j].span.end);
     let start = code.get(eq + 1).map_or(end, |t| t.span.start);
     if sensitive(&key[..]) && start < end {
         marks.push(Mark::Secret(start..end));
