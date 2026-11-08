@@ -234,6 +234,12 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::Expects(vec![text.clone(), text.clone()]),
         int,
     ));
+    // `locate` over `UTF8_LCASE` operands: the analyzer rewrites `instr`/`locate`/`position` to it.
+    out.extend(scalar(
+        &["__locate_lcase"],
+        &Inputs::Expects(vec![text.clone(), text.clone(), int_arg.clone()]),
+        locate_result,
+    ));
     out.extend(scalar(
         &["locate", "position"],
         &Inputs::Expects(vec![text.clone(), text.clone(), int_arg.clone()]),

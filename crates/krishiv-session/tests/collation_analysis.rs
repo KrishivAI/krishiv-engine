@@ -267,7 +267,6 @@ fn search_and_indeterminate_rules_follow_spark() {
 fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
     let l = "('Ab' COLLATE utf8_lcase)";
     for sql in [
-        format!("SELECT instr({l}, 'a')"),
         format!("SELECT replace({l}, 'a', 'x')"),
         format!("SELECT translate({l}, 'a', 'x')"),
         format!("SELECT trim('a' FROM {l})"),
@@ -862,5 +861,23 @@ fn in_subquery_compares_through_the_collation_keys() {
             want,
             "{sql}"
         );
+    }
+}
+
+/// `instr` / `locate` over `UTF8_LCASE` strings: values of a Spark 4.2.0 local run (2026-11-08).
+#[test]
+fn positions_over_lcase_strings_match_spark() {
+    let l = "COLLATE utf8_lcase";
+    for (sql, want) in [
+        (format!("instr('xAbAy' {l}, 'ab')"), "2"),
+        (format!("locate('ab', 'xAbAy' {l})"), "2"),
+        (format!("locate('a', 'xAbAy' {l}, 3)"), "4"),
+        (format!("instr('a\u{130}' {l}, 'i')"), "0"),
+        (format!("instr('a\u{130}' {l}, 'i\u{307}')"), "2"),
+        (format!("instr('a\u{130}b' {l}, 'b')"), "3"),
+        (format!("instr('x\u{3c2}' {l}, '\u{3c3}')"), "2"),
+        (format!("locate('', 'xAbAy' {l}, 3)"), "1"),
+    ] {
+        assert_eq!(one(&format!("SELECT CAST({sql} AS STRING)")), want, "{sql}");
     }
 }

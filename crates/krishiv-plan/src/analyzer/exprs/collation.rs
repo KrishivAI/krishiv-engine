@@ -419,6 +419,19 @@ impl Resolver<'_> {
         {
             return Ok(bound);
         }
+        // `instr` / `locate` / `position` over `UTF8_LCASE` strings answer positions in the
+        // original text: the kernel `__locate_lcase` matches the lower-cased code points (unit 5b).
+        if matches!(name.as_str(), "instr" | "locate" | "position")
+            && !f.distinct
+            && (2..=3).contains(&n)
+            && kids[..2].iter().all(|k| is_string(k.ty.data_type.as_ref()))
+            && kids[..2]
+                .iter()
+                .any(|k| is_collated(k.ty.data_type.as_ref()))
+            && let Some(bound) = self.locate_lcase(e, kids, n, &name, in_agg, window_fn, cx)?
+        {
+            return Ok(bound);
+        }
         if f.distinct
             || COMPARING.contains(&name.as_str())
             || INSPECTS.contains(&name.as_str())
@@ -708,6 +721,55 @@ impl Resolver<'_> {
         }
         self.expr_node_inner(e, &keyed, in_agg, window_fn, cx)
             .map(Some)
+    }
+
+    /// `instr` / `locate` / `position` as `__locate_lcase(substr, str, start)` when the strings
+    /// compare in `UTF8_LCASE` (not `_RTRIM`); `None` leaves the call to the other rules.
+    #[expect(clippy::too_many_arguments, reason = "the arguments of `expr_node`")]
+    fn locate_lcase(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        n: usize,
+        name: &str,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        let (chosen, _) = self.choose_collation(e, kids, 2, name)?;
+        let Some(c) = chosen else {
+            return Ok(None);
+        };
+        if c.rtrim() || !matches!(c.family(), CollationFamily::Utf8Lcase) {
+            return Ok(None);
+        }
+        let (sub, text) = if name == "instr" { (1, 0) } else { (0, 1) };
+        let plain = |this: &mut Self, k: &Bound| -> Result<Bound, AnalysisError> {
+            let cast = Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&k.expr),
+                to: DataType::String,
+                mode: CastMode::Ansi,
+            })
+            .with_origin(e.origin);
+            let mut b = this.expr(&Arc::new(cast), cx)?;
+            b.shown = Some(k.shown());
+            Ok(b)
+        };
+        let start = if n == 3 && name != "instr" {
+            kids[2].clone()
+        } else {
+            let one = Expr::new(ExprNode::Literal(Literal::Integer(1))).with_origin(e.origin);
+            self.expr(&Arc::new(one), cx)?
+        };
+        let keyed = vec![plain(self, &kids[sub])?, plain(self, &kids[text])?, start];
+        let call = Expr::function(
+            "__locate_lcase",
+            keyed.iter().map(|k| (*k.expr).clone()).collect(),
+        )
+        .with_origin(e.origin);
+        let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
+        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        Ok(Some(b))
     }
 
     /// The one collation of the string operands of the call `e` (its first `n` arguments),
