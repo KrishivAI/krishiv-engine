@@ -13,13 +13,15 @@ use krishiv_plan::{LogicalPlan, ReadSource};
 
 use super::{FileScans, FilesKey, QueryCatalog, TempTable, collect_scans, reference_key, run_on};
 
-/// A scan of files in an analyzed plan: what it reads, the table's columns
-/// and the scan's column ids with their names.
+/// A scan of files in an analyzed plan: what it reads, the table's columns,
+/// the scan's column ids with their names, and a permanent table's
+/// partition columns.
 pub(super) type FileScanOf = (
     FilesKey,
     ReadSource,
     SchemaRef,
     Vec<(krishiv_plan::AttrId, String)>,
+    Option<krishiv_exec::files::KnownPartitions>,
 );
 
 impl QueryCatalog {
@@ -34,7 +36,7 @@ impl QueryCatalog {
     pub(crate) async fn open_files(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
         self.check_reference_options(plan)?;
         let scans = self.file_scans(plan);
-        for (key, source, table, _) in &scans {
+        for (key, source, table, _, partitions) in &scans {
             if self.opened(key).is_some() {
                 continue;
             }
@@ -48,8 +50,16 @@ impl QueryCatalog {
             };
             let listing = match key {
                 FilesKey::Table(_) | FilesKey::Reference { known: true, .. } => {
+                    let Some(partitions) = partitions else {
+                        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                            feature: "reading a table with a partition outside its default \
+                                      directory (ADD PARTITION ... LOCATION, SET LOCATION)"
+                                .to_owned(),
+                        }
+                        .into());
+                    };
                     self.files
-                        .listing_known(format, paths, options, Arc::clone(table))
+                        .listing_known(format, paths, options, Arc::clone(table), partitions)
                         .await?
                 }
                 _ => self.files.listing(format, paths, options).await?,
@@ -131,22 +141,24 @@ impl QueryCatalog {
         scans
             .into_iter()
             .filter_map(|scan| {
-                let (key, source) = match &scan.source {
+                let (key, source, partitions) = match &scan.source {
                     ReadSource::Table { name, options } => {
                         let (key, table) = self.entry_of(name)?;
                         let TempTable::Files {
                             source,
                             known,
                             permanent,
+                            partitions,
                             ..
                         } = &*table
                         else {
                             return None;
                         };
-                        reference_key(key, *known, *permanent, source, options)
+                        let (key, source) = reference_key(key, *known, *permanent, source, options);
+                        (key, source, partitions.clone())
                     }
                     source @ ReadSource::Files { .. } => {
-                        (FilesKey::Read(source.clone()), source.clone())
+                        (FilesKey::Read(source.clone()), source.clone(), None)
                     }
                     _ => return None,
                 };
@@ -162,7 +174,7 @@ impl QueryCatalog {
                     .iter()
                     .map(|c| (c.id, c.name.clone()))
                     .collect();
-                Some((key, source, table, ids))
+                Some((key, source, table, ids, partitions))
             })
             .collect()
     }
@@ -192,4 +204,36 @@ async fn open_table(
         .await
     })
     .await
+}
+
+/// The partitions a read of `table` lists: its partition columns and the
+/// values of the partitions its catalog registered. `None` when a registered
+/// partition is not at its default directory under the table (`ADD PARTITION
+/// ... LOCATION`, `SET LOCATION`): Spark reads it there, a listing of the table
+/// does not.
+pub(super) fn known_partitions(
+    table: &crate::store::CatalogTable,
+) -> Option<krishiv_exec::files::KnownPartitions> {
+    let columns = table.layout.partition_columns.clone();
+    let mut registered = Vec::with_capacity(table.layout.partitions.len());
+    for p in &table.layout.partitions {
+        let mut dir = table.location.clone();
+        let mut values = Vec::with_capacity(p.spec.len());
+        for (k, v) in &p.spec {
+            dir.push(format!(
+                "{}={}",
+                crate::partitions::escape_path_name(k),
+                crate::partitions::escape_path_name(v)
+            ));
+            values.push((v != krishiv_io::DEFAULT_PARTITION).then(|| v.clone()));
+        }
+        if dir != p.location {
+            return None;
+        }
+        registered.push(values);
+    }
+    Some(krishiv_exec::files::KnownPartitions {
+        columns,
+        registered,
+    })
 }

@@ -1273,8 +1273,28 @@ impl DataFrame {
     pub async fn execute_stream(&self) -> Result<RecordBatchStream, KrishivError> {
         let df = self.clone();
         self.session
-            .on_executor(async move { df.execute_stream_here().await })
+            .on_executor(async move { df.execute_stream_here(true).await })
             .await
+    }
+
+    /// The result batches on the engine's own carriers, before the session edge converts them (a calendar
+    /// interval as its struct of microseconds, which holds values `Interval(MonthDayNano)` cannot): for
+    /// harnesses that render rows as Spark's SQL tests do, without Arrow. Not covered by semver.
+    ///
+    /// # Errors
+    /// As [`Self::collect`].
+    #[cfg(feature = "unstable-ir")]
+    pub async fn collect_engine(&self) -> Result<Vec<RecordBatch>, KrishivError> {
+        let df = self.clone();
+        let mut stream = self
+            .session
+            .on_executor(async move { df.execute_stream_here(false).await })
+            .await?;
+        let mut out = Vec::new();
+        while let Some(batch) = stream.next().await {
+            out.push(batch?);
+        }
+        Ok(out)
     }
 
     /// The analyzed plan with cached subplans replaced by scans of their
@@ -1841,6 +1861,7 @@ impl DataFrame {
                     columns,
                     known: false,
                     permanent: false,
+                    partitions: Some(Default::default()),
                 },
             );
             self.session.state.cache.invalidate_table(name);

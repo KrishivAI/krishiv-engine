@@ -82,6 +82,11 @@ pub(crate) enum TempTable {
         /// An entry of the permanent catalog: only a reference to one takes read options of its
         /// own (`FROM t WITH (..)`); Spark drops them for a temporary view.
         permanent: bool,
+        /// A permanent table's partition columns and registered partitions
+        /// (`None` when they are not all at their default directories, so a
+        /// listing under the root cannot read them as Spark does). Empty
+        /// otherwise.
+        partitions: Option<krishiv_exec::files::KnownPartitions>,
     },
     /// A view over a query: the unresolved plan and the output columns it
     /// had when it was created (renamed when the view declares aliases).
@@ -959,6 +964,7 @@ impl QueryCatalog {
             columns: columns.clone(),
             known: true,
             permanent: true,
+            partitions: file_tables::known_partitions(&table),
         });
         let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         // Keys are lower case whatever the session's case sensitivity: `entry_key` spells scans that way.
@@ -979,6 +985,11 @@ impl QueryCatalog {
             version: None,
             kind: TableKind::Table,
             file_metadata: file_metadata(&table.provider),
+            column_comments: table
+                .columns
+                .iter()
+                .filter_map(|c| Some((c.name.clone(), c.comment.clone()?)))
+                .collect(),
         })
     }
 }
@@ -1081,6 +1092,7 @@ impl Catalog for QueryCatalog {
                 version: None,
                 kind,
                 file_metadata,
+                column_comments: BTreeMap::new(),
             }))
         })
     }
@@ -2121,6 +2133,7 @@ mod tests {
         TempTable::Files {
             known: false,
             permanent: false,
+            partitions: Some(Default::default()),
             source: ReadSource::Files {
                 format: "parquet".to_owned(),
                 paths: vec![],
@@ -2926,6 +2939,7 @@ mod tests {
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
+                binary_output_style: None,
             },
         )
     }

@@ -272,29 +272,28 @@ fn skip_reason(file: &str, query: &str) -> Option<&'static str> {
         return Some("inputs are registered instead");
     }
     if file == "pivot.sql.out" {
-        // Several pivot columns stand for struct values, which the engine
-        // cannot value yet.
+        // The executor has no `min`/`max` over arrays and no comparison of
+        // structs holding arrays yet.
         for marker in [
-            "FOR (course, year) IN (('dotNET', 2012), ('Java', 2013))",
-            "FOR (course, s) IN (('dotNET', 2) as c1, ('Java', 1) as c2)",
+            "min(a)\n  FOR course",
             "FOR (y, course) IN ((2012, 'dotNET'), (2013, 'Java'))",
             "FOR (course, a) IN (('dotNET', array(1, 1)), ('Java', array(2, 2)))",
+        ] {
+            if query.contains(marker) {
+                return Some("needs array aggregates and comparisons");
+            }
+        }
+        // `yearsWithComplexTypes` is not registered here; the golden ratchet
+        // (`krishiv-testkit`) runs these statements over it.
+        for marker in [
+            "FOR a IN (array(1, 1), array(2, 2))",
+            "FOR s IN ((1, 'a'), (2, 'b'))",
             "FOR (course, s) IN (('dotNET', (1, 'a')), ('Java', (2, 'b')))",
+            "FOR m IN (map('1', 1), map('2', 2))",
             "FOR (course, m) IN (('dotNET', map('1', 1)), ('Java', map('2', 2)))",
         ] {
             if query.contains(marker) {
-                return Some("multi-column PIVOT needs struct values");
-            }
-        }
-        // Array, struct and map columns: the engine has no complex types.
-        for marker in [
-            "min(a)\n  FOR course",
-            "FOR a IN (array(1, 1), array(2, 2))",
-            "FOR s IN ((1, 'a'), (2, 'b'))",
-            "FOR m IN (map('1', 1), map('2', 2))",
-        ] {
-            if query.contains(marker) {
-                return Some("needs a complex-typed column");
+                return Some("reads yearsWithComplexTypes");
             }
         }
     }
@@ -428,6 +427,42 @@ fn pivot_count_star_counts_matching_rows() {
 }
 
 #[test]
+fn binary_pivot_values_name_columns_as_strings() {
+    // Spark 4.2.0: a binary value, alone or inside an array or a struct, is
+    // named by its cast to a string (`a`, `[a]`, `{ab}`), not its SQL text.
+    let s = session().unwrap();
+    for (sql, schema) in [
+        (
+            "SELECT * FROM (SELECT X'61' AS k, 2 AS v) PIVOT (sum(v) FOR k IN (X'61'))",
+            "struct<a:bigint>",
+        ),
+        (
+            "SELECT * FROM (SELECT array(X'61') AS k, 2 AS v) PIVOT (sum(v) FOR k IN (array(X'61')))",
+            "struct<[a]:bigint>",
+        ),
+        (
+            "SELECT * FROM (SELECT named_struct('p', X'6162') AS k, 2 AS v) \
+             PIVOT (sum(v) FOR k IN (named_struct('p', X'6162')))",
+            "struct<{ab}:bigint>",
+        ),
+    ] {
+        let (got, batches) = block_on(async {
+            let df = s.sql(sql).await.unwrap();
+            let schema = df.schema().await.unwrap();
+            let batches = df.collect().await.unwrap();
+            Ok::<_, Box<dyn std::error::Error>>((schema, batches))
+        })
+        .unwrap();
+        let (got, rows) = render(&got, &batches);
+        assert_eq!(
+            (got.as_str(), rows),
+            (schema, vec!["2".to_owned()]),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
 fn pivot_first_returns_the_first_matching_row() {
     // `first` flips to ignoring nulls for the nulls the `if` introduces:
     // for 2012 the Java row follows a dotNET row, so without the flip the
@@ -462,4 +497,100 @@ fn unpivot_matches_spark() {
         bad.join("\n")
     );
     assert_eq!(skipped.len(), 2, "{skipped:?}");
+}
+
+/// The message parameters of the pivot errors for complex values and
+/// several pivot columns, as a Spark 4.2.0 run prints them: a value as
+/// Spark's `toString` shows it (`array(1, 2)`, a tuple as
+/// `named_struct(col1, ..)`), the struct pivot column as `toSQLId` of its
+/// `named_struct` SQL.
+#[test]
+fn pivot_error_parameters_match_spark() {
+    let s = Session::new().unwrap();
+    let setup = [
+        "CREATE TEMPORARY VIEW t AS SELECT * FROM VALUES (1, 2, 'x') AS t(a, b, c)",
+        "CREATE TEMPORARY VIEW cs AS SELECT * FROM VALUES ('Java', map(1, 2), 3) AS cs(course, m, e)",
+    ];
+    for sql in setup {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let error = |sql: &str| match block_on(async { s.sql(sql).await?.collect().await }) {
+        Ok(_) => panic!("{sql}: no error"),
+        Err(e) => (e.error_class().name().to_owned(), error_params(&e)),
+    };
+    for (sql, value, value_type, pivot_type) in [
+        (
+            "SELECT * FROM t PIVOT (sum(b) FOR a IN (array(1, 2)))",
+            "array(1, 2)",
+            "array<int>",
+            "int",
+        ),
+        (
+            "SELECT * FROM t PIVOT (sum(b) FOR a IN (map(1, 2)))",
+            "map(1, 2)",
+            "map<int,int>",
+            "int",
+        ),
+        (
+            "SELECT * FROM t PIVOT (sum(b) FOR a IN (named_struct('p', 1)))",
+            "named_struct(p, 1)",
+            "struct<p:int>",
+            "int",
+        ),
+        (
+            "SELECT * FROM t PIVOT (sum(b) FOR a IN (struct(1, 'q')))",
+            "struct(col1, 1, col2, q)",
+            "struct<col1:int,col2:string>",
+            "int",
+        ),
+        // Spark refuses a cast collection even of the column's own type,
+        // and prints the cast as `Cast.toString` does.
+        (
+            "SELECT * FROM (SELECT array(1) AS k, 2 AS v) \
+             PIVOT (sum(v) FOR k IN (CAST(array(1) AS ARRAY<INT>)))",
+            "cast(array(1) as array<int>)",
+            "array<int>",
+            "array<int>",
+        ),
+        (
+            "SELECT * FROM (SELECT named_struct('a', 1) AS k, 2 AS v) \
+             PIVOT (sum(v) FOR k IN (CAST(named_struct('a', 1) AS STRUCT<a: BIGINT>)))",
+            "cast(named_struct(a, 1) as struct<a:bigint>)",
+            "struct<a:bigint>",
+            "struct<a:int>",
+        ),
+        (
+            "SELECT * FROM t PIVOT (sum(b) FOR (a, c) IN ((array(1), 'x')))",
+            "named_struct(col1, array(1), col2, x)",
+            "struct<col1:array<int>,col2:string>",
+            "struct<a:int,c:string>",
+        ),
+    ] {
+        let expected: BTreeMap<String, String> = [
+            ("pivotType", pivot_type),
+            ("value", value),
+            ("valueType", value_type),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        assert_eq!(
+            error(sql),
+            ("PIVOT_VALUE_DATA_TYPE_MISMATCH".to_owned(), expected),
+            "{sql}"
+        );
+    }
+    let sql = "SELECT * FROM (SELECT course, m, e FROM cs) \
+               PIVOT (sum(e) FOR (course, m) IN (('Java', map(1, 2))))";
+    let column = "`named_struct('course', __auto_generated_subquery_name`.`course, 'm', \
+                  __auto_generated_subquery_name`.`m)`";
+    assert_eq!(
+        error(sql),
+        (
+            "INCOMPARABLE_PIVOT_COLUMN".to_owned(),
+            [("columnName".to_owned(), column.to_owned())]
+                .into_iter()
+                .collect()
+        )
+    );
 }

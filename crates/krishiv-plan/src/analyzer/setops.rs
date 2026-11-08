@@ -817,6 +817,10 @@ impl Resolver<'_> {
                 nullable: a.col.nullable,
             };
             let output = self.attr(&a.col.name, &ty);
+            // A repeated column keeps its comment (Spark 4.2.0).
+            if let Some(t) = self.comments.get(&a.col.id).cloned() {
+                self.comments.insert(output.id, t);
+            }
             exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
                     expr: column,

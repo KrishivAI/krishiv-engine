@@ -1,8 +1,5 @@
 {
   "cases": {
-    "datetime": [
-      72
-    ],
     "nested-interval-types": [
       7,
       8,
