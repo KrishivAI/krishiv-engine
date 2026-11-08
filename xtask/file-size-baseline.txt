@@ -12,8 +12,7 @@
 2193 crates/krishiv-exec/src/join/grace.rs
 2003 crates/krishiv-exec/src/operators/sort/sort.rs
 2215 crates/krishiv-exec/src/physical/instantiate.rs
-# +1 line: PlanNode::Repartition plans a hash exchange (DISTRIBUTE BY as a real exchange)
-2106 crates/krishiv-exec/src/planner/build.rs
+2105 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 # +70 lines over main: the external-partition headroom reproducer, batches of 20 and 300/1,500 rows from a full pool (window spill flake, PR #601)
@@ -32,10 +31,8 @@
 # over main: a cast of an alias keeps the alias's name (T001c, PR #491); USING-join keys (P2b row 11); char comparison padding and declared types through GROUP BY and lateral aliases (T001b)
 # +14: not_constant walks distinct nodes (review of #529)
 # +6 lines over main: a SQL function call keeps its written name (T184, PR #505)
-# +5 lines: a sort's aggregate fallback stops at a DISTRIBUTE BY, as in Spark (DISTRIBUTE BY as a real exchange)
-4664 crates/krishiv-plan/src/analyzer/ops.rs
-# +37 lines: a DISTRIBUTE BY on a correlated subquery's path is kept through decorrelation (Spark's Category 2; DISTRIBUTE BY as a real exchange)
-3132 crates/krishiv-plan/src/analyzer/subquery.rs
+4659 crates/krishiv-plan/src/analyzer/ops.rs
+3095 crates/krishiv-plan/src/analyzer/subquery.rs
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 # +6 lines over main: a stored table's column comments reach the analyzer (TableMeta.column_comments, PR #589)
