@@ -335,7 +335,9 @@ impl Session {
 /// A syntax error at the `.` inside a name an `IDENTIFIER(..)` clause was replaced by is that
 /// clause in a position of one name part the parser could not tell from an expression when the
 /// text was substituted (`t(IDENTIFIER('a.b'))`, `WITH t(IDENTIFIER('a.b')) AS (..)`): Spark's
-/// `IDENTIFIER_TOO_MANY_NAME_PARTS`. `None` for any other error.
+/// `IDENTIFIER_TOO_MANY_NAME_PARTS`. `None` for any other error. This relies on every part being
+/// back-quoted when the name is substituted: the parser can stop at that `.` only where it takes
+/// one name.
 pub(crate) fn dotted_name_in_one_part_position(
     err: &ParseError,
     text: &str,
