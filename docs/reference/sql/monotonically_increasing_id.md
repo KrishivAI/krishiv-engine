@@ -34,7 +34,7 @@ monotonically_increasing_id()
 ```sql
 -- monotonically_increasing_id, example 1
 > SELECT monotonically_increasing_id();
-0
+-- the result differs on every run
 ```
 
 ## Version history

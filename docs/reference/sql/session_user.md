@@ -29,7 +29,7 @@ session_user()
 ```sql
 -- session_user, example 1
 > SELECT session_user();
-krishiv
+-- the result differs on every run
 ```
 
 ## Version history

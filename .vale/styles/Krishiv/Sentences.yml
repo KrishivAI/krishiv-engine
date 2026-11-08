@@ -1,9 +1,6 @@
 extends: occurrence
-message: "Sentence is %s words or more; split it (house style: short sentences)."
+message: "Sentence has more than 40 words; split it (house style: short sentences)."
 level: warning
 scope: sentence
-max: 1
-tokens:
-  - '\S+'
-# Vale's occurrence rule counts tokens per scope; the limit below is set by `min`.
-min: 40
+max: 40
+token: '\b[\w'']+\b'

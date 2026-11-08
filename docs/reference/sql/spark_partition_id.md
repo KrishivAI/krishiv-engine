@@ -29,7 +29,7 @@ spark_partition_id()
 ```sql
 -- spark_partition_id, example 1
 > SELECT spark_partition_id();
-0
+-- the result differs on every run
 ```
 
 ## Version history

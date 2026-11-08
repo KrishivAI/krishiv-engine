@@ -29,7 +29,7 @@ current_database()
 ```sql
 -- current_database, example 1
 > SELECT current_database();
-default
+-- the result differs on every run
 ```
 
 ## Version history

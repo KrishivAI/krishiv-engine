@@ -29,7 +29,7 @@ user()
 ```sql
 -- user, example 1
 > SELECT user();
-krishiv
+-- the result differs on every run
 ```
 
 ## Version history

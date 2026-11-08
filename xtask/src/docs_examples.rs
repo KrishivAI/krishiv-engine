@@ -50,6 +50,37 @@ fn run_once(root: &Path, items: &[(String, String)]) -> Result<Vec<Value>, Strin
     serde_json::from_slice(&out.stdout).map_err(|e| format!("doc-examples output: {e}"))
 }
 
+/// Functions whose answer depends on the clock, session or host: never recorded.
+fn is_clock(id: &str) -> bool {
+    let name = id.split('#').next().unwrap_or_default();
+    matches!(
+        name,
+        "current_date"
+            | "curdate"
+            | "current_timestamp"
+            | "now"
+            | "localtimestamp"
+            | "current_timezone"
+            | "current_time"
+            | "current_user"
+            | "user"
+            | "session_user"
+            | "current_database"
+            | "current_catalog"
+            | "current_schema"
+            | "version"
+            | "uuid"
+            | "rand"
+            | "random"
+            | "randn"
+            | "unix_timestamp"
+            | "monotonically_increasing_id"
+            | "spark_partition_id"
+            | "input_file_name"
+            | "shuffle"
+    )
+}
+
 /// The engine's answers, two runs compared.
 fn capture(root: &Path) -> Result<Value, String> {
     let items = examples()?;
@@ -58,7 +89,7 @@ fn capture(root: &Path) -> Result<Value, String> {
     for (x, y) in a.into_iter().zip(b) {
         let id = x["id"].as_str().unwrap_or_default().to_owned();
         let mut v = x.clone();
-        if x != y {
+        if x != y || is_clock(&id) {
             v = json!({"volatile": true});
         } else if let Some(o) = v.as_object_mut() {
             o.remove("id");

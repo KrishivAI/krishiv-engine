@@ -35,13 +35,13 @@ random([seed])
 ```sql
 -- random, example 2
 > SELECT random(0);
-0.7604953758285915
+-- the result differs on every run
 ```
 
 ```sql
 -- random, example 3
 > SELECT random(null);
-0.7604953758285915
+-- the result differs on every run
 ```
 
 ## Version history

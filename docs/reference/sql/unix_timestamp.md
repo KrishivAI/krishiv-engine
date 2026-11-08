@@ -35,7 +35,7 @@ unix_timestamp([timeExp[, fmt]])
 ```sql
 -- unix_timestamp, example 2
 > SELECT unix_timestamp('2016-04-08', 'yyyy-MM-dd');
-1460098800
+-- the result differs on every run
 ```
 
 ## Version history

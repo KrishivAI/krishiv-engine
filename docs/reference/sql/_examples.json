@@ -1066,34 +1066,19 @@
     ]
   },
   "curdate#1": {
-    "ok": true,
-    "rows": [
-      "2026-11-07"
-    ]
+    "volatile": true
   },
   "current_catalog#1": {
-    "ok": true,
-    "rows": [
-      "spark_catalog"
-    ]
+    "volatile": true
   },
   "current_database#1": {
-    "ok": true,
-    "rows": [
-      "default"
-    ]
+    "volatile": true
   },
   "current_date#1": {
-    "ok": true,
-    "rows": [
-      "2026-11-07"
-    ]
+    "volatile": true
   },
   "current_date#2": {
-    "ok": true,
-    "rows": [
-      "2026-11-07"
-    ]
+    "volatile": true
   },
   "current_path#1": {
     "ok": true,
@@ -1102,10 +1087,7 @@
     ]
   },
   "current_schema#1": {
-    "ok": true,
-    "rows": [
-      "default"
-    ]
+    "volatile": true
   },
   "current_time#1": {
     "volatile": true
@@ -1129,16 +1111,10 @@
     "volatile": true
   },
   "current_timezone#1": {
-    "ok": true,
-    "rows": [
-      "America/Los_Angeles"
-    ]
+    "volatile": true
   },
   "current_user#1": {
-    "ok": true,
-    "rows": [
-      "krishiv"
-    ]
+    "volatile": true
   },
   "date_add#1": {
     "ok": true,
@@ -2120,10 +2096,7 @@
     ]
   },
   "input_file_name#1": {
-    "ok": true,
-    "rows": [
-      ""
-    ]
+    "volatile": true
   },
   "instr#1": {
     "ok": true,
@@ -3209,10 +3182,7 @@
     ]
   },
   "monotonically_increasing_id#1": {
-    "ok": true,
-    "rows": [
-      "0"
-    ]
+    "volatile": true
   },
   "month#1": {
     "ok": true,
@@ -3956,46 +3926,28 @@
     "volatile": true
   },
   "rand#2": {
-    "ok": true,
-    "rows": [
-      "0.7604953758285915"
-    ]
+    "volatile": true
   },
   "rand#3": {
-    "ok": true,
-    "rows": [
-      "0.7604953758285915"
-    ]
+    "volatile": true
   },
   "randn#1": {
     "volatile": true
   },
   "randn#2": {
-    "ok": true,
-    "rows": [
-      "1.6034991609278433"
-    ]
+    "volatile": true
   },
   "randn#3": {
-    "ok": true,
-    "rows": [
-      "1.6034991609278433"
-    ]
+    "volatile": true
   },
   "random#1": {
     "volatile": true
   },
   "random#2": {
-    "ok": true,
-    "rows": [
-      "0.7604953758285915"
-    ]
+    "volatile": true
   },
   "random#3": {
-    "ok": true,
-    "rows": [
-      "0.7604953758285915"
-    ]
+    "volatile": true
   },
   "randstr#1": {
     "ok": true,
@@ -4672,10 +4624,7 @@
     "ok": false
   },
   "session_user#1": {
-    "ok": true,
-    "rows": [
-      "krishiv"
-    ]
+    "volatile": true
   },
   "session_window#1": {
     "class": "KRISHIV_UNSUPPORTED_FEATURE",
@@ -4860,10 +4809,7 @@
     ]
   },
   "spark_partition_id#1": {
-    "ok": true,
-    "rows": [
-      "0"
-    ]
+    "volatile": true
   },
   "split#1": {
     "ok": true,
@@ -6621,10 +6567,7 @@
     "volatile": true
   },
   "unix_timestamp#2": {
-    "ok": true,
-    "rows": [
-      "1460098800"
-    ]
+    "volatile": true
   },
   "upper#1": {
     "ok": true,
@@ -6645,10 +6588,7 @@
     ]
   },
   "user#1": {
-    "ok": true,
-    "rows": [
-      "krishiv"
-    ]
+    "volatile": true
   },
   "uuid#1": {
     "volatile": true
@@ -6808,10 +6748,7 @@
     ]
   },
   "version#1": {
-    "ok": true,
-    "rows": [
-      "4.2.0"
-    ]
+    "volatile": true
   },
   "weekday#1": {
     "ok": true,

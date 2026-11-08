@@ -31,13 +31,13 @@ current_date()
 ```sql
 -- current_date, example 1
 > SELECT current_date();
-2026-11-07
+-- the result differs on every run
 ```
 
 ```sql
 -- current_date, example 2
 > SELECT current_date;
-2026-11-07
+-- the result differs on every run
 ```
 
 ## Version history

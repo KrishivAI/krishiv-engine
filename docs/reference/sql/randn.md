@@ -35,13 +35,13 @@ randn([seed])
 ```sql
 -- randn, example 2
 > SELECT randn(0);
-1.6034991609278433
+-- the result differs on every run
 ```
 
 ```sql
 -- randn, example 3
 > SELECT randn(null);
-1.6034991609278433
+-- the result differs on every run
 ```
 
 ## Version history

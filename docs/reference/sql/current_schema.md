@@ -29,7 +29,7 @@ current_schema()
 ```sql
 -- current_schema, example 1
 > SELECT current_schema();
-default
+-- the result differs on every run
 ```
 
 ## Version history

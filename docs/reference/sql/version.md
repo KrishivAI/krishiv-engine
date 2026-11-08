@@ -29,7 +29,7 @@ version()
 ```sql
 -- version, example 1
 > SELECT version();
-4.2.0
+-- the result differs on every run
 ```
 
 ## Version history

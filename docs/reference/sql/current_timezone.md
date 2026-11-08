@@ -29,7 +29,7 @@ current_timezone()
 ```sql
 -- current_timezone, example 1
 > SELECT current_timezone();
-America/Los_Angeles
+-- the result differs on every run
 ```
 
 ## Version history

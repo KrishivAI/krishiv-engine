@@ -29,7 +29,7 @@ input_file_name()
 ```sql
 -- input_file_name, example 1
 > SELECT input_file_name();
-
+-- the result differs on every run
 ```
 
 ## Version history

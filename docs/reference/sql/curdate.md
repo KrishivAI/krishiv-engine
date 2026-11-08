@@ -29,7 +29,7 @@ curdate()
 ```sql
 -- curdate, example 1
 > SELECT curdate();
-2026-11-07
+-- the result differs on every run
 ```
 
 ## Version history

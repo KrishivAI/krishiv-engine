@@ -29,7 +29,7 @@ current_catalog()
 ```sql
 -- current_catalog, example 1
 > SELECT current_catalog();
-spark_catalog
+-- the result differs on every run
 ```
 
 ## Version history
