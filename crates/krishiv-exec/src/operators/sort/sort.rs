@@ -567,8 +567,10 @@ struct ReadersState {
 
 /// A reader's claim on the spilled result.
 enum Claim {
-    /// No bucket is left to claim.
-    Done,
+    /// No bucket is left to claim; `last` when no reader holds one either
+    /// (decided under the claim's lock, so a bucket given back meanwhile
+    /// is never missed): the result is read.
+    Done { last: bool },
     /// The lone reader is reserving: try again once it has.
     Wait,
     /// A bucket's runs to merge, and the reader's slot.
@@ -582,7 +584,9 @@ impl Readers {
             return Claim::Wait;
         }
         let Some(runs) = s.spilled.pop() else {
-            return Claim::Done;
+            return Claim::Done {
+                last: s.active == 0,
+            };
         };
         let alone = s.active == 0;
         s.active += 1;
@@ -1412,8 +1416,8 @@ impl Source for Sort {
                         let changed = g.readers.changed.listen();
                         match g.readers.claim() {
                             // The last reader is done: the result is read.
-                            Claim::Done => {
-                                if lock(&g.readers.state).active == 0 {
+                            Claim::Done { last } => {
+                                if last {
                                     g.leave();
                                 }
                             }
@@ -1556,6 +1560,9 @@ impl Sort {
                 } else {
                     None
                 };
+                // A lone reader reduces while it reserves: the other readers
+                // wait (`Claim::Wait`) for these whole passes, as they wait
+                // for its merge budget.
                 if self.recheck_share(g, &runs, l.batch_rows, &handle) {
                     let env = MergeEnv {
                         query: &l.query,
@@ -1565,14 +1572,9 @@ impl Sort {
                     let reduced = self
                         .reduce(&mut runs, l.batch_rows, &env, seat.as_mut(), true)
                         .await;
-                    if let Err(e) = reduced {
-                        // The reader's wait is over; the seat's drop wakes
-                        // the cohort.
-                        if let Some(slot) = &slot {
-                            slot.reserved();
-                        }
-                        return Err(e);
-                    }
+                    // On an error the slot's drop ends the reader's wait
+                    // and the seat's drop wakes the cohort.
+                    reduced?;
                 }
                 let waits = &self.counters.merge_waits;
                 let budget = merge_budget(
