@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "subqueries": [
-      19
-    ]
-  },
-  "file": "subquery/in-subquery/in-group-by",
-  "format_version": 1
-}

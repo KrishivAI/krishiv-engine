@@ -162,6 +162,7 @@ fn call(result: krishiv_types::DataType) -> UdafCall {
             Field::new("arg0", DataType::Int64, true),
             Field::new("arg1", DataType::Int64, true),
         ],
+        arg_types: vec![krishiv_types::DataType::Long; 2],
         result,
         nullable: false,
         state: vec![Field::new("rows", DataType::Int64, false)],
@@ -185,6 +186,20 @@ fn counts(a: &UdfAcc) -> Vec<i64> {
         .as_primitive::<Int64Type>()
         .values()
         .to_vec()
+}
+
+#[test]
+fn argument_types_come_from_the_calls_spark_types() {
+    let mut c = call(krishiv_types::DataType::Long);
+    c.arg_types = vec![krishiv_types::DataType::Long, krishiv_types::DataType::Null];
+    let fields = arg_fields(&c).unwrap();
+    assert_eq!(fields[0].data_type, Some(krishiv_types::DataType::Long));
+    // An untyped `NULL` has no type.
+    assert_eq!(fields[1].data_type, None);
+    // A call whose types and columns differ is an internal error.
+    c.arg_types.pop();
+    let e = arg_fields(&c).unwrap_err();
+    assert!(e.message().contains("1 argument types"), "{}", e.message());
 }
 
 #[test]

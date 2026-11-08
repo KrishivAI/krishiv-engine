@@ -1263,6 +1263,7 @@ impl Catalog for SystemCatalog {
                 version: None,
                 kind: TableKind::Table,
                 file_metadata: Default::default(),
+                column_comments: Default::default(),
             }))
         })
     }

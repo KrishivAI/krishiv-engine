@@ -565,7 +565,11 @@ impl Session {
                     return Err(unsupported("IDENTIFIER() column names"));
                 };
                 ident.value.clone_into(&mut column.name);
-                column.comment.clone_from(&alias.comment);
+                // Spark's `aliasPlan`: a listed comment replaces the column's; without one the alias keeps the
+                // query column's metadata, its comment included.
+                if alias.comment.is_some() {
+                    column.comment.clone_from(&alias.comment);
+                }
             }
         }
         // Spark checks the names after the aliases: a repeated one is `COLUMN_ALREADY_EXISTS`.
@@ -2870,6 +2874,7 @@ fn from_source(source: &krishiv_sql::ast::FromClause, c: &InsertClause) -> Inser
         },
         order_by: Vec::new(),
         order_span: None,
+        organization_span: None,
         cluster_by: Vec::new(),
         distribute_by: Vec::new(),
         sort_by: Vec::new(),

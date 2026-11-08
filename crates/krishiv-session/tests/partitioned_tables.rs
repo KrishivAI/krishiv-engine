@@ -1342,3 +1342,65 @@ fn reads_follow_the_registered_partitions() {
     run(&s, "INSERT INTO f VALUES (1, 1.5)");
     assert_eq!(class(&s, "SELECT a FROM f"), "KRISHIV_UNSUPPORTED_FEATURE");
 }
+
+/// A table partitioned by a BINARY column, as Spark 4.2.0 writes and reads it (krishiv-internal
+/// `research/spark/binary-partition/probe1.out`, `probe2.out`): the directory is the value's bytes as text,
+/// escaped like any value; NULL and the empty value are the default partition; the column stays `binary`.
+#[test]
+fn a_binary_partition_column_is_its_bytes_as_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE g (a INT, b BINARY) USING parquet PARTITIONED BY (b)",
+    );
+    run(
+        &s,
+        "INSERT INTO g VALUES (1, X'4142'), (2, NULL), (3, X''), (4, X'C3A9'), (5, X'2F3D25')",
+    );
+    for d in [
+        "g/b=AB",
+        "g/b=__HIVE_DEFAULT_PARTITION__",
+        "g/b=é",
+        "g/b=%2F%3D%25",
+    ] {
+        assert!(dir.path().join(d).is_dir(), "{d}");
+    }
+    assert_eq!(
+        rows(&s, "SHOW PARTITIONS g"),
+        ["b=%2F%3D%25", "b=AB", "b=__HIVE_DEFAULT_PARTITION__", "b=é"]
+    );
+    // A static value is the literal's text; DESC finds the partition by it and shows the column as binary.
+    run(&s, "INSERT INTO g PARTITION (b = 'lit') VALUES (6)");
+    assert!(dir.path().join("g/b=lit").is_dir());
+    let desc = rows(&s, "DESC EXTENDED g PARTITION (b = 'AB')");
+    assert!(desc.iter().any(|r| r.starts_with("b	binary")), "{desc:?}");
+    assert!(
+        desc.contains(&"Partition Values\t[b=AB]".to_owned()),
+        "{desc:?}"
+    );
+    // Reading rows of a partitioned catalog table is not supported yet, whatever the column type.
+}
+
+/// A timestamp partition value renders in a region session zone, not only a fixed offset (Spark 4.2.0,
+/// `research/spark/binary-partition/probe3.out`): the epoch in `America/Los_Angeles` is `1969-12-31 16:00:00`.
+#[test]
+fn a_timestamp_partition_renders_in_a_region_session_zone() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    s.conf()
+        .set("spark.sql.session.timeZone", "America/Los_Angeles")
+        .unwrap();
+    run(
+        &s,
+        "CREATE TABLE t (a INT, c TIMESTAMP) USING parquet PARTITIONED BY (c)",
+    );
+    run(
+        &s,
+        "INSERT INTO t VALUES (1, CAST(0 AS TIMESTAMP)), (2, TIMESTAMP'2018-07-01 12:00:00')",
+    );
+    assert_eq!(
+        rows(&s, "SHOW PARTITIONS t"),
+        ["c=1969-12-31 16%3A00%3A00", "c=2018-07-01 12%3A00%3A00"]
+    );
+}

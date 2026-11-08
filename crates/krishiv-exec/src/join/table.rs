@@ -213,6 +213,15 @@ impl Cols {
     }
 }
 
+/// An arena's bytes by part ([`RowArena::memory_split`]), as `get_array_memory_size` counts them.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct ArenaBytes {
+    pub(crate) hash: usize,
+    pub(crate) key: usize,
+    /// Payload and NULL-key columns.
+    pub(crate) other: usize,
+}
+
 /// One partition's build rows, coalesced into a single batch.
 #[derive(Debug)]
 pub(crate) struct RowArena {
@@ -258,6 +267,25 @@ impl RowArena {
 
     pub(crate) fn len(&self) -> usize {
         self.batch.num_rows()
+    }
+
+    /// The arena's bytes by part (`get_array_memory_size`, the measure its reservation uses): the `hash` column, the key
+    /// columns (`key*`), and everything else (payload, NULL-key flags).
+    pub(crate) fn memory_split(&self) -> ArenaBytes {
+        let data = self.batch.data();
+        let mut out = ArenaBytes::default();
+        for (field, column) in data.schema().fields().iter().zip(data.columns()) {
+            let bytes = column.get_array_memory_size();
+            let name = field.name();
+            if name == "hash" {
+                out.hash += bytes;
+            } else if name.starts_with("key") {
+                out.key += bytes;
+            } else {
+                out.other += bytes;
+            }
+        }
+        out
     }
 
     pub(crate) fn hash(&self, row: u32) -> u64 {

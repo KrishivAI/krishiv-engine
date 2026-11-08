@@ -35,7 +35,7 @@ use arrow_buffer::BooleanBuffer;
 use arrow_schema::{DataType, Field};
 use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable};
 use krishiv_functions::scalar::failed_execute;
-use krishiv_types::arrow::client_arrow_type;
+use krishiv_types::arrow::edge_arrow_type;
 use krishiv_types::batch::Weights;
 use krishiv_udf_sdk::{
     AggregateUdf, ArgField, GroupsAccumulator, InvokeContext, NullHandling, UdfArg, UdfError,
@@ -124,33 +124,37 @@ pub(crate) fn resolve(call: &UdafCall, env: Option<&UdafEnv>) -> Result<Arc<dyn 
     }
 }
 
-/// The argument fields the UDF is typed with: the call's columns as Spark
-/// types (`None` for an untyped `NULL`).
-pub(crate) fn arg_fields(args: &[Field]) -> Result<Vec<ArgField>> {
-    args.iter()
-        .map(|f| {
-            let data_type = match f.data_type() {
-                DataType::Null => None,
-                t => Some(
-                    krishiv_types::DataType::from_arrow(t)
-                        .map_err(|e| internal(format!("aggregate UDF argument {t}: {e}")))?,
-                ),
-            };
-            Ok(ArgField {
-                data_type,
-                nullable: f.is_nullable(),
-            })
+/// The argument fields the UDF is typed with: the call's Spark argument
+/// types, as the analyzer typed them (`None` for an untyped `NULL`), with
+/// the nullability of its columns.
+pub(crate) fn arg_fields(call: &UdafCall) -> Result<Vec<ArgField>> {
+    if call.args.len() != call.arg_types.len() {
+        return Err(internal(format!(
+            "aggregate UDF {} has {} argument columns and {} argument types",
+            call.name,
+            call.args.len(),
+            call.arg_types.len()
+        )));
+    }
+    Ok(call
+        .args
+        .iter()
+        .zip(&call.arg_types)
+        .map(|(f, t)| ArgField {
+            data_type: (*t != krishiv_types::DataType::Null).then(|| t.clone()),
+            nullable: f.is_nullable(),
         })
-        .collect()
+        .collect())
 }
 
 /// The carrier a UDF returns `t` on: `Utf8` for `STRING`, `Binary` for
-/// `BINARY`, decimals on `Decimal128`, the canonical type otherwise.
+/// `BINARY`, decimals on `Decimal128`, calendar intervals on `Interval(MonthDayNano)` (the session edge's carriers;
+/// Spark hands Arrow UDFs a `CalendarInterval` the same way), the canonical type otherwise.
 fn plain_carrier(t: &krishiv_types::DataType) -> DataType {
     match t {
         krishiv_types::DataType::String => DataType::Utf8,
         krishiv_types::DataType::Binary => DataType::Binary,
-        _ => client_arrow_type(&t.to_arrow()),
+        _ => edge_arrow_type(&t.to_arrow()),
     }
 }
 
@@ -194,7 +198,7 @@ pub(crate) fn declared_state(
 /// As [`resolve`] and [`declared_state`].
 pub(crate) fn plan_udaf_state(call: &mut UdafCall, env: Option<&UdafEnv>) -> Result<()> {
     let udf = resolve(call, env)?;
-    call.state = declared_state(&udf, &call.name, &arg_fields(&call.args)?)?;
+    call.state = declared_state(&udf, &call.name, &arg_fields(call)?)?;
     Ok(())
 }
 
@@ -205,7 +209,7 @@ pub(crate) fn plan_udaf_state(call: &mut UdafCall, env: Option<&UdafEnv>) -> Res
 /// # Errors
 /// `FAILED_EXECUTE_UDF` for a different state, or as [`declared_state`].
 pub(crate) fn check_state(udf: &Arc<dyn AggregateUdf>, call: &UdafCall) -> Result<()> {
-    let args = arg_fields(&call.args)?;
+    let args = arg_fields(call)?;
     let state = declared_state(udf, &call.name, &args)?;
     if state != call.state {
         return Err(failed_execute(
@@ -264,7 +268,7 @@ impl UdfAcc {
     pub(crate) fn new(call: &UdafCall, env: Option<&UdafEnv>, ansi: bool) -> Result<Self> {
         let udf = resolve(call, env)?;
         let name = call.name.clone();
-        let args = arg_fields(&call.args)?;
+        let args = arg_fields(call)?;
         let signature = guard_call(&name, "signature", || udf.signature().inputs_sql())
             .map_err(|e| early(&name, &e))?;
         let properties =
@@ -421,7 +425,7 @@ impl UdfAcc {
         }
         let wide: Vec<ArrayRef> = args
             .iter()
-            .map(|a| recarried_array(a, &client_arrow_type(a.data_type())))
+            .map(|a| recarried_array(a, &edge_arrow_type(a.data_type())))
             .collect::<std::result::Result<_, _>>()?;
         // TODO(unit 3b / P4 IVM): retracted rows fold after the added ones of
         // the batch; an order-sensitive UDAF would need the batch split at

@@ -15,7 +15,11 @@ use super::DataFrame;
 use crate::session::RecordBatchStream;
 
 impl DataFrame {
-    pub(super) async fn execute_stream_here(&self) -> Result<RecordBatchStream, KrishivError> {
+    /// The result stream; with `edge`, on the carriers a caller reads (`carrier.rs`), else on the engine's own.
+    pub(super) async fn execute_stream_here(
+        &self,
+        edge: bool,
+    ) -> Result<RecordBatchStream, KrishivError> {
         use tracing::Instrument as _;
         let span = self.span();
         async {
@@ -55,9 +59,12 @@ impl DataFrame {
                     self.session.operation_id(),
                 );
                 *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
-                return Ok(crate::carrier::client_stream(crate::result_cache::replay(
-                    batches,
-                )));
+                let replayed = crate::result_cache::replay(batches);
+                return Ok(if edge {
+                    crate::carrier::client_stream(replayed)
+                } else {
+                    replayed
+                });
             }
             let (physical, fill) = self.physical_cached(&a).await?;
             let stream = self.session.run(&physical, &a.env).await?;
@@ -72,7 +79,11 @@ impl DataFrame {
                 ),
                 None => stream,
             };
-            Ok(crate::carrier::client_stream(stream))
+            Ok(if edge {
+                crate::carrier::client_stream(stream)
+            } else {
+                stream
+            })
         }
         .instrument(span.clone())
         .await

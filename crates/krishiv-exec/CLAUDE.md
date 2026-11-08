@@ -19,7 +19,7 @@ immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) 
 `hash.rs` shared hash-table blocks (seeded key hash, key normalization + row encoding, `KeyTable`, spill
 partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
 `accumulator.rs` per-group states, `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
-`spill_global`; `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
+`spill_global`; a batch whose worst case the pool refuses is applied in slices, `slice_tests.rs`, unless a spill of the driver's tables would free the shortfall (then it spills, ADR 0007 addendum 2026-11-08); `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
 (P2-T117b) `file_scan.rs` FileScan/FileScanSource over any `krishiv_io::FileFormat` (Spark partitions cut into
 about four morsels per driver, footer read-ahead, `_metadata` struct column; filters stay `Inexact`) · `file_write.rs` FileWriteSink
 (one writer task per driver behind a bounded channel; nothing visible after a failed or cancelled write) + FileWrite.
@@ -106,7 +106,7 @@ partition, `Hll(10)` of the keys) that `EXPLAIN ANALYZE` prints as `exchange_*`.
 
 ## Key files
 Paths are relative to this crate.
-- `src/carrier.rs` moves a value between decimal carriers (nested ones too); `planner/eval/func.rs` `Recarried` keeps registry functions and UDFs on `Decimal128`
+- `src/carrier.rs` moves a value between decimal carriers and between the calendar struct and `Interval(MonthDayNano)` (nested ones too); `planner/eval/func.rs` `Recarried` keeps registry functions and UDFs on `Decimal128`
 - `src/operator.rs` Source, Operator and Sink traits; `src/pipeline.rs` `ExecNode` and `PipelineBuilder`
 - `src/driver.rs` the pipeline driver: yields, memory waits, spill servicing, cancellation
 - `src/runner.rs` `QueryRunner` and the scheduler (first error wins)

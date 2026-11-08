@@ -196,6 +196,11 @@ impl Instantiation<'_> {
             exchange: *id,
             stage_attempt: input.stage_attempt,
         };
+        // The broadcast's bytes for this task, known once its map outputs
+        // committed (blocking mode): a table that can never fit is not tried.
+        let committed = input.reduce.iter().try_fold(0_u64, |sum, &r| {
+            Some(sum.saturating_add(exchange.committed_bytes(*id, input.stage_attempt, r)?))
+        });
         // One reader of the broadcast for the shared build and, when that
         // does not fit, for this task's own build (spilling as needed;
         // owner decision 2026-11-06). Its state is per pipeline.
@@ -236,7 +241,12 @@ impl Instantiation<'_> {
             &self.values,
             self.worker.producer,
         )?;
-        let decision = Arc::new(Decision::new(tables, key, BuildJob::new(shared, rows)));
+        let decision = Arc::new(Decision::new(
+            tables,
+            key,
+            committed,
+            BuildJob::new(shared, rows),
+        ));
         let own_rows = Arc::new(SharedOrOwnRows::new(Arc::clone(&decision), read));
         let sink = Arc::new(PrebuiltSink::new(&join, decision));
         Ok(Some(Built {
