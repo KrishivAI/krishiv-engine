@@ -13,8 +13,9 @@ Paths are relative to this crate.
   last); `PhysNode::ExchangeSource` in each exchange's place. Shared-plan and recursive-CTE bodies are not cut and run
   whole; a stage holding one, a `range`, a gather read by its rows, or a build-emitting join over a broadcast is
   `single`. A runtime filter whose producer and scan are in different fragments is dropped on both sides until
-  P2-T177 unit 2 carries values across stages. Refuses unpinned hash exchanges and a nondeterministic shared plan read
-  by several stages. `Stage::dealable` lists the scans its tasks may split (`streaming_scans`: probe sides only);
+  P2-T177 unit 2 carries values across stages. Refuses unpinned hash exchanges, a hash exchange on a key the routing hash cannot hash
+  (`HashScheme::routes`: nested, 256-bit decimal, time of day, day-time and month-day-nano intervals; checked when
+  the plan is cut, so no map task fails on it), and a nondeterministic shared plan read by several stages. `Stage::dealable` lists the scans its tasks may split (`streaming_scans`: probe sides only);
   `stage_tasks` refuses splits dealt for any other scan.
 - `src/deal.rs` `TableDealer`: a `StageSplits` dealing the listed files of named tables (P2-T178), used by the tests
   and the simulation's coordinator.

@@ -36,7 +36,7 @@ use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
     BuiltinTableFunctions, DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf,
-    Securable, SparkProfile, TableColumn, authorize,
+    Securable, SparkProfile, authorize,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -152,7 +152,7 @@ pub(crate) struct SessionState {
     closed: AtomicBool,
     /// The session's memory pool: the runtime's root, or a pool of its own
     /// under the root (`krishiv.session.memoryLimit`).
-    memory: Arc<dyn MemoryPool>,
+    pub(crate) memory: Arc<dyn MemoryPool>,
     /// Whether a store creates objects only if absent (the commit log's
     /// probe), by store id; per session, never process-wide.
     commit_log_probes: Mutex<HashMap<String, bool>>,
@@ -160,7 +160,7 @@ pub(crate) struct SessionState {
     /// The session's content-addressed relations: every memory table's
     /// batches as Arrow IPC, so workers resolve a batch range through it
     /// instead of reading rows from the plan.
-    relations: Arc<RelationStore>,
+    pub(crate) relations: Arc<RelationStore>,
     cwd: String,
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
@@ -819,36 +819,7 @@ impl Session {
         if is_reserved_view_name(name) {
             return Err(reserved_temp_view_name(name));
         }
-        let columns = schema
-            .fields()
-            .iter()
-            .map(|f| {
-                Ok(TableColumn::new(
-                    f.name().clone(),
-                    DataType::from_arrow_field(f)?,
-                    f.is_nullable(),
-                ))
-            })
-            .collect::<Result<Vec<_>, KrishivError>>()?;
-        if let Some(b) = batches.iter().find(|b| b.schema() != schema) {
-            return Err(internal(format!(
-                "a batch of schema {} for a table of schema {schema}",
-                b.schema()
-            )));
-        }
-        let schema = crate::carrier::canonical_schema(schema);
-        let batches = batches
-            .into_iter()
-            .map(|b| crate::carrier::recarried(&b, &schema).map(Batch::new))
-            .collect::<Result<Vec<Batch>, KrishivError>>()?;
-        // The batches as content-addressed IPC in the session's store: the
-        // table's scans split into batch ranges that workers resolve
-        // through it. The table holds the lease but not the batches, so
-        // they live once, memory-accounted; the lease releases the entry
-        // when the table is dropped or replaced.
-        let rows: u64 = batches.iter().map(|b| b.num_rows() as u64).sum();
-        let lease = self.state.relations.insert(&schema, &batches)?;
-        let table = krishiv_exec::planner::MemoryTable::from_lease(schema, rows, lease);
+        let (columns, table) = self.memory_table(schema, batches)?;
         self.state.catalog.put(
             name,
             TempTable::Memory {

@@ -9,9 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::task::{Context, Poll};
 
 use arrow_array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
@@ -30,7 +28,11 @@ use crate::catalog::TempTable;
 use crate::column::Column;
 use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_files, typed_paths};
 
+mod fill_stream;
+mod geo_gate;
 mod traced;
+
+use fill_stream::FillStream;
 
 /// A storage level for [`DataFrame::persist`], as PySpark's
 /// `StorageLevel`. Every level maps to memory: the relation cache holds
@@ -196,121 +198,6 @@ impl CacheFill {
     }
 }
 
-/// A result stream that keeps its batches for the relation cache. When the
-/// inner stream ends, the batches are stored under the fill's key; a cap
-/// overrun stores nothing, so the query stays uncached instead of failing.
-/// An error, a cancellation (dropping before the end) or a mid-stream schema
-/// change stores nothing either: a cached relation is one complete snapshot,
-/// never a prefix of one. The empty result stores an empty snapshot, so
-/// later actions read the snapshot, not the source. The buffer is bounded by
-/// the cache cap: once the batches kept so far exceed it, they are dropped
-/// and the rest of the stream passes through unbuffered.
-struct FillStream {
-    inner: RecordBatchStream,
-    cache: Arc<RelationCache>,
-    key: CacheKey,
-    /// The first batch's schema: what the snapshot is stored as. Operators
-    /// may widen the analysis types (large string views, ...), so the cached
-    /// table carries the executed schema, as the scan of a created
-    /// DataFrame carries the registered one. The analysis schema is only
-    /// the fallback for an empty result.
-    schema: Option<SchemaRef>,
-    fallback: SchemaRef,
-    reads_files: bool,
-    tables: Vec<String>,
-    batches: Vec<RecordBatch>,
-    /// Bytes of `batches`.
-    bytes: usize,
-    /// The fill query's cache cap.
-    cap: usize,
-    generation: u64,
-    /// The pool bytes `batches` hold; dropped (released) when the fill is
-    /// abandoned, fails or is cancelled, handed to the cache on success.
-    reservation: Option<crate::cache::FillReservation>,
-    filled: bool,
-}
-
-impl futures::Stream for FillStream {
-    type Item = Result<RecordBatch, KrishivError>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(batch))) => {
-                if self.filled {
-                    // Abandoned: over the cap or a changed shape.
-                    return Poll::Ready(Some(Ok(batch)));
-                }
-                if self.schema.is_none() {
-                    self.schema = Some(Arc::clone(batch.schema_ref()));
-                } else if self
-                    .schema
-                    .as_ref()
-                    .is_some_and(|s| s.as_ref() != batch.schema().as_ref())
-                {
-                    // A stream that changes shape mid-way is not one snapshot.
-                    self.batches.clear();
-                    self.reservation = None;
-                    self.schema = None;
-                    self.filled = true;
-                    return Poll::Ready(Some(Ok(batch)));
-                }
-                let size = crate::cache::batch_bytes(&batch);
-                self.bytes = self.bytes.saturating_add(size);
-                // Over the cap, or the pool (`krishiv.memory.limit`) refuses
-                // the bytes: the snapshot cannot be stored, stop holding it.
-                let reserved = self.bytes <= self.cap
-                    && self.reservation.as_mut().is_some_and(|r| r.grow(size));
-                if !reserved {
-                    self.batches = Vec::new();
-                    self.reservation = None;
-                    self.schema = None;
-                    self.filled = true;
-                    return Poll::Ready(Some(Ok(batch)));
-                }
-                self.batches.push(batch.clone());
-                Poll::Ready(Some(Ok(batch)))
-            }
-            Poll::Ready(None) => {
-                if !self.filled {
-                    self.filled = true;
-                    // The empty result still caches (as an empty snapshot),
-                    // so later actions read the snapshot, not the source.
-                    let this = &mut *self;
-                    let batches = std::mem::take(&mut this.batches);
-                    let schema = this
-                        .schema
-                        .take()
-                        .unwrap_or_else(|| Arc::clone(&this.fallback));
-                    let cache = Arc::clone(&this.cache);
-                    let Some(reservation) = this.reservation.take() else {
-                        return Poll::Ready(None);
-                    };
-                    cache.insert(
-                        this.key.clone(),
-                        schema,
-                        batches,
-                        this.reads_files,
-                        std::mem::take(&mut this.tables),
-                        crate::cache::FillLimits {
-                            generation: this.generation,
-                            cap: this.cap,
-                            reservation,
-                        },
-                    );
-                }
-                Poll::Ready(None)
-            }
-            Poll::Ready(Some(Err(e))) => {
-                self.batches.clear();
-                self.reservation = None;
-                self.filled = true;
-                Poll::Ready(Some(Err(e)))
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
 /// A lazy query: its rows are computed by actions (`collect`,
 /// `execute_stream`, ...). Cheap to clone.
 ///
@@ -346,6 +233,8 @@ pub struct DataFrame {
     /// a frame `Session::sql` returned, absent for one a transformation
     /// built.
     trace: Option<Arc<crate::telemetry::QueryTrace>>,
+    /// Owns what the plan reads by a name no SQL spells (a script result's table), as long as it lives.
+    pub(crate) keep: Vec<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl fmt::Debug for DataFrame {
@@ -374,6 +263,7 @@ impl DataFrame {
             invalid: None,
             cache_request: None,
             trace: None,
+            keep: Vec::new(),
         }
     }
 
@@ -401,6 +291,7 @@ impl DataFrame {
             invalid: self.invalid.clone(),
             cache_request: None,
             trace: None,
+            keep: self.keep.clone(),
         }
     }
 
@@ -691,16 +582,15 @@ impl DataFrame {
     }
 
     fn join_with(&self, right: &Self, kind: JoinKind, condition: JoinCondition) -> Self {
-        let mut joined = self.derive(PlanNode::Join {
-            left: Arc::clone(&self.plan),
-            right: Arc::clone(&right.plan),
-            kind,
-            condition,
-        });
-        if joined.invalid.is_none() {
-            joined.invalid.clone_from(&right.invalid);
-        }
-        joined
+        self.pair(
+            right,
+            PlanNode::Join {
+                left: Arc::clone(&self.plan),
+                right: Arc::clone(&right.plan),
+                kind,
+                condition,
+            },
+        )
     }
 
     /// A new DataFrame of `node` over this frame and `other` (as
@@ -711,6 +601,7 @@ impl DataFrame {
         if out.invalid.is_none() {
             out.invalid.clone_from(&other.invalid);
         }
+        out.keep.extend(other.keep.iter().cloned());
         out
     }
 
@@ -1273,8 +1164,28 @@ impl DataFrame {
     pub async fn execute_stream(&self) -> Result<RecordBatchStream, KrishivError> {
         let df = self.clone();
         self.session
-            .on_executor(async move { df.execute_stream_here().await })
+            .on_executor(async move { df.execute_stream_here(true).await })
             .await
+    }
+
+    /// The result batches on the engine's own carriers, before the session edge converts them (a calendar
+    /// interval as its struct of microseconds, which holds values `Interval(MonthDayNano)` cannot): for
+    /// harnesses that render rows as Spark's SQL tests do, without Arrow. Not covered by semver.
+    ///
+    /// # Errors
+    /// As [`Self::collect`].
+    #[cfg(feature = "unstable-ir")]
+    pub async fn collect_engine(&self) -> Result<Vec<RecordBatch>, KrishivError> {
+        let df = self.clone();
+        let mut stream = self
+            .session
+            .on_executor(async move { df.execute_stream_here(false).await })
+            .await?;
+        let mut out = Vec::new();
+        while let Some(batch) = stream.next().await {
+            out.push(batch?);
+        }
+        Ok(out)
     }
 
     /// The analyzed plan with cached subplans replaced by scans of their
@@ -1840,6 +1751,8 @@ impl DataFrame {
                     source: source.clone(),
                     columns,
                     known: false,
+                    permanent: false,
+                    partitions: Some(Default::default()),
                 },
             );
             self.session.state.cache.invalidate_table(name);
@@ -2156,20 +2069,7 @@ impl DataFrameWriter {
                 let mut admitted = admitted;
                 let written = async {
                     let a = df.action_analysis().await?;
-                    // Files hold a geometry or geography as a WKB column with a
-                    // Parquet logical type (P2-T181 unit U3); until it lands, a
-                    // spatial value is not written as the `{srid, wkb}` struct
-                    // Spark cannot read.
-                    if a.analyzed
-                        .output
-                        .iter()
-                        .any(|c| krishiv_types::geo::holds_spatial(&c.data_type))
-                    {
-                        return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                            feature: "writing GEOMETRY or GEOGRAPHY columns to files".to_owned(),
-                        }
-                        .into());
-                    }
+                    geo_gate::check(&a.analyzed.output, &target.format)?;
                     // A write reads the cache like any other action.
                     let (physical, _) = df.physical_cached(&a).await?;
                     let types: Vec<_> = a

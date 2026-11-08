@@ -31,17 +31,17 @@ SELECT * FROM t, LATERAL (SELECT a)
 SELECT * FROM t VERSION AS OF 1
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature time travel is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..31
 SELECT a FROM t CLUSTER BY a
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature CLUSTER BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..28
+  => Sort [a ASC NULLS FIRST], false | +- Repartition (a) |    +- Project [a] |       +- Read t | 
 SELECT a FROM t DISTRIBUTE BY a
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature DISTRIBUTE BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..31
+  => Repartition (a) | +- Project [a] |    +- Read t | 
 SELECT a FROM t LIMIT 1 OFFSET 2
   => Limit 1 | +- Offset 2 |    +- Project [a] |       +- Read t | 
 FROM t SELECT a LIMIT 1 OFFSET 2
   => Limit 1 | +- Offset 2 |    +- Project [a] |       +- Read t | 
 FROM t SELECT a CLUSTER BY a
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature CLUSTER BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..28
+  => Sort [a ASC NULLS FIRST], false | +- Repartition (a) |    +- Project [a] |       +- Read t | 
 FROM t SELECT a DISTRIBUTE BY a
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature DISTRIBUTE BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..31
+  => Repartition (a) | +- Project [a] |    +- Read t | 
 FROM t SELECT a WINDOW w AS (ORDER BY a)
   => Project [a] | +- Read t | 
 SELECT a FROM t WINDOW w AS (ORDER BY a)

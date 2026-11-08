@@ -354,6 +354,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..108,
 }
 -- SELECT trim(BOTH 'x' FROM s), trim(LEADING FROM s), trim(TRAILING 'y' FROM s), trim(s), trim(s, 'z')
@@ -653,6 +654,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..100,
 }
 -- SELECT position('a' IN s), position('a', s), overlay(s PLACING 'x' FROM 2 FOR 1), overlay(s PLACING 'y' FROM 1)
@@ -957,6 +959,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..111,
 }
 -- SELECT timestampadd(DAY, 1, t), dateadd(HOUR, 2, t), date_add(d, 1), timestampdiff(MONTH, a, b), datediff(year, 1)
@@ -1330,5 +1333,6 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..114,
 }
