@@ -29,8 +29,8 @@
 # over main: a cast of an alias keeps the alias's name (T001c, PR #491); USING-join keys (P2b row 11); char comparison padding and declared types through GROUP BY and lateral aliases (T001b)
 # +14: not_constant walks distinct nodes (review of #529)
 # +6 lines over main: a SQL function call keeps its written name (T184, PR #505)
-4642 crates/krishiv-plan/src/analyzer/ops.rs
-3096 crates/krishiv-plan/src/analyzer/subquery.rs
+4659 crates/krishiv-plan/src/analyzer/ops.rs
+3095 crates/krishiv-plan/src/analyzer/subquery.rs
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 2902 crates/krishiv-session/src/catalog.rs
@@ -42,13 +42,13 @@
 2781 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
-3373 crates/krishiv-session/src/table_commands.rs
+3374 crates/krishiv-session/src/table_commands.rs
 # +6 lines over main: CREATE NAMESPACE records a clause written twice and PROPERTIES with DBPROPERTIES (DUPLICATE_CLAUSES, PR #572)
-3875 crates/krishiv-sql/src/ast.rs
-2732 crates/krishiv-sql/src/lower.rs
+3879 crates/krishiv-sql/src/ast.rs
+2554 crates/krishiv-sql/src/lower.rs
 # +21 lines over main: WITH ctes FROM source INSERT ... parses as a multi-table insert (P2b row 11)
 # +28 more (PR #572): CREATE NAMESPACE counts each clause in Spark's duplicate-check order (DUPLICATE_CLAUSES)
-5274 crates/krishiv-sql/src/parser.rs
+5283 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
 # +2 lines over main: WriteOptions.zone_name (region session zones for timestamp partitions, row 36)
