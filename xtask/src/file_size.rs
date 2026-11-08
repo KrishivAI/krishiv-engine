@@ -2,8 +2,12 @@
 //! `cargo xtask file-size [--write-baseline [--base REF] [--only PATH]...]`: no hand-written Rust file under a crate's `src/` grows
 //! past [`MAX_LINES`] lines (owner rule, 2026-11-01).
 //!
-//! Files already over the limit are listed with their size in `xtask/file-size-baseline.txt` (one
-//! `<lines> <path>` per line, sorted by path): they may shrink, never grow. A new file over the limit
+//! `xtask/file-size-baseline.txt` is unused (the check no longer reads it) and goes away in a follow-up; it stays
+//! untouched until then so PRs that still edit it merge cleanly.
+//!
+//! Files already over the limit are listed with their size in `xtask/file-size-baseline/<crate>.txt` (one
+//! `<lines> <path>` per line, sorted by path; one file per crate so PRs in different crates never
+//! conflict on the list): they may shrink, never grow. A new file over the limit
 //! fails; a file that grew past its baseline fails. A PR that needs a bigger file raises that one line
 //! in the baseline, which shows in review. A shrink passes and is reported, so concurrent PRs do not
 //! all have to edit the same baseline line. `--write-baseline` updates only the lines of files this
@@ -19,8 +23,53 @@ use std::path::{Path, PathBuf};
 
 use crate::map::{MAX_LINES, is_generated};
 
-/// The checked-in baseline, relative to the repository root.
-pub const BASELINE: &str = "xtask/file-size-baseline.txt";
+/// The checked-in baseline directory, relative to the repository root: one `<crate>.txt` per crate.
+pub const BASELINE: &str = "xtask/file-size-baseline";
+
+/// The crate a source path belongs to (`crates/<crate>/...`), or `other`; names the baseline file.
+fn crate_of(path: &str) -> &str {
+    path.strip_prefix("crates/")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("other")
+}
+
+/// Reads every `*.txt` under the baseline directory into one map.
+///
+/// # Errors
+/// Returns an error when the directory or a file cannot be read, a line is malformed, or a path is
+/// listed twice.
+pub fn load_baseline(dir: &Path) -> Result<BTreeMap<String, usize>, String> {
+    let mut out = BTreeMap::new();
+    // Git does not track an empty directory: no baseline files means nothing is over the limit.
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+    };
+    for entry in entries {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.extension().is_none_or(|e| e != "txt") {
+            continue;
+        }
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        for (file, lines) in parse_baseline(&text)? {
+            if out.insert(file.clone(), lines).is_some() {
+                return Err(format!(
+                    "{}: {file} is listed in two baseline files",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Whether baseline text still has an entry (not just comments and blank lines).
+fn has_entries(text: &str) -> bool {
+    text.lines()
+        .any(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+}
 
 /// What a comparison of the tree with the baseline found.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -77,10 +126,10 @@ pub fn parse_baseline(text: &str) -> Result<BTreeMap<String, usize>, String> {
         }
         let (n, path) = line
             .split_once(' ')
-            .ok_or_else(|| format!("{BASELINE}:{}: expected `<lines> <path>`", i + 1))?;
+            .ok_or_else(|| format!("baseline line {}: expected `<lines> <path>`", i + 1))?;
         let n = n
             .parse()
-            .map_err(|_| format!("{BASELINE}:{}: `{n}` is not a line count", i + 1))?;
+            .map_err(|_| format!("baseline line {}: `{n}` is not a line count", i + 1))?;
         out.insert(path.trim().to_owned(), n);
     }
     Ok(out)
@@ -241,26 +290,45 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
         return Err("--base and --only go with --write-baseline".to_owned());
     }
     let current = scan(root)?;
-    let path = root.join(BASELINE);
+    let dir = root.join(BASELINE);
     if write {
         let touched = if only.is_empty() {
             changed_files(root, &base)?
         } else {
             only.into_iter().collect()
         };
-        let old = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => render_baseline(&BTreeMap::new()),
-            Err(e) => return Err(format!("{}: {e}", path.display())),
-        };
-        parse_baseline(&old)?;
-        std::fs::write(&path, merge_baseline_text(&old, &current, &touched))
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        println!("file-size: updated {BASELINE} for the files this branch changed");
+        let mut by_crate: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for file in &touched {
+            by_crate
+                .entry(crate_of(file))
+                .or_default()
+                .insert(file.clone());
+        }
+        // A touched file that is not under a crate's src/ is never in the baseline; skip crates with no change to make.
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        for (krate, files) in by_crate {
+            let path = dir.join(format!("{krate}.txt"));
+            let old = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    render_baseline(&BTreeMap::new())
+                }
+                Err(e) => return Err(format!("{}: {e}", path.display())),
+            };
+            parse_baseline(&old)?;
+            let new = merge_baseline_text(&old, &current, &files);
+            if has_entries(&new) {
+                if new != old {
+                    std::fs::write(&path, new).map_err(|e| format!("{}: {e}", path.display()))?;
+                }
+            } else if path.exists() {
+                std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            }
+        }
+        println!("file-size: updated {BASELINE}/ for the files this branch changed");
         return Ok(());
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let report = compare(&current, &parse_baseline(&text)?);
+    let report = compare(&current, &load_baseline(&dir)?);
     for (f, n) in &report.new_over {
         println!("{f}: {n} lines, over {MAX_LINES} and not in {BASELINE}: split it");
     }
@@ -352,12 +420,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("crates/c/src");
         std::fs::create_dir_all(&src).unwrap();
-        std::fs::create_dir_all(dir.path().join("xtask")).unwrap();
+        std::fs::create_dir_all(dir.path().join(BASELINE)).unwrap();
         let lines = |n: usize| "fn f() {}\n".repeat(n);
         std::fs::write(src.join("a.rs"), lines(2100)).unwrap();
         std::fs::write(src.join("b.rs"), lines(2100)).unwrap();
         std::fs::write(
-            dir.path().join(BASELINE),
+            dir.path().join(BASELINE).join("c.txt"),
             "2300 crates/c/src/a.rs\n2100 crates/c/src/b.rs\n",
         )
         .unwrap();
@@ -367,7 +435,7 @@ mod tests {
             &["--write-baseline", "--only", "crates/c/src/b.rs"],
         )
         .unwrap();
-        let text = std::fs::read_to_string(dir.path().join(BASELINE)).unwrap();
+        let text = std::fs::read_to_string(dir.path().join(BASELINE).join("c.txt")).unwrap();
         assert!(text.contains("2300 crates/c/src/a.rs") && text.contains("2200 crates/c/src/b.rs"));
         assert!(run(dir.path(), &["--only", "x"]).is_err());
     }
@@ -388,12 +456,12 @@ mod tests {
         };
         let src = root.join("crates/c/src");
         std::fs::create_dir_all(&src).unwrap();
-        std::fs::create_dir_all(root.join("xtask")).unwrap();
+        std::fs::create_dir_all(root.join(BASELINE)).unwrap();
         let lines = |n: usize| "fn f() {}\n".repeat(n);
         std::fs::write(src.join("a.rs"), lines(2100)).unwrap();
         std::fs::write(src.join("b.rs"), lines(2100)).unwrap();
         std::fs::write(
-            root.join(BASELINE),
+            root.join(BASELINE).join("c.txt"),
             "# why\n2300 crates/c/src/a.rs\n2100 crates/c/src/b.rs\n",
         )
         .unwrap();
@@ -406,7 +474,7 @@ mod tests {
         git(&["commit", "-q", "-am", "grow b"]);
         std::fs::write(src.join("new.rs"), lines(2001)).unwrap();
         run(root, &["--write-baseline", "--base", "main"]).unwrap();
-        let text = std::fs::read_to_string(root.join(BASELINE)).unwrap();
+        let text = std::fs::read_to_string(root.join(BASELINE).join("c.txt")).unwrap();
         assert_eq!(
             text,
             "# why\n2300 crates/c/src/a.rs\n2200 crates/c/src/b.rs\n2001 crates/c/src/new.rs\n"
@@ -450,7 +518,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("crates/c/src");
         std::fs::create_dir_all(&src).unwrap();
-        std::fs::create_dir_all(dir.path().join("xtask")).unwrap();
+        std::fs::create_dir_all(dir.path().join(BASELINE)).unwrap();
         let lines = |n: usize| "fn f() {}\n".repeat(n);
         std::fs::write(src.join("big.rs"), lines(2100)).unwrap();
         std::fs::write(src.join("small.rs"), lines(10)).unwrap();
@@ -462,7 +530,7 @@ mod tests {
             &["--write-baseline", "--only", "crates/c/src/big.rs"],
         )
         .unwrap();
-        let text = std::fs::read_to_string(dir.path().join(BASELINE)).unwrap();
+        let text = std::fs::read_to_string(dir.path().join(BASELINE).join("c.txt")).unwrap();
         assert!(text.contains("2100 crates/c/src/big.rs") && !text.contains("small.rs"));
         run(dir.path(), &[]).unwrap();
         // A shrink and a stale entry pass (they are only reported).
@@ -477,7 +545,56 @@ mod tests {
         std::fs::write(src.join("new.rs"), lines(2001)).unwrap();
         assert!(run(dir.path(), &[]).is_err());
         // A malformed baseline is an error.
-        std::fs::write(dir.path().join(BASELINE), "oops").unwrap();
+        std::fs::write(dir.path().join(BASELINE).join("c.txt"), "oops").unwrap();
         assert!(run(dir.path(), &[]).is_err());
+    }
+
+    #[test]
+    fn the_baseline_is_one_file_per_crate_and_a_path_listed_twice_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let put = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let lines = |n: usize| "fn f() {}\n".repeat(n);
+        put("crates/a/src/x.rs", &lines(2100));
+        put("crates/b/src/y.rs", &lines(2100));
+        put("xtask/ignored.md", "not a baseline");
+        run(
+            root,
+            &[
+                "--write-baseline",
+                "--only",
+                "crates/a/src/x.rs",
+                "--only",
+                "crates/b/src/y.rs",
+            ],
+        )
+        .unwrap();
+        let read = |c: &str| std::fs::read_to_string(root.join(BASELINE).join(c)).unwrap();
+        assert!(
+            read("a.txt").contains("2100 crates/a/src/x.rs") && !read("a.txt").contains("y.rs")
+        );
+        assert!(read("b.txt").contains("2100 crates/b/src/y.rs"));
+        run(root, &[]).unwrap();
+        // A file back under the limit empties its crate's baseline file, which is then removed.
+        put("crates/a/src/x.rs", &lines(10));
+        run(root, &["--write-baseline", "--only", "crates/a/src/x.rs"]).unwrap();
+        assert!(
+            !root.join(BASELINE).join("a.txt").exists()
+                && root.join(BASELINE).join("b.txt").exists()
+        );
+        // The same path in two files is a malformed baseline.
+        put(
+            "xtask/file-size-baseline/dup.txt",
+            "2100 crates/b/src/y.rs\n",
+        );
+        assert!(run(root, &[]).is_err());
+        // No baseline directory at all is an empty baseline: only the files over the limit fail.
+        std::fs::remove_dir_all(root.join(BASELINE)).unwrap();
+        put("crates/b/src/y.rs", &lines(10));
+        run(root, &[]).unwrap();
     }
 }
