@@ -231,7 +231,7 @@ impl Encoder {
             } => Kind::ExchangeSource(pb::ExchangeSourceNode {
                 id: id.0,
                 partitioning: Some(partitioning(p)),
-                schema: schema_bytes(schema),
+                schema: flagged_schema_bytes(schema, &self.nested),
             }),
             PhysNode::SharedRead { id, layout } => Kind::SharedRead(pb::SharedReadNode {
                 id: id.0,
@@ -528,7 +528,10 @@ impl Encoder {
                 .iter()
                 .map(|f| exchange_filter(f, &self.nested))
                 .collect(),
-            schema: exchange.schema.as_deref().map(schema_bytes),
+            schema: exchange
+                .schema
+                .as_deref()
+                .map(|schema| flagged_schema_bytes(schema, &self.nested)),
         })
     }
 
@@ -930,10 +933,24 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
     }
 }
 
+/// `schema` as Arrow IPC bytes. The feature walk classifies a schema field by field, so the
+/// encoder's nested-types flag follows its fields too.
+fn flagged_schema_bytes(schema: &arrow_schema::Schema, nested: &Cell<bool>) -> Vec<u8> {
+    if schema
+        .fields()
+        .iter()
+        .any(|f| arrow_type_is_nested(f.data_type()))
+    {
+        nested.set(true);
+    }
+    schema_bytes(schema)
+}
+
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
     let mut expr = aggregate_function(a, nested)?;
     if let Some(f) = &a.element {
-        expr.result_element = schema_bytes(&arrow_schema::Schema::new(vec![Arc::clone(f)]));
+        expr.result_element =
+            flagged_schema_bytes(&arrow_schema::Schema::new(vec![Arc::clone(f)]), nested);
     }
     Ok(expr)
 }
@@ -1131,6 +1148,11 @@ fn udaf_call(call: &UdafCall, nested: &Cell<bool>) -> Result<pb::UdafCall> {
         name: call.name.clone(),
         version: u64::from(call.version),
         args: fields(&call.args),
+        arg_types: call
+            .arg_types
+            .iter()
+            .map(|t| spark_type(t, nested))
+            .collect::<Result<_>>()?,
         result: Some(spark_type(&call.result, nested)?),
         nullable: call.nullable,
         state: fields(&call.state),
@@ -1315,7 +1337,10 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         DataType::Long => (Kind::Long, 0, 0, 0),
         DataType::Float => (Kind::Float, 0, 0, 0),
         DataType::Double => (Kind::Double, 0, 0, 0),
+        // The display-only `UTF8_BINARY` marker travels as plain STRING (ADR 0043, update
+        // 2026-11-07): it changes the printed type name only.
         DataType::String => (Kind::String, 0, 0, 0),
+        DataType::CollatedString(c) if c.is_utf8_binary() => (Kind::String, 0, 0, 0),
         DataType::Binary => (Kind::Binary, 0, 0, 0),
         DataType::Decimal(d) => (
             Kind::Decimal,

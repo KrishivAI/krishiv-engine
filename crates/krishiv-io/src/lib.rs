@@ -66,10 +66,11 @@ pub use io::beneath::{AnchorError, BeneathStore};
 #[cfg(unix)]
 pub use io::local_listing::SettledLocalFileSystem;
 pub use io::{
-    BlockCacheStats, ByteRange, CacheScope, CacheStats, FileRef, Held, IoConfig, IoContext,
-    IoCounters, IoScheduler, ObjectScheme, OpenedStore, ParsedUrl, PinnedStore, PutIfAbsent,
-    SecretResolver, StoreId, StorePolicy, StoreRegistry, StoreSettings, Tail, VersionToken,
-    parse_object_url, query_registry, register, register_with_options,
+    BlockCacheStats, ByteRange, CacheKey, CacheScope, CacheStats, DistinctSample, DistinctSamples,
+    FileRef, Held, IoConfig, IoContext, IoCounters, IoScheduler, ObjectScheme, OpenedStore,
+    ParsedUrl, PinnedStore, PutIfAbsent, SampleKey, SecretResolver, StoreId, StorePolicy,
+    StoreRegistry, StoreSettings, Tail, VersionToken, parse_object_url, query_registry, register,
+    register_with_options,
 };
 pub use json::JsonFormat;
 pub use options::{
@@ -83,7 +84,7 @@ pub use partition::{
     DEFAULT_PARTITION, check_partition_column,
     discover::{Segment, constant_column, file_values, parse_segment, partition_columns},
     escape_partition_value, partition_dir_name, partition_segment, partition_segments,
-    partition_texts, renders_as_string, spark_partitioned_file_name,
+    partition_texts, partition_texts_in, renders_as_string, spark_partitioned_file_name,
 };
 pub use request::{
     CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,

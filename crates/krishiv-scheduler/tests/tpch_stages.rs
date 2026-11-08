@@ -640,7 +640,7 @@ fn a_broadcast_that_does_not_fit_is_built_by_each_task() {
     let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
     let plain = QueryRunner::new(Arc::clone(&executor) as _);
     // The query's shared broadcast tables may hold 256 KiB: the build of
-    // `orders` (about 1 MiB) does not fit, the tasks' own builds do.
+    // `orders` (3.75 MB of frames) does not fit, the tasks' own builds do.
     let capped = StageRunner::new(Arc::clone(&executor) as _, 4)
         .unwrap()
         .with_splits(Arc::new(dealer(&tpch.files)))
@@ -672,11 +672,16 @@ fn a_broadcast_that_does_not_fit_is_built_by_each_task() {
     assert_eq!(want.len(), 5, "{want:?}");
     let got = sorted(run(&capped, &plan, &worker, &root, 2).unwrap());
     assert_eq!(got, want);
+    // The broadcast's committed bytes alone are past the cap: the shared
+    // build is not even tried (design `P2-row30c-m5-shared-skip`).
+    assert_eq!(capped.broadcast_fallbacks(), 0, "a shared build was tried");
+    // Once per task (review M1): each task's join skipped, and says so.
     assert_eq!(
-        capped.broadcast_fallbacks(),
-        1,
-        "the shared build fit:\n{plan}"
+        capped.broadcast_skips(),
+        capped.task_counter("broadcast_skipped"),
+        "the shared build was not skipped once per task:\n{plan}"
     );
+    assert!(capped.broadcast_skips() > 0);
     assert_eq!(root.reserved(), 0, "memory still held after a fallback");
     // Each task's join says it built its own table.
     assert!(capped.task_counter("broadcast_fallback") > 0);
@@ -701,7 +706,26 @@ fn a_broadcast_that_does_not_fit_is_built_by_each_task() {
         sorted(run_with(&split, &plan, &worker, &root, 4, exec).unwrap()),
         want
     );
-    assert_eq!(split.broadcast_fallbacks(), 1);
+    // Skipped as the runner's cap is: the config reaches the decision.
+    assert_eq!(split.broadcast_fallbacks(), 0);
+    assert!(split.broadcast_skips() > 0);
+    assert_eq!(root.reserved(), 0);
+    // A cap past half the broadcast's frame bytes (3.75 MB; the skip's lower
+    // bound of the table) and below the table (it fits in 3.67 MB, not in
+    // 3 MiB; measured 2026-11-07): the shared build is tried, does not fit, and
+    // the tasks fall back (review minor of row 30c m5).
+    let between = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)))
+        .with_broadcast_limit(3 << 20);
+    assert_eq!(
+        sorted(run(&between, &plan, &worker, &root, 5).unwrap()),
+        want
+    );
+    assert_eq!(between.broadcast_skips(), 0, "the build was not tried");
+    assert_eq!(between.broadcast_fallbacks(), 1, "the shared build fit");
+    assert!(between.task_counter("broadcast_fallback") > 0);
+    assert_eq!(between.task_counter("broadcast_skipped"), 0);
     assert_eq!(root.reserved(), 0);
 }
 
@@ -750,7 +774,7 @@ fn a_fallback_build_spills_under_a_small_query_pool() {
     });
     let got = sorted(run(&capped, &plan, &worker, &small, 2).unwrap());
     assert_eq!(got, want);
-    assert_eq!(capped.broadcast_fallbacks(), 1);
+    assert_eq!(capped.broadcast_fallbacks() + capped.broadcast_skips(), 1);
     assert_eq!(capped.task_counter("broadcast_fallback"), 1);
     // The join build spilled (their counter), not only other operators.
     assert!(

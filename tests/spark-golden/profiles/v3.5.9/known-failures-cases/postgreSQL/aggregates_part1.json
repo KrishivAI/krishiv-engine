@@ -1,9 +1,7 @@
 {
   "cases": {
     "fn-aggregate": [
-      33,
-      54,
-      55
+      33
     ]
   },
   "file": "postgreSQL/aggregates_part1",

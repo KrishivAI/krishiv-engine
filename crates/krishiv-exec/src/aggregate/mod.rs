@@ -330,6 +330,11 @@ pub struct UdafCall {
     /// The argument columns after the analyzer's casts, as the UDF reads
     /// them (decimals on `Decimal128`).
     pub args: Vec<Field>,
+    /// The Spark types of the arguments, as the analyzer typed them (one per
+    /// `args` entry; `NULL` for an untyped `NULL`). The Arrow fields in
+    /// `args` carry the same types only as the carrier the UDF reads, which
+    /// loses `TIME(p)`, non-default intervals and the like.
+    pub arg_types: Vec<krishiv_types::DataType>,
     /// The result type, as the analyzer typed it.
     pub result: krishiv_types::DataType,
     /// Whether the result may be NULL.

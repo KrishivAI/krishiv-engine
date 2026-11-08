@@ -32,12 +32,15 @@
 //! | a bucket count of 0 or above `bucketing.maxBuckets` | `INVALID_BUCKET_COUNT` |
 //! | a `DESCRIBE` with `AS JSON` but no `EXTENDED`/`FORMATTED`, with a column and `AS JSON`, or with a column and a partition | `DESCRIBE_JSON_NOT_EXTENDED`, `UNSUPPORTED_FEATURE.DESC_TABLE_COLUMN_JSON`, `UNSUPPORTED_FEATURE.DESC_TABLE_COLUMN_PARTITION` |
 //! | a `DESCRIBE` partition key without a value | `INVALID_SQL_SYNTAX.EMPTY_PARTITION_VALUE` |
+//! | a partition key written twice; a property key written twice (`TBLPROPERTIES`, `OPTIONS` but a `CREATE TABLE`'s, `DBPROPERTIES`, `SERDEPROPERTIES`, `WITH (...)`) | `DUPLICATE_KEY` (see [`keys`]) |
+//! | a property list key without a value (`SET`) or with one (`UNSET`); a `CREATE TABLE` option without a value | `_LEGACY_ERROR_TEMP_0035` |
 //!
 //! Not checked here (the analyzer raises it, `Resolver::inline_table`): an inline table whose expressions fail when Spark
 //! evaluates them while parsing (`INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION`),
 //! which needs expression evaluation.
 
 pub(crate) mod interval;
+mod keys;
 pub(crate) mod literal;
 mod pipe;
 mod relation;
@@ -48,6 +51,7 @@ mod types;
 
 use std::collections::HashSet;
 
+use self::keys::{duplicate_key, key_text, misvalued_keys, reserved_namespace_properties};
 use krishiv_common::error::{
     CreateTableColumnDescriptorDuplicate, DescribeJsonNotExtended, DuplicateClauses,
     DuplicatedCteNames, FeatureNotEnabled, IdentityColumnsDuplicatedSequenceGeneratorOption,
@@ -62,7 +66,8 @@ use krishiv_common::error::{
     LegacyErrorTemp0064, LegacyErrorTemp1292, UnsupportedFeatureContinueExceptionHandler,
     UnsupportedFeatureDescTableColumnJson, UnsupportedFeatureDescTableColumnPartition,
     UnsupportedFeatureLateralJoinUsing, UnsupportedFeatureSchemaLevelCollations,
-    UnsupportedFeatureSqlCursor, UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
+    UnsupportedFeatureSetPropertiesAndDbproperties, UnsupportedFeatureSqlCursor,
+    UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
 };
 
 pub(crate) use self::types::data_type;
@@ -70,19 +75,19 @@ use crate::ParserOptions;
 use crate::ast::{
     AlterColumnAction, AlterNamespaceAction, AlterTable, AlterTableAction, AlterView,
     AlterViewAction, CacheKind, ChangeColumnAction, ColumnConstraintKind, ColumnDef, ColumnName,
-    CreateFunction, CreatePermanentView, CreateTable, CreateTableLike, DdlName, Delete, Describe,
-    DescribeKind, Expr, ExprKind, FileFormat, FileFormatKind, FrameBoundKind, FromClause, Function,
-    FunctionBodyKind, FunctionReturnsKind, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
-    GroupWith, GroupingSet, Insert, InsertClause, Join, JoinConstraint, Literal, Merge,
-    MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName, PartitionFieldKind,
-    PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat, RowFormatKind,
-    SchemaBindingClause, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind, Show, ShowKind,
-    SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind, TableElement,
-    TableFactor, TableFactorKind, TableOption, TemporalClause, Truncate, Update, UpdateAssignment,
-    WindowRef, WindowSpec, With,
+    CreateFunction, CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, DdlName,
+    Delete, Describe, DescribeKind, Expr, ExprKind, FileFormat, FileFormatKind, FrameBoundKind,
+    FromClause, Function, FunctionBodyKind, FunctionReturnsKind, GeneratedKind, GroupBy, GroupItem,
+    GroupItemKind, GroupWith, GroupingSet, Insert, InsertClause, Join, JoinConstraint, Literal,
+    Merge, MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName,
+    PartitionFieldKind, PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat,
+    RowFormatKind, SchemaBindingClause, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind,
+    Show, ShowKind, SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind,
+    TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause, Truncate, Update,
+    UpdateAssignment, WindowRef, WindowSpec, With,
 };
 use crate::error::{self, ParseError};
-use crate::lexer::tokenize;
+use crate::lexer::{Sym, TokenKind, tokenize};
 
 type R = Result<(), ParseError>;
 
@@ -114,20 +119,21 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             | Statement::DropView(_)
             | Statement::DropFunction(_)
             | Statement::DropTable(_)
-            | Statement::CreateNamespace(_)
             | Statement::DropNamespace(_)
             | Statement::Use(_)
             | Statement::DropVariable(_)
             | Statement::AddResource(_)
             | Statement::ListResource(_) => return Ok(()),
+            Statement::CreateNamespace(n) => return Checker { sql, opts }.create_namespace(n),
             Statement::DropPermanentView(v) => return Checker { sql, opts }.ddl_name(&v.name),
             Statement::AlterNamespace(a) => {
                 let checker = Checker { sql, opts };
                 checker.ddl_name(&a.name)?;
                 match &a.action {
                     AlterNamespaceAction::SetProperties(properties) => {
-                        property_shapes(properties, true, a.span)?;
+                        checker.property_list(properties, true, a.span)?;
                         checker.option_values(properties)?;
+                        reserved_namespace_properties(properties, a.span)?;
                     }
                     // Schema-level collations are off in Spark 4.2
                     // (`spark.sql.schemaLevelCollations.enabled`).
@@ -168,7 +174,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                 } => {
                     let checker = Checker { sql, opts };
                     checker.ddl_name(name)?;
-                    property_shapes(options, true, c.span)?;
+                    checker.property_list(options, true, c.span)?;
                     options
                         .iter()
                         .filter_map(|o| o.value.as_ref())
@@ -370,11 +376,13 @@ impl Checker<'_> {
                 b.span,
             ));
         }
-        t.options
-            .iter()
-            .chain(&t.tblproperties)
-            .filter_map(|o| o.value.as_ref())
-            .try_for_each(|e| self.expr(e))?;
+        // `visitCreateTableClauses`: the properties, the options, the ROW FORMAT against the file
+        // format, then the SerDe's properties.
+        self.property_list(&t.tblproperties, true, t.span)?;
+        self.expression_options(&t.options, t.span)?;
+        self.option_values(&t.tblproperties)?;
+        self.row_format_file_format(t.row_format.as_ref(), t.file_format.as_ref(), t.span)?;
+        self.serde_properties(t.row_format.as_ref())?;
         self.using_with_serde(
             "CREATE TABLE ... USING ...",
             t.using.as_ref(),
@@ -420,12 +428,101 @@ impl Checker<'_> {
                 t.span,
             ));
         }
+        // `visitCreateTableLike` checks the ROW FORMAT against the file format and reads the SerDe's
+        // properties before it checks `USING` beside a serde clause, and the table's properties after.
+        self.row_format_file_format(t.row_format.as_ref(), t.file_format.as_ref(), t.span)?;
+        self.serde_properties(t.row_format.as_ref())?;
         self.using_with_serde(
             "CREATE TABLE LIKE ... USING ...",
             t.using.as_ref(),
             (t.row_format.as_ref(), t.file_format.as_ref()),
             t.span,
-        )
+        )?;
+        self.property_list(&t.tblproperties, true, t.span)
+    }
+
+    /// `CREATE DATABASE|SCHEMA|NAMESPACE`, in `visitCreateNamespace`'s order: a clause written
+    /// twice, both `PROPERTIES` and `DBPROPERTIES`, the property list, then its reserved keys.
+    fn create_namespace(&self, n: &CreateNamespace) -> R {
+        if let Some(clause) = n.duplicate_clause {
+            return Err(at(
+                DuplicateClauses {
+                    clause_name: clause.to_owned(),
+                },
+                n.span,
+            ));
+        }
+        if n.properties_and_dbproperties {
+            return Err(at(
+                UnsupportedFeatureSetPropertiesAndDbproperties {},
+                n.span,
+            ));
+        }
+        self.property_list(&n.properties, true, n.span)?;
+        // Spark 4.2 then refuses `DEFAULT COLLATION` unless `spark.sql.schemaLevelCollations.enabled`;
+        // its golden suite runs with it on, and Krishiv accepts the clause (not checked here).
+        reserved_namespace_properties(&n.properties, n.span)
+    }
+
+    /// Spark's `validateRowFormatFileFormat`, when both a `ROW FORMAT` and a `STORED AS|BY` are
+    /// written: `ROW FORMAT SERDE` only with `STORED AS` `sequencefile`, `textfile` or `rcfile`,
+    /// `ROW FORMAT DELIMITED` only with `textfile` (any case, unquoted; the name lower-cased in the
+    /// message, unknown names included), and `STORED BY` with neither; else
+    /// `_LEGACY_ERROR_TEMP_0035` at `statement`. `STORED AS INPUTFORMAT .. OUTPUTFORMAT ..`, which
+    /// takes any row format, does not parse here.
+    fn row_format_file_format(
+        &self,
+        row_format: Option<&RowFormat>,
+        file_format: Option<&FileFormat>,
+        statement: Span,
+    ) -> R {
+        let (Some(row_format), Some(file_format)) = (row_format, file_format) else {
+            return Ok(());
+        };
+        let message = match (&row_format.kind, &file_format.kind) {
+            (kind, FileFormatKind::StoredAs(name)) => {
+                let format = name
+                    .parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".")
+                    .to_lowercase();
+                match kind {
+                    RowFormatKind::Serde(_)
+                        if !matches!(&*format, "sequencefile" | "textfile" | "rcfile") =>
+                    {
+                        format!(
+                            "ROW FORMAT SERDE is incompatible with format '{format}', which also \
+                             specifies a serde"
+                        )
+                    }
+                    RowFormatKind::Delimited(_) if format != "textfile" => format!(
+                        "ROW FORMAT DELIMITED is only compatible with 'textfile', not '{format}'"
+                    ),
+                    _ => return Ok(()),
+                }
+            }
+            // Spark's "should never happen" arm, reached by `STORED BY`.
+            (_, FileFormatKind::StoredBy(_)) => format!(
+                "Unexpected combination of {} and {}",
+                context_children_text(self.sql, row_format.span, usize::MAX),
+                context_children_text(self.sql, file_format.span, 2),
+            ),
+        };
+        Err(at(LegacyErrorTemp0035 { message }, statement))
+    }
+
+    /// `ROW FORMAT SERDE '...' WITH SERDEPROPERTIES (...)`: a property list whose missing values
+    /// Spark reports at the `ROW FORMAT` clause (`visitRowFormatSerde`).
+    fn serde_properties(&self, row_format: Option<&RowFormat>) -> R {
+        match row_format {
+            Some(RowFormat {
+                kind: RowFormatKind::Serde(serde),
+                span,
+            }) => self.property_list(&serde.properties, true, *span),
+            _ => Ok(()),
+        }
     }
 
     /// `USING provider` together with `STORED AS` or `ROW FORMAT` (Spark's
@@ -472,13 +569,12 @@ impl Checker<'_> {
 
     /// A `CREATE VIEW` beyond the legacy temporary views, in the order
     /// Spark's builder checks it. `createView` (`AS query`): `PARTITIONED
-    /// ON`, a duplicate clause, `OR REPLACE` with `IF NOT EXISTS`,
-    /// `TBLPROPERTIES` or `WITH SCHEMA` on a temporary view, the names,
+    /// ON`, a duplicate clause, `OR REPLACE` with `IF NOT EXISTS`, the
+    /// properties, `TBLPROPERTIES` or `WITH SCHEMA` on a temporary view, the names,
     /// options and query, then `IF NOT EXISTS` on a temporary view and its
     /// qualifier. `createTempViewUsing`: the names, types and options,
     /// then the qualifier.
     fn create_permanent_view(&self, v: &CreatePermanentView) -> R {
-        property_shapes(&v.tblproperties, true, v.span)?;
         if v.query.is_some() {
             if v.partitioned_on {
                 return Err(at(
@@ -502,6 +598,9 @@ impl Checker<'_> {
                     v.span,
                 ));
             }
+            // Spark 4.2.0 reads the properties here: after `PARTITIONED ON`, a duplicate clause and
+            // `OR REPLACE` with `IF NOT EXISTS`, before the temporary-view checks and the query.
+            self.property_list(&v.tblproperties, true, v.span)?;
             if v.temporary && !v.tblproperties.is_empty() {
                 return Err(at(
                     LegacyErrorTemp0035 {
@@ -526,7 +625,7 @@ impl Checker<'_> {
             }
         }
         if v.query.is_none() {
-            property_shapes(&v.options, true, v.span)?;
+            self.property_list(&v.options, true, v.span)?;
         }
         v.options
             .iter()
@@ -615,7 +714,7 @@ impl Checker<'_> {
             }
             AlterTableAction::SetTblProperties(properties)
             | AlterTableAction::SetSerdeProperties(properties) => {
-                property_shapes(properties, true, a.span)?;
+                self.property_list(properties, true, a.span)?;
                 self.option_values(properties)
             }
             AlterTableAction::SetPartitionSerdeProperties {
@@ -623,12 +722,13 @@ impl Checker<'_> {
                 properties,
                 ..
             } => {
+                // Spark 4.2.0 reads the properties before the partition spec.
+                self.property_list(properties, true, a.span)?;
                 self.partition_values(Some(partition))?;
-                property_shapes(properties, true, a.span)?;
                 self.option_values(properties)
             }
             AlterTableAction::UnsetTblProperties { keys, .. } => {
-                property_shapes(keys, false, a.span)?;
+                self.property_list(keys, false, a.span)?;
                 self.option_values(keys)
             }
             AlterTableAction::AddPartition { parts, .. } => parts
@@ -656,11 +756,11 @@ impl Checker<'_> {
         match &a.action {
             AlterViewAction::SetQuery { query, .. } => self.query(query),
             AlterViewAction::SetTblProperties(properties) => {
-                property_shapes(properties, true, a.span)?;
+                self.property_list(properties, true, a.span)?;
                 self.option_values(properties)
             }
             AlterViewAction::UnsetTblProperties { keys, .. } => {
-                property_shapes(keys, false, a.span)?;
+                self.property_list(keys, false, a.span)?;
                 self.option_values(keys)
             }
             AlterViewAction::SetSchemaBinding(b) => self.schema_binding(b),
@@ -736,7 +836,7 @@ impl Checker<'_> {
             return Err(at(InsertReplaceWhereTableAliasNotAllowed {}, c.head_span));
         }
         // Spark spans a key without a value at the target name.
-        property_shapes(&c.target_options, true, c.name.span())?;
+        self.property_list(&c.target_options, true, c.name.span())?;
         self.option_values(&c.target_options)?;
         if let Some(e) = &c.replace_where {
             self.expr(e)?;
@@ -814,24 +914,9 @@ impl Checker<'_> {
                 as_json,
                 ..
             } => {
-                self.ddl_name(table)?;
-                if let Some(spec) = partition {
-                    for part in &spec.parts {
-                        if part.value.is_none() {
-                            return Err(at(
-                                InvalidSqlSyntaxEmptyPartitionValue {
-                                    part_key: quote(&part.key.value),
-                                },
-                                d.span,
-                            ));
-                        }
-                    }
-                    spec.parts
-                        .iter()
-                        .filter_map(|p| p.value.as_ref())
-                        .try_for_each(|e| self.expr(e))?;
-                }
-                column.iter().try_for_each(|c| self.column_name(c))?;
+                // `SparkSqlParser.visitDescribeRelation`: `AS JSON` without a mode, the name, then a
+                // column (with a partition, or `AS JSON`), else the partition spec (its values and
+                // repeated keys, then a key without a value).
                 if *as_json && mode.is_none() {
                     return Err(at(
                         DescribeJsonNotExtended {
@@ -840,11 +925,30 @@ impl Checker<'_> {
                         d.span,
                     ));
                 }
-                if *as_json && !column.is_empty() {
-                    return Err(at(UnsupportedFeatureDescTableColumnJson {}, d.span));
+                self.ddl_name(table)?;
+                if !column.is_empty() {
+                    if partition.is_some() {
+                        return Err(at(UnsupportedFeatureDescTableColumnPartition {}, d.span));
+                    }
+                    if *as_json {
+                        return Err(at(UnsupportedFeatureDescTableColumnJson {}, d.span));
+                    }
+                    return column.iter().try_for_each(|c| self.column_name(c));
                 }
-                if !column.is_empty() && partition.is_some() {
-                    return Err(at(UnsupportedFeatureDescTableColumnPartition {}, d.span));
+                self.partition_values(partition.as_ref())?;
+                // The spec's map (`toMap`) is walked for a key without a value.
+                let parts: Vec<_> = partition.iter().flat_map(|s| &s.parts).collect();
+                let keys: Vec<&str> = parts.iter().map(|p| p.key.value.as_str()).collect();
+                if let Some(key) = keys::to_map_order(&keys)
+                    .into_iter()
+                    .find(|k| parts.iter().any(|p| p.key.value == *k && p.value.is_none()))
+                {
+                    return Err(at(
+                        InvalidSqlSyntaxEmptyPartitionValue {
+                            part_key: quote(key),
+                        },
+                        d.span,
+                    ));
                 }
                 Ok(())
             }
@@ -910,11 +1014,101 @@ impl Checker<'_> {
     }
 
     /// The values of a `PARTITION` specification's keys.
+    /// Then a repeated key (lower case unless `spark.sql.caseSensitive`) is `DUPLICATE_KEY` at the spec, the key
+    /// quoted by `toSQLId` (`INVALID_ATTRIBUTE_NAME_SYNTAX` when it is not an attribute name), as
+    /// `AstBuilder.visitPartitionSpec` checks before the table is looked up.
     fn partition_values(&self, spec: Option<&PartitionSpec>) -> R {
-        spec.into_iter()
-            .flat_map(|s| &s.parts)
+        let Some(spec) = spec else {
+            return Ok(());
+        };
+        spec.parts
+            .iter()
             .filter_map(|p| p.value.as_ref())
-            .try_for_each(|e| self.expr(e))
+            .try_for_each(|e| self.expr(e))?;
+        let keys: Vec<String> = spec
+            .parts
+            .iter()
+            .map(|p| {
+                if self.opts.case_sensitive {
+                    p.key.value.clone()
+                } else {
+                    p.key.value.to_lowercase()
+                }
+            })
+            .collect();
+        let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+        match keys::first_duplicate_key(&keys) {
+            None => Ok(()),
+            Some(key) => Err(at(duplicate_key(key), spec.span)),
+        }
+    }
+
+    /// A key written twice in a property list (`TBLPROPERTIES`, `OPTIONS`, `DBPROPERTIES`,
+    /// `SERDEPROPERTIES`, a `WITH (...)` options clause) is `DUPLICATE_KEY` at the list, the key
+    /// compared as written (never lower-cased) and chosen as for a partition spec (see [`keys`]):
+    /// Spark's `visitPropertyList`, before any value is looked at.
+    fn property_keys(&self, properties: &[TableOption]) -> R {
+        let keys: Vec<String> = properties.iter().map(|o| key_text(&o.key)).collect();
+        let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        let Some(key) = keys::first_duplicate_key(&refs) else {
+            return Ok(());
+        };
+        let (Some(first), Some(last)) = (properties.first(), properties.last()) else {
+            return Ok(());
+        };
+        Err(at(
+            duplicate_key(key),
+            property_list_span(self.sql, first.span, last.span),
+        ))
+    }
+
+    /// A property list as Spark's `visitPropertyKeyValues` (`set`) or `visitPropertyKeys` checks
+    /// it: [`Self::property_keys`], then a `SET` list needs a value for every key and an `UNSET`
+    /// list takes none: `_LEGACY_ERROR_TEMP_0035` naming the offending keys in the property map's
+    /// order, at `statement` (the context around the list).
+    fn property_list(&self, properties: &[TableOption], set: bool, statement: Span) -> R {
+        self.property_keys(properties)?;
+        let bad = misvalued_keys(properties, set);
+        if bad.is_empty() {
+            return Ok(());
+        }
+        let what = if set {
+            "Values must be specified for key(s)"
+        } else {
+            "Values should not be specified for key(s)"
+        };
+        Err(at(
+            LegacyErrorTemp0035 {
+                message: format!("{what}: [{}]", bad.join(",")),
+            },
+            statement,
+        ))
+    }
+
+    /// `CREATE TABLE ... OPTIONS (...)`, an expression list (Spark's `visitExpressionPropertyList`):
+    /// a repeated key is allowed; in written order, an option without a value is
+    /// `_LEGACY_ERROR_TEMP_0035` at `statement` (the key not echoed when written as a string, which
+    /// may hold a secret), and a value is checked as an expression.
+    fn expression_options(&self, options: &[TableOption], statement: Span) -> R {
+        for o in options {
+            let Some(e) = &o.value else {
+                let error: KrishivError = LegacyErrorTemp0035 {
+                    message: format!(
+                        "A value must be specified for the key: {}.",
+                        key_text(&o.key)
+                    ),
+                }
+                .into();
+                let error = if o.key.is_string {
+                    error.redacted()
+                } else {
+                    error
+                };
+                return Err(at(error, statement));
+            };
+            self.expr(e)?;
+        }
+        Ok(())
     }
 
     /// The values of `OPTIONS`, `TBLPROPERTIES` and similar lists.
@@ -1205,18 +1399,8 @@ impl Checker<'_> {
         if let Some(t) = temporal {
             self.expr(&t.value)?;
         }
-        let missing: Vec<String> = options
-            .iter()
-            .filter(|o| o.value.is_none())
-            .map(|o| {
-                o.key
-                    .parts
-                    .iter()
-                    .map(|p| p.value.as_str())
-                    .collect::<Vec<_>>()
-                    .join(".")
-            })
-            .collect();
+        self.property_keys(options)?;
+        let missing = misvalued_keys(options, true);
         if !missing.is_empty() {
             let error: KrishivError = LegacyErrorTemp0035 {
                 message: format!(
@@ -1604,37 +1788,56 @@ fn foldable(e: &Expr) -> bool {
     }
 }
 
-/// A name as Spark quotes it in errors: `` `name` ``.
-/// `SET` property lists need a value for every key, `UNSET` lists take
-/// none (Spark's `visitPropertyKeyValues` / `visitPropertyKeys`):
-/// `_LEGACY_ERROR_TEMP_0035` naming the offending keys, at `statement`.
-fn property_shapes(properties: &[TableOption], set: bool, statement: Span) -> R {
-    let bad: Vec<String> = properties
+/// The clause at `span` as Spark's `validateRowFormatFileFormat` prints a context: its children's
+/// `getText` joined by spaces. The first `tokens` tokens are children of their own, as is each
+/// token after them outside brackets (`ROW FORMAT SERDE 'x'`, `FIELDS TERMINATED BY ','`); a
+/// bracketed list (`SERDEPROPERTIES (...)`'s), or with `tokens` set everything after the first
+/// `tokens` (a `STORED BY` storage handler), is one child whose text drops the whitespace.
+fn context_children_text(sql: &str, span: Span, tokens: usize) -> String {
+    let text = span.text(sql);
+    let mut children: Vec<String> = Vec::new();
+    let mut depth = 0_usize;
+    for (i, t) in tokenize(text)
         .iter()
-        .filter(|o| o.value.is_some() != set)
-        .map(|o| {
-            o.key
-                .parts
-                .iter()
-                .map(|p| p.value.as_str())
-                .collect::<Vec<_>>()
-                .join(".")
-        })
-        .collect();
-    if bad.is_empty() {
-        return Ok(());
+        .filter(|t| !t.kind.is_trivia())
+        .enumerate()
+    {
+        let token = t.span.text(text);
+        let glued = i > tokens || depth > 0;
+        match t.kind {
+            TokenKind::Sym(Sym::LParen) => depth += 1,
+            TokenKind::Sym(Sym::RParen) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        match children.last_mut() {
+            Some(last) if glued => last.push_str(token),
+            _ => children.push(token.to_owned()),
+        }
     }
-    let what = if set {
-        "Values must be specified for key(s)"
-    } else {
-        "Values should not be specified for key(s)"
-    };
-    Err(at(
-        LegacyErrorTemp0035 {
-            message: format!("{what}: [{}]", bad.join(",")),
-        },
-        statement,
-    ))
+    children.join(" ")
+}
+
+/// The parenthesized list from `first` to `last` (the first and last options of a property list):
+/// the `(` before the first through the `)` after the last, where Spark reports an error raised
+/// inside `visitPropertyList`. The options themselves when a comment hides a parenthesis.
+fn property_list_span(sql: &str, first: Span, last: Span) -> Span {
+    let paren = |t: &crate::lexer::Token, sym| t.kind == TokenKind::Sym(sym);
+    let start = sql
+        .get(..first.start)
+        .and_then(|before| {
+            tokenize(before)
+                .into_iter()
+                .rev()
+                .find(|t| !t.kind.is_trivia())
+        })
+        .filter(|t| paren(t, Sym::LParen))
+        .map_or(first.start, |t| t.span.start);
+    let end = sql
+        .get(last.end..)
+        .and_then(|after| tokenize(after).into_iter().find(|t| !t.kind.is_trivia()))
+        .filter(|t| paren(t, Sym::RParen))
+        .map_or(last.end, |t| last.end + t.span.end);
+    Span::new(start, end)
 }
 
 fn quote(name: &str) -> String {

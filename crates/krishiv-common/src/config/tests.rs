@@ -228,6 +228,46 @@ fn spill_entries_parse_and_default() {
 }
 
 #[test]
+fn ndv_sampling_entries_parse_and_default() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&NDV_SAMPLING_ENABLED).and_then(ConfigValue::as_bool),
+            c.get(&NDV_SAMPLING_ROWS).and_then(ConfigValue::as_int),
+            c.get(&NDV_SAMPLING_TIMEOUT)
+                .and_then(ConfigValue::as_duration),
+        )
+    };
+    assert_eq!(
+        get(&c),
+        (
+            Some(true),
+            Some(131_072),
+            Some(std::time::Duration::from_secs(2))
+        )
+    );
+    c.set("krishiv.optimizer.ndvSampling.enabled", "false")
+        .unwrap();
+    c.set("krishiv.optimizer.ndvSampling.rows", "1000").unwrap();
+    c.set("krishiv.optimizer.ndvSampling.timeout", "1s")
+        .unwrap();
+    assert_eq!(
+        get(&c),
+        (
+            Some(false),
+            Some(1000),
+            Some(std::time::Duration::from_secs(1))
+        )
+    );
+    assert!(c.set("krishiv.optimizer.ndvSampling.rows", "0").is_err());
+    assert!(c.set("krishiv.optimizer.ndvSampling.rows", "many").is_err());
+    assert!(
+        c.set("krishiv.optimizer.ndvSampling.timeout", "soon")
+            .is_err()
+    );
+}
+
+#[test]
 fn avro_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {
@@ -741,6 +781,31 @@ fn agent_gate_defaults_to_one_gib_and_parses_sizes() {
 }
 
 #[test]
+fn join_enumerator_entries_default_and_parse() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str),
+        Some("dpsub")
+    );
+    assert_eq!(
+        c.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int),
+        Some(10)
+    );
+    c.set("krishiv.optimizer.joinEnumerator", "Greedy").unwrap();
+    assert_eq!(
+        c.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str),
+        Some("greedy")
+    );
+    c.set("krishiv.optimizer.joinDpLimit", "12").unwrap();
+    assert_eq!(
+        c.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int),
+        Some(12)
+    );
+    assert!(c.set("krishiv.optimizer.joinEnumerator", "dphyp").is_err());
+    assert!(c.set("krishiv.optimizer.joinDpLimit", "0").is_err());
+}
+
+#[test]
 fn eager_aggregation_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
@@ -969,6 +1034,25 @@ fn engine_runtime_entries_parse_and_default() {
     assert!(c.set("krishiv.system.queries.capacity", "0").is_err());
     assert_eq!(SESSION_MEMORY_LIMIT.scope, Scope::Session);
     assert_eq!(SYSTEM_QUERIES_CAPACITY.scope, Scope::Cluster);
+}
+
+#[test]
+fn the_dictionary_filter_is_on_by_default_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&IO_PARQUET_DICTIONARY_FILTER_ENABLED),
+        Some(&ConfigValue::Bool(true))
+    );
+    c.set("krishiv.io.parquet.dictionaryFilter.enabled", "false")
+        .unwrap();
+    assert_eq!(
+        c.get(&IO_PARQUET_DICTIONARY_FILTER_ENABLED),
+        Some(&ConfigValue::Bool(false))
+    );
+    assert!(
+        c.set("krishiv.io.parquet.dictionaryFilter.enabled", "maybe")
+            .is_err()
+    );
 }
 
 #[test]
