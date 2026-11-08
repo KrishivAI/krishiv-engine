@@ -29,7 +29,7 @@ Spark data type ↔ Arrow mapping.
 | `time(p)` | `Time64(Nanosecond)`, tagged when `p < 6` | |
 | `interval year to month` | `Interval(YearMonth)`, tagged for other fields | |
 | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
-| `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`; ADR 0009 update 2026-11-06) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
+| `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
 | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
 | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
 | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
@@ -163,7 +163,7 @@ pub fn client_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::DataTy
 - `MustUse { reason: None }`
 
 `arrow` as a caller outside the engine reads it: [`client_arrow_type`], and each calendar interval as Arrow's
-`Interval(MonthDayNano)` (Spark's own Arrow form of it; ADR 0009 update 2026-11-06).
+`Interval(MonthDayNano)` (Spark's own Arrow form of it).
 
 ```rust
 pub fn edge_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::DataType { /* ... */ }
@@ -651,7 +651,7 @@ pub type ChangeBatch = Batch;
 ## Module `calendar`
 
 Calendar interval columns: the struct carrier of [`crate::arrow::calendar_struct`] (months, days,
-microseconds, as Spark's `CalendarInterval`; ADR 0009 update 2026-11-06), read through [`Calendars`] and built
+microseconds, as Spark's `CalendarInterval`), read through [`Calendars`] and built
 with [`calendar_array`], and the conversions to and from Arrow's `Interval(MonthDayNano)`, which only the
 session edges use: [`to_month_day_nano`] multiplies the microseconds by 1,000 and reports the first row that
 overflows (Spark's `ArrowWriter` overflows there with `Math.multiplyExact`), [`from_month_day_nano`] divides
@@ -1437,13 +1437,39 @@ docs for the rules).
 pub fn rewrite(wkb: &[u8], kind: SpatialKind, order: ByteOrder) -> crate::error::Result<Vec<u8>> { /* ... */ }
 ```
 
+#### Function `check_geographic_srid`
+
+A value of `GEOMETRY(ANY)` or `GEOGRAPHY(ANY)` cast to a geography must carry a geographic
+SRID of Spark's registry (`STUtils.geometryToGeography`).
+
+# Errors
+`ST_INVALID_SRID_VALUE` for an SRID that is unknown or not geographic.
+
+```rust
+pub fn check_geographic_srid(srid: i32) -> crate::error::Result<()> { /* ... */ }
+```
+
+#### Function `srid_of_crs`
+
+The SRID of the CRS string of a Parquet `GEOMETRY` / `GEOGRAPHY` column, as Spark's
+`ParquetToSparkSchemaConverter` reads it: no CRS is `OGC:CRS84` (4326); otherwise the string
+must be a name of Spark's registry exactly (`OGC:CRS84`, `EPSG:4326`, `EPSG:3857`,
+`SRID:0`, ...; case-sensitive, so `srid:0` and PROJJSON are refused), and a geography needs a
+geographic system.
+
+# Errors
+`ST_INVALID_CRS_VALUE` for any other CRS.
+
+```rust
+pub fn srid_of_crs(crs: Option<&str>, geography: bool) -> crate::error::Result<i32> { /* ... */ }
+```
+
 #### Function `to_ewkt`
 
 The text Spark prints a spatial value as (extended well-known text):
-`POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0.
-
-Only a two-dimensional point is printed so far; any other geometry is
-`KRISHIV_UNSUPPORTED_FEATURE`.
+`POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0. Every
+geometry type prints, with `Z`/`M`/`ZM` ordinates, empty geometries and
+nested collections; see the `wkt` module for the rules (from a real Spark 4.2.0 run).
 
 ```
 use krishiv_types::geo::{rewrite, to_ewkt, ByteOrder, SpatialKind};
@@ -1455,7 +1481,7 @@ assert_eq!(to_ewkt(0, &ndr).unwrap(), "POINT(1 2)");
 ```
 
 # Errors
-`KRISHIV_UNSUPPORTED_FEATURE` for anything but a two-dimensional point.
+`WKB_PARSE_ERROR` for a value that is not well-formed ISO WKB.
 
 ```rust
 pub fn to_ewkt(srid: i32, wkb: &[u8]) -> crate::error::Result<String> { /* ... */ }
