@@ -24,9 +24,11 @@ use krishiv_memory::Reservation;
 
 use crate::error::{Result, internal};
 
-/// The most rows a file format's decoder puts in one batch (the Parquet
-/// reader's batch size): a decoded batch is never larger, so the
-/// pass-through threshold is capped by it.
+/// The most rows a file format's decoder puts in one batch: a decoded
+/// batch is never larger, so the pass-through threshold is capped by it.
+/// Keep it equal to krishiv-io's three `pub(crate) BATCH_ROWS` (Parquet
+/// `parquet/decode.rs`, Avro `avro/decode.rs`, text `text/mod.rs`); if
+/// one changes, change this with it.
 pub(crate) const DECODE_ROWS: usize = 4096;
 
 /// Buffers small batches into batches of about `target` rows, in order.

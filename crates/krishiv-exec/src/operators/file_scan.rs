@@ -71,6 +71,7 @@ use super::scan::{
 use super::{global_ref, local_mut};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
+use crate::executor::Executor;
 use crate::morsel::MorselCursor;
 use crate::operator::{GlobalState, LocalState, Source};
 
@@ -547,6 +548,10 @@ struct FileScanLocal {
     /// threshold, so the driver's boundary (cancel, abort, spill requests)
     /// still runs while a selective scan buffers.
     slice: std::time::Duration,
+    /// The slice's clock: the executor's, as the driver's stall detector
+    /// reads it (the paused Tokio clock in deterministic mode), so batch
+    /// boundaries replay under simulation.
+    executor: Arc<dyn Executor>,
     /// The scan's totals, to record a split this driver abandons (a limit above
     /// stopped it before the split's end): its reads were made and paid for. The
     /// split's rows, bytes and unit counts are added with them; the decode
@@ -1120,7 +1125,7 @@ impl FileScanSource {
     ) -> Result<Option<Batch>> {
         let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
         let local = local_mut::<FileScanLocal>(local, "FileScan")?;
-        let started = std::time::Instant::now();
+        let started = local.executor.now();
         // The slice ends only after this call decoded a batch: every call
         // makes progress, whatever the threshold.
         let mut decoded = false;
@@ -1128,7 +1133,7 @@ impl FileScanSource {
             if let Some(b) = local.out.pop_ready() {
                 return Ok(Some(Batch::new(b)));
             }
-            if decoded && started.elapsed() >= local.slice {
+            if decoded && local.executor.now().saturating_duration_since(started) >= local.slice {
                 // The driver's turn: an empty batch (the driver pushes it to
                 // no operator); the buffer keeps joining rows of this morsel.
                 return Ok(Some(Batch::new(RecordBatch::new_empty(Arc::clone(
@@ -1548,6 +1553,7 @@ impl Source for FileScanSource {
                 ctx.consumer().consumer().reservation(),
             ),
             slice: ctx.query().config().stall_threshold / 2,
+            executor: Arc::clone(ctx.executor()),
             consumer: Arc::clone(ctx.consumer().consumer()),
             gate: Arc::clone(ctx.query().scan_gate()),
             morsel: None,
