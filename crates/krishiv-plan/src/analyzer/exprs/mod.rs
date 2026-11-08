@@ -59,6 +59,7 @@ use crate::{
 };
 
 mod aggregates;
+mod by_k;
 mod calls;
 mod collation;
 mod columns;
@@ -466,6 +467,12 @@ impl Resolver<'_> {
                         if is_secret {
                             self.secret.insert(addr(&*rewritten));
                         }
+                        stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
+                        stack.push(Step::Enter(rewritten, ctx));
+                        continue;
+                    }
+                    if let Some(rewritten) = self.window_by_k(&x) {
+                        rewritten_calls.push(Arc::clone(&rewritten));
                         stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
                         stack.push(Step::Enter(rewritten, ctx));
                         continue;
