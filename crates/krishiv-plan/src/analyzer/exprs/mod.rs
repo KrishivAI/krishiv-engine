@@ -425,6 +425,9 @@ impl Resolver<'_> {
         // Rewritten calls stay alive for the pass: `done` is keyed by
         // address.
         let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
+        // The windowed `max_by`/`min_by` calls rewritten by `top_k_by_window`, by the rewrite's address: the
+        // result keeps the call as written for its name.
+        let mut top_k_calls: HashMap<usize, Arc<Expr>> = HashMap::new();
         // The key argument of an AES call and everything under it (kept on
         // the resolver, see `Resolver::secret`): an error raised there
         // never shows the key (ADR 0042), so its message parameters are
@@ -472,6 +475,7 @@ impl Resolver<'_> {
                     }
                     if let Some(rewritten) = Self::top_k_by_window(&x) {
                         rewritten_calls.push(Arc::clone(&rewritten));
+                        top_k_calls.insert(addr(&*rewritten), Arc::clone(&x));
                         stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
                         stack.push(Step::Enter(rewritten, ctx));
                         continue;
@@ -528,7 +532,10 @@ impl Resolver<'_> {
                     stack.extend(kids.into_iter().rev().map(|(c, k)| Step::Enter(c, k)));
                 }
                 Step::Link(from, to, ctx) => {
-                    if let Some(b) = done.get(&(addr(&*to), ctx)).cloned() {
+                    if let Some(mut b) = done.get(&(addr(&*to), ctx)).cloned() {
+                        if let Some(orig) = top_k_calls.get(&addr(&*to)) {
+                            b.shown = Some(Self::top_k_shown(orig, &b.shown()));
+                        }
                         done.insert((from, ctx), b);
                     }
                 }
@@ -666,6 +673,40 @@ impl Resolver<'_> {
             vec![top, lit(Literal::String("v".to_owned()))],
             None,
         ))
+    }
+
+    /// The call as written (`orig`) over the window as the rewrite's result shows it (the frame spelled out):
+    /// `max_by(c, a, 2) OVER (PARTITION BY b ROWS BETWEEN ...)`. `rewritten` is
+    /// `__subscript(slice(sort_array(<window>, ..), ..), 'v')`.
+    fn top_k_shown(orig: &Arc<Expr>, rewritten: &Arc<Expr>) -> Arc<Expr> {
+        let first = |e: &Arc<Expr>| match &e.node {
+            ExprNode::Function(f) => f.args.first().cloned(),
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => f.args.first().cloned(),
+            ExprNode::Field { base, .. } => Some(Arc::clone(base)),
+            _ => None,
+        };
+        // Down the first arguments (`transform`/`slice`/`sort_array`) to the window call.
+        let mut cur = Some(Arc::clone(rewritten));
+        let mut window = None;
+        for _ in 0..8 {
+            let Some(x) = cur else { break };
+            if let ExprNode::Window(w) = &x.node {
+                window = Some(w.window.clone());
+                break;
+            }
+            cur = first(&x);
+        }
+        match (&orig.node, window) {
+            (ExprNode::Window(w), Some(window)) => {
+                let mut shown = (**orig).clone();
+                shown.node = ExprNode::Window(crate::expr::WindowExpr {
+                    function: Arc::clone(&w.function),
+                    window,
+                });
+                Arc::new(shown)
+            }
+            _ => Arc::clone(rewritten),
+        }
     }
 
     pub(super) fn is_aggregate(&self, e: &Expr) -> bool {

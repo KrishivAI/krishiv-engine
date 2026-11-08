@@ -49,3 +49,23 @@ fn the_k_best_over_a_partition_window_match_spark() {
         ]
     );
 }
+
+#[test]
+fn the_unaliased_column_is_named_as_written() {
+    let s = Session::new().unwrap();
+    let df = block_on(async {
+        s.sql(
+            "select max_by(c, a, 2) over (partition by b) from values (1, 'x', 'p') as t(a, b, c)",
+        )
+        .await
+    })
+    .unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    let names: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
+    assert_eq!(
+        names,
+        [
+            "max_by(c, a, 2) OVER (PARTITION BY b ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"
+        ]
+    );
+}
