@@ -77,11 +77,45 @@ impl Resolver<'_> {
             }))
             .with_origin(origin),
         );
-        let sorted = call(
-            "sort_array",
-            vec![collected, lit(Literal::Boolean(ascending))],
+        // A comparator on `k` only, so a map-valued `x` sorts as well (the entries order by `y`).
+        let var = |name: &str| {
+            Arc::new(
+                Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+                    name.to_owned(),
+                ])))
+                .with_origin(origin),
+            )
+        };
+        let key = |name: &str| {
+            call(
+                "__subscript",
+                vec![var(name), lit(Literal::String("k".to_owned()))],
+                None,
+            )
+        };
+        let (before, after) = if ascending { (-1, 1) } else { (1, -1) };
+        let compare = call(
+            "if",
+            vec![
+                call("<", vec![key("l"), key("r")], None),
+                lit(Literal::Integer(before)),
+                call(
+                    "if",
+                    vec![
+                        call(">", vec![key("l"), key("r")], None),
+                        lit(Literal::Integer(after)),
+                        lit(Literal::Integer(0)),
+                    ],
+                    None,
+                ),
+            ],
             None,
         );
+        let comparator = Arc::new(
+            Expr::lambda(vec!["l".to_owned(), "r".to_owned()], (*compare).clone())
+                .with_origin(origin),
+        );
+        let sorted = call("array_sort", vec![collected, comparator], None);
         let top = call(
             "slice",
             vec![
@@ -91,10 +125,46 @@ impl Resolver<'_> {
             ],
             None,
         );
+        // NULL, not `[]`, when the frame holds no row with a `y` (Spark). `top` is one node used
+        // twice: it is bound, and its window planned, once.
         Some(call(
-            "__subscript",
-            vec![top, lit(Literal::String("v".to_owned()))],
+            "if",
+            vec![
+                call(
+                    "<",
+                    vec![
+                        call("size", vec![Arc::clone(&top)], None),
+                        lit(Literal::Integer(1)),
+                    ],
+                    None,
+                ),
+                lit(Literal::Null(None)),
+                call(
+                    "__subscript",
+                    vec![top, lit(Literal::String("v".to_owned()))],
+                    None,
+                ),
+            ],
             None,
+        ))
+    }
+
+    /// The name of the rewritten call as written: the original call over the bound window spec
+    /// (`max_by(emp, salary, 2) OVER (PARTITION BY dept ...)`), for the column name and for errors.
+    pub(super) fn by_k_shown(original: &Expr, bound: &Bound) -> Option<Arc<Expr>> {
+        let ExprNode::Window(w) = &original.node else {
+            return None;
+        };
+        let inner = super::super::windows::first_window(&bound.shown())?;
+        let ExprNode::Window(shown) = &inner.node else {
+            return None;
+        };
+        Some(Arc::new(
+            Expr::new(ExprNode::Window(crate::WindowExpr {
+                function: Arc::clone(&w.function),
+                window: shown.window.clone(),
+            }))
+            .with_origin(original.origin),
         ))
     }
 }

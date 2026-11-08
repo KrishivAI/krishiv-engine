@@ -127,7 +127,7 @@ pub(super) fn misplaced(use_: WindowUse, b: &Bound, origin: Origin) -> AnalysisE
 }
 
 /// The first window expression in `e`, pre-order, outside subqueries.
-fn first_window(e: &Arc<Expr>) -> Option<Arc<Expr>> {
+pub(super) fn first_window(e: &Arc<Expr>) -> Option<Arc<Expr>> {
     let mut stack = vec![Arc::clone(e)];
     while let Some(x) = stack.pop() {
         if matches!(x.node, ExprNode::Window(_)) {

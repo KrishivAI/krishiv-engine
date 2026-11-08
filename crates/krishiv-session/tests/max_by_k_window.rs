@@ -62,3 +62,96 @@ fn the_k_best_values_over_a_partition_window() {
         ]
     );
 }
+
+fn session() -> Session {
+    let s = Session::new().unwrap();
+    block_on(async {
+        s.sql(
+            "CREATE TEMPORARY VIEW d AS SELECT * FROM VALUES (1,'eng','ann',100), (2,'eng','bob',90), \
+             (3,'eng','cy',80), (4,'ops','dee',70), (5,'ops','eve',NULL) AS t(id, dept, emp, salary)",
+        )
+        .await?
+        .collect()
+        .await
+    })
+    .unwrap();
+    s
+}
+
+/// Spark 4.2.0 (local run, 2026-11-08): a frame with no row that has a `y` gives NULL, not `[]`.
+#[test]
+fn an_empty_frame_is_null_and_a_running_frame_grows() {
+    let s = session();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(id AS STRING), coalesce(to_json(max_by(emp, salary, 2) OVER (PARTITION BY dept ORDER BY id \
+             ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)), 'NULL') FROM d ORDER BY id"
+        ),
+        [
+            "1|NULL",
+            r#"2|["ann"]"#,
+            r#"3|["ann","bob"]"#,
+            "4|NULL",
+            r#"5|["dee"]"#
+        ]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(id AS STRING), to_json(max_by(emp, salary, 2) OVER (PARTITION BY dept ORDER BY id)) FROM d \
+             ORDER BY id"
+        ),
+        [
+            r#"1|["ann"]"#,
+            r#"2|["ann","bob"]"#,
+            r#"3|["ann","bob"]"#,
+            r#"4|["dee"]"#,
+            r#"5|["dee"]"#
+        ]
+    );
+}
+
+/// A map-valued `x` sorts through the comparator, as in the plain form.
+#[test]
+fn a_map_valued_x_works() {
+    let s = session();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(id AS STRING), to_json(max_by(map('k', emp), salary, 2) OVER (PARTITION BY dept)) FROM d \
+             ORDER BY id"
+        ),
+        [
+            r#"1|[{"k":"ann"},{"k":"bob"}]"#,
+            r#"2|[{"k":"ann"},{"k":"bob"}]"#,
+            r#"3|[{"k":"ann"},{"k":"bob"}]"#,
+            r#"4|[{"k":"dee"}]"#,
+            r#"5|[{"k":"dee"}]"#
+        ]
+    );
+}
+
+/// The column is named by the call as written over the resolved window, as in Spark.
+#[test]
+fn the_column_name_is_the_call_as_written() {
+    let s = session();
+    let names = |sql: &str| -> Vec<String> {
+        let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+        b[0].schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
+    };
+    assert_eq!(
+        names("SELECT max_by(emp, salary, 2) OVER (PARTITION BY dept) FROM d"),
+        [
+            "max_by(emp, salary, 2) OVER (PARTITION BY dept ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"
+        ]
+    );
+    assert_eq!(
+        names("SELECT id, max_by(emp, salary, 2) OVER (PARTITION BY dept ORDER BY id) FROM d")[1],
+        "max_by(emp, salary, 2) OVER (PARTITION BY dept ORDER BY id ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
+    );
+}
