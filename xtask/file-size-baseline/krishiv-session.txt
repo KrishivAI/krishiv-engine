@@ -3,7 +3,8 @@
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 # +6 lines over main: a stored table's column comments reach the analyzer (TableMeta.column_comments, PR #589)
 # +7 lines: a file table's registered partitions (`TempTable::Files::partitions`, reading partitioned tables)
-2916 crates/krishiv-session/src/catalog.rs
+# +42 lines over main: system-only scan tracking and the admission estimate (QueryCatalog::reads_only_system, set_estimate; PR #525)
+2958 crates/krishiv-session/src/catalog.rs
 # +43 lines over main: nested session and script variables (T196, PR #505)
 2294 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
@@ -11,9 +12,11 @@
 # +1 line: the file view's `partitions` field (reading partitioned tables)
 2661 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
-2781 crates/krishiv-session/src/session.rs
+# +5 lines over main: the admission exemption of system-only reads and the estimate gate (PR #525)
+2786 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
 # +4 lines over main: a view column list without a comment keeps the query column's comment (Spark's aliasPlan, PR #589)
 # +1 line: the temporary table's `partitions` field (reading partitioned tables)
-3379 crates/krishiv-session/src/table_commands.rs
+# +1 line over main: CREATE TABLE refuses a secret() call in its options (PR #525)
+3380 crates/krishiv-session/src/table_commands.rs
