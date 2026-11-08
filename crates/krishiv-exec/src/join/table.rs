@@ -442,6 +442,42 @@ impl RowArena {
         self.len
     }
 
+    /// The bytes the arena's blocks keep allocated: the capacity of every
+    /// buffer they reference, each counted once (blocks sliced from one
+    /// chunk share its buffers). A build's chunks were reserved at their
+    /// allocated size, builder slack included; once finalize copies the
+    /// tails into exact blocks and drops the chunks, this is what the
+    /// arena still holds (study 21 §4.4: the slack of the tails kept
+    /// reserved was ~27 MB per build at 12 threads).
+    pub(crate) fn held_bytes(&self) -> usize {
+        fn walk(
+            data: &arrow_data::ArrayData,
+            seen: &mut std::collections::HashSet<usize>,
+            sum: &mut usize,
+        ) {
+            let nulls = data.nulls().map(arrow_buffer::NullBuffer::buffer);
+            for b in data.buffers().iter().chain(nulls) {
+                if seen.insert(b.data_ptr().as_ptr() as usize) {
+                    *sum = sum.saturating_add(b.capacity());
+                }
+            }
+            for child in data.child_data() {
+                walk(child, seen, sum);
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut sum = 0usize;
+        for part in &self.parts {
+            for column in part.batch.data().columns() {
+                walk(&column.to_data(), &mut seen, &mut sum);
+            }
+            if let Weights::Column(w) = part.batch.weights() {
+                walk(&w.to_data(), &mut seen, &mut sum);
+            }
+        }
+        sum
+    }
+
     /// The arena's bytes by part (each block's share of its buffers): the `hash` column, the key columns (`key*`), and
     /// everything else (payload, NULL-key flags).
     pub(crate) fn memory_split(&self) -> ArenaBytes {

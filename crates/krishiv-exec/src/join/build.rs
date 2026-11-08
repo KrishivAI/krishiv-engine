@@ -424,6 +424,22 @@ fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usiz
     Some((index.saturating_add(kept), copy.saturating_sub(kept)))
 }
 
+/// Returns what a built partition's chunks reserved beyond its arena: the
+/// chunks were reserved at their allocated size (builder slack, and tails
+/// charged at the chunk they were sliced from), the arena copied the tails
+/// into exact blocks and the chunks are gone, so the reservation keeps
+/// `bytes`, the arena's allocated bytes ([`RowArena::held_bytes`]), less
+/// the `kept` tails reserved with the index. Never below zero, and only
+/// ever shrinks.
+fn trim_to_arena(part: &mut Part, kept: usize, bytes: usize) {
+    let mut excess = part.bytes().saturating_sub(bytes.saturating_sub(kept));
+    for m in part.memory.iter_mut() {
+        let cut = excess.min(m.size());
+        m.shrink(cut);
+        excess -= cut;
+    }
+}
+
 /// A duration in whole nanoseconds, saturating.
 pub(super) fn nanos(d: std::time::Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
@@ -800,6 +816,9 @@ impl Sink for BuildSink {
             let mut jobs = std::collections::VecDeque::from(jobs);
             let mut running = futures::stream::FuturesUnordered::new();
             let mut tables = Vec::with_capacity(jobs.len());
+            // Per built partition: its kept tails and its arena's allocated
+            // bytes, to true up its chunks' reservation once they are gone.
+            let mut held = Vec::with_capacity(jobs.len());
             loop {
                 if let Some(&Job {
                     need: (index_bytes, copy),
@@ -905,6 +924,7 @@ impl Sink for BuildSink {
                 self.0.counters.or(Counter::IndexKinds, kind as u64);
                 self.0.counters.add(Counter::HashEntries, keys as u64);
                 self.0.counters.add(Counter::HashBuckets, buckets as u64);
+                held.push((p, kept, table.arena().held_bytes()));
                 tables.push((p, table));
             }
             index.shrink(spare.min(index.size()));
@@ -925,6 +945,11 @@ impl Sink for BuildSink {
             let mut memory = vec![index, filter_memory];
             let mut grace = Grace::new(g.hashing.fanout0());
             grace.keep_unprobed = s.join_type.keeps_null_build_keys();
+            for (p, kept, bytes) in held {
+                if let Some(part) = c.parts.get_mut(p) {
+                    trim_to_arena(part, kept, bytes);
+                }
+            }
             for (p, part) in c.parts.iter_mut().enumerate() {
                 if spilled & (1 << p) == 0 {
                     self.0

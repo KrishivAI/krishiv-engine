@@ -1005,3 +1005,25 @@ async fn a_spilling_build_with_kept_tails_fits_or_spills_under_any_limit() {
         }
     }
 }
+
+/// A build of many small batches leaves every partition's rows in chunk
+/// tails shorter than a block, each reserved at its allocated size
+/// (builder slack). Finalize copies the tails into exact blocks and drops
+/// the chunks, so what the table keeps reserved through the probe is
+/// trued up to the arena's allocated bytes, not the chunks' (study 21
+/// §4.4: ~27 MB of such slack per build at 12 threads).
+#[tokio::test(start_paused = true)]
+async fn a_built_table_keeps_reserved_what_its_arena_holds() {
+    let build = skewed(40_000, 40_000);
+    // Batches of 256 rows: about 32 rows per level-0 partition and push.
+    let (got, q) = run_self_join(&build, 256, 512 * MIB, None).await;
+    got.unwrap();
+    let steady = metric(&q, "HashJoinBuild", "steady_reserved_bytes");
+    let arena = metric(&q, "HashJoinBuild", "arena_bytes");
+    assert!(arena > 0);
+    // Exact blocks round each buffer up to 64 bytes, nothing more.
+    assert!(
+        steady <= arena + arena / 20,
+        "steady {steady} B against an arena of {arena} B"
+    );
+}
