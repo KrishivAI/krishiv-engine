@@ -186,6 +186,11 @@ impl Window {
             return Ok(0);
         }
         topup.shrink_to_credit(topup.size());
+        // From here until the freed credit is back in the pool, the rows
+        // count as about to be released, so another driver's round that
+        // cannot spill waits for them instead of failing. No arbitration
+        // inside: the write is sync, the blocking job ends on its own.
+        let writing = ctx.consumer().consumer().spilling();
         let mut batches = Vec::with_capacity(l.pending.len());
         for p in l.pending.drain(..) {
             let n = p.batch.num_rows();
@@ -215,6 +220,7 @@ impl Window {
             })
             .await;
         ctx.consumer().consumer().release_credit();
+        drop(writing);
         let file = match written {
             Ok(f) => f,
             Err(e) => {
