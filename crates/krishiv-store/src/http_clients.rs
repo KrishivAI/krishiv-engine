@@ -170,14 +170,18 @@ impl HttpConnector for SharedHttpClients {
             return Ok(client.clone());
         }
         // Built outside the lock: a build parses the root store (milliseconds). Two racing
-        // misses build twice and the second insert wins; both clients work.
+        // misses build twice; the first insert wins and both callers get its client, so one
+        // pool serves the options.
         let client = self.build(options)?;
         let mut clients = self
             .inner
             .clients
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if clients.len() < MAX_CLIENTS || clients.contains_key(&key) {
+        if let Some(first) = clients.get(&key) {
+            return Ok(first.clone());
+        }
+        if clients.len() < MAX_CLIENTS {
             clients.insert(key, client.clone());
         }
         Ok(client)

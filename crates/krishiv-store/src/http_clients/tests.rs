@@ -184,17 +184,13 @@ fn registries_sharing_a_cache_build_one_client_set() {
     let second = StoreRegistry::new(Arc::clone(&settings)).with_http_clients(clients);
     second.open("s3a://bucket/b.parquet").unwrap();
     second.open("s3a://other/c.parquet").unwrap();
-    second.open("gs://bucket/d.parquet").ok();
-    let shared_before_gcs = builds(&counter);
-    assert!(
-        shared_before_gcs <= after_first + 1,
-        "S3 stores of the second registry reuse the first's clients ({after_first} -> {shared_before_gcs})"
-    );
-    let unshared = StoreRegistry::new(settings);
-    unshared.open("s3a://bucket/e.parquet").unwrap();
     assert_eq!(
         builds(&counter),
-        shared_before_gcs,
-        "no cache, no use of it"
+        after_first,
+        "the second registry's S3 stores reuse the first's clients"
     );
+    let shared = builds(&counter);
+    let unshared = StoreRegistry::new(settings);
+    unshared.open("s3a://bucket/e.parquet").unwrap();
+    assert_eq!(builds(&counter), shared, "no cache, no use of it");
 }
