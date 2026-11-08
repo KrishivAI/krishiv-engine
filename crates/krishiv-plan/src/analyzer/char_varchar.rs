@@ -309,6 +309,39 @@ impl Resolver<'_> {
         }
     }
 
+    /// `b` without the engine's own cast of a `string` column to `string` (a permanent view's read projection,
+    /// `written` an ANSI cast under an alias, [`is_internal_cast_alias`]): a no-op whose resolved form a stored
+    /// plan (a DataFrame's temporary view over the view) could not tell from a user's cast, which drops the
+    /// declared type. Without it the stored plan holds the bare column and keeps the declared `CHAR`/`VARCHAR`.
+    pub(super) fn without_internal_identity_cast(b: Bound, written: &Expr) -> Bound {
+        if !is_internal_cast_alias(written) {
+            return b;
+        }
+        let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node else {
+            return b;
+        };
+        let ExprNode::Cast {
+            expr: inner, to, ..
+        } = &expr.node
+        else {
+            return b;
+        };
+        let identity = *to == DataType::String
+            && matches!(&inner.node, ExprNode::Resolved(ResolvedExpr::Column(c)) if c.data_type == DataType::String);
+        if !identity {
+            return b;
+        }
+        let alias = Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+            expr: Arc::clone(inner),
+            output: output.clone(),
+        }))
+        .with_origin(b.expr.origin);
+        Bound {
+            expr: Arc::new(alias),
+            ..b
+        }
+    }
+
     /// [`Self::carry_declared`] for one item, `written` its form before resolution when known. The select list
     /// calls it as each item is bound, so a later item that reads the alias (a lateral column alias) sees it.
     pub(super) fn carry_declared_item(&mut self, b: &Bound, written: Option<&Expr>) {
