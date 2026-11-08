@@ -754,25 +754,20 @@ struct Final {
     chunks: usize,
 }
 
-/// An in-memory result: its tables, read in `chunks` (table, positions),
-/// and the reservations that hold them.
-struct InMemory {
-    tables: Vec<Table>,
-    chunks: Vec<(usize, std::ops::Range<usize>)>,
+/// One piece of an in-memory result (a row table's radix partition, or a
+/// whole key table) with its share of the result's reservation: it goes,
+/// and its memory with it, once the reader of its last chunk is done (a
+/// piece without chunks, an empty key table, once the result goes).
+struct Piece {
+    table: Table,
     held: Vec<Reservation>,
 }
 
-impl InMemory {
-    fn batch(&self, chunk: usize) -> Result<Batch> {
-        let (t, range) = self
-            .chunks
-            .get(chunk)
-            .ok_or_else(|| internal("aggregate chunk out of range".to_owned()))?;
-        let t = self
-            .tables
-            .get(*t)
-            .ok_or_else(|| internal("aggregate chunk without its table".to_owned()))?;
-        Ok(Batch::new(t.output_batch(&t.ids(range.clone()))?))
+impl Piece {
+    /// The output of the groups at positions `range`.
+    fn batch(&self, range: std::ops::Range<usize>) -> Result<Batch> {
+        let t = &self.table;
+        Ok(Batch::new(t.output_batch(&t.ids(range))?))
     }
 
     fn bytes(&self) -> usize {
@@ -780,10 +775,66 @@ impl InMemory {
     }
 }
 
+/// An in-memory result: its pieces, read in `chunks` (piece, positions)
+/// in order. A piece leaves its slot when its last chunk is claimed, so
+/// what readers have copied out stops counting against the pool as they
+/// go, not only once the whole result is read. The slot locks are not
+/// contended: slots are taken only by `claim` under the output's state
+/// lock, and the spill job reads them while that state is `Spilling`.
+struct InMemory {
+    pieces: Vec<Mutex<Option<Arc<Piece>>>>,
+    chunks: Vec<(usize, std::ops::Range<usize>)>,
+}
+
+impl InMemory {
+    /// The piece and positions of `chunk`; with `take`, the piece leaves
+    /// its slot if this is its last chunk.
+    fn piece(&self, chunk: usize, take: bool) -> Result<(Arc<Piece>, std::ops::Range<usize>)> {
+        let (p, range) = self
+            .chunks
+            .get(chunk)
+            .ok_or_else(|| internal("aggregate chunk out of range".to_owned()))?;
+        let slot = self
+            .pieces
+            .get(*p)
+            .ok_or_else(|| internal("aggregate chunk without its piece".to_owned()))?;
+        let mut slot = lock(slot);
+        let piece = if take && self.ends_piece(chunk) {
+            slot.take()
+        } else {
+            slot.clone()
+        };
+        let piece = piece.ok_or_else(|| internal("aggregate chunk of a freed piece".to_owned()))?;
+        Ok((piece, range.clone()))
+    }
+
+    /// Whether `chunk` is the last of its piece (a piece's chunks are
+    /// contiguous).
+    fn ends_piece(&self, chunk: usize) -> bool {
+        let piece = self.chunks.get(chunk).map(|(p, _)| *p);
+        self.chunks.get(chunk + 1).map(|(p, _)| *p) != piece
+    }
+
+    /// Reads `chunk`, an unread one (its piece is still in its slot).
+    fn batch(&self, chunk: usize) -> Result<Batch> {
+        let (piece, range) = self.piece(chunk, false)?;
+        piece.batch(range)
+    }
+
+    /// The bytes of the pieces not yet handed to a reader.
+    fn bytes(&self) -> usize {
+        self.pieces
+            .iter()
+            .filter_map(|slot| lock(slot).as_ref().map(|p| p.bytes()))
+            .sum()
+    }
+}
+
 /// Where the source side reads.
 enum Out {
-    /// In memory; chunks `next..` are unread. Readers share the tables,
-    /// which go (with their memory) once the last chunk's reader is done.
+    /// In memory; chunks `next..` are unread. Readers share the pieces,
+    /// each of which goes (with its memory) once the reader of its last
+    /// chunk is done.
     Memory { mem: Arc<InMemory>, next: usize },
     /// The unread chunks are being written to spill files.
     Spilling,
@@ -802,7 +853,7 @@ enum Out {
 
 /// What a reader got from [`Output::claim`].
 enum Claim {
-    Chunk(Arc<InMemory>, usize),
+    Chunk(Arc<Piece>, std::ops::Range<usize>),
     /// A file, its reader's frames reserved (`true`) or to be reserved
     /// through arbitration (`false`: the only reader).
     File(SpillFile, bool),
@@ -852,10 +903,17 @@ impl Output {
     /// `consumer`.
     fn claim(&self, finished: bool, consumer: &Arc<ConsumerHandle>) -> Claim {
         let mut state = lock(&self.state);
-        let (mem, chunk) = match &mut *state {
+        let (claimed, last) = match &mut *state {
             Out::Memory { mem, next } => {
+                let chunk = *next;
                 *next += 1;
-                (Arc::clone(mem), *next - 1)
+                let last = chunk + 1 >= mem.chunks.len();
+                let claimed = (chunk < mem.chunks.len()).then(|| mem.piece(chunk, true));
+                if !last && mem.ends_piece(chunk) {
+                    // A piece left: only the rest is spillable.
+                    self.set_spillable(mem.bytes());
+                }
+                (claimed, last)
             }
             Out::Spilling => return Claim::Wait,
             Out::Files { files, active } => {
@@ -887,15 +945,15 @@ impl Output {
             Out::Done => return Claim::Done,
             Out::Failed(e) => return Claim::Failed(e.clone()),
         };
-        if chunk + 1 >= mem.chunks.len() {
-            // The last chunk: the readers' clones are all that is left.
+        if last {
+            // The last chunk: the readers' pieces are all that is left.
             *state = Out::Done;
             self.set_spillable(0);
         }
-        if chunk < mem.chunks.len() {
-            Claim::Chunk(mem, chunk)
-        } else {
-            Claim::Done
+        match claimed {
+            Some(Ok((piece, range))) => Claim::Chunk(piece, range),
+            Some(Err(e)) => Claim::Failed(e),
+            None => Claim::Done,
         }
     }
 }
@@ -1054,6 +1112,23 @@ fn reserve_to(r: &mut Reservation, want: usize) -> Result<(), usize> {
         return Err(need);
     }
     Ok(())
+}
+
+/// Up to `bytes` taken from the end of `from`: whole reservations, then a
+/// split of the next one.
+fn take_bytes(from: &mut Vec<Reservation>, mut bytes: usize) -> Vec<Reservation> {
+    let mut out = Vec::new();
+    while bytes > 0 {
+        let Some(r) = from.last_mut() else { break };
+        if r.size() <= bytes {
+            bytes -= r.size();
+            out.extend(from.pop());
+        } else {
+            out.push(r.split(bytes));
+            bytes = 0;
+        }
+    }
+    out
 }
 
 fn shrink_to(r: &mut Reservation, keep: usize) {
@@ -1260,9 +1335,10 @@ impl HashAggregate {
         Ok(Step::Yield)
     }
 
-    /// Publishes an in-memory result: `tables` read in chunks of a batch
-    /// (a row table's within one radix partition, whose states are one
-    /// partition's arrays), held by `held`.
+    /// Publishes an in-memory result: `tables`, held by `held`, in pieces
+    /// freed as they are read (a row table's radix partitions, moved out
+    /// without its index, each one partition's arrays; a key table whole),
+    /// each read in chunks of a batch.
     fn finish_memory(
         &self,
         g: &Global,
@@ -1271,30 +1347,43 @@ impl HashAggregate {
         held: Vec<Reservation>,
     ) -> Result<()> {
         let batch = ctx.query().config().batch_size.max(1);
-        let mut chunks = Vec::new();
-        for (i, t) in tables.iter().enumerate() {
-            let mut start = 0;
-            for len in t.part_lens() {
-                let end = start + len;
-                chunks.extend(
-                    (start..end)
-                        .step_by(batch)
-                        .map(|s| (i, s..(s + batch).min(end))),
-                );
-                start = end;
+        let mut pieces = Vec::new();
+        for t in tables {
+            match t {
+                Table::Rows(mut t) => {
+                    let ranges: Vec<_> = (0..t.part_count())
+                        .filter(|&p| t.part_len(p) > 0)
+                        .map(|p| p..p + 1)
+                        .collect();
+                    // What stays in `t` (its index, empty partitions) is
+                    // dropped here; its bytes go with the rest of `held`.
+                    pieces.extend(t.split_parts(&ranges).into_iter().map(Table::Rows));
+                }
+                keys @ Table::Keys(_) => pieces.push(keys),
             }
         }
-        self.publish_memory(g, ctx, tables, chunks, held)
+        let mut chunks = Vec::new();
+        for (i, t) in pieces.iter().enumerate() {
+            let len = t.len();
+            chunks.extend(
+                (0..len)
+                    .step_by(batch)
+                    .map(|s| (i, s..(s + batch).min(len))),
+            );
+        }
+        self.publish_memory(g, ctx, pieces, chunks, held)
     }
 
-    /// Publishes an in-memory result read in `chunks` (table, positions).
-    /// With a spill directory the result gets a consumer of its own whose
-    /// hook spills the unread chunks on request ([`crate::output_spill`]).
+    /// Publishes an in-memory result read in `chunks` (piece, positions)
+    /// of `pieces`, each holding its memory's share of `held` (the rest is
+    /// released). With a spill directory the result gets a consumer of its
+    /// own whose hook spills the unread chunks on request
+    /// ([`crate::output_spill`]).
     fn publish_memory(
         &self,
         g: &Global,
         ctx: &TaskContext,
-        tables: Vec<Table>,
+        pieces: Vec<Table>,
         chunks: Vec<(usize, std::ops::Range<usize>)>,
         mut held: Vec<Reservation>,
     ) -> Result<()> {
@@ -1310,11 +1399,15 @@ impl HashAggregate {
             None => None,
         };
         let count = chunks.len();
-        let mem = Arc::new(InMemory {
-            tables,
-            chunks,
-            held,
-        });
+        let pieces = pieces
+            .into_iter()
+            .map(|table| {
+                let held = take_bytes(&mut held, table.memory_size());
+                Mutex::new(Some(Arc::new(Piece { table, held })))
+            })
+            .collect();
+        drop(held);
+        let mem = Arc::new(InMemory { pieces, chunks });
         let bytes = mem.bytes();
         let out = Arc::new(Output {
             state: Mutex::new(Out::Memory { mem, next: 0 }),
@@ -1794,7 +1887,7 @@ impl Source for HashAggregate {
             loop {
                 let changed = out.changed.listen();
                 match out.claim(std::mem::take(&mut finished), &l.consumer) {
-                    Claim::Chunk(mem, chunk) => return mem.batch(chunk).map(Some),
+                    Claim::Chunk(piece, range) => return piece.batch(range).map(Some),
                     Claim::Done => return Ok(None),
                     Claim::Failed(e) => return Err(e),
                     Claim::File(file, reserved) => {
