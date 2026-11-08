@@ -988,3 +988,38 @@ fn an_unknown_count_compared_with_one_value_keeps_about_one_row() {
         "a known count",
     );
 }
+
+/// `col IN (<one value>, ...)` (E10's follow-up, review item 5): a list
+/// whose elements are each one value (literals or uncorrelated subqueries)
+/// with at least one subquery keeps `k` of a guessed count's rows, as
+/// `col = <one value>` keeps one. A literal-only list and a list with an
+/// expression over a column keep the default over the guessed count.
+#[test]
+fn an_unknown_count_in_a_list_of_one_values_keeps_k_rows() {
+    // Ten groups: `m`'s count is the guess, 10; the default keeps 2.
+    let over = |pred: &str| {
+        filter(&format!(
+            "SELECT * FROM (SELECT b, sum(a) AS m FROM t GROUP BY b) g WHERE {pred}"
+        ))
+    };
+    let three =
+        over("m IN ((SELECT max(a) FROM t), (SELECT min(a) FROM t), (SELECT max(b) FROM t))");
+    close(three.rows(), 3.0, "three subqueries");
+    assert_eq!(three.col("m").ndv, 3.0, "three values left");
+    assert_eq!(three.col("m").null_frac, 0.0, "IN leaves no NULL");
+    close(
+        over("m IN (5, 6, (SELECT max(a) FROM t))").rows(),
+        3.0,
+        "literals and a subquery",
+    );
+    close(
+        over("m IN (5, 6, 7)").rows(),
+        2.0,
+        "literals over a guessed count",
+    );
+    close(
+        over("m IN (b + 1, 6, (SELECT max(a) FROM t))").rows(),
+        2.0,
+        "an expression over a column",
+    );
+}

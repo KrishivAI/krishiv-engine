@@ -248,9 +248,7 @@ fn equality(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
                     // to a literal in an optimized plan) keeps T166's
                     // default, and another expression (`a = b + 1`) divides
                     // only by a known count.
-                    let one_value = has_subquery(other)
-                        && references(other).is_empty()
-                        && is_deterministic(other);
+                    let one_value = one_value(other);
                     if one_value {
                         // `<=>` with a NULL result keeps the NULL rows, as
                         // the `col = col` arm keeps them for `<=>`.
@@ -366,6 +364,13 @@ fn between(x: &Expr, lo: &Expr, hi: &Expr, v: &mut View<'_>) -> f64 {
 }
 
 /// `x IN (list)`.
+/// An uncorrelated subquery, or an expression over one, that reads no
+/// column and is deterministic: one value per query (scalar in practice;
+/// an uncorrelated EXISTS or IN is one value too).
+fn one_value(e: &Expr) -> bool {
+    has_subquery(e) && references(e).is_empty() && is_deterministic(e)
+}
+
 fn in_list(x: &Expr, list: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
     let Some((id, c)) = v.column(x).map(|(i, c)| (i, c.clone())) else {
         return DEFAULT_SELECTIVITY;
@@ -380,15 +385,35 @@ fn in_list(x: &Expr, list: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
             .collect::<std::collections::HashSet<_>>()
             .len()
     });
-    let k = to_f64(u64::try_from(distinct.unwrap_or(list.len())).unwrap_or(u64::MAX));
-    let sel = if c.ndv_known() {
-        (k / c.ndv).min(1.0)
+    // A list of one values with a subquery among them (`IN (5, (SELECT
+    // max(..)))`; each element reads no column and is deterministic): at
+    // most `k` values, so a guessed count is read as the rows, as
+    // `col = <one value>` reads it (E10's follow-up). A list of constants
+    // only keeps T166's default over a guessed count.
+    let values = (distinct.is_none()
+        && list.iter().any(|e| has_subquery(e))
+        && list
+            .iter()
+            .all(|e| references(e).is_empty() && is_deterministic(e)))
+    .then(|| {
+        let subqueries = list.iter().filter(|e| literal(e).is_none()).count();
+        let literals = list
+            .iter()
+            .filter_map(|e| literal(e))
+            .map(|x| format!("{x:?}"))
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        literals + subqueries
+    });
+    let k = to_f64(u64::try_from(distinct.or(values).unwrap_or(list.len())).unwrap_or(u64::MAX));
+    let sel = if c.ndv_known() || values.is_some() {
+        (k / c.ndv.max(1.0)).min(1.0)
     } else {
         DEFAULT_SELECTIVITY
     };
     v.update(id, |c| {
         c.null_frac = 0.0;
-        if distinct.is_some() {
+        if distinct.is_some() || values.is_some() {
             c.ndv = c.ndv.min(k).max(1.0);
         }
         if let Some(n) = numbers {
