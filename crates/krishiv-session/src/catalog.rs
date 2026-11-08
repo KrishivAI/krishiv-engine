@@ -148,6 +148,8 @@ pub(crate) struct SessionCatalog {
     pub(crate) warehouse: Arc<Warehouse>,
     /// The namespace bare table names resolve in (`USE`).
     current_namespace: RwLock<String>,
+    /// The current catalog (`USE system`); empty is `spark_catalog`.
+    current_catalog: RwLock<String>,
     /// The entries `SET PATH` stored; `None` is the default path.
     path: RwLock<Option<Vec<crate::sql_path::Entry>>>,
 }
@@ -163,6 +165,7 @@ impl SessionCatalog {
             store,
             warehouse,
             current_namespace: RwLock::default(),
+            current_catalog: RwLock::default(),
             path: RwLock::default(),
         }
     }
@@ -301,8 +304,49 @@ impl SessionCatalog {
         let entries = self
             .stored_path()
             .unwrap_or_else(|| crate::sql_path::default_entries(default_conf));
-        let namespace = self.current_namespace();
-        entries.iter().map(|e| e.parts(&namespace)).collect()
+        let current = self.current_position();
+        entries.iter().map(|e| e.parts(&current)).collect()
+    }
+
+    /// The current catalog and namespace as path parts: `[spark_catalog,
+    /// db]`, or `[system]`.
+    pub(crate) fn current_position(&self) -> Vec<String> {
+        let catalog = self.current_catalog();
+        if crate::system::is_system(&catalog) {
+            vec![catalog]
+        } else {
+            vec![catalog, self.current_namespace()]
+        }
+    }
+
+    /// The current catalog's canonical name.
+    pub(crate) fn current_catalog(&self) -> String {
+        let c = self
+            .current_catalog
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        if c.is_empty() {
+            CATALOG.to_owned()
+        } else {
+            c.clone()
+        }
+    }
+
+    /// `USE <catalog>`: a no-op when `catalog` is current, else its default
+    /// namespace (the default database for `spark_catalog`, none for `system`).
+    pub(crate) fn use_catalog(&self, catalog: &str) {
+        if self.current_catalog() == catalog {
+            return;
+        }
+        *self
+            .current_catalog
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = catalog.to_owned();
+        self.current_namespace
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.epoch.fetch_add(1, Ordering::AcqRel);
     }
 
     /// `USE namespace`.
@@ -400,6 +444,8 @@ pub(crate) struct QueryCatalog {
     epoch: u64,
     /// The current namespace (`USE`) as this query sees it.
     namespace: Vec<String>,
+    /// The current catalog (`USE system`) as this query sees it.
+    catalog: String,
     /// The SQL path (`SET PATH`) as this query sees it.
     path: Vec<Vec<String>>,
     /// What the `system` tables read.
@@ -436,7 +482,12 @@ impl QueryCatalog {
         system: crate::system::Sources,
     ) -> Self {
         let epoch = session.epoch();
-        let namespace = vec![session.current_namespace()];
+        let catalog = session.current_catalog();
+        let namespace = if crate::system::is_system(&catalog) {
+            Vec::new()
+        } else {
+            vec![session.current_namespace()]
+        };
         let path = session.sql_path(default_path);
         Self {
             session,
@@ -448,6 +499,7 @@ impl QueryCatalog {
             opened: Mutex::new(Vec::new()),
             epoch,
             namespace,
+            catalog,
             path,
             system,
         }
@@ -1037,7 +1089,7 @@ pub(crate) struct QueryCatalogs(pub(crate) Arc<QueryCatalog>);
 
 impl CatalogResolver for QueryCatalogs {
     fn current_catalog(&self) -> &str {
-        CATALOG
+        &self.0.catalog
     }
 
     fn current_namespace(&self) -> &[String] {
