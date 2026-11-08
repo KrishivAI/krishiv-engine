@@ -439,13 +439,15 @@ impl QueryContext {
     }
 
     /// Records one driver of pipeline `pipeline`: it ran from `started`
-    /// to `ended` (offsets) on `threads`.
+    /// to `ended` (offsets) on `threads`, its longest poll `max_slice`, with
+    /// `stalls` polls over the stall threshold.
     pub(crate) fn record_driver(
         &self,
         pipeline: u32,
         started: Duration,
         ended: Duration,
         threads: &[u64],
+        (max_slice, stalls): (Duration, u64),
     ) {
         let count = {
             let mut all = lock(&self.threads);
@@ -460,6 +462,8 @@ impl QueryContext {
                 threads: 0,
                 started,
                 ended,
+                max_slice,
+                stalls,
             });
             // The set only grows, but a driver that read it earlier may
             // merge later: keep the larger count.

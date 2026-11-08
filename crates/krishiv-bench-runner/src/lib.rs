@@ -33,9 +33,10 @@
 //!   same builds (`null` otherwise).
 //!   Each operator also reports `"drivers"`, `"batches_in"`, `"batches_out"`, `"morsels"`,
 //!   `"max_driver_compute_seconds"` (the busiest driver: skew) and `"blocked_sink_seconds"`
-//!   (backpressure); `"pipelines":[{"id","drivers","threads","started_seconds","ended_seconds"}]`
-//!   gives each pipeline's drivers, the threads that ran them, and when its first driver started
-//!   and its last ended, after the query started. `"detailed"` says whether the costlier counters
+//!   (backpressure); `"pipelines":[{"id","drivers","threads","started_seconds","ended_seconds",
+//!   "max_slice_seconds","stalls"}]` gives each pipeline's drivers, the threads that ran them, when its
+//!   first driver started and its last ended, after the query started, its drivers' longest poll and
+//!   their polls over the stall threshold (wall time). `"detailed"` says whether the costlier counters
 //!   of `PROFILE_DETAILED` were collected.
 //! * `PROFILE_DETAILED <query.sql>`: as `PROFILE`, also collecting the counters of a detailed
 //!   profile (`EXPLAIN ANALYZE`): hash-table probe lengths of joins and aggregates
@@ -708,11 +709,13 @@ impl Timing {
                 .iter()
                 .map(|(id, p)| {
                     format!(
-                        "{{\"id\":{id},\"drivers\":{},\"threads\":{},\"started_seconds\":{:.6},\"ended_seconds\":{:.6}}}",
+                        "{{\"id\":{id},\"drivers\":{},\"threads\":{},\"started_seconds\":{:.6},\"ended_seconds\":{:.6},\"max_slice_seconds\":{:.6},\"stalls\":{}}}",
                         p.drivers,
                         p.threads,
                         p.started.as_secs_f64(),
-                        p.ended.as_secs_f64()
+                        p.ended.as_secs_f64(),
+                        p.max_slice.as_secs_f64(),
+                        p.stalls
                     )
                 })
                 .collect();

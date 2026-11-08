@@ -135,6 +135,8 @@ impl QueryProfile {
                 threads: u64_of(p, "threads")?,
                 started: dur_of(p, "started_ns")?,
                 ended: dur_of(p, "ended_ns")?,
+                // Not in the v1 document.
+                ..PipelineMetrics::default()
             };
             if metrics.pipelines.insert(id, pm).is_some() {
                 return Err(ProfileError::new(format!("pipeline {id} listed twice")));

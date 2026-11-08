@@ -125,6 +125,7 @@ fn metrics() -> QueryMetrics {
             threads: 1,
             started: Duration::from_millis(1),
             ended: Duration::from_millis(3),
+            ..PipelineMetrics::default()
         },
     );
     m

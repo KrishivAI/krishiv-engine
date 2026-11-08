@@ -11,7 +11,9 @@
 //! `{"seconds":..,"heavy":{..},"short":{..},"io":{..}}`. Each of `heavy`/`short` gives `"done"`, the
 //! completed queries' `"latencies"` in seconds (a short query's from its scheduled arrival, so a
 //! queue counts; a heavy one's from its start), `"max_slice_seconds"` (the longest driver poll of any
-//! of them) and `"stalls"` (polls over the stall threshold, summed), and `"errors"` (the first message
+//! of them), `"stalls"` (polls over the stall threshold, summed; wall time, so a thread kept off a
+//! CPU counts), `"stalled_pipelines"` (each pipeline that stalled, named by its operators joined with
+//! `>`, with its stalls and longest poll), and `"errors"` (the first message
 //! of each failed query). `io` is the change of the runtime's read-latency histogram over the run,
 //! remote stores only (`krishiv_io::LatencyHistogram`): `"requests"` and `"p50_us"`, `"p99_us"`,
 //! `"max_us"`, each the upper bound of its power-of-two microsecond bucket, `null` with no request.
@@ -29,6 +31,9 @@ struct Class {
     latencies: Vec<f64>,
     max_slice: Duration,
     stalls: u64,
+    /// Per pipeline that stalled, named by its operators (in operator-id
+    /// order, `>`-joined): its stalls and longest poll.
+    stalled: std::collections::BTreeMap<String, (u64, Duration)>,
     errors: Vec<String>,
 }
 
@@ -40,12 +45,24 @@ impl Class {
             .iter()
             .map(|e| format!("\"{}\"", e.replace('\\', "\\\\").replace('"', "\\\"")))
             .collect();
+        let stalled: Vec<String> = self
+            .stalled
+            .iter()
+            .map(|(name, (n, max))| {
+                format!(
+                    "{{\"pipeline\":\"{}\",\"stalls\":{n},\"max_slice_seconds\":{:.6}}}",
+                    name.replace('\\', "\\\\").replace('"', "\\\""),
+                    max.as_secs_f64()
+                )
+            })
+            .collect();
         format!(
-            "{{\"done\":{},\"latencies\":[{}],\"max_slice_seconds\":{:.6},\"stalls\":{},\"errors\":[{}]}}",
+            "{{\"done\":{},\"latencies\":[{}],\"max_slice_seconds\":{:.6},\"stalls\":{},\"stalled_pipelines\":[{}],\"errors\":[{}]}}",
             self.latencies.len(),
             lat.join(","),
             self.max_slice.as_secs_f64(),
             self.stalls,
+            stalled.join(","),
             errors.join(",")
         )
     }
@@ -99,6 +116,17 @@ fn one(runner: &Runner, sql: &str, from: Instant, class: &Mutex<Class>) {
             if let Some(m) = m {
                 c.max_slice = c.max_slice.max(m.drivers.max_slice);
                 c.stalls = c.stalls.saturating_add(m.drivers.stalls);
+                for (id, p) in m.pipelines.iter().filter(|(_, p)| p.stalls > 0) {
+                    let name: Vec<&str> = m
+                        .operators
+                        .values()
+                        .filter(|o| o.pipelines.contains(id))
+                        .map(|o| o.name.as_ref())
+                        .collect();
+                    let e = c.stalled.entry(name.join(">")).or_default();
+                    e.0 = e.0.saturating_add(p.stalls);
+                    e.1 = e.1.max(p.max_slice);
+                }
             }
         }
         Err(e) => c.errors.push(one_line(&e.to_string())),

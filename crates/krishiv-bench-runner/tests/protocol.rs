@@ -888,6 +888,11 @@ fn load_runs_heavy_loops_and_an_open_loop_and_reports_store_latency() {
     assert!(v["heavy"]["done"].as_u64().unwrap() >= 2, "{v}");
     assert_eq!(v["short"]["done"], 5, "{v}");
     assert_eq!(v["heavy"]["errors"].as_array().unwrap().len(), 0, "{v}");
+    // Pipelines that stalled are listed by their operators (often none at all here).
+    for p in v["heavy"]["stalled_pipelines"].as_array().unwrap() {
+        assert!(p["stalls"].as_u64().unwrap() > 0, "{v}");
+        assert!(!p["pipeline"].as_str().unwrap().is_empty(), "{v}");
+    }
     assert_eq!(v["short"]["latencies"].as_array().unwrap().len(), 5, "{v}");
     // A local file is not a remote store: no read is timed, so there are no quantiles (krishiv-io tests
     // cover the remote case).
