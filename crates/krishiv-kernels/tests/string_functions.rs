@@ -1278,3 +1278,21 @@ fn locate_lcase_follows_spark_lowercase_matching() {
     assert_eq!(at("b", "a\u{130}b", 1), 3);
     assert_eq!(at("\u{3c3}", "x\u{3c2}", 1), 2);
 }
+
+/// `find_in_set` over `UTF8_LCASE` operands: values of a Spark 4.2.0 local run (2026-11-08).
+#[test]
+fn find_in_set_lcase_follows_spark_lowercase_matching() {
+    let at = |w: &str, set: &str| {
+        s::find_in_set_lcase(StrOperand::Array(&r1(w)), lit(Some(set)))
+            .unwrap()
+            .value(0)
+    };
+    assert_eq!(at("B", "a,b,c"), 2);
+    assert_eq!(at("b", "A,B,C"), 2);
+    assert_eq!(at("\u{130}", "x,i\u{307},y"), 2);
+    assert_eq!(at("i\u{307}", "x,\u{130}"), 2);
+    assert_eq!(at("a,b", "a,b"), 0);
+    assert_eq!(at("", "a,,b"), 2);
+    assert_eq!(at("\u{3a3}", "\u{3c2},\u{3c3}"), 1);
+    assert_eq!(at("z", "a,b"), 0);
+}
