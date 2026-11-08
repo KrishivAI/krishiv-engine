@@ -365,6 +365,11 @@ async fn a_failed_partition_write_fails_the_spill() {
     let agg = HashAggregate::new(sp).unwrap();
     let (e, reserved) = failing_step(&agg, &s, &b, 3_000, 4_302, false).await;
     assert_eq!(e.error_class(), ErrorClass::KrishivSpillCapExceeded, "{e}");
+    // Extra writers started, so the failure ran through their path.
+    assert!(
+        sink_metric(&agg, "spill_writers") > 1,
+        "no extra writer started"
+    );
     assert_eq!(reserved, 0);
     drop(agg);
     assert_eq!(spill.manager.used_bytes(), 0, "spill files left");

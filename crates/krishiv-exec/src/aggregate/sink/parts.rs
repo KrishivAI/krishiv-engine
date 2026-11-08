@@ -54,16 +54,16 @@ const PARALLEL_MIN_BYTES: usize = 1;
 /// Extra writers running in the process, every run's together.
 static LIVE_HELPERS: AtomicUsize = AtomicUsize::new(0);
 
-/// Tests (review M3): for each query listed, how many more partitions
-/// its extra writers hand back, one per writer at its next claim, as when
-/// the pool refuses their scratch. Keyed by query, so tests running side
-/// by side in one process do not see each other's setting.
 /// Tests: queries whose final-phase extra writers panic at their next task
 /// (`Spiller::panic_in_test`).
 #[cfg(test)]
 pub(in crate::aggregate) static PANICS: std::sync::Mutex<Vec<crate::QueryId>> =
     std::sync::Mutex::new(Vec::new());
 
+/// Tests (review M3): for each query listed, how many more partitions
+/// its extra writers hand back, one per writer at its next claim, as when
+/// the pool refuses their scratch. Keyed by query, so tests running side
+/// by side in one process do not see each other's setting.
 #[cfg(test)]
 pub(in crate::aggregate) static HANDBACKS: std::sync::Mutex<Vec<(crate::QueryId, usize)>> =
     std::sync::Mutex::new(Vec::new());
