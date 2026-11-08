@@ -1743,3 +1743,26 @@ fn a_multi_table_insert_denied_in_a_later_clause_writes_nothing() {
         "the first clause wrote nothing"
     );
 }
+
+#[test]
+fn use_system_and_show_catalogs_need_no_privilege() {
+    let policy = Policy::new(allow);
+    let s = session(Arc::clone(&policy) as Arc<dyn AccessPolicy>);
+    policy.deny_everything();
+    assert_eq!(class(rows(&s, "SHOW CATALOGS")), "OK");
+    assert_eq!(class(rows(&s, "USE system")), "OK");
+    assert_eq!(class(rows(&s, "SHOW CATALOGS")), "OK");
+}
+
+#[test]
+fn bare_ddl_under_system_is_a_reserved_name() {
+    let s = session(Policy::new(allow) as Arc<dyn AccessPolicy>);
+    block_on(s.sql("USE system")).unwrap();
+    for sql in [
+        "CREATE TABLE x (a INT) USING parquet",
+        "CREATE VIEW x AS SELECT 1",
+        "DROP TABLE IF EXISTS x",
+    ] {
+        assert_eq!(class(rows(&s, sql)), "KRISHIV_RESERVED_NAME", "{sql}");
+    }
+}
