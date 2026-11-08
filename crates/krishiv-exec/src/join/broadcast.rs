@@ -75,6 +75,9 @@ pub struct BroadcastTables {
     pool: Arc<dyn MemoryPool>,
     builds: Mutex<HashMap<BroadcastKey, Arc<Slot>>>,
     next: AtomicU64,
+    /// Tasks that built their own table without attempting the shared one,
+    /// because it could never fit ([`Decision`]).
+    skipped: AtomicU64,
 }
 
 impl fmt::Debug for BroadcastTables {
@@ -135,6 +138,7 @@ impl BroadcastTables {
             pool,
             builds: Mutex::default(),
             next: AtomicU64::new(0),
+            skipped: AtomicU64::new(0),
         }
     }
 
@@ -151,6 +155,13 @@ impl BroadcastTables {
             .values()
             .filter(|s| matches!(&*lock(&s.outcome), Some(Err(e)) if does_not_fit(e)))
             .count()
+    }
+
+    /// The tasks that skipped the shared build because it could never fit
+    /// (each built its own table; not among [`Self::fallbacks`]).
+    #[must_use]
+    pub fn skipped(&self) -> u64 {
+        self.skipped.load(Ordering::Relaxed)
     }
 
     /// The build `key`, started from `job` with `query`'s settings and
@@ -179,14 +190,7 @@ impl BroadcastTables {
                     // A newer attempt of the stage that wrote the exchange:
                     // no task reads an older attempt's rows any more, so
                     // its table goes (a retry never doubles the memory).
-                    builds.retain(|k, s| {
-                        let older =
-                            k.exchange == key.exchange && k.stage_attempt < key.stage_attempt;
-                        if older && let Some(q) = lock(&s.query).take() {
-                            q.cancel();
-                        }
-                        !older
-                    });
+                    drop_older(&mut builds, key);
                     let s = Arc::new(Slot::default());
                     builds.insert(key, Arc::clone(&s));
                     (s, Some(job))
@@ -237,6 +241,19 @@ impl BroadcastTables {
     }
 }
 
+/// Drops the builds of attempts older than `key`'s of its exchange, cancelling
+/// those still running: no task reads an older attempt's rows any more, so
+/// its table goes (a retry never doubles the memory).
+fn drop_older(builds: &mut HashMap<BroadcastKey, Arc<Slot>>, key: BroadcastKey) {
+    builds.retain(|k, s| {
+        let older = k.exchange == key.exchange && k.stage_attempt < key.stage_attempt;
+        if older && let Some(q) = lock(&s.query).take() {
+            q.cancel();
+        }
+        !older
+    });
+}
+
 impl Drop for BroadcastTables {
     fn drop(&mut self) {
         for slot in lock(&self.builds).values() {
@@ -254,6 +271,16 @@ fn does_not_fit(e: &KrishivError) -> bool {
     e.error_class() == ErrorClass::UnableToAcquireMemory
 }
 
+/// At most this many frame bytes per byte of a broadcast's built table, so
+/// that `frames / FRAMES_PER_TABLE_BYTE` is a lower bound of the table and
+/// no build that could fit is skipped. Frames carry overhead the table does
+/// not (a header and a full IPC schema per frame, an `End` frame per map
+/// output): measured 2026-11-07 on TPC-H SF0.01 over a `LocalShuffle`, the
+/// `orders` broadcast (3.75 MB of frames) fit in 3.67 MB and not in 3.15 MB
+/// (0.84 to 0.98 table bytes per frame byte); every other build's pool peak
+/// was 2 to over 1000 times its frames. Design `P2-row30c-m5-shared-skip`.
+const FRAMES_PER_TABLE_BYTE: usize = 2;
+
 /// How a task's join gets its table.
 #[derive(Clone)]
 enum Choice {
@@ -269,18 +296,44 @@ enum Choice {
 pub(crate) struct Decision {
     tables: Arc<BroadcastTables>,
     key: BroadcastKey,
+    /// The frame bytes the broadcast's committed map outputs hold for this
+    /// task, when its exchange knows them ([`Exchange::committed_bytes`](crate::exchange::Exchange::committed_bytes)).
+    committed: Option<u64>,
+    /// Whether this task skipped the shared build ([`Self::cannot_fit`]).
+    skipped: std::sync::atomic::AtomicBool,
     /// Handed over if this task starts the build.
     job: std::sync::Mutex<Option<BuildJob>>,
     chosen: OnceLock<Result<Choice>>,
 }
 
 impl Decision {
-    pub(crate) fn new(tables: Arc<BroadcastTables>, key: BroadcastKey, job: BuildJob) -> Self {
+    pub(crate) fn new(
+        tables: Arc<BroadcastTables>,
+        key: BroadcastKey,
+        committed: Option<u64>,
+        job: BuildJob,
+    ) -> Self {
         Self {
             tables,
             key,
+            committed,
+            skipped: std::sync::atomic::AtomicBool::new(false),
             job: std::sync::Mutex::new(Some(job)),
             chosen: OnceLock::new(),
+        }
+    }
+
+    /// Whether the shared table could never fit: the broadcast's bytes over
+    /// [`FRAMES_PER_TABLE_BYTE`] (a lower bound of its table) past the most the job's broadcast pool can hold (its
+    /// `krishiv.exec.join.sharedBroadcastBytes` cap or a limit above it).
+    /// What other consumers hold now does not count: they can spill.
+    fn cannot_fit(&self) -> bool {
+        match (self.committed, self.tables.pool.effective_limit()) {
+            (Some(bytes), Some(limit)) => {
+                let table = usize::try_from(bytes).unwrap_or(usize::MAX) / FRAMES_PER_TABLE_BYTE;
+                table > limit
+            }
+            _ => false,
         }
     }
 
@@ -294,6 +347,21 @@ impl Decision {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
         };
+        if self.cannot_fit() {
+            // Never attempted: the attempt would spill the query's other
+            // operators before failing (design `P2-row30c-m5-shared-skip`).
+            // Counted once per task: the first reader to set the choice.
+            return self
+                .chosen
+                .get_or_init(|| {
+                    self.skipped.store(true, Ordering::Relaxed);
+                    self.tables.skipped.fetch_add(1, Ordering::Relaxed);
+                    // A newer attempt that skips still frees the older ones' tables.
+                    drop_older(&mut lock(&self.tables.builds), self.key);
+                    Ok(Choice::Own)
+                })
+                .clone();
+        }
         let choice = match self.tables.get(self.key, job, query).await {
             Ok(built) => Ok(Choice::Shared(built)),
             Err(e) if does_not_fit(&e) => Ok(Choice::Own),
@@ -705,6 +773,13 @@ impl Sink for PrebuiltSink {
             Some(Ok(Choice::Own)) => Some("broadcast_fallback"),
             Some(Err(_)) | None => None,
         };
+        // Of the fallbacks, those that never tried the shared build.
+        if self.decision.skipped.load(Ordering::Relaxed) {
+            m.push((
+                std::borrow::Cow::Borrowed("broadcast_skipped"),
+                crate::metrics::Metric::Count(1),
+            ));
+        }
         if let Some(name) = probed {
             m.push((
                 std::borrow::Cow::Borrowed(name),
@@ -911,9 +986,64 @@ mod tests {
         Arc::new(Decision {
             tables: Arc::clone(tables),
             key,
+            committed: None,
+            skipped: std::sync::atomic::AtomicBool::new(false),
             job: std::sync::Mutex::new(None),
             chosen: OnceLock::new(),
         })
+    }
+
+    /// A decision over `committed` frame bytes, with no build to start.
+    fn sized(tables: &Arc<BroadcastTables>, committed: Option<u64>) -> Decision {
+        Decision {
+            tables: Arc::clone(tables),
+            key: BroadcastKey {
+                exchange: ExchangeId(9),
+                stage_attempt: 0,
+            },
+            committed,
+            skipped: std::sync::atomic::AtomicBool::new(false),
+            job: std::sync::Mutex::new(None),
+            chosen: OnceLock::new(),
+        }
+    }
+
+    /// Review M2 of row 30c m5: a broadcast whose frame bytes are past the
+    /// broadcast pool's limit is skipped (once per task, however many of its
+    /// readers ask); at the limit, with unknown bytes, or under no limit it
+    /// is attempted.
+    #[tokio::test]
+    async fn a_broadcast_past_the_pool_limit_is_skipped_once_per_task() {
+        let exec = crate::TokioExecutor::new(&crate::ExecutorConfig::default()).unwrap();
+        let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        let query = root.child("q", None);
+        let capped = Arc::new(BroadcastTables::new(
+            Arc::clone(&exec) as Arc<dyn Executor>,
+            query.child("broadcasts", Some(1_000)),
+        ));
+        assert!(sized(&capped, Some(2_002)).cannot_fit());
+        assert!(!sized(&capped, Some(2_001)).cannot_fit());
+        assert!(!sized(&capped, None).cannot_fit());
+        let free = Arc::new(BroadcastTables::new(
+            Arc::clone(&exec) as Arc<dyn Executor>,
+            query.child("broadcasts", None),
+        ));
+        // Without a cap only the limits above count (the root's default): 1,001 bytes fit.
+        assert!(!sized(&free, Some(1_001)).cannot_fit());
+        // Many readers of one task: one skip, and its own build.
+        let ctx = QueryContext::new(
+            crate::QueryId(1),
+            crate::WorkloadClass::Interactive,
+            crate::ExecConfig::default(),
+            query.child("task", None),
+        );
+        let d = sized(&capped, Some(5_000));
+        for _ in 0..4 {
+            assert!(matches!(d.choose(&ctx).await, Ok(Choice::Own)));
+        }
+        assert_eq!(capped.skipped(), 1);
+        assert_eq!(capped.builds(), 0, "the shared build was never started");
+        assert!(d.skipped.load(Ordering::Relaxed));
     }
 
     /// The three outcomes of a shared build as its tasks see them: a build
@@ -972,6 +1102,8 @@ mod tests {
         let gone = Decision {
             tables: Arc::clone(&tables),
             key: key(3),
+            committed: None,
+            skipped: std::sync::atomic::AtomicBool::new(false),
             job: std::sync::Mutex::new(None),
             chosen: OnceLock::new(),
         };

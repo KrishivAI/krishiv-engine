@@ -66,6 +66,8 @@ const QUERIES: &[&str] = &[
     "SELECT name, rank() OVER (PARTITION BY k ORDER BY x) FROM t",
     "SELECT k FROM t WHERE x > (SELECT avg(x) FROM t) AND name IN (SELECT name FROM t WHERE k = 3)",
     "SELECT k, count(DISTINCT name) FROM t GROUP BY ROLLUP (k)",
+    // The partial state of a percentile crosses the exchange as an array: its schema is nested.
+    "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x), percentile_disc(0.5) WITHIN GROUP (ORDER BY k) FROM t",
 ];
 
 #[test]
