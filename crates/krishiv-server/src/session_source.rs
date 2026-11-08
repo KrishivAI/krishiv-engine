@@ -143,8 +143,12 @@ impl UiSource for SessionSource {
     }
 }
 
+/// How long a stop waits for open connections before cutting them.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// The UI served from a host process's own engine runtime (embedded mode): queries run through `runtime`
-/// show up in the pages. Dropping the handle stops the server.
+/// show up in the pages. Dropping the handle stops the server and blocks until it has (at most about a second); do not drop it from
+/// a thread the engine needs to make progress.
 pub struct EmbeddedUi {
     addr: std::net::SocketAddr,
     token: String,
@@ -170,12 +174,6 @@ impl EmbeddedUi {
         let source = SessionSource::new(runtime)?;
         let token = crate::internal::random_token()?;
         let app = crate::internal::router_with_ui(Arc::new(source), &token);
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_io()
-            .enable_time()
-            .build()
-            .map_err(|e| UiError::new(format!("ui runtime: {e}")))?;
         let listener = std::net::TcpListener::bind(addr)
             .and_then(|l| l.set_nonblocking(true).map(|()| l))
             .map_err(|e| UiError::new(format!("bind {addr}: {e}")))?;
@@ -183,21 +181,56 @@ impl EmbeddedUi {
             .local_addr()
             .map_err(|e| UiError::new(format!("local address: {e}")))?;
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        // The runtime is built on the server's own thread, so a failure never drops one inside the caller's.
         let thread = std::thread::Builder::new()
             .name("krishiv-ui".into())
             .spawn(move || {
-                let _ = rt.block_on(async {
-                    let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
-                        return Ok(());
+                let rt = match tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_io()
+                    .enable_time()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(format!("ui runtime: {e}")));
+                        return;
+                    }
+                };
+                let served = rt.block_on(async {
+                    let listener = match tokio::net::TcpListener::from_std(listener) {
+                        Ok(l) => l,
+                        Err(e) => return Err(format!("ui listener: {e}")),
                     };
-                    axum::serve(listener, app)
-                        .with_graceful_shutdown(async {
-                            let _ = rx.await;
-                        })
-                        .await
+                    let _ = ready_tx.send(Ok(()));
+                    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+                    let serve = std::future::IntoFuture::into_future(
+                        axum::serve(listener, app).with_graceful_shutdown(async {
+                            let _ = stop_rx.await;
+                        }),
+                    );
+                    tokio::pin!(serve);
+                    tokio::select! {
+                        r = &mut serve => r.map_err(|e| e.to_string()),
+                        _ = rx => {
+                            let _ = stop_tx.send(());
+                            // An open event stream never ends: give the others a moment, then cut it.
+                            let _ = tokio::time::timeout(SHUTDOWN_GRACE, &mut serve).await;
+                            Ok(())
+                        }
+                    }
                 });
+                // A serve error after start has no caller left to receive it.
+                drop(served);
+                rt.shutdown_background();
             })
             .map_err(|e| UiError::new(format!("ui thread: {e}")))?;
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(UiError::new(e)),
+            Err(_) => return Err(UiError::new("the UI thread stopped before it served")),
+        }
         Ok(Self {
             addr: bound,
             token,
@@ -210,6 +243,12 @@ impl EmbeddedUi {
     #[must_use]
     pub fn addr(&self) -> std::net::SocketAddr {
         self.addr
+    }
+
+    /// The token the `/api/internal` routes require.
+    #[must_use]
+    pub fn token(&self) -> &str {
+        &self.token
     }
 
     /// The URL to open, with the token.
