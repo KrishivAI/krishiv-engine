@@ -188,7 +188,28 @@ fn a_result_frame_survives_changes_to_the_catalog() {
     block_on(s.sql("CREATE TEMP VIEW v2 AS SELECT 2 AS a")).unwrap();
     block_on(s.sql("DROP VIEW v1")).unwrap();
     assert_eq!(total(&block_on(df.collect()).unwrap()), 5);
-    let derived = df.limit(2);
+    drop(df);
+    let derived = block_on(s.sql("BEGIN SELECT id FROM range(5); END"))
+        .unwrap()
+        .limit(2);
     block_on(s.sql("DROP VIEW v2")).unwrap();
+    block_on(s.sql("CREATE TEMP VIEW v3 AS SELECT 3 AS a")).unwrap();
     assert_eq!(total(&block_on(derived.collect()).unwrap()), 2);
+}
+
+#[test]
+fn execute_immediate_outside_a_script_keeps_the_operation_id() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql_with(
+        "EXECUTE IMMEDIATE 'SELECT 1 AS one'",
+        QueryOptions::new().operation_id(OP),
+    ))
+    .unwrap();
+    block_on(df.collect()).unwrap();
+    assert!(
+        count(
+            &s,
+            "SELECT count(*) FROM system.queries WHERE query_id = '00112233-4455-6677-8899-aabbccddeeff'"
+        ) >= 1
+    );
 }

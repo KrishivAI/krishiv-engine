@@ -108,6 +108,9 @@ pub(crate) const HIDDEN_PREFIX: &str = "__krishiv_snapshot_";
 /// that no view pins and that lives as long as a frame reads it.
 const SCRIPT_RESULT_PREFIX: &str = "__krishiv_snapshot_r";
 
+/// How many of the newest script results the catalog keeps whether or not a frame holds them.
+const RECENT_SCRIPT_RESULTS: usize = 16;
+
 /// Whether `name` is a hidden snapshot pin: it starts with
 /// [`HIDDEN_PREFIX`], in any letter case.
 pub(crate) fn is_hidden_name(name: &str) -> bool {
@@ -217,10 +220,24 @@ impl SessionCatalog {
         }
         // A script's result table also stays while something besides the catalog holds it: the
         // result frame, whose analysis keeps the table it loaded.
+        // The newest few stay whatever holds them: a frame derived from a result (`limit`, `filter`)
+        // has no analysis yet and reads the table by its name.
+        let mut results: Vec<u64> = tables
+            .keys()
+            .filter_map(|k| k.strip_prefix(SCRIPT_RESULT_PREFIX)?.parse().ok())
+            .collect();
+        results.sort_unstable();
+        let newest = results
+            .len()
+            .checked_sub(RECENT_SCRIPT_RESULTS)
+            .map_or(0, |n| results[n]);
         tables.retain(|key, (_, table)| {
             !is_hidden_name(key)
                 || live.contains(key)
-                || (key.starts_with(SCRIPT_RESULT_PREFIX) && Arc::strong_count(table) > 1)
+                || key
+                    .strip_prefix(SCRIPT_RESULT_PREFIX)
+                    .and_then(|n| n.parse::<u64>().ok())
+                    .is_some_and(|n| n >= newest || Arc::strong_count(table) > 1)
         });
     }
 

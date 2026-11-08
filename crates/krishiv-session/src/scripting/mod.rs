@@ -161,7 +161,9 @@ impl Run<'_> {
 
     /// The session handle whose queries see the locals as they are now.
     fn handle(&self) -> Session {
-        self.session.with_locals(
+        // The operation id names the script (its registration, `control.rs`); its statements are
+        // queries of their own under minted ids.
+        let mut handle = self.session.with_locals(
             self.scopes
                 .iter()
                 .map(|scope| LocalFrame {
@@ -173,7 +175,9 @@ impl Run<'_> {
                         .collect(),
                 })
                 .collect(),
-        )
+        );
+        handle.operation = None;
+        handle
     }
 
     /// The text of an expression of the script.
