@@ -28,6 +28,18 @@ fn corrupt(m: &pb::PhysicalPlan, expected: &str) {
 }
 
 #[test]
+fn an_unknown_binary_output_style_is_corrupt() {
+    for style in ["hex", "HEX_DISCRETE", "nonsense", ""] {
+        let mut m = message("binary_output_style");
+        m.env.as_mut().unwrap().binary_output_style = Some(style.to_owned());
+        corrupt(&m, "an unknown binary output style");
+    }
+    let mut m = message("binary_output_style");
+    m.env.as_mut().unwrap().binary_output_style = Some("BASE64".to_owned());
+    assert!(decode(&m.encode_to_vec()).is_ok());
+}
+
+#[test]
 fn the_header_lists_exactly_the_features_in_use() {
     let m = message("window_ranking");
     assert_eq!(m.features, ["window"]);

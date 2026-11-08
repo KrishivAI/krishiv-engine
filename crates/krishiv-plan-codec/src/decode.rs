@@ -303,6 +303,12 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         .env
         .as_ref()
         .ok_or_else(|| corrupt("no expression environment"))?;
+    // A writer sets the style only when it is not the default, and by its exact name.
+    if let Some(style) = env.binary_output_style.as_deref()
+        && !matches!(style, "UTF-8" | "BASIC" | "BASE64" | "HEX")
+    {
+        return Err(corrupt("an unknown binary output style"));
+    }
     let env = ExprEnv {
         ansi: env.ansi,
         // The wire carries the flag for the `legacy_statistical_aggregate`
