@@ -286,6 +286,21 @@ const CASES: &[(&str, &str)] = &[
         "SELECT t.a FROM t JOIN u ON t.a = u.a JOIN t t2 ON u.a = t2.a WHERE t2.a = 7",
     ),
     (
+        // Two instances of `t` (a `Shift` each) need different filters:
+        // the first gets `a = 7` through `t.a = u.a` and `c = 2` through
+        // `t.c = t2.c`, the second only `c = 2`, never `a = 7` (round-2
+        // review M2: a `shift`/`unshift` sign error would cross them).
+        "infer_self_join_different_filters",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a JOIN t t2 ON t.c = t2.c WHERE u.a = 7 AND t2.c = 2",
+    ),
+    (
+        // A `NOT IN` subquery is a null-aware anti join: no `=` key, so
+        // nothing is added to its right side (an `isnotnull` there would
+        // change rows); the inner join's key still gets its filters.
+        "infer_not_in_beside_inferred_key",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE u.a = 5 AND t.a NOT IN (SELECT a FROM u)",
+    ),
+    (
         "infer_left_outer_preserved_side_kept",
         "SELECT t.a FROM t LEFT JOIN (SELECT a FROM u WHERE a = 5) v ON t.a = v.a",
     ),

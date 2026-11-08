@@ -142,9 +142,10 @@ pub(crate) fn imply_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
 }
 
 /// `side` with `preds` pushed into it as far as legal, without a
-/// structural comparison (`unless_equal` clones and encodes both plans): for callers that only pass predicates `side` does not already
-/// imply, so the result differs (a duplicate the pushdown drops leaves a
-/// structurally equal copy, which the caller must tolerate).
+/// structural comparison (`unless_equal` clones and encodes both plans):
+/// for callers that only pass predicates `side` does not already imply, so
+/// the result differs (a duplicate the pushdown drops leaves a structurally
+/// equal copy, which the caller must tolerate).
 pub(crate) fn into_side_new(side: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> Arc<LogicalPlan> {
     into(side, preds)
 }
