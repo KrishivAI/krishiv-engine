@@ -895,3 +895,22 @@ fn searches_with_column_patterns_over_lcase_match_spark() {
         assert_eq!(one(&q), want, "{sql}");
     }
 }
+
+/// The `İ` rows of the kernel test, through SQL: `İ` lower-cases to `i` + U+0307, so a match may
+/// not end inside the pair (values of a Spark 4.2.0 local run).
+#[test]
+fn searches_over_lcase_split_the_dotted_capital_i_like_spark() {
+    let l = "COLLATE utf8_lcase";
+    for (pat, want) in [
+        ("a", ["true", "true", "false"]),
+        ("ai", ["false", "false", "false"]),
+        ("ai\u{307}", ["true", "true", "true"]),
+    ] {
+        for (f, w) in ["contains", "startswith", "endswith"].iter().zip(want) {
+            let q = format!(
+                "SELECT CAST({f}(t {l}, p) AS STRING) FROM (SELECT 'a\u{130}' AS t, '{pat}' AS p)"
+            );
+            assert_eq!(one(&q), w, "{f} {pat:?}");
+        }
+    }
+}
