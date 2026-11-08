@@ -162,8 +162,8 @@ fn points_print_as_extended_well_known_text() {
 
 /// Every case of a real Spark 4.2.0 run (`tests/scripts` note
 /// `research/2026-11-06-spark-geo-wkt-and-geography-cast.md`): a geometry
-/// prints without an SRID, a geography with `SRID=4326;`; input Spark refuses
-/// is refused here too.
+/// prints without an SRID, a geography with `SRID=4326;`. Only the accepted
+/// cases are checked here; refusals are covered by the malformed-value test.
 #[test]
 fn every_spark_text_case_prints_the_same() {
     use super::to_ewkt;
