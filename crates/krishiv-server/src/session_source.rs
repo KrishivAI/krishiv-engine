@@ -143,6 +143,93 @@ impl UiSource for SessionSource {
     }
 }
 
+/// The UI served from a host process's own engine runtime (embedded mode): queries run through `runtime`
+/// show up in the pages. Dropping the handle stops the server.
+pub struct EmbeddedUi {
+    addr: std::net::SocketAddr,
+    token: String,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for EmbeddedUi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddedUi")
+            .field("addr", &self.addr)
+            .finish_non_exhaustive()
+    }
+}
+
+impl EmbeddedUi {
+    /// Binds `addr` (port 0 picks a free one) and serves the UI over `runtime` on a background thread,
+    /// behind a fresh token.
+    ///
+    /// # Errors
+    /// Returns an error when the UI session, the token, the runtime or the bind fails.
+    pub fn start(runtime: Arc<EngineRuntime>, addr: std::net::SocketAddr) -> Result<Self, UiError> {
+        let source = SessionSource::new(runtime)?;
+        let token = crate::internal::random_token()?;
+        let app = crate::internal::router_with_ui(Arc::new(source), &token);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_io()
+            .enable_time()
+            .build()
+            .map_err(|e| UiError::new(format!("ui runtime: {e}")))?;
+        let listener = std::net::TcpListener::bind(addr)
+            .and_then(|l| l.set_nonblocking(true).map(|()| l))
+            .map_err(|e| UiError::new(format!("bind {addr}: {e}")))?;
+        let bound = listener
+            .local_addr()
+            .map_err(|e| UiError::new(format!("local address: {e}")))?;
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let thread = std::thread::Builder::new()
+            .name("krishiv-ui".into())
+            .spawn(move || {
+                let _ = rt.block_on(async {
+                    let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
+                        return Ok(());
+                    };
+                    axum::serve(listener, app)
+                        .with_graceful_shutdown(async {
+                            let _ = rx.await;
+                        })
+                        .await
+                });
+            })
+            .map_err(|e| UiError::new(format!("ui thread: {e}")))?;
+        Ok(Self {
+            addr: bound,
+            token,
+            shutdown: Some(tx),
+            thread: Some(thread),
+        })
+    }
+
+    /// The address the server is bound to.
+    #[must_use]
+    pub fn addr(&self) -> std::net::SocketAddr {
+        self.addr
+    }
+
+    /// The URL to open, with the token.
+    #[must_use]
+    pub fn url(&self) -> String {
+        format!("http://{}/?token={}", self.addr, self.token)
+    }
+}
+
+impl Drop for EmbeddedUi {
+    fn drop(&mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
