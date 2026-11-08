@@ -4,6 +4,7 @@
 //! executor's I/O runtime, and the plan-time distinct-value samples that
 //! follow ([`super::ndv_sampling`]).
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError};
 
 use arrow_schema::{Schema, SchemaRef};
@@ -11,7 +12,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_exec::planner::FileTable;
 use krishiv_plan::{LogicalPlan, ReadSource};
 
-use super::{FileScans, FilesKey, QueryCatalog, TempTable, collect_scans, reference_key, run_on};
+use super::{FileScans, FilesKey, QueryCatalog, TempTable, collect_scans, run_on};
 
 /// A scan of files in an analyzed plan: what it reads, the table's columns,
 /// the scan's column ids with their names, and a permanent table's
@@ -178,6 +179,44 @@ impl QueryCatalog {
             })
             .collect()
     }
+}
+
+/// The key a reference to a file table scans under, and what it reads. A reference that carries
+/// read options (`FROM t WITH ('k' = 'v')`) is a read of the table's files with those options over
+/// the table's own, so two references with different options keep their own listing, decoder
+/// options and scan; one without options shares the table's.
+pub(super) fn reference_key(
+    key: String,
+    known: bool,
+    permanent: bool,
+    source: &ReadSource,
+    options: &BTreeMap<String, krishiv_common::secret::OptionValue>,
+) -> (FilesKey, ReadSource) {
+    // Spark applies a reference's options to a catalog table's scan only (`resolveTempView`
+    // drops them for a temporary view), and a key the table already stores keeps the table's
+    // spelling and value: a different value is an error (`check_reference_options`).
+    if let (false, true, ReadSource::Files { .. }) = (options.is_empty(), permanent, source) {
+        let mut merged = source.clone();
+        if let ReadSource::Files { options: base, .. } = &mut merged {
+            for (k, v) in options {
+                if !base.keys().any(|b| b.eq_ignore_ascii_case(k)) {
+                    base.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        let key = FilesKey::Reference {
+            key,
+            known,
+            source: merged.clone(),
+        };
+        return (key, merged);
+    }
+    let key = if known {
+        FilesKey::Table(key)
+    } else {
+        FilesKey::View(key)
+    };
+    (key, source.clone())
 }
 
 /// [`FileTable::open`] on the executor's I/O runtime: footer reads are

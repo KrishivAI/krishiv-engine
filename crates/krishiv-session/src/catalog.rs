@@ -47,7 +47,7 @@ use crate::cache::{RelationCache, is_cache_name};
 mod file_tables;
 mod ndv_sampling;
 
-use self::file_tables::FileScanOf;
+use self::file_tables::{FileScanOf, reference_key};
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -377,44 +377,6 @@ enum FilesKey {
         known: bool,
         source: ReadSource,
     },
-}
-
-/// The key a reference to a file table scans under, and what it reads. A reference that carries
-/// read options (`FROM t WITH ('k' = 'v')`) is a read of the table's files with those options over
-/// the table's own, so two references with different options keep their own listing, decoder
-/// options and scan; one without options shares the table's.
-fn reference_key(
-    key: String,
-    known: bool,
-    permanent: bool,
-    source: &ReadSource,
-    options: &BTreeMap<String, krishiv_common::secret::OptionValue>,
-) -> (FilesKey, ReadSource) {
-    // Spark applies a reference's options to a catalog table's scan only (`resolveTempView`
-    // drops them for a temporary view), and a key the table already stores keeps the table's
-    // spelling and value: a different value is an error (`check_reference_options`).
-    if let (false, true, ReadSource::Files { .. }) = (options.is_empty(), permanent, source) {
-        let mut merged = source.clone();
-        if let ReadSource::Files { options: base, .. } = &mut merged {
-            for (k, v) in options {
-                if !base.keys().any(|b| b.eq_ignore_ascii_case(k)) {
-                    base.insert(k.clone(), v.clone());
-                }
-            }
-        }
-        let key = FilesKey::Reference {
-            key,
-            known,
-            source: merged.clone(),
-        };
-        return (key, merged);
-    }
-    let key = if known {
-        FilesKey::Table(key)
-    } else {
-        FilesKey::View(key)
-    };
-    (key, source.clone())
 }
 
 /// How a query opens the file tables of its scans.
