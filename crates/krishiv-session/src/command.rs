@@ -1361,6 +1361,10 @@ impl Session {
             }
             let current = store.functions();
             if !f.or_replace && current.get(namespace, &entry.def.name).is_some() {
+                if f.if_not_exists {
+                    // Spark: an existing function of the name is left as is.
+                    return self.empty_frame().await;
+                }
                 return Err(RoutineAlreadyExists {
                     new_routine_type: "function".to_owned(),
                     routine_name: quote_all(&qualified),

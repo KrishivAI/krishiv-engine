@@ -860,6 +860,12 @@ fn a_stored_function_is_created_replaced_and_dropped_as_spark_does() {
     let (class, params) = class_and_params(&fails(&s, "CREATE FUNCTION f1() RETURNS INT RETURN 2"));
     assert_eq!(class, "ROUTINE_ALREADY_EXISTS");
     assert_eq!(params["routineName"], "`spark_catalog`.`default`.`f1`");
+    // IF NOT EXISTS leaves the existing function as is.
+    ok(
+        &s,
+        "CREATE FUNCTION IF NOT EXISTS f1() RETURNS INT RETURN 9",
+    );
+    assert_eq!(ok(&s, "SELECT f1()"), ["1"]);
     ok(&s, "CREATE OR REPLACE FUNCTION f1() RETURNS INT RETURN 2");
     assert_eq!(ok(&s, "SELECT f1()"), ["2"]);
     // A stored and a temporary function of one name coexist; the temporary
