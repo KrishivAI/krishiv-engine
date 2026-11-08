@@ -249,6 +249,10 @@ impl SpillUnread for Output {
                 hook.set_spillable_bytes(0);
                 return Ok(0);
             }
+            // Until the written segments' memory is back in the pool, it counts as about to be released, so
+            // another driver's round that cannot spill waits for it instead of failing. No arbitration
+            // inside: the writers' scratch is a sync grow, the writes run on the blocking pool.
+            let _writing = consumer.spilling();
             // Working memory for the writers, lent from the first segment in memory (grant credit).
             let lent = lock(&self.state)
                 .iter_mut()

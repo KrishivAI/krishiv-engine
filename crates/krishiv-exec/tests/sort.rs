@@ -1033,3 +1033,59 @@ fn hash_buckets_need_keys() {
     assert_eq!(err.error_class(), ErrorClass::InternalError);
     assert!(err.to_string().contains("without keys"), "{err}");
 }
+
+/// Two tasks of one query, each sorting [`table`] (`rows` rows) with its
+/// own spill scope, under one pool of `limit` bytes.
+async fn two_sorts(rows: u64, limit: usize) -> [Result<Vec<Batch>>; 2] {
+    let root = root();
+    let q = root.child("q", Some(limit));
+    let (_m, scope) = spill();
+    let task = |i: u64| {
+        let config = ExecConfig {
+            morsel_rows: 4096,
+            ..batch_rows(1024)
+        };
+        let query = QueryContext::new(
+            QueryId(i),
+            WorkloadClass::Interactive,
+            config,
+            q.child(&format!("task{i}"), None),
+        );
+        let sort = Sort::new(
+            table(1, 100)[0].schema(),
+            &[SortKey::asc(0)],
+            Some(scope.clone()),
+        )
+        .unwrap();
+        let sort = Arc::new(sort.with_max_fan_in(4));
+        (plan(table(rows, 100), &sort), query, threaded())
+    };
+    let (a, b) = (task(1), task(2));
+    let (a, b) = tokio::join!(run(&a.2, a.0, &a.1), run(&b.2, b.0, &b.1));
+    assert_released(&root);
+    [a, b]
+}
+
+/// Two sorts of one query under one small pool both finish: a request that
+/// finds nothing spillable while the other task writes a buffer out waits
+/// for that write instead of failing the query. Below about 3.5 MiB they
+/// fail for another reason: each sizes its merge budget against the shared
+/// pool's limit (1.84 MB here), not its share.
+/// `KRISHIV_SORT_TWO_TASK_RUNS` repeats each limit (a stress loop).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_sorts_finish_when_their_spill_writes_fill_the_pool() {
+    let runs: usize = std::env::var("KRISHIV_SORT_TWO_TASK_RUNS").map_or(1, |v| v.parse().unwrap());
+    let rows = 65_536;
+    let mut failed = Vec::new();
+    for limit in [4096 * KIB, 5120 * KIB] {
+        for _ in 0..runs {
+            for out in two_sorts(rows, limit).await {
+                match out {
+                    Ok(out) => check_sorted(rows, &out, false),
+                    Err(e) => failed.push(format!("{} KiB: {e}", limit / KIB)),
+                }
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{} failed: {failed:?}", failed.len());
+}

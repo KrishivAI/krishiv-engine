@@ -173,6 +173,11 @@ pub(crate) async fn spill_parts(
         return Ok((0, 0));
     }
     topup.shrink_to_credit(topup.size());
+    // From here until the freed credit is back in the pool, the rows count
+    // as about to be released, so another driver's round that cannot spill
+    // waits for them instead of failing. No arbitration inside: the
+    // transfers and the writes are sync, the blocking job ends on its own.
+    let _writing = ctx.consumer().consumer().spilling();
     let mut jobs = Vec::new();
     let mut freed = 0;
     let own = ctx.consumer().id();

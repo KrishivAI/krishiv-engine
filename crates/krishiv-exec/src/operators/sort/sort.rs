@@ -711,6 +711,11 @@ impl SpillUnread for Held {
                 }
                 changed.await;
             };
+            // Until the buffers are freed, their bytes count as about to be
+            // released, so another driver's round that cannot spill waits
+            // for them instead of failing. Only from here: the wait above
+            // is for the readers' steps, which may arbitrate.
+            let _writing = self.handle.spilling();
             // The buffers' headroom is lent to the writers' scratch (as
             // grant credit, so no other consumer takes it meanwhile). The
             // first writer first: if its scratch is refused, nothing was
@@ -1035,6 +1040,11 @@ impl Sort {
         let rows = spill_rows(buffer.row_bytes, batch_rows);
         let (batches, handle) = (buffer.batches.clone(), Arc::clone(&buffer.handle));
         let written = self.write_buffer(batches, buckets, rows, &handle, ctx);
+        // Until the buffer's reservation shrinks below, its rows count as
+        // about to be released, so another driver's round that cannot spill
+        // waits for them instead of failing. The write is one blocking job
+        // with no arbitration (a merge pass frees nothing, so it takes none).
+        let _writing = handle.spilling();
         let runs = match lending_for_write(&mut buffer.headroom, &handle, target, written).await? {
             Ok(runs) => runs,
             Err(refused) => return Ok(Err(refused)),

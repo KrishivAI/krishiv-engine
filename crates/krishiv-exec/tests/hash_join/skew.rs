@@ -5,7 +5,8 @@
 
 use std::time::{Duration, Instant};
 
-use krishiv_exec::{SkewSplit, skew_split_sides};
+use krishiv_exec::{ExecNode, QueryContext, QueryId, SkewSplit, WorkloadClass, skew_split_sides};
+use krishiv_memory::{MemoryPool as _, SpillManager};
 
 use super::*;
 
@@ -322,4 +323,93 @@ async fn splitting_a_full_outer_join_changes_its_result() {
     }
     got.sort();
     assert_ne!(got, whole);
+}
+
+/// Two tasks of one query, each an inner join of `build_keys` against
+/// `probe_rows` keys with its own spill scope, under one pool of `limit`
+/// bytes, on threads (spill writes overlap the other task's requests).
+async fn two_inner_joins(build_keys: &[i64], probe_rows: usize, limit: usize) -> Vec<Result<Run>> {
+    let root = root(1 << 30);
+    let pool = root.child("q", Some(limit));
+    let task = |id: u64| {
+        let build: Vec<Row> = build_keys
+            .iter()
+            .enumerate()
+            .map(|(i, &k)| r(Some(k), Some("a"), i64::try_from(i).unwrap()))
+            .collect();
+        let probe: Vec<Row> = (0..probe_rows)
+            .map(|k| {
+                let k = i64::try_from(k).unwrap();
+                r(Some(k), Some("a"), k)
+            })
+            .collect();
+        let (manager, scope) = spill();
+        let config = ExecConfig {
+            fail_on_stall: true,
+            stall_threshold: Duration::from_secs(5),
+            ..ExecConfig::default()
+        };
+        let q = QueryContext::new(
+            QueryId(id),
+            WorkloadClass::Interactive,
+            config,
+            pool.child(&format!("task{id}"), None),
+        );
+        let plan = join(
+            case(JoinType::Inner, 1, false, false).spec(Some(scope.clone())),
+            scan(&schema(), batches(&data(&build), 4096)),
+            scan(&schema(), batches(&data(&probe), 4096)),
+        );
+        (plan, q, runner(2), manager, scope)
+    };
+    let one = |(plan, q, runner, _manager, scope): (
+        Arc<dyn ExecNode>,
+        Arc<QueryContext>,
+        QueryRunner,
+        SpillManager,
+        SpillScope,
+    )| async move {
+        let out = run(&runner, plan, &q).await?;
+        assert_eq!(spill_files(&scope), 0);
+        Ok(Run {
+            sums: checksum(&out),
+            wall: Duration::ZERO,
+            spilled: metric(&q, "HashJoinBuild", "spilled_partitions"),
+            share: None,
+            table_ns: 0,
+        })
+    };
+    let (a, b) = tokio::join!(one(task(1)), one(task(2)));
+    assert_released(&root);
+    vec![a, b]
+}
+
+/// Two grace joins of one query under one small pool both finish: a request
+/// that finds nothing spillable while the other task writes partitions out
+/// waits for that write instead of failing the query (at 1.5 MiB, 3 of 8
+/// runs failed without the wait, 1 of 8 with it). The failures left at
+/// 1.5 MiB are of another kind: a task's flush phase asks for a partition
+/// table while the other's loaded table, not spillable, holds the pool.
+/// `KRISHIV_JOIN_TWO_TASK_RUNS` repeats each limit (a stress loop).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_grace_joins_finish_when_their_spill_writes_fill_the_pool() {
+    const ROWS: usize = 100_000;
+    let runs: usize = std::env::var("KRISHIV_JOIN_TWO_TASK_RUNS").map_or(1, |v| v.parse().unwrap());
+    let keys = uniform_keys(ROWS, ROWS / 4);
+    let want = expected(&keys);
+    let mut failed = Vec::new();
+    for limit in [2 * MIB, 3 * MIB] {
+        for _ in 0..runs {
+            for out in two_inner_joins(&keys, ROWS, limit).await {
+                match out {
+                    Ok(run) => {
+                        assert_eq!(run.sums, want);
+                        assert!(run.spilled > 0);
+                    }
+                    Err(e) => failed.push(format!("{} MiB: {e}", limit / MIB)),
+                }
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{} failed: {failed:?}", failed.len());
 }
