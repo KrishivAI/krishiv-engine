@@ -539,11 +539,11 @@ struct FileScanLocal {
     row_filter: Option<(usize, bool)>,
     rows: super::RowStage,
     /// Small filtered batches joined toward the query's batch size; flushed
-    /// before the driver claims another morsel, when the slice ends and at
-    /// the scan's end.
+    /// before the driver claims another morsel, at a limit and at the scan's
+    /// end.
     out: super::scan_coalesce::ScanCoalesce,
-    /// How long one `get_data` call reads before it hands the driver what
-    /// it has (an empty batch when the filters kept nothing): half the stall
+    /// How long one `get_data` call reads before it hands the driver an
+    /// empty batch (pushed to no operator; the buffer stays): half the stall
     /// threshold, so the driver's boundary (cancel, abort, spill requests)
     /// still runs while a selective scan buffers.
     slice: std::time::Duration,
@@ -1129,13 +1129,11 @@ impl FileScanSource {
                 return Ok(Some(Batch::new(b)));
             }
             if decoded && started.elapsed() >= local.slice {
-                // The driver's turn: what is buffered, or nothing.
-                local.out.flush()?;
-                let b = local
-                    .out
-                    .pop_ready()
-                    .unwrap_or_else(|| RecordBatch::new_empty(Arc::clone(&self.output)));
-                return Ok(Some(Batch::new(b)));
+                // The driver's turn: an empty batch (the driver pushes it to
+                // no operator); the buffer keeps joining rows of this morsel.
+                return Ok(Some(Batch::new(RecordBatch::new_empty(Arc::clone(
+                    &self.output,
+                )))));
             }
             if self
                 .request

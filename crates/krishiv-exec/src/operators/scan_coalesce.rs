@@ -11,7 +11,9 @@
 //! The buffer is charged to the driver's consumer; when the pool refuses
 //! the charge, the buffered rows go out at once. The scan flushes it before
 //! it moves to another morsel (the source's position names the rows'
-//! morsel), when its time slice ends and at its end.
+//! morsel), at a pushed limit and at its end. When its time slice ends it hands the
+//! driver an empty batch and keeps the buffer (the driver pushes an empty batch
+//! to no operator).
 
 use std::collections::VecDeque;
 

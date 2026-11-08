@@ -541,6 +541,13 @@ impl Driver {
             let next = next?;
             let Some(batch) = next else { break };
             self.report_position()?;
+            if batch.num_rows() == 0 {
+                // Nothing for the operators: a source hands back an empty
+                // batch to give the driver its turn (a file scan buffering
+                // small batches) or because its filters kept nothing.
+                self.yield_now().await;
+                continue;
+            }
             self.metrics(0).output(batch.num_rows());
             self.batches += 1;
             if let Some(from) = self.push(0, batch).await? {
