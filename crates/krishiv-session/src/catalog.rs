@@ -79,6 +79,11 @@ pub(crate) enum TempTable {
         /// it lists its files without inferring a schema, and a table with
         /// no files is empty.
         known: bool,
+        /// A permanent table's partition columns and registered partitions
+        /// (`None` when they are not all at their default directories, so a
+        /// listing under the root cannot read them as Spark does). Empty
+        /// otherwise.
+        partitions: Option<krishiv_exec::files::KnownPartitions>,
     },
     /// A view over a query: the unresolved plan and the output columns it
     /// had when it was created (renamed when the view declares aliases).
@@ -927,6 +932,7 @@ impl QueryCatalog {
             source: table_source(&table),
             columns: columns.clone(),
             known: true,
+            partitions: file_tables::known_partitions(&table),
         });
         let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         // Keys are lower case whatever the session's case sensitivity: `entry_key` spells scans that way.
@@ -2098,6 +2104,7 @@ mod tests {
     fn files(col: &str) -> TempTable {
         TempTable::Files {
             known: false,
+            partitions: Some(Default::default()),
             source: ReadSource::Files {
                 format: "parquet".to_owned(),
                 paths: vec![],
