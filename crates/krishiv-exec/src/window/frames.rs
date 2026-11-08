@@ -1089,9 +1089,11 @@ pub(super) fn cost(a: &AggregateExpr, f: &WindowFunctionPlan, rows: usize) -> Re
 }
 
 /// The items one chunk of merges holds for `rows` rows (see [`CHUNK`]): a `ROWS` frame of at most `w` rows has at
-/// most `max(w, 2 * (bits(w) + 1))` items per row (the rows of an in-order fold, or the nodes of a tree query), so a
-/// small batch charges for those, not for a whole chunk. Other frames can hold a whole chunk.
-fn chunk_items(f: &WindowFunctionPlan, rows: usize) -> usize {
+/// most `w` items per row in an in-order fold (its rows) and at most `min(w, 2 * (bits(w) + 1))` in a tree query (its
+/// nodes); `max(w, 2 * (bits(w) + 1))` covers both (loose for the tree, on the safe side), so a small batch charges
+/// for those, not for a whole chunk. A chunk ends once it reaches [`CHUNK`], so it may pass it by one row's nodes
+/// less one (an in-order fold stops at [`CHUNK`] rows exactly). Other frames can hold a whole chunk.
+pub(super) fn chunk_items(f: &WindowFunctionPlan, rows: usize) -> usize {
     use super::FrameBound as B;
     let fr = &f.frame;
     let at = |b: B| match b {
@@ -1108,7 +1110,8 @@ fn chunk_items(f: &WindowFunctionPlan, rows: usize) -> usize {
     let w = usize::try_from(hi.saturating_sub(lo).saturating_add(1).max(1)).unwrap_or(usize::MAX);
     let bits = usize::try_from(usize::BITS - w.leading_zeros()).unwrap_or(64);
     let per_row = w.max(2 * (bits + 1));
-    CHUNK.min(rows.saturating_mul(per_row).saturating_add(2 * (bits + 1)))
+    let nodes = w.min(2 * (bits + 1));
+    rows.saturating_mul(per_row).min(CHUNK + nodes - 1)
 }
 
 /// The bytes `lag`/`lead`/`nth_value` (function `f`) hold at most over
@@ -1325,5 +1328,68 @@ pub(super) fn view_of(t: &DataType) -> DataType {
         DataType::Utf8 | DataType::LargeUtf8 => DataType::Utf8View,
         DataType::Binary | DataType::LargeBinary => DataType::BinaryView,
         t => t.clone(),
+    }
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::{CHUNK, chunk_items};
+    use crate::aggregate::{AggInput, AggregateExpr, AggregateFunction};
+    use crate::window::{
+        FrameBound as B, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan,
+    };
+    use arrow_schema::DataType;
+
+    fn sum(units: FrameUnits, lower: B, upper: B) -> WindowFunctionPlan {
+        WindowFunctionPlan {
+            function: WindowFunction::Aggregate(AggregateExpr {
+                function: AggregateFunction::Sum,
+                args: vec![0],
+                input: AggInput::Raw,
+                mask: None,
+                arg_type: DataType::Float64,
+                name: "s".to_owned(),
+                element: None,
+            }),
+            frame: WindowFrame {
+                units,
+                lower,
+                upper,
+            },
+            filter: None,
+            name: "s".to_owned(),
+        }
+    }
+
+    /// A small batch over a bounded `ROWS` frame charges for its rows' items, not a whole chunk; a large one charges
+    /// a chunk plus at most one row's nodes less one; an extreme offset does not overflow.
+    #[test]
+    fn a_bounded_rows_frame_charges_its_rows_items() {
+        let rows = FrameUnits::Rows;
+        // CURRENT ROW only: w = 1, 4 items a row (the tree's bound), one node a row.
+        let current = sum(rows, B::CurrentRow, B::CurrentRow);
+        assert_eq!(chunk_items(&current, 10), 40);
+        assert_eq!(chunk_items(&current, CHUNK), CHUNK);
+        // 2 PRECEDING AND 1 FOLLOWING: w = 4, bits 3, 8 items a row, at most 4 nodes.
+        let around = sum(rows, B::Offset(-2), B::Offset(1));
+        assert_eq!(chunk_items(&around, 10), 80);
+        assert_eq!(chunk_items(&around, CHUNK), CHUNK + 3);
+        // 5 PRECEDING AND 2 PRECEDING: the same width.
+        let before = sum(rows, B::Offset(-5), B::Offset(-2));
+        assert_eq!(chunk_items(&before, 10), 80);
+        // An i64::MIN offset: the width saturates, a row's nodes stay 2 * (63 + 1).
+        let far = sum(rows, B::Offset(i64::MIN), B::CurrentRow);
+        assert_eq!(chunk_items(&far, 1), CHUNK + 127);
+        let far = sum(rows, B::CurrentRow, B::Offset(i64::MAX));
+        assert_eq!(chunk_items(&far, 3), CHUNK + 127);
+        // Unbounded and RANGE frames hold a whole chunk.
+        assert_eq!(
+            chunk_items(&sum(rows, B::UnboundedPreceding, B::CurrentRow), 10),
+            CHUNK
+        );
+        assert_eq!(
+            chunk_items(&sum(FrameUnits::Range, B::CurrentRow, B::CurrentRow), 10),
+            CHUNK
+        );
     }
 }
