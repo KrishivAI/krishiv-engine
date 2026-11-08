@@ -839,6 +839,11 @@ impl SpillUnread for Output {
             let groups = ranges(from..mem.chunks.len(), self.executor.parallelism());
             let query = Arc::clone(&s.query);
             let guard = query.blocking_started();
+            // Until the memory written is freed, it counts as about to be released,
+            // so another driver's round that cannot spill waits for it instead of
+            // failing (`ConsumerHandle::spilling`). No arbitration inside: the
+            // writes run on the blocking pool, their scratch a sync grow.
+            let _writing = s.consumer.spilling();
             #[cfg(test)]
             let gate = self.gate.clone();
             let written = run_blocking(&*self.executor, move || {
@@ -1396,6 +1401,11 @@ impl Sink for HashAggregate {
             let own_partition = l.partition;
             // The table spilled is part of this driver's map-task report.
             let mut report = l.exchange.as_ref().map(|_| ExchangeStats::new(PARTS));
+            // Until the memory written is freed, it counts as about to be released,
+            // so another driver's round that cannot spill waits for it instead of
+            // failing (`ConsumerHandle::spilling`). No arbitration inside: the
+            // writes run on the blocking pool, their scratch a sync grow.
+            let _writing = ctx.consumer().consumer().spilling();
             let (runs, report) = ctx
                 .run_blocking(move || {
                     let mut runs = Vec::new();

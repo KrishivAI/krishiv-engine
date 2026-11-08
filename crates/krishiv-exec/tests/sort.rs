@@ -1063,6 +1063,8 @@ async fn two_sorts(rows: u64, limit: usize) -> [Result<Vec<Batch>>; 2] {
     let (a, b) = (task(1), task(2));
     let (a, b) = tokio::join!(run(&a.2, a.0, &a.1), run(&b.2, b.0, &b.1));
     assert_released(&root);
+    let files = std::fs::read_dir(scope.dir()).map_or(0, Iterator::count);
+    assert_eq!(files, 0, "every spill file is gone");
     [a, b]
 }
 

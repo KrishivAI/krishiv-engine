@@ -633,10 +633,12 @@ impl HashAggregate {
         #[cfg(test)]
         let counters = Arc::clone(&self.counters);
         Box::pin(async move {
-            // A split writes the task's table out and drops it: until then
-            // the table counts as about to be released, so another driver's
-            // round that cannot spill waits for it instead of failing. The
-            // job ends on its own (its reads and writes never arbitrate).
+            // A split writes the task's table out and drops it, then reads
+            // the task's runs back and rewrites them by the next hash bits:
+            // until it ends, the consumer's memory (the waiting tasks' tables
+            // too) counts as about to be released, so another driver's round
+            // that cannot spill waits for it instead of failing. The job ends
+            // on its own (its reads and writes never arbitrate).
             // A merge task takes none: it grows its table, and one refused
             // memory keeps it while it waits.
             let _writing = ctx.consumer().consumer().spilling();
