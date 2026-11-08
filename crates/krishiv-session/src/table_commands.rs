@@ -2130,7 +2130,7 @@ impl Session {
     /// a missing table, an unknown column or a column count mismatch in any clause writes nothing,
     /// as in Spark 4.2.0; the clauses are then written in order. Spark plans them as one statement,
     /// so a failure while one runs also leaves the others unwritten; here the clauses before it
-    /// stay written (`docs/explanation/known-differences.md`).
+    /// stay written (`docs/concepts/known-differences.md`).
     pub(crate) async fn exec_insert(
         &self,
         i: &Insert,

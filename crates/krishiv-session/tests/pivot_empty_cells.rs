@@ -21,7 +21,7 @@ use krishiv_session::Session;
 use serde_json::Value;
 
 /// Cases not matched yet: several timestamp values, one of them a string: the analyzer cannot tell whether two
-/// values are equal, which decides Spark's result, so the engine refuses them (`docs/explanation/known-differences.md`).
+/// values are equal, which decides Spark's result, so the engine refuses them (`docs/concepts/known-differences.md`).
 const KNOWN_GAPS: &[&str] = &["pf-ts-dup-cast-value", "pf-ts-distinct-values"];
 
 fn fixture() -> Value {
