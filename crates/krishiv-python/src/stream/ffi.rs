@@ -974,3 +974,47 @@ fn panic_message(p: &(dyn Any + Send)) -> String {
         .or_else(|| p.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "unknown panic".to_owned())
 }
+
+/// A copy of `data` whose every buffer is newly allocated by Rust: each
+/// buffer, the null bitmap and, recursively, all `child_data` (a
+/// dictionary's values, run ends and values, list, struct and map children),
+/// with the same type, offset and length (design P2-T059, unit 3b M3).
+///
+/// An imported array may hold memory a Python object owns (pyarrow over a
+/// numpy buffer), whose release takes the GIL; the UDF pool thread copies a
+/// result with this while attached and drops the import there, so no engine
+/// thread, and nothing after interpreter exit, runs the producer's release.
+///
+/// # Errors
+/// `KRISHIV_INVALID_ARROW_DATA` when the copy fails arrow-rs's layout checks
+/// (it cannot for an array that passed [`import_column`]) or arrow-rs panics.
+pub(crate) fn owned_copy(data: &ArrayData) -> Result<ArrayData, KrishivError> {
+    let children = data
+        .child_data()
+        .iter()
+        .map(owned_copy)
+        .collect::<Result<Vec<_>, _>>()?;
+    let buffers = data
+        .buffers()
+        .iter()
+        .map(|b| arrow_buffer::Buffer::from_slice_ref(b.as_slice()))
+        .collect();
+    let nulls = data.nulls().map(|n| {
+        let bits = n.inner();
+        arrow_buffer::NullBuffer::new(arrow_buffer::BooleanBuffer::new(
+            arrow_buffer::Buffer::from_slice_ref(bits.values()),
+            bits.offset(),
+            bits.len(),
+        ))
+    });
+    catch_panic(|| {
+        ArrayData::builder(data.data_type().clone())
+            .len(data.len())
+            .offset(data.offset())
+            .buffers(buffers)
+            .child_data(children)
+            .nulls(nulls)
+            .build()
+    })?
+    .map_err(|e| invalid(format!("copying the result failed: {}", arrow_message(&e))))
+}

@@ -1268,3 +1268,73 @@ fn an_exported_column_not_imported_releases_on_drop() {
     drop((schema, array));
     assert_eq!(column.len(), 2);
 }
+
+/// Every buffer address of `data` and its children, the null bitmaps included.
+fn all_addresses(data: &ArrayData, out: &mut Vec<usize>) {
+    out.extend(data.buffers().iter().map(|b| b.as_ptr() as usize));
+    if let Some(n) = data.nulls() {
+        out.push(n.inner().values().as_ptr() as usize);
+    }
+    for c in data.child_data() {
+        all_addresses(c, out);
+    }
+}
+
+/// Design P2-T059 unit 3b M3: the copy equals the input and shares no buffer.
+fn assert_owned_copy(array: &ArrayRef) {
+    let data = array.to_data();
+    let copy = ffi::owned_copy(&data).unwrap();
+    copy.validate_full().unwrap();
+    assert_eq!(copy, data, "{}", data.data_type());
+    let (mut before, mut after) = (Vec::new(), Vec::new());
+    all_addresses(&data, &mut before);
+    all_addresses(&copy, &mut after);
+    assert_eq!(before.len(), after.len());
+    for a in &after {
+        assert!(
+            !before.contains(a),
+            "{}: a buffer is shared",
+            data.data_type()
+        );
+    }
+}
+
+#[test]
+fn owned_copy_shares_no_buffer_and_keeps_the_values() {
+    let ints: ArrayRef = Arc::new(Int64Array::from(vec![
+        Some(1),
+        None,
+        Some(3),
+        Some(4),
+        None,
+    ]));
+    assert_owned_copy(&ints);
+    // Sliced: the offset is kept (nulls at a bit offset).
+    assert_owned_copy(&ints.slice(1, 3));
+    let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), None, Some("ccc")]));
+    assert_owned_copy(&strings);
+    assert_owned_copy(&strings.slice(1, 2));
+    let dict: arrow_array::DictionaryArray<arrow_array::types::Int32Type> =
+        vec![Some("x"), None, Some("y"), Some("x")]
+            .into_iter()
+            .collect();
+    assert_owned_copy(&(Arc::new(dict) as ArrayRef));
+    let list =
+        arrow_array::ListArray::from_iter_primitive::<arrow_array::types::Int64Type, _, _>(vec![
+            Some(vec![Some(1), None]),
+            None,
+            Some(vec![]),
+        ]);
+    assert_owned_copy(&(Arc::new(list) as ArrayRef));
+    let ree = arrow_array::RunArray::<arrow_array::types::Int32Type>::try_new(
+        &arrow_array::Int32Array::from(vec![2, 5]),
+        &Int64Array::from(vec![Some(7), None]),
+    )
+    .unwrap();
+    assert_owned_copy(&(Arc::new(ree) as ArrayRef));
+    let structs: ArrayRef = Arc::new(StructArray::from(vec![(
+        Arc::new(Field::new("s", DataType::Utf8, true)),
+        Arc::clone(&strings),
+    )]));
+    assert_owned_copy(&structs);
+}

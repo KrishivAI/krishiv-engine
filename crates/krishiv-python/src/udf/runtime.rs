@@ -37,7 +37,7 @@ use pyo3::types::{PyCapsule, PyDict, PyTuple};
 use super::interrupt::{Call, CancelOnDrop};
 use super::pool::Pool;
 use crate::stream::capsule_pointer;
-use crate::stream::ffi::{ARRAY_CAPSULE, SCHEMA_CAPSULE, export_column, import_column};
+use crate::stream::ffi::{ARRAY_CAPSULE, SCHEMA_CAPSULE, export_column, import_column, owned_copy};
 
 thread_local! {
     /// Set on a pool thread while a UDF's Python code runs: a call back into
@@ -383,14 +383,20 @@ fn invoke(
     // capsules `schema` and `array`, which this frame holds until the import
     // returns; the schema is only borrowed, the array moved out of once (the
     // capsule's destructor then sees a released array).
-    unsafe {
+    let imported = unsafe {
         import_column(
             schema_ptr.cast(),
             array_ptr.cast(),
             declared,
             args.num_rows(),
         )
-    }
+    }?;
+    // The engine gets Rust-owned buffers; `imported` (and so the producer's
+    // release, which may take the GIL for numpy-owned memory) is dropped here,
+    // on this attached pool thread (design P2-T059 unit 3b, review M3).
+    let owned = owned_copy(&imported.to_data())?;
+    drop(imported);
+    crate::stream::ffi::catch_panic(|| arrow_array::make_array(owned))
 }
 
 /// A Python exception raised by a UDF (or by the conversion around it) as

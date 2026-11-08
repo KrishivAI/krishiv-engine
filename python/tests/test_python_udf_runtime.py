@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
+from typing import ClassVar
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -210,3 +211,33 @@ def test_a_running_call_of_a_failed_query_is_interrupted() -> None:
     for _ in range(20):
         rows = spark.sql("SELECT py_plus_after(id) FROM range(0, 8, 1, 4) ORDER BY 1").collect()
         assert _ids(rows) == list(range(1, 9))
+
+
+class _Owned(bytearray):
+    """A Python-owned buffer that records the thread it is freed on."""
+
+    freed_on: ClassVar[list[int]] = []
+
+    def __del__(self) -> None:
+        _Owned.freed_on.append(threading.get_ident())
+
+
+def test_a_result_over_python_owned_memory_is_released_on_a_pool_thread() -> None:
+    # Design P2-T059 unit 3b (review M3): a result may wrap memory a Python object owns (pyarrow over numpy);
+    # the pool thread copies it into Rust-owned buffers and drops the import while attached, so no engine
+    # thread runs the producer's release (which takes the GIL) and nothing does after interpreter exit.
+    ran_on: set[int] = set()
+    _Owned.freed_on.clear()
+
+    def wrap(x: pa.Array) -> pa.Array:
+        ran_on.add(threading.get_ident())
+        values = pc.call_function("add", [x, 1]).buffers()[1].to_pybytes()
+        owned = _Owned(values)
+        return pa.Array.from_buffers(pa.int64(), len(x), [None, pa.py_buffer(owned)])
+
+    spark = _spark()
+    spark._native.register_python_udf("py_owned", ARROW_BATCHED, "bigint", True, True, wrap)
+    rows = spark.sql("SELECT py_owned(id) FROM range(10) ORDER BY 1").collect()
+    assert _ids(rows) == list(range(1, 11))
+    assert _Owned.freed_on, "the wrapped buffers were never freed"
+    assert set(_Owned.freed_on) <= ran_on, (_Owned.freed_on, ran_on)
