@@ -806,6 +806,20 @@ pub(super) fn opened(env: &Env, frame: usize) -> Result<usize> {
     Ok(bytes)
 }
 
+/// What the folds over the whole partition hold as they open, which the
+/// partition's copy to disk charges from the credit it is lent.
+pub(super) fn opened_whole(env: &Env) -> Result<usize> {
+    let mut bytes = 0_usize;
+    for f in &env.plan.functions {
+        if let WindowFunction::Aggregate(a) = &f.function
+            && f.shape()? == Shape::Whole
+        {
+            bytes = bytes.saturating_add(Fold::opened_bytes(a, env)?);
+        }
+    }
+    Ok(bytes)
+}
+
 /// The readers `f` opens beyond the partition's own.
 pub(super) fn readers(f: &WindowFunctionPlan) -> Result<usize> {
     if !framed(f)? {

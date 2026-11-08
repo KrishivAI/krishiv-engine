@@ -451,6 +451,16 @@ impl Window {
             .reservation()
             .releasing_to_credit()
             .for_spill_scratch();
+        // The whole-partition folds open on the lent credit: reserve their
+        // states on top of the rows the writer's scratch draws from, so a
+        // state larger than a small partition is not left to the pool.
+        let opening = super::disk::opened_whole(&self.env)?;
+        if opening > 0 {
+            r.headroom
+                .grow(opening)
+                .await
+                .map_err(krishiv_common::error::KrishivError::from)?;
+        }
         // The buffered rows' bytes stay with the headroom: the partition's
         // evaluation from disk needs them.
         let keep = r.headroom.size() + held;
