@@ -6,6 +6,7 @@ Usage: docs-preview.py OUT_DIR [CHANGED_FILE ...]
 Without changed files every page is rendered. Links between pages are rewritten from `.md` to
 `.html`. The output is a CI artifact for reviewers, not the published site.
 """
+
 import html
 import pathlib
 import re
@@ -27,12 +28,14 @@ def render(src: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path:
     text = src.read_text(encoding="utf-8")
     body = markdown.markdown(text, extensions=["tables", "fenced_code"])
     body = re.sub(r'href="([^"#:]+)\.md(#[^"]*)?"', r'href="\1.html\2"', body)
-    m = re.search(r"^#\s+(.+)$", text, re.M)
+    m = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
     title = html.escape(m.group(1)) if m else rel.stem
     dest = out_dir / rel.with_suffix(".html")
     dest.parent.mkdir(parents=True, exist_ok=True)
     up = "../" * (len(rel.parts) - 1)
-    dest.write_text(PAGE.format(title=title, up=up, path=rel, body=body), encoding="utf-8")
+    dest.write_text(
+        PAGE.format(title=title, up=up, path=rel, body=body), encoding="utf-8"
+    )
     return dest
 
 
@@ -42,7 +45,9 @@ def main(argv: list[str]) -> int:
         return 2
     out_dir = pathlib.Path(argv[0])
     changed = [ROOT / p for p in argv[1:]]
-    pages = [p for p in changed if p.suffix == ".md" and DOCS in p.parents and p.exists()]
+    pages = [
+        p for p in changed if p.suffix == ".md" and DOCS in p.parents and p.exists()
+    ]
     if not argv[1:]:
         pages = sorted(DOCS.rglob("*.md"))
     for p in pages:
