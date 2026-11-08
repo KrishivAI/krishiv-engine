@@ -960,6 +960,9 @@ fn generator_over_a_missing_column_is_not_a_lateral_alias_error() {
         "SELECT explode(t.arr) AS col",
     ] {
         let err = error_of(&s, sql);
-        assert_ne!(err.error_class(), ErrorClass::InternalError, "{sql}: {err}");
+        assert!(
+            err.to_string().contains("UNRESOLVED_COLUMN"),
+            "{sql}: {err}"
+        );
     }
 }
