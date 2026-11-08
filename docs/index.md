@@ -9,10 +9,12 @@ write.
 
 ## Where to go
 
-- [Quickstart](quickstart.md): install and run your first query.
-- [SQL](sql.md): the SQL dialect and the [function reference](reference/sql/index.md).
-- [Python](python.md): the `krishiv` package and the [API reference](reference/python/index.md).
-- [Configuration](configuration.md): every `krishiv.*` and Spark setting.
-- [Deployment](deployment.md): embedded today; what comes next.
-- [Compatibility](compatibility.md): what is supported against Spark, and the [known differences](known-differences.md).
-- [Reference](reference/index.md): SQL functions, Python API, Rust API, metrics and query profiles.
+The pages follow four kinds of need.
+
+- **[Tutorials](tutorials/quickstart.md)** teach by doing: [install and run your first query](tutorials/quickstart.md).
+- **[How-to guides](how-to/deploy.md)** solve one task: [deploy](how-to/deploy.md) and [find a stalled task with tokio-console](how-to/tokio-console.md).
+- **[Reference](reference/index.md)** lists facts: the [SQL language](reference/sql-language.md) and
+  [function reference](reference/sql/index.md), the [Python package](reference/python-package.md) and
+  [API](reference/python/index.md), every [setting](reference/configuration.md), metrics and query profiles.
+- **[Explanation](explanation/compatibility.md)** gives background: what is supported against Spark
+  ([compatibility](explanation/compatibility.md)) and the [known differences](explanation/known-differences.md).

@@ -1,11 +1,7 @@
 {
   "index": "Introduction",
-  "quickstart": "Quickstart",
-  "sql": "SQL",
-  "python": "Python",
-  "configuration": "Configuration",
-  "deployment": "Deployment",
-  "compatibility": "Compatibility",
-  "known-differences": "Known differences",
-  "reference": "Reference"
+  "tutorials": "Tutorials",
+  "how-to": "How-to guides",
+  "reference": "Reference",
+  "explanation": "Explanation"
 }

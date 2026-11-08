@@ -1,5 +1,8 @@
 {
   "index": "Reference",
+  "sql-language": "SQL language",
+  "python-package": "Python package",
+  "configuration": "Configuration",
   "sql": "SQL functions",
   "python": "Python API",
   "rust": "Rust API",

@@ -24,7 +24,7 @@ use serde_json::Value;
 /// - pivot columns of complex types (a map is not orderable, an array value is a `array(...)` call): the engine
 ///   does not take them yet (P2b row 11);
 /// - several timestamp values, one of them a string: the analyzer cannot tell whether two values are equal, which
-///   decides Spark's result, so the engine refuses them (`docs/known-differences.md`).
+///   decides Spark's result, so the engine refuses them (`docs/explanation/known-differences.md`).
 const KNOWN_GAPS: &[&str] = &[
     "err-unorderable-pivot-col",
     "pf-array-pivot-col",

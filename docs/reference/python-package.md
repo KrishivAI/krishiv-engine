@@ -21,4 +21,4 @@ table = df.toArrow()  # a pyarrow.Table
 - Test your PySpark code without a JVM: `krishiv.testing` has `assertDataFrameEqual`, `assertSchemaEqual` and a
   pytest fixture (`pytest_plugins = ["krishiv.testing.pytest_plugin"]`, then use the `krishiv_session` fixture).
 
-The full [Python API reference](reference/python/index.md) is generated from the package's docstrings.
+The full [Python API reference](python/index.md) is generated from the package's docstrings.

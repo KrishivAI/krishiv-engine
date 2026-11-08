@@ -41,11 +41,11 @@ fn the_checked_in_configuration_guide_page_matches_the_registry() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
-    let on_disk = std::fs::read_to_string(root.join("docs/configuration.md")).unwrap();
+    let on_disk = std::fs::read_to_string(root.join("docs/reference/configuration.md")).unwrap();
     assert_eq!(
         on_disk,
         Doc::Config.markdown(),
-        "run `cargo xtask docs-config docs/configuration.md`"
+        "run `cargo xtask docs-config docs/reference/configuration.md`"
     );
 }
 
@@ -69,7 +69,7 @@ fn generated_reference_pages_name_no_internal_documents() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
-    let mut files = vec![root.join("docs/configuration.md")];
+    let mut files = vec![root.join("docs/reference/configuration.md")];
     for dir in ["sql", "python", "rust"] {
         let d = root.join("docs/reference").join(dir);
         for e in std::fs::read_dir(&d).unwrap() {
@@ -132,7 +132,7 @@ fn the_quickstart_page_runs_the_readme_code() {
         .parent()
         .unwrap();
     let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
-    let page = std::fs::read_to_string(root.join("docs/quickstart.md")).unwrap();
+    let page = std::fs::read_to_string(root.join("docs/tutorials/quickstart.md")).unwrap();
     let python = |t: &str| {
         fenced_blocks(t, t == readme)
             .into_iter()
@@ -142,6 +142,6 @@ fn the_quickstart_page_runs_the_readme_code() {
     assert_eq!(
         python(&readme),
         python(&page),
-        "docs/quickstart.md drifted from the README"
+        "docs/tutorials/quickstart.md drifted from the README"
     );
 }
