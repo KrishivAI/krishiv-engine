@@ -247,6 +247,24 @@ fn nulls_big_endian_and_malformed_values() {
 }
 
 #[test]
+fn binary_as_string_leaves_a_spatial_column_binary() {
+    // `spark.sql.parquet.binaryAsString` makes unannotated BINARY a string; a column with a
+    // GEOMETRY logical type is not unannotated and keeps reading as a geometry.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("f.parquet");
+    let p = point();
+    crafted(
+        &file,
+        Some(LogicalType::geometry(None)),
+        &[Some(p.as_slice())],
+    );
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.parquet.binaryAsString=true")).unwrap();
+    let got = rows(&s, &format!("SELECT g FROM parquet.`{}`", file.display()));
+    assert_eq!(got, Ok(vec!["SRID=4326;POINT(1 2)".to_owned()]));
+}
+
+#[test]
 fn a_plain_binary_column_stays_binary() {
     let p = point();
     let got = read_crafted(None, &[Some(p.as_slice())]).unwrap();
