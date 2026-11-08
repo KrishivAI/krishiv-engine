@@ -482,6 +482,33 @@ async fn a_query_reading_only_system_tables_skips_admission() {
         "a query reading nothing is admitted as usual"
     );
     assert_eq!(gate.requests.lock().unwrap().len(), 1);
+    // A system table with rows of the query's own making, or with a user table, is admitted.
+    s.sql("CREATE TEMPORARY VIEW t AS SELECT 1 AS id")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .ok();
+    let mixed = [
+        "SELECT count(*) FROM system.queries CROSS JOIN range(10)",
+        "SELECT q.query_id FROM system.queries q CROSS JOIN VALUES (1), (2) AS v(x)",
+        "SELECT explode(array(1, 2)) FROM system.queries",
+        "SELECT q.query_id FROM system.queries q JOIN t ON true",
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) \
+         SELECT q.query_id FROM system.queries q CROSS JOIN r",
+    ];
+    for sql in mixed {
+        let before = gate.requests.lock().unwrap().len();
+        let refused = match s.sql(sql).await {
+            Ok(df) => df.collect().await.is_err(),
+            Err(e) => panic!("{sql}: {e}"),
+        };
+        assert!(
+            refused,
+            "{sql} is admitted, so the refusing gate refuses it"
+        );
+        assert_eq!(gate.requests.lock().unwrap().len(), before + 1, "{sql}");
+    }
 }
 
 /// The request carries the estimate of the optimized plan for a controller that reads it, and

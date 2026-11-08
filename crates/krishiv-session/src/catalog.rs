@@ -468,11 +468,12 @@ impl QueryCatalog {
         }
     }
 
-    /// Whether the planned scans read `system.*` tables and nothing else: such a query is how an
-    /// operator sees why the engine is saturated, so it is never queued behind the load.
-    pub(crate) fn reads_only_system(&self) -> bool {
+    /// Whether the planned scans and `plan`'s leaves read `system.*` tables and nothing else
+    /// (`system::plan_reads_only_system`): such a query is never queued behind the load.
+    pub(crate) fn reads_only_system(&self, plan: &krishiv_exec::physical::PhysicalPlan) -> bool {
         use std::sync::atomic::Ordering::SeqCst;
-        self.scanned.system.load(SeqCst) && !self.scanned.other.load(SeqCst)
+        (self.scanned.system.load(SeqCst) && !self.scanned.other.load(SeqCst))
+            && crate::system::plan_reads_only_system(plan)
     }
 
     /// Keeps `estimate` for the query's admission request.

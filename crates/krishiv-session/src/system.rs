@@ -62,6 +62,33 @@ pub(crate) fn is_system_table(name: &[String]) -> bool {
     matches!(name, [catalog, table] if is_system(catalog) && table_known(table))
 }
 
+/// Whether `plan` reads only system tables: every leaf a scan of a system table (at least one),
+/// and no one-row relation (inline `VALUES`), range, generator or recursion that makes rows of
+/// its own. Admission is skipped only for such a plan; anything else, such as
+/// `system.queries CROSS JOIN range(..)`, is admitted as usual (fail closed).
+pub(crate) fn plan_reads_only_system(plan: &krishiv_exec::physical::PhysicalPlan) -> bool {
+    use krishiv_exec::physical::PhysNode;
+    let mut stack: Vec<&PhysNode> = plan.roots().collect();
+    let mut system_scan = false;
+    while let Some(node) = stack.pop() {
+        match node {
+            PhysNode::Scan(scan) => match &scan.scan.source {
+                krishiv_plan::ReadSource::Table { name, .. } if is_system_table(name) => {
+                    system_scan = true;
+                }
+                _ => return false,
+            },
+            PhysNode::OneRow
+            | PhysNode::Range(_)
+            | PhysNode::Generate { .. }
+            | PhysNode::UnionLoop { .. }
+            | PhysNode::LoopRef { .. } => return false,
+            other => stack.extend(other.children()),
+        }
+    }
+    system_scan
+}
+
 fn table_known(table: &str) -> bool {
     TABLES.iter().any(|t| t.eq_ignore_ascii_case(table))
 }
