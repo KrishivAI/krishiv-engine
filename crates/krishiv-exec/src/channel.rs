@@ -443,6 +443,11 @@ impl Sink for ResultSink {
         Ok(Arc::new(ResultGlobal::default()))
     }
 
+    /// Ordered drivers hold their batches until every lower key is sent.
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn expect_ordered(&self, global: &GlobalState, member: u32, partitions: std::ops::Range<u32>) {
         let Ok(g) = result_global(global) else {
             return;
