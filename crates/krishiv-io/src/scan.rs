@@ -575,9 +575,13 @@ impl ScanStream {
             if grow > 0 {
                 self.mem.grow(grow).await?;
             }
-            let started = tokio::time::Instant::now();
-            let fetched = self.io.get_ranges(&self.file, &missing).await?;
-            let took = tokio::time::Instant::now() - started;
+            // On the I/O runtime (when the scheduler has one), as a prefetch:
+            // a remote response is received and handled there, not inside
+            // the caller's poll, which only waits for the bytes.
+            let (fetched, took) = self
+                .io
+                .fetch_timed(self.file.clone(), missing.clone())
+                .await?;
             self.reads.record(&missing, took, took);
             out.extend(missing.into_iter().zip(fetched));
         }
