@@ -1,51 +1,64 @@
 # Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
 # (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
 # +31 lines over main: the decimal sum/avg unit-weight fast loops (E2 step 1)
-4157 crates/krishiv-exec/src/aggregate/accumulator.rs
+4190 crates/krishiv-exec/src/aggregate/accumulator.rs
 2067 crates/krishiv-exec/src/aggregate/hll.rs
 # +104 lines over main: the batch-local key map of a low-cardinality batch (RowTable::probe_local, E2 step 2)
 3260 crates/krishiv-exec/src/aggregate/rowtable.rs
 # +1 line (and in physical/instantiate.rs, window/tests.rs): the `udafs` spec field and the `Udf` aggregate variant (ADR 0045, T060a)
 # +37 lines over main: rows of batches that take the batch-local key map equal the columnar tables' (E2 step 2)
 3277 crates/krishiv-exec/src/aggregate/tests.rs
-2182 crates/krishiv-exec/src/join/grace.rs
+# +11: the coalesce test asserts the merged-run bytes it now returns (X3' step 1, #586)
+2193 crates/krishiv-exec/src/join/grace.rs
 2003 crates/krishiv-exec/src/operators/sort/sort.rs
 2215 crates/krishiv-exec/src/physical/instantiate.rs
-2139 crates/krishiv-exec/src/planner/build.rs
+2105 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 # +70 lines over main: the external-partition headroom reproducer, batches of 20 and 300/1,500 rows from a full pool (window spill flake, PR #601)
-3134 crates/krishiv-exec/src/window/tests.rs
+# +10 lines: offsets and nth_value read back from a full pool (window fold charges)
+3144 crates/krishiv-exec/src/window/tests.rs
 # +14: nth_value refuses an interval or timestamp offset as UNEXPECTED_INPUT_TYPE before its value check (T025 rest)
-2098 crates/krishiv-functions/src/registry/defs.rs
+2099 crates/krishiv-functions/src/registry/defs.rs
 3340 crates/krishiv-functions/src/registry/tests.rs
-4186 crates/krishiv-io/src/avro/tests.rs
-2215 crates/krishiv-kernels/src/csv.rs
-2429 crates/krishiv-kernels/src/map.rs
+# +2 lines over main: WriteOptions.zone_name (region session zones for timestamp partitions, row 36)
+4188 crates/krishiv-io/src/avro/tests.rs
+2201 crates/krishiv-kernels/src/csv.rs
+# +6 lines over main: map keys and values read the calendar interval struct carrier (ADR 0009 update 2026-11-06)
+2435 crates/krishiv-kernels/src/map.rs
 # +2 over main: the implicit cast of a string to TIME(6) for the AnyTimeOrString parameter of time_trunc (T025 rest)
-2470 crates/krishiv-plan/src/analyzer/coerce.rs
+2436 crates/krishiv-plan/src/analyzer/coerce.rs
 # over main: a cast of an alias keeps the alias's name (T001c, PR #491); USING-join keys (P2b row 11); char comparison padding and declared types through GROUP BY and lateral aliases (T001b)
 # +14: not_constant walks distinct nodes (review of #529)
-4636 crates/krishiv-plan/src/analyzer/ops.rs
-3096 crates/krishiv-plan/src/analyzer/subquery.rs
+# +6 lines over main: a SQL function call keeps its written name (T184, PR #505)
+4659 crates/krishiv-plan/src/analyzer/ops.rs
+3095 crates/krishiv-plan/src/analyzer/subquery.rs
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
-2902 crates/krishiv-session/src/catalog.rs
-2251 crates/krishiv-session/src/command.rs
+# +6 lines over main: a stored table's column comments reach the analyzer (TableMeta.column_comments, PR #589)
+# +7 lines: a file table's registered partitions (`TempTable::Files::partitions`, reading partitioned tables)
+2916 crates/krishiv-session/src/catalog.rs
+# +43 lines over main: nested session and script variables (T196, PR #505)
+2294 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
-2640 crates/krishiv-session/src/dataframe.rs
+# +20 lines: collect_engine (unstable-ir) reads results on the engine carriers for the golden harness (calendar carrier)
+2539 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
+# +5 lines (this branch): Parquet writes a top-level GEOMETRY or GEOGRAPHY column as WKB with a logical type (T181 U3)
 2781 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
-3373 crates/krishiv-session/src/table_commands.rs
+# +4 lines over main: a view column list without a comment keeps the query column's comment (Spark's aliasPlan, PR #589)
+# +1 line: the temporary table's `partitions` field (reading partitioned tables)
+3379 crates/krishiv-session/src/table_commands.rs
 # +6 lines over main: CREATE NAMESPACE records a clause written twice and PROPERTIES with DBPROPERTIES (DUPLICATE_CLAUSES, PR #572)
-3875 crates/krishiv-sql/src/ast.rs
-2732 crates/krishiv-sql/src/lower.rs
+3879 crates/krishiv-sql/src/ast.rs
+2554 crates/krishiv-sql/src/lower.rs
 # +21 lines over main: WITH ctes FROM source INSERT ... parses as a multi-table insert (P2b row 11)
 # +28 more (PR #572): CREATE NAMESPACE counts each clause in Spark's duplicate-check order (DUPLICATE_CLAUSES)
-5274 crates/krishiv-sql/src/parser.rs
+5283 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
-2153 crates/krishiv-testkit/src/file_format/mod.rs
+# +2 lines over main: WriteOptions.zone_name (region session zones for timestamp partitions, row 36)
+2155 crates/krishiv-testkit/src/file_format/mod.rs
 2535 crates/krishiv-testkit/src/kernel_eval.rs

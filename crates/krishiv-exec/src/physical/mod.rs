@@ -223,6 +223,18 @@ pub enum HashScheme {
 }
 
 impl HashScheme {
+    /// Whether [`partitions`](Self::partitions) routes a key column of type
+    /// `t`: `false` for [`Unpinned`](Self::Unpinned), and for
+    /// [`KeyGroupV1`](Self::KeyGroupV1) the types its hash refuses (nested,
+    /// 256-bit decimal, time of day, day-time and month-day-nano intervals).
+    #[must_use]
+    pub fn routes(self, t: &DataType) -> bool {
+        match self {
+            Self::Unpinned => false,
+            Self::KeyGroupV1 => routing::routable(t),
+        }
+    }
+
     /// The partition of `n` that each row of `keys` (the key columns, in
     /// hash order) goes to, written to `out` (cleared first).
     ///
@@ -333,6 +345,10 @@ pub struct ExprEnv {
     /// functions use the `SimpleDateFormat` parser. A plan that sets it
     /// needs the `legacy_time_parser` codec feature.
     pub legacy_time_parser: bool,
+    /// `spark.sql.binaryOutputStyle` when it is not `HEX_DISCRETE` (what an unset config
+    /// prints): `to_csv` and `to_xml` print binary fields in that style. A plan that sets it
+    /// needs the `binary_output_style` codec feature.
+    pub binary_output_style: Option<Arc<str>>,
 }
 
 impl ExprEnv {
@@ -917,7 +933,8 @@ plan_data!(struct ExprEnv {
     map_key_dedup_last_win,
     legacy_java_charsets,
     legacy_coding_error_action,
-    legacy_time_parser
+    legacy_time_parser,
+    binary_output_style
 });
 plan_data!(enum PhysNode {
     Scan(scan),

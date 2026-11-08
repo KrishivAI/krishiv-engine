@@ -19,7 +19,7 @@ concurrency:
 
 env:
   # Faster builds and links in CI: line tables only (backtraces and coverage keep
-  # line numbers); mold is installed per job by rui314/setup-mold.
+  # line numbers); mold is installed per job by .github/actions/setup-mold.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
@@ -55,7 +55,7 @@ jobs:
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: Pinned tools (sccache, nextest)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0,cargo-nextest@0.9.148
       - name: clippy (all features)
@@ -96,7 +96,7 @@ jobs:
           persist-credentials: false
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: $/.github/actions/setup-uv
       - name: Seed (the date)
         run: echo "SEED=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
       - name: Generate queries (DuckDB)
@@ -120,6 +120,16 @@ jobs:
             --fixture "$RUNNER_TEMP/diff/expr.json" \
             --known tests/fixtures/spark-4.2.0/expr-differential-known-failures.json \
             --out "$RUNNER_TEMP/diff/expr-mismatches.json"
+      # P2-T082b: Spark 4.2 writes and reads every partitioned-write case again; a difference from the committed
+      # fixture (a Krishiv writer change Spark reads differently) fails the job.
+      - name: Partitioned writes Spark reads back (Spark 4.2, local mode)
+        run: |
+          cargo build -p krishiv-testkit --locked --bin write-partition-cases
+          env -u SPARK_HOME uv run --no-project --python 3.12 --with 'pyspark==4.2.0' \
+            python -I tests/scripts/gen_partitioned_write_goldens.py \
+            --writer target/debug/write-partition-cases \
+            --check tests/fixtures/spark-4.2.0/partitioned-write-goldens.json \
+            > "$RUNNER_TEMP/diff/partitioned-writes.json"
       - name: TLP and NoREC hunt (one hour)
         run: |
           set -o pipefail
@@ -170,7 +180,7 @@ jobs:
       # cannot compile apache-avro 0.22 (async-drop cycle), which ended every run since.
       - name: Nightly toolchain with llvm-tools (branch coverage)
         run: rustup toolchain install nightly-2026-08-12 --profile minimal --component llvm-tools-preview
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-llvm-cov,cargo-nextest
       # No `--branch`: with branch coverage `llvm-cov export -format=lcov` crashes on the pinned
@@ -237,8 +247,8 @@ jobs:
         run: |
           rustup show active-toolchain
           rustup component add llvm-tools-preview
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/setup-uv
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-llvm-cov
       - name: Build the instrumented extension and run the Python tests
@@ -275,13 +285,21 @@ jobs:
   # and result channel (`crates/krishiv-exec/src/loom_model.rs`).
   # P2-T163: runtime filter snapshot publication
   # (`crates/krishiv-io/src/runtime_filter/tests.rs`).
-  # P2-T103: every wheel target, built and tested (wheels.yml).
-  wheels:
+  # Every job of ci.yml on main (msrv, hack, deny, docs, release-dry-run, miri, fuzz-build, the abi3 and cp314t wheels,
+  # ...): ci.yml has no schedule or push trigger of its own (owner 2026-11-08, each gate runs once). Its jobs run here
+  # with `github.event_name == 'schedule'`, including the full wheel matrix (P2-T103, `wheels-targets` calling wheels.yml),
+  # and a failure opens the
+  # "nightly CI failed" issue (nightly-failure-notice, a job of ci.yml).
+  ci:
     if: github.repository == 'KrishivAI/krishiv-engine'
     permissions:
       contents: read
       actions: read
-    uses: $/.github/workflows/wheels.yml
+      checks: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    uses: $/.github/workflows/ci.yml
 
   loom:
     if: github.repository == 'KrishivAI/krishiv-engine'
@@ -328,7 +346,7 @@ jobs:
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: Pinned tools (sccache)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0
       - name: TPC-H SF1 with no stalled poll
@@ -356,7 +374,7 @@ jobs:
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: Pinned tools (sccache)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0
       - name: Golden ratchet through the wire format
@@ -380,7 +398,7 @@ jobs:
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: Pinned tools (sccache)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0
       - name: Fetch the Spark v4.3.0, v4.1.4, v4.0.5 and v3.5.9 goldens
@@ -448,7 +466,7 @@ jobs:
           persist-credentials: false
       - name: Nightly toolchain
         run: rustup toolchain install nightly-2026-08-12 --profile minimal
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-fuzz@0.13.2
       # The corpus carries over between nights: restore the latest, save anew.
@@ -490,7 +508,7 @@ jobs:
       - name: Nightly toolchain
         run: rustup toolchain install nightly-2026-08-12 --profile minimal
       - name: Pinned tools (sccache, cargo-public-api)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0,cargo-public-api@0.52.0
       - name: Diff against the snapshots

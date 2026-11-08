@@ -10,6 +10,7 @@
 
 pub mod arrow;
 pub mod batch;
+pub mod calendar;
 mod collation;
 mod data_type;
 mod ddl;
@@ -19,6 +20,7 @@ pub mod interval;
 pub mod interval_parse;
 mod json;
 mod nested;
+mod srs;
 pub mod variant;
 
 pub use collation::{CatalogEntry, Collation, CollationFamily};

@@ -90,5 +90,6 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..28,
 }
