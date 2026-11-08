@@ -661,7 +661,7 @@ static OPTS: OptionSchema = OptionSchema {
             name: "key",
             kind: OptionKind::Secret,
             default: OptionDefault::None,
-            conf_fallback: None,
+            conf_fallback: Some("spark.sql.t.key"),
             metadata_key: true,
             doc: "",
         },
@@ -1819,8 +1819,13 @@ fn the_async_bridge_rejects_pushes_of_the_wrong_length() {
 
 #[test]
 fn conf_fallbacks_are_written_into_the_options_for_a_worker() {
-    let (session, _) =
-        Config::from_pairs([("spark.sql.t.flag", "true"), ("krishiv.io.maxRetries", "7")]).unwrap();
+    let (session, _) = Config::from_pairs([
+        ("spark.sql.t.flag", "true"),
+        ("krishiv.io.maxRetries", "7"),
+        // A secret option's fallback is never written into a plan.
+        ("spark.sql.t.key", "hunter2"),
+    ])
+    .unwrap();
     // The user set `LEVEL` (any case): its conf is not consulted.
     let user: BTreeMap<String, OptionValue> =
         [("LEVEL".to_owned(), OptionValue::from_user("LEVEL", "2"))].into();

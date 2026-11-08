@@ -271,6 +271,13 @@ impl OptionSchema {
     /// parsing them against its own configuration reads the session's
     /// values (`spark.sql.binaryOutputStyle`, the session time zone, a
     /// Parquet codec), never the worker's. Secret options are left out.
+    ///
+    /// Every fallback of the schema is carried, read-side ones too, so a
+    /// worker running in strict mode (`krishiv.io.strictOptions`) must
+    /// know every option a newer driver's schema has. A fallback key that
+    /// is not in the config registry and is unset on the driver is not
+    /// carried: a worker that sets it reads its own value (today all such
+    /// keys are read-side only).
     #[must_use]
     pub fn with_conf_fallbacks(
         &self,
