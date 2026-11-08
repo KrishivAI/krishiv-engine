@@ -8,12 +8,12 @@
 #
 # Containers are named krishiv-test-<kind>-<pid> and bind 127.0.0.1 on free ports; only those names are ever
 # removed (never bench-minio or any other container). Images are overridable and should be pinned by digest in CI:
-#   MINIO_IMAGE (default minio/minio), FAKE_GCS_IMAGE (fsouza/fake-gcs-server, the image object_store's own CI
+#   MINIO_IMAGE (default cgr.dev/chainguard/minio: Docker Hub no longer serves minio/minio), FAKE_GCS_IMAGE (fsouza/fake-gcs-server, the image object_store's own CI
 #   uses; the tustvold image answers the XML PUT with 405),
 #   AZURITE_IMAGE (mcr.microsoft.com/azure-storage/azurite), AZ_CLI_IMAGE (mcr.microsoft.com/azure-cli).
 set -euo pipefail
 
-MINIO_IMAGE="${MINIO_IMAGE:-minio/minio}"
+MINIO_IMAGE="${MINIO_IMAGE:-cgr.dev/chainguard/minio}"
 FAKE_GCS_IMAGE="${FAKE_GCS_IMAGE:-fsouza/fake-gcs-server}"
 AZURITE_IMAGE="${AZURITE_IMAGE:-mcr.microsoft.com/azure-storage/azurite}"
 AZ_CLI_IMAGE="${AZ_CLI_IMAGE:-mcr.microsoft.com/azure-cli}"

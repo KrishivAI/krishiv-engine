@@ -372,6 +372,43 @@ jobs:
       - name: Golden ratchet through the wire format
         run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
 
+  # Object stores against throw-away emulators (P2-T084): krishiv-io's S3 (MinIO) and Azure (Azurite) round trips,
+  # then TPC-H SF1 uploaded to MinIO and read back over `s3a://`, equal to the local answers. The script names and
+  # removes only its own containers. Docker Hub no longer serves `minio/minio`, so MinIO comes from Chainguard.
+  object-stores:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MINIO_IMAGE: cgr.dev/chainguard/minio@sha256:a1ac4589a5f8136b616e667b48a0bea9719bb10bd45799ea946f24bbedfafde4
+      KRISHIV_TPCH_DIR: ${{ github.workspace }}/tpch-sf1
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (sccache, nextest)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: sccache@0.18.0,cargo-nextest@0.9.148
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Generate TPC-H SF1 (DuckDB dbgen)
+        working-directory: bench
+        env:
+          KRISHIV_DATA: ${{ github.workspace }}/data
+        run: |
+          uv sync --frozen
+          uv run krishiv-datasets tpch-dbgen --sf 1
+          # The output directory is versioned by the generator: link whichever one holds the tables.
+          ln -s "$(dirname "$(find "$KRISHIV_DATA/tpch-dbgen" -name lineitem.parquet | head -n1)")" "$KRISHIV_TPCH_DIR"
+      - name: Object stores against emulators
+        run: tests/scripts/object_store_emulators.sh
+
   # The Spark golden ratchet for other Spark versions (P3-T090): the upstream goldens of the tag are fetched
   # here (they are not committed, only v4.2.0 is), the baseline of failing statements is committed under
   # `tests/spark-golden/profiles/<tag>/`.
