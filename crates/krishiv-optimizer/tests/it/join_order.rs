@@ -19,7 +19,7 @@ use crate::support::{self, data, eval};
 
 /// Statistics by table name, from `tests/fixtures/tpch-sf10-stats.json`.
 #[derive(Debug)]
-struct Fixture(HashMap<String, TableStats>);
+pub(crate) struct Fixture(HashMap<String, TableStats>);
 
 impl Statistics for Fixture {
     fn table(&self, scan: &Scan) -> Option<TableStats> {
@@ -38,7 +38,7 @@ fn bound(v: &Value) -> Option<Literal> {
     Some(Literal::Double(v.get("number")?.as_f64()?))
 }
 
-fn fixture() -> Fixture {
+pub(crate) fn fixture() -> Fixture {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/tpch-sf10-stats.json"
@@ -572,6 +572,7 @@ fn tpcds_ctx() -> krishiv_plan::analyzer::AnalysisContext {
                 name: (*c).to_owned(),
                 data_type: krishiv_types::parse_data_type(ty).unwrap(),
                 nullable: true,
+                char_varchar: None,
             })
             .collect();
         cat = cat.with_table(&["default"], table, columns, None);
@@ -985,6 +986,7 @@ fn nested_equalities_stay_as_written() {
         name: name.to_owned(),
         data_type: ty.clone(),
         nullable: true,
+        char_varchar: None,
     };
     let cat = support::catalog()
         .with_table(&["default"], "n1", vec![col("a"), col("b")], None)

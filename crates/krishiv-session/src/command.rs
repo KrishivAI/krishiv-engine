@@ -14,8 +14,7 @@ use arrow_array::RecordBatch;
 use futures::StreamExt;
 use krishiv_common::config::REGISTRY;
 use krishiv_common::error::{
-    AssignmentArityMismatch, ColumnAlreadyExists,
-    CreateViewColumnArityMismatchNotEnoughDataColumns,
+    AssignmentArityMismatch, CreateViewColumnArityMismatchNotEnoughDataColumns,
     CreateViewColumnArityMismatchTooManyDataColumns, CreateViewWithIfNotExistsAndReplace,
     DefaultPlacementInvalid, DuplicateAssignments, DuplicateRoutineParameterNames,
     DuplicateRoutineReturnsColumns, DuplicateVariableNameInsideDeclare, ErrorClass,
@@ -29,16 +28,19 @@ use krishiv_common::error::{
     UserDefinedFunctionsNotNullOnFunctionParameters,
     UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery, VariableAlreadyExists, VariableNotFound,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::analyzer::{FunctionLookup, SqlFunction, SqlParam, TableColumn, variable_name};
+use krishiv_plan::analyzer::{
+    FunctionLookup, SqlFunction, SqlParam, TableColumn, VariableValue, variable_name,
+};
 use krishiv_plan::{
     Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SourceId, SubqueryKind,
 };
 use krishiv_sql::ast::{
-    Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeKind,
-    DataTypeSpec, DdlName, DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind,
-    FunctionBodyKind, FunctionReturnsKind, Ident, ObjectName, Query, Refresh, RefreshKind, Reset,
-    Set, SetExprKind, SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
+    Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeSpec, DdlName,
+    DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind, FunctionBodyKind,
+    FunctionReturnsKind, Ident, ObjectName, Query, Refresh, RefreshKind, Reset, Set, SetExprKind,
+    SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
 };
 use krishiv_types::DataType;
 
@@ -304,11 +306,7 @@ impl Session {
             .analyzed
             .output
             .iter()
-            .map(|c| TableColumn {
-                name: c.name.clone(),
-                data_type: c.data_type.clone(),
-                nullable: c.nullable,
-            })
+            .map(|c| TableColumn::new(c.name.clone(), c.data_type.clone(), c.nullable))
             .collect();
         if !v.columns.is_empty() {
             let declared: Vec<String> = v.columns.iter().map(|c| c.name.value.clone()).collect();
@@ -565,8 +563,8 @@ impl Session {
             .transpose()?;
         let (data_type, value, default_query) = match (&declared, &v.default) {
             (_, None) => match declared {
-                Some(t) => (t.clone(), Literal::Null(Some(t)), None),
-                None => (DataType::Null, Literal::Null(None), None),
+                Some(t) => (t.clone(), Literal::Null(Some(t)).into(), None),
+                None => (DataType::Null, Literal::Null(None).into(), None),
             },
             (declared, Some(default)) => {
                 if contains_subquery(default) {
@@ -591,9 +589,8 @@ impl Session {
                     ),
                     None => padded_select("SELECT ", slice, default.span.start, ""),
                 };
-                let (inferred, value) = self
-                    .eval_variable_value(&sql, text, v.span, default.span)
-                    .await?;
+                let (inferred, value) =
+                    self.eval_variable(&sql, text, v.span, default.span).await?;
                 let data_type = declared.clone().unwrap_or(inferred);
                 (data_type, value, Some(sql))
             }
@@ -651,11 +648,11 @@ impl Session {
                         match &var.default_query {
                             Some(query) => {
                                 let (_, value) = self
-                                    .eval_variable_value(query, text, v.span, a.value.span)
+                                    .eval_variable(query, text, v.span, a.value.span)
                                     .await?;
                                 value
                             }
-                            None => Literal::Null(Some(var.data_type.clone())),
+                            None => Literal::Null(Some(var.data_type.clone())).into(),
                         }
                     } else {
                         if contains_default(&a.value) && !has_default_var {
@@ -670,9 +667,8 @@ impl Session {
                             a.value.span.start,
                             &format!(" AS {})", var.data_type.simple_string()),
                         );
-                        let (_, value) = self
-                            .eval_variable_value(&sql, text, v.span, a.value.span)
-                            .await?;
+                        let (_, value) =
+                            self.eval_variable(&sql, text, v.span, a.value.span).await?;
                         value
                     };
                     pending.push((key.clone(), var.clone(), value));
@@ -747,7 +743,7 @@ impl Session {
                             key.clone(),
                             StoredVariable {
                                 data_type: var.data_type.clone(),
-                                value: Literal::Null(Some(var.data_type.clone())),
+                                value: Literal::Null(Some(var.data_type.clone())).into(),
                                 default_query: var.default_query.clone(),
                             },
                         );
@@ -789,7 +785,13 @@ impl Session {
                     crate::session::internal("a row assignment returned no batches".to_owned())
                 })?;
                 for ((key, var), i) in keys.iter().zip(&stored).zip(0..) {
-                    let (_, value) = arrow_field_value(batch, i, 0)?;
+                    let (_, value) = if crate::nested_value::is_nested(batch.column(i).data_type())
+                    {
+                        crate::nested_value::arrow_variable_value(batch.column(i), 0)?
+                    } else {
+                        let (t, l) = arrow_field_value(batch, i, 0)?;
+                        (t, l.into())
+                    };
                     self.state.variables.put(
                         key.clone(),
                         StoredVariable {
@@ -1560,25 +1562,10 @@ fn origin(source: krishiv_plan::SourceId, span: Span) -> Origin {
 /// The type `spec` names. `CHAR` and `VARCHAR` are for table schemas only:
 /// Spark rejects them in a function's signature.
 fn data_type(spec: &DataTypeSpec) -> Result<DataType, KrishivError> {
-    if has_char_or_varchar(spec) {
+    if spec.has_char_or_varchar() {
         return Err(UnsupportedCharOrVarcharAsString {}.into());
     }
     spec.to_data_type()
-}
-
-fn has_char_or_varchar(spec: &DataTypeSpec) -> bool {
-    match &spec.kind {
-        DataTypeKind::Primitive { name, .. } => matches!(
-            name.split(' ').next().unwrap_or(name),
-            "char" | "character" | "varchar"
-        ),
-        DataTypeKind::Array(Some(e)) => has_char_or_varchar(e),
-        DataTypeKind::Map(Some(kv)) => has_char_or_varchar(&kv.0) || has_char_or_varchar(&kv.1),
-        DataTypeKind::Struct(Some(fields)) => {
-            fields.iter().any(|f| has_char_or_varchar(&f.data_type))
-        }
-        _ => false,
-    }
 }
 
 /// Whether `e` holds a subquery.
@@ -1634,26 +1621,10 @@ fn list(names: &[String]) -> String {
         .join(", ")
 }
 
-/// A repeated view column, as Spark 4.2 reports it with
-/// `COLUMN_ALREADY_EXISTS`: ignoring case unless `case_sensitive`, then
-/// the repeated name in lower case, mirroring
-/// [`unique_columns`](crate::session) for writes.
+/// A repeated view column, as Spark 4.2 reports it with `COLUMN_ALREADY_EXISTS`
+/// (`check_column_name_duplication`).
 fn unique_view_columns(columns: &[TableColumn], case_sensitive: bool) -> Result<(), KrishivError> {
-    let mut seen = std::collections::HashSet::new();
-    for c in columns {
-        let name = if case_sensitive {
-            c.name.clone()
-        } else {
-            c.name.to_lowercase()
-        };
-        if !seen.insert(name.clone()) {
-            return Err(ColumnAlreadyExists {
-                column_name: format!("`{}`", name.replace('`', "``")),
-            }
-            .into());
-        }
-    }
-    Ok(())
+    check_column_name_duplication(columns.iter().map(|c| c.name.as_str()), case_sensitive)
 }
 
 /// Spark's search path, as analysis reports it for a missing table.
@@ -1799,6 +1770,39 @@ impl Session {
         command_span: Span,
         expr_span: Span,
     ) -> Result<(DataType, Literal), KrishivError> {
+        let (batch, declared) = self
+            .eval_variable_row(sql, text, command_span, expr_span)
+            .await?;
+        declared_value(batch.column(0), 0, declared.as_ref())
+    }
+
+    /// As [`Self::eval_variable_value`], for a variable's value, which may
+    /// be an `ARRAY`, `STRUCT` or `MAP` ([`crate::nested_value`]).
+    pub(crate) async fn eval_variable(
+        &self,
+        sql: &str,
+        text: &RedactedSql,
+        command_span: Span,
+        expr_span: Span,
+    ) -> Result<(DataType, VariableValue), KrishivError> {
+        let (batch, declared) = self
+            .eval_variable_row(sql, text, command_span, expr_span)
+            .await?;
+        if crate::nested_value::is_nested(batch.column(0).data_type()) {
+            return crate::nested_value::arrow_variable_value(batch.column(0), 0);
+        }
+        let (t, l) = declared_value(batch.column(0), 0, declared.as_ref())?;
+        Ok((t, l.into()))
+    }
+
+    /// The one-row, one-column batch of `sql`.
+    async fn eval_variable_row(
+        &self,
+        sql: &str,
+        text: &RedactedSql,
+        command_span: Span,
+        expr_span: Span,
+    ) -> Result<(RecordBatch, Option<DataType>), KrishivError> {
         let analysis = self
             .analyze_variable_query(sql)
             .await
@@ -1821,8 +1825,12 @@ impl Session {
                 "a variable expression returned more than one column".to_owned(),
             ));
         }
-        let declared = analysis.analyzed.output.first().map(|c| &c.data_type);
-        declared_value(batch.column(0), 0, declared)
+        let declared = analysis
+            .analyzed
+            .output
+            .first()
+            .map(|c| c.data_type.clone());
+        Ok((batch.clone(), declared))
     }
 }
 

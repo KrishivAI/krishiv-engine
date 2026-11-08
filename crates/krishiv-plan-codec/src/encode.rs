@@ -13,10 +13,10 @@ use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
 };
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
-    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryPlan,
-    SubqueryValueKind, WritePlan,
+    AggregatePlan, ExchangeFilterPlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme,
+    JoinDistribution, JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
+    ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan,
+    SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
@@ -231,7 +231,7 @@ impl Encoder {
             } => Kind::ExchangeSource(pb::ExchangeSourceNode {
                 id: id.0,
                 partitioning: Some(partitioning(p)),
-                schema: schema_bytes(schema),
+                schema: flagged_schema_bytes(schema, &self.nested),
             }),
             PhysNode::SharedRead { id, layout } => Kind::SharedRead(pb::SharedReadNode {
                 id: id.0,
@@ -330,6 +330,9 @@ impl Encoder {
                     krishiv_plan::GeneratorKind::Explode => pb::GeneratorKind::Explode,
                     krishiv_plan::GeneratorKind::PosExplode => pb::GeneratorKind::PosExplode,
                     krishiv_plan::GeneratorKind::Inline => pb::GeneratorKind::Inline,
+                    krishiv_plan::GeneratorKind::VariantExplode => {
+                        pb::GeneratorKind::VariantExplode
+                    }
                 }
                 .into(),
                 outer: *outer,
@@ -520,6 +523,15 @@ impl Encoder {
             id: exchange.id.0,
             input: self.node_index(&exchange.input)?,
             partitioning: Some(partitioning(&exchange.partitioning)),
+            filters: exchange
+                .filters
+                .iter()
+                .map(|f| exchange_filter(f, &self.nested))
+                .collect(),
+            schema: exchange
+                .schema
+                .as_deref()
+                .map(|schema| flagged_schema_bytes(schema, &self.nested)),
         })
     }
 
@@ -802,6 +814,21 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
     }
 }
 
+fn exchange_filter(f: &ExchangeFilterPlan, nested: &Cell<bool>) -> pb::ExchangeFilter {
+    pb::ExchangeFilter {
+        id: f.id.0,
+        column: u64::try_from(f.column).unwrap_or(u64::MAX),
+        key_type: arrow_bytes(&f.key_type, nested),
+        options: join_filter(&JoinFilterPlan {
+            id: f.id,
+            key: 0,
+            options: f.options,
+        })
+        .options,
+        null_safe: f.null_safe,
+    }
+}
+
 fn scan_filter(f: &ScanRuntimeFilter, nested: &Cell<bool>) -> pb::ScanRuntimeFilter {
     pb::ScanRuntimeFilter {
         id: f.id.0,
@@ -906,10 +933,24 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
     }
 }
 
+/// `schema` as Arrow IPC bytes. The feature walk classifies a schema field by field, so the
+/// encoder's nested-types flag follows its fields too.
+fn flagged_schema_bytes(schema: &arrow_schema::Schema, nested: &Cell<bool>) -> Vec<u8> {
+    if schema
+        .fields()
+        .iter()
+        .any(|f| arrow_type_is_nested(f.data_type()))
+    {
+        nested.set(true);
+    }
+    schema_bytes(schema)
+}
+
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
     let mut expr = aggregate_function(a, nested)?;
     if let Some(f) = &a.element {
-        expr.result_element = schema_bytes(&arrow_schema::Schema::new(vec![Arc::clone(f)]));
+        expr.result_element =
+            flagged_schema_bytes(&arrow_schema::Schema::new(vec![Arc::clone(f)]), nested);
     }
     Ok(expr)
 }
@@ -1107,6 +1148,11 @@ fn udaf_call(call: &UdafCall, nested: &Cell<bool>) -> Result<pb::UdafCall> {
         name: call.name.clone(),
         version: u64::from(call.version),
         args: fields(&call.args),
+        arg_types: call
+            .arg_types
+            .iter()
+            .map(|t| spark_type(t, nested))
+            .collect::<Result<_>>()?,
         result: Some(spark_type(&call.result, nested)?),
         nullable: call.nullable,
         state: fields(&call.state),
@@ -1291,7 +1337,10 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         DataType::Long => (Kind::Long, 0, 0, 0),
         DataType::Float => (Kind::Float, 0, 0, 0),
         DataType::Double => (Kind::Double, 0, 0, 0),
+        // The display-only `UTF8_BINARY` marker travels as plain STRING (ADR 0043, update
+        // 2026-11-07): it changes the printed type name only.
         DataType::String => (Kind::String, 0, 0, 0),
+        DataType::CollatedString(c) if c.is_utf8_binary() => (Kind::String, 0, 0, 0),
         DataType::Binary => (Kind::Binary, 0, 0, 0),
         DataType::Decimal(d) => (
             Kind::Decimal,

@@ -1,0 +1,80 @@
+@import "tailwindcss";
+@import "./brand/tokens.css";
+
+/* Red Hat Display / Text / Mono, self-hosted (SIL OFL 1.1, see fonts-LICENSE.txt). */
+@font-face { font-family: "Red Hat Display"; src: url("./brand/fonts/RedHatDisplay-VF.ttf") format("truetype"); font-weight: 300 900; font-display: swap; }
+@font-face { font-family: "Red Hat Text"; src: url("./brand/fonts/RedHatText-VF.ttf") format("truetype"); font-weight: 300 700; font-display: swap; }
+@font-face { font-family: "Red Hat Mono"; src: url("./brand/fonts/RedHatMono-VF.ttf") format("truetype"); font-weight: 300 700; font-display: swap; }
+
+/* shadcn-svelte's CSS variables, mapped to the brand kit's --k-* tokens (tokens.css switches them for dark and
+   light, by prefers-color-scheme or data-theme). The same variables are the hook for embed theming. */
+:root {
+  --background: var(--k-bg);
+  --foreground: var(--k-text);
+  --card: var(--k-surface);
+  --card-foreground: var(--k-text);
+  --popover: var(--k-surface);
+  --popover-foreground: var(--k-text);
+  --primary: var(--k-primary);
+  --primary-foreground: var(--k-on-primary);
+  --secondary: var(--k-surface-2);
+  --secondary-foreground: var(--k-text);
+  --muted: var(--k-bg-subtle);
+  --muted-foreground: var(--k-muted);
+  --accent: var(--k-surface-2);
+  --accent-foreground: var(--k-text);
+  --destructive: var(--k-error);
+  --border: var(--k-border);
+  --input: var(--k-border-strong);
+  --ring: var(--k-focus);
+  --radius: var(--k-radius-md);
+}
+
+/* Tailwind's theme: shadcn names first, then the brand's status colours and series. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-text-2: var(--k-text-2);
+  --color-success: var(--k-success);
+  --color-warning: var(--k-warning);
+  --color-error: var(--k-error);
+  --color-info: var(--k-info);
+  --color-success-bg: var(--k-success-bg);
+  --color-warning-bg: var(--k-warning-bg);
+  --color-error-bg: var(--k-error-bg);
+  --color-info-bg: var(--k-info-bg);
+  --color-series-1: var(--k-series-1);
+  --color-code: var(--k-code-bg);
+  --font-sans: var(--k-font-text);
+  --font-display: var(--k-font-display);
+  --font-mono: var(--k-font-mono);
+  --radius-sm: var(--k-radius-sm);
+  --radius-md: var(--k-radius-md);
+  --radius-lg: var(--k-radius-lg);
+  --shadow-sm: var(--k-shadow-sm);
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body { @apply bg-background font-sans text-sm text-foreground antialiased; overflow-x: hidden; }
+  h1 { @apply font-display text-xl font-bold tracking-tight wrap-anywhere md:text-2xl; }
+  h2 { @apply font-display text-base font-bold; }
+  :focus-visible { @apply outline-2 outline-offset-2 outline-ring; }
+  code, .mono { @apply font-mono text-[13px]; }
+}

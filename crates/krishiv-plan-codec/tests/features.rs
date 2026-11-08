@@ -967,6 +967,31 @@ fn only_udaf_plans_need_rust_udaf_and_a_reader_without_it_refuses() {
 }
 
 #[test]
+fn a_udaf_argument_type_counts_toward_the_header() {
+    use inventory::udaf_call_typed;
+    use krishiv_types::DataType;
+    // The Arrow column of the call cannot say `TIME(3)`; its Spark type can.
+    let plain = plan_of(udaf_call_typed(vec![DataType::Integer]));
+    assert!(!plan_features(&plain).contains(&Feature::TimeType));
+    let timed = plan_of(udaf_call_typed(vec![DataType::Time { precision: 3 }]));
+    let features = plan_features(&timed);
+    assert!(features.contains(&Feature::TimeType) && features.contains(&Feature::RustUdaf));
+    // A reader without `time_type` refuses it, naming the feature.
+    let bytes = encode(&timed).unwrap();
+    let others: Vec<Feature> = features
+        .into_iter()
+        .filter(|f| *f != Feature::TimeType)
+        .collect();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &ReaderFeatures::only(others)).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["time_type".to_owned()]
+        }
+    );
+    assert_eq!(decode(&bytes).unwrap(), timed);
+}
+
+#[test]
 fn only_udf_plans_need_rust_udf_and_every_expression_position_counts() {
     // Negative: no inventory case but `rust_udf` uses it, and the
     // `expressions` case (a registry call) does not.
@@ -1080,6 +1105,20 @@ fn the_variant_type_needs_its_feature() {
         Some(Feature::VariantType)
     );
     assert_eq!(Feature::VariantType.kind(), FeatureKind::Semantic);
+    assert_eq!(
+        message("generate_variant_explode").features,
+        ["generate", "variant_explode", "variant_type"]
+    );
+    assert_eq!(
+        feature_of(Construct::Generator(
+            krishiv_plan::GeneratorKind::VariantExplode
+        )),
+        Some(Feature::VariantExplode)
+    );
+    assert_eq!(
+        feature_of(Construct::Generator(krishiv_plan::GeneratorKind::Explode)),
+        None
+    );
     // A variant carried only in an Arrow schema (an exchange's columns).
     let carrier = DataType::Variant.to_arrow();
     assert_eq!(
@@ -1098,6 +1137,52 @@ fn the_variant_type_needs_its_feature() {
         CodecError::UnsupportedFeatures {
             missing: vec!["variant_type".to_owned()]
         }
+    );
+}
+
+/// A plan whose result columns include a variant encodes with
+/// `variant_type` alone and decodes to the same schema: the encoder's own
+/// nested-types check reads the variant's struct carrier as one value, as
+/// [`feature_of`] does. This is the end-to-end `encode` case the review of
+/// #555 asked for (its M1): the nightly `serialize-through` failure was a
+/// plan like this one. A variant inside an array is still nested.
+#[test]
+fn a_variant_result_column_is_not_a_nested_type() {
+    use std::sync::Arc;
+
+    use arrow_schema::{Field, Schema};
+    use krishiv_exec::physical::PhysicalPlan;
+    use krishiv_types::DataType;
+    let (_, scan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "variant_scan")
+        .unwrap();
+    let with_result = |t: arrow_schema::DataType| {
+        PhysicalPlan::new(
+            scan.root().clone(),
+            Arc::new(Schema::new(vec![Field::new("v", t, true)])),
+            scan.explain().clone(),
+            scan.env().clone(),
+        )
+    };
+    let plan = with_result(DataType::Variant.to_arrow());
+    let m = to_message(&plan).unwrap();
+    assert_eq!(m.features, ["variant_type"]);
+    let back = decode(&m.encode_to_vec()).unwrap();
+    assert_eq!(back.schema(), plan.schema());
+    let list = arrow_schema::DataType::List(Arc::new(Field::new(
+        "element",
+        DataType::Variant.to_arrow(),
+        true,
+    )));
+    let features = to_message(&with_result(list)).unwrap().features;
+    assert!(
+        features.contains(&"nested_types".to_owned()),
+        "{features:?}"
+    );
+    assert!(
+        features.contains(&"variant_type".to_owned()),
+        "{features:?}"
     );
 }
 

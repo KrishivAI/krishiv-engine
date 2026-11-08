@@ -20,8 +20,7 @@ use futures::StreamExt as _;
 use krishiv_common::config::Config;
 use krishiv_common::error::KrishivError;
 use krishiv_exec::physical::{
-    PhysNode, PhysicalPlan, ScanId, ScanNode, ScanSplits, SpillScopes, SplitFileRef, WorkerContext,
-    assign_file_splits, plan_file_partitions,
+    PhysicalPlan, ScanId, ScanSplits, SpillScopes, SplitFileRef, WorkerContext,
 };
 use krishiv_exec::planner::{
     DefaultPlanner, FileTable, MemoryTables, PhysicalPlanner, PlanningContext, ProviderStatistics,
@@ -40,8 +39,8 @@ use krishiv_plan::analyzer::testing::{block_on, context};
 use krishiv_plan::analyzer::{
     AnalysisContext, Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
 };
-use krishiv_plan::{Plan, ReadSource, SourceId};
-use krishiv_scheduler::{StageRunner, StageSplits, fragment};
+use krishiv_plan::{Plan, SourceId};
+use krishiv_scheduler::{StageRunner, StageSplits, TableDealer, fragment};
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
@@ -64,58 +63,22 @@ struct Tpch {
 /// Deals the scans of a stage's streaming pipeline (probe sides, not
 /// builds or subqueries) to its tasks in byte ranges of 64 KiB, as the
 /// coordinator would (P2-T178).
-#[derive(Debug)]
-struct Dealer(BTreeMap<String, Vec<SplitFileRef>>);
+/// A query pool smaller than a task's own build of `orders`, so that build
+/// spills. One task's build spills at 2 and 3 MiB and fits at 8; at 4 to 6
+/// MiB the query can fail instead (`ops/queue-opus-b1.md`, arbitration
+/// finding of 2026-11-06), and 3 MiB keeps clear of that window.
+const SMALL_POOL: usize = 3 << 20;
 
-impl StageSplits for Dealer {
-    fn splits(
-        &self,
-        fragment: &PhysicalPlan,
-        tasks: u32,
-    ) -> Result<Option<Vec<BTreeMap<ScanId, ScanSplits>>>, KrishivError> {
-        fn streaming<'a>(n: &'a PhysNode, out: &mut Vec<&'a ScanNode>) {
-            match n {
-                PhysNode::Scan(s) => out.push(s),
-                PhysNode::HashJoin(j) => streaming(&j.probe, out),
-                PhysNode::SortMergeJoin(j) => streaming(&j.probe, out),
-                PhysNode::NestedLoopJoin(j) => streaming(&j.probe, out),
-                PhysNode::UnionLoop { .. } | PhysNode::LateFetch { .. } => {}
-                PhysNode::Filter { input, .. }
-                | PhysNode::Project { input, .. }
-                | PhysNode::ReplicateRows { input, .. }
-                | PhysNode::Generate { input, .. }
-                | PhysNode::Expand { input, .. } => streaming(input, out),
-                other => other.children().into_iter().for_each(|c| streaming(c, out)),
-            }
-        }
-        let mut scans = Vec::new();
-        streaming(fragment.root(), &mut scans);
-        if scans.is_empty() {
-            return Ok(None);
-        }
-        let tasks = tasks as usize;
-        let cfg = SplitConfig {
+fn dealer(files: &BTreeMap<String, Vec<SplitFileRef>>) -> TableDealer {
+    TableDealer::new(
+        files.clone(),
+        SplitConfig {
             max_partition_bytes: 64 << 10,
             open_cost_in_bytes: 0,
             min_partition_num: 1,
             max_partition_num: None,
-        };
-        let mut out = vec![BTreeMap::new(); tasks];
-        for scan in scans {
-            let ReadSource::Table { name, .. } = &scan.scan.source else {
-                return Ok(None);
-            };
-            let files = &self.0[name.last().unwrap()];
-            let partitions = plan_file_partitions(&cfg, files, |_| true);
-            for (t, splits) in assign_file_splits(files, &partitions, tasks)
-                .into_iter()
-                .enumerate()
-            {
-                out[t].insert(scan.id, splits);
-            }
-        }
-        Ok(Some(out))
-    }
+        },
+    )
 }
 
 fn tpch(rt: &tokio::runtime::Runtime) -> Tpch {
@@ -139,7 +102,7 @@ fn tpch(rt: &tokio::runtime::Runtime) -> Tpch {
             .unwrap();
         let files = vec![FileRef::from_meta(id.clone(), &meta)];
         listed.insert(
-            t.to_owned(),
+            format!("spark_catalog.default.{t}"),
             files.iter().map(SplitFileRef::from_file_ref).collect(),
         );
         let file_schema = rt
@@ -160,6 +123,7 @@ fn tpch(rt: &tokio::runtime::Runtime) -> Tpch {
                 name: f.name().clone(),
                 data_type,
                 nullable: f.is_nullable(),
+                char_varchar: None,
             });
         }
         catalog = catalog.with_table(&["default"], t, columns, None);
@@ -194,16 +158,17 @@ impl Tpch {
     fn plan(&self, q: usize) -> Result<PhysicalPlan, KrishivError> {
         let text = std::fs::read_to_string(repo().join(format!("bench/queries/tpch/q{q:02}.sql")))
             .unwrap();
-        let plan = krishiv_sql::parse_and_lower(
-            &text,
-            &krishiv_sql::ParserOptions::default(),
-            SourceId(0),
-        )
-        .map_err(KrishivError::from)?;
+        self.plan_sql(&text, Arc::clone(&self.config))
+    }
+
+    fn plan_sql(&self, text: &str, config: Arc<Config>) -> Result<PhysicalPlan, KrishivError> {
+        let plan =
+            krishiv_sql::parse_and_lower(text, &krishiv_sql::ParserOptions::default(), SourceId(0))
+                .map_err(KrishivError::from)?;
         let plan: Plan = block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))?.plan;
         let stats = ProviderStatistics(Arc::clone(&self.tables) as _);
         let plan = krishiv_optimizer::optimize_with(&plan, &stats)?;
-        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, config);
         DefaultPlanner.plan(&plan, &cx)
     }
 }
@@ -217,10 +182,22 @@ fn run(
     pool: &Arc<dyn MemoryPool>,
     id: u64,
 ) -> Result<Vec<String>, KrishivError> {
+    run_with(scheduler, plan, worker, pool, id, ExecConfig::default())
+}
+
+/// [`run`] with the query's settings `config`.
+fn run_with(
+    scheduler: &dyn Scheduler,
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    pool: &Arc<dyn MemoryPool>,
+    id: u64,
+    config: ExecConfig,
+) -> Result<Vec<String>, KrishivError> {
     let query = QueryContext::new(
         QueryId(id),
         WorkloadClass::Interactive,
-        ExecConfig::default(),
+        config,
         pool.child(&format!("q{id}"), None),
     );
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -263,7 +240,7 @@ fn tpch_sf0_01_on_stages_equals_one_worker() {
     let stages = StageRunner::new(Arc::clone(&executor) as _, 4).unwrap();
     let split = StageRunner::new(Arc::clone(&executor) as _, 4)
         .unwrap()
-        .with_splits(Arc::new(Dealer(tpch.files.clone())));
+        .with_splits(Arc::new(dealer(&tpch.files)));
     let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
     let dir = tempfile::tempdir().unwrap();
     let spill = SpillManager::open(&SpillConfig {
@@ -311,6 +288,14 @@ fn tpch_sf0_01_on_stages_equals_one_worker() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
     // The suite crosses stages: every query has at least one exchange.
     assert!(only.is_some() || cut >= 22, "{cut} cuts");
+    // Dealt scans run several tasks per stage: their broadcast joins read
+    // one table built once per query (design P2-T177 unit 3), and its
+    // memory is back once the query ended.
+    assert!(
+        only.is_some() || split.shared_builds() > 0,
+        "no broadcast build was shared"
+    );
+    assert_eq!(root.reserved(), 0, "memory still held after the queries");
 }
 
 /// Scopes from one spill manager, counted.
@@ -342,7 +327,7 @@ fn stages_under_a_16_mib_pool_match() {
     let plain = QueryRunner::new(Arc::clone(&executor) as _);
     let stages = StageRunner::new(Arc::clone(&executor) as _, 8)
         .unwrap()
-        .with_splits(Arc::new(Dealer(tpch.files.clone())));
+        .with_splits(Arc::new(dealer(&tpch.files)));
     let big: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
     let small: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
         limit: Some(16 << 20),
@@ -380,10 +365,10 @@ fn stages_under_a_16_mib_pool_match() {
     assert_eq!(small.reserved(), 0);
 }
 
-/// Deals as [`Dealer`] does, but task 1 of every dealt stage reads a file
+/// Deals as [`dealer`] does, but task 1 of every dealt stage reads a file
 /// that does not exist.
 #[derive(Debug)]
-struct Failing(Dealer);
+struct Failing(TableDealer);
 
 impl StageSplits for Failing {
     fn splits(
@@ -443,7 +428,7 @@ fn a_failing_map_task_ends_its_stage_and_frees_its_memory() {
     let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
     let stages = StageRunner::new(Arc::clone(&executor) as _, 4)
         .unwrap()
-        .with_splits(Arc::new(Failing(Dealer(tpch.files.clone()))));
+        .with_splits(Arc::new(Failing(dealer(&tpch.files))));
     let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
     let worker = WorkerContext::new(Arc::clone(&tpch.tables) as _);
     let plan = tpch.plan(1).unwrap();
@@ -523,4 +508,378 @@ fn a_submission_dropped_unpolled_is_forgotten() {
     // A timeout or a client gone drops the submission unfinished.
     drop(submitted);
     assert_eq!(stages.running_queries(), 0);
+}
+
+/// The hazard of design P2-T177 §7, across stages: a partitioned join whose
+/// build stage runs as several tasks, each seeing part of the build keys.
+/// The probe scan's filter is collected by the build exchange in the
+/// earlier stage, merged from every task's partial, and carried to the
+/// probe scan's stage; a partial alone would drop probe rows whose keys
+/// another task saw. The rows equal one worker's (filters local) and the
+/// run with runtime filters off.
+#[test]
+fn a_filter_merged_from_every_build_task_crosses_stages() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let plain = QueryRunner::new(Arc::clone(&executor) as _);
+    let split = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)));
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let worker = WorkerContext::new(Arc::clone(&tpch.tables) as _);
+    // Partitioned joins: no broadcast at this scale otherwise.
+    let mut config = Config::clone(&tpch.config);
+    config
+        .set("spark.sql.autoBroadcastJoinThreshold", "-1")
+        .unwrap();
+    let mut off = config.clone();
+    off.set("krishiv.runtimeFilter.enabled", "false").unwrap();
+    let sql = "SELECT l_orderkey, l_linenumber, o_orderdate FROM lineitem JOIN orders \
+               ON l_orderkey = o_orderkey WHERE o_orderdate < DATE '1992-03-01' \
+               AND o_orderpriority = '1-URGENT'";
+    let plan = tpch.plan_sql(sql, Arc::new(config)).unwrap();
+    let schemas = krishiv_exec::physical::exchange_schemas(&plan, &worker).unwrap();
+    let stages = fragment(&plan, &schemas).unwrap();
+    let collecting: Vec<usize> = stages
+        .iter()
+        .filter(|s| {
+            matches!(s.plan.root(), krishiv_exec::physical::PhysNode::Exchange(e) if !e.filters.is_empty())
+        })
+        .map(|s| s.id)
+        .collect();
+    assert!(!collecting.is_empty(), "no filter crosses stages:\n{plan}");
+    // Several tasks collect the filter: each partial alone is the hazard.
+    let tasks = krishiv_scheduler::stage_tasks(&stages, 4, Some(&dealer(&tpch.files))).unwrap();
+    assert!(
+        collecting.iter().any(|&s| tasks[s].len() > 1),
+        "the collecting stage runs as one task"
+    );
+    let sorted = |mut rows: Vec<String>| {
+        rows.sort();
+        rows
+    };
+    let want = sorted(run(&plain, &plan, &worker, &root, 1).unwrap());
+    assert!(!want.is_empty());
+    let got = sorted(run(&split, &plan, &worker, &root, 2).unwrap());
+    assert_eq!(got.len(), want.len());
+    assert_eq!(got, want);
+    assert!(split.cross_stage_filters() > 0, "no value crossed");
+    let unfiltered = tpch.plan_sql(sql, Arc::new(off)).unwrap();
+    assert_eq!(
+        sorted(run(&plain, &unfiltered, &worker, &root, 3).unwrap()),
+        want
+    );
+    assert_eq!(root.reserved(), 0);
+}
+
+/// A file its format cannot split (gzip or `multiLine` CSV) is dealt whole,
+/// as a local scan keeps it: one task reads all of its bytes, so its
+/// `_metadata.file_block_length` is the file's length. Other files of the
+/// same size are cut into ranges.
+#[test]
+fn an_unsplittable_file_is_dealt_whole() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let plan = tpch
+        .plan_sql(
+            "SELECT l_orderkey FROM lineitem",
+            Arc::new(Config::clone(&tpch.config)),
+        )
+        .unwrap();
+    let ranges = |dealer: &TableDealer| {
+        let mut ranges = Vec::new();
+        for task in dealer.splits(&plan, 4).unwrap().unwrap() {
+            for splits in task.values() {
+                let ScanSplits::Files { files, partitions } = splits else {
+                    panic!("not file splits: {splits:?}");
+                };
+                for s in partitions.iter().flat_map(|p| &p.splits) {
+                    ranges.push((s.range.start, s.range.end, files[s.file].size));
+                }
+            }
+        }
+        ranges
+    };
+    let cut = ranges(&dealer(&tpch.files));
+    assert!(
+        cut.iter()
+            .any(|&(start, end, size)| start > 0 || end < size),
+        "{cut:?}"
+    );
+    let paths = tpch.files["spark_catalog.default.lineitem"]
+        .iter()
+        .map(|f| f.path.to_string());
+    let whole = ranges(&dealer(&tpch.files).with_unsplittable(paths));
+    assert!(!whole.is_empty());
+    assert!(
+        whole
+            .iter()
+            .all(|&(start, end, size)| start == 0 && end == size),
+        "{whole:?}"
+    );
+}
+
+/// A shared broadcast build that does not fit in the query's memory falls
+/// back to one build per task (owner decision 2026-11-06, row 30c (b)):
+/// each task builds its own table under its own spill scope, and the rows
+/// match. With room, the same plan shares the build.
+#[test]
+fn a_broadcast_that_does_not_fit_is_built_by_each_task() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let plain = QueryRunner::new(Arc::clone(&executor) as _);
+    // The query's shared broadcast tables may hold 256 KiB: the build of
+    // `orders` (3.75 MB of frames) does not fit, the tasks' own builds do.
+    let capped = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)))
+        .with_broadcast_limit(256 << 10);
+    let split = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)));
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let dir = tempfile::tempdir().unwrap();
+    let spill = SpillManager::open(&SpillConfig {
+        dir: dir.path().join("spill"),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let worker =
+        WorkerContext::new(Arc::clone(&tpch.tables) as _).with_spill(spill.scope().unwrap());
+    let mut config = Config::clone(&tpch.config);
+    config
+        .set("spark.sql.autoBroadcastJoinThreshold", "1g")
+        .unwrap();
+    let sql = "SELECT o_orderpriority, count(*), sum(l_quantity), max(o_comment) \
+               FROM lineitem JOIN orders ON l_orderkey = o_orderkey GROUP BY o_orderpriority";
+    let plan = tpch.plan_sql(sql, Arc::new(config)).unwrap();
+    let sorted = |mut rows: Vec<String>| {
+        rows.sort();
+        rows
+    };
+    let want = sorted(run(&plain, &plan, &worker, &root, 1).unwrap());
+    assert_eq!(want.len(), 5, "{want:?}");
+    let got = sorted(run(&capped, &plan, &worker, &root, 2).unwrap());
+    assert_eq!(got, want);
+    // The broadcast's committed bytes alone are past the cap: the shared
+    // build is not even tried (design `P2-row30c-m5-shared-skip`).
+    assert_eq!(capped.broadcast_fallbacks(), 0, "a shared build was tried");
+    // Once per task (review M1): each task's join skipped, and says so.
+    assert_eq!(
+        capped.broadcast_skips(),
+        capped.task_counter("broadcast_skipped"),
+        "the shared build was not skipped once per task:\n{plan}"
+    );
+    assert!(capped.broadcast_skips() > 0);
+    assert_eq!(root.reserved(), 0, "memory still held after a fallback");
+    // Each task's join says it built its own table.
+    assert!(capped.task_counter("broadcast_fallback") > 0);
+    assert_eq!(capped.task_counter("broadcast_shared"), 0);
+    // Uncapped, the same plan shares its build.
+    assert_eq!(sorted(run(&split, &plan, &worker, &root, 3).unwrap()), want);
+    assert_eq!(split.broadcast_fallbacks(), 0);
+    assert_eq!(split.shared_builds(), 1);
+    assert_eq!(
+        split.task_counter("broadcast_shared"),
+        capped.task_counter("broadcast_fallback")
+    );
+    assert_eq!(split.task_counter("broadcast_fallback"), 0);
+    assert_eq!(root.reserved(), 0);
+    // The query's `krishiv.exec.join.sharedBroadcastBytes` caps them the
+    // same way when the runner sets no cap.
+    let exec = ExecConfig {
+        shared_broadcast_bytes: Some(256 << 10),
+        ..ExecConfig::default()
+    };
+    assert_eq!(
+        sorted(run_with(&split, &plan, &worker, &root, 4, exec).unwrap()),
+        want
+    );
+    // Skipped as the runner's cap is: the config reaches the decision.
+    assert_eq!(split.broadcast_fallbacks(), 0);
+    assert!(split.broadcast_skips() > 0);
+    assert_eq!(root.reserved(), 0);
+    // A cap past half the broadcast's frame bytes (3.75 MB; the skip's lower
+    // bound of the table) and below the table (it fits in 3.67 MB, not in
+    // 3 MiB; measured 2026-11-07): the shared build is tried, does not fit, and
+    // the tasks fall back (review minor of row 30c m5).
+    let between = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)))
+        .with_broadcast_limit(3 << 20);
+    assert_eq!(
+        sorted(run(&between, &plan, &worker, &root, 5).unwrap()),
+        want
+    );
+    assert_eq!(between.broadcast_skips(), 0, "the build was not tried");
+    assert_eq!(between.broadcast_fallbacks(), 1, "the shared build fit");
+    assert!(between.task_counter("broadcast_fallback") > 0);
+    assert_eq!(between.task_counter("broadcast_skipped"), 0);
+    assert_eq!(root.reserved(), 0);
+}
+
+/// The fallback's own build spills when the query's memory is short: the
+/// shared build does not fit, the task's own build of the broadcast then
+/// runs under a query pool smaller than the table, spills, and the rows
+/// still match (Fable review m2 of row 30c). One task (no dealt splits):
+/// several own builds at once under a small pool hit the arbitration
+/// finding named at [`SMALL_POOL`].
+#[test]
+fn a_fallback_build_spills_under_a_small_query_pool() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let plain = QueryRunner::new(Arc::clone(&executor) as _);
+    let capped = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_broadcast_limit(256 << 10);
+    let dir = tempfile::tempdir().unwrap();
+    let spill = SpillManager::open(&SpillConfig {
+        dir: dir.path().join("spill"),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let worker =
+        WorkerContext::new(Arc::clone(&tpch.tables) as _).with_spill(spill.scope().unwrap());
+    let mut config = Config::clone(&tpch.config);
+    config
+        .set("spark.sql.autoBroadcastJoinThreshold", "1g")
+        .unwrap();
+    let sql = "SELECT o_orderpriority, count(*), sum(l_quantity), max(o_comment) \
+               FROM lineitem JOIN orders ON l_orderkey = o_orderkey GROUP BY o_orderpriority";
+    let plan = tpch.plan_sql(sql, Arc::new(config)).unwrap();
+    let sorted = |mut rows: Vec<String>| {
+        rows.sort();
+        rows
+    };
+    let roomy: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let want = sorted(run(&plain, &plan, &worker, &roomy, 1).unwrap());
+    let small: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+        limit: Some(SMALL_POOL),
+        ..MemoryConfig::default()
+    });
+    let got = sorted(run(&capped, &plan, &worker, &small, 2).unwrap());
+    assert_eq!(got, want);
+    assert_eq!(capped.broadcast_fallbacks() + capped.broadcast_skips(), 1);
+    assert_eq!(capped.task_counter("broadcast_fallback"), 1);
+    // The join build spilled (their counter), not only other operators.
+    assert!(
+        capped.task_counter("spilled_partitions") > 0,
+        "no task's own build spilled:\n{plan}"
+    );
+    assert!(capped.task_spill_bytes() > 0);
+    assert_eq!(small.reserved(), 0, "memory still held after a fallback");
+}
+
+/// The schemas the planner writes into the plan (T176 unit 1 review m4)
+/// are the ones instantiation builds: the fragmenter takes them instead
+/// of instantiating the plan, and an exchange read refuses other columns.
+#[test]
+fn the_planners_exchange_schemas_are_the_instantiated_ones() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let worker = WorkerContext::new(Arc::clone(&tpch.tables) as _);
+    let mut partitioned = Config::clone(&tpch.config);
+    partitioned
+        .set("spark.sql.autoBroadcastJoinThreshold", "-1")
+        .unwrap();
+    let partitioned = Arc::new(partitioned);
+    for q in 1..=22 {
+        for plan in [
+            tpch.plan(q).unwrap(),
+            tpch.plan_sql(
+                &std::fs::read_to_string(repo().join(format!("bench/queries/tpch/q{q:02}.sql")))
+                    .unwrap(),
+                Arc::clone(&partitioned),
+            )
+            .unwrap(),
+        ] {
+            let planned = krishiv_exec::physical::planned_exchange_schemas(&plan)
+                .unwrap_or_else(|| panic!("q{q:02}: an exchange without a schema"));
+            let built = krishiv_exec::physical::exchange_schemas(&plan, &worker).unwrap();
+            assert_eq!(
+                planned.keys().collect::<Vec<_>>(),
+                built.keys().collect::<Vec<_>>(),
+                "q{q:02}"
+            );
+            for (id, schema) in &planned {
+                assert_eq!(
+                    schema.fields(),
+                    built[id].fields(),
+                    "q{q:02} exchange {}",
+                    id.0
+                );
+            }
+        }
+    }
+}
+
+/// A broadcast hash join under a partial aggregate, four drivers, query
+/// pools from "the build spills" to "everything fits": each pool size works.
+/// The table stays in memory from about 5 MiB, and the four aggregates each
+/// reserve a batch's worst case (~790 KB) and give most of it back. A
+/// driver refused while the others hold grants for their retries waits for
+/// those retries rather than failing (6 MiB failed 6/8 before; ADR 0007
+/// update 2026-11-06).
+#[test]
+fn a_join_and_aggregate_run_in_pools_between_spilling_and_fitting() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let runner = QueryRunner::new(Arc::clone(&executor) as _);
+    let dir = tempfile::tempdir().unwrap();
+    let spill = SpillManager::open(&SpillConfig {
+        dir: dir.path().join("spill"),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let worker =
+        WorkerContext::new(Arc::clone(&tpch.tables) as _).with_spill(spill.scope().unwrap());
+    let mut config = Config::clone(&tpch.config);
+    config
+        .set("spark.sql.autoBroadcastJoinThreshold", "1g")
+        .unwrap();
+    let sql = "SELECT o_orderpriority, count(*), sum(l_quantity), max(o_comment) \
+               FROM lineitem JOIN orders ON l_orderkey = o_orderkey GROUP BY o_orderpriority";
+    let plan = tpch.plan_sql(sql, Arc::new(config)).unwrap();
+    let sorted = |mut rows: Vec<String>| {
+        rows.sort();
+        rows
+    };
+    let roomy: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let want = sorted(run(&runner, &plan, &worker, &roomy, 0).unwrap());
+    let mut id = 1;
+    for mib in [3, 4, 6, 8] {
+        for _ in 0..4 {
+            let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+                limit: Some(mib << 20),
+                ..MemoryConfig::default()
+            });
+            let got = run(&runner, &plan, &worker, &pool, id)
+                .unwrap_or_else(|e| panic!("{mib} MiB, run {id}: {e}"));
+            assert_eq!(sorted(got), want, "{mib} MiB");
+            assert_eq!(pool.reserved(), 0, "{mib} MiB: memory still held");
+            id += 1;
+        }
+    }
 }

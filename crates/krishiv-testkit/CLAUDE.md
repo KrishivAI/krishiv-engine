@@ -63,6 +63,7 @@ Paths are relative to this crate.
 - `src/golden/` the SQLQueryTestSuite runner, report and manifest; `src/file_format/` the `FileFormat` conformance suite
 - `src/kernel_eval/` kernel evaluation for the Spark function matrix; `src/fn_matrix.rs` matrix loader
 - `src/hash_fixture.rs` hash golden fixtures; `src/batch_stream.rs` batch == bounded-stream harness; `src/slt.rs` sqllogictest runner
+- `src/partitioned_writes.rs` (P2-T082b acceptance): partitioned writes Spark reads back. `tests/fixtures/partitioned-writes/cases.json` is written by the `write-partition-cases` binary and read by a real Spark 4.2.0 (`tests/scripts/gen_partitioned_write_goldens.py`); test `partitioned_write_goldens` checks the partition directories and that Krishiv reads Spark's schema (partition-type inference included) and rows
 - `src/bin/` report binaries; `tests/` the differential and interop suites (e.g. `registry_matrix.rs`, `file_format_mock.rs`, `parquet_interop.rs`)
 
 ## Extension points
@@ -80,7 +81,6 @@ Paths are relative to this crate.
 `cargo nextest run -p krishiv-testkit --no-tests=pass` · `cargo clippy -p krishiv-testkit --all-targets -- -D warnings`
 
 **Other Spark versions (P3-T090).** Only the v4.2.0 goldens are committed. `tests/golden_profiles.rs` runs the ratchet for another tag
-(today `v4.3.0`) against its committed baseline `tests/spark-golden/profiles/<tag>/` (same split layout as the 4.2 baseline, with its own
-`s43-*` categories); the goldens themselves are fetched by `tests/scripts/import_spark_golden.sh <tag>` in the nightly `golden-profiles` job
-(the test is `#[ignore]`d locally). Refresh with `golden-report --engine session --tag <tag> --ratchet update --known-failures
-tests/spark-golden/profiles/<tag>/known-failures.json`; a new failure needs a rule in that directory's categories first (`s43-other` has cases but no rule, on purpose). `--ignored` fails locally until the tag is fetched.
+(`v4.3.0`, `v4.1.4`, `v4.0.5`, `v3.5.9`) against its committed baseline `tests/spark-golden/profiles/<tag>/` (same split layout as the 4.2 baseline, with the 4.2 categories plus `s43-*` for 4.3.0 and `v35-ansi-default` for 3.5.9); the goldens themselves are fetched by `tests/scripts/import_spark_golden.sh <tag>` in the nightly `golden-profiles` job
+(the test is `#[ignore]`d locally). Refresh all of them with `tests/scripts/refresh_golden_profiles.sh [tag ...]` (fetches the tags, builds `golden-report`, runs the update for each; review `git diff --stat`, a refresh is data only, and a statement that newly fails is a regression to fix, not to list), or one with `golden-report --engine session --tag <tag> --ratchet update --known-failures
+tests/spark-golden/profiles/<tag>/known-failures.json`; a new failure needs a rule in that directory's categories first (`s43-other` and each older profile's `other-version` have cases but no rule, on purpose). `--ignored` fails locally until the tag is fetched.

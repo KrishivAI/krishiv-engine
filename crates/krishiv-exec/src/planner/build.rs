@@ -28,14 +28,15 @@ use krishiv_io::{ColumnPath, FilterId, MetadataCols};
 use krishiv_optimizer::PlanStats;
 use krishiv_plan::{
     AttrId, BoundColumn, CastMode, Expr, ExprNode, Literal, LogicalPlan, NullOrdering, Plan,
-    PlanNode, ResolvedExpr, SortDirection, SortOrder, SubqueryKind,
+    PlanNode, ResolvedExpr, SortDirection, SortOrder,
 };
 
 use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
 use super::properties::{Distribution, Placement, range_keys};
 use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
-use super::subquery::SubqueryValue;
+pub(crate) use super::subquery::has_subquery;
+use super::subquery::{ByPlan, SubqueryValue, subqueries, with_subquery_columns};
 use super::{PhysicalPlanner, PlanningContext};
 use crate::error::Result;
 use crate::operator::{Operator, Source};
@@ -954,7 +955,7 @@ impl<'a> Planner<'a> {
         for e in exprs {
             subqueries(e, &mut found);
         }
-        let mut by_plan: HashMap<usize, BoundColumn> = HashMap::new();
+        let mut by_plan: ByPlan = HashMap::new();
         let mut prepared = Prepared {
             exprs: Vec::with_capacity(exprs.len()),
             subqueries: Vec::new(),
@@ -962,7 +963,10 @@ impl<'a> Planner<'a> {
             explain: Vec::new(),
         };
         for (kind, plan) in found {
-            let key = Arc::as_ptr(&plan) as usize;
+            let key = (
+                kind == SubqueryValueKind::Scalar,
+                Arc::as_ptr(&plan) as usize,
+            );
             if by_plan.contains_key(&key) {
                 continue;
             }
@@ -1685,10 +1689,7 @@ impl<'a> Planner<'a> {
         let scan = scan_below(&input.node)?;
         let bound_column = scan.scan.output.iter().find(|c| c.id == attr)?;
         if !krishiv_io::runtime_filter::supported_key_type(&key_type)
-            || matches!(
-                bound_column.data_type,
-                krishiv_types::DataType::CollatedString(_)
-            )
+            || bound_column.data_type.contains_collation()
         {
             return None;
         }
@@ -1870,41 +1871,6 @@ pub(crate) fn column_of(e: &Expr) -> Option<AttrId> {
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => column_of(expr),
         _ => None,
     }
-}
-
-/// The uncorrelated subqueries `e` reads (not inside subquery plans).
-fn subqueries(e: &Expr, out: &mut Vec<(SubqueryValueKind, Arc<LogicalPlan>)>) {
-    if let ExprNode::Subquery { kind, plan } = &e.node {
-        match kind {
-            SubqueryKind::Scalar => out.push((SubqueryValueKind::Scalar, Arc::clone(plan))),
-            SubqueryKind::Exists => out.push((SubqueryValueKind::Exists, Arc::clone(plan))),
-            // `IN (subquery)` is a semi join after analysis; one left here
-            // fails when compiled.
-            _ => {}
-        }
-    }
-    e.for_each_child(&mut |c| subqueries(c, out));
-}
-
-/// `e` with each subquery of `columns` (by the address of its plan)
-/// replaced by the column of its value.
-fn with_subquery_columns(e: Arc<Expr>, columns: &HashMap<usize, BoundColumn>) -> Result<Arc<Expr>> {
-    e.transform_down(&mut |x: Arc<Expr>| {
-        if let ExprNode::Subquery { plan, .. } = &x.node
-            && let Some(c) = columns.get(&(Arc::as_ptr(plan) as usize))
-        {
-            return Ok::<_, KrishivError>(Arc::new(Expr::new(ExprNode::Resolved(
-                ResolvedExpr::Column(c.clone()),
-            ))));
-        }
-        Ok(x)
-    })
-}
-
-pub(crate) fn has_subquery(e: &Expr) -> bool {
-    let mut found = Vec::new();
-    subqueries(e, &mut found);
-    !found.is_empty()
 }
 
 /// Exactly `output`'s columns of `planned`, in order, under their names.

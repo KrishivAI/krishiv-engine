@@ -20,12 +20,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ColumnNotDefinedInTable,
-    ForbiddenOperation, InternalError, InvalidPartitionColumnDataType,
-    InvalidPartitionOperationPartitionSchemaIsEmpty, KrishivError, KrishivUnsupportedFeature,
-    LegacyErrorTemp1166, LegacyErrorTemp1167, LegacyErrorTemp1169, LegacyErrorTemp1232,
-    LegacyErrorTemp1237, LegacyErrorTemp1251, PartitionsAlreadyExist, PartitionsNotFound,
+    AllPartitionColumnsNotAllowed, ColumnNotDefinedInTable, ForbiddenOperation, InternalError,
+    InvalidPartitionColumnDataType, InvalidPartitionOperationPartitionSchemaIsEmpty, KrishivError,
+    KrishivUnsupportedFeature, LegacyErrorTemp1166, LegacyErrorTemp1167, LegacyErrorTemp1169,
+    LegacyErrorTemp1232, LegacyErrorTemp1237, LegacyErrorTemp1251, PartitionsAlreadyExist,
+    PartitionsNotFound,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::Literal;
 use krishiv_plan::analyzer::{Privilege, Securable, authorize};
 use krishiv_sql::StatementClass;
@@ -154,20 +155,7 @@ fn can_partition_on(t: &DataType) -> bool {
 
 /// `COLUMN_ALREADY_EXISTS` when `names` repeat one (`SchemaUtils.checkColumnNameDuplication`).
 fn check_duplicates(names: &[String], case_sensitive: bool) -> Result<(), KrishivError> {
-    for (i, a) in names.iter().enumerate() {
-        if names[..i].iter().any(|b| same_name(a, b, case_sensitive)) {
-            let shown = if case_sensitive {
-                a.clone()
-            } else {
-                a.to_lowercase()
-            };
-            return Err(ColumnAlreadyExists {
-                column_name: quote_identifier(&shown),
-            }
-            .into());
-        }
-    }
-    Ok(())
+    check_column_name_duplication(names.iter().map(String::as_str), case_sensitive)
 }
 
 /// The table's layout from `PARTITIONED BY` names and `CLUSTERED BY`, checked against `columns`, which are
@@ -338,6 +326,72 @@ fn exact_spec(
     }
 }
 
+/// The `col=value/...` directories `depth` levels below `dir` (hidden and `_` entries are skipped, as the
+/// partition listing of `RepairTableCommand` does), as paths relative to the table location.
+fn list_partition_dirs(
+    dir: &std::path::Path,
+    depth: usize,
+    prefix: &str,
+    out: &mut Vec<String>,
+) -> Result<(), KrishivError> {
+    if depth == 0 {
+        if !prefix.is_empty() {
+            out.push(prefix.to_owned());
+        }
+        return Ok(());
+    }
+    let listing = |e: std::io::Error| internal(format!("cannot list {}: {e}", dir.display()));
+    let mut names: Vec<(String, PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(listing)? {
+        let entry = entry.map_err(listing)?;
+        // Spark lists the local file system through Hadoop, which follows a symbolic link to a directory.
+        if !std::fs::metadata(entry.path()).map_err(listing)?.is_dir() {
+            continue;
+        }
+        let Ok(n) = entry.file_name().into_string() else {
+            continue;
+        };
+        if n.contains('=') && !n.starts_with(['.', '_']) {
+            names.push((n, entry.path()));
+        }
+    }
+    names.sort();
+    for (n, path) in names {
+        let next = if prefix.is_empty() {
+            n
+        } else {
+            format!("{prefix}/{n}")
+        };
+        list_partition_dirs(&path, depth - 1, &next, out)?;
+    }
+    Ok(())
+}
+
+/// A partition `LOCATION` as the catalog stores it: qualified as the statement's access check qualified it
+/// (`Session::qualify_path`: Spark's `makeQualified`, a relative path against the working directory), so the
+/// directory the command probes is the one the policy was asked about. An empty location fails as
+/// `CREATE TABLE ... LOCATION ''` does (Spark 4.2.0 throws Hadoop's unclassified `IllegalArgumentException`
+/// "Can not create a Path from an empty string" here); a location outside the local file system is not supported.
+fn qualified(session: &Session, location: &str) -> Result<PathBuf, KrishivError> {
+    if location
+        .strip_prefix("file:")
+        .unwrap_or(location)
+        .is_empty()
+    {
+        return Err(krishiv_common::error::InvalidEmptyLocation {
+            location: location.to_owned(),
+        }
+        .into());
+    }
+    let display = session.qualify_path(location)?;
+    match display.strip_prefix("file:") {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => Err(unsupported(
+            "partition locations outside the local file system",
+        )),
+    }
+}
+
 /// `spec` in partition-column order.
 fn ordered(table: &CatalogTable, spec: &[(String, String)]) -> Vec<(String, String)> {
     table
@@ -393,6 +447,29 @@ fn listed_files(dir: &Path) -> Vec<(String, u64)> {
         .collect();
     out.sort();
     out
+}
+
+/// Whether `dir` or a directory below it holds a file, skipping names that start with `_` or `.` as
+/// [`location_size`] does.
+fn holds_files(dir: &Path) -> Result<bool, KrishivError> {
+    let listing = |e: std::io::Error| internal(format!("cannot list {}: {e}", dir.display()));
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(listing(e)),
+    };
+    for entry in entries {
+        let entry = entry.map_err(listing)?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('_') || name.starts_with('.') {
+            continue;
+        }
+        if !entry.file_type().map_err(listing)?.is_dir() || holds_files(&entry.path())? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The size of the data under `dir` as `CommandUtils.calculateSingleLocationSize` sums it: files and
@@ -515,6 +592,98 @@ impl Session {
             .collect())
     }
 
+    /// `MSCK REPAIR TABLE name [ADD PARTITIONS]` (`RepairTableCommand`): the `col=value/...` directories of the
+    /// table's location that the catalog does not know are registered, with their file statistics.
+    /// `DROP` and `SYNC PARTITIONS` (which forget partitions whose directory is gone) are not supported yet.
+    pub(crate) async fn exec_repair(
+        &self,
+        r: &krishiv_sql::ast::Repair,
+    ) -> Result<DataFrame, KrishivError> {
+        use krishiv_sql::ast::RepairAction;
+        let env = self.query_env();
+        let name = self.table_name(&r.table, &env)?;
+        let table = self.table_for_write(&name, "MSCK REPAIR TABLE", &env)?;
+        require_partition_provider(&table, "MSCK REPAIR TABLE")?;
+        if matches!(r.action, Some(RepairAction::Drop | RepairAction::Sync)) {
+            return Err(unsupported("MSCK REPAIR TABLE ... DROP | SYNC PARTITIONS"));
+        }
+        // Spark 4.2.0 fails on a missing table directory (an unclassified `FileNotFoundException`) rather than
+        // registering nothing.
+        if !table.location.is_dir() {
+            return Err(krishiv_common::error::PathNotFound {
+                path: format!("file:{}", table.location.display()),
+            }
+            .into());
+        }
+        let mut dirs = Vec::new();
+        list_partition_dirs(
+            &table.location,
+            table.layout.partition_columns.len(),
+            "",
+            &mut dirs,
+        )?;
+        // Each partition is registered at its directory: the same check `ADD PARTITION` makes of a location.
+        for dir in &dirs {
+            self.authorize_dir(&table.location.join(dir)).await?;
+        }
+        self.register_partitions(&name, &dirs, true);
+        self.empty_frame().await
+    }
+
+    /// `ALTER TABLE name PARTITION (...) SET LOCATION '...'`: only the catalog entry changes.
+    pub(crate) async fn set_partition_location(
+        &self,
+        table: &Arc<CatalogTable>,
+        partition: &PartitionSpec,
+        location: &str,
+        original: &str,
+    ) -> Result<CatalogTable, KrishivError> {
+        require_partition_provider(table, "ALTER TABLE SET LOCATION")?;
+        let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+        let written = self.written_spec(partition, original).await?;
+        let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
+        let mut changed = (**table).clone();
+        let path = qualified(self, location)?;
+        // Reads and writes of the table follow the table root, not a partition's own location, so a location
+        // that already holds data would be reported as set and then ignored.
+        if path.is_file() || holds_files(&path)? {
+            return Err(unsupported(
+                "ALTER TABLE ... PARTITION ... SET LOCATION onto existing files",
+            ));
+        }
+        let Some(found) = changed
+            .layout
+            .partitions
+            .iter_mut()
+            .find(|p| spec.iter().all(|kv| p.spec.contains(kv)))
+        else {
+            return Err(PartitionsNotFound {
+                partition_list: spec_text(&spec),
+                table_name: db_table(table),
+            }
+            .into());
+        };
+        found.location = path;
+        Ok(changed)
+    }
+
+    /// `ALTER TABLE name PARTITION (...) RENAME TO PARTITION (...)`: both specs must name every partition
+    /// column (`_LEGACY_ERROR_TEMP_1232`); the rename itself (it moves the directory) is not supported yet.
+    pub(crate) async fn rename_partition(
+        &self,
+        table: &Arc<CatalogTable>,
+        specs: [&PartitionSpec; 2],
+        original: &str,
+    ) -> Result<CatalogTable, KrishivError> {
+        require_partition_provider(table, "ALTER TABLE RENAME PARTITION")?;
+        let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+        for spec in specs {
+            let written = self.written_spec(spec, original).await?;
+            exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
+        }
+        Err(unsupported("ALTER TABLE ... RENAME PARTITION"))
+    }
+
     /// `ALTER TABLE name ADD [IF NOT EXISTS] PARTITION (...) [LOCATION '...'] ...`.
     pub(crate) async fn add_partitions(
         &self,
@@ -532,13 +701,7 @@ impl Session {
             let written = self.written_spec(&part.spec, original).await?;
             let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
             let location = match &part.location {
-                Some(l) => {
-                    let path = PathBuf::from(l.strip_prefix("file:").unwrap_or(l));
-                    if !path.is_absolute() {
-                        return Err(unsupported("a relative partition LOCATION"));
-                    }
-                    path
-                }
+                Some(l) => qualified(self, l)?,
                 None => partition_path(&table.location, &ordered(table, &spec)),
             };
             if find_partition(&changed, &spec).is_some()

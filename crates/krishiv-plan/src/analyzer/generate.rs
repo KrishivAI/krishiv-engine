@@ -8,6 +8,7 @@
 //! input, its type picks the generated columns, and the node outputs the
 //! input's attributes followed by them.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
@@ -60,6 +61,12 @@ fn generated(kind: GeneratorKind, ty: &DataType) -> Option<Vec<(String, DataType
             ));
             Some(cols)
         }
+        // Spark's `VariantExplode.elementSchema`.
+        (GeneratorKind::VariantExplode, DataType::Variant) => Some(vec![
+            ("pos".to_owned(), DataType::Integer, false),
+            ("key".to_owned(), DataType::String, true),
+            ("value".to_owned(), DataType::Variant, false),
+        ]),
         (GeneratorKind::Inline, DataType::Array(a)) => match a.element_type() {
             DataType::Struct(s) => Some(
                 s.fields()
@@ -103,9 +110,45 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
         let rels = [&c];
-        let cx = Self::cx(&c.out, &rels, env, "Generate");
+        // The argument reads an input column before another select-list generator's column of
+        // its name (Spark resolves generators over the lateral aliases only after the input).
+        let generated = |a: &Attr| {
+            a.qual
+                .iter()
+                .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
+        };
+        let cs = self.ctx.conf.case_sensitive;
+        let scope: Vec<Attr> =
+            c.out
+                .iter()
+                .filter(|a| {
+                    !generated(a)
+                        || !c.out.iter().any(|i| {
+                            !generated(i) && super::bind::same(&i.col.name, &a.col.name, cs)
+                        })
+                })
+                .cloned()
+                .collect();
+        let cx = Self::cx(&scope, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
-        let b = self.bind(arg, &cx)?;
+        let mut b = self.bind(arg, &cx)?;
+        // `variant_explode` expects a VARIANT: an untyped NULL is cast to one
+        // (and gives no rows), as `ExpectsInputTypes` casts it.
+        if kind == GeneratorKind::VariantExplode
+            && matches!(b.ty.data_type, None | Some(DataType::Null))
+        {
+            let cast = Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&b.expr),
+                to: DataType::Variant,
+                mode: crate::CastMode::Legacy,
+            })
+            .with_origin(b.expr.origin);
+            b = Bound {
+                ty: super::exprs::arg_type(DataType::Variant, true),
+                expr: Arc::new(cast),
+                ..b
+            };
+        }
         if super::ops::has_generator(&b.expr) {
             return Err(AnalysisError::new(
                 UnsupportedGeneratorNestedInExpressions {
@@ -354,6 +397,7 @@ impl Resolver<'_> {
         let Some(cols) = b.ty.data_type.as_ref().and_then(|ty| generated(kind, ty)) else {
             let required = match kind {
                 GeneratorKind::Inline => "\"ARRAY<STRUCT>\"".to_owned(),
+                GeneratorKind::VariantExplode => "\"VARIANT\"".to_owned(),
                 _ => "(\"ARRAY\" or \"MAP\")".to_owned(),
             };
             let shown = pretty(&b.expr, None);
@@ -434,17 +478,7 @@ impl ExtractedGenerator {
 }
 
 fn generator_kind(name: &str) -> Option<(GeneratorKind, bool)> {
-    let (base, outer) = match name.strip_suffix("_outer") {
-        Some(base) => (base, true),
-        None => (name, false),
-    };
-    let kind = match base {
-        "explode" => GeneratorKind::Explode,
-        "posexplode" => GeneratorKind::PosExplode,
-        "inline" => GeneratorKind::Inline,
-        _ => return None,
-    };
-    Some((kind, outer))
+    GeneratorKind::of_name(name)
 }
 
 impl Resolver<'_> {
@@ -648,6 +682,27 @@ impl Resolver<'_> {
 }
 
 impl Resolver<'_> {
+    /// Whether a `Generate` node sits between `plan` and the aggregate it
+    /// sorts: the search stops at the first aggregate, so a generator in
+    /// that aggregate's input does not count.
+    pub(super) fn holds_generator(plan: &Arc<LogicalPlan>) -> bool {
+        let mut seen = HashSet::new();
+        let mut stack = vec![Arc::clone(plan)];
+        while let Some(p) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&p) as usize) {
+                continue;
+            }
+            if matches!(p.node, PlanNode::Generate { .. }) {
+                return true;
+            }
+            if matches!(p.node, PlanNode::Aggregate { .. }) {
+                continue;
+            }
+            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+        false
+    }
+
     /// A `HAVING` over an aggregate with a generator in the select list and
     /// windows: the generator runs above the windows, and the `HAVING`
     /// still filters below them (Spark 4.3; 4.2 filtered the generated rows

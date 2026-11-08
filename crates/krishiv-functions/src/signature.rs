@@ -103,6 +103,11 @@ pub enum Constant {
     /// A cast of a literal that Spark raises while folding it (overflow,
     /// malformed input); the function that reads the value raises it.
     Error(KrishivError),
+    /// An ANSI interval: months of a year-month interval, microseconds of a
+    /// day-time one (the argument's type says which).
+    Interval(i64),
+    /// A `TIMESTAMP` or `TIMESTAMP_NTZ`, in microseconds since the epoch.
+    Timestamp(i64),
 }
 
 /// The type of a value, as function signatures see it.
@@ -132,6 +137,7 @@ pub struct CallTypes<'a> {
     args: &'a [ArgType],
     constants: &'a [Option<Constant>],
     literals: &'a [bool],
+    foldable: &'a [bool],
     sql: Option<&'a dyn Fn(usize) -> Option<String>>,
     bound_sql: Option<&'a dyn Fn(usize) -> Option<String>>,
     ansi: bool,
@@ -162,6 +168,7 @@ impl<'a> CallTypes<'a> {
             args,
             constants,
             literals: &[],
+            foldable: &[],
             sql: None,
             bound_sql: None,
             ansi: true,
@@ -178,6 +185,23 @@ impl<'a> CallTypes<'a> {
     pub const fn with_literals(mut self, literals: &'a [bool]) -> Self {
         self.literals = literals;
         self
+    }
+
+    /// With `foldable[i]` telling whether argument `i` is foldable in Spark's sense (no column, subquery or
+    /// non-deterministic call), whether or not it folds to a [`Constant`] here.
+    #[must_use]
+    pub const fn with_foldable(mut self, foldable: &'a [bool]) -> Self {
+        self.foldable = foldable;
+        self
+    }
+
+    /// Whether argument `i` is foldable; without [`Self::with_foldable`], whether it has a constant.
+    #[must_use]
+    pub fn foldable(&self, i: usize) -> bool {
+        self.foldable
+            .get(i)
+            .copied()
+            .unwrap_or_else(|| self.constant(i).is_some())
     }
 
     /// With `spark.sql.ansi.enabled = ansi` (on by default): some legacy
@@ -336,6 +360,9 @@ pub enum InputType {
     /// `TypeCollection`: `unix_timestamp` takes a string, date or
     /// timestamp, never a number).
     StrictOneOf(Vec<DataType>),
+    /// Any `TIME(p)`, or a string (read as `TIME(6)`): Spark's `AnyTimeType` with its implicit cast from a
+    /// string, as `time_trunc` takes it. Other time functions take [`Self::StrictOneOf`] times.
+    AnyTimeOrString,
     /// Any numeric type; a string or untyped `NULL` becomes `DOUBLE`.
     /// `intervals`: Spark also takes ANSI intervals (it names them in the
     /// error; Krishiv has no interval values yet).
@@ -379,7 +406,7 @@ impl InputType {
             // Spark's `AnyTimestampType` names itself in words. The time
             // fields also take a `TIME` (Spark types that overload
             // separately, so its message keeps the timestamp wording).
-            Self::OneOf(types)
+            Self::OneOf(types) | Self::StrictOneOf(types)
                 if matches!(
                     types
                         .iter()
@@ -393,6 +420,13 @@ impl InputType {
             }
             Self::OneOf(types) | Self::StrictOneOf(types) => {
                 let names: Vec<String> = types.iter().map(|t| format!("\"{}\"", t.sql())).collect();
+                format!("({})", names.join(" or "))
+            }
+            Self::AnyTimeOrString => {
+                let names: Vec<String> = [6_u8, 0, 1, 2, 3, 4, 5]
+                    .into_iter()
+                    .map(|precision| format!("\"{}\"", DataType::Time { precision }.sql()))
+                    .collect();
                 format!("({})", names.join(" or "))
             }
         }
@@ -544,6 +578,8 @@ pub struct Arity {
     /// Spark's `expectedNum` text for `WRONG_NUM_ARGS` (`"1"`, `"[2, 3]"`,
     /// `"> 0"`).
     expected: String,
+    /// No count above this passes, when set (see [`Arity::with_ceiling`]).
+    ceiling: Option<usize>,
 }
 
 impl Arity {
@@ -561,6 +597,7 @@ impl Arity {
         Self {
             counts,
             expected: expected.into(),
+            ceiling: None,
         }
     }
 
@@ -570,10 +607,22 @@ impl Arity {
         Self::new([true; Self::PROBED + 1], "")
     }
 
-    /// Whether `n` arguments pass the arity check.
+    /// Whether `n` arguments pass the arity check. Counts above [`Arity::PROBED`] take the answer for
+    /// `PROBED`, unless the function has a [`ceiling`](Self::with_ceiling).
     #[must_use]
     pub fn accepts(&self, n: usize) -> bool {
+        if self.ceiling.is_some_and(|max| n > max) {
+            return false;
+        }
         self.counts & (1 << n.min(Self::PROBED)) != 0
+    }
+
+    /// This arity with no count above `max` (a function whose Spark arity ends below what the probed counts
+    /// tell: the probe stops at [`Arity::PROBED`], and `make_timestamp_ntz` takes at most 6).
+    #[must_use]
+    pub fn with_ceiling(mut self, max: usize) -> Self {
+        self.ceiling = Some(max);
+        self
     }
 
     /// Spark's `expectedNum` text.
@@ -599,6 +648,11 @@ mod tests {
         let v = Arity::new([false, true, true, true, true, true, true], "> 0");
         assert!(v.accepts(40) && !v.accepts(0));
         assert!(Arity::any().accepts(0) && Arity::any().accepts(99));
+        // A listed ceiling holds above the probed counts too (`make_timestamp_ntz` takes `[2, 6]`).
+        let l = Arity::new([false, false, true, true, true, true, true], "[2, 6]").with_ceiling(6);
+        assert!(l.accepts(6) && !l.accepts(7) && !l.accepts(40));
+        let open = Arity::new([false, false, true, true, true, true, true], "[2, 6]");
+        assert!(open.accepts(7));
     }
 
     #[test]

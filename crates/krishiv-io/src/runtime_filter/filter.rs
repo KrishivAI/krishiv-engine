@@ -343,6 +343,13 @@ impl KeyFilterBuilder {
         values + hashes + range
     }
 
+    /// Drops the Bloom filter's hashes and keeps the distinct keys (the
+    /// first answer to a failed reservation: the hashes cost 8 bytes per
+    /// row, the keys at most the exact set).
+    pub fn drop_hashes(&mut self) {
+        self.hashes = None;
+    }
+
     /// Keeps only what costs almost nothing (a failed reservation): no
     /// Bloom hashes, and the distinct keys only while they fit the `IN`
     /// list.

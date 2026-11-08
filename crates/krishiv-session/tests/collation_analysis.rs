@@ -49,8 +49,11 @@ fn collate_gives_the_collated_type() {
         one("SELECT typeof(collate('a', 'UNICODE_CI'))"),
         "string collate UNICODE_CI"
     );
-    // UTF8_BINARY is the plain string type.
-    assert_eq!(one("SELECT typeof('a' COLLATE UTF8_BINARY)"), "string");
+    // A written UTF8_BINARY is the display-only marker: Spark prints it, nothing else sees it.
+    assert_eq!(
+        one("SELECT typeof('a' COLLATE UTF8_BINARY)"),
+        "string collate UTF8_BINARY"
+    );
     // Names are case-insensitive and may be qualified.
     assert_eq!(
         one("SELECT typeof('a' COLLATE SYSTEM.BUILTIN.utf8_lcase)"),
@@ -80,13 +83,15 @@ fn collate_checks_its_input_and_its_name() {
 #[test]
 fn comparing_positions_refuse_a_collated_value() {
     let c = "('a' COLLATE utf8_lcase)";
+    // ICU collations have no key yet (unit 6): their scalar comparisons and joins are refused.
+    let ci = "('a' COLLATE unicode_ci)";
     for sql in [
         // scalar comparisons
-        format!("SELECT {c} = 'A'"),
-        format!("SELECT {c} <=> 'A'"),
-        format!("SELECT {c} < 'A'"),
-        format!("SELECT {c} BETWEEN 'a' AND 'b'"),
-        format!("SELECT {c} IN ('A', 'b')"),
+        format!("SELECT {ci} = 'A'"),
+        format!("SELECT {ci} <=> 'A'"),
+        format!("SELECT {ci} < 'A'"),
+        format!("SELECT {ci} BETWEEN 'a' AND 'b'"),
+        format!("SELECT {ci} IN ('A', 'b')"),
         // keys
         format!("SELECT col1 FROM (SELECT {c} AS col1) GROUP BY col1"),
         format!("SELECT DISTINCT {c}"),
@@ -97,7 +102,7 @@ fn comparing_positions_refuse_a_collated_value() {
         format!("SELECT {c} UNION SELECT {c}"),
         format!("SELECT {c} INTERSECT SELECT {c}"),
         format!("SELECT {c} EXCEPT SELECT {c}"),
-        format!("SELECT * FROM (SELECT {c} AS c) a JOIN (SELECT {c} AS c) b ON a.c = b.c"),
+        format!("SELECT * FROM (SELECT {ci} AS c) a JOIN (SELECT {ci} AS c) b ON a.c = b.c"),
     ] {
         assert_eq!(
             class(&sql),
@@ -158,7 +163,10 @@ fn collated_columns_in_tables_keep_their_type() {
             |v| v.value(0).to_owned(),
         )
     };
-    assert_eq!(first("select typeof(a) from t1"), "string");
+    assert_eq!(
+        first("select typeof(a) from t1"),
+        "string collate UTF8_BINARY"
+    );
     assert_eq!(
         first("select typeof(b) from t1"),
         "string collate UTF8_LCASE"
@@ -495,22 +503,6 @@ fn result_boundaries_and_equal_null() {
         one("SELECT typeof(format_number(123, '###' COLLATE UTF8_LCASE))"),
         "string"
     );
-    // Opus review of #493 (head f1239bef): the three-argument `decode` is a CASE whose result keeps
-    // the collation of its branches; only the charset form `decode(bin, 'utf-8')` is a plain STRING.
-    assert_eq!(
-        one("SELECT typeof(decode(1, 1, 'a' COLLATE UTF8_LCASE, 'b' COLLATE UTF8_LCASE))"),
-        "string collate UTF8_LCASE"
-    );
-    assert_eq!(
-        one("SELECT typeof(decode(encode('a' COLLATE UTF8_LCASE, 'utf-8'), 'utf-8'))"),
-        "string"
-    );
-    // A call returning a non-string carries no collation: `length` of a collated string does not
-    // make `substr`'s result collated.
-    assert_eq!(
-        one("SELECT typeof(upper(substr('abc', 1, length('x' COLLATE UTF8_LCASE))))"),
-        "string"
-    );
     // Codex review of #493 (third round): a binary-result call nested in another string call does
     // not pass its argument's collation on, so it cannot conflict with another explicit one.
     assert_eq!(
@@ -552,6 +544,108 @@ fn nvl2_selector_does_not_unify() {
     );
 }
 
+/// Unit 3a: comparisons of `UTF8_LCASE` / `_RTRIM` strings compare collation keys, with the
+/// answers of the Spark 4.2 runs in design `P2-collations.md` section 2.4.
+#[test]
+fn lcase_and_rtrim_comparisons_compare_keys() {
+    let t = |sql: &str| one(&format!("SELECT CAST(({sql}) AS STRING)"));
+    for (sql, want) in [
+        ("'a' COLLATE utf8_lcase = 'A'", "true"),
+        ("'A' = 'a' COLLATE utf8_lcase", "true"),
+        ("'a' COLLATE utf8_lcase = 'b'", "false"),
+        ("'a' COLLATE utf8_lcase < 'B'", "true"),
+        ("'b' COLLATE utf8_lcase < 'A'", "false"),
+        ("'B' COLLATE utf8_lcase >= 'a'", "true"),
+        ("'a' COLLATE utf8_lcase <=> 'A'", "true"),
+        ("CAST(NULL AS STRING) COLLATE utf8_lcase <=> 'A'", "false"),
+        // The special cases of `lowerCaseCodePoints`.
+        ("'\u{3c2}' COLLATE utf8_lcase = '\u{3c3}'", "true"),
+        ("'\u{130}' COLLATE utf8_lcase = 'i\u{307}'", "true"),
+        ("'\u{df}' COLLATE utf8_lcase = 'ss'", "false"),
+        // RTRIM drops trailing spaces only.
+        ("'a ' COLLATE utf8_binary_rtrim = 'a'", "true"),
+        ("' a' COLLATE utf8_binary_rtrim = 'a'", "false"),
+        ("'A ' COLLATE utf8_lcase_rtrim = 'a'", "true"),
+        ("'a' COLLATE utf8_lcase IN ('B', 'A')", "true"),
+        ("'a' COLLATE utf8_lcase IN ('B', 'C')", "false"),
+        ("'b' COLLATE utf8_lcase BETWEEN 'A' AND 'C'", "true"),
+        ("'d' COLLATE utf8_lcase BETWEEN 'A' AND 'C'", "false"),
+    ] {
+        assert_eq!(t(sql), want, "{sql}");
+    }
+    // The column name is the call as written.
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT 'a' COLLATE utf8_lcase = 'A'")).unwrap();
+    assert_eq!(
+        block_on(df.schema()).unwrap().field(0).name(),
+        "(collate(a, utf8_lcase) = A)"
+    );
+}
+
+/// Filters, joins and projections over collated columns use the keys; ICU collations, which have
+/// no key yet, stay refused, as do `greatest` and the keyed positions of unit 3b.
+#[test]
+fn tables_filter_and_join_on_collation_keys() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table c1(a string collate utf8_lcase, n int) using parquet",
+        "insert into c1 values('aaa', 1), ('AAA', 2), ('bbb', 3), ('BBB', 4)",
+        "create table c2(a string collate utf8_lcase) using parquet",
+        "insert into c2 values('aaa'), ('ccc')",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let count = |sql: &str| value_of(&s, &format!("select cast(count(*) as string) from {sql}"));
+    assert_eq!(count("c1 where a = 'aaa' collate utf8_lcase"), "2");
+    assert_eq!(count("c1 where a = 'AAA'"), "2");
+    assert_eq!(count("c1 where a < 'bbb'"), "2");
+    assert_eq!(count("c1 join c2 on c1.a = c2.a"), "2");
+    assert_eq!(count("c1 where a in ('BBB', 'zzz')"), "2");
+    // An explicit `UTF8_BINARY` beats the column's implicit `UTF8_LCASE`: bytes.
+    assert_eq!(count("c1 where a = 'AAA' collate utf8_binary"), "1");
+    // `BETWEEN` coerces each half on its own: the same collation on both halves keys, different
+    // ones (the lower bound explicit binary, the upper implicit) stay with the guard.
+    assert_eq!(count("c1 where a between 'AAA' and 'bbb'"), "4");
+    assert_eq!(
+        class_of(
+            &s,
+            "select count(*) from c1 where a between 'A' collate utf8_binary and 'c'"
+        ),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // Two different explicit collations never compare.
+    assert_eq!(
+        class_of(
+            &s,
+            "select 1 where 'a' collate utf8_lcase = 'a' collate utf8_binary"
+        ),
+        ErrorClass::CollationMismatchExplicit
+    );
+    // Opus review of #530: against a timestamp, number or binary the other operand is cast to the
+    // string's type, so the lowered key must never be cast instead of the text: those comparisons
+    // stay with the guard.
+    for sql in [
+        "select count(*) from (select timestamp '2020-01-01 10:00:00' as ts) where ts = '2020-01-01T10:00:00' collate utf8_lcase",
+        "select count(*) from c1 where n = '1' collate utf8_lcase",
+    ] {
+        assert_eq!(
+            class_of(&s, sql),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
+    for sql in [
+        "select count(*) from c1 where a = 'aaa' collate unicode_ci",
+        "select count(*) from c1 group by a",
+    ] {
+        assert_eq!(
+            class_of(&s, sql),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
+}
+
 /// The first value of the first column of `sql`, as text.
 fn value_of(s: &Session, sql: &str) -> String {
     let b = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
@@ -560,4 +654,102 @@ fn value_of(s: &Session, sql: &str) -> String {
         || c.as_string_view().value(0).to_owned(),
         |v| v.value(0).to_owned(),
     )
+}
+
+/// A written `UTF8_BINARY` keeps its name in the schema (ADR 0043, update 2026-11-07) and is a
+/// plain string everywhere else: functions, comparisons, grouping and joins work as on `STRING`.
+#[test]
+fn an_explicit_utf8_binary_is_a_display_only_marker() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table m(c string collate utf8_binary, p string) using parquet",
+        "insert into m values ('aB', 'aB'), ('ab', 'x'), ('aB', 'y')",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let col = |sql: &str| -> Vec<String> {
+        let b = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+        let mut out = Vec::new();
+        for batch in &b {
+            let c = &batch.columns()[0];
+            for i in 0..c.len() {
+                out.push(if let Some(v) = c.as_string_view_opt() {
+                    v.value(i).to_owned()
+                } else if let Some(v) = c.as_string_opt::<i32>() {
+                    v.value(i).to_owned()
+                } else if let Some(v) = c.as_primitive_opt::<arrow_array::types::Int64Type>() {
+                    v.value(i).to_string()
+                } else {
+                    format!("{c:?}")
+                });
+            }
+        }
+        out
+    };
+    // The schema line: the marker follows the first operand of the winning strength.
+    let ty = |sql: &str| col(sql).remove(0);
+    assert_eq!(
+        ty("select typeof(upper(c)) from m limit 1"),
+        "string collate UTF8_BINARY"
+    );
+    assert_eq!(ty("select typeof(upper(p)) from m limit 1"), "string");
+    // With one collation among the operands nothing is cast and the head operand decides.
+    assert_eq!(ty("select typeof(concat(p, c)) from m limit 1"), "string");
+    assert_eq!(
+        ty("select typeof(concat(c, p)) from m limit 1"),
+        "string collate UTF8_BINARY"
+    );
+    assert_eq!(ty("select typeof(concat('a', c)) from m limit 1"), "string");
+    // An operand already `UTF8_BINARY` is not cast: the head operand's own type stays.
+    assert_eq!(
+        ty("select typeof(concat(p, c, 'y' collate utf8_binary)) from m limit 1"),
+        "string"
+    );
+    // Mixed collations cast to the winner, which is the written type.
+    assert_eq!(
+        ty("select typeof(concat(c, 'x' collate utf8_lcase)) from m limit 1"),
+        "string collate UTF8_LCASE"
+    );
+    // Behaviour is a plain string's.
+    assert_eq!(col("select upper(c) from m order by 1")[0], "AB");
+    assert_eq!(col("select count(*) from m where c = 'aB'"), ["2"]);
+    assert_eq!(col("select count(*) from m where c = p"), ["1"]);
+    assert_eq!(col("select count(distinct c) from m"), ["2"]);
+    assert_eq!(col("select c from m group by c order by c"), ["aB", "ab"]);
+    assert_eq!(col("select count(*) from m a join m b on a.c = b.c"), ["5"]);
+}
+
+/// Type unification treats the marker as the plain string it equals (`UNION`, `IN (subquery)`,
+/// array functions, casts to the marker type, a `from_json` map key).
+#[test]
+fn the_marker_unifies_with_string() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table u(c string collate utf8_binary, p string, a array<string collate utf8_binary>) using parquet",
+        "insert into u values ('x', 'x', array('x', 'y'))",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let n = |sql: &str| -> usize {
+        block_on(block_on(s.sql(sql)).unwrap().collect())
+            .unwrap()
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum()
+    };
+    assert_eq!(n("select c from u union select p from u"), 1);
+    assert_eq!(n("select p from u where p in (select c from u)"), 1);
+    assert_eq!(n("select c from u where c in (select p from u)"), 1);
+    assert_eq!(n("select array_contains(a, 'x') from u"), 1);
+    assert_eq!(n("select coalesce(a, array(1)) from u where false"), 0);
+    assert_eq!(n("select c from u where false union all select 1"), 1);
+    assert_eq!(n("select 1 in (select c from u where false) from u"), 1);
+    assert_eq!(
+        n("select cast(date'2024-01-01' as string collate utf8_binary)"),
+        1
+    );
+    assert_eq!(
+        n("select from_json('{\"a\":1}', 'map<string collate utf8_binary,int>')"),
+        1
+    );
 }

@@ -23,6 +23,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(feature = "metrics-prometheus")]
 pub mod metrics;
 
+pub mod internal;
+
+#[cfg(feature = "session")]
+pub mod session_source;
+
 async fn version() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/json")],
@@ -82,12 +87,25 @@ pub async fn serve(listener: TcpListener) -> io::Result<()> {
 /// # Errors
 /// Returns an I/O error if the runtime, bind or server fails.
 pub fn run_blocking(addr: SocketAddr, on_bound: impl FnOnce(SocketAddr)) -> io::Result<()> {
+    run_blocking_with(addr, router(), on_bound)
+}
+
+/// Like [`run_blocking`], serving `app` (for example [`internal::router_with_ui`]).
+///
+/// # Errors
+/// Returns an I/O error if the runtime, bind or server fails.
+pub fn run_blocking_with(
+    addr: SocketAddr,
+    app: Router,
+    on_bound: impl FnOnce(SocketAddr),
+) -> io::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_io()
+        .enable_time()
         .build()?;
     rt.block_on(async {
         let listener = TcpListener::bind(addr).await?;
         on_bound(listener.local_addr()?);
-        serve(listener).await
+        axum::serve(listener, app).await
     })
 }

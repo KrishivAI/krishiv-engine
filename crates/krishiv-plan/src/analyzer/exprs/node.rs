@@ -12,6 +12,31 @@ impl Resolver<'_> {
         window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Bound, AnalysisError> {
+        // The display-only `UTF8_BINARY` marker (ADR 0043, update 2026-11-07) is a plain STRING to
+        // every operator and function: only an alias passes it on to the schema (calls re-mark
+        // their result in `expr_node`).
+        let plain_kids: Vec<Bound>;
+        let reads_type = matches!(&e.node, ExprNode::Alias { .. })
+            || matches!(&e.node, ExprNode::Function(f)
+                if f.name.eq_ignore_ascii_case("typeof") || f.name.eq_ignore_ascii_case("collation"));
+        let marked = |k: &Bound| {
+            k.ty.data_type
+                .as_ref()
+                .is_some_and(|t| t.any_type(&DataType::is_binary_marker))
+        };
+        let kids = if !reads_type && kids.iter().any(marked) {
+            plain_kids = kids
+                .iter()
+                .map(|k| {
+                    let mut k = k.clone();
+                    k.ty.data_type = k.ty.data_type.as_ref().map(DataType::without_binary_marker);
+                    k
+                })
+                .collect();
+            &plain_kids[..]
+        } else {
+            kids
+        };
         let outer = kids.iter().filter_map(|k| k.outer).min();
         let agg = kids.iter().find_map(|k| k.agg);
         let win = kids.iter().find_map(|k| k.win);
@@ -420,11 +445,17 @@ impl Resolver<'_> {
                         b = make_nullable(b);
                     }
                     // Shown as Spark names it, over the operands as written
-                    // (a session variable keeps its name).
+                    // (a session variable keeps its name): `date_add` / `date_sub`, or the `try_` call
+                    // itself with its operands in the order written.
+                    let (shown_name, a, c) = if lookup_name.starts_with("try_") {
+                        (lookup_name, 0, 1)
+                    } else {
+                        (name, first, second)
+                    };
                     b.shown = Some(Arc::new(
                         Expr::function(
-                            name,
-                            vec![kids[first].shown(), kids[second].shown()]
+                            shown_name,
+                            vec![kids[a].shown(), kids[c].shown()]
                                 .into_iter()
                                 .map(|k| bare_variable(&k))
                                 .collect(),
@@ -785,10 +816,9 @@ impl Resolver<'_> {
                     let sorted = if kids[0].ty.data_type.as_ref().is_some_and(holds_map) {
                         let var = |name: &str| {
                             Arc::new(
-                                Expr::new(ExprNode::Column(crate::ColumnRef {
-                                    name: vec![name.to_owned()],
-                                    plan_id: None,
-                                }))
+                                Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+                                    name.to_owned(),
+                                ])))
                                 .with_origin(origin),
                             )
                         };
@@ -952,6 +982,32 @@ impl Resolver<'_> {
                         false,
                         e.origin,
                     ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 3)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "time_bucket" && n == 2 {
+                    // Spark's builder writes the origin: 1970-01-01 00:00:00 in the session zone for a
+                    // `TIMESTAMP` (or anything that is not a `TIMESTAMP_NTZ`), the epoch for a `TIMESTAMP_NTZ`.
+                    owned = kids[..n].to_vec();
+                    owned.push(if kids[1].ty.data_type == Some(DataType::TimestampNtz) {
+                        default_argument(
+                            Literal::TimestampNtz(0),
+                            DataType::TimestampNtz,
+                            false,
+                            e.origin,
+                        )
+                    } else {
+                        let offset = self.ctx.conf.session_zone.map_or(0, |z| {
+                            krishiv_kernels::cast::TimeZoneRules::offset_for_local(&z, 0)
+                        });
+                        default_argument(
+                            Literal::Timestamp(i64::from(offset).saturating_mul(-1_000_000)),
+                            DataType::Timestamp,
+                            false,
+                            e.origin,
+                        )
+                    });
                     if let Some(filter) = kids.get(n) {
                         owned.push(filter.clone());
                     }
@@ -1196,10 +1252,9 @@ impl Resolver<'_> {
                             e.origin,
                         ));
                     };
-                    let element = Expr::new(ExprNode::Column(ColumnRef {
-                        name: vec!["__subscript_element".to_owned()],
-                        plan_id: None,
-                    }))
+                    let element = Expr::new(ExprNode::Column(ColumnRef::new(vec![
+                        "__subscript_element".to_owned(),
+                    ])))
                     .with_origin(e.origin);
                     let body = Expr::new(ExprNode::Field {
                         base: Arc::new(element),
@@ -1641,6 +1696,19 @@ impl Resolver<'_> {
                 }
             }),
         };
+        if let ExprNode::Function(f) = &e.node
+            && matches!(
+                &b.expr.node,
+                ExprNode::Resolved(ResolvedExpr::Function(r)) if !matches!(r.id, FunctionId::Udf { .. })
+            )
+            && let Some(shown) = super::display::spark_display(
+                &f.name,
+                &kids.iter().map(Bound::shown).collect::<Vec<_>>(),
+                e.origin,
+            )
+        {
+            b.shown = Some(shown);
+        }
         if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
             b.shown = Some(with_children(
                 &b.expr,

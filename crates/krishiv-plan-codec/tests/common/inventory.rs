@@ -866,6 +866,17 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "generate_variant_explode",
+            PhysNode::Generate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                kind: krishiv_plan::GeneratorKind::VariantExplode,
+                outer: true,
+                arg: col(2, "v", DataType::Variant),
+                subqueries: Vec::new(),
+            },
+        ),
+        (
             "generate_posexplode_outer",
             PhysNode::Generate {
                 input: boxed(scan()),
@@ -1365,6 +1376,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "exchange_hash",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(11),
                 input: boxed(scan()),
                 // A plan from before the routing hash was named.
@@ -1372,51 +1384,81 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     keys: vec![0, 1],
                     scheme: HashScheme::Unpinned,
                 },
+                filters: Vec::new(),
             }),
         ),
         (
             "exchange_hash_key_group",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(16),
                 input: boxed(scan()),
                 partitioning: Partitioning::Hash {
                     keys: vec![1, 0],
                     scheme: HashScheme::KeyGroupV1,
                 },
+                filters: Vec::new(),
             }),
         ),
         (
             "exchange_single",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(12),
                 input: boxed(scan()),
                 partitioning: Partitioning::Single,
+                filters: Vec::new(),
             }),
         ),
         (
             "exchange_broadcast",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(13),
                 input: boxed(scan()),
                 partitioning: Partitioning::Broadcast,
+                filters: Vec::new(),
             }),
         ),
         (
             "exchange_round_robin",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(14),
                 input: boxed(scan()),
                 partitioning: Partitioning::RoundRobin,
+                filters: Vec::new(),
             }),
         ),
         (
             "exchange_range",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(15),
                 input: boxed(scan()),
                 partitioning: Partitioning::Range {
                     keys: vec![SortKey::asc(0), SortKey::desc(1)],
                 },
+                filters: Vec::new(),
+            }),
+        ),
+        (
+            "exchange_filters",
+            PhysNode::Exchange(ExchangePlan {
+                schema: None,
+                id: ExchangeId(18),
+                input: boxed(scan()),
+                partitioning: Partitioning::Single,
+                filters: vec![krishiv_exec::physical::ExchangeFilterPlan {
+                    id: krishiv_io::FilterId(3),
+                    column: 0,
+                    key_type: arrow_schema::DataType::Int64,
+                    options: krishiv_io::KeyFilterOptions {
+                        bloom_bytes: Some(4096),
+                        ..krishiv_io::KeyFilterOptions::default()
+                    },
+                    null_safe: true,
+                }],
             }),
         ),
         (
@@ -1602,10 +1644,16 @@ pub(crate) fn udf_call() -> PhysNode {
 /// columns the planner fixed, in a final aggregate and the merge of its
 /// states (a filtered raw call, then the same call over its states).
 pub(crate) fn udaf_call() -> PhysNode {
+    udaf_call_typed(vec![DataType::Integer])
+}
+
+/// [`udaf_call`] with these Spark argument types (one argument column).
+pub(crate) fn udaf_call_typed(arg_types: Vec<DataType>) -> PhysNode {
     let call = UdafCall {
         name: "my_udaf".to_owned(),
         version: 3,
         args: vec![Field::new("arg0", ArrowType::Int32, true)],
+        arg_types,
         result: DataType::Integer,
         nullable: false,
         state: vec![Field::new("count", ArrowType::Int64, false)],

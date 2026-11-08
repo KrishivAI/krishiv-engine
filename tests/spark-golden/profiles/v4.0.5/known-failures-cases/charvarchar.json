@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "sql-commands": [
+      3,
+      5,
+      11
+    ]
+  },
+  "file": "charvarchar",
+  "format_version": 1
+}

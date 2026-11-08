@@ -633,7 +633,7 @@ fn fold_from_file(
     shed.grow(&mut charge, state.saturating_mul(frames.len()))?;
     let mut folds = Vec::with_capacity(frames.len());
     for _ in frames {
-        let fold = Fold::new(a, env.ansi, env.udafs.as_ref())?;
+        let fold = Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?;
         // An aggregate UDF's state is opaque: each frame's fold charges it.
         folds.push(if super::udaf::is_udf(a) {
             fold.charged(a, consumer)
@@ -830,9 +830,9 @@ impl Framed {
                     edges: Edges::open(env, f, file, consumer)?,
                     stream: Stream::open(file, consumer)?,
                     fold: if super::udaf::is_udf(a) {
-                        Fold::new(a, env.ansi, env.udafs.as_ref())?.charged(a, consumer)
+                        Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?.charged(a, consumer)
                     } else {
-                        Fold::new(a, env.ansi, env.udafs.as_ref())?
+                        Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?
                     },
                     folded: 0,
                 }))
@@ -1031,7 +1031,7 @@ impl Held {
                 f,
                 &slices,
                 &rebased,
-                &mut super::udaf::Charge::new(Some(&mut self.charge)),
+                &mut super::udaf::Charge::strict(Some(&mut self.charge)),
             );
             self.charge.shrink(eval);
             match out {
@@ -1081,7 +1081,7 @@ impl Held {
             f,
             &[row],
             &vec![(0, 0); frames.len()],
-            &mut super::udaf::Charge::new(Some(&mut self.charge)),
+            &mut super::udaf::Charge::strict(Some(&mut self.charge)),
         );
         self.charge.shrink(eval);
         out

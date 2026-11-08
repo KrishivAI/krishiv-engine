@@ -196,12 +196,37 @@ impl Partials {
                 *b = None;
             }
         }
+        self.fit();
+    }
+
+    /// Reserves what the partials hold beyond their reservations; when that
+    /// fails the Bloom hashes go first, the exact keys only if it still
+    /// fails without them (an optional filter never waits or fails).
+    fn fit(&mut self) {
+        let held: usize = self.memory.iter().map(Reservation::size).sum();
         let want = self.heap_bytes();
         let Some(memory) = self.memory.first_mut() else {
             return;
         };
-        let held = memory.size();
         if want > held && memory.try_grow(want - held).is_err() {
+            // The Bloom hashes go first; the exact keys only if the
+            // reservation still fails without them.
+            for b in self.builders.iter_mut().flatten() {
+                b.drop_hashes();
+            }
+            let want = self.heap_bytes();
+            let Some(memory) = self.memory.first_mut() else {
+                return;
+            };
+            if want <= held || memory.try_grow(want - held).is_ok() {
+                if want < held {
+                    // Only the first reservation shrinks (the others are
+                    // merged drivers', released when the partials drop).
+                    let extra = (held - want).min(memory.size());
+                    memory.shrink(extra);
+                }
+                return;
+            }
             for b in self.builders.iter_mut().flatten() {
                 b.drop_bloom();
             }
@@ -210,7 +235,8 @@ impl Partials {
                 return;
             };
             if want < held {
-                memory.shrink(held - want);
+                let extra = (held - want).min(memory.size());
+                memory.shrink(extra);
             } else {
                 // The few value-set bytes left are not worth failing over.
                 let _ = memory.try_grow(want - held);
@@ -229,6 +255,8 @@ impl Partials {
             };
         }
         self.memory.extend(other.memory);
+        // `merge` grew this driver's hashes by the other's (review minor 2).
+        self.fit();
     }
 }
 
@@ -625,7 +653,8 @@ impl Sink for BuildSink {
         }
         for (p, c) in chunks {
             l.parts[p].chunks.push(c);
-            l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
+            let merged = l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
+            s.counters.max(Counter::MaxCoalesceCopyBytes, merged as u64);
         }
         if let Some((sketches, _)) = &mut l.sketches {
             for (sketch, rows) in sketches.iter_mut().zip(&by_part) {
@@ -762,6 +791,8 @@ impl Sink for BuildSink {
             // are asked for through arbitration when nothing else runs.
             let spill = s.spill.is_some();
             let mut spare = held_copy;
+            // The concatenation copies reserved at once (for the counter).
+            let mut copying = 0usize;
             let mut jobs = std::collections::VecDeque::from(jobs);
             let mut running = futures::stream::FuturesUnordered::new();
             let mut tables = Vec::with_capacity(jobs.len());
@@ -796,6 +827,10 @@ impl Sink for BuildSink {
                         ..
                     }) = jobs.pop_front_if(|_| funded)
                     {
+                        copying = copying.saturating_add(copy);
+                        self.0
+                            .counters
+                            .max(Counter::MaxFinalizeCopyBytes, copying as u64);
                         let shared = Arc::clone(&self.0);
                         let hashing = g.hashing.clone();
                         running.push(async move {
@@ -836,6 +871,7 @@ impl Sink for BuildSink {
                     break;
                 };
                 let (p, table, copy, index_bytes) = done?;
+                copying = copying.saturating_sub(copy);
                 // The index was reserved for one key per row: keep what it
                 // holds.
                 index.shrink(
@@ -843,6 +879,15 @@ impl Sink for BuildSink {
                         .saturating_sub(table.index_memory())
                         .min(index.size()),
                 );
+                let split = table.arena().memory_split();
+                let n = &self.0.counters;
+                n.add(
+                    Counter::ArenaBytes,
+                    (split.hash + split.key + split.other) as u64,
+                );
+                n.add(Counter::ArenaHashBytes, split.hash as u64);
+                n.add(Counter::ArenaKeyBytes, split.key as u64);
+                n.add(Counter::IndexBytes, table.index_memory() as u64);
                 let (keys, buckets, kind) = table.index_size();
                 self.0.counters.or(Counter::IndexKinds, kind as u64);
                 self.0.counters.add(Counter::HashEntries, keys as u64);
@@ -878,6 +923,11 @@ impl Sink for BuildSink {
             let mut grace = Grace::new(g.hashing.fanout0());
             grace.keep_unprobed = s.join_type.keeps_null_build_keys();
             for (p, part) in c.parts.iter_mut().enumerate() {
+                if spilled & (1 << p) == 0 {
+                    self.0
+                        .counters
+                        .add(Counter::SteadyReservedBytes, part.bytes() as u64);
+                }
                 memory.append(&mut part.memory);
                 if spilled & (1 << p) != 0 {
                     grace.build[p].files = std::mem::take(&mut part.files);
@@ -959,6 +1009,9 @@ mod tests {
         let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
             limit: Some(limit),
             quantum: 1,
+            // The whole limit for the partials: the spill-scratch floor
+            // would hide part of it from these exact-size cases.
+            spill_scratch_reserve: 0,
             ..MemoryConfig::default()
         });
         let id = pool.register("partials", None);
@@ -988,6 +1041,54 @@ mod tests {
                 ..KeyFilterOptions::default()
             },
         }
+    }
+
+    /// Memory for the distinct keys but not for their Bloom hashes too: the
+    /// hashes go and the exact set stays (`drop_hashes`, review M1), with
+    /// the reservation equal to what the partial holds. Were the hashes and
+    /// the keys dropped together (`drop_bloom`), only the range would be
+    /// published.
+    #[test]
+    fn without_room_for_the_hashes_the_exact_set_stays() {
+        let mut f = filter();
+        f.options.max_values = 100;
+        let shared = vec![f.clone()];
+        // Sparse (not a dense range, which would publish as the range
+        // whatever is kept), and more than the `IN` list holds (100), so
+        // `drop_bloom` would drop them where `drop_hashes` keeps them.
+        let keys: ArrayRef = Arc::new(Int64Array::from_iter_values(
+            (0..2000).map(|i: i64| i * 1_000_003),
+        ));
+        let sizes = |hashes: bool| {
+            let mut b = krishiv_io::KeyFilterBuilder::new(DataType::Int64, f.options).unwrap();
+            b.add(keys.as_ref(), None).unwrap();
+            if !hashes {
+                b.drop_hashes();
+            }
+            b.heap_bytes()
+        };
+        let (keys_only, with_hashes) = (sizes(false), sizes(true));
+        assert!(with_hashes > keys_only, "no hashes to drop");
+        let mut p = Partials {
+            builders: vec![krishiv_io::KeyFilterBuilder::new(
+                DataType::Int64,
+                f.options,
+            )],
+            // Room for the keys and half the hashes: never both.
+            memory: vec![reservation(keys_only + (with_hashes - keys_only) / 2)],
+        };
+        p.add_keys(&shared, &[Arc::clone(&keys)], None);
+        assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+        assert_eq!(p.heap_bytes(), keys_only, "the keys were dropped too");
+        publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+        let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
+            unreachable!("not published")
+        };
+        assert_eq!(
+            k.form(),
+            krishiv_io::FilterForm::HashSet(2000),
+            "no exact set published"
+        );
     }
 
     /// Without memory for the hashes the Bloom is dropped; without memory

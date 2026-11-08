@@ -335,6 +335,10 @@ pub struct FileScanMetrics {
     pub units_pruned_bloom: u64,
     /// Units whose Bloom filter failed a check and was not used.
     pub bloom_rejected: u64,
+    /// Units a dictionary page ruled out (also in `units_pruned`).
+    pub units_pruned_dictionary: u64,
+    /// Units whose dictionary page failed a check and was not used.
+    pub dictionary_rejected: u64,
     /// Rows decoded.
     pub rows: u64,
     /// Bytes pushed into decoders.
@@ -351,6 +355,9 @@ pub struct FileScanMetrics {
     pub row_filter_rows: u64,
     /// Rows it kept.
     pub row_filter_kept: u64,
+    /// What the splits' reads cost (byte ranges read, bytes, time waited,
+    /// time outstanding).
+    pub reads: krishiv_io::ReadStats,
 }
 
 impl FileScanMetrics {
@@ -390,6 +397,22 @@ impl FileScanMetrics {
                 ("bloom_rejected", self.bloom_rejected),
             ]));
         }
+        if self.units_pruned_dictionary > 0 || self.dictionary_rejected > 0 {
+            out.extend(crate::metrics::counts([
+                ("scan_units_pruned_dictionary", self.units_pruned_dictionary),
+                ("dictionary_rejected", self.dictionary_rejected),
+            ]));
+        }
+        if self.reads.reads > 0 {
+            // Mean reads in flight over a span is `scan_read_inflight_ns`
+            // divided by that span (the scan's wall time in the profile).
+            out.extend(crate::metrics::counts([
+                ("scan_reads", self.reads.reads),
+                ("scan_read_bytes", self.reads.bytes),
+                ("scan_read_wait_ns", self.reads.wait_ns),
+                ("scan_read_inflight_ns", self.reads.inflight_ns),
+            ]));
+        }
         if self.decode_overcommit_bytes > 0 {
             out.extend(crate::metrics::counts([(
                 "decode_overcommit_bytes",
@@ -397,6 +420,10 @@ impl FileScanMetrics {
             )]));
         }
         out
+    }
+
+    pub(super) fn add_reads(&mut self, r: &krishiv_io::ReadStats) {
+        self.reads.add(r);
     }
 
     pub(super) fn add(&mut self, m: &ScanUnitMetrics, overcommitted: u64) {
@@ -408,6 +435,8 @@ impl FileScanMetrics {
         self.page_index_rejected += m.page_index_rejected;
         self.units_pruned_bloom += m.units_pruned_bloom;
         self.bloom_rejected += m.bloom_rejected;
+        self.units_pruned_dictionary += m.units_pruned_dictionary;
+        self.dictionary_rejected += m.dictionary_rejected;
         self.rows += m.rows;
         self.bytes += m.bytes_pushed;
         self.units_filtered += m.units_filtered;
@@ -438,7 +467,7 @@ pub struct FileScanSource {
     /// columns (the decoded batch is `mapped`).
     layout: Vec<Slot>,
     runtime: super::RuntimeFilters,
-    metrics: Mutex<FileScanMetrics>,
+    metrics: Arc<Mutex<FileScanMetrics>>,
     /// Whether the row id ends the output.
     row_id: bool,
 }
@@ -465,6 +494,13 @@ struct FileScanGlobal {
     partition_filters: Vec<(usize, ScanFilter)>,
     /// Rows returned by every driver (for a limit hint).
     returned: AtomicU64,
+}
+
+/// Adds what a finished (or abandoned) split cost to the scan's totals.
+fn record_split(metrics: &Mutex<FileScanMetrics>, current: &Current) {
+    let mut metrics = metrics.lock().unwrap_or_else(PoisonError::into_inner);
+    metrics.add(&current.stream.metrics(), current.stream.overcommitted());
+    metrics.add_reads(&current.stream.read_stats());
 }
 
 /// The piece being read.
@@ -499,6 +535,19 @@ struct FileScanLocal {
     /// again.
     row_filter: Option<(usize, bool)>,
     rows: super::RowStage,
+    /// The scan's totals, to record a split this driver abandons (a limit above
+    /// stopped it before the split's end): its reads were made and paid for. The
+    /// split's rows, bytes and unit counts are added with them; the decode
+    /// over-commit of its last unit is added when the stream drops, later.
+    totals: Arc<Mutex<FileScanMetrics>>,
+}
+
+impl Drop for FileScanLocal {
+    fn drop(&mut self) {
+        if let Some(current) = self.current.take() {
+            record_split(&self.totals, &current);
+        }
+    }
 }
 
 /// Rejects pushdowns the format cannot honour (`build` and
@@ -762,7 +811,7 @@ impl FileScanSource {
             layout,
             mapped,
             runtime: p.dynamic,
-            metrics: Mutex::new(FileScanMetrics::default()),
+            metrics: Arc::new(Mutex::new(FileScanMetrics::default())),
             row_id: p.row_id,
         })
     }
@@ -792,10 +841,7 @@ impl FileScanSource {
     }
 
     fn end_split(&self, current: &Current) {
-        self.metrics
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .add(&current.stream.metrics(), current.stream.overcommitted());
+        record_split(&self.metrics, current);
     }
 
     /// The morsels the drivers of `ctx`'s executor claim: whole splits
@@ -1464,6 +1510,7 @@ impl Source for FileScanSource {
             claimed: 0,
             row_filter: None,
             position: None,
+            totals: Arc::clone(&self.metrics),
         }))
     }
 
@@ -1536,6 +1583,29 @@ mod tests {
 
     /// The scan counters are summed over splits; the row filter's appear
     /// only where it ran.
+    #[test]
+    fn read_costs_are_reported_once_a_read_was_made_and_sum_over_splits() {
+        let mut m = FileScanMetrics::default();
+        assert_eq!(value(&m.extra(), "scan_reads"), None);
+        let mut a = krishiv_io::ReadStats::default();
+        a.reads = 3;
+        a.bytes = 3_000;
+        a.wait_ns = 500;
+        a.inflight_ns = 1_500;
+        m.add_reads(&a);
+        m.add_reads(&a);
+        // Reads without a decoded split still show, so the I/O is never hidden.
+        let extra = m.extra();
+        for (name, want) in [
+            ("scan_reads", 6),
+            ("scan_read_bytes", 6_000),
+            ("scan_read_wait_ns", 1_000),
+            ("scan_read_inflight_ns", 3_000),
+        ] {
+            assert_eq!(value(&extra, name), Some(want), "{name}");
+        }
+    }
+
     #[test]
     fn scan_counters_sum_over_splits() {
         let mut m = FileScanMetrics::default();

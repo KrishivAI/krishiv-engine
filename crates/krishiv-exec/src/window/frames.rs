@@ -21,10 +21,12 @@
 //! - **Strings and binaries** (`min`/`max`/`first`/`last`) pick a row: a
 //!   segment tree of row indices compared by bytes, or the next or previous
 //!   row that counts; values are gathered as views, never copied.
-//! - **In order** for a floating-point `sum` or `avg`, or an integer `sum`
-//!   under ANSI: rounding and overflow depend on the order and grouping of
-//!   the additions, so each frame folds its rows from its start, as
-//!   Spark's does (O(rows × frame) like Spark's).
+//! - **In order** for a floating-point `sum` or `avg`, an integer `sum`
+//!   under ANSI, the moment aggregates (`var_*`, `stddev_*`, `skewness`,
+//!   `kurtosis`, `corr`, `covar_*`, `regr_*`) and `max_by`/`min_by`:
+//!   rounding, overflow and ties depend on the order and grouping of the
+//!   rows, so each frame folds its rows from its start, as Spark's does
+//!   (O(rows × frame) like Spark's).
 
 use std::sync::Arc;
 
@@ -748,6 +750,7 @@ pub(super) fn aggregate(
     slices: &[Slice<'_>],
     frames: &[(u32, u32)],
     ansi: bool,
+    legacy: bool,
 ) -> Result<ArrayRef> {
     let method = method(a, ansi)?;
     if method == Method::Bytes {
@@ -759,20 +762,20 @@ pub(super) fn aggregate(
         Method::Bytes => Err(internal("strings over frames picked above".to_owned())),
         Method::Tree => {
             let rows = slices.iter().map(|s| s.len).sum();
-            tree(a, &args, mask.as_ref(), rows, frames, ansi)
+            tree(a, &args, mask.as_ref(), rows, frames, ansi, legacy)
         }
-        Method::InOrder => in_order(a, &args, mask.as_ref(), frames, ansi),
+        Method::InOrder => in_order(a, &args, mask.as_ref(), frames, ansi, legacy),
     }
 }
 
 /// An accumulator of `a` over its argument columns as they are.
-fn accumulator(a: &AggregateExpr, ansi: bool) -> Result<Accumulator> {
+fn accumulator(a: &AggregateExpr, ansi: bool, legacy: bool) -> Result<Accumulator> {
     let local = AggregateExpr {
         args: (0..a.args.len()).collect(),
         input: AggInput::Raw,
         ..a.clone()
     };
-    Accumulator::new(&local, ansi)
+    Ok(Accumulator::new(&local, ansi)?.legacy_statistical(legacy))
 }
 
 /// The segment tree (see the module docs). Node `k` of `1..2n` is a group:
@@ -785,9 +788,10 @@ fn tree(
     rows: usize,
     frames: &[(u32, u32)],
     ansi: bool,
+    legacy: bool,
 ) -> Result<ArrayRef> {
     let n = rows;
-    let mut t = accumulator(a, ansi)?;
+    let mut t = accumulator(a, ansi, legacy)?;
     t.resize(2 * n);
     let leaves: Vec<u32> = (0..n)
         .map(|i| if passes(mask, i) { id(n + i) } else { Ok(0) })
@@ -816,7 +820,7 @@ fn tree(
         hi = lo;
     }
     // Each frame's nodes, left to right, merged into its row's group.
-    let mut out = accumulator(a, ansi)?;
+    let mut out = accumulator(a, ansi, legacy)?;
     out.resize(frames.len());
     let (mut groups, mut nodes) = (Vec::new(), Vec::new());
     let mut right = Vec::new();
@@ -860,9 +864,10 @@ fn in_order(
     mask: Option<&BooleanArray>,
     frames: &[(u32, u32)],
     ansi: bool,
+    legacy: bool,
 ) -> Result<ArrayRef> {
     let n = frames.len();
-    let mut out = accumulator(a, ansi)?;
+    let mut out = accumulator(a, ansi, legacy)?;
     out.resize(n);
     let (mut groups, mut rows) = (Vec::new(), Vec::new());
     let mut flush = |groups: &mut Vec<u32>, rows: &mut Vec<u32>| -> Result<()> {
@@ -1073,14 +1078,37 @@ pub(super) fn cost(a: &AggregateExpr, f: &WindowFunctionPlan, rows: usize) -> Re
     } else if picks_bytes(a) {
         rows * (size_of::<(usize, usize)>() * 2 + 8 + 2 * size_of::<Option<u32>>())
     } else {
-        let state = accumulator(a, true)?.group_bytes();
+        let state = accumulator(a, true, false)?.group_bytes();
         // The tree's nodes and each row's result (an in-order fold needs
         // the results only), the leaf ids (then the result ids), and one
         // chunk of merges: a chunk of parents while the tree is built, of
         // frame nodes while it is queried, or of rows in order.
-        3 * rows * state + rows * 4 + CHUNK * (8 + 2 * state.max(16))
+        3 * rows * state + rows * 4 + chunk_items(f, rows) * (8 + 2 * state.max(16))
     };
     Ok(frames + inputs + method + width(&out, rows))
+}
+
+/// The items one chunk of merges holds for `rows` rows (see [`CHUNK`]): a `ROWS` frame of at most `w` rows has at
+/// most `max(w, 2 * (bits(w) + 1))` items per row (the rows of an in-order fold, or the nodes of a tree query), so a
+/// small batch charges for those, not for a whole chunk. Other frames can hold a whole chunk.
+fn chunk_items(f: &WindowFunctionPlan, rows: usize) -> usize {
+    use super::FrameBound as B;
+    let fr = &f.frame;
+    let at = |b: B| match b {
+        B::CurrentRow => Some(0_i64),
+        B::Offset(n) => Some(n),
+        _ => None,
+    };
+    if fr.units != FrameUnits::Rows {
+        return CHUNK;
+    }
+    let (Some(lo), Some(hi)) = (at(fr.lower), at(fr.upper)) else {
+        return CHUNK;
+    };
+    let w = usize::try_from(hi.saturating_sub(lo).saturating_add(1).max(1)).unwrap_or(usize::MAX);
+    let bits = usize::try_from(usize::BITS - w.leading_zeros()).unwrap_or(64);
+    let per_row = w.max(2 * (bits + 1));
+    CHUNK.min(rows.saturating_mul(per_row).saturating_add(2 * (bits + 1)))
 }
 
 /// The bytes `lag`/`lead`/`nth_value` (function `f`) hold at most over

@@ -311,6 +311,73 @@ fn analyze_tpch_q1_on_the_fixture() {
     assert!(text.contains("groups=3"), "{text}");
 }
 
+/// A file scan reports what its reads cost: fetches, bytes, time waited and
+/// time outstanding. The file was read, so at least what the decoder took was
+/// fetched; nothing is read twice, so no more than the file's size.
+#[test]
+fn a_file_scan_reports_its_read_costs() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/tpch/q1-lineitem.parquet"
+    );
+    let s = session(2);
+    block_on(
+        s.read()
+            .parquet([path])
+            .create_or_replace_temp_view("lineitem"),
+    )
+    .unwrap();
+    let df = block_on(s.sql("SELECT count(*) FROM lineitem WHERE l_quantity > 10")).unwrap();
+    let (_, profile) = block_on(df.collect_with_profile()).unwrap();
+    let scan = profile
+        .metrics
+        .operators
+        .values()
+        .find(|e| e.extra("scan_reads").is_some())
+        .expect("a scan operator reports scan_reads");
+    let get = |name: &str| scan.extra(name).and_then(Metric::value).unwrap();
+    assert!(get("scan_reads") > 0);
+    assert!(get("scan_read_bytes") > 0);
+    // A wait happens inside the span a read is outstanding.
+    assert!(get("scan_read_inflight_ns") >= get("scan_read_wait_ns"));
+    // The file was read through the scheduler: at least what the decoder took.
+    assert!(get("scan_read_bytes") >= get("scan_bytes"));
+    // Each range is fetched once: never more than the file holds.
+    let size = std::fs::metadata(path).unwrap().len();
+    assert!(
+        get("scan_read_bytes") <= size,
+        "{} > {size}",
+        get("scan_read_bytes")
+    );
+}
+
+/// A limit that stops the scan before a split ends still reports the reads that
+/// split made: they were paid for.
+#[test]
+fn a_scan_a_limit_stops_early_still_reports_its_reads() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/tpch/q1-lineitem.parquet"
+    );
+    let s = session(2);
+    block_on(
+        s.read()
+            .parquet([path])
+            .create_or_replace_temp_view("lineitem"),
+    )
+    .unwrap();
+    let df = block_on(s.sql("SELECT l_quantity FROM lineitem LIMIT 1")).unwrap();
+    let (got, profile) = block_on(df.collect_with_profile()).unwrap();
+    assert_eq!(rows(&got), 1);
+    let reads: u64 = profile
+        .metrics
+        .operators
+        .values()
+        .filter_map(|e| e.extra("scan_reads").and_then(Metric::value))
+        .sum();
+    assert!(reads > 0, "the abandoned split's reads are reported");
+}
+
 #[test]
 fn row_layout_joins_report_their_index() {
     let s = session(2);
@@ -329,6 +396,23 @@ fn row_layout_joins_report_their_index() {
         Some(&Metric::Text("row-flat+chain".to_owned()))
     );
     assert_eq!(build.extra("hash_entries"), Some(&Metric::Count(4)));
+    // Its memory once finalized: one 8-byte hash per row, key and payload
+    // columns, an index, and the reservation the probe lives with.
+    let count = |name| build.extra(name).and_then(Metric::value).unwrap_or(0);
+    // The build side is the 4 customers (`hash_entries` above: 4 distinct keys).
+    let rows_built = count("build_rows");
+    assert_eq!(rows_built, 4, "{build:?}");
+    // `get_array_memory_size`: 8 bytes per row in a 64-byte-aligned buffer plus the array's own struct, never
+    // more than a kilobyte for 4 rows (an inflated count fails here).
+    let hash = count("arena_hash_bytes");
+    assert!((8 * rows_built..=1024).contains(&hash), "{build:?}");
+    assert!(count("arena_key_bytes") > 0, "{build:?}");
+    assert!(
+        count("arena_bytes") >= count("arena_hash_bytes") + count("arena_key_bytes"),
+        "{build:?}"
+    );
+    assert!(count("index_bytes") > 0, "{build:?}");
+    assert!(count("steady_reserved_bytes") > 0, "{build:?}");
     // The row-layout index counts probe lengths too: every probe row with
     // a key looks up once (2,000 orders, filtered to those over 10).
     let probe = profile

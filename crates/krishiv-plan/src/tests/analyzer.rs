@@ -49,10 +49,12 @@ fn catalog() -> MemoryCatalog {
             .as_array()
             .unwrap()
             .iter()
-            .map(|f| TableColumn {
-                name: f["name"].as_str().unwrap().to_owned(),
-                data_type: krishiv_types::parse_data_type(f["type"].as_str().unwrap()).unwrap(),
-                nullable: f["nullable"].as_bool().unwrap(),
+            .map(|f| {
+                TableColumn::new(
+                    f["name"].as_str().unwrap().to_owned(),
+                    krishiv_types::parse_data_type(f["type"].as_str().unwrap()).unwrap(),
+                    f["nullable"].as_bool().unwrap(),
+                )
             })
             .collect();
         let version = (name == "lineitem").then_some(TableVersion(7));
@@ -170,8 +172,8 @@ fn df(table: &str, id: i64) -> LogicalPlan {
 
 fn col(name: &str, id: i64) -> Expr {
     Expr::new(ExprNode::Column(ColumnRef {
-        name: vec![name.to_owned()],
         plan_id: Some(PlanId(id)),
+        ..ColumnRef::new(vec![name.to_owned()])
     }))
 }
 
@@ -1420,7 +1422,7 @@ fn every_context_input_changes_the_key() {
                 "v".to_owned(),
                 SessionVariable {
                     data_type: DataType::Integer,
-                    value: Literal::Integer(1),
+                    value: Literal::Integer(1).into(),
                 },
             )]
             .into_iter()
@@ -1926,11 +1928,7 @@ fn session_variables_resolve_after_columns() {
         MemoryCatalog::new("spark_catalog").with_table(
             &["default"],
             "t",
-            vec![TableColumn {
-                name: "var1".to_owned(),
-                data_type: DataType::String,
-                nullable: true,
-            }],
+            vec![TableColumn::new("var1".to_owned(), DataType::String, true)],
             None,
         )
     };
@@ -1941,7 +1939,7 @@ fn session_variables_resolve_after_columns() {
                 "var1".to_owned(),
                 SessionVariable {
                     data_type: DataType::Integer,
-                    value: Literal::Integer(1),
+                    value: Literal::Integer(1).into(),
                 },
             )]),
             version: 3,
@@ -1987,7 +1985,7 @@ fn variable_versions_change_the_fingerprint() {
             "var1".to_owned(),
             SessionVariable {
                 data_type: DataType::Integer,
-                value: Literal::Integer(1),
+                value: Literal::Integer(1).into(),
             },
         )]),
         version: base.variables.version + 1,
@@ -3458,8 +3456,8 @@ fn inline_table_of_ragged_rows_fails() {
 fn inline_table_of_dataframe_reference_fails() {
     let ctx = ctx();
     let cell = Expr::new(ExprNode::Column(ColumnRef {
-        name: vec!["a".to_owned()],
         plan_id: Some(PlanId(1)),
+        ..ColumnRef::new(vec!["a".to_owned()])
     }));
     let r = run(inline_table(vec![vec![cell]], &["a"]), &ctx);
     assert_eq!(
@@ -3517,7 +3515,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 28);
+    assert_eq!(ResolutionConf::KEYS.len(), 34);
     let charsets = conf(&[
         ("spark.sql.legacy.javaCharsets", "true"),
         ("spark.sql.legacy.codingErrorAction", "TRUE"),
@@ -5150,18 +5148,14 @@ fn types_without_evaluation_are_refused() {
     let e = run(one_row().project(vec![nested]), &ctx()).err().unwrap();
     assert_eq!(e.error.error_class(), ErrorClass::UnsupportedTimeType);
     // A scanned column, even when the query does not select it.
-    let geo = TableColumn {
-        name: "g".to_owned(),
-        data_type: DataType::Geography {
+    let geo = TableColumn::new(
+        "g".to_owned(),
+        DataType::Geography {
             srid: Srid::Fixed(4326),
         },
-        nullable: true,
-    };
-    let x = TableColumn {
-        name: "x".to_owned(),
-        data_type: DataType::Integer,
-        nullable: true,
-    };
+        true,
+    );
+    let x = TableColumn::new("x".to_owned(), DataType::Integer, true);
     let cat =
         MemoryCatalog::new("spark_catalog").with_table(&["default"], "geo", vec![x, geo], None);
     let geo_ctx = context(cat, ResolutionConf::default());

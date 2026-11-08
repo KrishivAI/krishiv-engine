@@ -57,6 +57,7 @@ fn catalog(g: &Value) -> MemoryCatalog {
                 name: f["name"].as_str().unwrap().to_owned(),
                 data_type: krishiv_types::parse_data_type(f["type"].as_str().unwrap()).unwrap(),
                 nullable: f["nullable"].as_bool().unwrap(),
+                char_varchar: None,
             })
             .collect();
         c = c.with_table(&["default"], name, columns, None);
@@ -360,8 +361,9 @@ fn resolution_corpus_matches_spark() {
     // interval literals and date and timestamp arithmetic, P2-T001b; 12
     // since a correlated `EXISTS` in an aggregate's key or `FILTER`; 11 since
     // a scalar subquery over no relation reads the outer query's columns; 9
-    // since grouped scalar subqueries run as Spark's single join, P2b row 20).
-    assert_eq!(gaps, 9, "statements in documented gaps");
+    // since grouped scalar subqueries run as Spark's single join, P2b row 20;
+    // 8 since a correlated subquery's own `WITH` is inlined, P2-T115).
+    assert_eq!(gaps, 8, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.
@@ -818,6 +820,7 @@ fn window_goldens_resolve_to_a_fixed_point() {
                 name: f["name"].as_str().unwrap().to_owned(),
                 data_type: krishiv_types::parse_data_type(f["type"].as_str().unwrap()).unwrap(),
                 nullable: f["nullable"].as_bool().unwrap(),
+                char_varchar: None,
             })
             .collect();
         c = c.with_table(&["default"], name, columns, None);

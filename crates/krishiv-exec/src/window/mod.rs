@@ -458,6 +458,9 @@ struct Env {
     /// `spark.sql.ansi.enabled`: overflow raises instead of wrapping or
     /// becoming NULL.
     ansi: bool,
+    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates give NaN instead of NULL where Spark
+    /// divides by zero.
+    legacy: bool,
     /// The session time zone, for a year-month `RANGE` bound over a `TIMESTAMP` key.
     zone: krishiv_kernels::datetime::ZoneRef,
     /// The session's aggregate UDFs, for window frames of one (ADR 0045).
@@ -639,6 +642,7 @@ impl Window {
                 input,
                 plan,
                 ansi,
+                legacy: false,
                 zone,
                 udafs: None,
             }),
@@ -668,9 +672,14 @@ impl Window {
                 crate::aggregate::check_udaf(a, udafs.as_ref())?;
             }
         }
-        if let Some(e) = Arc::get_mut(&mut me.env) {
-            e.udafs = udafs;
-        }
+        // The environment was just built, so nothing shares it; an error here would be a bug, not a dropped flag.
+        let Some(e) = Arc::get_mut(&mut me.env) else {
+            return Err(internal(
+                "a window environment shared before its settings were set".to_owned(),
+            ));
+        };
+        e.udafs = udafs;
+        e.legacy = env.legacy_statistical_aggregate;
         Ok(me)
     }
 
@@ -819,6 +828,7 @@ impl Window {
                 &self.env.plan,
                 &unit,
                 self.env.ansi,
+                self.env.legacy,
                 &self.env.zone,
                 self.env.udafs.as_ref(),
                 Some(&mut l.reservation),
@@ -1001,6 +1011,10 @@ impl Operator for Window {
             (
                 "frame_file_folds",
                 self.counters.file_folds.load(Ordering::Relaxed),
+            ),
+            (
+                "external_narrowed",
+                self.counters.narrowed.load(Ordering::Relaxed),
             ),
         ])
     }

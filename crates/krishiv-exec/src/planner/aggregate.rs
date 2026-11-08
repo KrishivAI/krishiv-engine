@@ -21,8 +21,8 @@ use arrow_schema::Field;
 use krishiv_functions::registry::{Lookup, builtins};
 use krishiv_functions::signature::SparkProfile;
 use krishiv_plan::{
-    AttrId, BoundColumn, Expr, ExprNode, FunctionId, FunctionKind, Grouping, Literal, NullOrdering,
-    ResolvedExpr, ResolvedFunction, SortDirection,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping, Literal,
+    NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection,
 };
 
 use super::build::{Planned, Planner, column_of, internal, list, unsupported};
@@ -440,6 +440,7 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
             name: name.clone(),
             version: *version,
             args: Vec::new(),
+            arg_types: Vec::new(),
             result: f.data_type.clone(),
             nullable: f.nullable,
             state: Vec::new(),
@@ -498,8 +499,18 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "covar_samp" if f.args.len() == 2 => (AggregateFunction::CovarSamp, f.args.clone()),
         "covar_pop" if f.args.len() == 2 => (AggregateFunction::CovarPop, f.args.clone()),
         "regr_count" if f.args.len() == 2 => (AggregateFunction::RegrCount, f.args.clone()),
-        "regr_avgx" if f.args.len() == 2 => (AggregateFunction::RegrAvgx, f.args.clone()),
-        "regr_avgy" if f.args.len() == 2 => (AggregateFunction::RegrAvgy, f.args.clone()),
+        // Spark's `RegrAvgX(y, x)` is `Average(IF(y IS NOT NULL AND x IS NOT NULL, x,
+        // NULL))`: a plain sum over a count, not the running mean the other
+        // moments keep (they differ in the last bit, and an infinity gives NaN
+        // in the running mean).
+        "regr_avgx" if f.args.len() == 2 => (
+            AggregateFunction::Avg,
+            vec![value_where_other_present(&f.args[0], &f.args[1])],
+        ),
+        "regr_avgy" if f.args.len() == 2 => (
+            AggregateFunction::Avg,
+            vec![value_where_other_present(&f.args[1], &f.args[0])],
+        ),
         "regr_sxx" if f.args.len() == 2 => (AggregateFunction::RegrSxx, f.args.clone()),
         "regr_syy" if f.args.len() == 2 => (AggregateFunction::RegrSyy, f.args.clone()),
         "regr_sxy" if f.args.len() == 2 => (AggregateFunction::RegrSxy, f.args.clone()),
@@ -694,6 +705,39 @@ fn long_lit(v: i64) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Literal(krishiv_plan::Literal::Long(v))))
 }
 
+/// `CASE WHEN other IS NOT NULL THEN value END` (`value` where `other` is
+/// present, else NULL), over two `double` arguments.
+fn value_where_other_present(other: &Arc<Expr>, value: &Arc<Expr>) -> Arc<Expr> {
+    let call = |id: Builtin, args: Vec<Arc<Expr>>, data_type: krishiv_types::DataType| {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Builtin(id),
+                kind: FunctionKind::Scalar,
+                args,
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                nullable: !matches!(data_type, krishiv_types::DataType::Boolean),
+                data_type,
+                deterministic: true,
+            },
+        ))))
+    };
+    let present = call(
+        Builtin::IsNotNull,
+        vec![Arc::clone(other)],
+        krishiv_types::DataType::Boolean,
+    );
+    let absent = Arc::new(Expr::literal(krishiv_plan::Literal::Null(Some(
+        krishiv_types::DataType::Double,
+    ))));
+    call(
+        Builtin::When,
+        vec![present, Arc::clone(value), absent],
+        krishiv_types::DataType::Double,
+    )
+}
+
 /// `nullif(c, false)`: `c` where it is true, else NULL, so `count` of it
 /// counts the rows where `c` is true.
 fn null_if_false(c: &Arc<Expr>) -> Option<Arc<Expr>> {
@@ -790,6 +834,14 @@ pub(super) fn aggregate_expr(
 ) -> Result<AggregateExpr> {
     let typed = |a: &usize| view_type(schema.field(*a).data_type());
     if let AggregateFunction::Udf(mut call) = function {
+        call.arg_types = args
+            .iter()
+            .map(|a| {
+                krishiv_types::DataType::from_arrow_field(schema.field(*a)).map_err(|e| {
+                    internal(&format!("aggregate UDF argument {}: {e}", schema.field(*a)))
+                })
+            })
+            .collect::<Result<_>>()?;
         call.args = args
             .iter()
             .enumerate()
@@ -866,4 +918,51 @@ pub(super) fn udaf_state(
 
 fn non_null_literal(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Literal(l) if !matches!(l, krishiv_plan::Literal::Null(_)))
+}
+
+#[cfg(test)]
+mod udaf_arg_type_tests {
+    use super::*;
+    use arrow_schema::{DataType, Schema};
+
+    fn call() -> UdafCall {
+        UdafCall {
+            name: "f".to_owned(),
+            version: 1,
+            args: Vec::new(),
+            arg_types: Vec::new(),
+            result: krishiv_types::DataType::Long,
+            nullable: true,
+            state: Vec::new(),
+        }
+    }
+
+    /// The Spark types of a UDF call's arguments are read from the input
+    /// fields' Spark type tag; a tag that is not a type is an internal error.
+    #[test]
+    fn an_aggregate_udf_reads_its_spark_argument_types_off_the_input() {
+        let tagged = |tag: &str| {
+            Field::new("a", DataType::Int64, true).with_metadata(std::collections::HashMap::from([
+                (
+                    krishiv_types::arrow::SPARK_TYPE_METADATA_KEY.to_owned(),
+                    tag.to_owned(),
+                ),
+            ]))
+        };
+        let build = |tag: &str| {
+            aggregate_expr(
+                AggregateFunction::Udf(Box::new(call())),
+                vec![0],
+                None,
+                &Schema::new(vec![tagged(tag)]),
+                "n".to_owned(),
+            )
+        };
+        let AggregateFunction::Udf(c) = build("bigint").unwrap().function else {
+            panic!("not a UDF call");
+        };
+        assert_eq!(c.arg_types, vec![krishiv_types::DataType::Long]);
+        let e = build("not a type").unwrap_err();
+        assert!(e.to_string().contains("aggregate UDF argument"), "{e}");
+    }
 }

@@ -48,6 +48,7 @@ mod cache;
 mod cancel;
 mod carrier;
 mod catalog;
+mod char_write;
 mod collation_defaults;
 mod column;
 mod command;
@@ -61,6 +62,7 @@ mod history;
 mod identifier_clause;
 mod introspection;
 mod locals;
+mod nested_value;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
 mod partitions;

@@ -58,23 +58,51 @@ pub(super) fn cost(
 pub(super) struct Charge<'a> {
     pool: Option<&'a mut Reservation>,
     held: usize,
+    /// The state the pool may refuse without failing the query: the whole
+    /// reservation the driver holds when the charge starts (pending batches
+    /// and queued output, not only this evaluation's share; an exception to
+    /// ADR 0045 section 4 that is bounded by the pool limit). A refusal of
+    /// more is a memory error; a refusal of less is the pool being briefly
+    /// full, and the state runs unaccounted, as it did before it was charged.
+    slack: usize,
 }
 
 impl<'a> Charge<'a> {
-    pub(super) const fn new(pool: Option<&'a mut Reservation>) -> Self {
-        Self { pool, held: 0 }
+    /// A charge that fails on any refusal: the disk paths, whose callers
+    /// fall back to folding from the file.
+    pub(super) const fn strict(pool: Option<&'a mut Reservation>) -> Self {
+        Self {
+            pool,
+            held: 0,
+            slack: 0,
+        }
+    }
+
+    /// A charge that lets the state of the in-memory evaluation overshoot a
+    /// briefly full pool by the reservation the driver already holds.
+    pub(super) fn with_slack(pool: Option<&'a mut Reservation>) -> Self {
+        let slack = pool.as_deref().map_or(0, Reservation::size);
+        Self {
+            pool,
+            held: 0,
+            slack,
+        }
     }
 
     /// Brings the charge to `size`.
     ///
     /// # Errors
-    /// The memory class when the pool refuses the growth.
+    /// The memory class when the pool refuses a state larger than the slack.
     fn to(&mut self, size: usize) -> Result<()> {
         let Some(pool) = self.pool.as_deref_mut() else {
             return Ok(());
         };
         if size > self.held {
-            pool.try_grow(size - self.held)?;
+            match pool.try_grow(size - self.held) {
+                Ok(()) => {}
+                Err(_) if size <= self.slack => return Ok(()),
+                Err(e) => return Err(e.into()),
+            }
         } else {
             pool.shrink(self.held - size);
         }
@@ -187,7 +215,7 @@ pub(super) fn frames_aggregate(
     charge: &mut Charge<'_>,
 ) -> Result<ArrayRef> {
     if !is_udf(a) {
-        return super::frames::aggregate(a, f, slices, frames, env.ansi);
+        return super::frames::aggregate(a, f, slices, frames, env.ansi, env.legacy);
     }
     let local = AggregateExpr {
         args: (0..a.args.len()).collect(),
@@ -330,4 +358,83 @@ fn gather(cols: &[ArrayRef], at: &[usize]) -> Result<Vec<ArrayRef>> {
 fn concat(values: &[ArrayRef]) -> Result<ArrayRef> {
     let refs: Vec<&dyn Array> = values.iter().map(AsRef::as_ref).collect();
     arrow_select::concat::concat(&refs).map_err(|e| internal(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use krishiv_common::error::ErrorClass;
+    use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
+
+    use super::Charge;
+    use crate::TokioClock;
+
+    /// A 64 KiB pool of 16 KiB quanta with 48 KiB held by `window` and the
+    /// rest by `hog`, so any growth is refused.
+    fn full_pool() -> (Reservation, Reservation) {
+        let pool = TreePool::with_clock(
+            &MemoryConfig {
+                limit: Some(64 << 10),
+                quantum: 16 << 10,
+                spill_wait_timeout: Duration::from_secs(1),
+                abort_release_timeout: Duration::from_secs(1),
+                spill_scratch_reserve: 0,
+                resident_guard: false,
+            },
+            Arc::new(TokioClock),
+        );
+        let mut window = Reservation::new(Arc::clone(&pool) as _, pool.register("window", None));
+        let mut hog = Reservation::new(Arc::clone(&pool) as _, pool.register("hog", None));
+        window.try_grow(48 << 10).unwrap();
+        hog.try_grow(16 << 10).unwrap();
+        (window, hog)
+    }
+
+    #[test]
+    fn a_strict_charge_fails_on_any_refusal() {
+        let (mut window, _hog) = full_pool();
+        let mut c = Charge::strict(Some(&mut window));
+        let e = c.to(1 << 10).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    }
+
+    #[test]
+    fn a_slack_charge_passes_a_state_within_the_reservation_and_fails_a_larger_one() {
+        let (mut window, _hog) = full_pool();
+        let before = window.size();
+        {
+            let mut c = Charge::with_slack(Some(&mut window));
+            // Within what the window already holds: runs uncharged.
+            c.to(1 << 10).unwrap();
+            // Larger than that: a memory error.
+            let e = c.to(1 << 20).unwrap_err();
+            assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+        }
+        // Nothing was charged, and nothing is released that was not.
+        assert_eq!(window.size(), before);
+    }
+
+    #[test]
+    fn a_charge_that_fits_is_released_on_drop() {
+        let pool = TreePool::with_clock(
+            &MemoryConfig {
+                limit: Some(256 << 10),
+                quantum: 16 << 10,
+                spill_wait_timeout: Duration::from_secs(1),
+                abort_release_timeout: Duration::from_secs(1),
+                spill_scratch_reserve: 0,
+                resident_guard: false,
+            },
+            Arc::new(TokioClock),
+        );
+        let mut window = Reservation::new(Arc::clone(&pool) as _, pool.register("window", None));
+        {
+            let mut c = Charge::strict(Some(&mut window));
+            c.to(40 << 10).unwrap();
+            c.to(8 << 10).unwrap();
+        }
+        assert_eq!(window.size(), 0);
+    }
 }

@@ -7,11 +7,13 @@
 
 #![forbid(unsafe_code)]
 
+mod deal;
 mod fragment;
 mod stages;
 
-pub use fragment::{Stage, StageInput, fragment};
-pub use stages::{StageRunner, StageSplits, stage_tasks};
+pub use deal::TableDealer;
+pub use fragment::{Stage, StageInput, fragment, streaming_scans};
+pub use stages::{Partials, StageRunner, StageSplits, merge_partials, produced, stage_tasks};
 
 #[cfg(test)]
 mod tests;

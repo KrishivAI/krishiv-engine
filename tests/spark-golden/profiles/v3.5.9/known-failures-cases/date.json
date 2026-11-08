@@ -1,0 +1,26 @@
+{
+  "cases": {
+    "depends-on-command": [
+      55,
+      56,
+      69
+    ],
+    "other-version": [
+      4,
+      5,
+      22,
+      64,
+      66,
+      72,
+      73
+    ],
+    "v35-ansi-default": [
+      15,
+      26,
+      37,
+      50
+    ]
+  },
+  "file": "date",
+  "format_version": 1
+}

@@ -42,6 +42,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # 2026-11-07 (run 42354903028, rerun): "No space left on device" 13 minutes into the
+      # all-features nextest build (linking krishiv-exec examples). Same fix as the coverage job.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/boost \
+            /opt/microsoft /opt/az /usr/lib/google-cloud-sdk /usr/lib/mono /usr/local/julia* /usr/local/graalvm \
+            /opt/hostedtoolcache/Java_* /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy
+          df -h /
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: Pinned tools (sccache, nextest)
@@ -110,6 +120,16 @@ jobs:
             --fixture "$RUNNER_TEMP/diff/expr.json" \
             --known tests/fixtures/spark-4.2.0/expr-differential-known-failures.json \
             --out "$RUNNER_TEMP/diff/expr-mismatches.json"
+      # P2-T082b: Spark 4.2 writes and reads every partitioned-write case again; a difference from the committed
+      # fixture (a Krishiv writer change Spark reads differently) fails the job.
+      - name: Partitioned writes Spark reads back (Spark 4.2, local mode)
+        run: |
+          cargo build -p krishiv-testkit --locked --bin write-partition-cases
+          env -u SPARK_HOME uv run --no-project --python 3.12 --with 'pyspark==4.2.0' \
+            python -I tests/scripts/gen_partitioned_write_goldens.py \
+            --writer target/debug/write-partition-cases \
+            --check tests/fixtures/spark-4.2.0/partitioned-write-goldens.json \
+            > "$RUNNER_TEMP/diff/partitioned-writes.json"
       - name: TLP and NoREC hunt (one hour)
         run: |
           set -o pipefail
@@ -373,9 +393,9 @@ jobs:
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: sccache@0.18.0
-      - name: Fetch the Spark v4.3.0 goldens
-        run: "bash tests/scripts/import_spark_golden.sh v4.3.0"
-      - name: Spark 4.3.0 golden ratchet
+      - name: Fetch the Spark v4.3.0, v4.1.4, v4.0.5 and v3.5.9 goldens
+        run: "for t in v4.3.0 v4.1.4 v4.0.5 v3.5.9; do bash tests/scripts/import_spark_golden.sh $t; done"
+      - name: Golden ratchet per Spark version
         run: "cargo test -p krishiv-testkit --release --locked --test golden_profiles -- --ignored"
 
   # cargo-fuzz targets (`fuzz/`), one hour each: the reusable `fuzz.yml`

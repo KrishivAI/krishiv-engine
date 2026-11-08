@@ -18,7 +18,7 @@ use krishiv_exec::physical::{
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
     SubqueryPlan, SubqueryValueKind, WritePlan,
 };
-use krishiv_exec::physical::{SharedId, SharedPlan};
+use krishiv_exec::physical::{ExchangeFilterPlan, SharedId, SharedPlan};
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
@@ -534,6 +534,7 @@ impl Decoder {
                     Explode => krishiv_plan::GeneratorKind::Explode,
                     PosExplode => krishiv_plan::GeneratorKind::PosExplode,
                     Inline => krishiv_plan::GeneratorKind::Inline,
+                    VariantExplode => krishiv_plan::GeneratorKind::VariantExplode,
                 })?,
                 outer: g.outer,
                 arg: self.expr_ref(g.arg)?,
@@ -717,6 +718,27 @@ impl Decoder {
             id: ExchangeId(e.id),
             input: self.boxed(e.input)?,
             partitioning: partitioning(required(&e.partitioning, "the partitioning")?)?,
+            filters: e
+                .filters
+                .iter()
+                .map(|f| {
+                    let options = join_filter(&pb::JoinFilter {
+                        id: f.id,
+                        key: 0,
+                        options: f.options,
+                    })?
+                    .options;
+                    Ok(ExchangeFilterPlan {
+                        id: FilterId(f.id),
+                        column: usize::try_from(f.column)
+                            .map_err(|_| corrupt("an exchange filter column out of range"))?,
+                        key_type: type_from(&f.key_type)?,
+                        options,
+                        null_safe: f.null_safe,
+                    })
+                })
+                .collect::<Result<_>>()?,
+            schema: e.schema.as_deref().map(schema_from).transpose()?,
         })
     }
 
@@ -1139,10 +1161,17 @@ fn udaf_call(u: Option<&pb::UdafCall>) -> Result<UdafCall> {
     if state.is_empty() {
         return Err(corrupt("an aggregate UDF without state columns"));
     }
+    let args = fields(&u.args)?;
+    if u.arg_types.len() != args.len() {
+        return Err(corrupt(
+            "an aggregate UDF whose argument types and columns differ",
+        ));
+    }
     Ok(UdafCall {
         name: u.name.clone(),
         version: u32::try_from(u.version).map_err(|_| corrupt("a UDF version out of range"))?,
-        args: fields(&u.args)?,
+        arg_types: u.arg_types.iter().map(spark_type).collect::<Result<_>>()?,
+        args,
         result: spark_type(
             u.result
                 .as_ref()
