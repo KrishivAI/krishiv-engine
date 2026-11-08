@@ -795,14 +795,23 @@ async fn load(
         let mut candidates: Vec<TableIdent> = Vec::new();
         if name.len() == 1 && !scan {
             for entry in ctx.catalogs.sql_path() {
-                if let [c, n] = entry.as_slice()
-                    && c.eq_ignore_ascii_case(catalog.name())
-                {
-                    candidates.push(TableIdent {
-                        catalog: ident.catalog.clone(),
-                        namespace: vec![n.clone()],
-                        name: ident.name.clone(),
-                    });
+                match entry.as_slice() {
+                    [c, n] if c.eq_ignore_ascii_case(catalog.name()) => {
+                        candidates.push(TableIdent {
+                            catalog: ident.catalog.clone(),
+                            namespace: vec![n.clone()],
+                            name: ident.name.clone(),
+                        });
+                    }
+                    // A catalog with an empty namespace (`USE system`).
+                    [c] if c.eq_ignore_ascii_case(catalog.name()) => {
+                        candidates.push(TableIdent {
+                            catalog: ident.catalog.clone(),
+                            namespace: Vec::new(),
+                            name: ident.name.clone(),
+                        });
+                    }
+                    _ => {}
                 }
             }
         }

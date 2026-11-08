@@ -202,13 +202,13 @@ impl Session {
                     .get(&krishiv_common::config::SQL_DEFAULT_PATH)
                     .map(ToString::to_string)
                     .unwrap_or_default();
-                let namespace = self.state.catalog.current_namespace();
+                let current = self.state.catalog.current_position();
                 let live = self
                     .state
                     .catalog
                     .stored_path()
                     .unwrap_or_else(|| crate::sql_path::default_entries(&default_conf));
-                let entries = crate::sql_path::expand(elements, &live, &default_conf, &namespace)?;
+                let entries = crate::sql_path::expand(elements, &live, &default_conf, &current)?;
                 self.state.catalog.set_path(entries);
                 self.empty_frame().await
             }
