@@ -146,3 +146,31 @@ fn from_xml_reads_an_empty_or_null_value_element_into_binary_as_null() {
         );
     }
 }
+
+#[test]
+fn the_csv_file_writer_follows_the_style_too() {
+    // Spark 4.2.0: bytes 'AB' under UTF-8 / BASE64 / HEX / HEX_DISCRETE write `AB` / `QUI` / `4142` / `[41 42]`.
+    for (style, want) in [
+        ("UTF-8", "AB"),
+        ("BASE64", "QUI"),
+        ("HEX", "4142"),
+        ("HEX_DISCRETE", "[41 42]"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let s = with_style(Some(style));
+        let df = block_on(s.sql("SELECT X'4142' AS b")).unwrap();
+        block_on(
+            df.write()
+                .format("csv")
+                .save(dir.path().join("out").to_str().unwrap()),
+        )
+        .unwrap();
+        let got: String = std::fs::read_dir(dir.path().join("out"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "csv"))
+            .map(|e| std::fs::read_to_string(e.path()).unwrap())
+            .collect();
+        assert_eq!(got.trim_end(), want, "csv file under {style}");
+    }
+}
