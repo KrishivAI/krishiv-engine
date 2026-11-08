@@ -13,8 +13,7 @@ name: Main measurement
 # pull request may have been built on any of them, so these runs are keyed by
 # commit and never cancelled. ci.yml cancels superseded runs on a branch and
 # would run its whole test suite for each of them; here only the two
-# measurements run. ci.yml skips its wheel build on main to avoid building the
-# wheels twice. The workflow name in main-baseline.sh (`main-measure.yml`),
+# measurements run. ci.yml has no push trigger, so main's wheels are built only here. The workflow name in main-baseline.sh (`main-measure.yml`),
 # the artifact names and the job `budgets` are read by pr-policy.yml; keep them
 # in sync.
 

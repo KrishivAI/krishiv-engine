@@ -285,10 +285,10 @@ jobs:
   # and result channel (`crates/krishiv-exec/src/loom_model.rs`).
   # P2-T163: runtime filter snapshot publication
   # (`crates/krishiv-io/src/runtime_filter/tests.rs`).
-  # P2-T103: every wheel target, built and tested (wheels.yml).
   # Every job of ci.yml on main (msrv, hack, deny, docs, release-dry-run, miri, fuzz-build, the abi3 and cp314t wheels,
   # ...): ci.yml has no schedule or push trigger of its own (owner 2026-11-08, each gate runs once). Its jobs run here
-  # with `github.event_name == 'schedule'`; the full wheel matrix is the `wheels` job below, and a failure opens the
+  # with `github.event_name == 'schedule'`, including the full wheel matrix (P2-T103, `wheels-targets` calling wheels.yml),
+  # and a failure opens the
   # "nightly CI failed" issue (nightly-failure-notice, a job of ci.yml).
   ci:
     if: github.repository == 'KrishivAI/krishiv-engine'
@@ -300,13 +300,6 @@ jobs:
       issues: write
       pull-requests: write
     uses: $/.github/workflows/ci.yml
-
-  wheels:
-    if: github.repository == 'KrishivAI/krishiv-engine'
-    permissions:
-      contents: read
-      actions: read
-    uses: $/.github/workflows/wheels.yml
 
   loom:
     if: github.repository == 'KrishivAI/krishiv-engine'

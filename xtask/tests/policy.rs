@@ -418,8 +418,8 @@ fn ci_policy_wiring() {
     // label); the label-aware gate in pr-policy.yml compares the measurement.
     let ci = read(".github/workflows/ci.yml");
     assert!(
-        job(&ci, "wheels-targets").contains("github.event_name == 'pull_request'"),
-        "wheels-targets runs on pull requests only (main and the nightly build the full matrix through wheels.yml)"
+        job(&ci, "wheels-targets").contains("github.event_name != 'merge_group'"),
+        "wheels-targets runs on pull requests and in the nightly run, not in the merge queue"
     );
     let wheels = read(".github/workflows/wheels.yml");
     for needle in [
