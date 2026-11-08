@@ -20,17 +20,9 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 use serde_json::Value;
 
-/// Cases not matched yet:
-/// - pivot columns of complex types (a map is not orderable, an array value is a `array(...)` call): the engine
-///   does not take them yet (P2b row 11);
-/// - several timestamp values, one of them a string: the analyzer cannot tell whether two values are equal, which
-///   decides Spark's result, so the engine refuses them (`docs/explanation/known-differences.md`).
-const KNOWN_GAPS: &[&str] = &[
-    "err-unorderable-pivot-col",
-    "pf-array-pivot-col",
-    "pf-ts-dup-cast-value",
-    "pf-ts-distinct-values",
-];
+/// Cases not matched yet: several timestamp values, one of them a string: the analyzer cannot tell whether two
+/// values are equal, which decides Spark's result, so the engine refuses them (`docs/explanation/known-differences.md`).
+const KNOWN_GAPS: &[&str] = &["pf-ts-dup-cast-value", "pf-ts-distinct-values"];
 
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
