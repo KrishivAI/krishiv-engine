@@ -50,7 +50,7 @@ use super::super::table::Table;
 use super::parts::{Helper, MAX_WRITERS};
 use super::{
     CHUNK, Final, Global, HEADROOM, HashAggregate, Output, Run, Spiller, bump, lend_headroom,
-    reserve_to, shrink_to, tasks_of,
+    reserve_to, shrink_to, tasks_of, writer_panicked,
 };
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
@@ -668,14 +668,6 @@ impl TaskRuns {
     }
 }
 
-/// The text of a panic's payload (a `&str` or `String`), else empty.
-fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
-    p.downcast_ref::<&str>()
-        .map(|s| (*s).to_owned())
-        .or_else(|| p.downcast_ref::<String>().cloned())
-        .unwrap_or_default()
-}
-
 /// Counts one extra writer as running while it lives.
 struct Live<'a>(&'a AtomicUsize);
 
@@ -743,10 +735,7 @@ impl Spiller {
                             // `stop`, so no writer's "stopped" wins).
                             let run = std::panic::AssertUnwindSafe(|| self.help_tasks(&h, shared));
                             if let Err(p) = std::panic::catch_unwind(run) {
-                                shared.fail(internal(format!(
-                                    "a spill writer thread panicked: {}",
-                                    panic_message(p.as_ref())
-                                )));
+                                shared.fail(writer_panicked(p.as_ref()));
                             }
                         });
                     match started {
@@ -768,10 +757,7 @@ impl Spiller {
                 // Helpers catch their own panics; this is for a panic outside
                 // `help_tasks` (dropping the helper or its place).
                 if let Err(p) = j.join() {
-                    shared.fail(internal(format!(
-                        "a spill writer thread panicked: {}",
-                        panic_message(p.as_ref())
-                    )));
+                    shared.fail(writer_panicked(p.as_ref()));
                 }
             }
         });
@@ -782,14 +768,10 @@ impl Spiller {
         if let Some(e) = lock(&shared.failed).take() {
             return Err(e);
         }
+        // Every task's run is written unless a writer failed (returned above).
+        let unwritten = || internal("a spill run of the final phase was not written".to_owned());
         let runs = std::mem::take(&mut *lock(&shared.runs));
-        runs.into_iter()
-            .map(|r| {
-                r.ok_or_else(|| {
-                    internal("a spill run of the final phase was not written".to_owned())
-                })
-            })
-            .collect()
+        runs.into_iter().map(|r| r.ok_or_else(unwritten)).collect()
     }
 
     /// An extra writer of [`Self::write_task_runs`]: tasks until none are
@@ -813,6 +795,7 @@ impl Spiller {
         };
         while let Some(mut pending) = shared.next() {
             opened.set(0);
+            self.panic_in_test();
             let outcome = write_task(self, &pending.1, &mut pending.2, &writer, &shared.stop);
             if !shared.done(self, pending, outcome, true) {
                 return;

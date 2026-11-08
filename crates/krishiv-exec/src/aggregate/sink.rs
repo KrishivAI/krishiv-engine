@@ -52,7 +52,7 @@ mod disk;
 mod parallel;
 mod parts;
 #[cfg(test)]
-pub(super) use parts::HANDBACKS;
+pub(super) use parts::{HANDBACKS, PANICS};
 
 /// Groups per state batch when spilling and merging (one finalize step).
 const CHUNK: usize = 1024;
@@ -146,6 +146,17 @@ struct Counters {
 
 fn bump(c: &AtomicU64, n: u64) {
     c.fetch_add(n, AtomicOrdering::Relaxed);
+}
+
+/// The error of a spill writer thread that panicked, with the text of the
+/// panic's payload (a `&str` or `String`; empty otherwise).
+pub(super) fn writer_panicked(p: &(dyn std::any::Any + Send)) -> KrishivError {
+    let what = p
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    internal(format!("a spill writer thread panicked: {what}"))
 }
 
 /// A hash-aggregation pipeline breaker (see the [module docs](super)).

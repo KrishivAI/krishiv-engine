@@ -32,8 +32,8 @@ use krishiv_common::error::KrishivError;
 use krishiv_memory::{ConsumerHandle, SpillError, SpillFile, SpillWriter};
 use krishiv_types::batch::Batch;
 
-use super::{HEADROOM, Run, Spiller, Table, bump, chunks};
-use crate::error::{Result, internal};
+use super::{HEADROOM, Run, Spiller, Table, bump, chunks, writer_panicked};
+use crate::error::Result;
 use crate::hash::PARTITIONS;
 
 /// Writers of one run at most, the calling thread included.
@@ -58,6 +58,12 @@ static LIVE_HELPERS: AtomicUsize = AtomicUsize::new(0);
 /// its extra writers hand back, one per writer at its next claim, as when
 /// the pool refuses their scratch. Keyed by query, so tests running side
 /// by side in one process do not see each other's setting.
+/// Tests: queries whose final-phase extra writers panic at their next task
+/// (`Spiller::panic_in_test`).
+#[cfg(test)]
+pub(in crate::aggregate) static PANICS: std::sync::Mutex<Vec<crate::QueryId>> =
+    std::sync::Mutex::new(Vec::new());
+
 #[cfg(test)]
 pub(in crate::aggregate) static HANDBACKS: std::sync::Mutex<Vec<(crate::QueryId, usize)>> =
     std::sync::Mutex::new(Vec::new());
@@ -160,14 +166,7 @@ impl Spiller {
         mine?;
         let mut back = Vec::new();
         for d in done {
-            let d = d.map_err(|p| {
-                let what = p
-                    .downcast_ref::<&str>()
-                    .map(|s| (*s).to_owned())
-                    .or_else(|| p.downcast_ref::<String>().cloned())
-                    .unwrap_or_default();
-                internal(format!("a spill writer thread panicked: {what}"))
-            })??;
+            let d = d.map_err(|p| writer_panicked(p.as_ref()))??;
             for (p, f) in d.files {
                 files[p] = Some(f);
             }
@@ -343,6 +342,19 @@ impl Spiller {
     pub(super) fn refused_in_test(&self) -> bool {
         false
     }
+
+    /// Tests: an extra writer of a query listed in [`PANICS`] panics at
+    /// its next task, as a bug in a writer thread would.
+    #[cfg(test)]
+    pub(super) fn panic_in_test(&self) {
+        let id = self.query.id();
+        if PANICS.lock().is_ok_and(|v| v.contains(&id)) {
+            panic!("a test panic in a spill writer");
+        }
+    }
+
+    #[cfg(not(test))]
+    pub(super) fn panic_in_test(&self) {}
 
     /// Writes the groups `ids` with writer `w` as one partition file. The
     /// inner error is the writer's (a refused scratch among them: nothing

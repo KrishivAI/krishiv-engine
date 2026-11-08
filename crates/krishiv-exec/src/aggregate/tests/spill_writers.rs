@@ -281,3 +281,129 @@ async fn final_phase_runs_are_written_at_once() {
         .unwrap()
         .retain(|(q, _)| *q != QueryId(6));
 }
+
+/// Sinks `b` with `drivers` drivers of query `query` into `agg` (row tables),
+/// then runs the final phase (`finalize`) or one `spill_global`, which must
+/// fail; returns its error and what the pool still holds once the query's
+/// states are dropped.
+async fn failing_step(
+    agg: &Arc<HashAggregate>,
+    s: &SchemaRef,
+    b: &[Vec<ArrayRef>],
+    drivers: usize,
+    query: u64,
+    finalize: bool,
+) -> (krishiv_common::error::KrishivError, usize) {
+    let root = pool(1 << 30);
+    let config = ExecConfig {
+        agg_row_layout: true,
+        ..ExecConfig::default()
+    };
+    let q = QueryContext::new(
+        QueryId(query),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", None),
+    );
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let ctx = |id, name| {
+        let e = Arc::clone(&executor);
+        TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), name)
+    };
+    let sink_ctx = ctx(0, "agg");
+    let g = Sink::global_state(&**agg, &sink_ctx).unwrap();
+    for part in b.chunks(b.len().div_ceil(drivers)) {
+        let mut l = Sink::local_state(&**agg, &sink_ctx, &g).unwrap();
+        for cols in part {
+            let batch = Batch::new(RecordBatch::try_new(Arc::clone(s), cols.clone()).unwrap());
+            agg.sink(batch, &mut l, &g).unwrap();
+        }
+        agg.combine(l, &g).unwrap();
+    }
+    let e = if finalize {
+        let final_ctx = ctx(0, "agg");
+        let e = agg.finalize(&g, &final_ctx).await.unwrap_err();
+        drop(final_ctx);
+        e
+    } else {
+        agg.spill_global(&g, 1, &sink_ctx).await.unwrap_err()
+    };
+    drop((g, sink_ctx, q));
+    (e, root.reserved())
+}
+
+/// A spill directory over its cap fails the final phase's parallel writes
+/// (the calling thread's and the extra writers'): the query fails with the
+/// cap's error, the other writers stop, and no memory or spill file stays.
+#[tokio::test]
+async fn a_failed_final_phase_run_fails_the_query() {
+    let (s, b) = grouped_input(200_000, 90_000);
+    let (spill, scope) = spill_dir_capped(256 << 10);
+    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+    sp.spill = Some(scope);
+    let mode = rowtable::Mode::Fixed { limit: 5_000 };
+    let agg = HashAggregate::with_final_stall(sp, mode, 0).unwrap();
+    let (e, reserved) = failing_step(&agg, &s, &b, 3, 4_301, true).await;
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillCapExceeded, "{e}");
+    assert_eq!(reserved, 0);
+    drop(agg);
+    assert_eq!(spill.manager.used_bytes(), 0, "spill files left");
+}
+
+/// The same for one run's partition files written by several threads
+/// (`write_parts`, X2b): a spill request with room in the pool starts
+/// extra writers, the cap fails one of them, and the spill fails whole.
+#[tokio::test]
+async fn a_failed_partition_write_fails_the_spill() {
+    if std::thread::available_parallelism().map_or(1, std::num::NonZero::get) < 2 {
+        return;
+    }
+    let (s, b) = grouped_input(30_000, 20_000);
+    let (spill, scope) = spill_dir_capped(64 << 10);
+    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+    sp.spill = Some(scope);
+    let agg = HashAggregate::new(sp).unwrap();
+    let (e, reserved) = failing_step(&agg, &s, &b, 3_000, 4_302, false).await;
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillCapExceeded, "{e}");
+    assert_eq!(reserved, 0);
+    drop(agg);
+    assert_eq!(spill.manager.used_bytes(), 0, "spill files left");
+}
+
+/// An extra writer whose thread panics fails the query with the panic's
+/// message (not another writer's "stopped"), and leaves nothing reserved.
+#[tokio::test]
+async fn a_panicking_extra_writer_fails_the_query_with_its_message() {
+    if std::thread::available_parallelism().map_or(1, std::num::NonZero::get) < 2 {
+        return;
+    }
+    let (s, b) = grouped_input(200_000, 90_000);
+    let query = QueryId(4_303);
+    super::super::sink::PANICS.lock().unwrap().push(query);
+    let (_m, scope) = spill_dir();
+    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+    sp.spill = Some(scope);
+    let mode = rowtable::Mode::Fixed { limit: 5_000 };
+    let agg = HashAggregate::with_final_stall(sp, mode, 0).unwrap();
+    let (e, reserved) = failing_step(&agg, &s, &b, 3, query.0, true).await;
+    super::super::sink::PANICS
+        .lock()
+        .unwrap()
+        .retain(|q| *q != query);
+    let text = e.to_string();
+    assert!(
+        text.contains("a spill writer thread panicked: a test panic in a spill writer"),
+        "{text}"
+    );
+    assert_eq!(reserved, 0);
+}
+
+#[test]
+fn a_writer_panic_names_its_payload() {
+    let text = |p: Box<dyn std::any::Any + Send>| {
+        super::super::sink::writer_panicked(p.as_ref()).to_string()
+    };
+    assert!(text(Box::new("a str")).contains("panicked: a str"));
+    assert!(text(Box::new(String::from("a string"))).contains("panicked: a string"));
+    assert!(text(Box::new(7_u8)).contains("panicked: "));
+}
