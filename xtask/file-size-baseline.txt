@@ -7,19 +7,17 @@
 3260 crates/krishiv-exec/src/aggregate/rowtable.rs
 # +1 line (and in physical/instantiate.rs, window/tests.rs): the `udafs` spec field and the `Udf` aggregate variant (ADR 0045, T060a)
 # +37 lines over main: rows of batches that take the batch-local key map equal the columnar tables' (E2 step 2)
-# +68: an aggregate spill write holds the spilling guard, and the combined tables are the writer's during it (spill-guard tests, #627)
-3345 crates/krishiv-exec/src/aggregate/tests.rs
+3277 crates/krishiv-exec/src/aggregate/tests.rs
 # +11: the coalesce test asserts the merged-run bytes it now returns (X3' step 1, #586)
-# +127: spill guards on spill_parts, and each Loading partition and its Active table hold a seat in the query's grace table cohort (#627)
-2320 crates/krishiv-exec/src/join/grace.rs
+2193 crates/krishiv-exec/src/join/grace.rs
+2003 crates/krishiv-exec/src/operators/sort/sort.rs
 2215 crates/krishiv-exec/src/physical/instantiate.rs
 2105 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 # +70 lines over main: the external-partition headroom reproducer, batches of 20 and 300/1,500 rows from a full pool (window spill flake, PR #601)
 # +10 lines: offsets and nth_value read back from a full pool (window fold charges)
-# +29: a window spill write holds the spilling guard (spill-guard tests, #627)
-3173 crates/krishiv-exec/src/window/tests.rs
+3144 crates/krishiv-exec/src/window/tests.rs
 # +14: nth_value refuses an interval or timestamp offset as UNEXPECTED_INPUT_TYPE before its value check (T025 rest)
 2099 crates/krishiv-functions/src/registry/defs.rs
 3340 crates/krishiv-functions/src/registry/tests.rs
