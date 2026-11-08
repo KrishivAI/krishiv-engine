@@ -726,3 +726,23 @@ fn use_system_switches_the_current_catalog() {
     );
     assert_eq!(column_of(&s, "SELECT current_schema()", 0), ["default"]);
 }
+
+#[test]
+fn a_temp_view_still_resolves_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TEMPORARY VIEW mine AS SELECT 7 AS n").unwrap();
+    run(&s, "CREATE TEMPORARY VIEW queries AS SELECT 1 AS only_col").unwrap();
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(n AS STRING) FROM mine", 0),
+        ["7"]
+    );
+    // The temp view wins over the system table of the same name.
+    assert_eq!(
+        column_of(&s, "SELECT CAST(only_col AS STRING) FROM queries", 0),
+        ["1"]
+    );
+    // A bare persistent name that is not a system table is not found.
+    let e = run(&s, "SELECT * FROM nosuch").unwrap_err();
+    assert!(e.contains("TABLE_OR_VIEW_NOT_FOUND"), "{e}");
+}
