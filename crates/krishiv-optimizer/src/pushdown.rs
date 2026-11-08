@@ -276,7 +276,15 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
         PlanNode::Sort { input, .. }
         | PlanNode::SubqueryAlias { input, .. }
         | PlanNode::WithCte { input, .. }
-        | PlanNode::JoinHint { input, .. } => {
+        | PlanNode::JoinHint { input, .. }
+        // Spark's `canPushThrough` lists `RepartitionByExpression` (with
+        // deterministic expressions; a nondeterministic one is first pulled
+        // into a projection below by `PullOutNondeterministic`, so a filter
+        // passes it all the same: checked on 4.2.0, a filter above
+        // `DISTRIBUTE BY CAST(x AS INT) + rand()` drops the row the cast
+        // would fail on). A repartition never changes rows, so the filter
+        // moves whatever its expressions are.
+        | PlanNode::Repartition { input, .. } => {
             through(plan, input, movable, |p| Some(Arc::clone(p)))
         }
         PlanNode::Shift { input, offset } => through(plan, input, movable, |p| {

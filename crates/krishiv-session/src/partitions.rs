@@ -12,8 +12,12 @@
 //! - `INSERT` into a partitioned table registers the partitions found under the table's directory afterwards;
 //!   a `CREATE TABLE ... AS SELECT` registers them with their file counts and sizes (`RepairTableCommand`).
 //! - Bucketed tables keep their bucket specification as metadata; the engine writes no bucketed files, so a
-//!   write to one fails with `KRISHIV_UNSUPPORTED_FEATURE` before anything is written. Reading a partitioned
-//!   table's rows needs partition discovery, which file reads refuse (`KRISHIV_UNSUPPORTED_FEATURE`).
+//!   write to one fails with `KRISHIV_UNSUPPORTED_FEATURE` before anything is written.
+//! - Reading a partitioned table's rows (`catalog.rs` `known_partitions`, `krishiv_exec::files::KnownPartitions`):
+//!   its registered partitions at their default directories, values typed as declared (strings, integers and dates
+//!   so far). A table with a partition registered elsewhere, a directory the catalog does not know, or another
+//!   partition column type is `KRISHIV_UNSUPPORTED_FEATURE`, never read differently from Spark's
+//!   `CatalogFileIndex`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

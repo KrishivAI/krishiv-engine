@@ -599,6 +599,25 @@ const CASES: &[(&str, &str)] = &[
         "expand_duplicate_sets",
         "SELECT a, sum(c) FROM t GROUP BY GROUPING SETS ((a), (a))",
     ),
+    // `DISTRIBUTE BY`: filters move below it, columns it reads stay under a
+    // `count(*)`, and an outer one directly over another drops the inner one
+    // (Spark's `CollapseRepartition`), unless a local sort sits between them.
+    (
+        "repartition_filter_below",
+        "SELECT * FROM (SELECT a, b FROM t DISTRIBUTE BY CAST(b AS INT)) WHERE a > 1",
+    ),
+    (
+        "repartition_kept_under_count",
+        "SELECT count(*) FROM (SELECT a FROM t DISTRIBUTE BY a + 1)",
+    ),
+    (
+        "repartition_collapse",
+        "SELECT * FROM (SELECT a, b FROM t DISTRIBUTE BY CAST(b AS INT)) DISTRIBUTE BY a",
+    ),
+    (
+        "repartition_sort_keeps_both",
+        "SELECT * FROM (SELECT a, b FROM t DISTRIBUTE BY CAST(b AS INT) SORT BY a) DISTRIBUTE BY a",
+    ),
 ];
 
 #[test]

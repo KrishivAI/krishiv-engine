@@ -378,6 +378,8 @@ pub(crate) struct ParquetEncoder {
     writer: ArrowWriter<Vec<u8>>,
     /// The schema of the batches the writer takes ([`to_stored`] applied).
     schema: SchemaRef,
+    /// The top-level spatial columns, written as plain WKB (see [`super::geo`]).
+    spatial: Vec<(usize, super::geo::Spatial)>,
     settings: Settings,
     options: FormatOptions,
 }
@@ -407,6 +409,8 @@ impl ParquetEncoder {
         } else {
             Arc::clone(schema)
         };
+        let spatial = super::geo::spatial_columns(&schema)?;
+        let schema = super::geo::stored_schema(&schema, &spatial);
         // The footer keeps arrow-rs's Arrow schema next to the Parquet
         // types: other engines read the Parquet types, Krishiv's reader
         // also gets back what Parquet cannot say (extension tags).
@@ -414,17 +418,18 @@ impl ParquetEncoder {
         let mut options = ArrowWriterOptions::new();
         // A variant group (at any depth) gets its `VARIANT(1)` annotation,
         // which arrow-rs does not write on its own.
-        if schema
-            .fields()
-            .iter()
-            .any(|f| super::variant::holds_variant(f.data_type()))
+        if !spatial.is_empty()
+            || schema
+                .fields()
+                .iter()
+                .any(|f| super::variant::holds_variant(f.data_type()))
         {
             let descr = parquet::arrow::ArrowSchemaConverter::new()
                 .with_coerce_types(properties.coerce_types())
                 .convert(&schema)
                 .map_err(|e| FormatError::WriteFailed(e.to_string()))?;
-            options =
-                options.with_parquet_schema(super::variant::annotate(descr, schema.fields())?);
+            let descr = super::variant::annotate(descr, schema.fields())?;
+            options = options.with_parquet_schema(super::geo::annotate(descr, &spatial)?);
         }
         let options = options.with_properties(properties);
         let writer = ArrowWriter::try_new_with_options(Vec::new(), Arc::clone(&schema), options)
@@ -432,6 +437,7 @@ impl ParquetEncoder {
         Ok(Self {
             writer,
             schema,
+            spatial,
             settings,
             options: o.clone(),
         })
@@ -464,6 +470,13 @@ impl Encoder for ParquetEncoder {
                 }
             }
         }
+        let stored;
+        let batch = if self.spatial.is_empty() {
+            batch
+        } else {
+            stored = super::geo::to_stored(batch, &self.spatial)?;
+            &stored
+        };
         let converted;
         let batch = if self.settings.millis || self.settings.year_month {
             let columns = batch

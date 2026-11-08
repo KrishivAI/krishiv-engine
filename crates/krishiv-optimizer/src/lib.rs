@@ -15,7 +15,8 @@
 //!    sorts, aliases, CTE bodies, self-join instances and joins, turning
 //!    outer joins inner where a filter rejects their NULL rows), join
 //!    conditions into the side they read, projection collapse and removal,
-//!    limit pushdown.
+//!    limit pushdown, a `DISTRIBUTE BY` directly over another dropping the
+//!    inner one (Spark's `CollapseRepartition`).
 //!    **Algebraic sum**, once: `SUM(x + c)` over a narrow integral column
 //!    becomes `SUM(x) + c * COUNT(x)` (`sum_rewrite`).
 //! 2. **Restrict**, then alternating with join order until neither
@@ -62,6 +63,7 @@ mod plan_stats;
 mod project;
 mod prune;
 mod pushdown;
+mod repartition;
 mod restrict;
 mod share_cte;
 mod stats;
@@ -99,8 +101,9 @@ pub const MAX_ITERATIONS: usize = 100;
 type Rule = fn(Arc<LogicalPlan>) -> Arc<LogicalPlan>;
 
 /// The rewrite batch, in order, with the rules' names.
-const REWRITE: [(&str, Rule); 6] = [
+const REWRITE: [(&str, Rule); 7] = [
     ("RemoveAlias", project::remove_alias),
+    ("CollapseRepartition", repartition::collapse),
     ("ConstantFolding", fold_node),
     ("PushDownFilter", pushdown::push_filter),
     ("PushDownJoinCondition", pushdown::push_join_condition),

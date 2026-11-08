@@ -62,7 +62,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         "make_interval" | "try_make_interval" if takes(&types, 6, true) => {
             let fail = listed == "make_interval" && opts.ansi;
             Binding::new(
-                DataType::Interval(IntervalUnit::MonthDayNano),
+                krishiv_types::arrow::calendar_struct(),
                 move |x: &Inputs<'_>| {
                     let out = make_calendar(
                         CalendarFields {
@@ -76,7 +76,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                         },
                         fail,
                     )?;
-                    Ok(Arc::new(out) as ArrayRef)
+                    Ok(out)
                 },
             )
         }
