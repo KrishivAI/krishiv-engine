@@ -363,7 +363,6 @@ fn between(x: &Expr, lo: &Expr, hi: &Expr, v: &mut View<'_>) -> f64 {
     sel
 }
 
-/// `x IN (list)`.
 /// An uncorrelated subquery, or an expression over one, that reads no
 /// column and is deterministic: one value per query (scalar in practice;
 /// an uncorrelated EXISTS or IN is one value too).
@@ -371,6 +370,7 @@ fn one_value(e: &Expr) -> bool {
     has_subquery(e) && references(e).is_empty() && is_deterministic(e)
 }
 
+/// `x IN (list)`.
 fn in_list(x: &Expr, list: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
     let Some((id, c)) = v.column(x).map(|(i, c)| (i, c.clone())) else {
         return DEFAULT_SELECTIVITY;
@@ -389,7 +389,10 @@ fn in_list(x: &Expr, list: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
     // max(..)))`; each element reads no column and is deterministic): at
     // most `k` values, so a guessed count is read as the rows, as
     // `col = <one value>` reads it (E10's follow-up). A list of constants
-    // only keeps T166's default over a guessed count.
+    // only keeps T166's default over a guessed count. Not `one_value` per
+    // element: a constant element (a folded or cast literal) has no
+    // subquery, and one subquery in the list is enough. A NULL literal or a
+    // repeated subquery counts as a value, so `k` can only overcount.
     let values = (distinct.is_none()
         && list.iter().any(|e| has_subquery(e))
         && list

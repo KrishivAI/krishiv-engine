@@ -1022,4 +1022,12 @@ fn an_unknown_count_in_a_list_of_one_values_keeps_k_rows() {
         2.0,
         "an expression over a column",
     );
+    // A repeated literal is one value: `k` is 2.
+    let two = over("m IN (5L, 5L, (SELECT max(a) FROM t))");
+    close(two.rows(), 2.0, "a repeated literal");
+    assert_eq!(two.col("m").ndv, 2.0, "two values left");
+    // A known count divides by the distinct values too and keeps at most `k`.
+    let known = over("b IN (1, 1, (SELECT max(b) FROM t))");
+    close(known.rows(), 2.0, "a known count");
+    assert_eq!(known.col("b").ndv, 2.0, "two values left of a known count");
 }
