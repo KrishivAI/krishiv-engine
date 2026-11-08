@@ -1463,6 +1463,17 @@ impl<'s> Parser<'s> {
         {
             return Ok(None);
         }
+        // `SELECT 1 INTO x` in a script: ANTLR reads `INTO` as the alias and fails at `x`.
+        if self.in_script > 0
+            && strict
+            && !self.opts.enforce_reserved_keywords
+            && self.kw_at(0, "INTO")
+        {
+            let alias = self.ident_with(true)?;
+            // The token after it is dropped as "extra input" in the error.
+            self.extra = Some(self.pos);
+            return Ok(Some(alias));
+        }
         let keyword = !self.opts.enforce_reserved_keywords
             && self.kind(0) == Some(TokenKind::Word)
             && self.item_end_at(1)

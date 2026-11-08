@@ -556,10 +556,12 @@ impl Run<'_> {
         let output = &analysis.analyzed.output;
         let not_boolean = || -> KrishivError {
             InvalidBooleanStatement {
+                // Spark prints the condition's text in upper case (`IF 'abc'` shows `'ABC'`, `IF x` shows
+                // `X`; record: `control_flow/if_condition_*`).
                 invalid_statement: self
                     .redacted
                     .fragment(shown.span.start..shown.span.end)
-                    .to_owned(),
+                    .to_uppercase(),
             }
             .into()
         };

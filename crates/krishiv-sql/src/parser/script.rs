@@ -7,7 +7,7 @@
 //! gets its own error class. Refusals Spark makes while it builds the tree (`CONTINUE`
 //! handlers, cursors) are kept in the tree and raised by the checks, in `AstBuilder` order.
 
-use super::{PR, Parser};
+use super::{Fail, PR, Parser};
 use crate::ast::{
     CaseStatement, Compound, ConditionalBranch, DeclareCondition, ForStatement, Handler,
     HandlerBody, HandlerCondition, Ident, IfStatement, LabelJump, LoopStatement, RepeatStatement,
@@ -135,7 +135,7 @@ impl Parser<'_> {
                 return p.script_declaration(start);
             }
             if p.kw_at(0, "SET") {
-                return match p.set_variable_command(false)? {
+                return match p.script_set()? {
                     Statement::SetVariable(set) => Ok(ScriptStatement::Assign(set)),
                     _ => p.fail(),
                 };
@@ -145,14 +145,51 @@ impl Parser<'_> {
                 p.skip_to_statement_end();
                 return Ok(ScriptStatement::Cursor(p.span_from(start)));
             }
-            // `RESET`, `SIGNAL`, `GET DIAGNOSTICS` and the rest that Spark 4.2 does not have fail
-            // as the statement parser fails on them.
+            // `RESET` is no script statement (Spark fails at the token after it).
             if p.kw_at(0, "RESET") {
+                p.bump();
                 return p.fail();
             }
-            let statement = p.explainable()?;
+            let statement = p.statement_or_label_start()?;
             Ok(ScriptStatement::Sql(Box::new(statement)))
         })
+    }
+
+    /// The SQL statement at the cursor. A statement Spark does not know (`GET DIAGNOSTICS`, `SIGNAL`,
+    /// `RESIGNAL`, a qualified label) starts with a word its script grammar could still take as a
+    /// label, so ANTLR's prediction goes on to the next token and the error is there.
+    fn statement_or_label_start(&mut self) -> PR<Statement> {
+        let first = self.pos;
+        let result = self.explainable();
+        if matches!(result, Err(Fail::Syntax)) && self.far == first && self.is_ident_at(0, false) {
+            self.pos = first + 1;
+            // The error is recorded at the second token, as if the first had matched.
+            return self.fail();
+        }
+        result
+    }
+
+    /// `SET` in a script, always an assignment. `SET VARIABLE x = 1` and `SET TIME ZONE 'UTC'` read
+    /// their second word as the variable and fail at the next token, which ANTLR then recovers from:
+    /// by dropping the token when the one after it is the `=` ("extra input"), else by inserting
+    /// the `=` ("missing EQ").
+    fn script_set(&mut self) -> PR<Statement> {
+        let start = self.pos;
+        let word = self.is_ident_at(1, true);
+        let result = self.set_variable_command(false);
+        if matches!(result, Err(Fail::Syntax))
+            && self.far == start + 2
+            && self.extra.is_none()
+            && self.missing.is_none()
+            && word
+        {
+            if self.toks.get(self.far + 1).map(|t| t.kind) == Some(TokenKind::Sym(Sym::Eq)) {
+                self.extra = Some(self.far);
+            } else {
+                self.missing = Some((self.far, "EQ"));
+            }
+        }
+        result
     }
 
     /// A compound or a loop, after its optional label.
@@ -355,8 +392,12 @@ impl Parser<'_> {
                 Statement::SetVariable(set) => HandlerBody::Assign(set),
                 _ => return self.fail(),
             }
+        } else if self.kw_at(0, "IF") && !self.sym_at(1, Sym::LParen) {
+            // Spark has no `IF` statement as a handler body: it fails at the token after `IF`.
+            self.bump();
+            return self.fail();
         } else {
-            HandlerBody::Sql(Box::new(self.explainable()?))
+            HandlerBody::Sql(Box::new(self.statement_or_label_start()?))
         };
         Ok(ScriptStatement::Handler(Box::new(Handler {
             continue_handler,
