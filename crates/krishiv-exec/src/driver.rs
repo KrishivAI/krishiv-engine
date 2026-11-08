@@ -47,6 +47,11 @@ pub(crate) struct PipelineRun {
     /// The fan-in's baton and this pipeline's member index, when the
     /// members of a deterministic fan-in take turns (see [`Baton`]).
     pub(crate) turn: Option<(Arc<Baton>, usize)>,
+    /// `(first partition id, lane count)` when the drivers of this pipeline
+    /// are the logical partitions of `krishiv.deterministicOrder` (T094 G1):
+    /// the driver of partition `p` is lane `p - first` and reads only the
+    /// morsels dealt to its lane.
+    pub(crate) lanes: Option<(u32, usize)>,
     pub(crate) query: Arc<QueryContext>,
     pub(crate) executor: Arc<dyn Executor>,
 }
@@ -486,6 +491,10 @@ impl Driver {
                 name,
             )
             .with_partition(partition)
+            .with_lane(
+                run.lanes
+                    .map(|(first, n)| ((partition - first) as usize, n)),
+            )
         };
         let p = &run.pipeline;
         let (source_id, source) = &p.source;

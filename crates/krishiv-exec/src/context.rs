@@ -502,6 +502,8 @@ pub struct TaskContext {
     /// driver computes): stateful functions own one value stream per
     /// partition. The first driver of a group reads partition 0.
     partition: u32,
+    /// `(lane, lanes)` of a logical-partition driver (T094 G1), else `None`.
+    lane: Option<(usize, usize)>,
 }
 
 impl fmt::Debug for TaskContext {
@@ -532,7 +534,22 @@ impl TaskContext {
             dependency: None,
             second_dependency: None,
             partition: 0,
+            lane: None,
         }
+    }
+
+    /// The same context for the driver of lane `lane` out of `lanes`.
+    #[must_use]
+    pub(crate) fn with_lane(mut self, lane: Option<(usize, usize)>) -> Self {
+        self.lane = lane;
+        self
+    }
+
+    /// `(lane, lanes)` when this driver is one of the logical partitions of
+    /// `krishiv.deterministicOrder` (T094 G1): a source then claims only the
+    /// morsels dealt to its lane ([`MorselCursor::claim_strided`](crate::MorselCursor::claim_strided)).
+    pub fn lane(&self) -> Option<(usize, usize)> {
+        self.lane
     }
 
     /// The same context for the driver `partition` (its scheduler-assigned

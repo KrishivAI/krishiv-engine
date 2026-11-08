@@ -63,6 +63,16 @@ pub trait Source: Send + Sync {
     /// count). The pipeline runs `min(worker slots, this)` drivers. No
     /// default, so a scan cannot run serially by omission.
     fn max_parallelism(&self, global: &GlobalState) -> usize;
+    /// How many logical partitions (T094 G1) this source can be split into
+    /// under `krishiv.deterministicOrder`: with `Some(n)` the pipeline may run
+    /// `n` drivers, each reading only the morsels dealt to its lane
+    /// ([`TaskContext::lane`], [`MorselCursor::claim_for`](crate::MorselCursor::claim_for)),
+    /// so which rows a driver reads never depends on thread timing. `None`
+    /// (the default): one driver, as today.
+    fn deterministic_split(&self, global: &GlobalState) -> Option<usize> {
+        let _ = global;
+        None
+    }
     /// One driver's state.
     ///
     /// # Errors

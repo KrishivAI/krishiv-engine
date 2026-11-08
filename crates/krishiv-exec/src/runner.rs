@@ -644,6 +644,7 @@ fn spawn_group(
             sink_global: Arc::clone(&sink_global),
             countdown: Arc::clone(&countdown),
             turn: baton.as_ref().map(|b| (Arc::clone(b), member)),
+            lanes: None,
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
@@ -679,6 +680,7 @@ async fn run_group_sequential(
             sink_global: Arc::clone(&sink_global),
             countdown: Arc::clone(&countdown),
             turn: None,
+            lanes: None,
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
