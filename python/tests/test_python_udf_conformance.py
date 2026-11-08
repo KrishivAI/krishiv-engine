@@ -157,6 +157,43 @@ def test_interpreter_exit_during_and_after_a_query_is_clean_100_times(script: st
     assert time.monotonic() - start < 600
 
 
+DROP_ORDER = """
+import gc
+freed = []
+class PlusOne:
+    def __call__(self, x):
+        return plus_one(x)
+    def __del__(self):
+        freed.append(1)
+spark = session(4)
+register(spark, "py_plus", PlusOne())
+assert spark.sql("SELECT count(py_plus(id)) FROM range(100000)").collect()[0][0] == 100000
+del spark
+gc.collect()
+# A pyo3 handle dropped on an unattached thread is decref'd at the next attach: any native call flushes it.
+_native.Session([])
+gc.collect()
+print(json.dumps({"freed": len(freed)}))
+class AtExit:
+    def __call__(self, x):
+        return plus_one(x)
+    def __del__(self):
+        print("released at exit", flush=True)
+kept = session(4)
+register(kept, "py_kept", AtExit())
+assert kept.sql("SELECT count(py_kept(id)) FROM range(100000)").collect()[0][0] == 100000
+"""
+
+
+def test_a_dropped_session_releases_its_udf_callables_and_one_alive_at_exit_is_safe() -> None:
+    # Design P2-T059 §7.6: a UDF callable's `Py` handle is dropped attached or deferred by pyo3 and flushed before
+    # finalization. A dropped session's callable is released (after the next attach); a session still alive at
+    # interpreter exit, its callable last run on the pool, does not crash the exit.
+    out = ok(run_child(DROP_ORDER))
+    first = json.loads(out.splitlines()[0])
+    assert first == {"freed": 1}, out
+
+
 FAILING_BATCH = """
 spark = session(4, ("krishiv.memory.limit", "512m"))
 spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "1000")
