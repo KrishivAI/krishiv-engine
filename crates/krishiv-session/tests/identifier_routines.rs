@@ -105,6 +105,34 @@ fn alias_column_lists_and_literal_runs_follow_spark() {
         class_of(&s, "SELECT * FROM VALUES (1) AS t(c, IDENTIFIER('a.b'))"),
         "IDENTIFIER_TOO_MANY_NAME_PARTS"
     );
+    // Without `AS`, and in a CTE's column list, the same: one part.
+    for sql in [
+        "SELECT * FROM VALUES (1) t(IDENTIFIER('a.b'))",
+        "WITH t(IDENTIFIER('a.b')) AS (SELECT 1) SELECT * FROM t",
+    ] {
+        assert_eq!(class_of(&s, sql), "IDENTIFIER_TOO_MANY_NAME_PARTS", "{sql}");
+    }
+    // The other one-name positions, each IDENTIFIER_TOO_MANY_NAME_PARTS on a Spark 4.2.0 run
+    // (`ops/reviews/2026-11-08-sonnet-3-identifier-onepart-spark.md`).
+    block_on(s.sql("CREATE TABLE onepart(c INT) USING parquet")).unwrap();
+    for sql in [
+        "CREATE TABLE onepart2(IDENTIFIER('a.b') INT) USING parquet",
+        "SELECT 1 AS IDENTIFIER('a.b')",
+        "SELECT 1 x FROM VALUES (1) IDENTIFIER('a.b')",
+        "SELECT sum(1) OVER w FROM VALUES (1) WINDOW IDENTIFIER('a.b') AS ()",
+        "SELECT * FROM VALUES (1) a JOIN VALUES (1) b USING (IDENTIFIER('a.b'))",
+        "INSERT INTO onepart(IDENTIFIER('a.b')) VALUES (1)",
+    ] {
+        assert_eq!(class_of(&s, sql), "IDENTIFIER_TOO_MANY_NAME_PARTS", "{sql}");
+    }
+    // A plain dotted name there stays a syntax error, and a one-part clause or a dotted one in
+    // an expression still runs.
+    assert_eq!(
+        class_of(&s, "SELECT * FROM VALUES (1) t(a.b)"),
+        "PARSE_SYNTAX_ERROR"
+    );
+    block_on(s.sql("SELECT * FROM VALUES (1) t(IDENTIFIER('a'))")).unwrap();
+    block_on(s.sql("SELECT * FROM VALUES (1) AS t(c) WHERE (IDENTIFIER('t.c') > 0)")).unwrap();
     // A run of string literals followed by `.` is a field of the column it names.
     block_on(s.sql("DECLARE VARIABLE tab STRING DEFAULT 'T'")).unwrap();
     assert_eq!(

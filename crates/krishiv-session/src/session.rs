@@ -535,8 +535,15 @@ impl Session {
         let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
         let query: &str = &resolved;
         let redacted = krishiv_sql::redact_sql(query);
-        let statement = krishiv_sql::parse_statement(query, &env.parser)
-            .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        let statement = krishiv_sql::parse_statement(query, &env.parser).map_err(|e| {
+            let error = crate::identifier_clause::dotted_name_in_one_part_position(
+                &e,
+                query,
+                &env.identifier_spans,
+            )
+            .unwrap_or(e.error);
+            sql_context(error, &redacted, e.span.start, e.span.end)
+        })?;
         // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
         // clause when it drops it; the parser sees only the evaluated name.
         if named_by_clause

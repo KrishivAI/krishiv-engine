@@ -16,7 +16,7 @@ use krishiv_common::error::{
 use krishiv_plan::{Literal, SourceId};
 use krishiv_sql::ast::{Expr, ExprKind, Span};
 use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
-use krishiv_sql::{ParserOptions, parse_multipart_identifier, parse_named_expression};
+use krishiv_sql::{ParseError, ParserOptions, parse_multipart_identifier, parse_named_expression};
 
 use crate::command::padded_select;
 use crate::session::{QueryEnv, Session};
@@ -351,6 +351,32 @@ impl Session {
             .join(".");
         Ok(Some((name, parsed.parts.len())))
     }
+}
+
+/// A syntax error at the `.` inside a name an `IDENTIFIER(..)` clause was replaced by is that
+/// clause in a position of one name part the parser could not tell from an expression when the
+/// text was substituted (`t(IDENTIFIER('a.b'))`, `WITH t(IDENTIFIER('a.b')) AS (..)`): Spark's
+/// `IDENTIFIER_TOO_MANY_NAME_PARTS`. `None` for any other error. This relies on every part being
+/// back-quoted when the name is substituted: the parser can stop at that `.` only where it takes
+/// one name.
+pub(crate) fn dotted_name_in_one_part_position(
+    err: &ParseError,
+    text: &str,
+    spans: &[Span],
+) -> Option<KrishivError> {
+    if err.error.error_class() != krishiv_common::error::ErrorClass::ParseSyntaxError {
+        return None;
+    }
+    let at = err.span.start;
+    let name = spans.iter().find(|s| s.start < at && at < s.end)?;
+    let shown = text.get(name.start..name.end)?;
+    (text.get(at..=at) == Some(".")).then(|| {
+        IdentifierTooManyNameParts {
+            identifier: shown.to_owned(),
+            limit: "1".to_owned(),
+        }
+        .into()
+    })
 }
 
 /// Whether the clause starting at token `i` is an item of the column list of an alias
