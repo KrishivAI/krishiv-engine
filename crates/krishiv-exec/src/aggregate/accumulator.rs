@@ -3922,6 +3922,39 @@ mod tests {
         assert_eq!(decimal_unscaled(f64::NEG_INFINITY, 2), i128::MIN);
     }
 
+    /// `compact_views` reaches the views inside a `LargeList` of strings: its values are copied
+    /// into buffers of their own, with the same content.
+    #[test]
+    fn compact_views_walks_a_large_list() {
+        use arrow_array::{LargeListArray, StringViewArray};
+        use arrow_schema::Field;
+        let values = StringViewArray::from(vec![
+            Some("a string longer than twelve bytes, in the first row"),
+            Some("another string longer than twelve bytes, in the second"),
+        ]);
+        let field = Arc::new(Field::new("item", DataType::Utf8View, true));
+        let list = LargeListArray::try_new(
+            field,
+            arrow_buffer::OffsetBuffer::new(vec![0_i64, 1, 2].into()),
+            Arc::new(values),
+            None,
+        )
+        .unwrap();
+        let before: ArrayRef = Arc::new(list);
+        let compacted = compact_views(Arc::clone(&before));
+        let buffer =
+            |a: &ArrayRef| a.as_list::<i64>().values().as_string_view().data_buffers()[0].as_ptr();
+        assert_ne!(buffer(&compacted), buffer(&before), "the views were copied");
+        assert_eq!(
+            compacted
+                .as_list::<i64>()
+                .value(1)
+                .as_string_view()
+                .value(0),
+            "another string longer than twelve bytes, in the second"
+        );
+    }
+
     #[test]
     fn avg_decimal_rounds_like_spark() {
         // 5 / 3 at decimal(38,22) (Spark: 1.6666666666666666666667).

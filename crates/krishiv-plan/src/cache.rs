@@ -403,6 +403,11 @@ impl Encoder {
                 self.expr(expr, bias);
                 self.text(name);
             }
+            ExprNode::Pipe { expr, clause } => {
+                self.tag("pipe");
+                self.expr(expr, bias);
+                self.debug(clause);
+            }
             ExprNode::MultiAlias { expr, names } => {
                 self.tag("multi-alias");
                 self.expr(expr, bias);
@@ -774,6 +779,11 @@ impl Encoder {
             }
             PlanNode::PipeOperator { input } => {
                 self.tag("PipeOperator");
+                self.plan(input, bias);
+            }
+            PlanNode::Repartition { input, exprs } => {
+                self.tag("Repartition");
+                self.exprs(exprs, bias);
                 self.plan(input, bias);
             }
             PlanNode::JoinHint { input, strategy } => {
@@ -1481,6 +1491,13 @@ mod tests {
                 (
                     "pipe-operator",
                     node(PlanNode::PipeOperator { input: base() }),
+                ),
+                (
+                    "repartition",
+                    node(PlanNode::Repartition {
+                        input: base(),
+                        exprs: vec![lit(1)],
+                    }),
                 ),
                 (
                     "join-hint",

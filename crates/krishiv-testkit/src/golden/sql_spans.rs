@@ -59,9 +59,14 @@ struct Frame {
     children: Vec<(usize, usize)>,
 }
 
-/// An optional span, written over three lines: `order_span: Some(`, the
-/// range, `)`.
-const OPTIONAL_SPAN: &str = "order_span: Some(";
+/// The optional spans, each written over three lines: `order_span: Some(`,
+/// the range, `)`.
+const OPTIONAL_SPANS: [&str; 2] = ["order_span: Some(", "organization_span: Some("];
+
+/// Whether `line` opens an optional span.
+fn optional_span(line: &str) -> bool {
+    OPTIONAL_SPANS.contains(&line)
+}
 
 /// The node's `Debug` lines without spans (a predicate's `op` span and a
 /// query's `order_span` included), trimmed, as a comparable text.
@@ -70,11 +75,15 @@ fn without_spans<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     let mut ordinal = false;
     let mut skip = 0;
     for line in lines.map(|l| l.trim().trim_end_matches(',')) {
-        if skip > 0 || line.starts_with(OPTIONAL_SPAN) {
+        if skip > 0 || optional_span(line) {
             skip = if skip > 0 { skip - 1 } else { 2 };
             continue;
         }
-        if line.starts_with("span: ") || line == "order_span: None" || op_span(line).is_some() {
+        if line.starts_with("span: ")
+            || line == "order_span: None"
+            || line == "organization_span: None"
+            || op_span(line).is_some()
+        {
             continue;
         }
         let line = line.rsplit_once(": Expr {").map_or(line, |_| "Expr {");
@@ -187,10 +196,11 @@ fn check_tree(
                 top.span = Some(span);
             }
         } else if let Some((a, b)) = op_span(line).or_else(|| {
-            // The range inside `order_span: Some(..)`.
+            // The range inside `order_span: Some(..)` or
+            // `organization_span: Some(..)`.
             let after = i
                 .checked_sub(1)
-                .is_some_and(|p| lines[p].trim() == OPTIONAL_SPAN);
+                .is_some_and(|p| optional_span(lines[p].trim()));
             after.then(|| range(line)).flatten()
         }) {
             // An operator's or a clause's span: on tokens, and inside its
@@ -296,6 +306,12 @@ mod tests {
         let span = q.order_span.as_mut().unwrap();
         span.end = span.start + 1;
         assert!(check_spans(ordered, &q, &d).is_err());
+        let distributed = "SELECT a FROM t DISTRIBUTE BY a LIMIT 1";
+        let mut q = parse_query(distributed, &d).unwrap();
+        check_spans(distributed, &q, &d).unwrap();
+        let span = q.organization_span.as_mut().unwrap();
+        span.end = span.start + 1;
+        assert!(check_spans(distributed, &q, &d).is_err());
         let params = "SELECT ? - ?";
         check_spans(params, &parse_query(params, &d).unwrap(), &d).unwrap();
     }

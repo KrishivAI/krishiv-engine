@@ -751,6 +751,7 @@ Merge(
                             windows: [],
                             limit: None,
                             offset: None,
+                            organization_span: None,
                             span: 20..35,
                         },
                     ),
@@ -764,6 +765,7 @@ Merge(
                 windows: [],
                 limit: None,
                 offset: None,
+                organization_span: None,
                 span: 19..36,
             },
             alias: Some(
