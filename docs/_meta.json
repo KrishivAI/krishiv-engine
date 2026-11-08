@@ -1,7 +1,8 @@
 {
   "index": "Introduction",
-  "tutorials": "Tutorials",
-  "how-to": "How-to guides",
+  "get-started": "Get started",
+  "guides": "Guides",
   "reference": "Reference",
-  "explanation": "Explanation"
+  "concepts": "Concepts",
+  "releases": "Releases"
 }

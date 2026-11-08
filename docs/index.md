@@ -11,10 +11,10 @@ write.
 
 The pages follow four kinds of need.
 
-- **[Tutorials](tutorials/quickstart.md)** teach by doing: [install and run your first query](tutorials/quickstart.md).
-- **[How-to guides](how-to/deploy.md)** solve one task: [deploy](how-to/deploy.md) and [find a stalled task with tokio-console](how-to/tokio-console.md).
-- **[Reference](reference/index.md)** lists facts: the [SQL language](reference/sql-language.md) and
-  [function reference](reference/sql/index.md), the [Python package](reference/python-package.md) and
-  [API](reference/python/index.md), every [setting](reference/configuration.md), metrics and query profiles.
-- **[Explanation](explanation/compatibility.md)** gives background: what is supported against Spark
-  ([compatibility](explanation/compatibility.md)) and the [known differences](explanation/known-differences.md).
+- **[Get started](get-started/quickstart.md)** teach by doing: [install and run your first query](get-started/quickstart.md).
+- **[Guides](guides/deploy.md)** solve one task: [deploy](guides/deploy.md) and [find a stalled task with tokio-console](guides/tokio-console.md).
+- **[Reference](reference/index.md)** lists facts: the [SQL language](reference/sql/index.md) and
+  [function reference](reference/sql/functions/index.md), the [Python package](reference/python-package.md) and
+  [API](reference/python/index.md), every [setting](reference/config/index.md), metrics and query profiles.
+- **[Concepts](concepts/compatibility.md)** gives background: what is supported against Spark
+  ([compatibility](concepts/compatibility.md)) and the [known differences](concepts/known-differences.md).

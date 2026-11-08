@@ -25,7 +25,7 @@ fn slugs_are_file_safe_and_pages_unique() {
             "{stem}"
         );
     }
-    let page = &pages[Path::new("docs/reference/sql/array_contains.md")];
+    let page = &pages[Path::new("docs/reference/sql/functions/array_contains.md")];
     assert!(page.contains("SELECT array_contains(array(1, 2, 3), 2);"));
 }
 
@@ -41,7 +41,7 @@ fn functions_the_planner_owns_are_implemented() {
         "sql_keywords",
         "collate",
     ] {
-        let page = &pages[Path::new(&format!("docs/reference/sql/{name}.md"))];
+        let page = &pages[Path::new(&format!("docs/reference/sql/functions/{name}.md"))];
         assert!(page.contains("| Krishiv | Implemented"), "{name}: {page}");
     }
 }

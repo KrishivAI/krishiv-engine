@@ -539,4 +539,4 @@ jobs:
           cargo xtask docs-python --check
           cargo xtask docs-rust --check
           cargo xtask docs-config "$RUNNER_TEMP/configuration.md"
-          diff -u docs/reference/configuration.md "$RUNNER_TEMP/configuration.md"
+          diff -u docs/reference/config/index.md "$RUNNER_TEMP/configuration.md"

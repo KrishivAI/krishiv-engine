@@ -39,7 +39,7 @@ const EXCLUDED_PREFIXES: &[&str] = &[
     "docs/reference/sql/",
     "docs/reference/python/",
     "docs/reference/rust/",
-    "docs/reference/configuration.md",
+    "docs/reference/config/index.md",
 ];
 /// Suffixes of machine-written files. Kept specific: a loose suffix such as
 /// `.out` or `.map` would also exclude hand-written files.

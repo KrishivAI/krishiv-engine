@@ -42,8 +42,8 @@ jobs:
       - name: Vale (hand-written pages)
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/vale/vale" --minAlertLevel=warning docs/index.md docs/tutorials docs/how-to docs/explanation \
-            docs/reference/index.md docs/reference/configuration.md docs/reference/sql-language.md docs/reference/python-package.md
+          "$RUNNER_TEMP/vale/vale" --minAlertLevel=warning docs/index.md docs/get-started docs/guides docs/concepts docs/releases \
+            docs/reference/index.md docs/reference/config/index.md docs/reference/sql/index.md docs/reference/python-package.md
       - name: Render the changed pages
         env:
           BASE: ${{ github.event.pull_request.base.sha }}

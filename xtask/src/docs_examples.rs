@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask docs-examples [--check]`: runs every SQL example of the reference pages on the
 //! engine at this commit (`krishiv-testkit`'s `doc-examples` binary) and records the answers in
-//! `docs/reference/sql/_examples.json`, which `docs-sql` prints under each example. With `--check`
+//! `docs/reference/sql/functions/_examples.json`, which `docs-sql` prints under each example. With `--check`
 //! the recorded answers must equal a fresh run, so a behaviour change that is not in the docs
 //! fails. An example whose answer differs between two runs (`rand()`, `uuid()`, `now()`) is
 //! recorded as volatile and shown without a result.

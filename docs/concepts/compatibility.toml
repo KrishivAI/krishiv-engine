@@ -1,4 +1,4 @@
-# Data for `cargo xtask docs-compat` (renders docs/explanation/compatibility.md).
+# Data for `cargo xtask docs-compat` (renders docs/concepts/compatibility.md).
 # status is one of: supported, partial, not yet. Anything not listed is
 # "unknown, not supported". Keep notes factual and public: no plans or dates.
 

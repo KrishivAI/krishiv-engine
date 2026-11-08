@@ -13,7 +13,7 @@ Nothing to deploy: import the package. Supported CPUs are x86-64-v3 (Intel Haswe
 imports as `krishiv`; install one of the two, not both). An unsupported CPU is detected at import time and reported by
 name instead of crashing.
 
-Memory use is bounded by `krishiv.*` settings (see [configuration](../reference/configuration.md)); operators spill to disk when the
+Memory use is bounded by `krishiv.*` settings (see [configuration](../reference/config/index.md)); operators spill to disk when the
 limit is reached.
 
 Nothing has been published to PyPI or crates.io yet. Until the first release, build the wheel from the repository

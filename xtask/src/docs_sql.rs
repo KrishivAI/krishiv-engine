@@ -13,7 +13,7 @@ use krishiv_functions::signature::FunctionKind;
 use serde::Deserialize;
 
 /// Where the pages go, relative to the workspace root.
-pub const OUT_DIR: &str = "docs/reference/sql";
+pub const OUT_DIR: &str = "docs/reference/sql/functions";
 
 const DOCS_JSONL: &str =
     include_str!("../../crates/krishiv-functions/vendored/spark-function-docs.jsonl");
@@ -131,7 +131,7 @@ fn example_id(name: &str, n: usize) -> String {
 }
 
 /// The file with the engine's answers to the examples, written by `cargo xtask docs-examples`.
-pub const CAPTURED: &str = "docs/reference/sql/_examples.json";
+pub const CAPTURED: &str = "docs/reference/sql/functions/_examples.json";
 
 fn captured_examples() -> serde_json::Value {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -452,7 +452,7 @@ pub fn run(root: &Path, check: bool) -> Result<(), String> {
             Ok(())
         } else {
             Err(format!(
-                "docs/reference/sql is stale ({} files, first: {}); run `cargo xtask docs-sql`",
+                "docs/reference/sql/functions is stale ({} files, first: {}); run `cargo xtask docs-sql`",
                 bad.len(),
                 bad[0]
             ))
