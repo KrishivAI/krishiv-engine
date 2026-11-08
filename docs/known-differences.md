@@ -108,3 +108,13 @@ aggregate below another operator, as in `SELECT (SELECT sum(c) FROM (SELECT coun
 which stays refused with `KRISHIV_UNSUPPORTED_FEATURE`, as it does under `spark.sql.legacy.scalarSubqueryCountBugBehavior`
 and `spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`. Every other correlated shape is answered
 as with the setting on, including those Spark would refuse with an analysis error.
+
+## SQL scripting
+
+The interpreter follows Spark 4.2.0 (`tests/spark-golden/v4.2.0/scripting`) except for these:
+
+- A `FOR` loop runs its query to the end and holds the rows in memory for the loop (Spark reads them lazily). A script's rows are limited by memory only: `UNABLE_TO_ACQUIRE_MEMORY`.
+- A handler declared inside an `IF` body, and a `DECLARE ... CONDITION` after a handler, fail with the intended error classes (`INVALID_HANDLER_DECLARATION.WRONG_PLACE_OF_DECLARATION`, `INVALID_ERROR_CONDITION_DECLARATION.NOT_AT_START_OF_COMPOUND_STATEMENT`) where Spark 4.2 crashes with a Java `NoSuchElementException`.
+- An unaliased output column over a local variable is named from the expression as written, not with Spark's random scope id.
+- `KRISHIV_*` errors, `OPERATION_CANCELED` and internal errors are never caught by a handler. Cancelling or timing out a script (`krishiv.query.maxExecutionTime`) ends the whole script, between statements too.
+- Locals, labels and `FOR` columns are lower-cased whatever `spark.sql.caseSensitive` says.

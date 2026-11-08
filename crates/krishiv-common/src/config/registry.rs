@@ -882,7 +882,8 @@ pub static QUERY_MAX_EXECUTION_TIME: ConfigEntry = ConfigEntry {
     default: None,
     doc: "The longest a query may run from the start of its execution: past it the query is \
           cancelled and fails with `KRISHIV_QUERY_TIMEOUT`. The limit is read when the query \
-          starts. When unset, queries run without a time limit.",
+          starts. For a SQL script, the whole script is the query: the limit counts from its start. \
+          When unset, queries run without a time limit.",
     scope: Scope::Session,
     version_added: "0.2.0",
     spark_alias: None,
