@@ -34,6 +34,12 @@ const EXCLUDED_PREFIXES: &[&str] = &[
     ".github/ci-fixtures/",
     // The Python wrappers generated from the function registry (`.py` and `.pyi`).
     "python/krishiv/sql/_generated_functions.",
+    // The API reference pages written by `cargo xtask docs-sql | docs-python | docs-rust` and the
+    // configuration page of `docs-config`; a nightly job diffs them against the generators.
+    "docs/reference/sql/",
+    "docs/reference/python/",
+    "docs/reference/rust/",
+    "docs/reference/config/index.md",
 ];
 /// Suffixes of machine-written files. Kept specific: a loose suffix such as
 /// `.out` or `.map` would also exclude hand-written files.

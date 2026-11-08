@@ -1,0 +1,14 @@
+extends: substitution
+message: "Use '%s' instead of '%s' (house style: plain words)."
+level: warning
+ignorecase: true
+swap:
+  utilize: use
+  leverage: use
+  "in order to": to
+  "a number of": several
+  "prior to": before
+  "subsequent to": after
+  facilitate: help
+  "is able to": can
+  "make use of": use

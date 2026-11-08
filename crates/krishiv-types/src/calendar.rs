@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Calendar interval columns: the struct carrier of [`crate::arrow::calendar_struct`] (months, days,
-//! microseconds, as Spark's `CalendarInterval`; ADR 0009 update 2026-11-06), read through [`Calendars`] and built
+//! microseconds, as Spark's `CalendarInterval`), read through [`Calendars`] and built
 //! with [`calendar_array`], and the conversions to and from Arrow's `Interval(MonthDayNano)`, which only the
 //! session edges use: [`to_month_day_nano`] multiplies the microseconds by 1,000 and reports the first row that
 //! overflows (Spark's `ArrowWriter` overflows there with `Math.multiplyExact`), [`from_month_day_nano`] divides
