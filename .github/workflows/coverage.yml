@@ -36,7 +36,7 @@ permissions:
 
 env:
   # Faster builds and links in CI: line tables only (backtraces and coverage keep
-  # line numbers); mold is installed per job by rui314/setup-mold.
+  # line numbers); mold is installed per job by .github/actions/setup-mold.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
@@ -113,7 +113,7 @@ jobs:
         run: rustup component add llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.changes.outputs.cargo == 'true'
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
         if: steps.changes.outputs.cargo == 'true'
       # Which packages to test: see the comment at the top of this file.
       - name: Coverage scope (touched packages and their dependents)
