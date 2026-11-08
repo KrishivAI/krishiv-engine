@@ -32,6 +32,7 @@ pub(super) struct ScriptRun {
     consumer: ConsumerId,
     held: usize,
     settled: bool,
+    started: std::time::Instant,
 }
 
 impl Session {
@@ -72,6 +73,7 @@ impl Session {
             consumer,
             held: 0,
             settled: false,
+            started: std::time::Instant::now(),
         };
         // A failed attach drops `run`, which closes the row.
         self.attach(&ctx, &row, &env.config)?;
@@ -199,7 +201,11 @@ impl ScriptRun {
         self.settled = true;
         match outcome {
             Ok(()) => self.close("finished", None),
-            Err(error) => self.state.queries.record_failed_row(&self.row, error),
+            Err(error) => {
+                let class = error.error_class().name();
+                let state = crate::system::outcome_state(class);
+                self.close(state, (state != "cancelled").then_some(class));
+            }
         }
     }
 
@@ -208,7 +214,7 @@ impl ScriptRun {
             &self.row,
             &crate::system::Finished {
                 state,
-                wall_ns: 0,
+                wall_ns: i64::try_from(self.started.elapsed().as_nanos()).unwrap_or(i64::MAX),
                 peak_memory_bytes: i64::try_from(self.ctx.pool().peak_reserved())
                     .unwrap_or(i64::MAX),
                 error_class,
