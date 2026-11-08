@@ -20,10 +20,15 @@
 //! Spark's (`value` for one aggregate, `value_aggalias` or
 //! `value_<aggregate sql>` otherwise).
 //!
-//! Pivot values must be foldable (`NON_LITERAL_PIVOT_VALUES`) and castable
-//! to the pivot column type (`PIVOT_VALUE_DATA_TYPE_MISMATCH`). Several
-//! pivot columns stand for a struct, which the engine cannot value yet:
-//! they fail with `KRISHIV_UNSUPPORTED_FEATURE`, never a wrong result.
+//! Several pivot columns are one struct column, `struct(c1, c2)`, and a value
+//! of several parts (`(2012, 'Java')`) one struct value, as Spark's parser
+//! builds them (`CreateStruct`); the rule then treats them like any other
+//! column and value. The pivot column must be orderable
+//! (`INCOMPARABLE_PIVOT_COLUMN`: no map anywhere in its type), its values
+//! foldable (`NON_LITERAL_PIVOT_VALUES`; arrays, structs and maps of
+//! constants count) and castable to the pivot column type
+//! (`PIVOT_VALUE_DATA_TYPE_MISMATCH`). A value names its outputs as Spark's
+//! cast of the value to `STRING` prints it (`{2012, Java}`, `[1, 1]`).
 
 use super::SessionZone;
 
@@ -32,12 +37,12 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    LegacyErrorTemp1006, NonLiteralPivotValues, PivotValueDataTypeMismatch,
+    IncomparablePivotColumn, LegacyErrorTemp1006, NonLiteralPivotValues, PivotValueDataTypeMismatch,
 };
 use krishiv_types::DataType;
 
 use super::bind::{addr, unsupported};
-use super::coerce::can_cast;
+use super::coerce::{can_cast, orderable};
 use super::exprs::{Bound, Cx, WindowUse, pretty};
 use super::fold;
 use super::ops::column_bound;
@@ -61,6 +66,8 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
+        let (pivot_columns, values) = as_structs(pivot_columns, values);
+        let (pivot_columns, values) = (pivot_columns.as_slice(), values.as_slice());
         let rels = [&c];
         let mut cx = Self::cx(&c.out, &rels, env, "Pivot");
         cx.windows = WindowUse::Allowed;
@@ -70,6 +77,17 @@ impl Resolver<'_> {
         let mut pivots = Vec::with_capacity(pivot_columns.len());
         for col in pivot_columns {
             pivots.push(self.bind(col, &cx)?);
+        }
+        // Spark's `RowOrdering.isOrderable`, checked before the values.
+        if let Some(t) = &pivots[0].ty.data_type
+            && !orderable(t)
+        {
+            return Err(AnalysisError::new(
+                IncomparablePivotColumn {
+                    column_name: incomparable_name(&pivots[0].expr, &c.out),
+                },
+                p.origin,
+            ));
         }
         let mut bound_values: Vec<Vec<Bound>> = Vec::with_capacity(values.len());
         for v in values {
@@ -113,6 +131,8 @@ impl Resolver<'_> {
                             b.expr.origin,
                         ));
                     }
+                }
+                if folded.is_none() && !self.foldable(&t.expr) {
                     return Err(AnalysisError::new(
                         NonLiteralPivotValues {
                             expression: value_sql(&b.expr, &v.alias, self.ctx.conf.session_zone),
@@ -124,9 +144,6 @@ impl Resolver<'_> {
                     return Err(AnalysisError::new(e, b.expr.origin));
                 }
             }
-        }
-        if pivot_columns.len() > 1 {
-            return self.multi_pivot(p, &pivots, values, &bound_values, &trimmed_values);
         }
         let pivot_type = pivots[0].ty.data_type.clone().unwrap_or(DataType::Null);
         // Spark's `Cast.canCast` check: the value type must cast to the
@@ -322,7 +339,7 @@ impl Resolver<'_> {
                 Some(Err(e)) => return Err(AnalysisError::new(e, value.origin)),
                 _ if by_identity => SlotKey::Never,
                 Some(Ok(a)) => SlotKey::of(&a),
-                None => SlotKey::literal(&bound.expr),
+                None => self.struct_key(&bound.expr, &pivot_type, ansi),
             };
             keys.push(key);
         }
@@ -454,60 +471,6 @@ impl Resolver<'_> {
         self.build_aggregate(origin, &stage, second_group, &combined, global, None, env)
     }
 
-    /// Several pivot columns: Spark validates the values against the struct
-    /// pivot type, which the engine cannot value; well-typed struct values
-    /// fail as unsupported, never wrong. Values whose arity or per-part
-    /// type fails Spark's check fail with `PIVOT_VALUE_DATA_TYPE_MISMATCH`
-    /// first, as Spark does (a `STRING` part casts to anything, so a
-    /// well-typed string-only mismatch still reaches the unsupported path;
-    /// both are errors, never a wrong result).
-    fn multi_pivot(
-        &self,
-        p: &LogicalPlan,
-        pivots: &[Bound],
-        values: &[PivotValue],
-        bound: &[Vec<Bound>],
-        trimmed: &[Vec<Bound>],
-    ) -> Result<Rel, AnalysisError> {
-        let pivot_type = format!(
-            "struct<{}>",
-            pivots
-                .iter()
-                .map(|b| {
-                    let ty =
-                        b.ty.data_type
-                            .as_ref()
-                            .map(DataType::simple_string)
-                            .unwrap_or_else(|| "void".to_owned());
-                    format!(
-                        "{}:{ty}",
-                        pivot_part_name(&b.expr, self.ctx.conf.session_zone)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-        let mode = if self.ctx.conf.ansi {
-            CastMode::Ansi
-        } else {
-            CastMode::Legacy
-        };
-        for ((v, parts), trimmed) in values.iter().zip(bound).zip(trimmed) {
-            if parts.len() != pivots.len() {
-                let (value, value_type) = value_render(v, parts, trimmed, self);
-                return Err(pivot_type_mismatch(value, value_type, pivot_type, p.origin));
-            }
-            for (pivot, t) in pivots.iter().zip(trimmed.iter()) {
-                let to = pivot.ty.data_type.clone().unwrap_or(DataType::Null);
-                if can_cast(t.ty.data_type.as_ref(), &to, mode).is_err() {
-                    let (value, value_type) = value_render(v, parts, trimmed, self);
-                    return Err(pivot_type_mismatch(value, value_type, pivot_type, p.origin));
-                }
-            }
-        }
-        Err(unsupported("multi-column PIVOT", p.origin))
-    }
-
     /// Filters one unresolved aggregate: every aggregate call's children
     /// wrapped in `if(pivot_col <=> value, child, NULL)`, as Spark's
     /// `transformDown` wraps them. `first` / `last` (and their `_value`
@@ -612,6 +575,122 @@ impl Resolver<'_> {
     }
 }
 
+impl Resolver<'_> {
+    /// Spark's `foldable` for a pivot value: a literal, or a deterministic
+    /// scalar call or cast over foldable arguments (`array(1, 1)`,
+    /// `struct(1, 'a')`, `map('1', 1)`), which the constant folder may not
+    /// value.
+    fn foldable(&self, e: &Arc<Expr>) -> bool {
+        match &e.node {
+            ExprNode::Literal(_) => true,
+            ExprNode::Cast { expr, .. }
+            | ExprNode::Alias { expr, .. }
+            | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => self.foldable(expr),
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+                f.kind == FunctionKind::Scalar
+                    && f.deterministic
+                    && f.filter.is_none()
+                    && f.args.iter().all(|a| self.foldable(a))
+            }
+            _ => fold::is_literal(e) || self.fold(e, self.ctx.conf.ansi).is_some(),
+        }
+    }
+}
+
+/// Spark's parser's pivot shapes: several pivot columns are one
+/// `struct(c1, c2, ...)` column and a value of several parts one
+/// `struct(v1, v2, ...)` value (`CreateStruct`).
+fn as_structs(columns: &[Arc<Expr>], values: &[PivotValue]) -> (Vec<Arc<Expr>>, Vec<PivotValue>) {
+    let call = |name: &str, args: &[Arc<Expr>]| {
+        let origin = args.first().map_or(Origin::UNKNOWN, |a| a.origin);
+        Arc::new(
+            Expr::new(ExprNode::Function(FunctionCall {
+                name: name.to_owned(),
+                qualifier: Vec::new(),
+                args: args.to_vec(),
+                arg_names: Vec::new(),
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+            }))
+            .with_origin(origin),
+        )
+    };
+    let columns = if columns.len() > 1 {
+        vec![call("struct", columns)]
+    } else {
+        columns.to_vec()
+    };
+    let values = values
+        .iter()
+        .map(|v| {
+            if v.exprs.len() > 1 {
+                // Spark's row constructor (`CreateStruct`): a column part
+                // is named as the column (an alias as itself), any other
+                // `col<i>`; the type `struct(a, ...)` has, and its text.
+                let args: Vec<Arc<Expr>> = v
+                    .exprs
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, e)| {
+                        let field = match &e.node {
+                            ExprNode::Column(c) if let Some(last) = c.name.last() => last.clone(),
+                            ExprNode::Alias { name, .. } => name.clone(),
+                            _ => format!("col{}", i + 1),
+                        };
+                        let name = Expr::new(ExprNode::Literal(Literal::String(field)))
+                            .with_origin(e.origin);
+                        [Arc::new(name), Arc::clone(e)]
+                    })
+                    .collect();
+                PivotValue {
+                    exprs: vec![call("named_struct", &args)],
+                    alias: v.alias.clone(),
+                }
+            } else {
+                v.clone()
+            }
+        })
+        .collect();
+    (columns, values)
+}
+
+/// The `columnName` of `INCOMPARABLE_PIVOT_COLUMN`: Spark's `toSQLId` of
+/// the pivot column's `sql`. A column prints as its name; the struct of
+/// several columns as `named_struct('a', q.a, ...)`, which `toSQLId` splits
+/// at its dots and quotes part by part.
+fn incomparable_name(e: &Arc<Expr>, scope: &[Attr]) -> String {
+    let quote = |s: &str| format!("`{}`", s.replace('`', "``"));
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => quote(&c.name),
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            // `named_struct` arguments come in (name literal, value) pairs.
+            let fields: Vec<String> = f
+                .args
+                .chunks(2)
+                .map(|pair| match pair {
+                    [_, v] if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &v.node => {
+                        let sql = scope
+                            .iter()
+                            .find(|x| x.col.id == c.id)
+                            .map_or_else(|| c.name.clone(), attr_sql);
+                        format!("'{}', {sql}", c.name)
+                    }
+                    [k, v] => format!("{}, {}", pretty(k, None), pretty(v, None)),
+                    other => other
+                        .iter()
+                        .map(|a| pretty(a, None))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                })
+                .collect();
+            let sql = format!("named_struct({})", fields.join(", "));
+            sql.split('.').map(quote).collect::<Vec<_>>().join(".")
+        }
+        _ => quote(&pretty(e, None)),
+    }
+}
+
 /// A pivot value as Spark's `PivotFirst` slot map keys it: its exact
 /// value, with `0.0` and `-0.0` one key (Scala's numeric `==`).
 enum SlotKey {
@@ -624,6 +703,8 @@ enum SlotKey {
     Float(u64),
     /// Any other value, as its one-row array.
     Value(arrow_array::ArrayRef),
+    /// A struct of constants (several pivot columns), field by field.
+    Parts(Vec<SlotKey>),
     /// A literal of a type the analyzer does not evaluate (timestamp,
     /// binary), compared by value.
     Literal(Literal),
@@ -668,6 +749,9 @@ impl SlotKey {
             (Self::Float(a), Self::Float(b)) => a == b,
             (Self::Value(a), Self::Value(b)) => a.to_data() == b.to_data(),
             (Self::Literal(a), Self::Literal(b)) => literal_eq(a, b),
+            (Self::Parts(a), Self::Parts(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.same(y))
+            }
             _ => false,
         }
     }
@@ -675,6 +759,94 @@ impl SlotKey {
     /// Whether rows of this value can be found in the map.
     const fn matches(&self) -> bool {
         !matches!(self, Self::Nan | Self::Never)
+    }
+}
+
+impl Resolver<'_> {
+    /// The key of a pivot value the folder does not value whole: a
+    /// constant array or struct (`array(1, 2)`, several pivot columns'
+    /// `('Java', 2013)`), cast to the pivot column's type. Keyed part by
+    /// part, each part cast to its type in the pivot column's type and
+    /// folded; opaque when a part cannot be compared exactly (a NaN, a part
+    /// the folder does not value), so such values are refused.
+    fn struct_key(&self, e: &Arc<Expr>, pivot_type: &DataType, ansi: bool) -> SlotKey {
+        match &e.node {
+            ExprNode::Cast { expr, to, mode } => self.part_key(expr, to, *mode, ansi),
+            // A value of the pivot column's own type is not cast.
+            _ => {
+                let mode = if ansi {
+                    CastMode::Ansi
+                } else {
+                    CastMode::Legacy
+                };
+                self.part_key(e, pivot_type, mode, ansi)
+            }
+        }
+    }
+
+    fn part_key(&self, e: &Arc<Expr>, to: &DataType, mode: CastMode, ansi: bool) -> SlotKey {
+        let inner = trim_value_alias(e);
+        let inner = match &inner.node {
+            ExprNode::Cast { expr, .. } => Arc::clone(expr),
+            _ => inner,
+        };
+        if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &inner.node {
+            let parts: Option<Vec<(&Arc<Expr>, DataType)>> = match (f.id.name(), to) {
+                ("named_struct", DataType::Struct(st)) => {
+                    let values: Vec<&Arc<Expr>> = f.args.iter().skip(1).step_by(2).collect();
+                    (values.len() == st.fields().len()).then(|| {
+                        values
+                            .into_iter()
+                            .zip(st.fields())
+                            .map(|(v, fl)| (v, fl.data_type().clone()))
+                            .collect()
+                    })
+                }
+                ("struct", DataType::Struct(st)) => {
+                    (f.args.len() == st.fields().len()).then(|| {
+                        f.args
+                            .iter()
+                            .zip(st.fields())
+                            .map(|(v, fl)| (v, fl.data_type().clone()))
+                            .collect()
+                    })
+                }
+                ("array", DataType::Array(at)) => Some(
+                    f.args
+                        .iter()
+                        .map(|v| (v, at.element_type().clone()))
+                        .collect(),
+                ),
+                _ => None,
+            };
+            if let Some(parts) = parts {
+                let mut keys = Vec::with_capacity(parts.len());
+                for (part, ty) in parts {
+                    let key = self.part_key(part, &ty, mode, ansi);
+                    if !matches!(
+                        key,
+                        SlotKey::Float(_)
+                            | SlotKey::Value(_)
+                            | SlotKey::Literal(_)
+                            | SlotKey::Parts(_)
+                    ) {
+                        return SlotKey::Opaque;
+                    }
+                    keys.push(key);
+                }
+                return SlotKey::Parts(keys);
+            }
+        }
+        let cast = Arc::new(Expr::new(ExprNode::Cast {
+            expr: Arc::clone(&inner),
+            to: to.clone(),
+            mode,
+        }));
+        match self.fold_array(&cast, ansi) {
+            Some(Ok(a)) => SlotKey::of(&a),
+            Some(Err(_)) => SlotKey::Opaque,
+            None => SlotKey::literal(&inner),
+        }
     }
 }
 
@@ -916,6 +1088,9 @@ fn float_name(t: &Bound, r: &Resolver<'_>) -> Option<String> {
 /// other foldable expression prints its folded constant, or as written
 /// when it has no exact constant here.
 fn part_name(b: &Bound, r: &Resolver<'_>) -> String {
+    if let Some(text) = nested_string(&b.expr, r) {
+        return text;
+    }
     let zone = r.ctx.conf.session_zone;
     if let ExprNode::Literal(v) = &b.expr.node {
         return match v {
@@ -941,8 +1116,102 @@ fn part_name(b: &Bound, r: &Resolver<'_>) -> String {
     }
 }
 
+/// An array, struct or map of constants as Spark's cast to `STRING` prints
+/// it (`[1, 2]`, `{1, a}`, `{1 -> a}`; a null element is `null`); `None`
+/// for anything else.
+fn nested_string(e: &Arc<Expr>, r: &Resolver<'_>) -> Option<String> {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return None;
+    };
+    let element = |a: &Arc<Expr>| -> String {
+        if let ExprNode::Literal(Literal::Null(_)) = &a.node {
+            return "null".to_owned();
+        }
+        let bound = Bound {
+            expr: Arc::clone(a),
+            ty: super::catalog::ArgType {
+                data_type: None,
+                nullable: true,
+            },
+            agg: None,
+            win: None,
+            outer: None,
+            lateral: Vec::new(),
+            shown: None,
+        };
+        part_name(&bound, r)
+    };
+    let joined = |items: &[Arc<Expr>]| items.iter().map(element).collect::<Vec<_>>().join(", ");
+    match f.id.name() {
+        "array" => Some(format!("[{}]", joined(&f.args))),
+        "struct" => Some(format!("{{{}}}", joined(&f.args))),
+        "named_struct" => {
+            let values: Vec<Arc<Expr>> = f.args.iter().skip(1).step_by(2).cloned().collect();
+            Some(format!("{{{}}}", joined(&values)))
+        }
+        "map" => {
+            let pairs: Vec<String> = f
+                .args
+                .chunks(2)
+                .map(|kv| match kv {
+                    [k, v] => format!("{} -> {}", element(k), element(v)),
+                    _ => String::new(),
+                })
+                .collect();
+            Some(format!("{{{}}}", pairs.join(", ")))
+        }
+        _ => None,
+    }
+}
+
+/// A value as Spark's `Expression.toString` prints it in
+/// `PIVOT_VALUE_DATA_TYPE_MISMATCH` (checked against 4.2.0): a scalar as its
+/// output name does, `array(1, 2)`, `map(1, 2)`, `named_struct(p, 1)` and
+/// `struct(col1, 1, col2, q)`, strings without quotes.
+fn value_text(e: &Arc<Expr>, r: &Resolver<'_>) -> String {
+    if let ExprNode::Cast { expr, to, mode } = &e.node
+        && *mode != CastMode::Try
+    {
+        return format!("cast({} as {})", value_text(expr, r), to.simple_string());
+    }
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        if let ExprNode::Literal(Literal::Null(_)) = &e.node {
+            return "null".to_owned();
+        }
+        let bound = Bound {
+            expr: Arc::clone(e),
+            ty: super::catalog::ArgType {
+                data_type: None,
+                nullable: true,
+            },
+            agg: None,
+            win: None,
+            outer: None,
+            lateral: Vec::new(),
+            shown: None,
+        };
+        return part_name(&bound, r);
+    };
+    let args: Vec<String> = match f.id.name() {
+        "array" | "map" | "named_struct" => f.args.iter().map(|a| value_text(a, r)).collect(),
+        "struct" => f
+            .args
+            .iter()
+            .enumerate()
+            .flat_map(|(i, a)| [format!("col{}", i + 1), value_text(a, r)])
+            .collect(),
+        _ => return pretty(e, r.ctx.conf.session_zone),
+    };
+    format!("{}({})", f.id.name(), args.join(", "))
+}
+
 /// A whole value and its type for `PIVOT_VALUE_DATA_TYPE_MISMATCH`: one
-/// part prints as itself, several as a struct.
+/// part prints as itself, several as `named_struct(col1, .., col2, ..)`.
+///
+/// A value tuple `(a, b)` arrives as Spark's row constructor
+/// (`as_structs`), which prints as `named_struct(col1, a, col2, b)`; a
+/// written `struct(a, b)` prints as `struct(col1, a, col2, b)` (checked
+/// against 4.2.0).
 fn value_render(
     v: &PivotValue,
     parts: &[Bound],
@@ -950,8 +1219,20 @@ fn value_render(
     r: &Resolver<'_>,
 ) -> (String, String) {
     if let ([b], [t]) = (parts, trimmed) {
+        let collection = |e: &Expr| {
+            matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Function(f))
+                if matches!(f.id.name(), "array" | "map" | "struct" | "named_struct"))
+        };
         let value = v.alias.clone().unwrap_or_else(|| match &b.expr.node {
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
+            _ if collection(&t.expr) => value_text(&t.expr, r),
+            // An explicit cast of one prints as Spark's `Cast.toString`
+            // does: `cast(array(1) as array<int>)`.
+            _ if matches!(&t.expr.node, ExprNode::Cast { expr, .. } if collection(expr)) => {
+                value_text(&t.expr, r)
+            }
+            // A scalar prints as its output name does (as written, before
+            // implicit casts, when it does not fold).
             _ => part_name(t, r),
         });
         let ty =
@@ -963,10 +1244,11 @@ fn value_render(
     }
     let value = v.alias.clone().unwrap_or_else(|| {
         format!(
-            "{{{}}}",
+            "named_struct({})",
             trimmed
                 .iter()
-                .map(|b| part_name(b, r))
+                .enumerate()
+                .map(|(i, b)| format!("col{}, {}", i + 1, value_text(&b.expr, r)))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -988,16 +1270,6 @@ fn value_render(
             .join(",")
     );
     (value, ty)
-}
-
-/// The name of one pivot column part, for the struct pivot type.
-fn pivot_part_name(e: &Arc<Expr>, zone: Option<SessionZone>) -> String {
-    match &e.node {
-        ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
-            c.name.clone()
-        }
-        _ => pretty(e, zone),
-    }
 }
 
 /// `PIVOT_VALUE_DATA_TYPE_MISMATCH` with its message parameters.

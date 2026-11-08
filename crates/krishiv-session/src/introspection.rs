@@ -946,11 +946,16 @@ impl Session {
                 .map_err(|e| e.error)?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
-                let rows = analysis
-                    .analyzed
+                // A column's comment follows it through the query (Spark's field metadata).
+                let analyzed = &analysis.analyzed;
+                let rows = analyzed
                     .output
                     .iter()
-                    .map(|c| vec![s(&c.name), s(c.data_type.catalog_string()), None])
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let comment = analyzed.output_comments.get(i).cloned().flatten();
+                        vec![s(&c.name), s(c.data_type.catalog_string()), comment]
+                    })
                     .collect();
                 self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
                     .await

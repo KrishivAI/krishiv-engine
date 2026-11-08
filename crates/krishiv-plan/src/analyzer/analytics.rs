@@ -518,6 +518,10 @@ impl Resolver<'_> {
             };
             let ty = arg_type(v.data_type.clone(), true);
             let copy = self.attr(&name, &ty);
+            // The key's copy keeps the column's comment (Spark 4.2.0: ROLLUP/CUBE/GROUPING SETS keys do).
+            if let Some(t) = self.comments.get(&v.id).cloned() {
+                self.comments.insert(copy.id, t);
+            }
             copies.push(GroupExpr {
                 key: keys_of[j],
                 attr: Attr {
