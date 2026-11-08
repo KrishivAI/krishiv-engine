@@ -79,6 +79,15 @@ pub struct GrantCredit {
     /// Bytes granted by [`crate::SpillOwner::reserve_for`] whose retry has
     /// not ended yet ([`ConsumerHandle::settle_grant`]).
     unsettled: AtomicUsize,
+    /// Spill writes of this consumer in progress ([`SpillWriting`]): its
+    /// memory is about to be released, so rounds wait for it before they
+    /// fail a request.
+    writing: AtomicUsize,
+    /// Cohort seats of this consumer holding memory the member frees on its
+    /// own ([`ConsumerHandle::join_cohort`], [`crate::SeatState::Holding`]):
+    /// rounds wait for it, as for a spill write, before they fail a request
+    /// or abort a query.
+    holding: AtomicUsize,
     /// The pool tree whose waiting rounds re-plan when a grant settles.
     shared: OnceLock<Weak<Shared>>,
 }
@@ -94,6 +103,29 @@ impl GrantCredit {
         self.unsettled.load(Ordering::Acquire)
     }
 
+    /// Whether a spill write of the consumer is in progress.
+    pub(crate) fn writing(&self) -> bool {
+        self.writing.load(Ordering::Acquire) > 0
+    }
+
+    /// Whether a cohort seat of the consumer holds.
+    pub(crate) fn holding(&self) -> bool {
+        self.holding.load(Ordering::Acquire) > 0
+    }
+
+    /// A seat of the consumer starts (`true`) or stops holding; stopping
+    /// wakes the rounds waiting for it, which re-plan.
+    pub(crate) fn seat_holding(&self, holds: bool) {
+        if holds {
+            self.holding.fetch_add(1, Ordering::AcqRel);
+            return;
+        }
+        self.holding.fetch_sub(1, Ordering::AcqRel);
+        if let Some(shared) = self.shared.get().and_then(Weak::upgrade) {
+            shared.release.released();
+        }
+    }
+
     /// Wakes `shared`'s release waiters when a grant settles. Set once, by
     /// the pool the consumer registers with.
     pub(crate) fn notify(&self, shared: Weak<Shared>) {
@@ -106,7 +138,23 @@ impl fmt::Debug for GrantCredit {
         f.debug_struct("GrantCredit")
             .field("bytes", &self.bytes())
             .field("unsettled", &self.unsettled())
+            .field("writing", &self.writing.load(Ordering::Acquire))
+            .field("holding", &self.holding.load(Ordering::Acquire))
             .finish_non_exhaustive()
+    }
+}
+
+/// A spill write in progress ([`ConsumerHandle::spilling`]); dropping it
+/// ends the write's count and wakes the rounds waiting for it.
+#[derive(Debug)]
+pub struct SpillWriting(Arc<GrantCredit>);
+
+impl Drop for SpillWriting {
+    fn drop(&mut self) {
+        self.0.writing.fetch_sub(1, Ordering::AcqRel);
+        if let Some(shared) = self.0.shared.get().and_then(Weak::upgrade) {
+            shared.release.released();
+        }
     }
 }
 
@@ -211,6 +259,45 @@ impl ConsumerHandle {
     /// be used or returned.
     pub(crate) fn add_unsettled(&self, bytes: usize) {
         self.credit.unsettled.fetch_add(bytes, Ordering::AcqRel);
+    }
+
+    /// Marks a spill write of this consumer as in progress until the guard
+    /// drops: the memory the write frees (the rows lent to it as credit and
+    /// the writer's scratch) counts as about to be released, so a round that
+    /// cannot spill enough waits for it (re-planning on every release, up to
+    /// `abortReleaseTimeout`) before it fails a request or aborts a query.
+    ///
+    /// Hold it only across a write that ends without help: the blocking
+    /// write job and the release of the credit it freed, with no
+    /// arbitration (no `grow`, no wait for memory or input) inside. A writer
+    /// kept open between batches that arrive only after a reservation of the
+    /// same driver (a merge join's group file) must not hold one: two such
+    /// drivers would wait for each other until the deadline.
+    #[must_use]
+    pub fn spilling(&self) -> SpillWriting {
+        self.credit.writing.fetch_add(1, Ordering::AcqRel);
+        SpillWriting(Arc::clone(&self.credit))
+    }
+
+    /// Whether a [`spilling`](Self::spilling) guard of this consumer is held
+    /// (for tests: an operator's spill write runs under one).
+    #[doc(hidden)]
+    pub fn is_spilling(&self) -> bool {
+        self.credit.writing()
+    }
+
+    /// A seat of this consumer in the query's cohort `name` (`None` outside
+    /// a query, as [`MemoryPool::cohort`]). While the seat holds
+    /// ([`crate::SeatState::Holding`]), the consumer's memory counts as
+    /// about to be released: another driver's round that cannot spill
+    /// enough waits for it (re-planning on every release, up to
+    /// `abortReleaseTimeout`) before it fails a request or aborts a query.
+    /// Hold only memory the member frees without more memory from a round
+    /// of its own driver.
+    #[must_use]
+    pub fn join_cohort(&self, name: &'static str) -> Option<crate::Seat> {
+        let cohort = self.pool.cohort(name)?;
+        Some(cohort.join_for(Arc::clone(&self.credit)))
     }
 
     /// The retry a grant was for has ended: returns unused credit to the

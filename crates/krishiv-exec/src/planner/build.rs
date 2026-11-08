@@ -450,6 +450,7 @@ impl<'a> Planner<'a> {
                 condition,
             } => self.join(left, right, *kind, condition),
             PlanNode::SubqueryAlias { input, .. } => self.plan(input),
+            PlanNode::Repartition { input, exprs } => self.repartition(input, exprs),
             PlanNode::Shift { input, offset } => {
                 let mut planned = self.plan(input)?;
                 for id in &mut planned.layout {
