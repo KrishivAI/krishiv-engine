@@ -26,6 +26,16 @@ const SALT: [u32; 8] = [
 /// Bytes of one block.
 pub const BLOCK_BYTES: usize = 32;
 
+/// A filter up to this size probes one hash at a time: it stays in the
+/// caches, where a prefetch only adds instructions (study 18: filters
+/// under 30 KB probe in 2-5 ns a row).
+pub(crate) const PREFETCH_ABOVE_BYTES: usize = 256 * 1024;
+
+/// How many hashes ahead [`RuntimeBloom::check_batch`] prefetches a
+/// block: enough loads in flight to cover a memory miss at a few
+/// nanoseconds a probe (the prototype's 32, study 18 §7.1).
+pub(crate) const PREFETCH_DISTANCE: usize = 32;
+
 /// XXH64 with seed 0, Parquet's Bloom-filter hash.
 #[must_use]
 #[inline]
@@ -33,10 +43,29 @@ pub fn xxh64(bytes: &[u8]) -> u64 {
     twox_hash::XxHash64::oneshot(0, bytes)
 }
 
+/// One 256-bit block, aligned to its size: a block never straddles two
+/// cache lines, so a probe (and its prefetch) touches one line, not two.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(C, align(32))]
+struct Block([u32; 8]);
+
+impl std::ops::Deref for Block {
+    type Target = [u32; 8];
+    fn deref(&self) -> &[u32; 8] {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Block {
+    fn deref_mut(&mut self) -> &mut [u32; 8] {
+        &mut self.0
+    }
+}
+
 /// A split-block Bloom filter over 64-bit hashes (see the module docs).
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeBloom {
-    blocks: Box<[[u32; 8]]>,
+    blocks: Box<[Block]>,
 }
 
 impl std::fmt::Debug for RuntimeBloom {
@@ -83,7 +112,7 @@ impl RuntimeBloom {
     pub fn with_bytes(bytes: usize) -> Self {
         let blocks = bytes.div_ceil(BLOCK_BYTES).max(1);
         Self {
-            blocks: vec![[0u32; 8]; blocks].into_boxed_slice(),
+            blocks: vec![Block([0u32; 8]); blocks].into_boxed_slice(),
         }
     }
 
@@ -123,7 +152,7 @@ impl RuntimeBloom {
             return false;
         }
         for (a, b) in self.blocks.iter_mut().zip(&other.blocks) {
-            for (w, x) in a.iter_mut().zip(b) {
+            for (w, x) in a.iter_mut().zip(b.iter()) {
                 *w |= x;
             }
         }
@@ -136,7 +165,7 @@ impl RuntimeBloom {
     /// also holds for a union of filters whose keys overlap.
     #[must_use]
     pub fn pass_rate(&self) -> f64 {
-        let block = |b: &[u32; 8]| {
+        let block = |b: &Block| {
             b.iter()
                 .map(|w| f64::from(w.count_ones()) / 32.0)
                 .product::<f64>()
@@ -164,13 +193,51 @@ impl RuntimeBloom {
     }
 
     /// Checks every hash of `hashes`, packed 64 answers a word: answer
-    /// `i` is whether `hashes[i]` may have been added. One pass over the
-    /// batch's hash vector: the eight words of a block are tested together
-    /// (a SIMD compare where the target has one), as the Parquet and Impala
-    /// SBBF probes do.
+    /// `i` is whether `hashes[i]` may have been added. The eight words of a
+    /// block are tested together (a SIMD compare where the target has one),
+    /// as the Parquet and Impala SBBF probes do.
+    ///
+    /// A filter larger than the caches makes each probe a memory miss,
+    /// one block load waiting on the next (study 18 §R4: 16-22 ns a row
+    /// on 1-4 MB filters). Past [`PREFETCH_ABOVE_BYTES`] the block index of
+    /// every hash is computed once, and the block [`PREFETCH_DISTANCE`]
+    /// hashes ahead is prefetched while the current one is tested, so many
+    /// loads are in flight at once (Impala's and Kudu's batched SBBF
+    /// `Find`). The answers are the same either way.
     #[must_use]
     pub fn check_batch(&self, hashes: &[u64]) -> arrow_buffer::BooleanBuffer {
-        super::member::pack(hashes, |h| self.check_hash(h))
+        if self.num_bytes() <= PREFETCH_ABOVE_BYTES {
+            return super::member::pack(hashes, |h| self.check_hash(h));
+        }
+        let blocks: Vec<u32> = hashes
+            .iter()
+            .map(|&h| u32::try_from(self.block(h)).unwrap_or(u32::MAX))
+            .collect();
+        let mut words = Vec::with_capacity(hashes.len().div_ceil(64));
+        for (c, chunk) in hashes.chunks(64).enumerate() {
+            let base = c * 64;
+            let mut w = 0u64;
+            for (j, &h) in chunk.iter().enumerate() {
+                let i = base + j;
+                if let Some(&ahead) = blocks.get(i + PREFETCH_DISTANCE) {
+                    krishiv_kernels::prefetch_read(&self.blocks, ahead as usize);
+                }
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "the SBBF uses the low half"
+                )]
+                let m = mask(h as u32);
+                let hit = blocks
+                    .get(i)
+                    .and_then(|&b| self.blocks.get(b as usize))
+                    .is_some_and(|b| {
+                        b.iter().zip(m).fold(0, |miss, (w, bit)| miss | (bit & !w)) == 0
+                    });
+                w |= u64::from(hit) << j;
+            }
+            words.push(w);
+        }
+        arrow_buffer::BooleanBuffer::new(arrow_buffer::Buffer::from_vec(words), 0, hashes.len())
     }
 
     /// A filter over the Parquet-layout bitset `bytes` (see
@@ -189,7 +256,7 @@ impl RuntimeBloom {
                 for (w, c) in block.iter_mut().zip(b.as_chunks::<4>().0) {
                     *w = u32::from_le_bytes(*c);
                 }
-                block
+                Block(block)
             })
             .collect();
         Some(Self { blocks })
@@ -238,7 +305,7 @@ impl RuntimeBloom {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.num_bytes());
         for b in self.blocks.iter() {
-            for w in b {
+            for w in b.iter() {
                 out.extend_from_slice(&w.to_le_bytes());
             }
         }
@@ -302,5 +369,64 @@ mod tests {
         );
         assert_eq!(RuntimeBloom::with_bytes(0).num_bytes(), BLOCK_BYTES);
         assert!(format!("{f:?}").contains("bytes"));
+    }
+
+    /// The batched probe answers as the one-hash probe does, on both sides
+    /// of the prefetch threshold and for batch lengths around the 64-answer
+    /// words and the prefetch distance (study 18 §R4).
+    #[test]
+    fn blocks_never_straddle_a_cache_line() {
+        assert_eq!(std::mem::size_of::<Block>(), BLOCK_BYTES);
+        assert_eq!(std::mem::align_of::<Block>(), BLOCK_BYTES);
+        let f = RuntimeBloom::with_bytes(1 << 20);
+        assert_eq!(f.blocks.as_ptr().addr() % BLOCK_BYTES, 0);
+    }
+
+    #[test]
+    fn batched_probes_answer_as_single_probes() {
+        for bytes in [
+            4 * 1024,
+            PREFETCH_ABOVE_BYTES,
+            PREFETCH_ABOVE_BYTES + BLOCK_BYTES,
+            4 << 20,
+        ] {
+            let mut f = RuntimeBloom::with_bytes(bytes);
+            let keys = u64::try_from(bytes / 4).unwrap_or(u64::MAX);
+            for i in 0..keys {
+                f.insert_hash(xxh64(&(i * 3).to_le_bytes()));
+            }
+            let probes: Vec<u64> = (0..5_000u64).map(|i| xxh64(&i.to_le_bytes())).collect();
+            for n in [
+                0,
+                1,
+                PREFETCH_DISTANCE - 1,
+                PREFETCH_DISTANCE,
+                63,
+                64,
+                65,
+                129,
+                5_000,
+            ] {
+                let hashes = &probes[..n];
+                let got = f.check_batch(hashes);
+                assert_eq!(got.len(), n);
+                for (i, &h) in hashes.iter().enumerate() {
+                    assert_eq!(
+                        got.value(i),
+                        f.check_hash(h),
+                        "{bytes} bytes, {n} hashes, at {i}"
+                    );
+                }
+            }
+            // Every inserted key passes (no false negative on the batched path).
+            let added: Vec<u64> = (0..keys.min(3_000))
+                .map(|i| xxh64(&(i * 3).to_le_bytes()))
+                .collect();
+            assert_eq!(
+                f.check_batch(&added).count_set_bits(),
+                added.len(),
+                "{bytes} bytes"
+            );
+        }
     }
 }

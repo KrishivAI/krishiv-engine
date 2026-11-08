@@ -341,6 +341,30 @@ fn bytes_evaluate(
         _ => None,
     };
     let mut words = vec![0u64; n.div_ceil(64)];
+    // A Bloom filter past the caches: hash the rows the range keeps first,
+    // then probe them as a batch, which prefetches (`check_batch`).
+    if let Member::Bloom(bloom) = member
+        && bloom.num_bytes() > super::bloom::PREFETCH_ABOVE_BYTES
+    {
+        let mut rows = Vec::with_capacity(n);
+        let mut hashes = Vec::with_capacity(n);
+        for_each_bytes(a, |i, b| {
+            if valid.is_none_or(|v| v.value(i)) && bounds.is_none_or(|(lo, hi)| b >= lo && b <= hi)
+            {
+                rows.push(i);
+                hashes.push(xxh64(b));
+            }
+        });
+        let hit = bloom.check_batch(&hashes);
+        for (k, &i) in rows.iter().enumerate() {
+            if hit.value(k)
+                && let Some(w) = words.get_mut(i / 64)
+            {
+                *w |= 1 << (i % 64);
+            }
+        }
+        return BooleanBuffer::new(Buffer::from_vec(words), 0, n);
+    }
     for_each_bytes(a, |i, b| {
         let ok = valid.is_none_or(|v| v.value(i))
             && bounds.is_none_or(|(lo, hi)| b >= lo && b <= hi)

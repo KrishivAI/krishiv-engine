@@ -18,7 +18,7 @@ re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.
 atomic generation is only a "changed?" hint), `ScanFilter` (lowering cached per scan level), `KeyFilter` and
 `KeyFilterBuilder` (min/max, value set, Bloom filter), `merge.rs` `KeyFilter::merge` (the filter of several producer
 partitions: a superset of every input's keys, order-independent; Blooms OR only at the planned size), `normalize_key_bytes` and `widens_to` (the single key
-normalization that producers and consumers share), `RuntimeBloom` (Parquet's split-block Bloom filter over hashes),
+normalization that producers and consumers share), `RuntimeBloom` (Parquet's split-block Bloom filter over hashes; 32-byte-aligned blocks; past 256 KiB `check_batch` computes the block indices once and prefetches the block 32 hashes ahead through `krishiv_kernels::prefetch_read`, string keys too, study 18 §R4),
 and a loom model of publication · `write.rs` FileWriter · `commit.rs` `SaveMode` + `DirectoryWrite` (Spark's save modes on a
 directory, `_SUCCESS`, the empty-output file; files written under final names, never renamed) · `io/` IoScheduler,
 IoContext (reads, uploads, listing), coalescing, metadata cache, the cloud stores (URL parsing, `fs.*` keys, store building and `StorePolicy` live in the `krishiv-store` crate, ADR 0044; `stores.rs` re-exports them and holds `register`/`register_with_options`, which put a store from a `StoreRegistry` on the scheduler, and `query_registry`, whose stores connect through the scheduler's `SharedHttpClients` (`IoScheduler::http_clients`, one HTTP client per set of client options for the runtime's life); `cloud` turns on `krishiv-store/cloud`),
