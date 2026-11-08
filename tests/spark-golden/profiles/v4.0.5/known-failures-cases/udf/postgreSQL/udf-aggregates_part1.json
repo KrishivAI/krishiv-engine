@@ -1,9 +1,7 @@
 {
   "cases": {
     "test-udfs": [
-      32,
-      53,
-      54
+      32
     ]
   },
   "file": "udf/postgreSQL/udf-aggregates_part1",

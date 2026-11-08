@@ -1083,9 +1083,32 @@ pub(super) fn cost(a: &AggregateExpr, f: &WindowFunctionPlan, rows: usize) -> Re
         // the results only), the leaf ids (then the result ids), and one
         // chunk of merges: a chunk of parents while the tree is built, of
         // frame nodes while it is queried, or of rows in order.
-        3 * rows * state + rows * 4 + CHUNK * (8 + 2 * state.max(16))
+        3 * rows * state + rows * 4 + chunk_items(f, rows) * (8 + 2 * state.max(16))
     };
     Ok(frames + inputs + method + width(&out, rows))
+}
+
+/// The items one chunk of merges holds for `rows` rows (see [`CHUNK`]): a `ROWS` frame of at most `w` rows has at
+/// most `max(w, 2 * (bits(w) + 1))` items per row (the rows of an in-order fold, or the nodes of a tree query), so a
+/// small batch charges for those, not for a whole chunk. Other frames can hold a whole chunk.
+fn chunk_items(f: &WindowFunctionPlan, rows: usize) -> usize {
+    use super::FrameBound as B;
+    let fr = &f.frame;
+    let at = |b: B| match b {
+        B::CurrentRow => Some(0_i64),
+        B::Offset(n) => Some(n),
+        _ => None,
+    };
+    if fr.units != FrameUnits::Rows {
+        return CHUNK;
+    }
+    let (Some(lo), Some(hi)) = (at(fr.lower), at(fr.upper)) else {
+        return CHUNK;
+    };
+    let w = usize::try_from(hi.saturating_sub(lo).saturating_add(1).max(1)).unwrap_or(usize::MAX);
+    let bits = usize::try_from(usize::BITS - w.leading_zeros()).unwrap_or(64);
+    let per_row = w.max(2 * (bits + 1));
+    CHUNK.min(rows.saturating_mul(per_row).saturating_add(2 * (bits + 1)))
 }
 
 /// The bytes `lag`/`lead`/`nth_value` (function `f`) hold at most over

@@ -178,6 +178,18 @@ def discover_tables(root: Path) -> list[str]:
     return sorted(names)
 
 
+def table_paths(root: Path, names: list[str]) -> dict[str, list[str]]:
+    """Each table of ``discover_tables`` as the runner's ``--table NAME=PATH``: for a dataset directory that holds
+    more than tables (DSB's ``queries/``), which ``--data`` would try to register as one."""
+    out: dict[str, list[str]] = {}
+    for name in names:
+        for cand in (root / f"{name}.parquet", root / name):
+            if cand.exists():
+                out[name] = [str(cand)]
+                break
+    return out
+
+
 @contextmanager
 def bench_lock() -> Generator[float]:
     """Holds ``$KRISHIV_DATA/.bench.lock`` (flock) for the whole run; yields the seconds spent waiting."""

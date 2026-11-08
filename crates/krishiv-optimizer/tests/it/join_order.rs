@@ -19,7 +19,7 @@ use crate::support::{self, data, eval};
 
 /// Statistics by table name, from `tests/fixtures/tpch-sf10-stats.json`.
 #[derive(Debug)]
-struct Fixture(HashMap<String, TableStats>);
+pub(crate) struct Fixture(HashMap<String, TableStats>);
 
 impl Statistics for Fixture {
     fn table(&self, scan: &Scan) -> Option<TableStats> {
@@ -38,7 +38,7 @@ fn bound(v: &Value) -> Option<Literal> {
     Some(Literal::Double(v.get("number")?.as_f64()?))
 }
 
-fn fixture() -> Fixture {
+pub(crate) fn fixture() -> Fixture {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/tpch-sf10-stats.json"

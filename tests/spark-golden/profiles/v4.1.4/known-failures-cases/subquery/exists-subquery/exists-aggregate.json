@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "subqueries": [
-      11
-    ]
-  },
-  "file": "subquery/exists-subquery/exists-aggregate",
-  "format_version": 1
-}
