@@ -148,14 +148,16 @@ def wrapped_error(e) -> dict:
 
 
 def run(spark, sql: str) -> dict:
-    from py4j.protocol import Py4JJavaError
     from pyspark.errors import PySparkException
 
     try:
         rows = [list(map(lambda v: None if v is None else str(v), r)) for r in spark.sql(sql).collect()]
     except PySparkException as e:
         return {"error": error_of(e)}
-    except Py4JJavaError as e:
+    except Exception as e:
+        # py4j's `Py4JJavaError` (local mode), matched by name: py4j is pyspark's dependency, not ours.
+        if type(e).__name__ != "Py4JJavaError":
+            raise
         return {"error": wrapped_error(e)}
     return {"rows": sorted(rows, key=lambda r: [("" if v is None else v) for v in r])}
 
