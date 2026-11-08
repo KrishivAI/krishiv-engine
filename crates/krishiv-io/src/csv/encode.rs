@@ -9,6 +9,7 @@ use arrow_array::types::{
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Schema};
 use bytes::Bytes;
+use krishiv_kernels::binary_style::BinaryStyle;
 use krishiv_kernels::datetime_pattern::Purpose;
 use krishiv_kernels::text::{java_decimal_string, java_double_string, java_float_string32};
 
@@ -30,18 +31,6 @@ pub(crate) struct CsvEncoder {
     kinds: Vec<Kind>,
     line: Vec<u8>,
     text: String,
-}
-
-/// Spark's text of a binary value: `[AB 01 FF]`.
-fn binary_text(b: &[u8], out: &mut String) {
-    out.push('[');
-    for (i, byte) in b.iter().enumerate() {
-        if i > 0 {
-            out.push(' ');
-        }
-        out.push_str(&format!("{byte:02X}"));
-    }
-    out.push(']');
 }
 
 impl CsvEncoder {
@@ -197,9 +186,9 @@ impl CsvEncoder {
             (Kind::Str, DataType::Utf8View) => buf.push_str(a.as_string_view().value(i)),
             (Kind::Str, DataType::Utf8) => buf.push_str(a.as_string::<i32>().value(i)),
             (Kind::Str, _) => buf.push_str(a.as_string::<i64>().value(i)),
-            (Kind::Bin, DataType::BinaryView) => binary_text(a.as_binary_view().value(i), buf),
-            (Kind::Bin, DataType::Binary) => binary_text(a.as_binary::<i32>().value(i), buf),
-            (Kind::Bin, _) => binary_text(a.as_binary::<i64>().value(i), buf),
+            (Kind::Bin, DataType::BinaryView) => hex_discrete(a.as_binary_view().value(i), buf),
+            (Kind::Bin, DataType::Binary) => hex_discrete(a.as_binary::<i32>().value(i), buf),
+            (Kind::Bin, _) => hex_discrete(a.as_binary::<i64>().value(i), buf),
             (Kind::Date, _) => buf.push_str(
                 &self
                     .dt
@@ -268,4 +257,9 @@ impl Encoder for CsvEncoder {
     fn written_bytes(&self) -> u64 {
         self.taken + self.out.len() as u64
     }
+}
+
+/// Spark's text of a binary value: `[AB 01 FF]`.
+fn hex_discrete(b: &[u8], out: &mut String) {
+    BinaryStyle::HexDiscrete.write(b, out);
 }

@@ -1221,7 +1221,7 @@ fn row_text(vals: &[Val], kinds: &[FieldKind]) -> String {
             Val::F32(f) => out.push_str(&java_float_string32(*f)),
             Val::F64(f) => out.push_str(&java_double_string(*f)),
             Val::Text(t) => out.push_str(t),
-            Val::Bytes(b) => binary_text(b, &mut out),
+            Val::Bytes(b) => crate::binary_style::BinaryStyle::HexDiscrete.write(b, &mut out),
             Val::Calendar(c) => out.push_str(&krishiv_types::interval::calendar_string(
                 c.months,
                 c.days,
@@ -1442,19 +1442,6 @@ pub struct ToCsvOptions {
     pub timestamp_pattern: Option<DateTimePattern>,
     /// Timestamp_ntz pattern.
     pub ntz_pattern: Option<DateTimePattern>,
-}
-
-/// Spark's text of a binary value: `[AB 01 FF]`.
-fn binary_text(b: &[u8], out: &mut String) {
-    use std::fmt::Write as _;
-    out.push('[');
-    for (i, byte) in b.iter().enumerate() {
-        if i > 0 {
-            out.push(' ');
-        }
-        let _ = write!(out, "{byte:02X}");
-    }
-    out.push(']');
 }
 
 /// One value as the file shows it. Whitespace at either end is dropped when
