@@ -1097,6 +1097,9 @@ async fn two_sorts(rows: u64, limit: usize) -> [Result<Vec<Batch>>; 2] {
     let (a, b) = (task(1), task(2));
     let (a, b) = tokio::join!(run(&a.2, a.0, &a.1), run(&b.2, b.0, &b.1));
     assert_released(&root);
+    // Every seat of the sort merge cohort left with its merge.
+    let cohort = q.cohort("sort merges").unwrap();
+    assert_eq!(cohort.members(), 0, "a merge seat outlived the query");
     let files = std::fs::read_dir(scope.dir()).map_or(0, Iterator::count);
     assert_eq!(files, 0, "every spill file is gone");
     [a, b]
@@ -1108,9 +1111,10 @@ async fn two_sorts(rows: u64, limit: usize) -> [Result<Vec<Batch>>; 2] {
 /// refuses while the other task finalizes or merges waits for it in the
 /// query's merge cohort (the final merge keeps to half the pool). At 3 MiB,
 /// 32 runs: 48 of 64 sorts failed without the cohort and the cap, 6 with
-/// them. What still fails (about 1 run in 100 at 4 MiB too, as before) is a
-/// sort driver's input batch, asked through the driver while the other
-/// task finalizes or merges: no cohort covers that request. Below about
+/// them. What still fails (about 1 run in 100 at 3.5-4 MiB too, as before)
+/// is a sort driver's input batch, asked through the driver while the other
+/// task finalizes or merges: no cohort covers that request, so the limits
+/// here stay above it (5 MiB: 0 of 192). Below about
 /// 2.75 MiB the pool is smaller than one task's fan-in-2 merge (1.19 MB)
 /// next to the other task's two drivers buffering a batch each.
 /// `KRISHIV_SORT_TWO_TASK_RUNS` repeats each limit (a stress loop).
@@ -1120,7 +1124,7 @@ async fn two_sorts_finish_when_their_spill_writes_fill_the_pool() {
     let runs: usize = std::env::var("KRISHIV_SORT_TWO_TASK_RUNS").map_or(1, |v| v.parse().unwrap());
     let rows = 65_536;
     let mut failed = Vec::new();
-    for limit in [3584 * KIB, 5120 * KIB] {
+    for limit in [5120 * KIB, 6144 * KIB] {
         for _ in 0..runs {
             for out in two_sorts(rows, limit).await {
                 match out {

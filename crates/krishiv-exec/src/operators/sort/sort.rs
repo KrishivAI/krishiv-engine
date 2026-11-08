@@ -1142,7 +1142,9 @@ impl Sort {
     /// (and ties their input order).
     ///
     /// `seat` (idle, in the query's [`MERGE_COHORT`]) holds while the
-    /// budget is held and is idle again once it is released.
+    /// budget is held and is idle again once it is released. On an error it
+    /// may stay holding after the budget is gone: the caller's drop of the
+    /// seat (finalize's) then wakes the cohort.
     async fn reduce(
         &self,
         runs: &mut Vec<SpillRun>,
@@ -1510,8 +1512,9 @@ struct Merging {
     /// A spilled bucket's reader slot (none: the rest of an in-memory
     /// bucket), dropped after the budget.
     slot: Option<ReaderSlot>,
-    /// Its seat in the query's merge cohort (a reader not of one bucket
-    /// whose budget waited with arbitration), dropped after the budget.
+    /// Its seat in the query's merge cohort, holding while the budget is
+    /// held (every reader; a merge join's bucket reader joins once granted
+    /// and never waits), dropped after the budget.
     seat: Option<Seat>,
 }
 
@@ -1727,12 +1730,16 @@ impl Sort {
                 let spare = pool
                     .effective_limit()
                     .is_none_or(|limit| pool.reserved().saturating_add(need) <= limit / 2);
+                // It never waits, but holds a merge budget a waiter in the
+                // cohort can wait for: holding before it takes the memory,
+                // so a request refused meanwhile waits too (idle again on a
+                // refusal, the seat's drop).
+                let seat = holding(&handle);
                 if !spare || budget.try_grow(need).is_err() {
+                    drop(seat);
                     return Ok(Err((runs, slot)));
                 }
-                // It never waits, but holds a merge budget a waiter in the
-                // cohort can wait for.
-                (budget, Some(slot), holding(&handle))
+                (budget, Some(slot), seat)
             }
             slot => {
                 // A merge join reads two buckets' merges in one driver: one
