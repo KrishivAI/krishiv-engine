@@ -13,11 +13,9 @@ use std::sync::Arc;
 use arrow_array::builder::{
     BinaryBuilder, BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
-    Int32Builder, Int64Builder, IntervalMonthDayNanoBuilder, IntervalYearMonthBuilder,
-    LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
-    Time64NanosecondBuilder, TimestampMicrosecondBuilder,
+    Int32Builder, Int64Builder, IntervalYearMonthBuilder, LargeBinaryBuilder, LargeStringBuilder,
+    StringBuilder, StringViewBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
 };
-use arrow_array::types::IntervalMonthDayNano;
 use arrow_array::{Array, ArrayRef, StringArray, StructArray, new_null_array};
 use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
 use krishiv_types::{DayTimeField, YearMonthField};
@@ -751,7 +749,7 @@ pub enum Val {
     /// Binary bytes.
     Bytes(Vec<u8>),
     /// A calendar interval.
-    Calendar(IntervalMonthDayNano),
+    Calendar(krishiv_types::calendar::CalendarValue),
 }
 
 /// Why a value did not convert.
@@ -894,20 +892,16 @@ impl Converter<'_> {
     }
 }
 
-/// `c` on the Arrow carrier, which holds about 292 years of microseconds where
-/// Spark holds a `long`.
+/// `c` as a calendar interval value (the struct carrier holds every value Spark's `long` of microseconds does).
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a value past that.
+/// None today; kept fallible for the readers' shared signature.
 pub(crate) fn calendar_value(
     c: krishiv_types::interval_parse::Calendar,
-) -> Result<IntervalMonthDayNano, KernelError> {
-    let nanos = c.micros.checked_mul(1_000).ok_or_else(|| {
-        KernelError::unsupported(
-            "a calendar interval whose microseconds overflow the nanosecond field of its Arrow type",
-        )
-    })?;
-    Ok(IntervalMonthDayNano::new(c.months, c.days, nanos))
+) -> Result<krishiv_types::calendar::CalendarValue, KernelError> {
+    Ok(krishiv_types::calendar::CalendarValue::new(
+        c.months, c.days, c.micros,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,7 +1029,7 @@ enum Column {
     /// Day-time interval.
     DayTime(DurationMicrosecondBuilder),
     /// Calendar interval.
-    Calendar(IntervalMonthDayNanoBuilder),
+    Calendar(krishiv_types::calendar::CalendarBuilder),
     /// Null.
     Null(usize, DataType),
 }
@@ -1053,8 +1047,10 @@ impl Column {
             DataType::Duration(TimeUnit::Microsecond) => {
                 return Ok(Self::DayTime(DurationMicrosecondBuilder::new()));
             }
-            DataType::Interval(IntervalUnit::MonthDayNano) => {
-                return Ok(Self::Calendar(IntervalMonthDayNanoBuilder::new()));
+            t if krishiv_types::arrow::is_calendar_struct(t) => {
+                return Ok(Self::Calendar(
+                    krishiv_types::calendar::CalendarBuilder::new(),
+                ));
             }
             _ => {}
         }
@@ -1161,7 +1157,7 @@ impl Column {
             Self::Timestamp(b) => Arc::new(b.finish()),
             Self::YearMonth(b) => Arc::new(b.finish()),
             Self::DayTime(b) => Arc::new(b.finish()),
-            Self::Calendar(b) => Arc::new(b.finish()),
+            Self::Calendar(b) => b.finish(),
             Self::Null(n, dt) => {
                 let rows = std::mem::take(n);
                 new_null_array(dt, rows)
@@ -1223,9 +1219,7 @@ fn row_text(vals: &[Val], kinds: &[FieldKind]) -> String {
             Val::Text(t) => out.push_str(t),
             Val::Bytes(b) => crate::binary_style::BinaryStyle::HexDiscrete.write(b, &mut out),
             Val::Calendar(c) => out.push_str(&krishiv_types::interval::calendar_string(
-                c.months,
-                c.days,
-                c.nanoseconds / 1_000,
+                c.months, c.days, c.micros,
             )),
         }
     }
