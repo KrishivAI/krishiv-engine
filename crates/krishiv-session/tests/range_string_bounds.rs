@@ -350,17 +350,15 @@ fn an_integral_or_decimal_bound_the_key_cannot_hold_raises_under_ansi() {
         (
             "k",
             "1000 preceding and current row",
-            "NUMERIC_VALUE_OUT_OF_RANGE",
+            "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION",
         ),
         ("i", "current row and 2147483648 following", "CAST_OVERFLOW"),
     ] {
         let table = if key == "i" { "ei" } else { "ek" };
         let sql =
             format!("select count(*) over (order by {key} range between {bounds}) from {table}");
-        let err = block_on(async { s.sql(&sql).await?.collect().await })
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains(class), "{key} {bounds}: {err}");
+        let err = block_on(async { s.sql(&sql).await?.collect().await }).unwrap_err();
+        assert_eq!(err.error_class().name(), class, "{key} {bounds}: {err}");
     }
 }
 
