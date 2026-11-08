@@ -278,6 +278,39 @@ fn binary_as_string_leaves_a_spatial_column_binary() {
 }
 
 #[test]
+fn a_spatial_column_beside_millis_timestamps_and_intervals_round_trips() {
+    // The TIMESTAMP_MILLIS rewrite touches the other columns of the file; the geometry
+    // column, a tz-aware timestamp and a year-month interval must all survive it.
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let df = block_on(s.sql(&format!(
+        "SELECT ST_GeomFromWKB({POINT}, 3857) g, TIMESTAMP '2024-03-05 06:07:08.123' ts, \
+         INTERVAL '1-2' YEAR TO MONTH ym"
+    )))
+    .unwrap();
+    block_on(
+        df.write()
+            .option("outputTimestampType", "TIMESTAMP_MILLIS")
+            .parquet(out.to_str().unwrap()),
+    )
+    .unwrap();
+    let path = out.display();
+    assert_eq!(
+        rows(&s, &format!("SELECT g FROM parquet.`{path}`")),
+        Ok(vec!["SRID=3857;POINT(1 2)".to_owned()])
+    );
+    let other = block_on(s.sql(&format!(
+        "SELECT CAST(ts AS STRING) a, CAST(ym AS STRING) b FROM parquet.`{path}`"
+    )))
+    .unwrap();
+    let batches = block_on(other.collect()).unwrap();
+    let col = |i: usize| batches[0].column(i).as_string_view().value(0).to_owned();
+    assert!(col(0).starts_with("2024-03-05 06:07:08.123"), "{}", col(0));
+    assert!(col(1).contains("1-2"), "{}", col(1));
+}
+
+#[test]
 fn a_plain_binary_column_stays_binary() {
     let p = point();
     let got = read_crafted(None, &[Some(p.as_slice())]).unwrap();
