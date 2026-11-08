@@ -1196,21 +1196,56 @@ impl Graph {
         let (table, mut fallback, work) = match enumerator {
             Enumerator::Greedy => (None, Some("forced"), dp::Work::default()),
             Enumerator::DpSub if n <= settings.dp_limit.min(MAX_DP_LIMIT) => {
-                // Each set's rows and width once: a split asks for both halves.
-                let sizes = std::cell::RefCell::new(HashMap::<Set, (f64, f64)>::new());
-                let size = |s: Set| {
-                    if let Some(&v) = sizes.borrow().get(&s) {
+                // Each set's rows once, and its width once if a cost asks (tables indexed by the
+                // set's bits: a split asks for both halves). Sets are below `1 << n`, `n` at most
+                // `MAX_DP_LIMIT`, so the index fits.
+                let rows_cache = std::cell::RefCell::new(vec![None::<f64>; 1 << n]);
+                let width_cache = std::cell::RefCell::new(vec![None::<f64>; 1 << n]);
+                let at = |s: Set| usize::try_from(s).unwrap_or(usize::MAX);
+                let rows = |s: Set| {
+                    if let Some(v) = rows_cache.borrow()[at(s)] {
                         return v;
                     }
-                    let set = |i: usize| s & (1 << i) != 0;
-                    let v = (self.rows_of(&set), self.width_of(&set));
-                    sizes.borrow_mut().insert(s, v);
+                    let v = self.rows_of(&|i: usize| s & (1 << i) != 0);
+                    rows_cache.borrow_mut()[at(s)] = Some(v);
                     v
                 };
-                let result_of = |s: Set| self.result_cost(size(s).0);
-                let split_of = |a: Set, b: Set| self.build_cost(size(a), size(b));
-                let tie_of = |s: Set| self.tie_result(size(s).0);
-                let tie_split = |a: Set, b: Set| self.tie_build(size(a), size(b));
+                let width = |s: Set| {
+                    if let Some(v) = width_cache.borrow()[at(s)] {
+                        return v;
+                    }
+                    let v = self.width_of(&|i: usize| s & (1 << i) != 0);
+                    width_cache.borrow_mut()[at(s)] = Some(v);
+                    v
+                };
+                let result_of = |s: Set| self.result_cost(rows(s));
+                let split_of = |a: Set, b: Set| {
+                    if self.by_bytes {
+                        self.build_cost((rows(a), width(a)), (rows(b), width(b)))
+                    } else {
+                        0.0
+                    }
+                };
+                let tie_of = |s: Set| {
+                    if self.by_bytes || self.widths.is_none() {
+                        0.0
+                    } else {
+                        self.tie_result(rows(s))
+                    }
+                };
+                let tie_split = |a: Set, b: Set| {
+                    if self.by_bytes || self.widths.is_none() {
+                        return 0.0;
+                    }
+                    // The build is the input with fewer rows (`b` on a tie); only its width is read.
+                    let (ra, rb) = (rows(a), rows(b));
+                    let (build_rows, build_width) = if rb <= ra {
+                        (rb, width(b))
+                    } else {
+                        (ra, width(a))
+                    };
+                    self::rows(build_rows * (ROW_BYTES + build_width))
+                };
                 let (table, work) =
                     dp::dpsub(n, &masks, &result_of, &split_of, &tie_of, &tie_split);
                 (Some(table), None, work)
