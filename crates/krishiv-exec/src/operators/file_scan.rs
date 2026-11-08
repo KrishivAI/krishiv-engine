@@ -470,6 +470,9 @@ pub struct FileScanSource {
     metrics: Arc<Mutex<FileScanMetrics>>,
     /// Whether the row id ends the output.
     row_id: bool,
+    /// The pushed limit hint, also when filters keep it out of the request:
+    /// the coalescer's target stays at or below it.
+    limit_hint: Option<u64>,
 }
 
 impl std::fmt::Debug for FileScanSource {
@@ -536,8 +539,14 @@ struct FileScanLocal {
     row_filter: Option<(usize, bool)>,
     rows: super::RowStage,
     /// Small filtered batches joined toward the query's batch size; flushed
-    /// before the driver claims another morsel and at the scan's end.
+    /// before the driver claims another morsel, when the slice ends and at
+    /// the scan's end.
     out: super::scan_coalesce::ScanCoalesce,
+    /// How long one `get_data` call reads before it hands the driver what
+    /// it has (an empty batch when the filters kept nothing): half the stall
+    /// threshold, so the driver's boundary (cancel, abort, spill requests)
+    /// still runs while a selective scan buffers.
+    slice: std::time::Duration,
     /// The scan's totals, to record a split this driver abandons (a limit above
     /// stopped it before the split's end): its reads were made and paid for. The
     /// split's rows, bytes and unit counts are added with them; the decode
@@ -792,6 +801,7 @@ fn row_level(filters: &[PushedFilter]) -> RowLevel {
 impl FileScanSource {
     fn new(scan: &FileScan, p: ScanPushdowns) -> Result<Self> {
         check_capabilities(scan, &p)?;
+        let limit_hint = p.limit;
         let TableRequest {
             request,
             mapped,
@@ -816,6 +826,7 @@ impl FileScanSource {
             runtime: p.dynamic,
             metrics: Arc::new(Mutex::new(FileScanMetrics::default())),
             row_id: p.row_id,
+            limit_hint,
         })
     }
 
@@ -1109,8 +1120,21 @@ impl FileScanSource {
     ) -> Result<Option<Batch>> {
         let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
         let local = local_mut::<FileScanLocal>(local, "FileScan")?;
+        let started = std::time::Instant::now();
+        // The slice ends only after this call decoded a batch: every call
+        // makes progress, whatever the threshold.
+        let mut decoded = false;
         loop {
-            if let Some(b) = local.out.next() {
+            if let Some(b) = local.out.pop_ready() {
+                return Ok(Some(Batch::new(b)));
+            }
+            if decoded && started.elapsed() >= local.slice {
+                // The driver's turn: what is buffered, or nothing.
+                local.out.flush()?;
+                let b = local
+                    .out
+                    .pop_ready()
+                    .unwrap_or_else(|| RecordBatch::new_empty(Arc::clone(&self.output)));
                 return Ok(Some(Batch::new(b)));
             }
             if self
@@ -1119,8 +1143,8 @@ impl FileScanSource {
                 .is_some_and(|l| g.returned.load(Ordering::Relaxed) >= l)
             {
                 // Rows count when they are buffered: what is held goes out.
-                local.out.finish()?;
-                return Ok(local.out.next().map(Batch::new));
+                local.out.flush()?;
+                return Ok(local.out.pop_ready().map(Batch::new));
             }
             if let Some(cur) = local.current.as_mut() {
                 match cur.stream.next_batch().await? {
@@ -1134,6 +1158,7 @@ impl FileScanSource {
                         };
                         g.returned.fetch_add(b.num_rows() as u64, Ordering::Relaxed);
                         local.out.push(b)?;
+                        decoded = true;
                         continue;
                     }
                     None => {
@@ -1158,8 +1183,8 @@ impl FileScanSource {
             }
             // The buffered rows belong to the claimed morsel: they go out
             // before the position moves on.
-            local.out.finish()?;
-            if let Some(b) = local.out.next() {
+            local.out.flush()?;
+            if let Some(b) = local.out.pop_ready() {
                 return Ok(Some(Batch::new(b)));
             }
             let Some((ordinal, m)) = g.cursor.claim_ordered() else {
@@ -1517,7 +1542,14 @@ impl Source for FileScanSource {
         let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
         Ok(Box::new(FileScanLocal {
             rows: super::RowStage::new(&g.request.dynamic, &self.mapped, self.runtime.settings()),
-            out: super::scan_coalesce::ScanCoalesce::new(ctx.query().config().batch_size),
+            out: super::scan_coalesce::ScanCoalesce::new(
+                Arc::clone(&self.output),
+                usize::try_from(self.limit_hint.unwrap_or(u64::MAX))
+                    .unwrap_or(usize::MAX)
+                    .min(ctx.query().config().batch_size),
+                ctx.consumer().consumer().reservation(),
+            ),
+            slice: ctx.query().config().stall_threshold / 2,
             consumer: Arc::clone(ctx.consumer().consumer()),
             gate: Arc::clone(ctx.query().scan_gate()),
             morsel: None,

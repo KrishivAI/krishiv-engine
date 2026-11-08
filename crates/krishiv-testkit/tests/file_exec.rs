@@ -620,7 +620,13 @@ fn prefetch_hides_store_latency() {
         ));
         t.rt.block_on(async {
             let start = tokio::time::Instant::now();
-            let out = run(&t.pool, plan, 1).await.unwrap();
+            // A batch per 100-row unit (they pass the coalescer uncopied),
+            // so the work is per unit.
+            let config = ExecConfig {
+                batch_size: 100,
+                ..ExecConfig::default()
+            };
+            let out = run_with(&t.pool, plan, 1, config).await.unwrap();
             assert!(out.is_empty());
             start.elapsed()
         })
@@ -1258,5 +1264,101 @@ fn a_late_fetch_of_a_changed_file_fails_and_frees_its_memory() {
     let (env, out) = late_fetch_of_two_files(true);
     let e = out.unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivFileChangedDuringRead);
+    assert_eq!(env.root.reserved(), 0);
+}
+
+/// Runs `pushdowns` over three files of 7-row units (each decoded batch is
+/// small) on 4 drivers with `config`.
+fn small_unit_scan(
+    env: &Env,
+    files: &[FileRef],
+    pushdowns: ScanPushdowns,
+    config: ExecConfig,
+) -> Vec<RecordBatch> {
+    let scan = scan_of(
+        env,
+        files.to_vec(),
+        splits(files[0].size / 3),
+        ScanOptions::default(),
+    );
+    let source = scan.build(pushdowns).unwrap();
+    env.block_on(run_with(&env.query, Arc::new(Leaf(source)), 4, config))
+        .unwrap()
+}
+
+/// E7': a file scan joins its small batches toward `batchSize` within one
+/// morsel. Against `batchSize = 1` (every batch passes through, the old
+/// behaviour) the rows, their order across 4 drivers' morsels, the row
+/// index and `_metadata` are the same, in fewer batches; a pushed limit
+/// hint caps the joined batches; a zero stall threshold (every call hands
+/// the driver its turn after one decoded batch) changes nothing either.
+#[test]
+fn a_file_scan_joins_small_batches_without_changing_rows_or_order() {
+    let env = Env::new(None).unwrap();
+    let fx = MockFixture::default();
+    let files: Vec<FileRef> = (0..3)
+        .map(|k| {
+            env.write(
+                &fx,
+                &format!("small/f{k}"),
+                &schema(),
+                &[sorted(1000, k * 1000)],
+                &fx.unit_rows(7),
+            )
+            .unwrap()
+        })
+        .collect();
+    let pushdowns = || ScanPushdowns {
+        metadata: MetadataCols {
+            file_name: true,
+            file_block_start: true,
+            row_index: true,
+            ..MetadataCols::default()
+        },
+        ..ScanPushdowns::default()
+    };
+    let config = |batch_size: usize| ExecConfig {
+        batch_size,
+        ..ExecConfig::default()
+    };
+    let concat =
+        |out: &[RecordBatch]| arrow_select::concat::concat_batches(&out[0].schema(), out).unwrap();
+    let old = small_unit_scan(&env, &files, pushdowns(), config(1));
+    let joined = small_unit_scan(&env, &files, pushdowns(), config(256));
+    assert_eq!(total_rows(&joined), 3000);
+    assert_eq!(concat(&joined), concat(&old));
+    assert!(
+        joined.len() * 10 < old.len(),
+        "{} joined batches, {} before",
+        joined.len(),
+        old.len()
+    );
+    assert!(joined.iter().all(|b| b.num_rows() <= 256));
+    // A limit hint caps the target, with filters too (the Filter above
+    // sees rows as soon as the limit's worth is read).
+    let limited = small_unit_scan(
+        &env,
+        &files,
+        ScanPushdowns {
+            filters: vec![PushedFilter::opaque(keep_all())],
+            limit: Some(10),
+            ..pushdowns()
+        },
+        config(256),
+    );
+    assert_eq!(total_rows(&limited), 3000);
+    assert!(limited.iter().all(|b| b.num_rows() <= 10));
+    // Every call ends after one decoded batch: same rows, same order.
+    let sliced = small_unit_scan(
+        &env,
+        &files,
+        pushdowns(),
+        ExecConfig {
+            stall_threshold: Duration::ZERO,
+            ..config(256)
+        },
+    );
+    let sliced: Vec<RecordBatch> = sliced.into_iter().filter(|b| b.num_rows() > 0).collect();
+    assert_eq!(concat(&sliced), concat(&old));
     assert_eq!(env.root.reserved(), 0);
 }
