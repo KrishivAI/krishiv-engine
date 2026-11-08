@@ -2,6 +2,8 @@
 //! The decimal carrier at the session's edges (design P2-T160): queries run on
 //! the canonical carrier of each decimal's precision, what a caller hands in may
 //! be on any, and what a caller reads is on `Decimal128`, as Spark sends it.
+//! A calendar interval runs as its struct of microseconds and is read as Arrow's
+//! `Interval(MonthDayNano)` (ADR 0009 update 2026-11-06).
 
 use std::sync::Arc;
 
@@ -10,7 +12,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::StreamExt;
 use krishiv_common::error::KrishivError;
 use krishiv_exec::carrier::recarried_array;
-use krishiv_types::arrow::{canonical_arrow_type, client_arrow_type};
+use krishiv_types::arrow::{canonical_arrow_type, edge_arrow_type};
 
 use crate::session::{RecordBatchStream, internal};
 
@@ -26,7 +28,7 @@ fn mapped(schema: &Schema, to: fn(&DataType) -> DataType) -> SchemaRef {
 
 /// `schema` as a caller reads it.
 pub(crate) fn client_schema(schema: &Schema) -> SchemaRef {
-    mapped(schema, client_arrow_type)
+    mapped(schema, edge_arrow_type)
 }
 
 /// `schema` as queries read it.
