@@ -685,7 +685,7 @@ async fn merge_budget_covers_per_source_metadata() {
         });
     }
     let batch_rows = 100;
-    let (budget, fan_in) = merge_budget(&runs, runs.len(), batch_rows, &handle, false)
+    let (budget, fan_in) = merge_budget(&runs, runs.len(), batch_rows, &handle, false, None)
         .await
         .unwrap();
     assert_eq!(fan_in, runs.len());
@@ -695,6 +695,100 @@ async fn merge_budget_covers_per_source_metadata() {
     assert_eq!(budget.size(), expected);
     drop((budget, runs, handle));
     assert_eq!(root.reserved(), 0);
+    drop(manager);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Two sorts of one query: while another sort's merge holds the pool (a
+/// seat holding in the query's merge cohort), an intermediate merge budget
+/// that does not fit even at fan-in 2 waits for it instead of failing, and
+/// is granted at fan-in 2 once that merge ends (without a seat the full
+/// arbitration aborts the query).
+#[tokio::test(start_paused = true)]
+async fn a_merge_budget_waits_for_another_sorts_merge() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use krishiv_memory::SeatState;
+
+    use super::budget::{MERGE_COHORT, merge_budget, merge_need};
+    use super::merge::SpillRun;
+
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("sort-unit-merge-cohort-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    let k: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+    let batch = Batch::new(RecordBatch::try_new(Arc::clone(&schema), vec![k]).unwrap());
+    let unlimited = TreePool::new(&MemoryConfig::default());
+    let writer_handle = ConsumerHandle::register(unlimited.child("w", None), "sort", None);
+    let mut runs = Vec::new();
+    for _ in 0..8 {
+        let scratch = writer_handle.reservation().for_spill_scratch();
+        let mut writer = scope.writer(Arc::clone(&schema), scratch).unwrap();
+        writer.write(&batch).unwrap();
+        runs.push(SpillRun {
+            file: writer.finish().unwrap(),
+            max_batch_bytes: 100_000,
+            row_bytes: 8,
+        });
+    }
+    let batch_rows = 100;
+    let need = merge_need(&runs, 2, batch_rows, true);
+    // One fan-in-2 budget fits, two do not.
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(need + need / 2),
+        ..MemoryConfig::default()
+    });
+    let q = root.child("q", None);
+    let cohort = q.cohort(MERGE_COHORT).unwrap();
+    let other = ConsumerHandle::register(Arc::clone(&q), "other sort", None);
+    let mut other_budget = other.reservation();
+    other_budget.try_grow(need).unwrap();
+    let mut other_seat = cohort.join();
+    other_seat.set(SeatState::Holding);
+
+    let handle = ConsumerHandle::register(Arc::clone(&q), "sort", None);
+
+    let mut seat = cohort.join();
+    let waits = AtomicU64::new(0);
+    let (budget, fan_in) = {
+        let mut ask = Box::pin(merge_budget(
+            &runs,
+            runs.len(),
+            batch_rows,
+            &handle,
+            true,
+            Some((&mut seat, &waits)),
+        ));
+        let early = tokio::time::timeout(Duration::from_millis(200), ask.as_mut()).await;
+        assert!(
+            early.is_err(),
+            "granted while the other merge held the pool"
+        );
+        // The other merge ends: its memory goes, then its seat goes idle.
+        drop(other_budget);
+        other_seat.set(SeatState::Idle);
+        tokio::time::timeout(Duration::from_secs(10), ask)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    assert_eq!((fan_in, budget.size()), (2, need));
+    assert_eq!(seat.state(), SeatState::Holding);
+    assert!(waits.load(Ordering::Relaxed) >= 1);
+    assert!(q.check_aborted().is_ok());
+    drop(budget);
+    seat.set(SeatState::Idle);
+    drop((handle, other));
+    assert_eq!(root.reserved(), 0);
+    drop((runs, writer_handle));
     drop(manager);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -747,7 +841,7 @@ async fn merge_budget_falls_back_to_a_smaller_fan_in() {
             ..MemoryConfig::default()
         });
         let handle = ConsumerHandle::register(pool.child("q", None), "sort", None);
-        let got = merge_budget(&runs, runs.len(), batch_rows, &handle, true).await;
+        let got = merge_budget(&runs, runs.len(), batch_rows, &handle, true, None).await;
         match (got, want) {
             (Ok((budget, fan_in)), Some(want)) => {
                 assert_eq!(fan_in, want, "limit {limit}");

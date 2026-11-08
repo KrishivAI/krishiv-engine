@@ -1034,6 +1034,40 @@ fn hash_buckets_need_keys() {
     assert!(err.to_string().contains("without keys"), "{err}");
 }
 
+/// Prints `krishiv_*` debug events to stderr (shown for a failed test), so a
+/// refused reservation names what held the pool (`trace_exhausted`).
+struct StderrEvents;
+
+impl tracing::Subscriber for StderrEvents {
+    fn enabled(&self, m: &tracing::Metadata<'_>) -> bool {
+        m.target().starts_with("krishiv_") && *m.level() <= tracing::Level::DEBUG
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, e: &tracing::Event<'_>) {
+        struct Fields(String);
+        impl tracing::field::Visit for Fields {
+            fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                self.0.push_str(&format!(" {}={v:?}", f.name()));
+            }
+        }
+        let mut fields = Fields(String::new());
+        e.record(&mut fields);
+        #[expect(
+            clippy::print_stderr,
+            reason = "test diagnostics: nextest shows a failed test's stderr"
+        )]
+        {
+            eprintln!("[{}]{}", e.metadata().target(), fields.0);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
 /// Two tasks of one query, each sorting [`table`] (`rows` rows) with its
 /// own spill scope, under one pool of `limit` bytes.
 async fn two_sorts(rows: u64, limit: usize) -> [Result<Vec<Batch>>; 2] {
@@ -1070,16 +1104,23 @@ async fn two_sorts(rows: u64, limit: usize) -> [Result<Vec<Batch>>; 2] {
 
 /// Two sorts of one query under one small pool both finish: a request that
 /// finds nothing spillable while the other task writes a buffer out waits
-/// for that write instead of failing the query. Below about 3.5 MiB they
-/// fail for another reason: each sizes its merge budget against the shared
-/// pool's limit (1.84 MB here), not its share.
+/// for that write instead of failing the query, and a merge budget the pool
+/// refuses while the other task finalizes or merges waits for it in the
+/// query's merge cohort (the final merge keeps to half the pool). At 3 MiB,
+/// 32 runs: 48 of 64 sorts failed without the cohort and the cap, 6 with
+/// them. What still fails (about 1 run in 100 at 4 MiB too, as before) is a
+/// sort driver's input batch, asked through the driver while the other
+/// task finalizes or merges: no cohort covers that request. Below about
+/// 2.75 MiB the pool is smaller than one task's fan-in-2 merge (1.19 MB)
+/// next to the other task's two drivers buffering a batch each.
 /// `KRISHIV_SORT_TWO_TASK_RUNS` repeats each limit (a stress loop).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_sorts_finish_when_their_spill_writes_fill_the_pool() {
+    let _ = tracing::subscriber::set_global_default(StderrEvents);
     let runs: usize = std::env::var("KRISHIV_SORT_TWO_TASK_RUNS").map_or(1, |v| v.parse().unwrap());
     let rows = 65_536;
     let mut failed = Vec::new();
-    for limit in [4096 * KIB, 5120 * KIB] {
+    for limit in [3584 * KIB, 5120 * KIB] {
         for _ in 0..runs {
             for out in two_sorts(rows, limit).await {
                 match out {

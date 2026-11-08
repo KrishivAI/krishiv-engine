@@ -10,7 +10,6 @@
 3277 crates/krishiv-exec/src/aggregate/tests.rs
 # +11: the coalesce test asserts the merged-run bytes it now returns (X3' step 1, #586)
 2193 crates/krishiv-exec/src/join/grace.rs
-2003 crates/krishiv-exec/src/operators/sort/sort.rs
 2215 crates/krishiv-exec/src/physical/instantiate.rs
 2105 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs

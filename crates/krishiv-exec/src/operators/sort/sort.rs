@@ -17,7 +17,6 @@
 //! parallel only with memory to spare (see `Readers`): at a tight limit
 //! they need no more than one reader does.
 
-use std::future::Future;
 use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
@@ -27,17 +26,20 @@ use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
-    ConsumerHandle, MemoryError, Reservation, SpillScope, SpillSignal, SpillWriter,
+    ConsumerHandle, MemoryError, Reservation, Seat, SeatState, SpillScope, SpillSignal, SpillWriter,
 };
 use krishiv_types::batch::Batch;
 
-use super::budget::{merge_budget, merge_need};
+use super::budget::{
+    MERGE_COHORT, headroom, holding, lending, lending_for_write, merge_budget, merge_need,
+    spill_rows,
+};
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
     Bucketing, Merger, ParallelMerge, SortedBatch, SpillRun, data_bytes, interleave_batches,
     merge_part, merge_splitters, owned_rows, parallel_merge, sort_slices, write_run,
 };
-use super::{BATCH_SLACK_BYTES, SPILL_BATCH_BYTES, SPILL_BUFFER_BYTES, blocking, finalized};
+use super::{blocking, finalized};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
@@ -91,6 +93,9 @@ pub struct SortMetrics {
     pub merge_readers: u64,
     /// Rows a window group limit dropped from the sorted batches.
     pub rows_pruned: u64,
+    /// Times a merge budget the pool refused waited for another sort's
+    /// merge in the query to end (the merge cohort).
+    pub merge_waits: u64,
 }
 
 #[derive(Debug, Default)]
@@ -103,6 +108,7 @@ struct Counters {
     buckets: AtomicU64,
     readers: AtomicU64,
     pruned: AtomicU64,
+    merge_waits: AtomicU64,
 }
 
 /// A window group limit applied to each sorted batch (the `Partial` mode of
@@ -392,6 +398,7 @@ impl Sort {
             buckets: c.buckets.load(Ordering::Relaxed),
             merge_readers: c.readers.load(Ordering::Relaxed),
             rows_pruned: c.pruned.load(Ordering::Relaxed),
+            merge_waits: c.merge_waits.load(Ordering::Relaxed),
         }
     }
 }
@@ -422,63 +429,6 @@ impl Buffer {
             handle: Arc::clone(handle),
         }
     }
-}
-
-/// Lends `res` to the next growths of its consumer (as grant credit) while
-/// `work` runs, so the scratch memory of a spill or merge is never taken by
-/// another consumer; then takes the credit back and tops `res` up to
-/// `target` if the pool allows (best effort: a later reservation asks for
-/// the rest).
-async fn lending<T>(
-    res: &mut Reservation,
-    handle: &ConsumerHandle,
-    target: usize,
-    work: impl Future<Output = T>,
-) -> T {
-    let lent = res.size();
-    res.shrink_to_credit(lent);
-    let out = work.await;
-    // Credit only: this never reaches the pool, so it cannot fail.
-    let _ = res.try_grow(handle.credit());
-    let _ = res.try_grow(target.saturating_sub(res.size()));
-    out
-}
-
-/// [`lending`] for a spill write: takes back at most what it lent (or
-/// `target`) and returns the rest of the consumer's credit to the pool. The
-/// writer's scratch beyond the lent bytes is temporary, and may have come
-/// from the pool's spill-scratch floor, which must not stay with one
-/// consumer.
-async fn lending_for_write<T>(
-    res: &mut Reservation,
-    handle: &ConsumerHandle,
-    target: usize,
-    work: impl Future<Output = T>,
-) -> T {
-    let lent = res.size();
-    res.shrink_to_credit(lent);
-    let out = work.await;
-    // Credit only: this never reaches the pool, so it cannot fail.
-    let _ = res.try_grow(handle.credit().min(lent.max(target)));
-    handle.release_credit();
-    let _ = res.try_grow(target.saturating_sub(res.size()));
-    out
-}
-
-/// Rows per spilled batch: about [`SPILL_BATCH_BYTES`], at most a batch.
-fn spill_rows(row_bytes: usize, batch_rows: usize) -> usize {
-    (SPILL_BATCH_BYTES / row_bytes.max(1)).clamp(1, batch_rows.max(1))
-}
-
-/// Headroom to spill one buffer: one merged spill batch of `row_bytes`
-/// data bytes per row (plus its buffers' alignment), the writer's scratch
-/// (twice that) and its write buffer.
-pub(super) fn headroom(row_bytes: usize, batch_rows: usize) -> usize {
-    row_bytes
-        .saturating_mul(spill_rows(row_bytes, batch_rows))
-        .saturating_add(BATCH_SLACK_BYTES)
-        .saturating_mul(3)
-        .saturating_add(SPILL_BUFFER_BYTES)
 }
 
 /// One spill of a buffer: a sorted run per bucket (`None` for a bucket
@@ -1190,32 +1140,48 @@ impl Sort {
     /// until at most `fan_in` (what the memory pool allows) remain. A merged
     /// group takes its first run's place, so runs keep their relative order
     /// (and ties their input order).
+    ///
+    /// `seat` (idle, in the query's [`MERGE_COHORT`]) holds while the
+    /// budget is held and is idle again once it is released.
     async fn reduce(
         &self,
         runs: &mut Vec<SpillRun>,
         batch_rows: usize,
         ctx: &TaskContext,
+        mut seat: Option<&mut Seat>,
     ) -> Result<()> {
         if runs.len() <= 2 {
             return Ok(());
         }
         let handle = Arc::clone(ctx.consumer().consumer());
         let mut max_fan_in = self.max_fan_in;
-        // A merge join reads two final merges at once: each keeps to a quarter
-        // of the pool, so the two and the join's group fit together.
-        if let Some(limit) = handle
-            .pool()
-            .effective_limit()
-            .filter(|_| self.read_by_bucket)
-        {
+        // The final merge keeps to half the pool, which stays for the
+        // operators above and the query's other tasks (a merge holds its
+        // budget until it ends, and another task's sort may need the rest
+        // to buffer, finalize or merge). A merge join reads two final merges at once: each
+        // keeps to a quarter, so the two and the join's group fit together.
+        if let Some(limit) = handle.pool().effective_limit() {
+            let share = if self.read_by_bucket {
+                limit / 4
+            } else {
+                limit / 2
+            };
             while max_fan_in > 2
-                && merge_need(runs, max_fan_in.min(runs.len()), batch_rows, false) > limit / 4
+                && merge_need(runs, max_fan_in.min(runs.len()), batch_rows, false) > share
             {
                 max_fan_in /= 2;
             }
         }
-        let (mut budget, fan_in) =
-            merge_budget(runs, max_fan_in, batch_rows, &handle, true).await?;
+        let waits = &self.counters.merge_waits;
+        let (mut budget, fan_in) = merge_budget(
+            runs,
+            max_fan_in,
+            batch_rows,
+            &handle,
+            true,
+            seat.as_deref_mut().map(|s| (s, waits)),
+        )
+        .await?;
         let target = budget.size();
         while runs.len() > fan_in {
             self.counters.passes.fetch_add(1, Ordering::Relaxed);
@@ -1234,6 +1200,11 @@ impl Sort {
                 let run = lending_for_write(&mut budget, &handle, target, merged).await?;
                 runs.push(run.map_err(KrishivError::from)?);
             }
+        }
+        // The memory goes before the seat wakes the cohort.
+        drop(budget);
+        if let Some(seat) = seat {
+            seat.set(SeatState::Idle);
         }
         Ok(())
     }
@@ -1391,7 +1362,11 @@ impl Sink for Sort {
                 return Ok(());
             }
             // External: spill what is still buffered, so the output phase
-            // holds only the merges' frames.
+            // holds only the merges' frames. The buffers are memory this
+            // step frees on its own: a merge budget of another task waits
+            // for it in the cohort ([`MERGE_COHORT`]), and the seat then
+            // serves the merges (idle in between).
+            let mut seat = holding(ctx.consumer().consumer());
             let mut spilled: Vec<Vec<SpillRun>> = (0..g.buckets).map(|_| Vec::new()).collect();
             for part in parts {
                 let runs = match part {
@@ -1416,8 +1391,11 @@ impl Sink for Sort {
                     bucket.extend(run);
                 }
             }
+            if let Some(seat) = &mut seat {
+                seat.set(SeatState::Idle);
+            }
             for runs in &mut spilled {
-                self.reduce(runs, batch_rows, ctx).await?;
+                self.reduce(runs, batch_rows, ctx, seat.as_mut()).await?;
             }
             if self.read_by_bucket {
                 lock(&g.readers.state).by_bucket = spilled;
@@ -1532,6 +1510,9 @@ struct Merging {
     /// A spilled bucket's reader slot (none: the rest of an in-memory
     /// bucket), dropped after the budget.
     slot: Option<ReaderSlot>,
+    /// Its seat in the query's merge cohort (a reader not of one bucket
+    /// whose budget waited with arbitration), dropped after the budget.
+    seat: Option<Seat>,
 }
 
 /// Where a reader goes once a merge of spilled runs ends.
@@ -1679,6 +1660,7 @@ impl Source for Sort {
                             mut merger,
                             mut budget,
                             slot,
+                            seat,
                         },
                         after,
                     ) => {
@@ -1699,6 +1681,7 @@ impl Source for Sort {
                                     merger,
                                     budget,
                                     slot,
+                                    seat,
                                 },
                                 after,
                             );
@@ -1708,7 +1691,7 @@ impl Source for Sort {
                         // then waiting readers may take the memory.
                         drop((merger, budget));
                         l.handle.release_credit();
-                        drop(slot);
+                        drop((slot, seat));
                         l.state = match after {
                             After::Held(held) => SourceState::Held(held, None),
                             After::Spilled => SourceState::Spilled,
@@ -1732,7 +1715,7 @@ impl Sort {
     ) -> Result<std::result::Result<Merging, (Vec<SpillRun>, ReaderSlot)>> {
         let (schema, encoder) = (Arc::clone(&self.schema), Arc::clone(&self.encoder));
         let handle = Arc::clone(&l.handle);
-        let (mut budget, slot) = match slot {
+        let (mut budget, slot, seat) = match slot {
             Some(slot) if !slot.alone => {
                 let mut budget = handle.reservation();
                 let need = merge_need(&runs, runs.len(), l.batch_rows, false);
@@ -1747,15 +1730,37 @@ impl Sort {
                 if !spare || budget.try_grow(need).is_err() {
                     return Ok(Err((runs, slot)));
                 }
-                (budget, Some(slot))
+                // It never waits, but holds a merge budget a waiter in the
+                // cohort can wait for.
+                (budget, Some(slot), holding(&handle))
             }
             slot => {
-                let budget = merge_budget(&runs, runs.len(), l.batch_rows, &handle, false).await;
+                // A merge join reads two buckets' merges in one driver: one
+                // must never wait for the other, so a bucket reader joins
+                // the cohort only once its budget is granted.
+                let mut seat = if l.bucket.is_none() {
+                    handle.pool().cohort(MERGE_COHORT).map(|c| c.join())
+                } else {
+                    None
+                };
+                let waits = &self.counters.merge_waits;
+                let budget = merge_budget(
+                    &runs,
+                    runs.len(),
+                    l.batch_rows,
+                    &handle,
+                    false,
+                    seat.as_mut().map(|s| (s, waits)),
+                )
+                .await;
+                if l.bucket.is_some() && budget.is_ok() {
+                    seat = holding(&handle);
+                }
                 // The lone reader's wait is over (also on error).
                 if let Some(slot) = &slot {
                     slot.reserved();
                 }
-                (budget?.0, slot)
+                (budget?.0, slot, seat)
             }
         };
         let mut slot = slot;
@@ -1769,11 +1774,20 @@ impl Sort {
         let open = blocking(&l.query, &l.executor, move || {
             Merger::new(schema, encoder, Vec::new(), &runs, &handle)
         });
-        let merger = lending(&mut budget, &l.handle, 0, open).await?;
+        let merger = match lending(&mut budget, &l.handle, 0, open).await {
+            Ok(merger) => merger,
+            Err(e) => {
+                // The memory goes before the seat wakes the cohort.
+                drop(budget);
+                drop((slot, seat));
+                return Err(e);
+            }
+        };
         Ok(Ok(Merging {
             merger: Box::new(merger),
             budget,
             slot,
+            seat,
         }))
     }
 }
