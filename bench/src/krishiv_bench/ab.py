@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import compare
-from .abba import bench_lock, bootstrap_ci, discover_tables, load_line, loadavg, summarize, wait_idle
+from .abba import bench_lock, bootstrap_ci, discover_tables, load_line, loadavg, summarize, table_paths, wait_idle
 from .adapters import Dataset
 from .adapters.base import check_query, result_rows
 from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
@@ -170,10 +170,12 @@ def run_ab(
     tables = discover_tables(root)
     if not tables:
         raise SystemExit(f"no dataset at {root}")
-    queries = load_queries(suite, "krishiv", only)
+    queries = load_queries(suite, "krishiv", only, dataset_root=root)
     ds = Dataset(dataset, sf, root, tables)
-    a = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=a_runner, conf=a_conf)
-    b = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=b_runner, conf=b_conf)
+    # DSB's dataset directory also holds its queries: name the tables instead of the directory.
+    paths = table_paths(root, tables) if suite == "dsb" else None
+    a = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=a_runner, conf=a_conf, tables=paths)
+    b = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=b_runner, conf=b_conf, tables=paths)
     for eng in (a, b):
         eng.timeout_s = timeout_s or None  # 0 disables the timeout
     with bench_lock() as waited:

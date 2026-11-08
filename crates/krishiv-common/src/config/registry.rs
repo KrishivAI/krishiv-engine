@@ -74,6 +74,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_LATE_MATERIALIZATION,
     &IO_PARQUET_PAGE_INDEX_ENABLED,
     &IO_PARQUET_BLOOM_FILTER_ENABLED,
+    &IO_PARQUET_DICTIONARY_FILTER_ENABLED,
     &IO_FOOTER_READ_BYTES,
     &IO_METADATA_CACHE_BYTES,
     &IO_CACHE_ENABLED,
@@ -110,6 +111,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
+    &JOIN_ENUMERATOR,
+    &JOIN_DP_LIMIT,
     &NDV_SAMPLING_ENABLED,
     &NDV_SAMPLING_ROWS,
     &NDV_SAMPLING_TIMEOUT,
@@ -174,6 +177,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.coalesceWasteBytes", &IO_COALESCE_WASTE_BYTES),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
+    ("krishiv.optimizer.joinDpLimit", &JOIN_DP_LIMIT),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
     ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
@@ -204,6 +208,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
+    ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
     ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     ("krishiv.sql.files.commitProtocol", &FILES_COMMIT_PROTOCOL),
     ("spark.sql.avro.compression.codec", &AVRO_COMPRESSION_CODEC),
@@ -405,6 +410,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.sources.partitionOverwriteMode",
         &PARTITION_OVERWRITE_MODE,
+    ),
+    (
+        "krishiv.io.parquet.dictionaryFilter.enabled",
+        &IO_PARQUET_DICTIONARY_FILTER_ENABLED,
     ),
     (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
@@ -1305,6 +1314,22 @@ pub static IO_PARQUET_BLOOM_FILTER_ENABLED: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// `krishiv.io.parquet.dictionaryFilter.enabled`.
+pub static IO_PARQUET_DICTIONARY_FILTER_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.parquet.dictionaryFilter.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a Parquet scan reads the dictionary page of a column chunk whose data pages \
+          are all dictionary encoded, for the row groups its statistics could not decide, and \
+          skips a row group when the dictionary holds no literal of a pushed equality or IN. \
+          Returned rows are the same either way: the dictionary only prunes, and a page that \
+          fails a check is ignored. Dictionary pages above 16 MiB are not read.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// `krishiv.io.lateMaterialization`.
 pub static IO_LATE_MATERIALIZATION: ConfigEntry = ConfigEntry {
     key: "krishiv.io.lateMaterialization",
@@ -1877,6 +1902,36 @@ pub static EAGER_AGGREGATION: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
+};
+
+/// Join enumerator (`krishiv.optimizer.joinEnumerator`).
+pub static JOIN_ENUMERATOR: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.joinEnumerator",
+    value_type: ValueType::Enum(&["dpsub", "greedy"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("dpsub"))),
+    doc: "How the join optimizer orders each tree of inner joins. `dpsub`: dynamic programming \
+          over every split of every subset of the inputs, for trees of at most \
+          `krishiv.optimizer.joinDpLimit` inputs, greedy above. `greedy`: always join the connected \
+          pair with the fewest result rows. Results are the same either way; for comparing plans \
+          and planning time.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
+};
+
+/// `krishiv.optimizer.joinDpLimit`.
+pub static JOIN_DP_LIMIT: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.joinDpLimit",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10)),
+    doc: "Most inputs of an inner-join tree the `dpsub` join enumerator plans exactly; larger \
+          trees are planned greedily. Values above 14 count as 14: the work grows as 3 to the \
+          power of the inputs. Results are the same either way.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
 };
 
 /// `krishiv.sql.optimizer.shareCteInstances`.

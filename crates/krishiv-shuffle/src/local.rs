@@ -133,6 +133,31 @@ impl LocalShuffle {
 }
 
 impl Exchange for LocalShuffle {
+    fn committed_bytes(
+        &self,
+        exchange: ExchangeId,
+        stage_attempt: u32,
+        reduce: u32,
+    ) -> Option<u64> {
+        let committed = self
+            .inner
+            .committed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let maps = committed.get(&(exchange, stage_attempt))?;
+        let r = usize::try_from(reduce).ok()?;
+        Some(
+            maps.values()
+                .filter_map(|o| o.frames.get(r))
+                .flatten()
+                .map(|l| match l {
+                    Location::Memory(b) => b.len() as u64,
+                    Location::File { len, .. } => *len,
+                })
+                .sum(),
+        )
+    }
+
     fn writer(
         &self,
         output: MapOutputId,

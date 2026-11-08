@@ -284,7 +284,7 @@ impl Session {
                 key,
                 StoredVariable {
                     data_type: var.data_type,
-                    value,
+                    value: value.into(),
                     default_query: var.default_query,
                 },
             );
