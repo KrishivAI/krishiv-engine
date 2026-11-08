@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -54,8 +55,8 @@ def register(spark, name, fn, thread_safe=True):
 """
 
 
-def run_child(body: str, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
-    """Runs `PRELUDE + body` in a fresh interpreter; a hang is a failure with the child's output."""
+def run_child(body: str, timeout: float = 120.0, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Runs `PRELUDE + body` in a fresh interpreter, `env` added to ours; a hang fails with the child's output."""
     script = PRELUDE + textwrap.dedent(body)
     try:
         return subprocess.run(
@@ -64,6 +65,7 @@ def run_child(body: str, timeout: float = 120.0) -> subprocess.CompletedProcess[
             text=True,
             timeout=timeout,
             check=False,
+            env={**os.environ, **(env or {})},
         )
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
@@ -192,6 +194,39 @@ def test_a_dropped_session_releases_its_udf_callables_and_one_alive_at_exit_is_s
     out = ok(run_child(DROP_ORDER))
     first = json.loads(out.splitlines()[0])
     assert first == {"freed": 1}, out
+
+
+GIL_REENABLED = """
+assert sys._is_gil_enabled(), "PYTHON_GIL=1 did not enable the GIL"
+spark = SparkSession(_native.Session([]), [])  # krishiv.python.udf.threads = 0: one thread with the GIL
+active = 0
+peak = 0
+lock = threading.Lock()
+def counting(x):
+    global active, peak
+    with lock:
+        active += 1
+        peak = max(peak, active)
+    time.sleep(0.002)
+    with lock:
+        active -= 1
+    return plus_one(x)
+register(spark, "py_count", counting)
+spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "1000")
+rows = spark.sql("SELECT py_count(id) FROM range(0, 200000, 1, 8)").collect()
+assert sorted(r[0] for r in rows) == list(range(1, 200001))
+print(json.dumps({"gil": sys._is_gil_enabled(), "peak": peak}))
+"""
+
+
+@pytest.mark.skipif(
+    not hasattr(sys, "_is_gil_enabled") or sys._is_gil_enabled(), reason="needs a free-threaded interpreter"
+)
+def test_a_free_threaded_interpreter_with_the_gil_re_enabled_gives_correct_results() -> None:
+    # Design P2-T059 §7 (3.14t): `PYTHON_GIL=1` re-enables the GIL; UDFs still give every row, and the default
+    # pool (`threads` 0) is one thread, so calls never overlap.
+    out = ok(run_child(GIL_REENABLED, env={"PYTHON_GIL": "1"}))
+    assert json.loads(out.splitlines()[-1]) == {"gil": True, "peak": 1}, out
 
 
 FAILING_BATCH = """
