@@ -96,6 +96,28 @@ fn query_text_never_holds_the_canary() {
     );
 }
 
+/// The key stays and the value (to the end of the text, by design) is hidden:
+/// a later statement's `=` does not move the boundary of a `SET key value`.
+#[test]
+fn set_redaction_keeps_the_key_and_every_other_statement() {
+    for (sql, want) in [
+        (
+            "SET password Canary7f3a9c; SELECT 1 = 1",
+            "SET password *********(redacted)",
+        ),
+        (
+            "SET a = 1; SET password = Canary7f3a9c",
+            "SET a = 1; SET password = *********(redacted)",
+        ),
+        (
+            "SET spark.hadoop.fs.s3a.secret.key=Canary7f3a9c",
+            "SET spark.hadoop.fs.s3a.secret.key=*********(redacted)",
+        ),
+    ] {
+        assert_eq!(redact_sql(sql).as_str(), want, "{sql}");
+    }
+}
+
 /// Parsing, lowering and their errors (message, parameters, `Debug`) never
 /// hold a secret, wherever it is written; nor does a lowered plan.
 #[test]
