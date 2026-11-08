@@ -836,7 +836,7 @@ pub fn decode_with<O: OffsetSizeTrait>(
 /// `bytes` as UTF-8 with each malformed unit replaced by U+FFFD: Java's
 /// maximal subparts, except that an encoded surrogate (`ED A0..BF 80..BF`)
 /// is one unit.
-fn utf8_replacing(mut bytes: &[u8], out: &mut String) {
+pub(crate) fn utf8_replacing(mut bytes: &[u8], out: &mut String) {
     while let Err(e) = std::str::from_utf8(bytes) {
         let (valid, bad) = bytes.split_at(e.valid_up_to());
         if let Ok(text) = std::str::from_utf8(valid) {
