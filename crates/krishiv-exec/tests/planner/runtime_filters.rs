@@ -564,9 +564,8 @@ fn runtime_filter_bench() {
 /// The Bloom filter settings: the Krishiv key of Spark's switch and the
 /// byte cap each keep a Bloom filter out of the plan or out of the build
 /// (a 32-byte filter is too inaccurate to publish); a build over the item
-/// cap gets a planned shared array instead (design P2b-R1), which drops
-/// exactly the rows the collected filter does (the same bits); results
-/// never change.
+/// cap gets a planned shared array instead (design P2b-R1), published only
+/// when its build spills; results never change.
 #[test]
 fn bloom_settings_are_honoured() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -627,11 +626,10 @@ fn bloom_settings_are_honoured() {
         dropped.push(c.rows_dropped);
     }
     // Without a Bloom filter only the range drops rows; the 32-byte one
-    // was planned but not published, so it drops exactly as many. The
-    // shared array is sized for the estimate (600 keys), as the collected
-    // one is for the keys: the same filter.
+    // was planned but not published, so it drops exactly as many; so is the
+    // shared array of a build that does not spill (design P2b-R1 §2.7).
     assert!(dropped[0] > dropped[1], "{dropped:?}");
-    assert_eq!(dropped[2], dropped[0], "{dropped:?}");
+    assert_eq!(dropped[2], dropped[1], "{dropped:?}");
     assert_eq!(dropped[3], dropped[1], "{dropped:?}");
     // An exact set passes no false positive: it drops at least as many.
     assert!(dropped[4] >= dropped[0], "{dropped:?}");
@@ -700,10 +698,11 @@ fn a_selective_build_estimated_large_still_filters_by_its_keys() {
 
 /// A large build's shared Bloom array (design P2b-R1), planned past the
 /// item cap for a partitioned build on one worker: the planned size in
-/// `EXPLAIN`, the same rows dropped as with the filter the build collects
-/// hashes for (both sized for the build's rows at 1%), the results
-/// unchanged and the pool empty at the end. Spilling builds are tested
-/// with the operator (`hash_join` `a_spilling_build_keeps_its_shared_bloom`).
+/// `EXPLAIN`; the build does not spill, so the array is published as the
+/// range (§2.7, `bloom_unspilled`) where the collected filter is the Bloom;
+/// the results unchanged and the pool empty at the end. Spilling builds
+/// are tested with the operator (`hash_join`
+/// `a_spilling_build_keeps_its_shared_bloom`).
 #[test]
 fn a_large_build_plans_a_shared_bloom() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -760,9 +759,12 @@ fn a_large_build_plans_a_shared_bloom() {
                 .map(|(_, v)| v.value().unwrap_or(0))
                 .sum()
         };
+        // The build fits in memory: the array is filled, then published as
+        // the range (§2.7); the collected one is published as the Bloom.
+        assert_eq!(metric("shared_bloom_bytes"), 0, "{items}\n{plan}");
         assert_eq!(
-            metric("shared_bloom_bytes") > 0,
-            items == "1000",
+            metric("bloom_unspilled"),
+            u64::from(items == "1000"),
             "{items}\n{plan}"
         );
         assert_eq!(
@@ -774,8 +776,7 @@ fn a_large_build_plans_a_shared_bloom() {
         drop(out);
         assert_eq!(query.pool().reserved(), 0, "{items}: pool not empty");
     }
-    assert!(runs[0] > 0, "{runs:?}");
-    assert_eq!(runs[0], runs[1], "{runs:?}");
+    assert!(runs[0] > runs[1], "{runs:?}");
 }
 
 /// The `scan_waits` of every runtime filter a join in `node` publishes.

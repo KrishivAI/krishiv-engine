@@ -193,7 +193,7 @@ fn publish(
         filters,
         finished,
         held,
-        None,
+        (None, true),
         &super::Counters::default(),
     );
     drop(partials.memory);
@@ -204,14 +204,34 @@ fn publish(
 /// `blooms` (already funded, never dropped for memory) for as long as it
 /// lives (design P2b-R1 §2.5 M3); what no published array uses of it is
 /// released here.
+///
+/// A shared array is published only when the build `spilled` (design
+/// P2b-R1 §2.7): it is larger than the cache, so testing a probe row costs
+/// a memory access (about 100 ns without a prefetching probe, measured at
+/// SF100), more than the in-memory join's probe of a row it drops; when the
+/// build spills, each dropped row saves its spill write and read instead.
+/// Otherwise the filter is the range (`bloom_unspilled`).
 fn publish_finished(
     publisher: &FilterPublisher,
     filters: &[super::JoinRuntimeFilter],
     finished: Vec<Finished>,
     held: &mut Reservation,
-    blooms: Option<Reservation>,
+    (blooms, spilled): (Option<Reservation>, bool),
     counters: &super::Counters,
 ) {
+    let finished: Vec<Finished> = finished
+        .into_iter()
+        .map(|b| {
+            b.map(|(keys, outcome)| {
+                if outcome == Some(SharedBloomOutcome::Published) && !spilled {
+                    counters.add(Counter::BloomUnspilled, 1);
+                    (keys.range_only(), None)
+                } else {
+                    (keys, outcome)
+                }
+            })
+        })
+        .collect();
     let published = |(k, o): &(KeyFilter, Option<SharedBloomOutcome>)| {
         (*o == Some(SharedBloomOutcome::Published))
             .then(|| k.bloom_bytes())
@@ -571,12 +591,16 @@ impl BuildSink {
         } else {
             (finish_all(builders), blooms)
         };
+        // Spilled while it stored rows: its probe goes to disk too. A build
+        // that spills only at finalize (its indexes do not fit) still
+        // publishes the range: the publication comes first.
+        let spilled = g.spilled.load(Ordering::Acquire) != 0;
         publish_finished(
             publisher,
             &self.0.runtime,
             finished,
             &mut held,
-            blooms,
+            (blooms, spilled),
             &self.0.counters,
         );
         // The partials' memory (hash vectors) is freed with them here.

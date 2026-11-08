@@ -182,7 +182,8 @@ async fn spilled_builds_cover_every_key() {
 /// build stores a row, kept when the build spills (the form is the Bloom,
 /// not the range: the funded array is never dropped for memory), every
 /// stored key passes, and its reservation goes with the published filter,
-/// released when the filter drops.
+/// released when the filter drops. A build that does not spill publishes
+/// the range instead (§2.7, `bloom_unspilled`).
 #[tokio::test]
 async fn a_spilling_build_keeps_its_shared_bloom() {
     let n = 100_000u32;
@@ -219,22 +220,33 @@ async fn a_spilling_build_keeps_its_shared_bloom() {
             spills,
             "limit {limit}"
         );
+        // Published only when the build spilled (design P2b-R1 §2.7).
         assert_eq!(
             metric(&q, "HashJoinBuild", "shared_bloom_bytes"),
-            planned as u64,
+            if spills { planned as u64 } else { 0 },
+            "limit {limit}"
+        );
+        assert_eq!(
+            metric(&q, "HashJoinBuild", "bloom_unspilled"),
+            u64::from(!spills),
             "limit {limit}"
         );
         let k = published(&fs[0]);
-        assert_eq!(k.bloom_bytes(), Some(planned), "limit {limit}");
-        assert_eq!(k.held_bytes(), planned, "limit {limit}");
         assert_eq!(k.key_count(), u64::from(n), "limit {limit}");
         let keys = Int64Array::from_iter_values((0..i64::from(n)).map(|i| i * 3));
         assert_eq!(k.evaluate(&keys).unwrap().true_count(), n as usize);
-        // The filter holds the array's reservation until it goes.
-        assert!(
-            krishiv_memory::MemoryPool::reserved(&*root) >= planned,
-            "limit {limit}"
-        );
+        if spills {
+            assert_eq!(k.bloom_bytes(), Some(planned), "limit {limit}");
+            assert_eq!(k.held_bytes(), planned, "limit {limit}");
+            // The filter holds the array's reservation until it goes.
+            assert!(
+                krishiv_memory::MemoryPool::reserved(&*root) >= planned,
+                "limit {limit}"
+            );
+        } else {
+            assert!(k.bloom_bytes().is_none() && k.has_range());
+            assert_eq!(k.held_bytes(), 0, "limit {limit}");
+        }
         drop((k, fs, q));
         assert_released(&root);
     }

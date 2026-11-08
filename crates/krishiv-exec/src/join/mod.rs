@@ -392,6 +392,10 @@ pub(crate) enum Counter {
     /// Shared Bloom arrays published as the range: another holder was left
     /// at publish (a bug, not memory pressure).
     BloomStillShared,
+    /// Shared Bloom arrays published as the range: the build did not spill,
+    /// and testing a probe row against an array larger than the cache costs
+    /// more than an in-memory probe saves (design P2b-R1 §2.7).
+    BloomUnspilled,
     /// What the build's in-memory partitions keep reserved for their rows
     /// once finalized (the chunks' reservations, which the probe lives with).
     SteadyReservedBytes,
@@ -414,11 +418,12 @@ pub(crate) enum Counter {
 
 /// The build's counters reported only when not zero (most builds have no
 /// shared Bloom array).
-const BUILD_SPARSE_COUNTERS: [(Counter, &str); 4] = [
+const BUILD_SPARSE_COUNTERS: [(Counter, &str); 5] = [
     (Counter::SharedBloomBytes, "shared_bloom_bytes"),
     (Counter::BloomUndersized, "bloom_undersized"),
     (Counter::BloomUnfunded, "bloom_unfunded"),
     (Counter::BloomStillShared, "bloom_still_shared"),
+    (Counter::BloomUnspilled, "bloom_unspilled"),
 ];
 
 /// The build sink's counters, by name.
@@ -462,7 +467,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 35]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 36]);
 
 impl Default for Counters {
     // Arrays derive `Default` only up to 32 elements.
