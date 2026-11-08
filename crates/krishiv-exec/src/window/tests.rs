@@ -1744,10 +1744,10 @@ async fn a_spill_write_holds_the_spilling_guard() {
         .collect();
     let (_manager, scope) = spill_scope();
     let op = Window::new(schema(), plan(functions(), true), true, Some(scope.clone())).unwrap();
-    let (_root, ctx) = task(1 << 30);
+    let (root, ctx) = task(1 << 30);
     let consumer = Arc::clone(ctx.consumer().consumer());
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-    scope.set_writer_hook(Arc::new({
+    scope.set_test_writer_hook(Arc::new({
         let seen = Arc::clone(&seen);
         move || seen.lock().unwrap().push(consumer.is_spilling())
     }));
@@ -1759,6 +1759,8 @@ async fn a_spill_write_holds_the_spilling_guard() {
     assert!(op.spill(&mut local, 1, &ctx).await.unwrap() > 0);
     assert_eq!(*seen.lock().unwrap(), [true]);
     assert!(!ctx.consumer().consumer().is_spilling());
+    drop((local, op, ctx));
+    assert_eq!(root.reserved(), 0);
 }
 
 /// A spill dropped mid-write (its query cancelled) leaves the window

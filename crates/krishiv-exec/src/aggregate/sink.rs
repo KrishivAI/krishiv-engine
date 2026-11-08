@@ -1021,9 +1021,6 @@ fn shrink_to(r: &mut Reservation, keep: usize) {
     r.shrink(r.size().saturating_sub(keep));
 }
 
-/// Releases the headroom of `r` for a spill file's scratch memory (see
-/// [`HEADROOM`]); the writer or reader of the same consumer reserves it
-/// right after.
 /// Moves the combined tables' bytes to the spilling driver's consumer
 /// (another driver's, combined into the global state, without passing
 /// through the pool) and marks that consumer as writing until the returned
@@ -1045,6 +1042,9 @@ fn charged_to_writer(
     own.spilling()
 }
 
+/// Releases the headroom of `r` for a spill file's scratch memory (see
+/// [`HEADROOM`]); the writer or reader of the same consumer reserves it
+/// right after.
 fn lend_headroom(r: &mut Reservation) -> usize {
     let lent = HEADROOM.min(r.size());
     r.shrink(lent);

@@ -306,7 +306,7 @@ pub(crate) struct ScopeInner {
     manager: Arc<ManagerInner>,
     cancelled: AtomicBool,
     next_file: AtomicU64,
-    /// Runs before each writer starts ([`SpillScope::set_writer_hook`]).
+    /// Runs before each writer starts ([`SpillScope::set_test_writer_hook`]).
     writer_hook: std::sync::OnceLock<WriterHook>,
 }
 
@@ -350,12 +350,12 @@ pub struct SpillScope {
 }
 
 impl SpillScope {
-    /// Runs `hook` on the writing thread at the start of every later
-    /// [`writer`](Self::writer) call of this scope and its clones; a test
-    /// uses it to look at, or hold, an operator in the middle of a spill
-    /// write. The first hook set stays.
+    /// For tests only: runs `hook` on the writing thread at the start of
+    /// every later [`writer`](Self::writer) call of this scope and its
+    /// clones, to look at, or hold, an operator in the middle of a spill
+    /// write. The first hook set stays for the scope's life.
     #[doc(hidden)]
-    pub fn set_writer_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+    pub fn set_test_writer_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
         let _ = self.inner.writer_hook.set(WriterHook(hook));
     }
 

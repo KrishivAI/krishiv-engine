@@ -2191,7 +2191,7 @@ mod tests {
         let scope = manager.scope().unwrap();
         let consumer = Arc::clone(ctx.consumer().consumer());
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-        scope.set_writer_hook(Arc::new({
+        scope.set_test_writer_hook(Arc::new({
             let seen = Arc::clone(&seen);
             move || seen.lock().unwrap().push(consumer.is_spilling())
         }));
