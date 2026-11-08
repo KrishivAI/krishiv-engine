@@ -333,6 +333,10 @@ pub struct ExprEnv {
     /// functions use the `SimpleDateFormat` parser. A plan that sets it
     /// needs the `legacy_time_parser` codec feature.
     pub legacy_time_parser: bool,
+    /// `spark.sql.binaryOutputStyle` when it is not `HEX_DISCRETE` (what an unset config
+    /// prints): `to_csv` and `to_xml` print binary fields in that style. A plan that sets it
+    /// needs the `binary_output_style` codec feature.
+    pub binary_output_style: Option<Arc<str>>,
 }
 
 impl ExprEnv {
@@ -917,7 +921,8 @@ plan_data!(struct ExprEnv {
     map_key_dedup_last_win,
     legacy_java_charsets,
     legacy_coding_error_action,
-    legacy_time_parser
+    legacy_time_parser,
+    binary_output_style
 });
 plan_data!(enum PhysNode {
     Scan(scan),
