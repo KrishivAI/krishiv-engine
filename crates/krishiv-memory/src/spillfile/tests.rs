@@ -1787,3 +1787,30 @@ fn a_ram_file_system_is_named_and_a_disk_one_is_not() {
         assert_eq!(dir::unsuitable_fs(here), None);
     }
 }
+
+/// Consumers sharing stats report the most they held at once, not the sum of
+/// their own peaks (two drivers of one operator peaking one after the other).
+#[test]
+fn shared_stats_peak_is_the_operators_simultaneous_peak() {
+    let (_dir, _manager, _scope, pool) = env(SpillCodec::None);
+    let stats = Arc::new(crate::SpillStats::default());
+    let mk = |n| {
+        crate::ConsumerHandle::register_counted(
+            Arc::clone(&pool.query),
+            n,
+            None,
+            Arc::clone(&stats),
+        )
+    };
+    let (a, b) = (mk("a"), mk("b"));
+    {
+        let mut ra = a.reservation();
+        ra.try_grow(1000).unwrap();
+    }
+    {
+        let mut rb = b.reservation();
+        rb.try_grow(1000).unwrap();
+    }
+    assert_eq!((a.peak(), b.peak()), (1000, 1000));
+    assert_eq!(stats.peak_held(), 1000);
+}

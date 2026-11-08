@@ -396,6 +396,11 @@ impl QueryContext {
             let om = &mut m.operators.entry(*id).or_default().metrics;
             om.spill_files = stats.files();
             om.spill_write_bytes = stats.bytes();
+            // The drivers' peaks are summed on merge and need not coincide;
+            // the operator-wide counter is the true peak.
+            if stats.peak_held() > 0 {
+                om.peak_reserved = stats.peak_held() as u64;
+            }
         }
         m.memory = QueryMemory {
             limit: self.pool.effective_limit().map(|l| l as u64),
