@@ -60,12 +60,16 @@ fn connected(masks: &[Set], a: Set, b: Set) -> bool {
 /// smallest gap that matters: TPC-H q09's two shapes differ by 1e-6); then
 /// the tie (bytes) does.
 pub(super) fn cheaper(cost: (f64, f64), other: (f64, f64)) -> bool {
-    let equal = (cost.0 - other.0).abs() <= 1e-9 * cost.0.abs().max(other.0.abs());
-    if equal {
+    if same_cost(cost.0, other.0) {
         cost.1 < other.1
     } else {
         cost.0 < other.0
     }
+}
+
+/// Whether two costs are equal up to the rounding of [`cheaper`].
+fn same_cost(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs())
 }
 
 /// Dynamic programming over every split of every subset of `n` inputs:
@@ -101,9 +105,18 @@ pub(super) fn dpsub(
             {
                 work.pairs += 1;
                 let cost = x.cost + y.cost + split_of(a, b);
-                let tie = x.tie + y.tie + tie_split(a, b);
-                // The first of equal splits wins: they come largest `a` first.
-                if found.is_none_or(|f| cheaper((cost, tie), (f.cost, f.tie))) {
+                // The tie (the bytes of the split) is worked out only when it can matter: for a
+                // split that is cheaper in rows or equal to the best so far, not for the
+                // many that are dearer. The first of equal splits wins: they come largest `a` first.
+                let tie_of_split = || x.tie + y.tie + tie_split(a, b);
+                let tie = match found {
+                    None => Some(tie_of_split()),
+                    Some(f) if same_cost(cost, f.cost) => {
+                        Some(tie_of_split()).filter(|&t| t < f.tie)
+                    }
+                    Some(f) => (cost < f.cost).then(tie_of_split),
+                };
+                if let Some(tie) = tie {
                     found = Some(Best {
                         cost,
                         tie,
