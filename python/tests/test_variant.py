@@ -61,7 +61,7 @@ def test_values_print_as_spark() -> None:
 
 # Values built from their bytes (empty dictionary). Expected values follow Spark's JVM ``Variant`` (``VariantUtil``,
 # SQL ``to_json``), which Krishiv's ``VariantVal`` decodes as; where PySpark 4.2.0's own ``VariantVal`` differs is in
-# docs/known-differences.md ("PySpark's ``VariantVal``").
+# docs/explanation/known-differences.md ("PySpark's ``VariantVal``").
 _META = b"\x01\x00\x00"
 
 

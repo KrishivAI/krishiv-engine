@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Spark data type ↔ Arrow mapping (ADR 0009).
+//! Spark data type ↔ Arrow mapping.
 //!
 //! | Spark | Canonical Arrow type | Also accepted as storage |
 //! |---|---|---|
@@ -36,7 +36,7 @@
 //!   is stored as a binary Arrow type, and its field carries the Spark type
 //!   under [`SPARK_TYPE_METADATA_KEY`] so it reads back as `string`.
 //! - **Decimals.** The carrier follows the declared precision alone
-//!   ([`DECIMAL64_MAX_PRECISION`], design P2-T160), so one Spark type has one
+//!   ([`DECIMAL64_MAX_PRECISION`]), so one Spark type has one
 //!   carrier between operators, in spill files and in shuffle. Client edges
 //!   (Connect/Flight, Python, UDFs) widen to `Decimal128`, what Spark sends.
 //!   Arrow rejects precision 0, so `decimal(0,0)` (whose only value is 0) is
