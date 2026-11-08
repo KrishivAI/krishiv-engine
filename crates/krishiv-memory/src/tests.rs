@@ -9,6 +9,8 @@ use proptest::prelude::*;
 use super::*;
 use crate::pool::{Usage, round_up};
 
+mod abort_waits;
+
 const Q: usize = 1 << 20;
 
 /// Arbitration deadlines on Tokio's (pausable) clock, for deterministic tests.
@@ -988,6 +990,32 @@ fn shrink_to_credit_hands_bytes_over_without_the_pool() {
 }
 
 #[test]
+fn a_reservation_from_credit_holds_lent_bytes_and_grows_from_the_pool() {
+    let root = root(Some(1000), 1);
+    let q: Arc<dyn MemoryPool> = root.child("q", None);
+    let h = ConsumerHandle::register(Arc::clone(&q), "op", None);
+    let mut headroom = h.reservation();
+    headroom.try_grow(600).unwrap();
+    headroom.shrink_to_credit(600);
+    // Takes 250 of the 600 lent, without the pool.
+    let mut kept = h.reservation_from_credit(250);
+    assert_eq!((kept.size(), h.credit(), root.reserved()), (250, 350, 600));
+    // Its growth leaves the rest of the credit to the others.
+    kept.try_grow(100).unwrap();
+    assert_eq!((h.credit(), root.reserved()), (350, 700));
+    // Clamped to the credit held.
+    let rest = h.reservation_from_credit(10_000);
+    assert_eq!((rest.size(), h.credit()), (350, 0));
+    // Shrinks and drops return bytes to the pool, not to the credit.
+    kept.shrink(50);
+    assert_eq!((h.credit(), root.reserved()), (0, 650));
+    drop((kept, rest));
+    assert_eq!((h.credit(), root.reserved()), (0, 0));
+    drop((headroom, h));
+    assert_eq!(root.reserved(), 0);
+}
+
+#[test]
 fn a_reservation_releasing_to_credit_keeps_its_bytes_with_the_consumer() {
     let root = root(Some(1000), 1);
     let q: Arc<dyn MemoryPool> = root.child("q", None);
@@ -1775,4 +1803,5 @@ fn a_grant_credit_debug_shows_its_bytes_and_unsettled_grants() {
     assert!(shown.starts_with("GrantCredit {"), "{shown}");
     assert!(shown.contains("bytes: 0"), "{shown}");
     assert!(shown.contains("unsettled: 0"), "{shown}");
+    assert!(shown.contains("writing: 0"), "{shown}");
 }

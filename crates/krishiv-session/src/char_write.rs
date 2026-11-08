@@ -68,7 +68,7 @@ pub(crate) fn checked(
 }
 
 /// The stored columns of a table or view made from a query: its output columns, each keeping the
-/// `CHAR(n)` / `VARCHAR(n)` it was declared with (Spark carries it on the attribute); `nullable`
+/// `CHAR(n)` / `VARCHAR(n)` it was declared with and its comment (Spark carries both on the attribute); `nullable`
 /// overrides the query's nullability (CTAS columns are nullable).
 pub(crate) fn output_columns(a: &AnalyzedPlan, nullable: Option<bool>) -> Vec<StoreColumn> {
     a.output
@@ -81,6 +81,7 @@ pub(crate) fn output_columns(a: &AnalyzedPlan, nullable: Option<bool>) -> Vec<St
                 nullable.unwrap_or(c.nullable),
             );
             column.char_varchar = a.output_declared.get(i).cloned().flatten();
+            column.comment = a.output_comments.get(i).cloned().flatten();
             column
         })
         .collect()

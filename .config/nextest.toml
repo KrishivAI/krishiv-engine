@@ -1,3 +1,14 @@
+# Quarantine (owner policy 2026-11-07: a flaky test moves to a non-blocking profile with an issue and an owner,
+# fixed within 3 days). Quarantine a test with `default-filter = "not test(=<name>)"` on the default profile and
+# `default-filter = "test(=<name>)"` here, an owner and a deadline in this comment, and point the CI job
+# `test-quarantine` (not required) at its test binary. A name or `-E` filter on the default profile then selects
+# nothing for it: run `--profile quarantine` (or `--ignore-default-filter`). Empty now:
+# `moment_windows_from_disk_equal_the_in_memory_result` left with its fix (window fold and offset charges from the
+# flush phase's headroom, #614), `two_tasks_of_one_query_share_their_chunks` with its own (spill writes in progress
+# counted by a round).
+[profile.quarantine]
+default-filter = "none()"
+
 # Acceptance tests with stall or wall-clock bounds can flake on loaded
 # shared runners (a driver waiting on a lock held by a thread that is paging
 # code in trips `fail_on_stall` without any non-yielding operator); retry them,

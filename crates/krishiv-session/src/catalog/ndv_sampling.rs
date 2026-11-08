@@ -46,7 +46,7 @@ impl QueryCatalog {
         if compared.is_empty() {
             return;
         }
-        for (key, _, _, ids) in scans {
+        for (key, _, _, ids, _) in scans {
             let names: Vec<String> = ids
                 .iter()
                 .filter(|(id, _)| compared.contains(id))

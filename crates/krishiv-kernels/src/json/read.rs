@@ -30,8 +30,8 @@ use arrow_array::builder::ArrayBuilder;
 use arrow_array::builder::{
     BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
-    Int32Builder, Int64Builder, IntervalMonthDayNanoBuilder, IntervalYearMonthBuilder,
-    StringViewBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
+    Int32Builder, Int64Builder, IntervalYearMonthBuilder, StringViewBuilder,
+    Time64NanosecondBuilder, TimestampMicrosecondBuilder,
 };
 use arrow_array::{Array, ArrayRef, NullArray, StringArray};
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
@@ -1260,7 +1260,7 @@ enum Scalar {
         end: DayTimeField,
     },
     /// A calendar interval.
-    Calendar(IntervalMonthDayNanoBuilder),
+    Calendar(krishiv_types::calendar::CalendarBuilder),
 }
 
 impl Scalar {
@@ -1318,7 +1318,7 @@ impl Scalar {
             }
             Self::YearMonth { mut builder, .. } => Arc::new(builder.finish()),
             Self::DayTime { mut builder, .. } => Arc::new(builder.finish()),
-            Self::Calendar(mut b) => Arc::new(b.finish()),
+            Self::Calendar(mut b) => b.finish(),
         };
         if array.data_type() != target {
             return Err(InternalError {
@@ -1444,9 +1444,9 @@ impl Builder {
             ArrowType::Duration(TimeUnit::Microsecond) => {
                 Self::day_time(DayTimeField::Day, DayTimeField::Second)
             }
-            ArrowType::Interval(IntervalUnit::MonthDayNano) => {
-                Self::Scalar(Scalar::Calendar(IntervalMonthDayNanoBuilder::new()))
-            }
+            t if krishiv_types::arrow::is_calendar_struct(t) => Self::Scalar(Scalar::Calendar(
+                krishiv_types::calendar::CalendarBuilder::new(),
+            )),
             ArrowType::List(field) => Self::List {
                 field: Arc::clone(field),
                 offsets: vec![0],
@@ -1524,7 +1524,9 @@ impl Builder {
                 Scalar::Timestamp { builder, .. } => len_of(builder),
                 Scalar::YearMonth { builder, .. } => len_of(builder),
                 Scalar::DayTime { builder, .. } => len_of(builder),
-                Scalar::Calendar(b) => len_of(b),
+                Scalar::Calendar(b) => i32::try_from(b.len()).map_err(|_| {
+                    internal("a JSON builder length past the 32-bit offset limit".to_owned())
+                }),
             },
         }
     }

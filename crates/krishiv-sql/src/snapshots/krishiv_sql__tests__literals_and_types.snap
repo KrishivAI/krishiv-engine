@@ -228,6 +228,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..76,
 }
 -- SELECT 'a' 'b' "c", R'\n', DATE '2020-01-01', TIMESTAMP_NTZ '2020-01-01', X'1F', TIME '10:00', geometry 'POINT'
@@ -370,6 +371,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..111,
 }
 -- SELECT NULL, TRUE, FALSE, INTERVAL '1 day', INTERVAL 1 DAY 2 HOURS, INTERVAL -'1-2' YEAR TO MONTH, INTERVAL '1' 'x' SECOND
@@ -545,6 +547,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..122,
 }
 -- SELECT INTERVAL + 1.5 MINUTES - 3 SECOND, interval, interval.a, INTERVAL 1 DAY TO
@@ -686,6 +689,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..81,
 }
 -- SELECT CAST(a AS DECIMAL(10, 2)), TRY_CAST(b AS ARRAY<MAP<STRING, STRUCT<x: INT NOT NULL COMMENT 'c', `y z` ARRAY<INT>>>>), c::STRUCT<>, d::array
@@ -916,6 +920,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..145,
 }
 -- SELECT CAST(a AS TIMESTAMP WITH LOCAL TIME ZONE), CAST(b AS TIMESTAMP WITHOUT TIME ZONE), CAST(c AS TIME(6) WITHOUT TIME ZONE)
@@ -1041,6 +1046,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..126,
 }
 -- SELECT CAST(a AS INTERVAL YEAR TO MONTH), CAST(b AS INTERVAL DAY TO SECOND), CAST(c AS INTERVAL HOUR), CAST(d AS INTERVAL), CAST(e AS geometry(ANY)), CAST(f AS map), CAST(g AS struct)
@@ -1284,5 +1290,6 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..183,
 }

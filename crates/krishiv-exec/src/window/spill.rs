@@ -186,6 +186,11 @@ impl Window {
             return Ok(0);
         }
         topup.shrink_to_credit(topup.size());
+        // From here until the freed credit is back in the pool, the rows
+        // count as about to be released, so another driver's round that
+        // cannot spill waits for them instead of failing. No arbitration
+        // inside: the write is sync, the blocking job ends on its own.
+        let writing = ctx.consumer().consumer().spilling();
         let mut batches = Vec::with_capacity(l.pending.len());
         for p in l.pending.drain(..) {
             let n = p.batch.num_rows();
@@ -215,6 +220,7 @@ impl Window {
             })
             .await;
         ctx.consumer().consumer().release_credit();
+        drop(writing);
         let file = match written {
             Ok(f) => f,
             Err(e) => {
@@ -451,6 +457,16 @@ impl Window {
             .reservation()
             .releasing_to_credit()
             .for_spill_scratch();
+        // The whole-partition folds open on the lent credit: reserve their
+        // states on top of the rows the writer's scratch draws from, so a
+        // state larger than a small partition is not left to the pool.
+        let opening = super::disk::opened_whole(&self.env)?;
+        if opening > 0 {
+            r.headroom
+                .grow(opening)
+                .await
+                .map_err(krishiv_common::error::KrishivError::from)?;
+        }
         // The buffered rows' bytes stay with the headroom: the partition's
         // evaluation from disk needs them.
         let keep = r.headroom.size() + held;
@@ -490,6 +506,12 @@ impl Window {
             .file
             .max_read_reservation()
             .saturating_mul(readers);
+        // What the functions hold as they open: offset functions' values,
+        // folds' states.
+        let frames = frames.saturating_add(super::disk::opened(
+            &self.env,
+            copied.disk.file.max_read_reservation(),
+        )?);
         let need = |n: usize| -> Result<usize> {
             Ok(frames.saturating_add(super::disk::headroom(&self.env.plan, n)?))
         };
