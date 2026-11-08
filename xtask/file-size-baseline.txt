@@ -42,7 +42,7 @@
 2294 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 # +20 lines: collect_engine (unstable-ir) reads results on the engine carriers for the golden harness (calendar carrier)
-2649 crates/krishiv-session/src/dataframe.rs
+2539 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
 # +5 lines (this branch): Parquet writes a top-level GEOMETRY or GEOGRAPHY column as WKB with a logical type (T181 U3)
 2781 crates/krishiv-session/src/session.rs
