@@ -577,12 +577,17 @@ impl ScanStream {
             }
             // On the I/O runtime (when the scheduler has one), as a prefetch:
             // a remote response is received and handled there, not inside
-            // the caller's poll, which only waits for the bytes.
+            // the caller's poll, which only waits for the bytes. As for a
+            // prefetch, a shutdown of the I/O runtime under the scan ends the
+            // read with `OPERATION_CANCELED`. The wait is the caller's (it
+            // includes the queueing on the I/O runtime), the read time the
+            // read's own.
+            let waiting = tokio::time::Instant::now();
             let (fetched, took) = self
                 .io
                 .fetch_timed(self.file.clone(), missing.clone())
                 .await?;
-            self.reads.record(&missing, took, took);
+            self.reads.record(&missing, waiting.elapsed(), took);
             out.extend(missing.into_iter().zip(fetched));
         }
         Ok(out)
