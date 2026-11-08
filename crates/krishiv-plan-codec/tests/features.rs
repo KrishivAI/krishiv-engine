@@ -36,7 +36,8 @@ fn an_unknown_binary_output_style_is_corrupt() {
     }
     let mut m = message("binary_output_style");
     m.env.as_mut().unwrap().binary_output_style = Some("BASE64".to_owned());
-    assert!(decode(&m.encode_to_vec()).is_ok());
+    let plan = decode(&m.encode_to_vec()).unwrap();
+    assert_eq!(plan.env().binary_output_style.as_deref(), Some("BASE64"));
 }
 
 #[test]
