@@ -15,6 +15,7 @@
 //! | scan, union | — | [`Placement::Unknown`] |
 //! | one row | — | [`Placement::Single`] |
 //! | filter, replicate | — | its input's |
+//! | repartition (`DISTRIBUTE BY`) | — (always exchanged) | hash on its expressions |
 //! | project | — | its input's, under each name a plain column is projected as |
 //! | grouped aggregate | [`Distribution::Clustered`] on the keys | its input's |
 //! | global aggregate, limit, top-N | [`Distribution::Single`] (a limit or top-N first cuts each partition to `n` rows) | single |
@@ -38,13 +39,16 @@
 
 use std::sync::Arc;
 
-use krishiv_plan::AttrId;
+use krishiv_plan::{AttrId, Expr, LogicalPlan};
 
 use super::build::{Planned, Planner};
 use super::explain::ExplainNode;
 use crate::error::Result;
-use crate::operators::SortKey;
-use crate::physical::{ExchangeId, ExchangePlan, HashScheme, Partitioning, PhysNode};
+use crate::operator::Operator;
+use crate::operators::{Project, ProjectItem, SortKey};
+use crate::physical::{
+    ExchangeId, ExchangePlan, HashScheme, Partitioning, PhysNode, ProjectItemPlan,
+};
 
 /// A sort key of a range placement, by attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,6 +350,77 @@ impl Planner<'_> {
         }
         let (pb, bb) = (hash(&probe, &pa)?, hash(&build, &ba)?);
         Ok((self.exchange(probe, pb)?, self.exchange(build, bb)?))
+    }
+
+    /// `DISTRIBUTE BY exprs` (Spark's `RepartitionByExpression`) over the
+    /// logical `input`: a hash exchange on the expressions' values, always
+    /// placed (Spark shuffles for it whatever the input's placement), so
+    /// they are evaluated, and may raise, on every row as Spark's shuffle
+    /// evaluates them. The rows keep the input's columns: a key column
+    /// the input does not have is computed below the exchange and dropped
+    /// above it. On one worker the exchange instantiates as its input, so
+    /// what runs is the projection of the keys (a limit above stops it
+    /// early, where Spark's shuffle reads every row first:
+    /// `docs/known-differences.md`). Spark also elides the shuffle when the
+    /// input is already hash-placed on equal keys and AQE is off; that
+    /// changes no result, so it is not done here.
+    pub(crate) fn repartition(
+        &mut self,
+        input: &Arc<LogicalPlan>,
+        exprs: &[Arc<Expr>],
+    ) -> Result<Planned> {
+        let input = self.plan(input)?;
+        let width = input.layout.len();
+        let (keyed, keys) = self.with_columns(input, exprs)?;
+        let attrs = keys
+            .iter()
+            .map(|&c| {
+                keyed
+                    .layout
+                    .get(c)
+                    .copied()
+                    .ok_or_else(|| super::build::internal("a repartition key out of its input"))
+            })
+            .collect::<Result<Vec<AttrId>>>()?;
+        // The routing hash covers no nested key (array, map, struct, the
+        // calendar interval struct): such a key plans and runs on one
+        // worker, where no row is routed, but a distributed run refuses it
+        // when it routes (`KRISHIV_UNSUPPORTED_FEATURE`), as for grouping and
+        // join keys (queue-opus-b1, routing of nested keys).
+        let partitioning = Partitioning::Hash {
+            keys,
+            scheme: HashScheme::KeyGroupV1,
+        };
+        let moved = self.exchange(keyed, partitioning)?;
+        debug_assert_eq!(moved.placement, Placement::Hash(vec![attrs]));
+        if moved.layout.len() == width {
+            return Ok(moved);
+        }
+        let items: Vec<ProjectItem> = (0..width).map(ProjectItem::column).collect();
+        let schema = Project::try_new(&moved.schema, items)?.schema();
+        let layout: Vec<AttrId> = moved.layout[..width].to_vec();
+        let input_layout = moved.layout.clone();
+        let kept: Vec<String> = moved
+            .schema
+            .fields()
+            .iter()
+            .zip(&layout)
+            .map(|(f, id)| format!("{}#{}", f.name(), id.0))
+            .collect();
+        Ok(moved.wrap(
+            |input| PhysNode::Project {
+                input,
+                layout: input_layout,
+                items: (0..width)
+                    .map(|index| ProjectItemPlan::Column { index, name: None })
+                    .collect(),
+                nullable: None,
+                subqueries: Vec::new(),
+            },
+            schema,
+            layout,
+            ("Project", format!("[{}]", kept.join(", "))),
+        ))
     }
 
     /// `input` under an exchange by `partitioning`.

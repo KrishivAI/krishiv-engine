@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `DISTRIBUTE BY`, `CLUSTER BY` and `SORT BY ... DISTRIBUTE BY` (Spark's `RepartitionByExpression`), in queries
-//! and after `|>`. The expressions are checked as Spark checks them; the rows are the input's. Expected results
-//! and errors are from a Spark 4.2.0 run.
+//! and after `|>`. The expressions are checked as Spark checks them and evaluated as its shuffle evaluates them;
+//! the rows are the input's. Expected results and errors are from a Spark 4.2.0 run.
 #![cfg(test)]
 
 use arrow_array::Array;
@@ -83,13 +83,20 @@ fn params(s: &Session, sql: &str) -> (String, Vec<String>) {
     }
 }
 
-/// A recorded difference (`docs/concepts/known-differences.md`): Spark evaluates the
-/// partitioning expressions while it shuffles, so `x + 'a'` fails there
-/// with `CAST_INVALID_INPUT`; the repartition is dropped here and the rows
-/// come back. Remove with the exchange queued for the execution lane.
+/// Spark evaluates the partitioning expressions while it shuffles, so
+/// `x + 'a'` (`'a'` cast to a number) fails with `CAST_INVALID_INPUT`
+/// under ANSI, also under a `count(*)` that reads no column; the other
+/// cases are in `distribute_by_goldens.rs`.
 #[test]
-fn the_expressions_are_not_evaluated() {
+fn the_expressions_are_evaluated() {
     let s = session();
+    for sql in [
+        "SELECT x FROM t DISTRIBUTE BY x + 'a'",
+        "SELECT count(*) FROM (SELECT x FROM t DISTRIBUTE BY x + 'a')",
+    ] {
+        assert_eq!(error(&s, sql).0, "CAST_INVALID_INPUT", "{sql}");
+    }
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
     assert_eq!(
         sorted(&s, "SELECT x FROM t DISTRIBUTE BY x + 'a'"),
         ["0", "1"]
@@ -249,4 +256,50 @@ fn order_by_with_distribute_by_is_refused() {
         class,
         "UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES"
     );
+}
+
+/// A `DISTRIBUTE BY` over a correlated filter keeps the rows of the subquery it sits in: inside a set operation
+/// (decorrelated through the domain of the outer columns) and on both sides of one over a shared view (the second
+/// side a fresh instance of the first). Each query returns what it returns without the `DISTRIBUTE BY`, which
+/// only places rows.
+#[test]
+fn correlated_set_operations_through_distribute_by_keep_their_rows() {
+    let s = session();
+    block_on(async {
+        s.sql("CREATE TEMPORARY VIEW v AS SELECT * FROM VALUES (0, 'abc'), (1, 'abc'), (2, 'xyz') AS v(x, y)")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    for (with, without) in [
+        (
+            "SELECT x, (SELECT count(*) FROM (SELECT y FROM (SELECT y FROM v WHERE v.x = t.x \
+             UNION ALL SELECT y FROM v WHERE v.x = t.x + 1) DISTRIBUTE BY y)) AS n FROM t",
+            "SELECT x, (SELECT count(*) FROM (SELECT y FROM (SELECT y FROM v WHERE v.x = t.x \
+             UNION ALL SELECT y FROM v WHERE v.x = t.x + 1))) AS n FROM t",
+        ),
+        (
+            "SELECT x FROM t WHERE EXISTS (SELECT y FROM (SELECT y FROM v WHERE v.x = t.x DISTRIBUTE BY y) \
+             UNION ALL SELECT y FROM v WHERE v.x = t.x + 1)",
+            "SELECT x FROM t WHERE EXISTS (SELECT y FROM (SELECT y FROM v WHERE v.x = t.x) \
+             UNION ALL SELECT y FROM v WHERE v.x = t.x + 1)",
+        ),
+        (
+            "SELECT x, (SELECT count(*) FROM (SELECT y FROM (SELECT y FROM v WHERE v.x >= t.x DISTRIBUTE BY y) \
+             EXCEPT ALL SELECT y FROM v WHERE v.x > t.x + 1)) AS n FROM t",
+            "SELECT x, (SELECT count(*) FROM (SELECT y FROM (SELECT y FROM v WHERE v.x >= t.x) \
+             EXCEPT ALL SELECT y FROM v WHERE v.x > t.x + 1)) AS n FROM t",
+        ),
+        (
+            "SELECT x FROM t WHERE y IN ((SELECT y FROM v WHERE v.x = t.x DISTRIBUTE BY y) \
+             INTERSECT (SELECT y FROM v WHERE v.x = t.x DISTRIBUTE BY y))",
+            "SELECT x FROM t WHERE y IN ((SELECT y FROM v WHERE v.x = t.x) \
+             INTERSECT (SELECT y FROM v WHERE v.x = t.x))",
+        ),
+    ] {
+        let want = sorted(&s, without);
+        assert!(!want.is_empty(), "{without}");
+        assert_eq!(sorted(&s, with), want, "{with}");
+    }
 }

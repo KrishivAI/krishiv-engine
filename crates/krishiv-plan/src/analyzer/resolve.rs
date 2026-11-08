@@ -578,6 +578,7 @@ impl Resolver<'_> {
                 | PlanNode::Sort { .. }
                 | PlanNode::Limit { .. }
                 | PlanNode::Offset { .. }
+                | PlanNode::Repartition { .. }
         );
         let plan = Arc::new(LogicalPlan::new(node).with_origin(origin));
         let mut r = self.wrap(plan, origin.plan_id, out, kids);
