@@ -952,3 +952,35 @@ mod ranges {
         }
     }
 }
+
+/// `col = <one value>` (study 26, E10): an aggregate output's distinct count
+/// is only the guess (its rows), and compared with an uncorrelated scalar
+/// subquery it is read as the rows, so about one row stays, not the
+/// default fifth (TPC-H q15's `total_revenue = (SELECT max(..))`). An
+/// expression that reads a column, and a literal (T166 section 2), keep the
+/// default over the guessed count.
+#[test]
+fn an_unknown_count_compared_with_one_value_keeps_about_one_row() {
+    // Ten groups: `m`'s count is the guess, 10.
+    let over = |pred: &str| {
+        filter(&format!(
+            "SELECT * FROM (SELECT b, sum(a) AS m FROM t GROUP BY b) g WHERE {pred}"
+        ))
+    };
+    let one = over("m = (SELECT max(a) FROM t)");
+    close(one.rows(), 1.0, "a scalar subquery");
+    assert_eq!(one.col("m").ndv, 1.0, "one value left");
+    close(
+        over("m <=> (SELECT max(a) FROM t)").rows(),
+        1.0,
+        "null-safe",
+    );
+    close(over("m = b + 1").rows(), 2.0, "an expression over a column");
+    close(over("m = 5").rows(), 2.0, "a literal over a guessed count");
+    // A known count divides as before.
+    close(
+        over("b = (SELECT max(b) FROM t)").rows(),
+        1.0,
+        "a known count",
+    );
+}
