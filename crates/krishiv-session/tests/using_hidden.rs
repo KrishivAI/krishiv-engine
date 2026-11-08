@@ -82,6 +82,7 @@ fn projections_and_windows_keep_the_merged_keys() {
             "|> EXTEND 1 AS z |> EXTEND row_number() OVER (ORDER BY rhs.a) AS r |> SELECT rhs.a, r",
             row(&["1", "1"]),
         ),
+        ("|> TABLESAMPLE (100 PERCENT) |> SELECT rhs.a", row(&["1"])),
     ] {
         let sql = format!("{J}{tail}");
         assert_eq!(rows(&s, &sql), [want], "{sql}");

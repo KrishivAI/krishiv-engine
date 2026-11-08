@@ -34,6 +34,22 @@ that does not parse fails the `SET` with `KRISHIV_INVALID_CONFIG_VALUE`.
 Spark stores the string and fails when a query reads it, with
 `INVALID_CONF_VALUE.TYPE_MISMATCH` (SQLSTATE 22022).
 
+## `DISTRIBUTE BY` and `CLUSTER BY` do not repartition
+
+`DISTRIBUTE BY exprs` (Spark's `RepartitionByExpression`, also under `CLUSTER BY` and `SORT BY ...
+DISTRIBUTE BY`) is checked as Spark checks it: the expressions resolve, and aggregates, windows,
+generators and outer references are refused with Spark's errors. The repartition itself is then
+dropped, as the `REPARTITION`-family hints are. The rows are the same, but two things differ:
+
+- Spark evaluates the expressions while it shuffles, so one that fails at run time fails the query
+  there (`SELECT x FROM t DISTRIBUTE BY x + 'a'` raises `CAST_INVALID_INPUT` under ANSI). Krishiv
+  never evaluates them and returns the rows.
+- On a distributed run the rows are not hash-partitioned by the expressions, so what depends on the
+  partitioning (`spark_partition_id()`, the order `SORT BY` gives within each partition) can differ.
+
+Pinned by `crates/krishiv-session/tests/distribute_by.rs` (`the_expressions_are_not_evaluated`); a real
+exchange that evaluates them is queued for the execution lane.
+
 ## PySpark's `VariantVal`
 
 Krishiv's Python `VariantVal` (`krishiv.sql.variant`) decodes a value as Spark's JVM `Variant` and `VariantUtil` do, so
