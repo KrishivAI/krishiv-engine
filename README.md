@@ -41,8 +41,8 @@ laptop, and take the same code to a single server or a cluster.
 ## 30 seconds
 
 Needs Python 3.11 or newer. Nothing is on PyPI yet, so build the wheel from this repository first
-([python/README.md](python/README.md)); these are the first lines of the [Quickstart](#quickstart), which CI runs
-on every change.
+([python/README.md](python/README.md)) and install it with the `pyarrow` extra (`.show()` needs it). These two
+lines are taken from the [Quickstart](#quickstart), which CI runs on every change (this copy is not run itself).
 
 ```python
 import krishiv
