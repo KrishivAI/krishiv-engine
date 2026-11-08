@@ -505,7 +505,7 @@ mod tests {
         assert_eq!(slug("<=>"), "op-lt-eq-gt");
         assert_eq!(slug("!"), "op-bang");
         assert_eq!(slug("a-B"), "op-a-minus-b");
-        assert_eq!(slug("é"), "op-ue9");
+        assert_eq!(slug("\u{e9}"), format!("op-u{:x}", 0xe9));
         assert_eq!(slug(""), "op-");
     }
 
