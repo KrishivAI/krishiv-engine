@@ -112,6 +112,19 @@ fn alias_column_lists_and_literal_runs_follow_spark() {
     ] {
         assert_eq!(class_of(&s, sql), "IDENTIFIER_TOO_MANY_NAME_PARTS", "{sql}");
     }
+    // The other one-name positions, each IDENTIFIER_TOO_MANY_NAME_PARTS on a Spark 4.2.0 run
+    // (`ops/reviews/2026-11-08-sonnet-3-identifier-onepart-spark.md`).
+    block_on(s.sql("CREATE TABLE onepart(c INT) USING parquet")).unwrap();
+    for sql in [
+        "CREATE TABLE onepart2(IDENTIFIER('a.b') INT) USING parquet",
+        "SELECT 1 AS IDENTIFIER('a.b')",
+        "SELECT 1 x FROM VALUES (1) IDENTIFIER('a.b')",
+        "SELECT sum(1) OVER w FROM VALUES (1) WINDOW IDENTIFIER('a.b') AS ()",
+        "SELECT * FROM VALUES (1) a JOIN VALUES (1) b USING (IDENTIFIER('a.b'))",
+        "INSERT INTO onepart(IDENTIFIER('a.b')) VALUES (1)",
+    ] {
+        assert_eq!(class_of(&s, sql), "IDENTIFIER_TOO_MANY_NAME_PARTS", "{sql}");
+    }
     // A plain dotted name there stays a syntax error, and a one-part clause or a dotted one in
     // an expression still runs.
     assert_eq!(
