@@ -399,8 +399,24 @@ uv run krishiv-bench run --engine duckdb --suite dsb --sf 1 --dataset dsb@v1
   recorded; Parquet is written with one thread), an order-independent row hash per table and the SHA-256 of each query and of the oracle file. The upstream C code
   reads uninitialised locals, so the tools are built with `-ftrivial-auto-var-init=zero`: without it the data differs between optimisation levels.
 * `relation_count_distribution` in the manifest is the number of base-table references per query (a repeated table counts each time).
-* Scope: `run` supports the suite; `reproduce`, `abba` and `ab` do not yet. Full scale on the benchmark server: `uv run krishiv-datasets dsb --sf 10` (the
+* Scope: `run`, `ab` and `join-trees` support the suite; `reproduce` and `abba` do not yet. Full scale on the benchmark server: `uv run krishiv-datasets dsb --sf 10` (the
   conversion is single-threaded and `dsdgen` is single-process: about 3.5 min per unit on a laptop).
+## Join enumerators (`join-trees`, P2-T113)
+
+```bash
+uv run krishiv-bench join-trees --suite dsb --sf 10            # arms dpsub, dpsub12, dpsub13, greedy (the first is the base)
+uv run krishiv-bench join-trees --suite tpcds --arm base=krishiv.optimizer.joinEnumerator=dpsub \
+    --arm wide=krishiv.optimizer.joinDpLimit=12 --plan-reps 50
+```
+
+Nothing is executed. Per arm (a set of session settings) one runner plans every query over the dataset, so the
+optimizer reads its real statistics: `EXPLAIN VERBOSE` once, whose `JoinOrder` notes describe each inner-join tree
+(inputs, edges, hyperedges, enumerator, greedy fallback and why, csg-cmp pairs costed and candidates looked at,
+estimated `C_out`, plan shape), and `EXPLAIN` `--plan-reps` times for planning time (p50/p99; parsing, analysis,
+optimization and physical planning, so an upper bound on the enumerator's own time). The summary lists the trees by
+size and fallback and the queries whose plan shape differs from the base arm with their estimated-cost ratio; time
+those with `ab --a-conf ... --b-conf ...` over one runner.
+
 ## Operator microbenchmarks (`micro`, P2-T168)
 Krishiv, DuckDB and Polars run the **same single-operator query over the same Parquet files**, so a slow operator can be told from a
 slow plan: if Krishiv's operator time (below) is in line with the others but its wall time is not, the plan is at fault.

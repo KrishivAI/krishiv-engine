@@ -62,6 +62,7 @@ mod history;
 mod identifier_clause;
 mod introspection;
 mod locals;
+mod nested_value;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
 mod partitions;

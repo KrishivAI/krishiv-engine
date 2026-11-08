@@ -130,6 +130,7 @@ fn write_options(dir: &str, task: u32, max_records_per_file: u64) -> WriteOption
         partition_by: Vec::new(),
         partition_names: Vec::new(),
         zone: Some(0),
+        zone_name: None,
     }
 }
 

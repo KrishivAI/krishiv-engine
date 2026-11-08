@@ -134,6 +134,15 @@ pub fn partition_columns(files: &[(String, Vec<Segment>)], infer: bool) -> Resul
                 ty = Some(ty.map_or(t, |acc| merge(acc, t)));
             }
         }
+        if ty == Some(Ty::Ts) {
+            let value = files
+                .iter()
+                .find_map(|(_, segs)| segs[i].1.clone())
+                .unwrap_or_default();
+            return Err(unsupported(format!(
+                "timestamp partition values ({value}): the session time zone does not reach partition discovery yet"
+            )));
+        }
         let data_type = ty.unwrap_or(Ty::Str).arrow();
         fields.push(Arc::new(Field::new(name, data_type, true)));
     }
@@ -148,6 +157,8 @@ enum Ty {
     Dec(u8),
     Double,
     Date,
+    /// Spark infers `timestamp`; reading one needs the session zone, which partition discovery does not have yet.
+    Ts,
     Str,
 }
 
@@ -159,7 +170,8 @@ impl Ty {
             Self::Dec(p) => DataType::Decimal128(p, 0),
             Self::Double => DataType::Float64,
             Self::Date => DataType::Date32,
-            Self::Str => DataType::Utf8View,
+            // Never built: `partition_columns` refuses a timestamp column before typing it.
+            Self::Ts | Self::Str => DataType::Utf8View,
         }
     }
 }
@@ -168,8 +180,9 @@ impl Ty {
 /// `findWiderTypeForPartitionColumn`, probed on the oracle. Integers widen
 /// to `bigint`; an `int` meets a `double` as `double`; a decimal meets an
 /// `int` as `decimal(max(p,10),0)` and a `bigint` as `decimal(max(p,20),0)`;
-/// a `bigint` or decimal meeting a `double`, and anything meeting a date or
-/// a string, is a string.
+/// a date meets a timestamp as a timestamp; a `bigint` or decimal meeting a
+/// `double`, and anything else meeting a date, a timestamp or a string, is a
+/// string (Spark 4.2.0: `ts=2024-01-02 03:04:05` beside `ts=7` is a string).
 fn merge(a: Ty, b: Ty) -> Ty {
     match (a, b) {
         _ if a == b => a,
@@ -178,6 +191,7 @@ fn merge(a: Ty, b: Ty) -> Ty {
         (Ty::Dec(p), Ty::Long) | (Ty::Long, Ty::Dec(p)) => Ty::Dec(p.max(20)),
         (Ty::Int, Ty::Long) | (Ty::Long, Ty::Int) => Ty::Long,
         (Ty::Int, Ty::Double) | (Ty::Double, Ty::Int) => Ty::Double,
+        (Ty::Date, Ty::Ts) | (Ty::Ts, Ty::Date) => Ty::Ts,
         _ => Ty::Str,
     }
 }
@@ -200,9 +214,7 @@ fn infer_one(v: &str) -> Result<Ty> {
         return Ok(Ty::Date);
     }
     if is_timestamp(b) {
-        return Err(unsupported(format!(
-            "timestamp partition values ({v}): the session time zone does not reach partition discovery yet"
-        )));
+        return Ok(Ty::Ts);
     }
     Ok(Ty::Str)
 }
@@ -323,13 +335,28 @@ fn is_date(b: &[u8]) -> bool {
 
 /// A date followed by `T` or a space and `hh:mm`: what Spark reads as a
 /// timestamp.
+/// Whether Spark's partition timestamp pattern `yyyy-MM-dd HH:mm:ss[.S]` reads `b` (the value unescaped): a date, a
+/// space, a time of day in range and at most one fraction digit. Spark 4.2.0 reads `03:04:05` and `03:04:05.1` as a
+/// timestamp and `03:04:05.12` (more digits) as a string.
 fn is_timestamp(b: &[u8]) -> bool {
-    b.len() >= 16
-        && is_date(&b[..10])
-        && matches!(b[10], b' ' | b'T')
-        && b[11..13].iter().all(u8::is_ascii_digit)
+    let two = |s: &[u8]| -> Option<u8> {
+        match s {
+            [h, l] if h.is_ascii_digit() && l.is_ascii_digit() => {
+                Some((h - b'0') * 10 + (l - b'0'))
+            }
+            _ => None,
+        }
+    };
+    if !(b.len() == 19 || (b.len() == 21 && b[19] == b'.' && b[20].is_ascii_digit())) {
+        return false;
+    }
+    is_date(&b[..10])
+        && b[10] == b' '
         && b[13] == b':'
-        && b[14..16].iter().all(u8::is_ascii_digit)
+        && b[16] == b':'
+        && two(&b[11..13]).is_some_and(|h| h < 24)
+        && two(&b[14..16]).is_some_and(|m| m < 60)
+        && two(&b[17..19]).is_some_and(|s| s < 60)
 }
 
 /// The values of a file: the last `columns` directory names above `path`.
@@ -533,6 +560,32 @@ mod tests {
         let e = cols(&[&["2020-01-02 03:04:05"]], &["k"], true).unwrap_err();
         assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
         assert!(cols(&[&["2020-01-02 03:04:05"]], &["k"], false).is_ok());
+    }
+
+    #[test]
+    fn timestamp_inference_follows_sparks_pattern_and_merge() {
+        // Spark 4.2.0 (local run, 2026-11-06): `yyyy-MM-dd HH:mm:ss[.S]` is a timestamp, more fraction digits a
+        // string; a date beside a timestamp is a timestamp, a timestamp beside anything else a string.
+        let ty = |values: &[&str]| -> Result<DataType> {
+            let rows: Vec<Vec<&str>> = values.iter().map(|v| vec![*v]).collect();
+            let rows: Vec<&[&str]> = rows.iter().map(Vec::as_slice).collect();
+            cols(&rows, &["k"], true).map(|c| c[0].clone())
+        };
+        let refused = |values: &[&str]| {
+            ty(values).is_err_and(|e| e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE")
+        };
+        assert!(refused(&["2024-01-02 03:04:05.1"]));
+        assert!(refused(&["2024-01-02", "2024-01-02 03:04:05"]));
+        for strings in [
+            &["2024-01-02 03:04:05.12"][..],
+            &["2024-01-02 03:04:05.123456"],
+            &["2024-01-02 03:04:05", "2024-01-02 03:04:05.123456"],
+            &["2024-01-02 03:04:05", "7"],
+            &["2024-01-02 25:04:05"],
+            &["2024-01-02 03:04"],
+        ] {
+            assert_eq!(ty(strings).unwrap(), DataType::Utf8View, "{strings:?}");
+        }
     }
 
     #[test]

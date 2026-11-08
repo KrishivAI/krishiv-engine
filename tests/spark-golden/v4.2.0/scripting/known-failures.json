@@ -1,6 +1,5 @@
 {
   "3": "UNEXPLAINED: a table checksum differs after the script (not yet traced to a statement)",
-  "4": "needs ARRAY values in session and local variables",
   "75": "UNEXPLAINED: a table checksum differs after the script (not yet traced to a statement)",
   "8": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet"
 }

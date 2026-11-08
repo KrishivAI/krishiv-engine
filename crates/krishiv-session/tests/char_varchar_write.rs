@@ -541,6 +541,28 @@ fn a_dataframe_temp_view_keeps_the_declared_type() {
     assert_eq!(count(&s, "select * from dv3 where z = 'a'"), 0);
 }
 
+/// Spark 4.2.0 (local run 2026-11-07): a DataFrame temp view over a permanent view over `CHAR(3)` keeps the
+/// declared type, in `DESCRIBE` and in comparison padding.
+#[test]
+fn a_dataframe_temp_view_over_a_permanent_view_keeps_the_declared_type() {
+    let s = fresh();
+    run(&s, "insert into t values ('a', 'x'), ('ab', 'y')").unwrap();
+    run(&s, "drop view if exists pv").unwrap();
+    run(&s, "create view pv as select c, v from t").unwrap();
+    block_on(async { s.table("pv").create_or_replace_temp_view("tv").await }).unwrap();
+    assert_eq!(text_at(&s, "describe table tv", 1), "char(3)");
+    assert_eq!(count(&s, "select * from tv where c = 'a'"), 1);
+    block_on(async {
+        s.sql("select c from pv")
+            .await?
+            .create_or_replace_temp_view("tv2")
+            .await
+    })
+    .unwrap();
+    assert_eq!(text_at(&s, "describe table tv2", 1), "char(3)");
+    assert_eq!(count(&s, "select * from tv2 where c = 'a'"), 1);
+}
+
 #[test]
 fn between_over_a_char_column_does_not_pad_its_bounds() {
     // Spark 4.x rewrites `BETWEEN` before the padding rule sees a comparison, so the bounds stay unpadded
