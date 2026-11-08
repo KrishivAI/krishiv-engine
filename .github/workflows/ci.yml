@@ -218,6 +218,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    # Debuginfo of the whole workspace test build does not fit the runner's disk next to the spill tests
+    # ("No space left on device" in the bench-runner spill tests, an ld Bus error in otlp_collector; merge-queue
+    # ejections 2026-11-07/08). Line tables keep panic backtraces and cost a fraction of the space.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -226,6 +231,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The runner image ships toolchains and images the build never uses; same list as the nightly jobs.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/boost \
+            /opt/microsoft /opt/az /usr/lib/google-cloud-sdk /usr/lib/mono /usr/local/julia* /usr/local/graalvm \
+            /opt/hostedtoolcache/Java_* /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy
+          df -h /
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1
@@ -248,6 +262,35 @@ jobs:
           KRISHIV_SIM_TPCH_DIR: ${{ runner.temp }}/tpch-sf0.1
       - run: cargo test --workspace --doc --locked
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
+      - name: Disk left
+        if: always()
+        run: df -h / "$RUNNER_TEMP"
+
+  # The quarantined flaky tests (`.config/nextest.toml` profile `quarantine`, owner policy 2026-11-07):
+  # run on every PR so their state stays visible, never required, never blocking.
+  test-quarantine:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run -p krishiv-session -p krishiv-exec --test moment_window_spill --test nested_loop --profile quarantine --locked --no-tests=pass
 
   deny:
     needs: changes

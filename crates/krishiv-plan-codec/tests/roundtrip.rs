@@ -202,6 +202,45 @@ fn an_exchanges_planned_schema_round_trips_and_is_ignorable() {
     assert!(plan_features(&variant).contains(&krishiv_plan_codec::Feature::VariantType));
 }
 
+/// An exchange's and an exchange source's schema with a nested column puts `nested_types` in the
+/// header (the encoder's flag follows the feature walk; nightly serialize-through, percentile).
+#[test]
+fn a_nested_schema_on_an_exchange_or_its_source_lists_nested_types() {
+    use arrow_schema::{DataType, Field, Schema};
+    use krishiv_exec::SortKey;
+    use krishiv_exec::physical::{ExchangeId, Partitioning};
+
+    let nested = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new(
+            "p",
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            true,
+        ),
+    ]));
+    let (_, plain) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "exchange_round_robin")
+        .unwrap();
+    let PhysNode::Exchange(mut e) = plain.root().clone() else {
+        panic!("not an exchange");
+    };
+    e.schema = Some(Arc::clone(&nested));
+    let exchange = plan_of(PhysNode::Exchange(e));
+    let source = plan_of(PhysNode::Sort {
+        input: Box::new(PhysNode::ExchangeSource {
+            id: ExchangeId(19),
+            partitioning: Partitioning::Single,
+            schema: nested,
+        }),
+        keys: vec![SortKey::asc(0)],
+    });
+    for plan in [exchange, source] {
+        assert!(plan_features(&plan).contains(&krishiv_plan_codec::Feature::NestedTypes));
+        assert_eq!(round_trip(&plan), plan);
+    }
+}
+
 #[test]
 fn a_shared_subexpression_is_stored_once() {
     // `a > 10 AND a IS NOT NULL`: the column, the literal and three calls.
@@ -574,6 +613,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "map_key_dedup_policy"
             | "legacy_charset_switches"
             | "legacy_time_parser"
+            | "binary_output_style"
             | "session_zone_name"
             | "aggregate_filter"
             | "range"
@@ -595,7 +635,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
                 || n.starts_with("geo_")
                 || n.starts_with("interval_")
                 || n.starts_with("collated_")
-                || n.starts_with("variant_") =>
+                || n.starts_with("variant_")
+                || n.starts_with("calendar_") =>
             {
                 6
             }

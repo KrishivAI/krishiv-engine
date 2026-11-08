@@ -2,10 +2,6 @@
   "cases": {
     "depends-on-command": [
       19
-    ],
-    "subqueries": [
-      31,
-      32
     ]
   },
   "file": "cte",

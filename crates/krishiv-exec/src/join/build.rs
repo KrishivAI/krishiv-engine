@@ -923,7 +923,8 @@ impl Sink for BuildSink {
         }
         for (p, c) in chunks {
             l.parts[p].chunks.push(c);
-            l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
+            let merged = l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
+            s.counters.max(Counter::MaxCoalesceCopyBytes, merged as u64);
         }
         if let Some((sketches, _)) = &mut l.sketches {
             for (sketch, rows) in sketches.iter_mut().zip(&by_part) {
@@ -1060,6 +1061,8 @@ impl Sink for BuildSink {
             // are asked for through arbitration when nothing else runs.
             let spill = s.spill.is_some();
             let mut spare = held_copy;
+            // The concatenation copies reserved at once (for the counter).
+            let mut copying = 0usize;
             let mut jobs = std::collections::VecDeque::from(jobs);
             let mut running = futures::stream::FuturesUnordered::new();
             let mut tables = Vec::with_capacity(jobs.len());
@@ -1094,6 +1097,10 @@ impl Sink for BuildSink {
                         ..
                     }) = jobs.pop_front_if(|_| funded)
                     {
+                        copying = copying.saturating_add(copy);
+                        self.0
+                            .counters
+                            .max(Counter::MaxFinalizeCopyBytes, copying as u64);
                         let shared = Arc::clone(&self.0);
                         let hashing = g.hashing.clone();
                         running.push(async move {
@@ -1134,6 +1141,7 @@ impl Sink for BuildSink {
                     break;
                 };
                 let (p, table, copy, index_bytes) = done?;
+                copying = copying.saturating_sub(copy);
                 // The index was reserved for one key per row: keep what it
                 // holds.
                 index.shrink(
@@ -1141,6 +1149,15 @@ impl Sink for BuildSink {
                         .saturating_sub(table.index_memory())
                         .min(index.size()),
                 );
+                let split = table.arena().memory_split();
+                let n = &self.0.counters;
+                n.add(
+                    Counter::ArenaBytes,
+                    (split.hash + split.key + split.other) as u64,
+                );
+                n.add(Counter::ArenaHashBytes, split.hash as u64);
+                n.add(Counter::ArenaKeyBytes, split.key as u64);
+                n.add(Counter::IndexBytes, table.index_memory() as u64);
                 let (keys, buckets, kind) = table.index_size();
                 self.0.counters.or(Counter::IndexKinds, kind as u64);
                 self.0.counters.add(Counter::HashEntries, keys as u64);
@@ -1176,6 +1193,11 @@ impl Sink for BuildSink {
             let mut grace = Grace::new(g.hashing.fanout0());
             grace.keep_unprobed = s.join_type.keeps_null_build_keys();
             for (p, part) in c.parts.iter_mut().enumerate() {
+                if spilled & (1 << p) == 0 {
+                    self.0
+                        .counters
+                        .add(Counter::SteadyReservedBytes, part.bytes() as u64);
+                }
                 memory.append(&mut part.memory);
                 if spilled & (1 << p) != 0 {
                     grace.build[p].files = std::mem::take(&mut part.files);
