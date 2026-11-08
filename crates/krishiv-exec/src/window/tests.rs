@@ -1734,6 +1734,33 @@ async fn a_failed_spill_fails_every_later_call() {
     );
 }
 
+/// A window's spill write runs under its consumer's `spilling` guard, so
+/// another driver's round that cannot spill waits for the rows it frees
+/// (the memory crate's `a_round_waits_for_another_consumers_spill_write`).
+#[tokio::test]
+async fn a_spill_write_holds_the_spilling_guard() {
+    let rows: Vec<Row> = (0..400)
+        .map(|i| (Some(i / 300), Some(i), i, Some(i)))
+        .collect();
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), plan(functions(), true), true, Some(scope.clone())).unwrap();
+    let (_root, ctx) = task(1 << 30);
+    let consumer = Arc::clone(ctx.consumer().consumer());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    scope.set_writer_hook(Arc::new({
+        let seen = Arc::clone(&seen);
+        move || seen.lock().unwrap().push(consumer.is_spilling())
+    }));
+    let mut local = op.local_state(&ctx).unwrap();
+    assert!(matches!(
+        op.execute(&batch(&rows), &mut local).unwrap(),
+        OperatorOutput::NeedMoreInput(_)
+    ));
+    assert!(op.spill(&mut local, 1, &ctx).await.unwrap() > 0);
+    assert_eq!(*seen.lock().unwrap(), [true]);
+    assert!(!ctx.consumer().consumer().is_spilling());
+}
+
 /// A spill dropped mid-write (its query cancelled) leaves the window
 /// failed with `OPERATION_CANCELED`; a refused scratch reservation spills
 /// nothing and loses nothing.

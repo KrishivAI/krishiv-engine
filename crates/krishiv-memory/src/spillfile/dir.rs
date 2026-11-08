@@ -274,6 +274,7 @@ impl SpillManager {
                 manager: Arc::clone(&self.inner),
                 cancelled: AtomicBool::new(false),
                 next_file: AtomicU64::new(0),
+                writer_hook: std::sync::OnceLock::new(),
             }),
         })
     }
@@ -305,6 +306,17 @@ pub(crate) struct ScopeInner {
     manager: Arc<ManagerInner>,
     cancelled: AtomicBool,
     next_file: AtomicU64,
+    /// Runs before each writer starts ([`SpillScope::set_writer_hook`]).
+    writer_hook: std::sync::OnceLock<WriterHook>,
+}
+
+/// A test's code run on the writing thread before a writer starts.
+struct WriterHook(Arc<dyn Fn() + Send + Sync>);
+
+impl std::fmt::Debug for WriterHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WriterHook")
+    }
 }
 
 impl ScopeInner {
@@ -338,6 +350,15 @@ pub struct SpillScope {
 }
 
 impl SpillScope {
+    /// Runs `hook` on the writing thread at the start of every later
+    /// [`writer`](Self::writer) call of this scope and its clones; a test
+    /// uses it to look at, or hold, an operator in the middle of a spill
+    /// write. The first hook set stays.
+    #[doc(hidden)]
+    pub fn set_writer_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        let _ = self.inner.writer_hook.set(WriterHook(hook));
+    }
+
     /// Starts a spill file for batches of `schema`. `reservation` accounts
     /// the writer's scratch memory (see [`SpillWriter`]); when it comes from
     /// a [`ConsumerHandle`](crate::ConsumerHandle), the finished file is
@@ -353,6 +374,9 @@ impl SpillScope {
         reservation: Reservation,
     ) -> Result<SpillWriter, SpillError> {
         self.inner.check_cancelled()?;
+        if let Some(WriterHook(hook)) = self.inner.writer_hook.get() {
+            hook();
+        }
         let n = self.inner.next_file.fetch_add(1, Ordering::Relaxed);
         SpillWriter::create(
             Arc::clone(&self.inner),

@@ -258,6 +258,13 @@ impl ConsumerHandle {
         SpillWriting(Arc::clone(&self.credit))
     }
 
+    /// Whether a [`spilling`](Self::spilling) guard of this consumer is held
+    /// (for tests: an operator's spill write runs under one).
+    #[doc(hidden)]
+    pub fn is_spilling(&self) -> bool {
+        self.credit.writing()
+    }
+
     /// A seat of this consumer in the query's cohort `name` (`None` outside
     /// a query, as [`MemoryPool::cohort`]). While the seat holds
     /// ([`crate::SeatState::Holding`]), the consumer's memory counts as

@@ -176,6 +176,51 @@ fn interleaving_keeps_weights() {
     assert_eq!(same.weights(), &Weights::Const(2));
 }
 
+/// A sort's spill writes (a driver's buffer, and the buffers combined into
+/// the global state) run under the buffer's consumer's `spilling` guard, so
+/// another driver's round that cannot spill waits for the rows they free.
+#[tokio::test]
+async fn a_spill_write_holds_the_spilling_guard() {
+    let (schema, batch) = floats();
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        root.child("q", None),
+    );
+    let ctx = TaskContext::new(query, executor, SpillOwner::new(), OperatorId(0), "Sort");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("sort-unit-guard-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    let consumer = Arc::clone(ctx.consumer().consumer());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    scope.set_writer_hook(Arc::new({
+        let seen = Arc::clone(&seen);
+        move || seen.lock().unwrap().push(consumer.is_spilling())
+    }));
+    let sort = Sort::new(schema, &[SortKey::asc(2)], Some(scope)).unwrap();
+    let global = Sink::global_state(&sort, &ctx).unwrap();
+    let mut local = Sink::local_state(&sort, &ctx, &global).unwrap();
+    sort.sink(batch.clone(), &mut local, &global).unwrap();
+    assert!(sort.spill(&mut local, 1, &ctx).await.unwrap() > 0);
+    sort.sink(batch, &mut local, &global).unwrap();
+    sort.combine(local, &global).unwrap();
+    assert!(sort.spill_global(&global, 1, &ctx).await.unwrap() > 0);
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen.len() >= 2 && seen.iter().all(|&s| s), "{seen:?}");
+    assert!(!ctx.consumer().consumer().is_spilling());
+    drop((global, sort, manager));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The global spill (during `finalize`) of two combined drivers' buffers,
 /// then the source's merge of the spilled runs: weights and run order
 /// survive; a sort without a spill scope frees nothing.

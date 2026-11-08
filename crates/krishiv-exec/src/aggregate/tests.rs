@@ -1356,6 +1356,56 @@ async fn local_spill_keeps_an_unspilled_table_accounted() {
     assert_eq!(root.reserved(), 0);
 }
 
+/// An aggregate's spill writes (a driver's table, and the tables combined
+/// into the global state) run under the consumer's `spilling` guard, in
+/// both table layouts, so another driver's round that cannot spill waits
+/// for the rows they free.
+#[tokio::test]
+async fn a_spill_write_holds_the_spilling_guard() {
+    let (s, b) = grouped_input(1_000, 1_000);
+    for rows_layout in [false, true] {
+        let (_m, scope) = spill_dir();
+        let root = pool(1 << 30);
+        let q = QueryContext::new(
+            QueryId(10),
+            WorkloadClass::Batch,
+            ExecConfig {
+                agg_row_layout: rows_layout,
+                ..ExecConfig::default()
+            },
+            root.child("q", Some(1 << 30)),
+        );
+        let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+        let ctx = TaskContext::new(q, executor, SpillOwner::new(), OperatorId(0), "agg");
+        let consumer = Arc::clone(ctx.consumer().consumer());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        scope.set_writer_hook(Arc::new({
+            let seen = Arc::clone(&seen);
+            move || seen.lock().unwrap().push(consumer.is_spilling())
+        }));
+        let mut sp = spec(&s, vec![], grouped_aggs(&s));
+        sp.spill = Some(scope);
+        let agg = HashAggregate::new(sp).unwrap();
+        let g = Sink::global_state(&*agg, &ctx).unwrap();
+        let batch = || Batch::new(RecordBatch::try_new(Arc::clone(&s), b[0].clone()).unwrap());
+        let mut first = Sink::local_state(&*agg, &ctx, &g).unwrap();
+        agg.sink(batch(), &mut first, &g).unwrap();
+        agg.combine(first, &g).unwrap();
+        let mut second = Sink::local_state(&*agg, &ctx, &g).unwrap();
+        agg.sink(batch(), &mut second, &g).unwrap();
+        assert!(agg.spill(&mut second, 1, &ctx).await.unwrap() > 0);
+        agg.sink(batch(), &mut second, &g).unwrap();
+        agg.combine(second, &g).unwrap();
+        assert!(agg.spill_global(&g, 1, &ctx).await.unwrap() > 0);
+        let seen = seen.lock().unwrap().clone();
+        assert!(
+            seen.len() >= 2 && seen.iter().all(|&w| w),
+            "rows layout {rows_layout}: {seen:?}"
+        );
+        assert!(!ctx.consumer().consumer().is_spilling());
+    }
+}
+
 /// The spill headroom a spillable table keeps reserved (`sink::HEADROOM`).
 const HEADROOM_FOR_TESTS: usize = 128 << 10;
 

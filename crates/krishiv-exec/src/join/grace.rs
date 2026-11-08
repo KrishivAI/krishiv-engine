@@ -2168,6 +2168,54 @@ mod tests {
         assert_eq!(root.reserved(), 0);
     }
 
+    /// A grace partition's spill write runs under the consumer's `spilling`
+    /// guard, so another driver's round that cannot spill waits for the
+    /// rows it frees.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_spill_write_holds_the_spilling_guard() {
+        let root = TreePool::new(&MemoryConfig::default());
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            root.child("q", None),
+        );
+        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
+        let dir = TempDir::new("grace-guard");
+        let manager = SpillManager::open(&SpillConfig {
+            dir: dir.0.clone(),
+            ..SpillConfig::default()
+        })
+        .unwrap();
+        let scope = manager.scope().unwrap();
+        let consumer = Arc::clone(ctx.consumer().consumer());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        scope.set_writer_hook(Arc::new({
+            let seen = Arc::clone(&seen);
+            move || seen.lock().unwrap().push(consumer.is_spilling())
+        }));
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let small = Batch::new(
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from_iter_values(0..100))],
+            )
+            .unwrap(),
+        );
+        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
+        reserve_chunks(&mut parts, &[(0, small.clone())]).unwrap();
+        parts[0].chunks.push(small);
+        let (freed, _) = spill_parts(&mut parts, &[0], &schema, &scope, &ctx, true)
+            .await
+            .unwrap();
+        assert!(freed > 0);
+        assert_eq!(*seen.lock().unwrap(), [true]);
+        assert!(!ctx.consumer().consumer().is_spilling());
+        drop(parts);
+        assert_eq!(root.reserved(), 0);
+    }
+
     /// An alone load asks for an estimate of the whole rest of the
     /// partition only until the arbitrator refuses it once; then for the
     /// bytes missing now, and a refused exact ask gives up.
