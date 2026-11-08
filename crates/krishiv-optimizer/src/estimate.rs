@@ -347,6 +347,7 @@ impl<'a> Estimator<'a> {
             PlanNode::Sort { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::JoinHint { input, .. }
+            | PlanNode::Repartition { input, .. }
             // A window adds columns (without statistics), never rows.
             | PlanNode::Window { input, .. }
             // Each distinct row of an `INTERSECT ALL` / `EXCEPT ALL` count:
