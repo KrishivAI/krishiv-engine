@@ -281,8 +281,11 @@ impl Planner<'_> {
                 // Sized at the false-positive rate the producers build with.
                 options.bloom_bytes = match shared {
                     Some(bytes) => Some(u32::try_from(bytes).unwrap_or(u32::MAX)),
+                    // Its partials are sent and ORed: at most the 8 MB the
+                    // cap was before shared arrays (design P2b-R1 M5).
                     None => (bloom && partitioned).then(|| {
-                        planned_bloom_bytes(rows, options.bloom_fpp, options.bloom_max_bytes)
+                        let cap = options.bloom_max_bytes.min(PARTITIONED_BLOOM_MAX_BYTES);
+                        planned_bloom_bytes(rows, options.bloom_fpp, cap)
                     }),
                 };
                 out.filters.push(JoinFilterPlan { id, key, options });
@@ -291,6 +294,10 @@ impl Planner<'_> {
         out
     }
 }
+
+/// The largest planned Bloom of a partitioned build that collects hashes:
+/// its partials travel and merge at that size.
+const PARTITIONED_BLOOM_MAX_BYTES: usize = 8 << 20;
 
 /// The planned size of a large build's shared Bloom array (design P2b-R1
 /// §2.1): its estimate's 1% size, capped at `bloom.maxBytes`; `None` when
