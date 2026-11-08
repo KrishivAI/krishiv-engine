@@ -353,6 +353,11 @@ fn strings() -> Vec<Spec> {
         string,
     ));
     out.extend(scalar(
+        &["__contains_lcase", "__startswith_lcase", "__endswith_lcase"],
+        &Inputs::Built(InputBuilder(match_inputs)),
+        matches,
+    ));
+    out.extend(scalar(
         &["startswith", "endswith", "contains"],
         &Inputs::Built(InputBuilder(match_inputs)),
         matches,

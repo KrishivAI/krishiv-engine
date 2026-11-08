@@ -881,3 +881,17 @@ fn positions_over_lcase_strings_match_spark() {
         assert_eq!(one(&format!("SELECT CAST({sql} AS STRING)")), want, "{sql}");
     }
 }
+
+/// A column (or `İ`-splitting) pattern over `UTF8_LCASE`: values of a Spark 4.2.0 local run.
+#[test]
+fn searches_with_column_patterns_over_lcase_match_spark() {
+    let l = "COLLATE utf8_lcase";
+    for (sql, want) in [
+        (format!("contains(t {l}, p)"), "true"),
+        (format!("startswith(t {l}, p)"), "false"),
+        (format!("endswith(t {l}, p)"), "true"),
+    ] {
+        let q = format!("SELECT CAST({sql} AS STRING) FROM (SELECT 'AbC' AS t, 'bC' AS p)");
+        assert_eq!(one(&q), want, "{sql}");
+    }
+}

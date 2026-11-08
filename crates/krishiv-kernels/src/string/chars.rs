@@ -677,6 +677,51 @@ pub fn find_in_set<O: OffsetSizeTrait>(
     })
 }
 
+/// Where a [`search_lcase`] match must sit in the text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LcaseSearch {
+    /// Anywhere (`contains`).
+    Anywhere,
+    /// From the first character (`startswith`).
+    Start,
+    /// Ending at the last character (`endswith`).
+    End,
+}
+
+/// `contains` / `startswith` / `endswith` over `UTF8_LCASE` operands: the pattern's lower-cased
+/// code points must match the text's, and a match may not start or end between the two code
+/// points `İ` lower-cases to (Spark's `lowercaseMatchLengthFrom` / `lowercaseMatchUntil`).
+/// Values from a Spark 4.2.0 run. An empty pattern matches every non-NULL text.
+///
+/// # Errors
+/// `INTERNAL_ERROR` for operands of different lengths.
+pub fn search_lcase<O: OffsetSizeTrait>(
+    kind: LcaseSearch,
+    text: StrOperand<'_, O>,
+    pattern: StrOperand<'_, O>,
+) -> Result<BooleanArray, KernelError> {
+    let slots: [&dyn Slot; 2] = [&text, &pattern];
+    let rows = row_count(&slots)?;
+    Ok((0..rows)
+        .map(|i| {
+            if !all_valid(&slots, i) {
+                return None;
+            }
+            let chars: Vec<char> = text.at(i).chars().collect();
+            let mut pat = Vec::new();
+            for c in pattern.at(i).chars() {
+                lcase_points(c, &mut pat);
+            }
+            let hit = |at: usize| lcase_match_from(&chars, at, &pat).map(|n| at.saturating_add(n));
+            Some(match kind {
+                LcaseSearch::Start => hit(0).is_some(),
+                LcaseSearch::Anywhere => (0..=chars.len()).any(|at| hit(at).is_some()),
+                LcaseSearch::End => (0..=chars.len()).any(|at| hit(at) == Some(chars.len())),
+            })
+        })
+        .collect())
+}
+
 // ---- overlay ----
 
 /// The part of `n` units Spark's `overlay` keeps before `pos` and after the

@@ -689,7 +689,7 @@ impl Resolver<'_> {
         if KEYED_SEARCH.contains(&name)
             && !kids.get(1).is_some_and(|k| safe_search_pattern(&k.expr))
         {
-            return Ok(None);
+            return self.search_lcase(e, kids, name, in_agg, window_fn, cx);
         }
         let mut keyed = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
@@ -721,6 +721,39 @@ impl Resolver<'_> {
         }
         self.expr_node_inner(e, &keyed, in_agg, window_fn, cx)
             .map(Some)
+    }
+
+    /// `contains` / `startswith` / `endswith` with a pattern the lower-cased key cannot answer
+    /// (a column, or a literal that may split `İ`'s pair) as the `__*_lcase` kernel call.
+    fn search_lcase(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        name: &str,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        let mut plain = Vec::with_capacity(2);
+        for k in &kids[..2] {
+            let cast = Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&k.expr),
+                to: DataType::String,
+                mode: CastMode::Ansi,
+            })
+            .with_origin(e.origin);
+            let mut b = self.expr(&Arc::new(cast), cx)?;
+            b.shown = Some(k.shown());
+            plain.push(b);
+        }
+        let call = Expr::function(
+            &format!("__{name}_lcase"),
+            plain.iter().map(|k| (*k.expr).clone()).collect(),
+        )
+        .with_origin(e.origin);
+        let mut b = self.expr_node_inner(&Arc::new(call), &plain, in_agg, window_fn, cx)?;
+        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        Ok(Some(b))
     }
 
     /// `instr` / `locate` / `position` as `__locate_lcase(substr, str, start)` when the strings
