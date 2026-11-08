@@ -1088,11 +1088,16 @@ pub(super) fn cost(a: &AggregateExpr, f: &WindowFunctionPlan, rows: usize) -> Re
     Ok(frames + inputs + method + width(&out, rows))
 }
 
+/// A chunk of merges for a frame of any width: [`CHUNK`] and the nodes of one
+/// more frame query (at most `2 * (64 + 1)`), less one.
+const WIDE_CHUNK: usize = CHUNK + 2 * (64 + 1) - 1;
+
 /// The items one chunk of merges holds for `rows` rows (see [`CHUNK`]): a `ROWS` frame of at most `w` rows has at
 /// most `w` items per row in an in-order fold (its rows) and at most `min(w, 2 * (bits(w) + 1))` in a tree query (its
 /// nodes); `max(w, 2 * (bits(w) + 1))` covers both (loose for the tree, on the safe side), so a small batch charges
 /// for those, not for a whole chunk. A chunk ends once it reaches [`CHUNK`], so it may pass it by one row's nodes
-/// less one (an in-order fold stops at [`CHUNK`] rows exactly). Other frames can hold a whole chunk.
+/// less one (an in-order fold stops at [`CHUNK`] rows exactly). Other frames can hold a whole chunk and one row's
+/// tree nodes less one ([`WIDE_CHUNK`]).
 pub(super) fn chunk_items(f: &WindowFunctionPlan, rows: usize) -> usize {
     use super::FrameBound as B;
     let fr = &f.frame;
@@ -1102,10 +1107,10 @@ pub(super) fn chunk_items(f: &WindowFunctionPlan, rows: usize) -> usize {
         _ => None,
     };
     if fr.units != FrameUnits::Rows {
-        return CHUNK;
+        return WIDE_CHUNK;
     }
     let (Some(lo), Some(hi)) = (at(fr.lower), at(fr.upper)) else {
-        return CHUNK;
+        return WIDE_CHUNK;
     };
     let w = usize::try_from(hi.saturating_sub(lo).saturating_add(1).max(1)).unwrap_or(usize::MAX);
     let bits = usize::try_from(usize::BITS - w.leading_zeros()).unwrap_or(64);
