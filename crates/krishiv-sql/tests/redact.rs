@@ -201,3 +201,18 @@ fn nested_aes_calls_redact_in_linear_time() {
         assert!(!leaks(r.as_str()));
     }
 }
+
+/// A nested block comment between `SET`, the key and the value, and a
+/// value written without `=`, must not hide a secret.
+#[test]
+fn set_with_nested_comments_or_no_equals_redacts() {
+    for sql in [
+        "SET /* a /* b */ c */ password = Canary7f3a9c",
+        "SET password /* /* x */ */ = 'Canary7f3a9c'",
+        "SET password = /* /* x */ */ Canary7f3a9c",
+        "SET password Canary7f3a9c",
+    ] {
+        let r = redact_sql(sql);
+        assert!(!leaks(r.as_str()), "{sql} -> {}", r.as_str());
+    }
+}
