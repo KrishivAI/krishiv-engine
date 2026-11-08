@@ -21,5 +21,6 @@ pub mod policy;
 pub mod precheck;
 pub mod profile;
 pub mod qerror;
+pub mod quarantine;
 pub mod registry_coverage;
 pub mod wheels;

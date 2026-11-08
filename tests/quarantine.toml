@@ -1,0 +1,10 @@
+# Flaky-test quarantine registry (owner policy 2026-11-07). `cargo xtask quarantine` checks it against
+# `.config/nextest.toml`. Each entry: name (exact test name), package, owner (lane), issue, added and
+# deadline (YYYY-MM-DD, at most 3 days after `added`). Past its deadline the gate fails: fix or remove.
+[[test]]
+name = "two_tasks_of_one_query_share_their_chunks"
+package = "krishiv-exec"
+owner = "opus-3"
+issue = "PR #576 run 42433806198"
+added = "2026-11-08"
+deadline = "2026-11-11"
