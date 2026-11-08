@@ -45,6 +45,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::RecordBatch;
+use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_memory::{ConsumerHandle, Reservation, SpillFile, SpillReader};
 use krishiv_types::batch::Batch;
 
@@ -93,6 +94,15 @@ impl Cursor {
     }
 }
 
+/// The bytes a refused reservation asked for (0 if the error does not say).
+fn refused_bytes(e: &KrishivError) -> usize {
+    e.message_parameters()
+        .iter()
+        .find(|(name, _)| *name == "requestedBytes")
+        .and_then(|(_, v)| v.parse().ok())
+        .unwrap_or(0)
+}
+
 /// The flush phase's state.
 pub(super) struct Replay {
     /// `None` while a blocking step holds it.
@@ -101,6 +111,8 @@ pub(super) struct Replay {
     carry: Option<RecordBatch>,
     /// The driver was asked for memory for `carry`.
     asked: bool,
+    /// The driver was asked for memory for the next frame of the cursor, which the pool refused.
+    read_asked: bool,
     /// A partition evaluated from disk.
     emit: Option<Box<Emit>>,
     /// Lent to blocking steps (see the [module docs](self)).
@@ -278,6 +290,7 @@ impl Window {
             }),
             carry: None,
             asked: false,
+            read_asked: false,
             emit: None,
             headroom,
             base,
@@ -358,11 +371,26 @@ impl Window {
                 // fill the limit, so the next read of a batch found no memory).
                 let keep = r.base;
                 let (cursor, next) = with_credit_keeping(ctx, &mut r.headroom, keep, move || {
-                    let next = cursor.next()?;
+                    let next = cursor.next();
                     Ok((cursor, next))
                 })
                 .await?;
                 r.cursor = Some(cursor);
+                // A refused frame leaves the reader at the frame start (see `SpillReader`): the driver is asked
+                // for the frame's bytes once and the read repeats; a second refusal fails the query.
+                let next = match next {
+                    Err(e) if e.error_class() == ErrorClass::UnableToAcquireMemory => {
+                        if std::mem::replace(&mut r.read_asked, true) {
+                            r.read_asked = false;
+                            return Err(e);
+                        }
+                        return Ok(FlushOutput::NeedMemory {
+                            bytes: refused_bytes(&e).max(r.base),
+                        });
+                    }
+                    other => other?,
+                };
+                r.read_asked = false;
                 let Some(b) = next else {
                     l.finished = true;
                     self.flush_complete(l)?;
