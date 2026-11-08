@@ -162,6 +162,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn run_python_and_rust_report_a_missing_root() {
+        let nowhere = Path::new("/no/such/root");
+        assert!(run_python(nowhere, true).unwrap_err().contains("python3"));
+        assert!(run_rust(nowhere, true).is_err());
+    }
+
+    #[test]
     fn tidy_drops_the_banner_and_the_blank_lines_after_it() {
         let t = tidy("# Crate Documentation\n\n**Format Version:** 57\n\n# Module `x`\n\nBody\n");
         assert_eq!(t, "# Module `x`\n\nBody\n");

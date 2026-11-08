@@ -15,23 +15,29 @@ use serde_json::{Map, Value, json};
 use crate::docs_sql::{CAPTURED, examples};
 
 fn run_once(root: &Path, items: &[(String, String)]) -> Result<Vec<Value>, String> {
+    let mut cmd = Command::new("cargo");
+    cmd.args([
+        "run",
+        "--quiet",
+        "--locked",
+        "-p",
+        "krishiv-testkit",
+        "--bin",
+        "doc-examples",
+    ])
+    .current_dir(root);
+    run_child(cmd, items)
+}
+
+/// Feeds `items` as JSON to `cmd`'s stdin and parses its stdout as the answers.
+fn run_child(mut cmd: Command, items: &[(String, String)]) -> Result<Vec<Value>, String> {
     let input = Value::Array(
         items
             .iter()
             .map(|(id, sql)| json!({"id": id, "sql": sql}))
             .collect(),
     );
-    let mut child = Command::new("cargo")
-        .args([
-            "run",
-            "--quiet",
-            "--locked",
-            "-p",
-            "krishiv-testkit",
-            "--bin",
-            "doc-examples",
-        ])
-        .current_dir(root)
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -139,6 +145,33 @@ fn run_with(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn run_child_parses_the_answers_and_reports_failures() {
+        let mut ok = std::process::Command::new("sh");
+        ok.args(["-c", "cat >/dev/null; echo '[{\"id\":\"a\",\"ok\":true}]'"]);
+        let got = super::run_child(ok, &[("a".to_owned(), "select 1".to_owned())]).unwrap();
+        assert_eq!(got.len(), 1);
+        let mut bad = std::process::Command::new("sh");
+        bad.args(["-c", "cat >/dev/null; exit 3"]);
+        assert_eq!(
+            super::run_child(bad, &[]).unwrap_err(),
+            "doc-examples failed"
+        );
+        let mut junk = std::process::Command::new("sh");
+        junk.args(["-c", "cat >/dev/null; echo nope"]);
+        assert!(
+            super::run_child(junk, &[])
+                .unwrap_err()
+                .starts_with("doc-examples output")
+        );
+        let missing = std::process::Command::new("/no/such/program");
+        assert!(
+            super::run_child(missing, &[])
+                .unwrap_err()
+                .contains("cargo run")
+        );
+    }
+
     use super::*;
 
     /// An answer per example: `ok` with the id as the row, and `rand` varying between runs.
