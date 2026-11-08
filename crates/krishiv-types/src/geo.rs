@@ -388,7 +388,7 @@ pub fn srid_of_crs(crs: Option<&str>, geography: bool) -> Result<i32> {
 /// The text Spark prints a spatial value as (extended well-known text):
 /// `POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0. Every
 /// geometry type prints, with `Z`/`M`/`ZM` ordinates, empty geometries and
-/// nested collections; see [`wkt`] for the rules (from a real Spark 4.2.0 run).
+/// nested collections; see the `wkt` module for the rules (from a real Spark 4.2.0 run).
 ///
 /// ```
 /// use krishiv_types::geo::{rewrite, to_ewkt, ByteOrder, SpatialKind};
