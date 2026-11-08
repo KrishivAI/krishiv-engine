@@ -856,6 +856,10 @@ impl SortGlobal {
 
     /// The combined buffers changed: every driver still sorting input
     /// reports them (one waiting for memory reports nothing on its own).
+    /// A round of another consumer counts at most a consumer's own `used`
+    /// bytes of what it reports (`arbitrate::request_spills`): a driver
+    /// holding little exposes little of the combined bytes to it (the
+    /// driver's own requests are not capped so).
     fn report_all(&self) {
         let combined = self.combined.load(Ordering::Relaxed);
         for l in lock(&self.live).iter().filter_map(Weak::upgrade) {
@@ -1015,11 +1019,14 @@ impl Drop for ReaderSlot {
 
 impl Sort {
     /// Writes out the buffers among the combined parts; returns the bytes
-    /// freed. Out of the lock while spilling: a driver spills them only
-    /// before it combines, so the last to combine finalizes after every
-    /// such spill gave its parts back (`finalize` takes them, and is not
-    /// polled during the spill it services itself); an error fails the
-    /// query (the parts go).
+    /// freed, and every driver still sorting input reports what is left.
+    /// Out of the lock while spilling: a driver spills them only before it
+    /// combines, so the last to combine finalizes after every such spill
+    /// gave its parts back (`finalize` takes them, and is not polled during
+    /// the spill it services itself); an error fails the query (the parts
+    /// go). Two drivers spilling at once may put whole combines back out of
+    /// combine order (one driver's runs and buffer stay together, in
+    /// order); a driver's runs merge as one input either way.
     async fn spill_combined(
         &self,
         g: &SortGlobal,
@@ -1040,6 +1047,8 @@ impl Sort {
         parts.append(&mut shared.parts);
         shared.parts = parts;
         g.combined.store(buffered(&shared.parts), Ordering::Relaxed);
+        drop(shared);
+        g.report_all();
         Ok(freed)
     }
 
@@ -1401,7 +1410,10 @@ impl Sink for Sort {
             if !buffer.batches.is_empty() {
                 shared.parts.push(Part::Buffer(buffer));
             }
-            g.combined.store(buffered(&shared.parts), Ordering::Relaxed);
+            // Without a spill scope nothing spills: nothing is offered.
+            if self.spill.is_some() {
+                g.combined.store(buffered(&shared.parts), Ordering::Relaxed);
+            }
         }
         lock(&g.live)
             .retain(|l| l.strong_count() > 0 && !std::ptr::eq(l.as_ptr(), Arc::as_ptr(&live)));
@@ -1410,7 +1422,9 @@ impl Sink for Sort {
         // and spill them, and the last to combine finalizes (spilling them
         // itself when external), so this signal offers nothing.
         live.signal.set_spillable_bytes(0);
-        g.report_all();
+        if self.spill.is_some() {
+            g.report_all();
+        }
         Ok(())
     }
 
@@ -1531,7 +1545,6 @@ impl Sink for Sort {
                 }
             }
             g.report(&l.live, l.buffer.reservation.size());
-            g.report_all();
             Ok(freed)
         })
     }

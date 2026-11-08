@@ -18,7 +18,8 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use krishiv_common::error::ErrorClass;
 use krishiv_memory::{
-    ConsumerHandle, MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillOwner, TreePool,
+    ConsumerHandle, MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillOwner, Spillable,
+    TreePool,
 };
 use krishiv_types::batch::{Batch, Weights};
 
@@ -268,6 +269,87 @@ async fn spill_global_spills_the_combined_buffers() {
     assert_eq!(out.weights(), &Weights::Column(Int64Array::from(w)));
     assert_eq!(sort.metrics().final_fan_in, 2);
     drop((local, source_global, source_ctx, global, sink_ctx));
+    assert_eq!(manager.used_bytes(), 0);
+    assert_eq!(root.reserved(), 0);
+    drop(manager);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Buffers a driver combined while another driver still sorts input: the
+/// live driver reports them with its own (the ended driver's signal offers
+/// nothing, its hook ends with it) and its spill writes them out; finalize
+/// then reads every row in order. A sort without a spill scope offers
+/// nothing.
+#[tokio::test(start_paused = true)]
+async fn a_live_driver_reports_and_spills_the_combined_buffers() {
+    let (schema, batch) = floats();
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let root = TreePool::new(&MemoryConfig::default());
+    let config = ExecConfig {
+        batch_size: 3,
+        ..ExecConfig::default()
+    };
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", None),
+    );
+    let ctx = |op| {
+        TaskContext::new(
+            Arc::clone(&query),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(op),
+            "Sort",
+        )
+    };
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("sort-unit-live-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let keys = [SortKey::asc(2)];
+    let unspillable = Sort::new(Arc::clone(&schema), &keys, None).unwrap();
+    let sort = Sort::new(schema, &keys, Some(manager.scope().unwrap())).unwrap();
+    let offered = |c: &TaskContext| c.consumer().signal().spillable_bytes();
+    for s in [&unspillable, &sort] {
+        let (a_ctx, b_ctx) = (ctx(0), ctx(0));
+        let global = Sink::global_state(s, &a_ctx).unwrap();
+        let mut a = Sink::local_state(s, &a_ctx, &global).unwrap();
+        let mut b = Sink::local_state(s, &b_ctx, &global).unwrap();
+        s.sink(batch.clone(), &mut a, &global).unwrap();
+        s.combine(a, &global).unwrap();
+        assert_eq!(offered(&a_ctx), 0, "the ended driver offers nothing");
+        if std::ptr::eq(s, &unspillable) {
+            assert_eq!(offered(&b_ctx), 0);
+            assert_eq!(s.spill(&mut b, 1, &b_ctx).await.unwrap(), 0);
+            continue;
+        }
+        let combined = offered(&b_ctx);
+        assert!(combined > 0, "the live driver reports the combined buffer");
+        assert_eq!(s.spill(&mut b, 1, &b_ctx).await.unwrap(), combined);
+        assert_eq!(offered(&b_ctx), 0);
+        assert_eq!(sort.metrics().runs_spilled, 1);
+        s.sink(batch.clone(), &mut b, &global).unwrap();
+        s.combine(b, &global).unwrap();
+        s.finalize(&global, &b_ctx).await.unwrap();
+        assert_eq!(sort.metrics().runs_spilled, 2);
+
+        let source_ctx = ctx(1).with_dependency(Arc::clone(&global));
+        let source_global = Source::global_state(s, &source_ctx).unwrap();
+        let mut local = Source::local_state(s, &source_ctx, &source_global).unwrap();
+        let mut out = Vec::new();
+        while let Some(b) = s.get_data(&mut local, &source_global).await.unwrap() {
+            out.push(b);
+        }
+        let out = Batch::concat(&out[0].schema(), &out).unwrap();
+        assert_eq!(ids(&out), [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]);
+        drop((local, source_global, source_ctx, global, a_ctx, b_ctx));
+    }
     assert_eq!(manager.used_bytes(), 0);
     assert_eq!(root.reserved(), 0);
     drop(manager);
