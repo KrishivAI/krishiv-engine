@@ -111,8 +111,10 @@ struct Counters {
     /// files (`sink/parts.rs`), or the final phase's task runs
     /// (`sink/parallel.rs`). Reported as `spill_writers` when above 1.
     spill_writers: AtomicU64,
-    /// Partitions an extra writer handed back for want of scratch, written
-    /// again by the calling thread. Reported as `spill_handbacks` when set.
+    /// Work an extra writer handed back for want of scratch: a partition of
+    /// one run (`sink/parts.rs`, written by the calling thread) or a
+    /// final-phase task with the files it finished (`sink/parallel.rs`,
+    /// resumed by the next writer). Reported as `spill_handbacks` when set.
     spill_handbacks: AtomicU64,
     /// Final-phase task runs an extra writer finished (`sink/parallel.rs`).
     /// Reported as `spill_helper_runs` when set.
@@ -122,7 +124,8 @@ struct Counters {
     /// writers: with several writing at once it can exceed the elapsed
     /// time. Reported as `spill_write_ns` when set.
     spill_write_ns: AtomicU64,
-    /// The longest single run's write, in nanoseconds. Reported as
+    /// The longest single write attempt on a run (a whole run, or one
+    /// writer's share of a resumed one), in nanoseconds. Reported as
     /// `spill_write_max_ns` when set.
     spill_write_max_ns: AtomicU64,
     /// Times a disk task was refused memory while others ran (it waited);

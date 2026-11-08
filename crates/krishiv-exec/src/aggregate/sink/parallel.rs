@@ -668,6 +668,18 @@ impl TaskRuns {
     }
 }
 
+/// Stops the other writers when an extra writer's thread panics; the
+/// panic itself becomes the run's error when the thread is joined.
+struct StopOnPanic<'a>(&'a TaskRuns);
+
+impl Drop for StopOnPanic<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.stop.store(true, Ordering::Release);
+        }
+    }
+}
+
 /// Counts one extra writer as running while it lives.
 struct Live<'a>(&'a AtomicUsize);
 
@@ -717,10 +729,11 @@ impl Spiller {
             while let Some(pending) = shared.next() {
                 write_own(pending);
                 // The task's memory is back in the pool: start writers for
-                // the tasks left, while there is room for their scratch.
-                while shared.live.load(Ordering::Acquire) + 1 < MAX_WRITERS
-                    && lock(&shared.todo).len() > 1
-                {
+                // the tasks left (one for each but the next, which this
+                // thread takes), while there is room for their scratch.
+                let room = lock(&shared.todo).len().saturating_sub(1);
+                let mut started_now = 0;
+                while shared.live.load(Ordering::Acquire) + 1 < MAX_WRITERS && started_now < room {
                     let Some(h) = self.one_helper() else { break };
                     shared.live.fetch_add(1, Ordering::AcqRel);
                     let live = Live(&shared.live);
@@ -729,10 +742,14 @@ impl Spiller {
                         .name("krishiv-spill-write".to_owned())
                         .spawn_scoped(scope, move || {
                             let _live = live;
+                            let _stop = StopOnPanic(shared);
                             self.help_tasks(&h, shared);
                         });
                     match started {
-                        Ok(j) => handles.push(j),
+                        Ok(j) => {
+                            handles.push(j);
+                            started_now += 1;
+                        }
                         // The closure (and `live`) dropped: one writer fewer.
                         Err(_) => break,
                     }
@@ -775,13 +792,23 @@ impl Spiller {
     /// left, a run failed, or the pool refuses its scratch (that task goes
     /// back to the front of the queue, with the files it finished).
     fn help_tasks(&self, h: &Helper, shared: &TaskRuns) {
-        let writer = || self.helper_writer(h);
-        while let Some(mut pending) = shared.next() {
-            if self.refused_in_test() {
-                bump(&self.counters.spill_handbacks, 1);
-                lock(&shared.todo).push_front(pending);
-                return;
+        // Files this writer opened for its current task: tests refuse the
+        // second one (`refused_in_test`), so a handed-back task carries a
+        // finished file and is resumed, as when the pool refuses scratch
+        // part-way through a run.
+        let opened = std::cell::Cell::new(0usize);
+        let writer = || {
+            if opened.get() > 0 && self.refused_in_test() {
+                return Err(SpillError::Memory(krishiv_memory::MemoryError::Exhausted {
+                    requested: HEADROOM,
+                    available: 0,
+                }));
             }
+            opened.set(opened.get() + 1);
+            self.helper_writer(h)
+        };
+        while let Some(mut pending) = shared.next() {
+            opened.set(0);
             let outcome = write_task(self, &pending.1, &mut pending.2, &writer, &shared.stop);
             if !shared.done(self, pending, outcome, true) {
                 return;

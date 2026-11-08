@@ -202,12 +202,13 @@ async fn handed_back_partitions_are_written_by_the_calling_thread() {
 }
 
 /// X2b' (design P2-X2 §11.3): when the final phase spills with tasks left,
-/// their runs are written by several threads, each task's run whole, in
-/// the tasks' order; a writer the pool refuses scratch puts its task back,
-/// with the files it finished, for the next writer. Extra writers write
-/// runs; the result, `collect_list`'s order included, is the in-memory
-/// final phase's, with or without hand-backs; hand-backs write no file
-/// twice (as many files as without); nothing stays reserved.
+/// their runs are written by several threads, in the tasks' order; a
+/// writer the pool refuses scratch part-way through a run (here: its
+/// second file) puts its task back with the files it finished, and the
+/// next writer resumes it. The result, `collect_list`'s order included, is
+/// the in-memory final phase's, with or without hand-backs; resumed runs
+/// write no file twice and lose none (as many files as without); nothing
+/// stays reserved.
 #[tokio::test]
 async fn final_phase_runs_are_written_at_once() {
     // Extra writers take places among the process's (`LIVE_HELPERS`): the
@@ -249,16 +250,16 @@ async fn final_phase_runs_are_written_at_once() {
         let helper_runs = sink_metric(&agg, "spill_helper_runs");
         let back = sink_metric(&agg, "spill_handbacks");
         match handbacks {
-            0 => {
-                assert_eq!(back, 0);
-                assert!(helper_runs > 0, "an extra writer wrote a run");
-            }
+            0 => assert_eq!(back, 0),
+            // One extra writer is refused its second file: its task goes
+            // back with the first and another writer resumes it.
             1 => assert_eq!(back, 1),
-            // Every extra writer hands back its first task: the calling
-            // thread writes them all.
+            // Every extra writer is refused its second file: only a task of
+            // one partition file can be finished by one; the calling thread
+            // resumes the others.
             _ => {
                 assert!(back >= 1, "{back}");
-                assert_eq!(helper_runs, 0);
+                assert!(helper_runs < tasks, "{helper_runs} of {tasks}");
             }
         }
         // Files: hand-backs neither drop nor repeat any. (Not bytes: the
