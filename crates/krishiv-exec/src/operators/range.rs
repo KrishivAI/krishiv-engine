@@ -55,6 +55,8 @@ struct RangeLocal {
     claimed: u64,
     /// The claim ordinal of the current slice.
     position: Option<u64>,
+    lane: Option<(usize, usize)>,
+    taken: usize,
 }
 
 fn range_schema() -> SchemaRef {
@@ -100,12 +102,20 @@ impl crate::operator::Source for Range {
         global_ref::<RangeGlobal>(global, "Range").map_or(1, |g| (g.partitions as usize).max(1))
     }
 
-    fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+    fn deterministic_split(&self, global: &GlobalState) -> Option<usize> {
+        global_ref::<RangeGlobal>(global, "Range")
+            .ok()
+            .map(|g| (g.partitions as usize).max(1))
+    }
+
+    fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
         Ok(Box::new(RangeLocal {
             current: None,
             step: self.step,
             claimed: 0,
             position: None,
+            lane: ctx.lane(),
+            taken: 0,
         }))
     }
 
@@ -139,7 +149,8 @@ impl Range {
         loop {
             match local.current {
                 None => {
-                    let Some((ordinal, index)) = g.cursor.claim_ordered() else {
+                    let Some((ordinal, index)) = g.cursor.claim_for(local.lane, &mut local.taken)
+                    else {
                         return Ok(None);
                     };
                     local.claimed += 1;

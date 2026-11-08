@@ -71,6 +71,25 @@ impl MorselCursor {
     }
 }
 
+impl MorselCursor {
+    /// The next claim of a driver: from the shared sequence, or, for a
+    /// logical-partition driver (`lane` is `(lane, lanes)`, see
+    /// [`claim_strided`](Self::claim_strided)), from its own lane, with `taken`
+    /// counting the claims it made.
+    pub fn claim_for(
+        &self,
+        lane: Option<(usize, usize)>,
+        taken: &mut usize,
+    ) -> Option<(u64, usize)> {
+        let Some((lane, lanes)) = lane else {
+            return self.claim_ordered();
+        };
+        let got = self.claim_strided(lane, lanes, *taken)?;
+        *taken += 1;
+        Some(got)
+    }
+}
+
 /// A Fisher-Yates shuffle of `0..len` driven by SplitMix64.
 fn permutation(len: usize, seed: u64) -> Vec<usize> {
     let mut state = seed;

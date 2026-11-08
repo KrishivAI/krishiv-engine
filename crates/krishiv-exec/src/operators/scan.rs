@@ -268,6 +268,10 @@ pub(super) struct ScanLocal {
     /// The driver's partition: pushed filters evaluate stateful functions
     /// in it (see [`Predicate::evaluate_in`]).
     pub(super) partition: u32,
+    /// `(lane, lanes)` and the claims made, for a logical-partition driver
+    /// (T094 G1).
+    pub(super) lane: Option<(usize, usize)>,
+    pub(super) taken: usize,
 }
 
 impl MemoryScan {
@@ -414,7 +418,7 @@ impl MemoryScan {
             return Ok(None);
         }
         if local.batches.is_empty() {
-            let Some((ordinal, m)) = g.cursor.claim_ordered() else {
+            let Some((ordinal, m)) = g.cursor.claim_for(local.lane, &mut local.taken) else {
                 return Ok(None);
             };
             local.position = Some(ordinal);
@@ -526,7 +530,20 @@ impl Source for MemoryScan {
             position: None,
             rows: super::RowStage::new(&g.runtime, &self.table, self.runtime.settings()),
             partition: _ctx.partition(),
+            lane: _ctx.lane(),
+            taken: 0,
         }))
+    }
+
+    fn deterministic_split(&self, global: &GlobalState) -> Option<usize> {
+        // A pushed-down LIMIT stops all drivers at a shared row count, which
+        // depends on timing.
+        if self.limit.is_some() {
+            return None;
+        }
+        global_ref::<ScanGlobal>(global, "MemoryScan")
+            .ok()
+            .map(|g| g.morsels.len().max(1))
     }
 
     fn get_data<'a>(
