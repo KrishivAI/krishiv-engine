@@ -300,9 +300,14 @@ impl ExchangeSink {
     }
 
     fn partials(&self) -> Vec<Option<KeyFilterBuilder>> {
+        // Every map task is one producer of several: a large build's
+        // shared array is not built here (design P2b-R1 M5).
         self.filters
             .iter()
-            .map(|f| KeyFilterBuilder::new(f.key_type.clone(), f.options))
+            .map(|f| {
+                let options = crate::join::instantiated_filter_options(f.options, u32::MAX);
+                KeyFilterBuilder::new(f.key_type.clone(), options)
+            })
             .collect()
     }
 

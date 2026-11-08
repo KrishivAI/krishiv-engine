@@ -667,7 +667,7 @@ mod tests {
             SinkStatus::NeedMoreInput => "more",
             SinkStatus::Blocked(_) => "blocked",
             SinkStatus::Finished => "finished",
-            SinkStatus::NeedMemory { .. } => "memory",
+            SinkStatus::NeedMemory { .. } | SinkStatus::WantMemory { .. } => "memory",
         }
     }
 

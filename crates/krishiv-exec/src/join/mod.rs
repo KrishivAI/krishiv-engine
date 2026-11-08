@@ -178,6 +178,7 @@ use krishiv_types::batch::{Batch, Weights};
 
 pub use broadcast::{BroadcastKey, BroadcastTables, SharedBuildJoinNode};
 pub(crate) use broadcast::{BuildJob, Decision, PrebuiltSink, SharedOrOwnRows};
+pub(crate) use build::instantiated_filter_options;
 pub(crate) use merge::MergeEnv;
 pub use merge::{SortMergeJoin, SortMergeJoinNode, merge_join_supported};
 pub use nested::{NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec};
@@ -379,7 +380,28 @@ pub(crate) enum Counter {
     ProbeTableNs,
     /// Spilled partitions that would not split, joined by sort-merge.
     MergeFallbacks,
+    /// Bytes of the shared Bloom arrays the build published (design
+    /// P2b-R1).
+    SharedBloomBytes,
+    /// Shared Bloom arrays published as the range: too full for their
+    /// keys (the build's estimate was far low).
+    BloomUndersized,
+    /// Shared Bloom arrays published as the range: never reserved, or
+    /// some keys never reached them.
+    BloomUnfunded,
+    /// Shared Bloom arrays published as the range: another holder was left
+    /// at publish (a bug, not memory pressure).
+    BloomStillShared,
 }
+
+/// The build's counters reported only when not zero (most builds have no
+/// shared Bloom array).
+const BUILD_SPARSE_COUNTERS: [(Counter, &str); 4] = [
+    (Counter::SharedBloomBytes, "shared_bloom_bytes"),
+    (Counter::BloomUndersized, "bloom_undersized"),
+    (Counter::BloomUnfunded, "bloom_unfunded"),
+    (Counter::BloomStillShared, "bloom_still_shared"),
+];
 
 /// The build sink's counters, by name.
 const BUILD_COUNTERS: [(Counter, &str); 9] = [
@@ -415,7 +437,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 24]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 28]);
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {
@@ -452,6 +474,11 @@ impl Counters {
 
     pub(crate) fn build(&self) -> crate::metrics::ExtraMetrics {
         let mut out = self.report(&BUILD_COUNTERS);
+        out.extend(
+            self.report(&BUILD_SPARSE_COUNTERS)
+                .into_iter()
+                .filter(|(_, m)| !matches!(m, Metric::Count(0))),
+        );
         let kinds = self.get(Counter::IndexKinds);
         if kinds != 0 {
             out.push((

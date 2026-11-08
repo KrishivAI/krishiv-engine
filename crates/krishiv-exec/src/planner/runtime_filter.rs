@@ -38,12 +38,22 @@
 //! min/max and the distinct keys (up to the larger of
 //! `krishiv.runtimeFilter.inList.maxValues`, the statistics `IN` list, and
 //! `krishiv.runtimeFilter.exactSet.maxValues`, the exact row form) are
-//! always collected; a Bloom filter's hashes only when
-//! `spark.sql.optimizer.runtime.bloomFilter.enabled`, the build is
-//! estimated at most `krishiv.runtimeFilter.bloom.maxItems` rows, and the
-//! scan at least four times the build and at least
-//! `krishiv.runtimeFilter.bloom.minApplicationRows`. The build decides with
-//! the actual key count at finalize. A build whose estimate is a selectivity
+//! always collected; a Bloom filter only when
+//! `spark.sql.optimizer.runtime.bloomFilter.enabled` and the scan is at
+//! least four times the build and at least
+//! `krishiv.runtimeFilter.bloom.minApplicationRows`. A build estimated at
+//! most `krishiv.runtimeFilter.bloom.maxItems` rows collects its keys'
+//! hashes and sizes the filter for them at finalize. A larger one (design
+//! P2b-R1) gets a planned size, `RuntimeBloom::bytes_for` its estimate at
+//! 1% capped at `krishiv.runtimeFilter.bloom.maxBytes`, planned only while
+//! that size still expects at most 5% false positives: its drivers set bits
+//! in one shared array the build reserves before it stores a row, and the
+//! measured pass rate decides at finalize. A build run by several producer
+//! partitions (one per task) collects no Bloom past the item cap: its
+//! partials would be sent and merged at that size, so instantiation drops
+//! the shared array's form. The build decides with the actual key count at
+//! finalize. A
+//! build whose estimate is a selectivity
 //! guess over an aggregate's output (a `HAVING`, or a filter on a grouped
 //! subquery: `filtered_aggregate`) counts as at most `bloom.maxItems`
 //! rows for both tests, so its Bloom form is planned and its actual keys
@@ -60,7 +70,7 @@ use krishiv_common::config::{
     RUNTIME_FILTER_BLOOM_MAX_ITEMS, RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
     RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
 };
-use krishiv_io::runtime_filter::RuntimeBloom;
+use krishiv_io::runtime_filter::{BLOCK_BYTES, RuntimeBloom};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{AttrId, Expr, ExprNode, ReadSource, ResolvedExpr};
 
@@ -128,7 +138,7 @@ impl Settings {
                 .get(&RUNTIME_FILTER_BLOOM_MAX_BYTES)
                 .and_then(ConfigValue::as_size)
                 .and_then(|v| usize::try_from(v).ok())
-                .unwrap_or(8 << 20),
+                .unwrap_or(512 << 20),
             min_application_rows: count(&RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS, 1_000_000),
             row: RowStageSettings {
                 min_rows: count(&RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, 65_536).max(1),
@@ -226,9 +236,18 @@ impl Planner<'_> {
                     build_rows
                 };
                 #[expect(clippy::cast_precision_loss, reason = "estimates")]
-                let bloom = s.bloom
-                    && rows <= s.bloom_max_items as f64
-                    && site.scan_rows >= (4.0 * rows).max(s.min_application_rows as f64);
+                let applies =
+                    s.bloom && site.scan_rows >= (4.0 * rows).max(s.min_application_rows as f64);
+                #[expect(clippy::cast_precision_loss, reason = "estimates")]
+                let collected = rows <= s.bloom_max_items as f64;
+                // A larger build's one shared array. A partitioned build
+                // run by several producer partitions plans it too, and has
+                // it dropped at instantiation (design P2b-R1 M5: their
+                // partials would be sent and merged at that size).
+                let shared = (applies && !collected)
+                    .then(|| shared_bloom_bytes(rows, s))
+                    .flatten();
+                let bloom = applies && (collected || shared.is_some());
                 let reads_scan_table = reads_source(build, &site.source);
                 let id = FilterId(self.next_filter);
                 self.next_filter += 1;
@@ -244,7 +263,11 @@ impl Planner<'_> {
                     "RuntimeFilter {id}: {e} -> {}.{}{}",
                     site.scan_name,
                     site.column.0.join("."),
-                    if bloom { " (bloom)" } else { "" }
+                    match shared {
+                        Some(bytes) => format!(" (bloom {})", size_text(bytes)),
+                        None if bloom => " (bloom)".to_owned(),
+                        None => String::new(),
+                    }
                 ));
                 let mut options = KeyFilterOptions {
                     max_values: s.max_values,
@@ -256,12 +279,48 @@ impl Planner<'_> {
                     ..KeyFilterOptions::default()
                 };
                 // Sized at the false-positive rate the producers build with.
-                options.bloom_bytes = (bloom && partitioned)
-                    .then(|| planned_bloom_bytes(rows, options.bloom_fpp, options.bloom_max_bytes));
+                options.bloom_bytes = match shared {
+                    Some(bytes) => Some(u32::try_from(bytes).unwrap_or(u32::MAX)),
+                    None => (bloom && partitioned).then(|| {
+                        planned_bloom_bytes(rows, options.bloom_fpp, options.bloom_max_bytes)
+                    }),
+                };
                 out.filters.push(JoinFilterPlan { id, key, options });
             }
         }
         out
+    }
+}
+
+/// The planned size of a large build's shared Bloom array (design P2b-R1
+/// §2.1): its estimate's 1% size, capped at `bloom.maxBytes`; `None` when
+/// the capped size expects more than 5% false positives at the estimate,
+/// or is not above what the hash-collecting builds take (it would not be
+/// read as a shared array's, `KeyFilterOptions::shared_bloom_bytes`).
+fn shared_bloom_bytes(build_rows: f64, s: Settings) -> Option<usize> {
+    let defaults = KeyFilterOptions::default();
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a non-negative estimate, saturating"
+    )]
+    let keys = build_rows.max(1.0).ceil() as u64;
+    // Whole blocks, at most what a plan's `u32` holds.
+    let cap = s.bloom_max_bytes.min(u32::MAX as usize) / BLOCK_BYTES * BLOCK_BYTES;
+    let bytes = RuntimeBloom::bytes_for(keys, defaults.bloom_fpp).min(cap);
+    let collected = RuntimeBloom::bytes_for(s.bloom_max_items, defaults.bloom_fpp);
+    (bytes > collected && RuntimeBloom::expected_fpp_at(bytes, keys) <= defaults.bloom_max_fpp)
+        .then_some(bytes)
+}
+
+/// A planned size for `EXPLAIN`: whole MB from 1 MB, else whole KB (both
+/// rounded up). A filter of several producer partitions does not build it
+/// (design P2b-R1 M5, at instantiation).
+fn size_text(bytes: usize) -> String {
+    if bytes >= 1 << 20 {
+        format!("{} MB", bytes.div_ceil(1 << 20))
+    } else {
+        format!("{} KB", bytes.div_ceil(1 << 10))
     }
 }
 

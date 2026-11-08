@@ -48,7 +48,7 @@ impl std::fmt::Debug for RuntimeBloom {
 }
 
 #[inline]
-fn mask(key: u32) -> [u32; 8] {
+pub(super) fn mask(key: u32) -> [u32; 8] {
     let mut m = [0u32; 8];
     for (w, salt) in m.iter_mut().zip(SALT) {
         *w = 1 << (key.wrapping_mul(salt) >> 27);
@@ -56,7 +56,25 @@ fn mask(key: u32) -> [u32; 8] {
     m
 }
 
+/// The block of `hash` among `blocks`: `(upper 32 bits * blocks) >> 32`,
+/// below `blocks`.
+#[inline]
+pub(super) fn block_of(hash: u64, blocks: usize) -> usize {
+    usize::try_from(((hash >> 32) * blocks as u64) >> 32).unwrap_or(usize::MAX)
+}
+
 impl RuntimeBloom {
+    /// A filter over `blocks` (a frozen [`SharedBloom`](super::SharedBloom)).
+    pub(super) fn from_blocks(blocks: Box<[[u32; 8]]>) -> Self {
+        Self { blocks }
+    }
+
+    /// Where the blocks live (a test that a freeze copies nothing).
+    #[cfg(test)]
+    pub(super) fn blocks_addr(&self) -> usize {
+        self.blocks.as_ptr().addr()
+    }
+
     /// Bytes that hold `items` distinct hashes at false-positive rate `fpp`
     /// (Parquet's sizing: `-8 n / ln(1 - fpp^(1/8))` bits), in whole blocks,
     /// at least one.
@@ -95,8 +113,7 @@ impl RuntimeBloom {
 
     #[inline]
     fn block(&self, hash: u64) -> usize {
-        // `(upper 32 bits * blocks) >> 32` is below `blocks`.
-        usize::try_from(((hash >> 32) * self.blocks.len() as u64) >> 32).unwrap_or(usize::MAX)
+        block_of(hash, self.blocks.len())
     }
 
     /// Adds `hash`.
@@ -200,8 +217,16 @@ impl RuntimeBloom {
     /// when the eight bits it tests are set in its block.
     #[must_use]
     pub fn expected_fpp(&self, items: u64) -> f64 {
+        Self::expected_fpp_at(self.num_bytes(), items)
+    }
+
+    /// [`Self::expected_fpp`] of a filter of `bytes` bytes (whole blocks,
+    /// at least one), without making it: a planner's sizing.
+    #[must_use]
+    pub fn expected_fpp_at(bytes: usize, items: u64) -> f64 {
+        let blocks = bytes.div_ceil(BLOCK_BYTES).max(1);
         #[expect(clippy::cast_precision_loss, reason = "an estimate")]
-        let lambda = items as f64 / self.blocks.len() as f64;
+        let lambda = items as f64 / blocks as f64;
         if lambda == 0.0 {
             return 0.0;
         }

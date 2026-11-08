@@ -242,6 +242,7 @@ impl KeyFilter {
             nulls_pass: flags & 1 != 0,
             empty: flags & 2 != 0,
             keys,
+            held: super::filter::Held::default(),
         })
     }
 }

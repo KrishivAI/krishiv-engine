@@ -478,10 +478,18 @@ fn a_reader_takes_every_pair_and_refuses_another_schema() {
 /// under a pool of `finalize_limit` bytes; returns the published filter's form and what the
 /// sink's state held of that pool until it was dropped.
 fn published_filter_form(finalize_limit: Option<usize>) -> (krishiv_io::FilterForm, usize) {
+    published_filter_form_with(finalize_limit, krishiv_io::KeyFilterOptions::default())
+}
+
+/// As [`published_filter_form`], collecting with `options`.
+fn published_filter_form_with(
+    finalize_limit: Option<usize>,
+    options: krishiv_io::KeyFilterOptions,
+) -> (krishiv_io::FilterForm, usize) {
     use crate::operator::Sink as _;
     use crate::values::{LocalValues, Producer, ValueId, ValueService as _};
     use futures::FutureExt as _;
-    use krishiv_io::{ColumnPath, FilterId, FilterSnapshot, KeyFilterOptions};
+    use krishiv_io::{ColumnPath, FilterId, FilterSnapshot};
     use krishiv_memory::MemoryPool as _;
     let (_root, ctx) = sink_ctx(None);
     let (finalize_root, finalize_ctx) = sink_ctx_quantum(finalize_limit, 1);
@@ -506,7 +514,7 @@ fn published_filter_form(finalize_limit: Option<usize>) -> (krishiv_io::FilterFo
             id: FilterId(1),
             column: 0,
             key_type: DataType::Int64,
-            options: KeyFilterOptions::default(),
+            options,
             null_safe: false,
         }],
         Arc::clone(&values) as Arc<dyn crate::values::ValueService>,
@@ -537,6 +545,25 @@ fn published_filter_form(finalize_limit: Option<usize>) -> (krishiv_io::FilterFo
     drop(global);
     assert_eq!(finalize_root.reserved(), 0);
     (f.form(), held)
+}
+
+/// A map task is one producer of several: a large build's shared-array
+/// size (design P2b-R1) is never built from its collected hashes, nor held
+/// (M5, review blocker 1).
+#[test]
+fn an_exchange_filter_builds_no_shared_size_bloom() {
+    let options = krishiv_io::KeyFilterOptions {
+        max_values: 0,
+        exact_max_values: 0,
+        bloom_max_items: 1_000,
+        bloom_bytes: Some(64 << 20),
+        bloom_max_bytes: 512 << 20,
+        ..krishiv_io::KeyFilterOptions::default()
+    };
+    assert!(options.shared_bloom_bytes().is_some());
+    let (form, held) = published_filter_form_with(None, options);
+    assert_eq!(form, krishiv_io::FilterForm::Range);
+    assert!(held < 1 << 20, "{held}");
 }
 
 #[test]

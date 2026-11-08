@@ -1925,17 +1925,13 @@ pub(crate) fn hash_join(
         .runtime_filters
         .iter()
         .map(|f| {
-            // A planned Bloom size lets several build partitions' filters
-            // OR; one producer sizes its Bloom for the keys it saw, as an
-            // estimate can be far off.
-            let mut options = f.options;
-            if values.producers(ValueId::Filter(f.id)) == 1 {
-                options.bloom_bytes = None;
-            }
             Ok(JoinRuntimeFilter {
                 key: f.key,
                 filter: values.filter(f.id)?,
-                options,
+                options: crate::join::instantiated_filter_options(
+                    f.options,
+                    values.producers(ValueId::Filter(f.id)),
+                ),
             })
         })
         .collect::<Result<Vec<_>>>()?;

@@ -178,6 +178,155 @@ async fn spilled_builds_cover_every_key() {
     }
 }
 
+/// A large build's shared Bloom array (design P2b-R1): reserved before the
+/// build stores a row, kept when the build spills (the form is the Bloom,
+/// not the range: the funded array is never dropped for memory), every
+/// stored key passes, and its reservation goes with the published filter,
+/// released when the filter drops.
+#[tokio::test]
+async fn a_spilling_build_keeps_its_shared_bloom() {
+    let n = 100_000u32;
+    let build: Vec<super::Row> = (0..i64::from(n))
+        .map(|i| r(Some(i * 3), Some("k"), i))
+        .collect();
+    let planned = krishiv_io::runtime_filter::RuntimeBloom::bytes_for(u64::from(n), 0.01);
+    let shared = KeyFilterOptions {
+        max_values: 0,
+        exact_max_values: 0,
+        bloom_max_items: 1000,
+        bloom_bytes: Some(u32::try_from(planned).unwrap()),
+        ..KeyFilterOptions::default()
+    };
+    assert!(shared.shared_bloom_bytes().is_some());
+    for (limit, spills) in [(SPILL_FREE, false), (2 * MIB, true)] {
+        let fs = vec![filter(1, 0, shared)];
+        let root = root(limit);
+        let (_manager, scope) = spill();
+        let q = query(&root, 1, ExecConfig::default());
+        let case = case(JoinType::Inner, 1, false, false);
+        let join = HashJoin::try_new(case.spec(Some(scope)))
+            .unwrap()
+            .with_runtime_filters(fs.clone())
+            .unwrap();
+        let plan = Arc::new(HashJoinNode {
+            join,
+            build: scan(&schema(), batches(&data(&build), 7)),
+            probe: scan(&schema(), Vec::new()),
+        });
+        run(&runner_for(2, limit), plan, &q).await.unwrap();
+        assert_eq!(
+            metric(&q, "HashJoinBuild", "spilled_partitions") > 0,
+            spills,
+            "limit {limit}"
+        );
+        assert_eq!(
+            metric(&q, "HashJoinBuild", "shared_bloom_bytes"),
+            planned as u64,
+            "limit {limit}"
+        );
+        let k = published(&fs[0]);
+        assert_eq!(k.bloom_bytes(), Some(planned), "limit {limit}");
+        assert_eq!(k.held_bytes(), planned, "limit {limit}");
+        assert_eq!(k.key_count(), u64::from(n), "limit {limit}");
+        let keys = Int64Array::from_iter_values((0..i64::from(n)).map(|i| i * 3));
+        assert_eq!(k.evaluate(&keys).unwrap().true_count(), n as usize);
+        // The filter holds the array's reservation until it goes.
+        assert!(
+            krishiv_memory::MemoryPool::reserved(&*root) >= planned,
+            "limit {limit}"
+        );
+        drop((k, fs, q));
+        assert_released(&root);
+    }
+}
+
+/// A pool whose share for the array (1/16 of its limit) is too small for
+/// the build's keys publishes the range, counted, never fails the query.
+#[tokio::test]
+async fn an_undersized_shared_bloom_publishes_the_range() {
+    let n = 100_000u32;
+    let build: Vec<super::Row> = (0..i64::from(n))
+        .map(|i| r(Some(i * 3), Some("k"), i))
+        .collect();
+    let shared = KeyFilterOptions {
+        max_values: 0,
+        exact_max_values: 0,
+        bloom_max_items: 1000,
+        bloom_bytes: Some(512 << 20),
+        ..KeyFilterOptions::default()
+    };
+    let fs = vec![filter(1, 0, shared)];
+    let limit = MIB;
+    let root = root(limit);
+    let (_manager, scope) = spill();
+    let q = query(&root, 1, ExecConfig::default());
+    let join = HashJoin::try_new(case(JoinType::Inner, 1, false, false).spec(Some(scope)))
+        .unwrap()
+        .with_runtime_filters(fs.clone())
+        .unwrap();
+    let plan = Arc::new(HashJoinNode {
+        join,
+        build: scan(&schema(), batches(&data(&build), 7)),
+        probe: scan(&schema(), Vec::new()),
+    });
+    run(&runner_for(2, limit), plan, &q).await.unwrap();
+    assert_eq!(metric(&q, "HashJoinBuild", "bloom_undersized"), 1);
+    let k = published(&fs[0]);
+    assert!(k.bloom_bytes().is_none() && k.has_range());
+    assert_eq!(k.held_bytes(), 0);
+    drop((k, fs, q));
+    assert_released(&root);
+}
+
+/// A pool too full for the shared array (held by a consumer that cannot
+/// spill): the request never fails the query (design P2b-R1 M2), the array
+/// is abandoned and the filter is the range, every stored key passes, and
+/// the pool is empty at the end.
+#[tokio::test]
+async fn an_unfundable_shared_bloom_never_fails_the_query() {
+    use krishiv_memory::{MemoryPool, Reservation};
+    let n = 3_000u32;
+    let build: Vec<super::Row> = (0..i64::from(n))
+        .map(|i| r(Some(i * 3), Some("k"), i))
+        .collect();
+    let shared = KeyFilterOptions {
+        max_values: 0,
+        exact_max_values: 0,
+        bloom_max_items: 100,
+        bloom_bytes: Some(512 << 20),
+        bloom_max_bytes: 512 << 20,
+        ..KeyFilterOptions::default()
+    };
+    let fs = vec![filter(1, 0, shared)];
+    // The array's share is 1 MiB (1/16); leave the build less than that.
+    let limit = 16 * MIB;
+    let root = root(limit);
+    let hog_id = root.register("hog", None);
+    let mut hog = Reservation::new(Arc::clone(&root) as Arc<dyn MemoryPool>, hog_id);
+    hog.try_grow(limit - 900 * 1024).unwrap();
+    let (_manager, scope) = spill();
+    let q = query(&root, 1, ExecConfig::default());
+    let join = HashJoin::try_new(case(JoinType::Inner, 1, false, false).spec(Some(scope)))
+        .unwrap()
+        .with_runtime_filters(fs.clone())
+        .unwrap();
+    let plan = Arc::new(HashJoinNode {
+        join,
+        build: scan(&schema(), batches(&data(&build), 7)),
+        probe: scan(&schema(), Vec::new()),
+    });
+    run(&runner_for(2, limit), plan, &q).await.unwrap();
+    assert_eq!(metric(&q, "HashJoinBuild", "bloom_unfunded"), 1);
+    assert_eq!(metric(&q, "HashJoinBuild", "shared_bloom_bytes"), 0);
+    let k = published(&fs[0]);
+    assert!(k.bloom_bytes().is_none() && k.has_range());
+    assert_eq!(k.held_bytes(), 0);
+    let keys = Int64Array::from_iter_values((0..i64::from(n)).map(|i| i * 3));
+    assert_eq!(k.evaluate(&keys).unwrap().true_count(), n as usize);
+    drop((k, fs, q, hog));
+    assert_released(&root);
+}
+
 #[tokio::test]
 async fn failed_builds_disable_their_filters() {
     let root = root(SPILL_FREE);

@@ -831,6 +831,16 @@ impl Driver {
                 self.reserve(k, bytes).await?;
                 continue;
             }
+            if let SinkStatus::WantMemory { bytes } = status {
+                // Never aborting a query: a refusal leaves no credit, and
+                // the retry's `try_grow` takes the sink's fallback.
+                match self.reserve_with(k, bytes, false).await? {
+                    Ok(()) => self.credit = Some(k),
+                    Err(MemoryError::Exhausted { .. }) => {}
+                    Err(e) => return Err(KrishivError::from(e)),
+                }
+                continue;
+            }
             self.settle_credit();
             self.metrics(k).input(rows);
             return Ok(match status {
@@ -842,7 +852,9 @@ impl Driver {
                     waited?;
                     false
                 }
-                SinkStatus::NeedMoreInput | SinkStatus::NeedMemory { .. } => false,
+                SinkStatus::NeedMoreInput
+                | SinkStatus::NeedMemory { .. }
+                | SinkStatus::WantMemory { .. } => false,
             });
         }
     }

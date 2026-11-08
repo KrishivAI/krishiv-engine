@@ -9,7 +9,10 @@ use arrow_array::{ArrayRef, Int64Array, LargeBinaryArray, UInt64Array};
 use arrow_row::Rows;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
-use krishiv_io::{DisabledReason, FilterId, FilterSnapshot, KeyFilterBuilder};
+use krishiv_io::{
+    DisabledReason, FilterId, FilterSnapshot, KeyFilter, KeyFilterBuilder, SharedBloom,
+    SharedBloomOutcome,
+};
 use krishiv_memory::{Reservation, SpillSignal};
 use krishiv_types::batch::{Batch, Weights};
 
@@ -22,7 +25,7 @@ use crate::error::{Result, internal};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
 use crate::rows::Hll;
 use crate::sync::{Event, Mutex, lock};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 /// The build sink.
 #[derive(Debug)]
@@ -43,11 +46,44 @@ pub(crate) struct BuildGlobal {
     pub(crate) built: OnceLock<Built>,
     /// Runtime filter partials merged so far, and the memory they hold.
     runtime: Mutex<Partials>,
+    /// Per runtime filter: a large build's shared Bloom array (design
+    /// P2b-R1), which every partial is made over; taken at publish, so the
+    /// merged partial is the arrays' last holder.
+    blooms: Mutex<Vec<Option<Arc<SharedBloom>>>>,
+    /// The reservation of those arrays.
+    funding: Funding,
     /// The runtime filters and where they are published, abandoned if the
     /// build never publishes them.
     filters: Vec<FilterId>,
     publisher: Option<FilterPublisher>,
 }
+
+/// The reservation of a build's shared Bloom arrays (design P2b-R1 §2.5
+/// B2): one claim, taken by the first driver to sink a batch, which
+/// reserves every array before it stores a row, through the driver's
+/// `NeedMemory` path like a chunk. The other drivers go on meanwhile; their
+/// partials hold their keys' hashes until the arrays are allocated.
+#[derive(Debug, Default)]
+struct Funding {
+    /// Bytes of every shared array; 0 when the build has none.
+    bytes: usize,
+    /// `UNFUNDED`, `FUNDING`, `FUNDED` or `UNAFFORDABLE`.
+    state: AtomicU8,
+    /// The arrays' reservation once funded, until publish.
+    memory: Mutex<Option<Reservation>>,
+}
+
+const UNFUNDED: u8 = 0;
+const FUNDING: u8 = 1;
+const FUNDED: u8 = 2;
+/// The funding driver's retry, after its `NeedMemory` was granted, was
+/// still refused: the arrays are abandoned and the filters are the range.
+const UNAFFORDABLE: u8 = 3;
+
+/// The largest share of the query's memory limit one build's shared Bloom
+/// arrays take (design P2b-R1 §2.5 M2): a smaller array that turns out too
+/// full publishes the range, never fails the query.
+const BLOOM_SHARE_OF_LIMIT: usize = 16;
 
 /// Runtime filter partials (one per filter; `None`: the filter is off).
 #[derive(Debug, Default)]
@@ -105,6 +141,11 @@ struct BuildLocal {
     file_bytes: u64,
     /// This driver's runtime filter partials and their reservation.
     runtime: Partials,
+    /// Where the build's shared Bloom arrays are reserved, if this driver
+    /// funds them (`Funding`); moved to the build once funded.
+    bloom_memory: Option<Reservation>,
+    /// This driver took the funding claim.
+    funder: bool,
     /// Per partition: a sketch of this driver's stored hashes (row layout,
     /// when their memory was granted), and that memory.
     sketches: Option<(Vec<Hll>, Reservation)>,
@@ -124,40 +165,219 @@ fn null_spread(seq: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// A finished partial: the filter, and what became of its shared Bloom
+/// array (`None` for a dropped partial).
+type Finished = Option<(KeyFilter, Option<SharedBloomOutcome>)>;
+
+/// Finishes every partial.
+fn finish_all(builders: Vec<Option<KeyFilterBuilder>>) -> Vec<Finished> {
+    builders
+        .into_iter()
+        .map(|b| b.map(KeyFilterBuilder::finish_reporting))
+        .collect()
+}
+
 /// Builds each filter from its merged partial and publishes it, reserving
 /// it in `held` (a filter that does not fit keeps only its min/max range);
 /// a filter whose partial was dropped is disabled.
+#[cfg(test)]
 fn publish(
     publisher: &FilterPublisher,
     filters: &[super::JoinRuntimeFilter],
     partials: Partials,
     held: &mut Reservation,
 ) {
-    for (f, b) in filters.iter().zip(partials.builders) {
-        let id = f.filter.id();
-        let Some(b) = b else {
-            publisher.publish(id, FilterSnapshot::Disabled(DisabledReason::ProducerFailed));
-            continue;
-        };
-        let keys = b.finish();
-        let keys = if held.try_grow(keys.heap_bytes()).is_ok() {
-            keys
-        } else {
-            keys.range_only()
-        };
-        publisher.publish(id, FilterSnapshot::Final(Arc::new(keys)));
-    }
-    // The partials' memory (hash vectors) is freed with them here.
+    let finished = finish_all(partials.builders);
+    publish_finished(
+        publisher,
+        filters,
+        finished,
+        held,
+        None,
+        &super::Counters::default(),
+    );
     drop(partials.memory);
 }
 
-/// Empty partials of `shared`'s runtime filters.
-fn partials(shared: &Shared) -> Vec<Option<KeyFilterBuilder>> {
+/// Publishes the finished filters (see [`publish`]). A filter whose row
+/// form is its build's shared Bloom array keeps that array's reservation
+/// `blooms` (already funded, never dropped for memory) for as long as it
+/// lives (design P2b-R1 §2.5 M3); what no published array uses of it is
+/// released here.
+fn publish_finished(
+    publisher: &FilterPublisher,
+    filters: &[super::JoinRuntimeFilter],
+    finished: Vec<Finished>,
+    held: &mut Reservation,
+    blooms: Option<Reservation>,
+    counters: &super::Counters,
+) {
+    let published = |(k, o): &(KeyFilter, Option<SharedBloomOutcome>)| {
+        (*o == Some(SharedBloomOutcome::Published))
+            .then(|| k.bloom_bytes())
+            .flatten()
+    };
+    let used: usize = finished.iter().flatten().filter_map(published).sum();
+    let blooms = blooms.and_then(|mut m| {
+        let extra = m.size().saturating_sub(used);
+        m.shrink(extra);
+        (m.size() > 0).then(|| Arc::new(m))
+    });
+    for (f, b) in filters.iter().zip(finished) {
+        let id = f.filter.id();
+        let Some((keys, outcome)) = b else {
+            publisher.publish(id, FilterSnapshot::Disabled(DisabledReason::ProducerFailed));
+            continue;
+        };
+        match outcome {
+            Some(SharedBloomOutcome::Published) => {
+                counters.add(
+                    Counter::SharedBloomBytes,
+                    keys.bloom_bytes().unwrap_or(0) as u64,
+                );
+            }
+            Some(SharedBloomOutcome::Undersized) => counters.add(Counter::BloomUndersized, 1),
+            Some(SharedBloomOutcome::Unfunded) => counters.add(Counter::BloomUnfunded, 1),
+            Some(SharedBloomOutcome::StillShared) => counters.add(Counter::BloomStillShared, 1),
+            None => {}
+        }
+        let keys = match (&blooms, outcome) {
+            (Some(m), Some(SharedBloomOutcome::Published)) => {
+                // The array is reserved already. The rest (the range and
+                // the `IN` list) is reserved here; without room the list
+                // goes, and the range's few bytes are not worth the Bloom.
+                let rest = keys
+                    .heap_bytes()
+                    .saturating_sub(keys.bloom_bytes().unwrap_or(0));
+                let keys = if held.try_grow(rest).is_ok() {
+                    keys
+                } else {
+                    keys.without_values()
+                };
+                keys.holding(Arc::clone(m))
+            }
+            _ if held.try_grow(keys.heap_bytes()).is_ok() => keys,
+            _ => keys.range_only(),
+        };
+        publisher.publish(id, FilterSnapshot::Final(Arc::new(keys)));
+    }
+}
+
+/// Empty partials of `shared`'s runtime filters, over the build's shared
+/// Bloom arrays `blooms` where it has them.
+fn partials(shared: &Shared, blooms: &[Option<Arc<SharedBloom>>]) -> Vec<Option<KeyFilterBuilder>> {
     shared
         .runtime
         .iter()
-        .map(|f| KeyFilterBuilder::new(f.filter.key_type().clone(), f.options))
+        .enumerate()
+        .map(|(i, f)| {
+            let key_type = f.filter.key_type().clone();
+            match blooms.get(i).and_then(Option::as_ref) {
+                Some(b) => KeyFilterBuilder::with_shared_bloom(key_type, f.options, Arc::clone(b)),
+                None => KeyFilterBuilder::new(key_type, f.options),
+            }
+        })
         .collect()
+}
+
+/// A planned runtime filter's options on the worker, for a filter of
+/// `producers` producer partitions. A planned Bloom size lets several build
+/// partitions' filters OR; one producer sizes its Bloom for the keys it
+/// saw, as an estimate can be far off, unless the size is a large build's
+/// shared array, which needs it before the first key (design P2b-R1). A
+/// plan without that size runs as before (N-1). Several producers of a
+/// shared array's size collect no Bloom (M5): their partials would be sent
+/// and ORed at that size.
+pub(crate) fn instantiated_filter_options(
+    mut options: krishiv_io::KeyFilterOptions,
+    producers: u32,
+) -> krishiv_io::KeyFilterOptions {
+    match (producers == 1, options.shared_bloom_bytes()) {
+        (true, None) => options.bloom_bytes = None,
+        (false, Some(_)) => {
+            options.bloom = false;
+            options.bloom_bytes = None;
+        }
+        _ => {}
+    }
+    options
+}
+
+/// Per runtime filter of `shared`: its shared Bloom array, when its options
+/// plan one (design P2b-R1). The build's arrays together take at most a
+/// share of the query's memory `limit`, split evenly between them. The
+/// share is per build: a query's published arrays live as long as their
+/// filters, so several large builds hold several shares.
+fn shared_blooms(shared: &Shared, limit: Option<usize>) -> Vec<Option<Arc<SharedBloom>>> {
+    let arrays = shared
+        .runtime
+        .iter()
+        .filter(|f| f.options.shared_bloom_bytes().is_some())
+        .count()
+        .max(1);
+    let cap = limit.map_or(usize::MAX, |l| l / BLOOM_SHARE_OF_LIMIT / arrays);
+    shared
+        .runtime
+        .iter()
+        .map(|f| {
+            let bytes = f.options.shared_bloom_bytes()?.min(cap);
+            Some(Arc::new(SharedBloom::with_bytes(bytes)))
+        })
+        .collect()
+}
+
+impl BuildGlobal {
+    /// The funding claim's step for driver `l` (see [`Funding`]): `Some`
+    /// bytes when it must reserve them and pass its batch again.
+    fn fund(&self, l: &mut BuildLocal) -> Option<usize> {
+        let f = &self.funding;
+        match f.state.load(Ordering::Acquire) {
+            UNFUNDED => {
+                if f.state
+                    .compare_exchange(UNFUNDED, FUNDING, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    // Another driver took it: this one's keys wait.
+                    return None;
+                }
+                l.funder = true;
+                match l.bloom_memory.as_mut().map(|m| m.try_grow(f.bytes)) {
+                    Some(Ok(())) => {}
+                    Some(Err(_)) => return Some(f.bytes),
+                    None => return self.unaffordable(),
+                }
+            }
+            FUNDING if l.funder => {
+                let funded = l
+                    .bloom_memory
+                    .as_mut()
+                    .is_some_and(|m| m.size() >= f.bytes || m.try_grow(f.bytes).is_ok());
+                if !funded {
+                    // Granted, then refused again.
+                    return self.unaffordable();
+                }
+            }
+            _ => return None,
+        }
+        // Funded: allocate outside the lock (a pass over the bytes, once).
+        let blooms: Vec<Arc<SharedBloom>> = lock(&self.blooms).iter().flatten().cloned().collect();
+        for b in &blooms {
+            b.allocate();
+        }
+        *lock(&f.memory) = l.bloom_memory.take();
+        f.state.store(FUNDED, Ordering::Release);
+        None
+    }
+
+    /// Gives the shared arrays up: never allocated, their filters publish
+    /// the range (`bloom_unfunded`), and the partials stop holding hashes.
+    fn unaffordable(&self) -> Option<usize> {
+        for b in lock(&self.blooms).iter().flatten() {
+            b.abandon();
+        }
+        self.funding.state.store(UNAFFORDABLE, Ordering::Release);
+        None
+    }
 }
 
 impl Partials {
@@ -329,13 +549,39 @@ impl BuildSink {
     /// Builds and publishes the runtime filters from the merged partials;
     /// returns the reservation that holds them for the query (a filter that
     /// does not fit keeps only its min/max range).
-    fn publish_filters(&self, g: &BuildGlobal, ctx: &TaskContext) -> Reservation {
+    async fn publish_filters(&self, g: &BuildGlobal, ctx: &TaskContext) -> Result<Reservation> {
         let mut held = ctx.consumer().reservation();
         let partials = std::mem::take(&mut *lock(&g.runtime));
-        if let Some(publisher) = &self.0.publisher {
-            publish(publisher, &self.0.runtime, partials, &mut held);
-        }
-        held
+        // The build's handles on its shared arrays go first: the merged
+        // partial is then their only holder, and freezes them in place.
+        let shared = std::mem::take(&mut *lock(&g.blooms))
+            .iter()
+            .any(Option::is_some);
+        let blooms = lock(&g.funding.memory).take();
+        let Some(publisher) = &self.0.publisher else {
+            return Ok(held);
+        };
+        let Partials { builders, memory } = partials;
+        let (finished, blooms) = if shared {
+            // Freezing and measuring an array is a pass over its bytes. The
+            // reservation goes along: were this future dropped meanwhile,
+            // it is released with the arrays, not before.
+            ctx.run_blocking(move || Ok((finish_all(builders), blooms)))
+                .await?
+        } else {
+            (finish_all(builders), blooms)
+        };
+        publish_finished(
+            publisher,
+            &self.0.runtime,
+            finished,
+            &mut held,
+            blooms,
+            &self.0.counters,
+        );
+        // The partials' memory (hash vectors) is freed with them here.
+        drop(memory);
+        Ok(held)
     }
 
     async fn spill_parts(
@@ -487,6 +733,8 @@ impl BuildGlobal {
             collect: Mutex::new(Collect::default()),
             built: OnceLock::new(),
             runtime: Mutex::new(Partials::default()),
+            blooms: Mutex::new(Vec::new()),
+            funding: Funding::default(),
             filters: Vec::new(),
             publisher: None,
         };
@@ -522,6 +770,12 @@ impl Sink for BuildSink {
         let hashing = self.0.hashing(ctx.query().config());
         let fanout = hashing.fanout0();
         let rows = hashing.rows();
+        let blooms = if self.0.publisher.is_some() {
+            shared_blooms(&self.0, ctx.query().pool().effective_limit())
+        } else {
+            Vec::new()
+        };
+        let bloom_bytes = blooms.iter().flatten().map(|b| b.num_bytes()).sum();
         Ok(Arc::new(BuildGlobal {
             hashing,
             spilled: Arc::new(AtomicU64::new(0)),
@@ -534,9 +788,14 @@ impl Sink for BuildSink {
             }),
             built: OnceLock::new(),
             runtime: Mutex::new(Partials {
-                builders: partials(&self.0),
+                builders: partials(&self.0, &blooms),
                 memory: Vec::new(),
             }),
+            blooms: Mutex::new(blooms),
+            funding: Funding {
+                bytes: bloom_bytes,
+                ..Funding::default()
+            },
             filters: self.0.runtime.iter().map(|f| f.filter.id()).collect(),
             publisher: self.0.publisher.clone(),
         }))
@@ -544,8 +803,9 @@ impl Sink for BuildSink {
 
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let memory = ctx.consumer();
+        let g = state(global)?;
         Ok(Box::new(BuildLocal {
-            hashing: state(global)?.hashing.clone(),
+            hashing: g.hashing.clone(),
             parts: (0..state(global)?.hashing.fanout0())
                 .map(|_| Part::with_memory(memory.reservation()))
                 .collect(),
@@ -554,9 +814,11 @@ impl Sink for BuildSink {
             stored: 0,
             file_bytes: 0,
             runtime: Partials {
-                builders: partials(&self.0),
+                builders: partials(&self.0, &lock(&g.blooms)),
                 memory: vec![memory.reservation()],
             },
+            bloom_memory: (g.funding.bytes > 0).then(|| memory.reservation()),
+            funder: false,
             sketches: sketches(&state(global)?.hashing, memory),
         }))
     }
@@ -571,6 +833,14 @@ impl Sink for BuildSink {
         let n = input.num_rows();
         if n == 0 {
             return Ok(SinkStatus::NeedMoreInput);
+        }
+        // The shared Bloom arrays are reserved before the first row is
+        // stored (design P2b-R1 §2.3), never at the cost of failing a
+        // query (M2): a refused request leaves them unfunded.
+        if g.funding.bytes > 0
+            && let Some(bytes) = g.fund(l)
+        {
+            return Ok(SinkStatus::WantMemory { bytes });
         }
         // Covers the joins that return build rows by their matches too: a
         // build row's net multiplicity is not tracked, so a negative weight
@@ -712,7 +982,7 @@ impl Sink for BuildSink {
             let started = std::time::Instant::now();
             let g = state(global)?;
             let s = &self.0;
-            let filter_memory = self.publish_filters(g, ctx);
+            let filter_memory = self.publish_filters(g, ctx).await?;
             // Write what is left of spilled partitions; reserve the index of
             // the rest, spilling the largest while it does not fit. A
             // partition's table is built only while its concatenation copy
@@ -979,7 +1249,34 @@ mod tests {
     use krishiv_io::{ColumnPath, FilterId, FilterSnapshot, KeyFilterOptions, RuntimeFilter};
     use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
 
-    use super::{Partials, publish};
+    use super::{Partials, instantiated_filter_options, publish};
+
+    /// One producer keeps a shared array's planned size and drops a
+    /// partitioned build's; several keep the partitioned size and lose a
+    /// shared array's Bloom form (design P2b-R1 M5); an N-1 plan (no size)
+    /// is unchanged.
+    #[test]
+    fn instantiation_keeps_a_shared_size_for_one_producer_only() {
+        let base = KeyFilterOptions::default();
+        let shared = KeyFilterOptions {
+            bloom_bytes: Some(64 << 20),
+            ..base
+        };
+        let partitioned = KeyFilterOptions {
+            bloom_bytes: Some(4096),
+            ..base
+        };
+        assert_eq!(instantiated_filter_options(shared, 1), shared);
+        assert_eq!(
+            instantiated_filter_options(partitioned, 1).bloom_bytes,
+            None
+        );
+        assert_eq!(instantiated_filter_options(partitioned, 4), partitioned);
+        let many = instantiated_filter_options(shared, 4);
+        assert!(!many.bloom && many.bloom_bytes.is_none());
+        assert_eq!(instantiated_filter_options(base, 1), base);
+        assert_eq!(instantiated_filter_options(base, 4), base);
+    }
     use crate::join::{FilterPublisher, JoinRuntimeFilter};
     use crate::values::{LocalValues, Producer};
 

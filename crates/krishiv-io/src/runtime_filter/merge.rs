@@ -103,6 +103,9 @@ impl KeyFilter {
             empty: false,
             keys,
             bound: None,
+            // Partitioned builds plan no shared array (design P2b-R1 M5):
+            // their partials hold no memory to carry.
+            held: super::filter::Held::default(),
         })
     }
 }
@@ -110,6 +113,11 @@ impl KeyFilter {
 /// The planned Bloom size in bytes, in whole blocks as a builder makes it;
 /// `None` when the producer sizes its Bloom for its own keys.
 fn planned_bytes(options: &KeyFilterOptions) -> Option<usize> {
+    // A shared array's size is one producer's (design P2b-R1 M5): partials
+    // of several are never built, or merged into a Bloom, at that size.
+    if options.shared_bloom_bytes().is_some() {
+        return None;
+    }
     let planned = usize::try_from(options.bloom_bytes?).unwrap_or(usize::MAX);
     Some(RuntimeBloom::with_bytes(planned.min(options.bloom_max_bytes)).num_bytes())
 }

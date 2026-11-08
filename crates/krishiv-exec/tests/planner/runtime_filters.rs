@@ -561,10 +561,12 @@ fn runtime_filter_bench() {
     assert!(mismatched.is_empty(), "results differ: {mismatched:?}");
 }
 
-/// The Bloom filter settings: the Krishiv key of Spark's switch, the item
-/// cap and the byte cap each keep a Bloom filter out of the plan or out
-/// of the build (a 32-byte filter is too inaccurate to publish), and
-/// results never change.
+/// The Bloom filter settings: the Krishiv key of Spark's switch and the
+/// byte cap each keep a Bloom filter out of the plan or out of the build
+/// (a 32-byte filter is too inaccurate to publish); a build over the item
+/// cap gets a planned shared array instead (design P2b-R1), which drops
+/// exactly the rows the collected filter does (the same bits); results
+/// never change.
 #[test]
 fn bloom_settings_are_honoured() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -599,31 +601,37 @@ fn bloom_settings_are_honoured() {
     let spark_off = ("krishiv.sql.optimizer.runtime.bloomFilter.enabled", "false");
     let no_items = ("krishiv.runtimeFilter.bloom.maxItems", "0");
     let tiny = ("krishiv.runtimeFilter.bloom.maxBytes", "32");
-    let cases: [(&[(&str, &str)], bool); 5] = [
-        (&[forced, no_values, no_exact, always], true),
-        (&[forced, no_values, no_exact, always, spark_off], false),
-        (&[forced, no_values, no_exact, always, no_items], false),
-        (&[forced, no_values, no_exact, always, tiny], true),
+    let cases: [(&[(&str, &str)], &str); 5] = [
+        (&[forced, no_values, no_exact, always], "(bloom)"),
+        (&[forced, no_values, no_exact, always, spark_off], ""),
+        (
+            &[forced, no_values, no_exact, always, no_items],
+            "(bloom 1 KB)",
+        ),
+        (&[forced, no_values, no_exact, always, tiny], "(bloom)"),
         // The exact set: planned as a Bloom, published exact.
-        (&[forced, no_values, always], true),
+        (&[forced, no_values, always], "(bloom)"),
     ];
     let mut dropped = Vec::new();
     for (mode, planned) in cases {
         configured(&mut t, mode);
         let plan = t.plan_sql(q).unwrap();
-        assert_eq!(
-            plan.to_string().contains("(bloom)"),
-            planned,
-            "{mode:?}\n{plan}"
-        );
+        let text = plan.to_string();
+        if planned.is_empty() {
+            assert!(!text.contains("(bloom"), "{mode:?}\n{plan}");
+        } else {
+            assert!(text.contains(planned), "{mode:?}\n{plan}");
+        }
         let (got, c) = run(&plan);
         assert_eq!(sorted(&got), want, "{mode:?}");
         dropped.push(c.rows_dropped);
     }
     // Without a Bloom filter only the range drops rows; the 32-byte one
-    // was planned but not published, so it drops exactly as many.
+    // was planned but not published, so it drops exactly as many. The
+    // shared array is sized for the estimate (600 keys), as the collected
+    // one is for the keys: the same filter.
     assert!(dropped[0] > dropped[1], "{dropped:?}");
-    assert_eq!(dropped[2], dropped[1], "{dropped:?}");
+    assert_eq!(dropped[2], dropped[0], "{dropped:?}");
     assert_eq!(dropped[3], dropped[1], "{dropped:?}");
     // An exact set passes no false positive: it drops at least as many.
     assert!(dropped[4] >= dropped[0], "{dropped:?}");
@@ -681,11 +689,93 @@ fn a_selective_build_estimated_large_still_filters_by_its_keys() {
     // of `big`, the keys themselves keep ~1%.
     assert!(c.rows_dropped >= 3_000, "{c:?}\n{plan}");
     // A build estimated from its table, not guessed, keeps the estimate's
-    // decision: 20,000 rows are over the cap, so no Bloom is planned.
+    // decision: 20,000 rows are over the cap, and the scan of 4,000 rows
+    // is not four times the build, so no Bloom is planned (neither the
+    // collected one nor a shared array, design P2b-R1).
     let q = "SELECT b.v FROM big b JOIN small s ON b.k64 = s.k64";
     let plan = t.plan_sql(q).unwrap();
     assert!(plan.to_string().contains("RuntimeFilter #"), "{plan}");
     assert!(!plan.to_string().contains("(bloom)"), "{plan}");
+}
+
+/// A large build's shared Bloom array (design P2b-R1), planned past the
+/// item cap for a partitioned build on one worker: the planned size in
+/// `EXPLAIN`, the same rows dropped as with the filter the build collects
+/// hashes for (both sized for the build's rows at 1%), the results
+/// unchanged and the pool empty at the end. Spilling builds are tested
+/// with the operator (`hash_join` `a_spilling_build_keeps_its_shared_bloom`).
+#[test]
+fn a_large_build_plans_a_shared_bloom() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 29;
+    write(
+        dir.path(),
+        "big.parquet",
+        &table(&mut rng, 40_000, 400_000, 0),
+    );
+    write(
+        dir.path(),
+        "small.parquet",
+        &table(&mut rng, 8_000, 400_000, 0),
+    );
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let q = "SELECT b.v, s.v FROM big b JOIN small s ON b.k64 = s.k64";
+    configured(&mut t, MODES[0].1);
+    let want = sorted(&run(&t.plan_sql(q).unwrap()).0);
+    let base = [
+        ("krishiv.runtimeFilter.bloom.minApplicationRows", "0"),
+        ("krishiv.runtimeFilter.inList.maxValues", "0"),
+        ("krishiv.runtimeFilter.exactSet.maxValues", "0"),
+        ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+        ("spark.sql.autoBroadcastJoinThreshold", "-1"),
+    ];
+    // Collected (the default item cap), then shared (an item cap below
+    // the build's 8,000 rows).
+    let mut runs = Vec::new();
+    for (items, planned) in [("4000000", "(bloom)"), ("1000", "(bloom 10 KB)")] {
+        let mut mode = base.to_vec();
+        mode.push(("krishiv.runtimeFilter.bloom.maxItems", items));
+        configured(&mut t, &mode);
+        let plan = t.plan_sql(q).unwrap();
+        assert!(plan.to_string().contains(planned), "{items}\n{plan}");
+        let root = TreePool::new(&limited(1 << 30));
+        let (out, query) = super::run_in(&plan, &root);
+        let out = out.unwrap_or_else(|e| panic!("{e}\n{plan}"));
+        assert_eq!(sorted(&out), want, "{items}");
+        let metric = |name: &str| -> u64 {
+            query
+                .metrics()
+                .operators
+                .values()
+                .flat_map(|e| &e.extra)
+                .filter(|(n, _)| n.as_ref() == name)
+                .map(|(_, v)| v.value().unwrap_or(0))
+                .sum()
+        };
+        assert_eq!(
+            metric("shared_bloom_bytes") > 0,
+            items == "1000",
+            "{items}\n{plan}"
+        );
+        assert_eq!(
+            metric("bloom_unfunded") + metric("bloom_undersized"),
+            0,
+            "{items}"
+        );
+        runs.push(metric("runtime_filter_rows_dropped"));
+        drop(out);
+        assert_eq!(query.pool().reserved(), 0, "{items}: pool not empty");
+    }
+    assert!(runs[0] > 0, "{runs:?}");
+    assert_eq!(runs[0], runs[1], "{runs:?}");
 }
 
 /// The `scan_waits` of every runtime filter a join in `node` publishes.

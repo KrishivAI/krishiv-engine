@@ -1542,8 +1542,11 @@ pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
     key: "krishiv.runtimeFilter.bloom.maxItems",
     value_type: ValueType::Int,
     default: Some(ConfigValue::Int(4_000_000)),
-    doc: "Most build keys a runtime Bloom filter is built for: a build estimated larger plans \
-          none, and one that turns out larger publishes none.",
+    doc: "Most build keys a runtime Bloom filter collects hashes for, sizing the filter for the \
+          keys it saw. A build estimated larger gets a filter of a planned size \
+          (krishiv.runtimeFilter.bloom.maxBytes at most) that its drivers fill directly, and a \
+          partitioned one gets none. Also the estimate assumed for a filtered aggregate's \
+          output (a HAVING), whose estimate is a guess.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
@@ -1554,9 +1557,11 @@ pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
 pub static RUNTIME_FILTER_BLOOM_MAX_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.runtimeFilter.bloom.maxBytes",
     value_type: ValueType::Size,
-    default: Some(ConfigValue::Size(8 * MIB)),
-    doc: "Largest runtime Bloom filter. A filter capped below its 1% false-positive size is still \
-          built unless its expected false-positive rate exceeds 5%.",
+    default: Some(ConfigValue::Size(512 * MIB)),
+    doc: "Largest runtime Bloom filter: the cap of one filter's planned size, reserved by its \
+          join build before it stores a row (at most 1/16 of the query's memory limit). A filter \
+          capped below its 1% false-positive size is still built unless its expected \
+          false-positive rate exceeds 5%.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",

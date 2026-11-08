@@ -131,6 +131,7 @@ impl KeyFilter {
             empty,
             keys: 0,
             bound,
+            held: super::filter::Held::default(),
         };
         if keys.is_null(row) {
             // Only NULLs rank at or before a NULL under `NULLS FIRST`.

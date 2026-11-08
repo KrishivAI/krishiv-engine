@@ -21,6 +21,7 @@ use super::key::{
     supported_key_type, value_scalar, widens_to,
 };
 use super::member::{Class, EXACT_SET_MAX, FilterForm, Member, evaluate};
+use super::shared::SharedBloom;
 use crate::request::{CmpOp, ColumnPath, PushdownExpr, ScalarValue};
 use crate::schema_map::{Retyped, retype};
 
@@ -52,6 +53,20 @@ pub struct KeyFilterOptions {
     /// is then that size, so the partials' filters OR into the value's.
     /// `None` sizes it for the keys seen.
     pub bloom_bytes: Option<u32>,
+}
+
+impl KeyFilterOptions {
+    /// The size of a large build's [shared Bloom array](SharedBloom)
+    /// (design P2b-R1 §2.5 B4): the planned size, when the plan fixed one
+    /// above what `bloom_max_items` keys take at `bloom_fpp` (a smaller
+    /// planned size is a partitioned build's, P2-T177), capped at
+    /// `bloom_max_bytes`. `None`: the builder collects hashes.
+    #[must_use]
+    pub fn shared_bloom_bytes(&self) -> Option<usize> {
+        let planned = usize::try_from(self.bloom_bytes?).ok()?;
+        let collected = RuntimeBloom::bytes_for(self.bloom_max_items, self.bloom_fpp);
+        (self.bloom && planned > collected).then(|| planned.min(self.bloom_max_bytes))
+    }
 }
 
 impl Default for KeyFilterOptions {
@@ -116,6 +131,103 @@ impl Distinct {
     }
 }
 
+/// A builder's part in a build's [`SharedBloom`].
+#[derive(Debug, Clone)]
+struct SharedPart {
+    bloom: Arc<SharedBloom>,
+    /// Hashes added before the array was allocated (another driver is
+    /// reserving it), inserted once it is.
+    pending: Vec<u64>,
+    /// Keys of this partial never reached the array: no Bloom form.
+    lost: bool,
+}
+
+impl SharedPart {
+    fn feed(&mut self, h: &[u64]) {
+        if self.lost {
+            return;
+        }
+        if self.flush() {
+            self.bloom.insert_hashes(h);
+        } else if !self.lost {
+            self.pending.extend_from_slice(h);
+        }
+    }
+
+    /// Inserts the pending hashes once the array is allocated (`true`:
+    /// nothing is pending any more); loses the partial once it is
+    /// abandoned.
+    fn flush(&mut self) -> bool {
+        if self.bloom.is_allocated() {
+            if !self.pending.is_empty() {
+                self.bloom.insert_hashes(&self.pending);
+                self.pending = Vec::new();
+            }
+            true
+        } else {
+            if self.bloom.is_abandoned() {
+                self.lose();
+            }
+            false
+        }
+    }
+
+    /// Drops the pending hashes for memory: only those that cannot go into
+    /// the array yet are lost, and with them the partial's Bloom form.
+    fn drop_pending(&mut self) {
+        if !self.flush() && !self.pending.is_empty() {
+            self.lose();
+        }
+    }
+
+    fn lose(&mut self) {
+        self.lost = true;
+        self.pending = Vec::new();
+    }
+
+    /// The frozen array with the pending hashes, unless too inaccurate.
+    fn finish(self, max_fpp: f64) -> (Option<RuntimeBloom>, SharedBloomOutcome) {
+        if self.lost {
+            return (None, SharedBloomOutcome::Unfunded);
+        }
+        // Every other holder (the build's, the merged partials') is gone by
+        // now; one still held is never copied (its bytes may be 512 MB).
+        let Ok(bloom) = Arc::try_unwrap(self.bloom) else {
+            return (None, SharedBloomOutcome::StillShared);
+        };
+        let Some(mut bloom) = bloom.freeze() else {
+            return (None, SharedBloomOutcome::Unfunded);
+        };
+        for h in self.pending {
+            bloom.insert_hash(h);
+        }
+        // Measured, not estimated from rows (which count duplicates).
+        if bloom.pass_rate() > max_fpp {
+            (None, SharedBloomOutcome::Undersized)
+        } else {
+            (Some(bloom), SharedBloomOutcome::Published)
+        }
+    }
+}
+
+/// What became of a builder's [`SharedBloom`] when it finished (a build's
+/// metrics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharedBloomOutcome {
+    /// It is the published filter's row form.
+    Published,
+    /// It passes more than `bloom_max_fpp` of random keys (the build had
+    /// far more keys than planned): the filter is the range.
+    Undersized,
+    /// It was never allocated (the build could not reserve it), or some
+    /// keys never reached it: the filter is the range.
+    Unfunded,
+    /// Another holder of the array was left when it finished (a bug in
+    /// the producer, not a shortage of memory): it is not copied, and the
+    /// filter is the range.
+    StillShared,
+}
+
 /// One producer's partial knowledge of its keys (one per build driver);
 /// partials [merge](Self::merge) and [finish](Self::finish) into a
 /// [`KeyFilter`].
@@ -131,6 +243,8 @@ pub struct KeyFilterBuilder {
     distinct: Option<Distinct>,
     /// `None` when no Bloom is collected or too many keys were.
     hashes: Option<Vec<u64>>,
+    /// A large build's shared Bloom array, instead of `hashes`.
+    shared: Option<SharedPart>,
     nulls: bool,
     rows: u64,
 }
@@ -146,6 +260,7 @@ impl KeyFilterBuilder {
         Some(Self {
             class: Class::of(&key_type)?,
             hashes: options.bloom.then(Vec::new),
+            shared: None,
             distinct: Some(Distinct::default()),
             key_type,
             options,
@@ -154,6 +269,33 @@ impl KeyFilterBuilder {
             nulls: false,
             rows: 0,
         })
+    }
+
+    /// A builder of a large build whose Bloom form is the build's one
+    /// shared array `bloom` (design P2b-R1): no hashes are collected, and
+    /// every partial of the build is made over the same array. Its keys
+    /// reach the array once [allocated](SharedBloom::allocate); keys added
+    /// before are held until then.
+    #[must_use]
+    pub fn with_shared_bloom(
+        key_type: DataType,
+        options: KeyFilterOptions,
+        bloom: Arc<SharedBloom>,
+    ) -> Option<Self> {
+        let mut b = Self::new(key_type, options)?;
+        b.hashes = None;
+        b.shared = Some(SharedPart {
+            bloom,
+            pending: Vec::new(),
+            lost: false,
+        });
+        Some(b)
+    }
+
+    /// Whether this builder feeds a shared Bloom array.
+    #[must_use]
+    pub fn has_shared_bloom(&self) -> bool {
+        self.shared.is_some()
     }
 
     /// Most distinct keys a value form holds.
@@ -211,7 +353,10 @@ impl KeyFilterBuilder {
         if self.hashes.is_some() && self.rows > self.options.bloom_max_items {
             self.hashes = None;
         }
-        if self.distinct.is_none() && self.hashes.is_none() {
+        if self.distinct.is_none()
+            && self.hashes.is_none()
+            && self.shared.as_ref().is_none_or(|s| s.lost)
+        {
             return Ok(());
         }
         // One row hash per kept row, for the distinct set and the Bloom.
@@ -229,6 +374,9 @@ impl KeyFilterBuilder {
         self.add_values(&keys, &rows, &h);
         if let Some(all) = &mut self.hashes {
             all.extend_from_slice(&h);
+        }
+        if let Some(shared) = &mut self.shared {
+            shared.feed(&h);
         }
         Ok(())
     }
@@ -336,25 +484,33 @@ impl KeyFilterBuilder {
     pub fn heap_bytes(&self) -> usize {
         let values = self.distinct.as_ref().map_or(0, Distinct::heap_bytes);
         let hashes = self.hashes.as_ref().map_or(0, |h| h.capacity() * 8);
+        // The shared array is the build's own reservation; only the hashes
+        // waiting for it are this partial's.
+        let pending = self.shared.as_ref().map_or(0, |s| s.pending.capacity() * 8);
         let range = match &self.range {
             Some(KeyRange::Bytes(a, b)) => a.len() + b.len(),
             _ => 0,
         };
-        values + hashes + range
+        values + hashes + pending + range
     }
 
     /// Drops the Bloom filter's hashes and keeps the distinct keys (the
     /// first answer to a failed reservation: the hashes cost 8 bytes per
-    /// row, the keys at most the exact set).
+    /// row, the keys at most the exact set). A shared Bloom array is the
+    /// build's and stays: only hashes still waiting for it go, and with
+    /// them this partial's Bloom form.
     pub fn drop_hashes(&mut self) {
         self.hashes = None;
+        if let Some(s) = &mut self.shared {
+            s.drop_pending();
+        }
     }
 
     /// Keeps only what costs almost nothing (a failed reservation): no
     /// Bloom hashes, and the distinct keys only while they fit the `IN`
     /// list.
     pub fn drop_bloom(&mut self) {
-        self.hashes = None;
+        self.drop_hashes();
         if self
             .distinct
             .as_ref()
@@ -389,6 +545,24 @@ impl KeyFilterBuilder {
             }
             _ => None,
         };
+        self.shared = match (self.shared.take(), other.shared) {
+            (Some(mut a), Some(b)) => {
+                if b.lost || !Arc::ptr_eq(&a.bloom, &b.bloom) {
+                    a.lose();
+                } else if !a.lost {
+                    a.pending.extend(b.pending);
+                    // Into the array already, if it is allocated.
+                    a.flush();
+                }
+                Some(a)
+            }
+            // A partial without the array: its keys are not in it.
+            (Some(mut a), None) | (None, Some(mut a)) => {
+                a.lose();
+                Some(a)
+            }
+            (None, None) => None,
+        };
     }
 
     /// The filter: its row form picked by the distinct key count (see
@@ -399,7 +573,17 @@ impl KeyFilterBuilder {
     /// key was NaN.
     #[must_use]
     pub fn finish(self) -> KeyFilter {
+        self.finish_reporting().0
+    }
+
+    /// As [`Self::finish`], with what became of a shared Bloom array when
+    /// the Bloom form was wanted (`None`: no shared array, or a value form
+    /// was picked). The array is frozen and measured here, a pass over its
+    /// bytes: a large one is finished off the async threads.
+    #[must_use]
+    pub fn finish_reporting(self) -> (KeyFilter, Option<SharedBloomOutcome>) {
         let range = self.range.filter(|_| !self.nan);
+        let mut report = None;
         let members: Option<Vec<(u64, KeyValue)>> =
             self.distinct.map(|d| d.table.into_iter().collect());
         let values = members
@@ -415,12 +599,19 @@ impl KeyFilterBuilder {
             Some(m) if m.len() <= self.options.exact_max_values => {
                 Member::exact(self.class, m).unwrap_or(Member::Range)
             }
-            _ => self
-                .hashes
-                .and_then(|hashes| bloom(&hashes, &self.options))
-                .map_or(Member::Range, Member::Bloom),
+            _ => {
+                let bloom = match self.shared {
+                    Some(shared) => {
+                        let (bloom, outcome) = shared.finish(self.options.bloom_max_fpp);
+                        report = Some(outcome);
+                        bloom
+                    }
+                    None => self.hashes.and_then(|hashes| bloom(&hashes, &self.options)),
+                };
+                bloom.map_or(Member::Range, Member::Bloom)
+            }
         };
-        KeyFilter {
+        let filter = KeyFilter {
             range,
             values,
             member,
@@ -429,7 +620,9 @@ impl KeyFilterBuilder {
             keys: self.rows,
             key_type: self.key_type,
             bound: None,
-        }
+            held: Held::default(),
+        };
+        (filter, report)
     }
 }
 
@@ -458,7 +651,9 @@ fn dense(range: Option<&KeyRange>, count: usize) -> bool {
 /// A Bloom filter sized exactly for `hashes` (or of the planned size),
 /// unless empty or expected to pass too many false positives.
 fn bloom(hashes: &[u64], options: &KeyFilterOptions) -> Option<RuntimeBloom> {
-    if hashes.is_empty() {
+    // A shared array's planned size is never built from collected hashes
+    // (design P2b-R1 M5): a producer collects at most `bloom_max_items`.
+    if hashes.is_empty() || options.shared_bloom_bytes().is_some() {
         return None;
     }
     let items = hashes.len() as u64;
@@ -472,6 +667,26 @@ fn bloom(hashes: &[u64], options: &KeyFilterOptions) -> Option<RuntimeBloom> {
         bloom.insert_hash(h);
     }
     (bloom.expected_fpp(items) <= options.bloom_max_fpp).then_some(bloom)
+}
+
+/// Memory a published filter holds for as long as any copy of it lives
+/// (a large build's Bloom array, design P2b-R1 §2.5 M3). Not part of the
+/// filter's value: two filters with the same keys are equal whatever they
+/// hold, and a decoded filter holds nothing.
+#[derive(Clone, Default)]
+pub(crate) struct Held(Option<Arc<krishiv_memory::Reservation>>);
+
+impl PartialEq for Held {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for Held {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let bytes = self.0.as_ref().map_or(0, |r| r.size());
+        write!(f, "Held({bytes})")
+    }
 }
 
 /// What a producer knows about its keys (see the module docs). Immutable
@@ -491,6 +706,8 @@ pub struct KeyFilter {
     pub(crate) keys: u64,
     /// A top-N's bound, on the non-null keys.
     pub(crate) bound: Option<TopNBound>,
+    /// Memory reserved for it (see [`Held`]).
+    pub(crate) held: Held,
 }
 
 impl KeyFilter {
@@ -571,14 +788,48 @@ impl KeyFilter {
     }
 
     /// The same filter with only its min/max range (a failed reservation
-    /// keeps the form that costs nothing).
+    /// keeps the form that costs nothing); it holds no memory.
     #[must_use]
     pub fn range_only(&self) -> Self {
+        // Field by field: the row form and the value list, which it drops,
+        // are never copied.
         Self {
+            key_type: self.key_type.clone(),
+            range: self.range.clone(),
             values: None,
             member: Member::Range,
-            ..self.clone()
+            nulls_pass: self.nulls_pass,
+            empty: self.empty,
+            keys: self.keys,
+            bound: self.bound.clone(),
+            held: Held::default(),
         }
+    }
+
+    /// The same filter without its statistics `IN` list (a failed
+    /// reservation of a filter whose row form is already held).
+    #[must_use]
+    pub fn without_values(self) -> Self {
+        Self {
+            values: None,
+            ..self
+        }
+    }
+
+    /// The filter holding `memory` for as long as any copy of it lives:
+    /// the reservation of its bytes moves with it to its consumers.
+    #[must_use]
+    pub fn holding(self, memory: Arc<krishiv_memory::Reservation>) -> Self {
+        Self {
+            held: Held(Some(memory)),
+            ..self
+        }
+    }
+
+    /// Bytes of reservation this filter holds (see [`Self::holding`]).
+    #[must_use]
+    pub fn held_bytes(&self) -> usize {
+        self.held.0.as_ref().map_or(0, |r| r.size())
     }
 
     /// The range as literals of the key type.

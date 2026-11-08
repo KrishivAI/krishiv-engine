@@ -257,6 +257,14 @@ pub enum SinkStatus {
         /// Bytes the sink could not reserve.
         bytes: usize,
     },
+    /// As `NeedMemory`, for memory the sink can do without: the driver
+    /// reserves `bytes` the same cooperative way but never aborts a query
+    /// for them, and passes the same batch again whether or not they were
+    /// granted (the sink's next `try_grow` then fails, and it falls back).
+    WantMemory {
+        /// Bytes the sink could not reserve.
+        bytes: usize,
+    },
     /// Input consumed, but the sink is full (the bounded result channel):
     /// the driver awaits this future before pushing the next batch.
     Blocked(BoxFuture<'static, ()>),
@@ -269,6 +277,9 @@ impl fmt::Debug for SinkStatus {
             Self::Finished => f.write_str("Finished"),
             Self::NeedMemory { bytes } => {
                 f.debug_struct("NeedMemory").field("bytes", bytes).finish()
+            }
+            Self::WantMemory { bytes } => {
+                f.debug_struct("WantMemory").field("bytes", bytes).finish()
             }
             Self::Blocked(_) => f.write_str("Blocked"),
         }
