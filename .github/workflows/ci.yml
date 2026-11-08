@@ -29,7 +29,7 @@ permissions:
 
 env:
   # Faster builds and links in CI: line tables only (backtraces and coverage keep
-  # line numbers); mold is installed per job by rui314/setup-mold.
+  # line numbers); mold is installed per job by .github/actions/setup-mold.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
@@ -77,7 +77,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - id: filter
         env:
           EVENT: ${{ github.event_name }}
@@ -129,6 +129,41 @@ jobs:
           if typos .github/ci-fixtures/typo.md; then echo "typos accepted the typo fixture"; exit 1; fi
           if taplo fmt --check --config .github/ci-fixtures/taplo.toml .github/ci-fixtures/unformatted.toml; then echo "taplo accepted the unformatted fixture"; exit 1; fi
           if docker run --rm -v "$PWD/.github/ci-fixtures:/workdir" davidanson/markdownlint-cli2:v0.23.3 bad.md; then echo "markdownlint accepted the bad fixture"; exit 1; fi
+
+  # T133: the UI. svelte-check, a build whose output must equal the committed
+  # crates/krishiv-ui-assets/assets (ADR 0024: cargo build never needs Node), and the
+  # Playwright page check (ui/tests/check_pages.py) against that build. No Rust toolchain.
+  ui:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04 # Playwright has no chromium build for ubuntu-latest (26.04)
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      # The runner image ships Node; pnpm comes from npm (major pinned, the lockfile pins the rest).
+      - name: svelte-check and build
+        working-directory: ui
+        run: |
+          npx --yes pnpm@10 install --frozen-lockfile
+          npx --yes pnpm@10 run check
+          npx --yes pnpm@10 run sync-assets
+      - name: Committed assets equal the build
+        run: git diff --exit-code --stat -- crates/krishiv-ui-assets/assets
+      - name: Upload the rebuilt assets (on drift)
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-assets-rebuilt
+          path: crates/krishiv-ui-assets/assets
+      - name: Page check (360/390/820/1440 px, dark and light)
+        run: |
+          uv run --no-project --python 3.12 --with playwright==1.55.0 playwright install --with-deps chromium
+          uv run --no-project --python 3.12 --with playwright==1.55.0 python ui/tests/check_pages.py
 
   # P2-T151: Python code quality (ruff lint + format, ty) for python/, bench/ and
   # tests/scripts/. Needs no Rust toolchain and no built extension, and it is cheap, so it
@@ -205,7 +240,7 @@ jobs:
           toolchain: 1.99.1
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # telemetry-otlp is off in every default build: compile its code and tests here too, and
       # keep OpenTelemetry out of the default dependency tree (T125 section 6.5).
@@ -244,7 +279,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest
@@ -286,11 +321,11 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest
-      - run: cargo nextest run -p krishiv-session --test moment_window_spill --profile quarantine --locked --no-tests=pass
+      - run: cargo nextest run -p krishiv-exec --test nested_loop --profile quarantine --locked --no-tests=pass
 
   deny:
     needs: changes
@@ -341,7 +376,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-hack
@@ -363,7 +398,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - run: cargo xtask layering
 
   # The generated Spark Connect types match the vendored protos (P2-T091a).
@@ -468,7 +503,7 @@ jobs:
         with:
           toolchain: "1.97"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - run: cargo check --workspace --all-targets --locked
         env:
           RUSTUP_TOOLCHAIN: "1.97"
@@ -491,7 +526,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - run: cargo doc --workspace --no-deps --locked
 
   # P2-T147: `cargo publish --dry-run` for `krishiv` and the workspace crates it
@@ -514,7 +549,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - run: .github/scripts/publish-dry-run.sh
 
   # P2-T020: Miri on krishiv-kernels (ADR 0029; the crate holds unsafe and
@@ -605,7 +640,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       # --build-time wipes its own target dir, so it measures a clean build.
       - run: cargo xtask budgets --build-time --measure-only
       # The checkout is the PR's merge with the base branch; its first parent
@@ -660,7 +695,7 @@ jobs:
           persist-credentials: false
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Install Python ${{ matrix.python }}
         env:
@@ -921,8 +956,9 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
         with:
           toolchain: 1.99.1
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-        if: steps.measure.outputs.result == 'measured'
+      # The gate checks out the base commit, which has the local action only once this change is on main.
+      - uses: $/.github/actions/setup-mold
+        if: steps.measure.outputs.result == 'measured' && hashFiles('.github/actions/setup-mold/action.yml') != ''
       - name: Values the budget approvals are recorded against
         if: steps.measure.outputs.result == 'measured'
         # A base that predates the script has no recorded values: the label then counts only
@@ -1073,8 +1109,9 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
         with:
           toolchain: 1.99.1
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-        if: steps.measure.outputs.result == 'measured'
+      # The gate checks out the base commit, which has the local action only once this change is on main.
+      - uses: $/.github/actions/setup-mold
+        if: steps.measure.outputs.result == 'measured' && hashFiles('.github/actions/setup-mold/action.yml') != ''
       - name: Values the wheel-size approval is recorded against
         if: steps.measure.outputs.result == 'measured'
         # A base that predates the script has no recorded values: the label then counts only

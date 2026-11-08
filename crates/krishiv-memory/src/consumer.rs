@@ -215,6 +215,17 @@ impl ConsumerHandle {
         Reservation::with_handle(Arc::clone(self))
     }
 
+    /// A reservation of up to `max` bytes of this consumer's grant credit
+    /// (all of it when it holds less), without touching the pool. Unlike
+    /// [`reservation`](Self::reservation), it never draws credit again: its
+    /// later growth goes to the pool, and its shrinks and drop return bytes
+    /// there. For state charged from headroom an owner lends as credit whose
+    /// growth past that must not take the credit other reservations of the
+    /// consumer are lent for (a window function's held values).
+    pub fn reservation_from_credit(&self, max: usize) -> Reservation {
+        Reservation::holding(Arc::clone(&self.pool), self.id, self.take_credit(max))
+    }
+
     /// `bytes` were just reserved for this consumer in the pool; park them
     /// for the next `try_grow`. Only [`crate::SpillOwner::reserve_for`]
     /// (and refunds) call this, so credit is always backed by pool bytes.

@@ -1634,8 +1634,18 @@ async fn spilled_batches_of_alternating_sizes_read_back_from_a_full_pool() {
     for large in [300, 1_500] {
         alternating_sizes_from_a_full_pool(large, functions(), true).await;
     }
-    // Not here yet: offsets and `nth_value` charge the batches they keep past their read to the pool directly,
-    // which a pool taken whole refuses (queue: window fold charges with no fallback).
+}
+
+/// Offsets and `nth_value` keep the batches they read past their read: the flush phase's headroom covers what
+/// their offset spans, so a pool taken whole does not refuse them.
+#[tokio::test]
+async fn offsets_and_nth_value_read_back_from_a_full_pool() {
+    let rows = WindowFrame::running(FrameUnits::Rows);
+    let whole = WindowFrame::whole(FrameUnits::Rows);
+    let functions = vec![(lag_lead(-2, Some(3), false), whole), (nth(3, true), rows)];
+    // With larger batches or more functions, the two batches each keeps are more than the buffered partition lends:
+    // the query's error then comes from the flush phase's headroom, not from a charge with no fallback.
+    alternating_sizes_from_a_full_pool(300, functions, false).await;
 }
 
 /// [`spilled_batches_of_alternating_sizes_read_back_from_a_full_pool`] with batches of 20 and `large` rows: the
