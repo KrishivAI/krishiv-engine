@@ -46,6 +46,61 @@ mod unit {
             .collect()
     }
 
+    /// A Bloom filter past the caches probes in batches with prefetches
+    /// (study 18 §R4), for fixed-width and string keys alike: every key
+    /// added passes, NULLs and keys outside the range do not, and few
+    /// others do.
+    #[test]
+    fn large_bloom_filters_probe_in_batches_without_false_negatives() {
+        let opts = KeyFilterOptions {
+            max_values: 0,
+            exact_max_values: 0,
+            bloom: true,
+            bloom_max_items: u64::MAX,
+            bloom_max_bytes: 64 << 20,
+            ..KeyFilterOptions::default()
+        };
+        let n = 400_000i64;
+        let ints = Int64Array::from_iter_values((0..n).map(|i| i * 2));
+        let strings = StringViewArray::from_iter_values((0..n).map(|i| format!("k{:08}", i * 2)));
+        for keys in [&ints as &dyn Array, &strings] {
+            let mut b = KeyFilterBuilder::new(keys.data_type().clone(), opts)
+                .unwrap_or_else(|| panic!("{}", keys.data_type()));
+            b.add(keys, None).unwrap_or_else(|e| panic!("{e}"));
+            let f = b.finish();
+            assert!(
+                matches!(f.form(), FilterForm::Bloom(_))
+                    && f.bloom_bytes().is_some_and(|b| b > 256 * 1024),
+                "{:?} {:?}",
+                f.form(),
+                f.bloom_bytes()
+            );
+            assert!(pass(&f, keys).iter().all(|&p| p), "no false negative");
+        }
+        let ints_f = {
+            let mut b =
+                KeyFilterBuilder::new(DataType::Int64, opts).unwrap_or_else(|| panic!("int"));
+            b.add(&ints, None).unwrap_or_else(|e| panic!("{e}"));
+            b.finish()
+        };
+        let odd = Int64Array::from_iter_values((0..20_000i64).map(|i| i * 2 + 1));
+        let passed = pass(&ints_f, &odd).iter().filter(|&&p| p).count();
+        assert!(passed < 1_000, "{passed} of 20000 absent keys pass");
+        let strings_f = {
+            let mut b =
+                KeyFilterBuilder::new(DataType::Utf8View, opts).unwrap_or_else(|| panic!("str"));
+            b.add(&strings, None).unwrap_or_else(|e| panic!("{e}"));
+            b.finish()
+        };
+        let probe =
+            StringViewArray::from(vec![Some("k00000002"), None, Some("zz"), Some("k00000004")]);
+        assert_eq!(pass(&strings_f, &probe), [true, false, false, true]);
+        let absent =
+            StringViewArray::from_iter_values((0..20_000i64).map(|i| format!("k{:08}", i * 2 + 1)));
+        let passed = pass(&strings_f, &absent).iter().filter(|&&p| p).count();
+        assert!(passed < 1_000, "{passed} of 20000 absent strings pass");
+    }
+
     #[test]
     fn widenings_are_exactly_the_lossless_ones() {
         use DataType as D;
