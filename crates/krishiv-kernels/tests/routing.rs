@@ -234,8 +234,11 @@ fn routable_matches_what_hash_columns_hashes() {
         D::Interval(IntervalUnit::YearMonth),
         D::Interval(IntervalUnit::DayTime),
         D::Interval(IntervalUnit::MonthDayNano),
+        D::Time32(TimeUnit::Second),
         D::Time32(TimeUnit::Millisecond),
         D::Time64(TimeUnit::Microsecond),
+        D::Time64(TimeUnit::Nanosecond),
+        D::Float16,
         D::Decimal32(9, 2),
         D::Decimal64(18, 2),
         D::Decimal128(38, 10),
@@ -250,6 +253,8 @@ fn routable_matches_what_hash_columns_hashes() {
         D::List(Arc::clone(&item)),
         D::LargeList(Arc::clone(&item)),
         D::FixedSizeList(Arc::clone(&item), 2),
+        D::ListView(Arc::clone(&item)),
+        D::LargeListView(Arc::clone(&item)),
         D::Struct(Fields::from(vec![Field::new("a", D::Int32, true)])),
         D::Map(entries, false),
     ];
@@ -272,6 +277,10 @@ fn routable_matches_what_hash_columns_hashes() {
         assert_eq!(routable(&dict), want, "{dict}");
         assert_eq!(routable(&dict), routable(&values));
     }
+    // A dictionary with values hashes exactly when its value type routes.
+    let dict: DictionaryArray<Int32Type> = vec!["a", "b", "a"].into_iter().collect();
+    assert!(routable(dict.data_type()));
+    assert!(hash_columns(&[&dict], &mut out).is_ok());
 }
 
 /// A dictionary without values (all rows NULL) hashes as NULLs.

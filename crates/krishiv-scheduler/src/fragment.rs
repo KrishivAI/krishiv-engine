@@ -164,7 +164,8 @@ impl Cutter<'_> {
         let mut holds = Holds::default();
         let (cut, schema) = match output {
             Some(e) => {
-                check_scheme(&e.partitioning, &self.schema(e)?)?;
+                let columns = self.schema(e);
+                check_scheme(&e.partitioning, columns.as_ref().ok())?;
                 let input = self.cut(&e.input, &mut holds, false)?;
                 (
                     PhysNode::Exchange(ExchangePlan {
@@ -174,7 +175,7 @@ impl Cutter<'_> {
                         filters: e.filters.clone(),
                         schema: e.schema.clone(),
                     }),
-                    self.schema(e)?,
+                    columns?,
                 )
             }
             None => (
@@ -453,9 +454,13 @@ fn local_filters(roots: &mut [&mut PhysNode], crossing: &BTreeSet<FilterId>) {
 /// Refuses, before any task runs, a hash exchange no task could route: one
 /// without a routing function, or with a key column whose type the routing
 /// hash does not cover (a nested key: list, map, struct, the calendar
-/// interval; `input` is the exchange's input columns). On one worker the
-/// exchange is lowered and never routes, so only a cut plan is refused.
-fn check_scheme(p: &Partitioning, input: &SchemaRef) -> Result<()> {
+/// interval; `input` is the exchange's input columns, `None` when it has
+/// none, which the caller reports after this check). On one worker the
+/// exchange is lowered and never routes, so only a cut plan is refused,
+/// whatever partition count its tasks later run with (the fragment is the
+/// same bytes at every count, I5). Round-robin hashes only the columns the
+/// routing hash covers, so it is never refused.
+fn check_scheme(p: &Partitioning, input: Option<&SchemaRef>) -> Result<()> {
     let Partitioning::Hash { keys, scheme } = p else {
         return Ok(());
     };
@@ -464,6 +469,9 @@ fn check_scheme(p: &Partitioning, input: &SchemaRef) -> Result<()> {
             "a hash exchange without a routing function across stages",
         ));
     }
+    let Some(input) = input else {
+        return Ok(());
+    };
     for &k in keys {
         let field = input.fields().get(k).ok_or_else(|| InternalError {
             message: format!(
