@@ -154,6 +154,12 @@ jobs:
           npx --yes pnpm@10 run sync-assets
       - name: Committed assets equal the build
         run: git diff --exit-code --stat -- crates/krishiv-ui-assets/assets
+      - name: Upload the rebuilt assets (on drift)
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-assets-rebuilt
+          path: crates/krishiv-ui-assets/assets
       - name: Page check (360/390/820/1440 px, dark and light)
         run: |
           uv run --no-project --python 3.12 --with playwright==1.55.0 playwright install --with-deps chromium
