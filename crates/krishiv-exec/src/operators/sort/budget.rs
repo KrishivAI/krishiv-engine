@@ -22,6 +22,11 @@ use crate::error::Result;
 /// readers stay out: one driver holds both sides' merges at once.
 pub(super) const MERGE_COHORT: &str = "sort merges";
 
+/// The query cohort every sort's state sits in, idle, while it lives: a
+/// sort alone in its query (one member) need not leave half the pool to
+/// another sort's merges.
+pub(super) const SORTS_COHORT: &str = "sorts";
+
 /// A seat's state reset to idle if the request is dropped while it asks.
 struct Asking<'a>(Option<&'a mut Seat>);
 

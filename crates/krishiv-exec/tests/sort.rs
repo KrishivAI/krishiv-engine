@@ -1100,6 +1100,8 @@ async fn two_sorts(rows: u64, limit: usize) -> [Result<Vec<Batch>>; 2] {
     // Every seat of the sort merge cohort left with its merge.
     let cohort = q.cohort("sort merges").unwrap();
     assert_eq!(cohort.members(), 0, "a merge seat outlived the query");
+    let sorts = q.cohort("sorts").unwrap();
+    assert_eq!(sorts.members(), 0, "a sort's state outlived the query");
     let files = std::fs::read_dir(scope.dir()).map_or(0, Iterator::count);
     assert_eq!(files, 0, "every spill file is gone");
     [a, b]

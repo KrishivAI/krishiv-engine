@@ -31,8 +31,8 @@ use krishiv_memory::{
 use krishiv_types::batch::Batch;
 
 use super::budget::{
-    MERGE_COHORT, headroom, holding, lending, lending_for_write, merge_budget, merge_need,
-    spill_rows,
+    MERGE_COHORT, SORTS_COHORT, headroom, holding, lending, lending_for_write, merge_budget,
+    merge_need, spill_rows,
 };
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
@@ -475,6 +475,13 @@ struct Live {
 }
 
 impl SortGlobal {
+    /// Whether another sort of the query is alive (its state exists).
+    fn shares_query(&self) -> bool {
+        self.present
+            .as_ref()
+            .is_some_and(|s| s.cohort().members() > 1)
+    }
+
     /// Reports the bytes driver `live` could spill: its buffer's `own`
     /// and the combined buffers.
     fn report(&self, live: &Live, own: usize) {
@@ -512,6 +519,9 @@ struct SortGlobal {
     /// The query's bucketing (none: one bucket).
     bucketing: Option<Arc<Bucketing>>,
     buckets: usize,
+    /// This sort's idle seat in the query's [`SORTS_COHORT`] (none outside
+    /// a query), while the state lives.
+    present: Option<Seat>,
 }
 
 /// The readers of a spilled result: the buckets left to merge, and the
@@ -858,23 +868,28 @@ impl Sort {
         batch_rows: usize,
         ctx: &TaskContext,
         mut seat: Option<&mut Seat>,
+        shares_query: bool,
     ) -> Result<()> {
         if runs.len() <= 2 {
             return Ok(());
         }
         let handle = Arc::clone(ctx.consumer().consumer());
         let mut max_fan_in = self.max_fan_in;
-        // The final merge keeps to half the pool, which stays for the
-        // operators above and the query's other tasks (a merge holds its
-        // budget until it ends, and another task's sort may need the rest
-        // to buffer, finalize or merge). A merge join reads two final merges at once: each
-        // keeps to a quarter, so the two and the join's group fit together.
-        if let Some(limit) = handle.pool().effective_limit() {
-            let share = if self.read_by_bucket {
-                limit / 4
+        // With another sort in the query, the final merge keeps to half the
+        // pool, which stays for that sort (a merge holds its budget until it
+        // ends, and the other sort may need the rest to buffer, finalize or
+        // merge). A merge join reads two final merges at once: each keeps to
+        // a quarter, so the two and the join's group fit together. A sort
+        // alone in its query takes the fan-in the pool allows.
+        let limit = handle.pool().effective_limit();
+        let share = limit.and_then(|limit| {
+            if self.read_by_bucket {
+                Some(limit / 4)
             } else {
-                limit / 2
-            };
+                shares_query.then_some(limit / 2)
+            }
+        });
+        if let Some(share) = share {
             while max_fan_in > 2
                 && merge_need(runs, max_fan_in.min(runs.len()), batch_rows, false) > share
             {
@@ -953,6 +968,7 @@ impl Sink for Sort {
             readers: Arc::default(),
             bucketing,
             buckets,
+            present: ctx.consumer().consumer().join_cohort(SORTS_COHORT),
         }))
     }
 
@@ -1132,7 +1148,8 @@ impl Sink for Sort {
                 seat.set(SeatState::Idle);
             }
             for runs in &mut spilled {
-                self.reduce(runs, batch_rows, ctx, seat.as_mut()).await?;
+                self.reduce(runs, batch_rows, ctx, seat.as_mut(), g.shares_query())
+                    .await?;
             }
             if self.read_by_bucket {
                 lock(&g.readers.state).by_bucket = spilled;
