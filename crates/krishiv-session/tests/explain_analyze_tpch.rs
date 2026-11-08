@@ -210,7 +210,7 @@ fn spill_bytes_are_positive_under_a_tight_limit_and_zero_without() {
             b = b.config("krishiv.memory.limit", limit);
         }
         let s = b.build().unwrap();
-        // Enough data to overflow a 2 MiB pool: Q18's grouped lineitem.
+        // Enough data to overflow a 1 MiB pool: Q18's grouped lineitem.
         common::register(&s, 16_000);
         let df = block_on(s.sql(&query(18))).unwrap();
         block_on(df.collect_with_profile()).unwrap()
@@ -221,7 +221,9 @@ fn spill_bytes_are_positive_under_a_tight_limit_and_zero_without() {
             .map(|e| e.metrics.spill_write_bytes)
             .sum()
     };
-    let (got_tight, tight) = run(Some("2m"));
+    // 1 MiB, not 2: an aggregate applies a refused batch in slices (ADR 0007 addendum), so at 2 MiB Q18 often
+    // fits without spilling; at 1 MiB it must spill (0 of 20 runs without, 2026-11-07).
+    let (got_tight, tight) = run(Some("1m"));
     let (got_free, free) = run(None);
     assert_eq!(got_tight, got_free, "spilling does not change the result");
     assert!(spilled(&tight.metrics) > 0, "{:?}", tight.metrics);
