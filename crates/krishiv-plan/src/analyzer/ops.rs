@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     AmbiguousReference, AssignmentArityMismatch, DatatypeMismatchFilterNotBoolean,
-    DatatypeMismatchInvalidOrderingType, FailedToParseTooComplex, GroupByAggregate,
-    GroupByPosAggregate, GroupByPosOutOfRange, InvalidLimitLikeExpressionDataType,
+    DatatypeMismatchInvalidOrderingType, ErrorClass, FailedToParseTooComplex, GroupByAggregate,
+    GroupByPosAggregate, GroupByPosOutOfRange, InternalError, InvalidLimitLikeExpressionDataType,
     InvalidNonDeterministicExpressions, InvalidWhereCondition, JoinConditionIsNotBooleanType,
     MissingAggregation, MissingGroupBy, NumTableValueAliasesMismatch, OrderByPosOutOfRange,
     QualifyAggregateNotAllowed, QualifyRequiresWindowFunction, StarGroupByPos,
@@ -335,6 +335,47 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
         self.project_items(p, &c, exprs, env)
+    }
+
+    /// `e`, raised resolving the generators under a select list, as Spark
+    /// raises it: a generator argument naming an alias written earlier in
+    /// the same list leaves a `lateralAliasReference` in the resolved
+    /// plan, which Spark 4.2 reports as `INTERNAL_ERROR`. Select-list
+    /// generators run below the projection here, so the argument found
+    /// no column of that name.
+    pub(super) fn generator_over_lateral_alias(
+        &self,
+        exprs: &[Arc<Expr>],
+        e: AnalysisError,
+    ) -> AnalysisError {
+        let unresolved = matches!(
+            e.error.error_class(),
+            ErrorClass::UnresolvedColumnWithoutSuggestion
+        );
+        if !unresolved || !self.ctx.conf.lateral_column_alias {
+            return e;
+        }
+        let cs = self.ctx.conf.case_sensitive;
+        let named = |name: &str| quoted(&[name.to_owned()]);
+        let is_alias = exprs.iter().any(|x| match &x.node {
+            ExprNode::Alias { name, .. } => {
+                let shown = named(name);
+                let text = e.error.to_string();
+                text.contains(&shown)
+                    || (!cs && text.to_lowercase().contains(&shown.to_lowercase()))
+            }
+            _ => false,
+        });
+        if !is_alias {
+            return e;
+        }
+        AnalysisError::new(
+            InternalError {
+                message: "Resolved plan should not contain any LateralColumnAliasReference."
+                    .to_owned(),
+            },
+            e.origin,
+        )
     }
 
     pub(super) fn project_items(
