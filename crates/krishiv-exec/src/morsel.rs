@@ -90,6 +90,41 @@ impl MorselCursor {
     }
 }
 
+/// The combine order of the logical-partition drivers of one pipeline
+/// (T094 G1): lane `k` may combine its sink state only after lanes `0..k` have.
+#[derive(Debug)]
+pub(crate) struct CombineOrder {
+    next: AtomicUsize,
+    event: Event,
+}
+
+impl CombineOrder {
+    pub(crate) fn new() -> Self {
+        Self {
+            next: AtomicUsize::new(0),
+            event: Event::default(),
+        }
+    }
+
+    /// Completes once every lane below `lane` has combined or left.
+    pub(crate) async fn wait(&self, lane: usize) {
+        loop {
+            let listener = self.event.listen();
+            if self.next.load(Ordering::Acquire) >= lane {
+                return;
+            }
+            listener.await;
+        }
+    }
+
+    /// `lane` combined, failed or was aborted: the next lane may go. Lanes
+    /// call this in order, so the counter only ever steps by one.
+    pub(crate) fn pass(&self, lane: usize) {
+        self.next.fetch_max(lane + 1, Ordering::AcqRel);
+        self.event.notify();
+    }
+}
+
 /// A Fisher-Yates shuffle of `0..len` driven by SplitMix64.
 fn permutation(len: usize, seed: u64) -> Vec<usize> {
     let mut state = seed;

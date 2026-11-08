@@ -25,7 +25,7 @@ use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::{DriverStats, OperatorMetrics};
-use crate::morsel::{Barrier, Baton, Countdown};
+use crate::morsel::{Barrier, Baton, CombineOrder, Countdown};
 use crate::operator::{FlushOutput, GlobalState, LocalState, OperatorOutput, SinkStatus};
 use crate::pipeline::Pipeline;
 
@@ -52,8 +52,23 @@ pub(crate) struct PipelineRun {
     /// the driver of partition `p` is lane `p - first` and reads only the
     /// morsels dealt to its lane.
     pub(crate) lanes: Option<(u32, usize)>,
+    /// The lanes' combine order (set with `lanes`).
+    pub(crate) combine_order: Option<Arc<CombineOrder>>,
     pub(crate) query: Arc<QueryContext>,
     pub(crate) executor: Arc<dyn Executor>,
+}
+
+/// A lane's place in its pipeline's [`CombineOrder`]: dropped, it lets the next
+/// lane combine, whether this one combined, failed or was aborted.
+struct LanePass {
+    order: Arc<CombineOrder>,
+    lane: usize,
+}
+
+impl Drop for LanePass {
+    fn drop(&mut self) {
+        self.order.pass(self.lane);
+    }
 }
 
 /// A driver's place in its fan-in's [`Baton`]: it leaves when dropped, so
@@ -477,6 +492,8 @@ struct Driver {
     /// The driver's baton and member index in a deterministic fan-in, if it
     /// takes turns (its [`Turn`] guard is held by the driver's task).
     turn: Option<(Arc<Baton>, usize)>,
+    /// The scheduler-assigned partition id (the lane is `partition - first`).
+    partition: u32,
 }
 
 impl Driver {
@@ -538,6 +555,7 @@ impl Driver {
             yields: 0,
             position: None,
             turn: run.turn.clone(),
+            partition,
             owner,
             run,
         })
@@ -593,7 +611,22 @@ impl Driver {
         let k = run.pipeline.operators.len() + 1;
         let local = self.slots.get_mut().slot(k)?.local.take();
         let local = local.ok_or_else(|| internal("sink state combined twice".to_owned()))?;
+        // Logical partitions combine in lane order, so partial aggregates, builds and
+        // runs merge the same way on every run. The guard lets the next lane go
+        // even when this one fails or is aborted before it combines.
+        let _lane = match (&run.combine_order, run.lanes) {
+            (Some(order), Some((first, _))) => {
+                let lane = (self.partition - first) as usize;
+                order.wait(lane).await;
+                Some(LanePass {
+                    order: Arc::clone(order),
+                    lane,
+                })
+            }
+            _ => None,
+        };
         sink.combine(local, &run.sink_global)?;
+        drop(_lane);
         if run.countdown.arrive() {
             self.boundary().await?;
             let start = run.executor.now();

@@ -145,3 +145,46 @@ fn a_join_probing_a_union_gives_the_same_order_on_every_run() {
         assert!(first == shape(&run(&s, sql)), "run {i} differs");
     }
 }
+
+/// Logical partitions (T094 G1): a deterministic query returns the same bytes whatever the
+/// number of compute threads, because the morsels are dealt to a fixed set of lanes.
+#[test]
+fn the_result_does_not_depend_on_the_thread_count() {
+    use krishiv_exec::{ExecutorConfig, TokioExecutor};
+    let queries = [
+        "SELECT id, CAST(id AS DOUBLE) / 7 AS x FROM range(0, 400000, 1, 24) WHERE id % 3 = 0",
+        "SELECT id % 11 AS g, sum(CAST(id AS DOUBLE) / 7), avg(CAST(id AS DOUBLE) / 3), count(*) \
+         FROM range(0, 400000, 1, 24) GROUP BY id % 11",
+        "SELECT id FROM range(0, 400000, 1, 24) WHERE id % 5 = 0 LIMIT 100",
+        "SELECT collect_list(id) FROM (SELECT id FROM range(0, 5000, 1, 24))",
+    ];
+    let mut shapes: Vec<Vec<String>> = Vec::new();
+    for threads in [1, 4, 12] {
+        let executor = TokioExecutor::new(&ExecutorConfig {
+            compute_threads: threads,
+            ..ExecutorConfig::default()
+        })
+        .unwrap();
+        let s = Session::builder()
+            .config("krishiv.deterministicOrder", "true")
+            .executor(executor)
+            .build()
+            .unwrap();
+        shapes.push(
+            queries
+                .iter()
+                .map(|q| {
+                    let first = shape(&run(&s, q));
+                    assert_eq!(first, shape(&run(&s, q)), "two runs of `{q}` differ");
+                    first
+                })
+                .collect(),
+        );
+    }
+    for (i, q) in queries.iter().enumerate() {
+        assert!(
+            shapes[0][i] == shapes[1][i] && shapes[1][i] == shapes[2][i],
+            "`{q}` depends on the thread count"
+        );
+    }
+}

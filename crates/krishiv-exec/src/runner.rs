@@ -38,8 +38,8 @@ use crate::driver::{PipelineRun, spawn_driver};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::OperatorEntry;
-use crate::morsel::{Barrier, Baton, Countdown};
-use crate::operator::GlobalState;
+use crate::morsel::{Barrier, Baton, CombineOrder, Countdown};
+use crate::operator::{GlobalState, Source};
 use crate::physical::{PhysicalPlan, WorkerContext, instantiate};
 use crate::pipeline::{ExecNode, Pipeline, PipelineBuilder};
 use crate::sync::{Mutex, lock};
@@ -493,7 +493,10 @@ fn start_group(
         // One driver when the pipeline must keep order, and for every pipeline under
         // `krishiv.deterministicOrder`: no interleaving of drivers, no run-to-run
         // difference in the order of merges or output rows.
-        let drivers = if pipeline.preserve_order || query.config().deterministic_order {
+        let lane_count = lane_count(query, &pipeline, source, &source_global);
+        let drivers = if let Some(n) = lane_count {
+            n
+        } else if pipeline.preserve_order || query.config().deterministic_order {
             1
         } else {
             executor
@@ -513,6 +516,7 @@ fn start_group(
             source_global,
             drivers,
             base_partition: base,
+            lanes: lane_count.map(|n| (base, n)),
         });
     }
     // The members whose rows have a source order (an ordered source, and
@@ -557,7 +561,50 @@ struct MemberStart {
     drivers: usize,
     /// The first scheduler-assigned partition id of its drivers.
     base_partition: u32,
+    /// `(first partition id, lane count)` when its drivers are logical partitions.
+    lanes: Option<(u32, usize)>,
 }
+
+/// The logical partitions of a pipeline under `krishiv.deterministicOrder`
+/// (T094 G1), or `None` for the one-driver mode: the source offers a split, the
+/// sink merges in lane order without help, and no operator waits for
+/// another driver (a flush barrier). The count is a property of the source,
+/// never of the executor's thread count.
+fn lane_count(
+    query: &QueryContext,
+    pipeline: &Pipeline,
+    source: &Arc<dyn Source>,
+    global: &GlobalState,
+) -> Option<usize> {
+    if !query.config().deterministic_order || pipeline.preserve_order {
+        return None;
+    }
+    // Spill decisions follow the shared pool, which the lanes' timing moves (G2: a private
+    // per-query budget lifts this): under a small limit the one-driver mode keeps its guarantee.
+    if query
+        .pool()
+        .effective_limit()
+        .is_some_and(|l| l < LANES_MIN_MEMORY_LIMIT)
+    {
+        return None;
+    }
+    if !source.reports_positions()
+        || !pipeline.sink.1.lane_safe()
+        || pipeline.operators.iter().any(|(_, op)| op.needs_flush())
+    {
+        return None;
+    }
+    let n = source
+        .deterministic_split(global)?
+        .min(DETERMINISTIC_LOGICAL_PARTITIONS);
+    (n > 1).then_some(n)
+}
+
+/// Below this pool limit a deterministic pipeline keeps one driver (see `lane_count`).
+const LANES_MIN_MEMORY_LIMIT: usize = 4 << 30;
+
+/// The most logical partitions a deterministic pipeline runs.
+const DETERMINISTIC_LOGICAL_PARTITIONS: usize = 16;
 
 /// A pipeline group planned but not yet running: the state its members
 /// share and the members in pipeline order.
@@ -644,7 +691,8 @@ fn spawn_group(
             sink_global: Arc::clone(&sink_global),
             countdown: Arc::clone(&countdown),
             turn: baton.as_ref().map(|b| (Arc::clone(b), member)),
-            lanes: None,
+            lanes: m.lanes,
+            combine_order: m.lanes.map(|_| Arc::new(CombineOrder::new())),
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
@@ -680,7 +728,8 @@ async fn run_group_sequential(
             sink_global: Arc::clone(&sink_global),
             countdown: Arc::clone(&countdown),
             turn: None,
-            lanes: None,
+            lanes: m.lanes,
+            combine_order: m.lanes.map(|_| Arc::new(CombineOrder::new())),
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });

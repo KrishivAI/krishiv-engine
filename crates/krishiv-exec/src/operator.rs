@@ -317,8 +317,17 @@ pub trait Sink: Send + Sync {
         local: &mut LocalState,
         global: &GlobalState,
     ) -> Result<SinkStatus>;
+    /// Whether this sink may be fed by several logical-partition drivers
+    /// under `krishiv.deterministicOrder` (T094 G1): its `sink` touches only
+    /// the driver's own local state (or the result sink's ordered slots), and
+    /// its `combine` and `finalize` give the same result when the drivers
+    /// combine in partition order. Default `false`: one driver, as today.
+    fn lane_safe(&self) -> bool {
+        false
+    }
     /// Merges one driver's state into the global state, once per driver
-    /// after its source is exhausted.
+    /// after its source is exhausted. Under `krishiv.deterministicOrder`
+    /// with logical partitions the drivers call it in partition order.
     ///
     /// # Errors
     /// Any error fails the query.
