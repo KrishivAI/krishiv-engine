@@ -2,9 +2,7 @@
 # Known differences from Spark
 
 Deliberate, documented divergences of Krishiv's engine from Apache Spark.
-The register of record lives with ADR 0023 outside this repository; the
-entries below are the engine's own copy so each divergence is visible next
-to the code that implements it.
+Each divergence is listed here next to the code that implements it.
 
 ## Error ordering between two raising expressions
 
