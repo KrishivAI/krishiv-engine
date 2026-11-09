@@ -25,7 +25,9 @@ use krishiv_common::config::{
 use krishiv_common::error::{CannotUpCastDatatype, IncompatibleViewSchemaChange, KrishivError};
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::analyzer::AnalyzedPlan;
-use krishiv_plan::{AttrId, BoundColumn, LogicalPlan, PlanNode, ReadSource};
+use krishiv_plan::{
+    AttrId, BoundColumn, ColumnRef, Expr, ExprNode, LogicalPlan, Origin, PlanNode, ReadSource,
+};
 use krishiv_sql::ast::SchemaBinding;
 use krishiv_types::DataType;
 
@@ -105,6 +107,74 @@ pub(crate) const fn projection(mode: Option<ViewSchemaMode>) -> ReadProjection {
         Some(ViewSchemaMode::TypeEvolution) => ReadProjection::Rename,
         Some(ViewSchemaMode::Evolution) => ReadProjection::Output,
         _ => ReadProjection::Cast,
+    }
+}
+
+/// The names a view read finds its stored columns by in `input`, the inlined view query: the query's output names
+/// (`query`). A query that repeats a name (ignoring case) is first renamed by position to names of its own, so each
+/// column is still read once by name (Spark reads it by name and ordinal, `GetViewColumnByNameAndOrdinal`).
+pub(crate) fn read_names(
+    input: Arc<LogicalPlan>,
+    query: &[String],
+    alias: &str,
+    origin: Origin,
+) -> (Arc<LogicalPlan>, Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    if query.iter().all(|c| seen.insert(c.to_lowercase())) {
+        return (input, query.to_vec());
+    }
+    let names: Vec<String> = (0..query.len())
+        .map(|i| format!("__krishiv_view_column_{i}"))
+        .collect();
+    (
+        rename_by_position(input, alias, names.clone(), origin),
+        names,
+    )
+}
+
+/// `input` with its columns renamed by position to `names` (a `SubqueryAlias` with a column list).
+pub(crate) fn rename_by_position(
+    input: Arc<LogicalPlan>,
+    alias: &str,
+    names: Vec<String>,
+    origin: Origin,
+) -> Arc<LogicalPlan> {
+    Arc::new(
+        LogicalPlan::new(PlanNode::SubqueryAlias {
+            input,
+            alias: alias.to_owned(),
+            columns: names,
+        })
+        .with_origin(origin),
+    )
+}
+
+/// One column of a view read: the input column `name` (read as one part: `col(name)` would split a dot or read a
+/// trailing `*`), ANSI-cast to `cast` when given. With `comment` (`Some`), the field metadata it holds (a comment,
+/// or none) replaces what the column under it has and the column is named `output`, as Spark's view read alias with
+/// `explicitMetadata` does; without, the column is read as it is.
+pub(crate) fn read_column(
+    name: &str,
+    cast: Option<DataType>,
+    comment: Option<Option<String>>,
+    output: &str,
+) -> Arc<Expr> {
+    let column = crate::column::Column::new(Expr::new(ExprNode::Column(ColumnRef::new(vec![
+        name.to_owned(),
+    ]))));
+    let typed = match cast {
+        Some(t) => column.cast_ansi(t),
+        None => column,
+    };
+    match comment {
+        Some(comment) => {
+            let field = crate::column::Column::new(Expr::new(ExprNode::StoredField {
+                expr: Arc::new(typed.expr),
+                comment,
+            }));
+            Arc::new(field.alias(output).expr)
+        }
+        None => Arc::new(typed.expr),
     }
 }
 
