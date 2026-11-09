@@ -1039,7 +1039,7 @@ impl Resolver<'_> {
     }
 
     /// A projection of `out` over `r`: drops what a rewrite added.
-    fn restore(&self, r: &Rel, out: &[Attr]) -> Rel {
+    pub(super) fn restore(&self, r: &Rel, out: &[Attr]) -> Rel {
         let exprs = out
             .iter()
             .map(|a| col_expr(&a.col, Origin::UNKNOWN))
@@ -1376,6 +1376,13 @@ impl Resolver<'_> {
         loop {
             if cur.agg.is_some() {
                 return Some((layers, cur));
+            }
+            // A `DISTRIBUTE BY` between ends the walk: Spark 4.2.0 resolves
+            // an aggregate call in a sort only directly over the aggregate
+            // or its `HAVING`, so `GROUP BY y [HAVING ...] DISTRIBUTE BY y
+            // SORT BY max(x)` is UNRESOLVED_COLUMN there.
+            if matches!(cur.plan.node, PlanNode::Repartition { .. }) {
+                return None;
             }
             let child = match cur.widen.as_deref() {
                 Some(Widen::Through { child }) => child.clone(),
@@ -4648,6 +4655,7 @@ fn at_most_one_row(p: &LogicalPlan) -> bool {
         PlanNode::Project { input, .. }
         | PlanNode::Filter { input, .. }
         | PlanNode::Sort { input, .. }
+        | PlanNode::Repartition { input, .. }
         | PlanNode::SubqueryAlias { input, .. }
         | PlanNode::Shift { input, .. }
         | PlanNode::Window { input, .. } => at_most_one_row(input),

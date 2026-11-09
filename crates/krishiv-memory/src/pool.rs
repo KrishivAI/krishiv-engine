@@ -317,6 +317,23 @@ impl Consumer {
         lock(&self.usage).used
     }
 
+    /// Whether a spill write of the consumer is in progress
+    /// ([`crate::ConsumerHandle::spilling`]).
+    pub(crate) fn writing(&self) -> bool {
+        self.credit.as_ref().is_some_and(|c| c.writing())
+    }
+
+    /// Whether a cohort seat of the consumer holds memory it frees on its
+    /// own ([`crate::ConsumerHandle::join_cohort`]).
+    pub(crate) fn cohort_holding(&self) -> bool {
+        self.credit.as_ref().is_some_and(|c| c.holding())
+    }
+
+    /// The name the consumer registered with.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Bytes granted to the consumer's driver for a retry still running:
     /// about to be used or returned ([`GrantCredit::unsettled`]).
     pub(crate) fn unsettled(&self) -> usize {

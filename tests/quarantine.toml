@@ -2,9 +2,9 @@
 # `.config/nextest.toml`. Each entry: name (exact test name), package, owner (lane), issue, added and
 # deadline (YYYY-MM-DD, at most 3 days after `added`). Past its deadline the gate fails: fix or remove.
 [[test]]
-name = "two_tasks_of_one_query_share_their_chunks"
-package = "krishiv-exec"
+name = "moment_windows_from_disk_equal_the_in_memory_result"
+package = "krishiv-session"
 owner = "opus-3"
-issue = "PR #576 run 42433806198"
+issue = "main run 42501540888; PRs #576 and #627 (KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY)"
 added = "2026-11-08"
 deadline = "2026-11-11"

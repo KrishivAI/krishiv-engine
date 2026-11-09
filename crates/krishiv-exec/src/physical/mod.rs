@@ -223,6 +223,18 @@ pub enum HashScheme {
 }
 
 impl HashScheme {
+    /// Whether [`partitions`](Self::partitions) routes a key column of type
+    /// `t`: `false` for [`Unpinned`](Self::Unpinned), and for
+    /// [`KeyGroupV1`](Self::KeyGroupV1) the types its hash refuses (nested,
+    /// 256-bit decimal, time of day, day-time and month-day-nano intervals).
+    #[must_use]
+    pub fn routes(self, t: &DataType) -> bool {
+        match self {
+            Self::Unpinned => false,
+            Self::KeyGroupV1 => routing::routable(t),
+        }
+    }
+
     /// The partition of `n` that each row of `keys` (the key columns, in
     /// hash order) goes to, written to `out` (cleared first).
     ///

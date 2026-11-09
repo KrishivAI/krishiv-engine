@@ -61,10 +61,10 @@ jobs:
           persist-credentials: false
       - name: Pinned nightly toolchain (cargo-fuzz needs it)
         run: rustup toolchain install "$NIGHTLY" --profile minimal
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-fuzz@0.13.2
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         if: matrix.target == 'connect_decode'
         with:
           toolchain: 1.99.1

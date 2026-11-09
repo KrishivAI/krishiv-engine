@@ -42,6 +42,7 @@ mod calendar;
 mod collation;
 mod decode;
 mod dict_probe;
+mod geo;
 mod index_guard;
 mod intervals;
 mod meta;

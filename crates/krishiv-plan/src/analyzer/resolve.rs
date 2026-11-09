@@ -519,7 +519,24 @@ impl Resolver<'_> {
                 continue;
             }
             let (lo, saved) = (self.next_id, self.op_outer.take());
-            let mut r = self.node(&p, env)?;
+            let mut r = match self.node(&p, env) {
+                Ok(r) => r,
+                // A select-list generator runs below its projection: see
+                // `generator_over_lateral_alias`.
+                Err(e) if matches!(p.node, PlanNode::Generate { .. }) => {
+                    let list = stack.iter().rev().find_map(|(q, open)| match &q.node {
+                        PlanNode::Generate { .. } if *open => None,
+                        PlanNode::Project { exprs, .. } if *open => Some(Some(exprs)),
+                        _ if *open => Some(None),
+                        _ => None,
+                    });
+                    return Err(match list.flatten() {
+                        Some(exprs) => self.generator_over_lateral_alias(exprs, e),
+                        None => e,
+                    });
+                }
+                Err(e) => return Err(e),
+            };
             if self.next_id > lo {
                 r.ids = hull(r.ids, Some((lo, self.next_id - 1)));
             }
@@ -578,6 +595,7 @@ impl Resolver<'_> {
                 | PlanNode::Sort { .. }
                 | PlanNode::Limit { .. }
                 | PlanNode::Offset { .. }
+                | PlanNode::Repartition { .. }
         );
         let plan = Arc::new(LogicalPlan::new(node).with_origin(origin));
         let mut r = self.wrap(plan, origin.plan_id, out, kids);

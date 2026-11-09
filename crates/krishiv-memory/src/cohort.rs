@@ -22,6 +22,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use crate::consumer::GrantCredit;
 use crate::event::Event;
 use crate::sync::{AtomicUsize, Ordering};
 
@@ -36,14 +37,27 @@ pub struct Cohort {
 }
 
 impl Cohort {
-    /// A seat in the cohort, idle, until the seat drops.
+    /// A seat in the cohort, idle, until the seat drops. Arbitration does
+    /// not see it: a seat holding memory a round may wait for is taken
+    /// through [`crate::ConsumerHandle::join_cohort`].
     #[must_use]
     pub fn join(self: &Arc<Self>) -> Seat {
         self.members.fetch_add(1, Ordering::AcqRel);
         Seat {
             cohort: Arc::clone(self),
             state: SeatState::Idle,
+            credit: None,
         }
+    }
+
+    /// [`join`](Self::join) for the consumer whose grant credit is
+    /// `credit` ([`crate::ConsumerHandle::join_cohort`]): while the seat
+    /// holds, arbitration counts that consumer's memory as about to be
+    /// released.
+    pub(crate) fn join_for(self: &Arc<Self>, credit: Arc<GrantCredit>) -> Seat {
+        let mut seat = self.join();
+        seat.credit = Some(credit);
+        seat
     }
 
     /// The members now (at least one while a seat exists).
@@ -85,6 +99,9 @@ pub enum SeatState {
 pub struct Seat {
     cohort: Arc<Cohort>,
     state: SeatState,
+    /// The consumer's grant credit, for a seat taken through
+    /// [`crate::ConsumerHandle::join_cohort`]: counts the seat while it holds.
+    credit: Option<Arc<GrantCredit>>,
 }
 
 impl Seat {
@@ -104,6 +121,10 @@ impl Seat {
     /// the cohort's waiters; release the memory before that.
     pub fn set(&mut self, state: SeatState) {
         let (was, now) = (self.state != SeatState::Idle, state != SeatState::Idle);
+        let held = (
+            self.state == SeatState::Holding,
+            state == SeatState::Holding,
+        );
         self.state = state;
         match (was, now) {
             (false, true) => {
@@ -114,6 +135,11 @@ impl Seat {
                 self.cohort.changed.notify();
             }
             _ => {}
+        }
+        if let Some(credit) = &self.credit
+            && held.0 != held.1
+        {
+            credit.seat_holding(held.1);
         }
     }
 }

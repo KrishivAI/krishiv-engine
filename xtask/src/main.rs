@@ -29,7 +29,7 @@ use xtask::qerror;
 use xtask::quarantine;
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... | metrics-gate | docs-config [PATH] | docs-errors [PATH] | docs-metrics [PATH] | docs-compat [--report FILE] [--data FILE] [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | budgets --precheck [--base REF] [--repo DIR] | budgets --cache-main [--repo DIR] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [--check FLOORS [--previous SUMMARY]] [PATH] | coverage-scope --base REF [--head REF] [--repo DIR] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|pr-size-value|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | quarantine [--list] | file-size [--write-baseline [--base REF] [--only PATH]...] | map CRATE | maps-check [--report] | tokio-console-check | check-format-neutral [ROOT] | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures F]>";
+const USAGE: &str = "usage: cargo xtask <layering | qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... | metrics-gate | docs-config [PATH] | docs-errors [PATH] | docs-metrics [PATH] | docs-sql [--check] | docs-examples [--check] | docs-python [--check] | docs-rust [--check] | docs-compat [--report FILE] [--data FILE] [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | budgets --precheck [--base REF] [--repo DIR] | budgets --cache-main [--repo DIR] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [--check FLOORS [--previous SUMMARY]] [PATH] | coverage-scope --base REF [--head REF] [--repo DIR] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|pr-size-value|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | quarantine [--list] | file-size [--write-baseline [--base REF] [--only PATH]...] | map CRATE | maps-check [--report] | tokio-console-check | check-format-neutral [ROOT] | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures F]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -87,6 +87,14 @@ fn main() -> ExitCode {
         ["source-guard", root] => policy::run_source_guard(Path::new(root)),
         ["check-format-neutral"] => format_neutral::run_check(&workspace_root()),
         ["check-format-neutral", root] => format_neutral::run_check(Path::new(root)),
+        ["docs-python"] => xtask::docs_ext::run_python(&workspace_root(), false),
+        ["docs-python", "--check"] => xtask::docs_ext::run_python(&workspace_root(), true),
+        ["docs-rust"] => xtask::docs_ext::run_rust(&workspace_root(), false),
+        ["docs-rust", "--check"] => xtask::docs_ext::run_rust(&workspace_root(), true),
+        ["docs-examples"] => xtask::docs_examples::run(&workspace_root(), false),
+        ["docs-examples", "--check"] => xtask::docs_examples::run(&workspace_root(), true),
+        ["docs-sql"] => xtask::docs_sql::run(&workspace_root(), false),
+        ["docs-sql", "--check"] => xtask::docs_sql::run(&workspace_root(), true),
         [cmd] | [cmd, _] if Doc::from_command(cmd).is_some() => run_docs(&args),
         _ => Err(USAGE.to_owned()),
     };

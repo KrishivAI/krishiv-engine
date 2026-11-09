@@ -225,11 +225,19 @@ fn spatial_values_are_no_keys() {
 }
 
 #[test]
-fn spatial_values_are_not_written_to_files() {
+fn spatial_values_are_written_to_parquet_only() {
     let s = Session::new().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let df = block_on(s.sql(&format!("SELECT ST_GeomFromWKB({POINT}) g"))).unwrap();
-    let e = block_on(df.write().parquet(dir.path().join("out").to_str().unwrap())).unwrap_err();
+    // Parquet holds them (`tests/parquet_geo.rs`); the other formats and nested values are refused.
+    let e = block_on(df.write().csv(dir.path().join("out").to_str().unwrap())).unwrap_err();
+    assert!(e.to_string().contains("GEOMETRY or GEOGRAPHY"), "{e}");
+    let df = block_on(s.sql(&format!("SELECT array(ST_GeomFromWKB({POINT})) g"))).unwrap();
+    let e = block_on(
+        df.write()
+            .parquet(dir.path().join("out2").to_str().unwrap()),
+    )
+    .unwrap_err();
     assert!(e.to_string().contains("GEOMETRY or GEOGRAPHY"), "{e}");
 }
 
