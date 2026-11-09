@@ -178,7 +178,8 @@ fn show_create_table() {
     );
     assert_eq!(
         rows(&s, "SHOW CREATE TABLE v")[0][0],
-        "CREATE VIEW default.v (\n  a)\nWITH SCHEMA COMPENSATION\nAS SELECT a FROM t\n"
+        // The view's column keeps `t.a`'s comment (Spark 4.2.0: `column-comments/probe2.out`).
+        "CREATE VIEW default.v (\n  a COMMENT 'ca')\nWITH SCHEMA COMPENSATION\nAS SELECT a FROM t\n"
     );
 }
 
@@ -214,7 +215,7 @@ fn describe_table_query_namespace_and_column() {
     assert_eq!(ext[13][1], "[k=v]");
     assert_eq!(
         rows(&s, "DESCRIBE QUERY SELECT a, b FROM t"),
-        [["a", "int", "NULL"], ["b", "string", "NULL"]]
+        [["a", "int", "ca"], ["b", "string", "NULL"]]
     );
     let (names, c) = table(&s, "DESCRIBE t a");
     assert_eq!(names, ["info_name", "info_value"]);
@@ -342,4 +343,131 @@ fn describe_modes_secrets_and_quoting() {
     );
     let text = table(&s, "SHOW CREATE TABLE e").1[0][0].clone();
     assert!(text.contains("it\\'s'"), "{text}");
+}
+
+/// A column's comment follows it through a query as Spark 4.2.0's field metadata does
+/// (`research/spark/column-comments/probe1.out` in krishiv-internal): through aliases, joins, subqueries,
+/// set operations (the left side's), filters, sorts, grouping keys and windows, into CTAS tables and views;
+/// any other expression, a cast to the same type included, has none.
+#[test]
+fn column_comments_follow_columns_through_queries() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE t (a INT COMMENT 'ca', b STRING COMMENT 'cb', c INT) USING parquet",
+    );
+    run(
+        &s,
+        "CREATE TABLE u (a INT COMMENT 'ua', d INT COMMENT 'ud') USING parquet",
+    );
+    let comments = |q: &str| -> Vec<(String, String)> {
+        rows(&s, &format!("DESC QUERY {q}"))
+            .into_iter()
+            .map(|r| (r[0].clone(), r[2].clone()))
+            .collect()
+    };
+    let pairs = |p: &[(&str, &str)]| -> Vec<(String, String)> {
+        p.iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect()
+    };
+    let cases: [(&str, &[(&str, &str)]); 18] = [
+        (
+            "SELECT a, b FROM t GROUP BY ROLLUP(a, b)",
+            &[("a", "ca"), ("b", "cb")],
+        ),
+        (
+            "SELECT a, count(*) FROM t GROUP BY CUBE(a)",
+            &[("a", "ca"), ("count(1)", "NULL")],
+        ),
+        (
+            "SELECT a, b FROM t GROUP BY GROUPING SETS ((a), (b))",
+            &[("a", "ca"), ("b", "cb")],
+        ),
+        (
+            "SELECT a, a FROM t UNION ALL SELECT a, a FROM t",
+            &[("a", "ca"), ("a", "ca")],
+        ),
+        ("SELECT a AS x, b FROM t", &[("x", "ca"), ("b", "cb")]),
+        ("SELECT t.a FROM t JOIN u ON t.a = u.a", &[("a", "ca")]),
+        (
+            "SELECT u.a, d FROM t JOIN u ON t.a = u.a",
+            &[("a", "ua"), ("d", "ud")],
+        ),
+        (
+            "SELECT * FROM (SELECT a, b FROM t) s",
+            &[("a", "ca"), ("b", "cb")],
+        ),
+        (
+            "SELECT * FROM (SELECT a, b FROM t) s(x, y)",
+            &[("x", "ca"), ("y", "cb")],
+        ),
+        ("SELECT CAST(a AS BIGINT) FROM t", &[("a", "NULL")]),
+        ("SELECT CAST(a AS INT) AS a FROM t", &[("a", "NULL")]),
+        ("SELECT a FROM t UNION ALL SELECT a FROM u", &[("a", "ca")]),
+        ("SELECT a FROM t WHERE a > 1 ORDER BY a", &[("a", "ca")]),
+        (
+            "SELECT max(a), a FROM t GROUP BY a",
+            &[("max(a)", "NULL"), ("a", "ca")],
+        ),
+        (
+            "SELECT a, row_number() OVER (ORDER BY a) r FROM t",
+            &[("a", "ca"), ("r", "NULL")],
+        ),
+        (
+            "SELECT x FROM t LATERAL VIEW explode(array(a)) e AS x",
+            &[("x", "NULL")],
+        ),
+        ("SELECT a FROM t INTERSECT SELECT a FROM u", &[("a", "ca")]),
+        ("SELECT coalesce(a) FROM t", &[("coalesce(a)", "NULL")]),
+    ];
+    let mut wrong = Vec::new();
+    for (q, want) in cases {
+        let got = comments(q);
+        if got != pairs(want) {
+            wrong.push(format!("{q}: got {got:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    let desc = |name: &str| -> Vec<(String, String)> {
+        rows(&s, &format!("DESC {name}"))
+            .into_iter()
+            .map(|r| (r[0].clone(), r[2].clone()))
+            .collect()
+    };
+    run(&s, "CREATE TABLE ct AS SELECT a, b AS bb, c FROM t");
+    assert_eq!(
+        desc("ct"),
+        // DESC prints an empty comment for a table column without one.
+        pairs(&[("a", "ca"), ("bb", "cb"), ("c", "")])
+    );
+    run(&s, "CREATE VIEW v1 AS SELECT a, b FROM t");
+    assert_eq!(desc("v1"), pairs(&[("a", "ca"), ("b", "cb")]));
+    run(
+        &s,
+        "CREATE VIEW v2 (x, y COMMENT 'cy') AS SELECT a, b FROM t",
+    );
+    assert_eq!(desc("v2"), pairs(&[("x", "ca"), ("y", "cy")]));
+    assert_eq!(
+        comments("SELECT * FROM v1"),
+        pairs(&[("a", "ca"), ("b", "cb")])
+    );
+    // Known difference: a read of a view takes the comment of the column under it, not the view's stored one
+    // (Spark 4.2.0 gives `y` the view's `cy`: `column-comments/probe3.out`); see the limit in
+    // `research/spark/column-comments.md`.
+    assert_eq!(
+        comments("SELECT * FROM v2"),
+        pairs(&[("x", "ca"), ("y", "cb")])
+    );
+    // A DataFrame's temporary view holds its analyzed plan: a read of it keeps the scan's comments.
+    block_on(s.table("t").create_or_replace_temp_view("dv")).unwrap();
+    assert_eq!(
+        comments("SELECT a, c FROM dv"),
+        pairs(&[("a", "ca"), ("c", "NULL")])
+    );
+    // A changed comment is not served from a cached analysis (the catalog epoch is in its fingerprint).
+    assert_eq!(comments("SELECT a FROM t"), pairs(&[("a", "ca")]));
+    run(&s, "ALTER TABLE t ALTER COLUMN a COMMENT 'new'");
+    assert_eq!(comments("SELECT a FROM t"), pairs(&[("a", "new")]));
 }

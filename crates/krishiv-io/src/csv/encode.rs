@@ -9,6 +9,7 @@ use arrow_array::types::{
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Schema};
 use bytes::Bytes;
+use krishiv_kernels::binary_style::BinaryStyle;
 use krishiv_kernels::datetime_pattern::Purpose;
 use krishiv_kernels::text::{java_decimal_string, java_double_string, java_float_string32};
 
@@ -27,27 +28,25 @@ pub(crate) struct CsvEncoder {
     out: Vec<u8>,
     /// Bytes taken.
     taken: u64,
+    binary: BinaryStyle,
     kinds: Vec<Kind>,
     line: Vec<u8>,
     text: String,
-}
-
-/// Spark's text of a binary value: `[AB 01 FF]`.
-fn binary_text(b: &[u8], out: &mut String) {
-    out.push('[');
-    for (i, byte) in b.iter().enumerate() {
-        if i > 0 {
-            out.push(' ');
-        }
-        out.push_str(&format!("{byte:02X}"));
-    }
-    out.push(']');
 }
 
 impl CsvEncoder {
     pub(crate) fn new(schema: &Schema, o: &FormatOptions) -> FormatResult<Self> {
         let opts = CsvOptions::new(o, true)?;
         let dt = Datetimes::new(o, Purpose::Format)?;
+        let style = o.str("binaryOutputStyle").unwrap_or("HEX_DISCRETE");
+        let binary = BinaryStyle::from_name(style).ok_or_else(|| {
+            crate::text::invalid_option(
+                "csv",
+                "binaryOutputStyle",
+                style,
+                "not a binary output style",
+            )
+        })?;
         let kinds = schema
             .fields()
             .iter()
@@ -58,6 +57,7 @@ impl CsvEncoder {
             taken: 0,
             o: opts,
             dt,
+            binary,
             kinds,
             line: Vec::new(),
             text: String::new(),
@@ -197,9 +197,11 @@ impl CsvEncoder {
             (Kind::Str, DataType::Utf8View) => buf.push_str(a.as_string_view().value(i)),
             (Kind::Str, DataType::Utf8) => buf.push_str(a.as_string::<i32>().value(i)),
             (Kind::Str, _) => buf.push_str(a.as_string::<i64>().value(i)),
-            (Kind::Bin, DataType::BinaryView) => binary_text(a.as_binary_view().value(i), buf),
-            (Kind::Bin, DataType::Binary) => binary_text(a.as_binary::<i32>().value(i), buf),
-            (Kind::Bin, _) => binary_text(a.as_binary::<i64>().value(i), buf),
+            (Kind::Bin, DataType::BinaryView) => {
+                self.binary.write(a.as_binary_view().value(i), buf);
+            }
+            (Kind::Bin, DataType::Binary) => self.binary.write(a.as_binary::<i32>().value(i), buf),
+            (Kind::Bin, _) => self.binary.write(a.as_binary::<i64>().value(i), buf),
             (Kind::Date, _) => buf.push_str(
                 &self
                     .dt

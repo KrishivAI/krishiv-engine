@@ -781,6 +781,31 @@ fn agent_gate_defaults_to_one_gib_and_parses_sizes() {
 }
 
 #[test]
+fn join_enumerator_entries_default_and_parse() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str),
+        Some("dpsub")
+    );
+    assert_eq!(
+        c.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int),
+        Some(10)
+    );
+    c.set("krishiv.optimizer.joinEnumerator", "Greedy").unwrap();
+    assert_eq!(
+        c.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str),
+        Some("greedy")
+    );
+    c.set("krishiv.optimizer.joinDpLimit", "12").unwrap();
+    assert_eq!(
+        c.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int),
+        Some(12)
+    );
+    assert!(c.set("krishiv.optimizer.joinEnumerator", "dphyp").is_err());
+    assert!(c.set("krishiv.optimizer.joinDpLimit", "0").is_err());
+}
+
+#[test]
 fn eager_aggregation_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
@@ -1009,6 +1034,30 @@ fn engine_runtime_entries_parse_and_default() {
     assert!(c.set("krishiv.system.queries.capacity", "0").is_err());
     assert_eq!(SESSION_MEMORY_LIMIT.scope, Scope::Session);
     assert_eq!(SYSTEM_QUERIES_CAPACITY.scope, Scope::Cluster);
+}
+
+#[test]
+fn binary_output_style_parses_and_has_no_default() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&BINARY_OUTPUT_STYLE), None);
+    c.set("spark.sql.binaryOutputStyle", "hex_discrete")
+        .unwrap();
+    assert_eq!(
+        c.get(&BINARY_OUTPUT_STYLE).and_then(ConfigValue::as_str),
+        Some("HEX_DISCRETE")
+    );
+    c.set("spark.sql.binaryOutputStyle", "utf-8").unwrap();
+    assert_eq!(
+        c.get(&BINARY_OUTPUT_STYLE).and_then(ConfigValue::as_str),
+        Some("UTF-8")
+    );
+    assert!(c.set("spark.sql.binaryOutputStyle", "ROT13").is_err());
+    // The Krishiv key names the same entry.
+    c.set("krishiv.sql.binaryOutputStyle", "Base64").unwrap();
+    assert_eq!(
+        c.get(&BINARY_OUTPUT_STYLE).and_then(ConfigValue::as_str),
+        Some("BASE64")
+    );
 }
 
 #[test]

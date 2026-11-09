@@ -1429,7 +1429,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 if matches!(
                     t,
                     DataType::Interval(_) | DataType::Duration(TimeUnit::Microsecond)
-                ) =>
+                ) || krishiv_types::arrow::is_calendar_struct(t) =>
             {
                 Binding::new(interval_part_type(part), move |x: &Inputs<'_>| {
                     Ok(interval_part(x.column(1)?.as_ref(), part)?)

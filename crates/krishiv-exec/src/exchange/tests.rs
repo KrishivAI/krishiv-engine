@@ -82,6 +82,42 @@ fn round_robin_routes_by_the_whole_row_whatever_the_batches() {
     assert!(whole.iter().any(|p| *p != whole[0]));
 }
 
+/// A row with a nested column is placed by its other columns (the routing
+/// hash covers no array), as the same row without it; a row of nested
+/// columns only goes to partition 0. Neither fails.
+#[test]
+fn round_robin_places_rows_with_nested_columns_by_the_others() {
+    let b = batch(300);
+    let item = Arc::new(Field::new("item", DataType::Int64, true));
+    let lists = arrow_array::new_null_array(&DataType::List(Arc::clone(&item)), 300);
+    let mut fields: Vec<Field> = b
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect();
+    fields.push(Field::new("l", DataType::List(item), true));
+    let mut columns = b.columns().to_vec();
+    columns.push(Arc::clone(&lists));
+    let wide = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+    let (mut flat, mut nested) = (Vec::new(), Vec::new());
+    route(&Partitioning::RoundRobin, &b, 4, &mut flat).unwrap();
+    route(&Partitioning::RoundRobin, &wide, 4, &mut nested).unwrap();
+    assert_eq!(nested, flat);
+    let only = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "l",
+            lists.data_type().clone(),
+            true,
+        )])),
+        vec![lists],
+    )
+    .unwrap();
+    let mut out = Vec::new();
+    route(&Partitioning::RoundRobin, &only, 4, &mut out).unwrap();
+    assert_eq!(out, vec![0; 300]);
+}
+
 #[test]
 fn rows_without_columns_are_routed_not_dropped() {
     let b = RecordBatch::try_new_with_options(

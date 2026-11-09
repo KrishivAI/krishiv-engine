@@ -30,7 +30,9 @@ use krishiv_common::error::{
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::analyzer::{FunctionLookup, SqlFunction, SqlParam, TableColumn, variable_name};
+use krishiv_plan::analyzer::{
+    FunctionLookup, SqlFunction, SqlParam, TableColumn, VariableValue, variable_name,
+};
 use krishiv_plan::{
     Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SourceId, SubqueryKind,
 };
@@ -42,9 +44,7 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
-pub(crate) use crate::arrow_values::{
-    arrow_field_value, arrow_krishiv_type, arrow_value, declared_value,
-};
+pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_value};
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
@@ -561,8 +561,8 @@ impl Session {
             .transpose()?;
         let (data_type, value, default_query) = match (&declared, &v.default) {
             (_, None) => match declared {
-                Some(t) => (t.clone(), Literal::Null(Some(t)), None),
-                None => (DataType::Null, Literal::Null(None), None),
+                Some(t) => (t.clone(), Literal::Null(Some(t)).into(), None),
+                None => (DataType::Null, Literal::Null(None).into(), None),
             },
             (declared, Some(default)) => {
                 if contains_subquery(default) {
@@ -587,9 +587,8 @@ impl Session {
                     ),
                     None => padded_select("SELECT ", slice, default.span.start, ""),
                 };
-                let (inferred, value) = self
-                    .eval_variable_value(&sql, text, v.span, default.span)
-                    .await?;
+                let (inferred, value) =
+                    self.eval_variable(&sql, text, v.span, default.span).await?;
                 let data_type = declared.clone().unwrap_or(inferred);
                 (data_type, value, Some(sql))
             }
@@ -647,11 +646,11 @@ impl Session {
                         match &var.default_query {
                             Some(query) => {
                                 let (_, value) = self
-                                    .eval_variable_value(query, text, v.span, a.value.span)
+                                    .eval_variable(query, text, v.span, a.value.span)
                                     .await?;
                                 value
                             }
-                            None => Literal::Null(Some(var.data_type.clone())),
+                            None => Literal::Null(Some(var.data_type.clone())).into(),
                         }
                     } else {
                         if contains_default(&a.value) && !has_default_var {
@@ -666,9 +665,8 @@ impl Session {
                             a.value.span.start,
                             &format!(" AS {})", var.data_type.simple_string()),
                         );
-                        let (_, value) = self
-                            .eval_variable_value(&sql, text, v.span, a.value.span)
-                            .await?;
+                        let (_, value) =
+                            self.eval_variable(&sql, text, v.span, a.value.span).await?;
                         value
                     };
                     pending.push((key.clone(), var.clone(), value));
@@ -743,7 +741,7 @@ impl Session {
                             key.clone(),
                             StoredVariable {
                                 data_type: var.data_type.clone(),
-                                value: Literal::Null(Some(var.data_type.clone())),
+                                value: Literal::Null(Some(var.data_type.clone())).into(),
                                 default_query: var.default_query.clone(),
                             },
                         );
@@ -785,7 +783,13 @@ impl Session {
                     crate::session::internal("a row assignment returned no batches".to_owned())
                 })?;
                 for ((key, var), i) in keys.iter().zip(&stored).zip(0..) {
-                    let (_, value) = arrow_field_value(batch, i, 0)?;
+                    let (_, value) = if crate::nested_value::is_nested(batch.column(i).data_type())
+                    {
+                        crate::nested_value::arrow_variable_value(batch.column(i), 0)?
+                    } else {
+                        let (t, l) = arrow_field_value(batch, i, 0)?;
+                        (t, l.into())
+                    };
                     self.state.variables.put(
                         key.clone(),
                         StoredVariable {
@@ -1727,27 +1731,6 @@ impl Session {
         Ok(out)
     }
 
-    /// As [`Self::run_analyzed_variable_query`], but stops reading at the first row beyond
-    /// `max_rows` and returns `None`: a caller that holds the rows never holds more.
-    pub(crate) async fn run_analyzed_variable_query_capped(
-        &self,
-        analysis: &Arc<crate::dataframe::Analysis>,
-        max_rows: usize,
-    ) -> Result<Option<Vec<RecordBatch>>, KrishivError> {
-        let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
-        let mut stream = self.run(&physical, &analysis.env).await?;
-        let (mut out, mut rows) = (Vec::new(), 0_usize);
-        while let Some(batch) = stream.next().await {
-            let batch = batch?;
-            rows = rows.saturating_add(batch.num_rows());
-            if rows > max_rows {
-                return Ok(None);
-            }
-            out.push(batch);
-        }
-        Ok(Some(out))
-    }
-
     /// The value of `sql` (a synthesized one-row `SELECT`): its single
     /// row and column as a typed literal.
     ///
@@ -1764,6 +1747,39 @@ impl Session {
         command_span: Span,
         expr_span: Span,
     ) -> Result<(DataType, Literal), KrishivError> {
+        let (batch, declared) = self
+            .eval_variable_row(sql, text, command_span, expr_span)
+            .await?;
+        declared_value(batch.column(0), 0, declared.as_ref())
+    }
+
+    /// As [`Self::eval_variable_value`], for a variable's value, which may
+    /// be an `ARRAY`, `STRUCT` or `MAP` ([`crate::nested_value`]).
+    pub(crate) async fn eval_variable(
+        &self,
+        sql: &str,
+        text: &RedactedSql,
+        command_span: Span,
+        expr_span: Span,
+    ) -> Result<(DataType, VariableValue), KrishivError> {
+        let (batch, declared) = self
+            .eval_variable_row(sql, text, command_span, expr_span)
+            .await?;
+        if crate::nested_value::is_nested(batch.column(0).data_type()) {
+            return crate::nested_value::arrow_variable_value(batch.column(0), 0);
+        }
+        let (t, l) = declared_value(batch.column(0), 0, declared.as_ref())?;
+        Ok((t, l.into()))
+    }
+
+    /// The one-row, one-column batch of `sql`.
+    async fn eval_variable_row(
+        &self,
+        sql: &str,
+        text: &RedactedSql,
+        command_span: Span,
+        expr_span: Span,
+    ) -> Result<(RecordBatch, Option<DataType>), KrishivError> {
         let analysis = self
             .analyze_variable_query(sql)
             .await
@@ -1786,8 +1802,12 @@ impl Session {
                 "a variable expression returned more than one column".to_owned(),
             ));
         }
-        let declared = analysis.analyzed.output.first().map(|c| &c.data_type);
-        declared_value(batch.column(0), 0, declared)
+        let declared = analysis
+            .analyzed
+            .output
+            .first()
+            .map(|c| c.data_type.clone());
+        Ok((batch.clone(), declared))
     }
 }
 

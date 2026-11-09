@@ -84,7 +84,7 @@ jobs:
       - name: The wheel carries the CPU level marker
         run: |
           for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/_cpu_level$'; done
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: $/.github/actions/setup-uv
         if: matrix.libc == 'manylinux'
       - name: Test (manylinux, on the runner)
         if: matrix.libc == 'manylinux'
@@ -152,7 +152,7 @@ jobs:
           args: ${{ env.ABI3_ARGS }} --out ../dist
       - name: The compat wheel has no CPU level marker
         run: "! unzip -l dist/*.whl | grep -q '_cpu_level'"
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: $/.github/actions/setup-uv
       - name: Test
         run: |
           ls dist | grep -q '^krishiv_compat-'
@@ -197,7 +197,7 @@ jobs:
       - name: The wheel carries the CPU level marker
         run: |
           for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/_cpu_level$'; done
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: $/.github/actions/setup-uv
       - name: Test
         env:
           FLAVOUR: ${{ matrix.flavour }}
@@ -230,7 +230,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: $/.github/actions/setup-uv
       - name: Interpreters
         id: py
         env:
@@ -294,7 +294,7 @@ jobs:
           pattern: wheels-*
           path: dist
           merge-multiple: true
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - name: Measure the wheels
         run: cargo xtask wheel-sizes dist --measure-only "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json"
       - name: Record the main commit measured against

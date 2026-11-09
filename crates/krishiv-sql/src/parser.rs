@@ -1449,9 +1449,8 @@ impl<'s> Parser<'s> {
     /// ANTLR reads it); `strict` admits the strict-non-reserved words
     /// (`UNION`, `JOIN`, ...), which only a column alias may be.
     fn implicit_alias(&mut self, strict: bool) -> PR<Option<Ident>> {
-        // In a script `DO` ends the query of `FOR ... DO`.
-        if self.in_script > 0 && self.kw_at(0, "DO") {
-            return Ok(None);
+        if let Some(done) = self.script_alias(strict)? {
+            return Ok(done);
         }
         // `APPROX NEAREST ...` after a join's relation is its ranking clause.
         if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
@@ -3675,12 +3674,21 @@ impl<'s> Parser<'s> {
             windows: vec![],
             limit: None,
             offset: None,
+            organization_span: None,
         }
     }
 
     /// `queryOrganization`, onto `q`.
     fn organization(&mut self, q: &mut Query) -> PR<()> {
         let o = self.query_organization()?;
+        let any = !(o.order_by.is_empty()
+            && o.cluster_by.is_empty()
+            && o.distribute_by.is_empty()
+            && o.sort_by.is_empty()
+            && o.windows.is_empty()
+            && o.limit.is_none()
+            && o.offset.is_none());
+        q.organization_span = any.then_some(o.span);
         q.order_by = o.order_by;
         q.order_span = o.order_span;
         q.cluster_by = o.cluster_by;

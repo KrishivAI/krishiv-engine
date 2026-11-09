@@ -108,7 +108,7 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::accumulator::Accumulator;
 use super::merge_index::{MergeIndex, Slot};
-use super::table::{AggCore, batch};
+use super::table::{AggCore, batch, own_bytes};
 use super::{AggregateOutput, unsupported};
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
@@ -934,19 +934,17 @@ impl RowTable {
     fn gather_bytes(&self, cols: &[ArrayRef], fold: Fold, w: &Weights, counts: &[usize]) -> usize {
         let used = self.used(cols.len(), fold);
         let (mut fixed, mut varied) = (0usize, 0usize);
-        for (c, u) in cols.iter().zip(&used) {
-            if !u {
-                continue;
-            }
-            if c.data_type().primitive_width().is_some() {
-                fixed += c.get_array_memory_size();
+        for (c, _) in cols.iter().zip(&used).filter(|(_, u)| **u) {
+            let n = if c.data_type().primitive_width().is_some() {
+                &mut fixed
             } else {
-                varied += c.get_array_memory_size();
-            }
+                &mut varied
+            };
+            *n += own_bytes(c.as_ref());
         }
         // Weights are `Int64`: one value per row, so a proportional share.
         fixed += match w {
-            Weights::Column(c) => c.get_array_memory_size(),
+            Weights::Column(c) => own_bytes(c),
             Weights::Const(_) => 0,
         };
         let rows: usize = counts.iter().sum();

@@ -1634,8 +1634,18 @@ async fn spilled_batches_of_alternating_sizes_read_back_from_a_full_pool() {
     for large in [300, 1_500] {
         alternating_sizes_from_a_full_pool(large, functions(), true).await;
     }
-    // Not here yet: offsets and `nth_value` charge the batches they keep past their read to the pool directly,
-    // which a pool taken whole refuses (queue: window fold charges with no fallback).
+}
+
+/// Offsets and `nth_value` keep the batches they read past their read: the flush phase's headroom covers what
+/// their offset spans, so a pool taken whole does not refuse them.
+#[tokio::test]
+async fn offsets_and_nth_value_read_back_from_a_full_pool() {
+    let rows = WindowFrame::running(FrameUnits::Rows);
+    let whole = WindowFrame::whole(FrameUnits::Rows);
+    let functions = vec![(lag_lead(-2, Some(3), false), whole), (nth(3, true), rows)];
+    // With larger batches or more functions, the two batches each keeps are more than the buffered partition lends:
+    // the query's error then comes from the flush phase's headroom, not from a charge with no fallback.
+    alternating_sizes_from_a_full_pool(300, functions, false).await;
 }
 
 /// [`spilled_batches_of_alternating_sizes_read_back_from_a_full_pool`] with batches of 20 and `large` rows: the
@@ -1732,6 +1742,35 @@ async fn a_failed_spill_fails_every_later_call() {
         op.flush(&mut local, &ctx).await.unwrap_err().error_class(),
         class
     );
+}
+
+/// A window's spill write runs under its consumer's `spilling` guard, so
+/// another driver's round that cannot spill waits for the rows it frees
+/// (the memory crate's `a_round_waits_for_another_consumers_spill_write`).
+#[tokio::test]
+async fn a_spill_write_holds_the_spilling_guard() {
+    let rows: Vec<Row> = (0..400)
+        .map(|i| (Some(i / 300), Some(i), i, Some(i)))
+        .collect();
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), plan(functions(), true), true, Some(scope.clone())).unwrap();
+    let (root, ctx) = task(1 << 30);
+    let consumer = Arc::clone(ctx.consumer().consumer());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    scope.set_test_writer_hook(Arc::new({
+        let seen = Arc::clone(&seen);
+        move || seen.lock().unwrap().push(consumer.is_spilling())
+    }));
+    let mut local = op.local_state(&ctx).unwrap();
+    assert!(matches!(
+        op.execute(&batch(&rows), &mut local).unwrap(),
+        OperatorOutput::NeedMoreInput(_)
+    ));
+    assert!(op.spill(&mut local, 1, &ctx).await.unwrap() > 0);
+    assert_eq!(*seen.lock().unwrap(), [true]);
+    assert!(!ctx.consumer().consumer().is_spilling());
+    drop((local, op, ctx));
+    assert_eq!(root.reserved(), 0);
 }
 
 /// A spill dropped mid-write (its query cancelled) leaves the window

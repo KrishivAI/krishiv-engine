@@ -31,6 +31,7 @@ cargo machete                                    # unused deps
 cargo hack check --each-feature --workspace --locked   # features stay additive
 cargo xtask layering                             # L0–L7 layer rule (xtask/layers.toml)
 cargo xtask docs-config | docs-errors            # regenerate config / error-class docs
+cargo xtask docs-sql | docs-python | docs-rust [--check]   # docs/reference/{sql/functions,python,rust}/ (docs-rust needs nightly rustdoc + `cargo install rustdoc-md --version 0.2.0 --locked`; the docs-reference nightly job diffs them); docs-config docs/reference/config/index.md
 cargo xtask budgets [--build-time] [--write-baseline]   # crate-count / build-time / size budgets; PRs are gated against CI's measurement of main, `budgets.json` is only a reference record / fallback
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace   # docs gate
 (cd bench && uv run pytest)                      # bench harness tests
@@ -41,7 +42,7 @@ cargo xtask stack up|down|status [--kafka]       # bench/baselines compose proje
 cargo xtask coverage [--no-branch] [--all-features] [--html]   # cargo-llvm-cov -> target/coverage (branch needs nightly)
 cargo xtask coverage-summary | diff-coverage --base <ref>      # per-crate %; coverage of added lines (report only)
 cargo xtask spdx | source-guard | workflow-lint  # SPDX headers; no ParquetObject{Reader,Writer}; no pull_request_target
-cargo xtask file-size [--write-baseline]         # (updates only the lines of files your branch changed; never other files) no src/ file grows past 2,000 lines; xtask/file-size-baseline.txt lists the files already over (they may shrink, never grow)
+cargo xtask file-size [--write-baseline]         # (updates only the lines of files your branch changed; never other files) no src/ file grows past 2,000 lines; xtask/file-size-baseline/<crate>.txt lists the files already over (they may shrink, never grow)
 cargo xtask map <crate> | maps-check [--report]   # per-file module doc, line count and public items; missing //! lines, stale CLAUDE.md layout names, files over 2,000 lines (report-only in precheck)
 cargo xtask qerror [--data DIR] [--scale N] [--suite tpch|tpcds]...  # q-error (estimated vs actual rows per join/aggregate) over TPC-H/TPC-DS: median, p95; generated data by default
 cargo xtask pr-size|dco|changes --base <ref>     # PR size cap (10,000 counted lines), DCO sign-off, Rust-job path filter

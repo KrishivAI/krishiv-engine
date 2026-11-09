@@ -2511,6 +2511,7 @@ name = "krishiv-types"
 version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
  "arrow-schema",
  "arrow-select",
  "codspeed-criterion-compat",
@@ -4975,6 +4976,8 @@ version = "0.2.0-alpha"
 dependencies = [
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-functions",
+ "krishiv-plan",
  "serde",
  "serde_json",
  "tempfile",

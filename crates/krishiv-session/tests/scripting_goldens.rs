@@ -344,14 +344,29 @@ fn debug_one_script() {
         return;
     };
     let (setup, _, scripts) = load();
-    let script = &scripts[n - 1];
+    let mut script = scripts[n - 1].clone();
+    if let Ok(r) = std::env::var("KRISHIV_REPLACE")
+        && let Some((a, b)) = r.split_once("=>")
+    {
+        script = script.replace(a, b);
+    }
+    let script = &script;
     for (label, text) in [
         ("as is", script.clone()),
         ("without handlers", without_handlers(script)),
     ] {
         let (s, _dir) = fresh(&setup);
         match block_on(async { s.sql(&text).await?.collect().await }) {
-            Ok(b) => eprintln!("[{label}] ok, {} batches", b.len()),
+            Ok(b) => {
+                eprintln!("[{label}] ok, {} batches", b.len());
+                eprintln!(
+                    "CHK {:?}",
+                    checksums(&s, &["products".to_owned(), "orders".to_owned()])
+                );
+                if let Ok(t) = std::env::var("KRISHIV_TABLE") {
+                    eprintln!("{:?}", cells(&s, &format!("SELECT * FROM {t} ORDER BY 1")));
+                }
+            }
             Err(e) => eprintln!("[{label}] {e}"),
         }
     }
