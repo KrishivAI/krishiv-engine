@@ -61,10 +61,11 @@ impl Session {
         let Statement::Query(q) = &*e.statement else {
             unreachable!("an explained query");
         };
-        let plan = krishiv_sql::lower_with(
+        let plan = krishiv_sql::lower_identified(
             q,
             krishiv_plan::SourceId(0),
-            self.parser_options().case_sensitive,
+            env.parser.case_sensitive,
+            &env.identifier_spans,
         )
         .map_err(|e| e.error)?;
         let explained = DataFrame::new(self.clone(), Arc::clone(plan.root()));
