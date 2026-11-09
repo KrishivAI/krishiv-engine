@@ -149,6 +149,18 @@ impl Planner<'_> {
         }
         let probe_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.0)).collect();
         let build_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.1)).collect();
+        // What the consumer above may compute on the build side (S4').
+        let (build, computed) = if kind == JoinKind::Inner {
+            let built = if build_left { &logical.0 } else { &logical.1 };
+            let fixed: Vec<&Expr> = build_exprs
+                .iter()
+                .map(AsRef::as_ref)
+                .chain(residual.iter().copied())
+                .collect();
+            self.project_build((&logical.0, &logical.1), built, build, &fixed)?
+        } else {
+            (build, None)
+        };
         let (probe, probe_keys) = self.with_columns(probe, &probe_exprs)?;
         let (build, build_keys) = self.with_columns(build, &build_exprs)?;
         // Keys of one Spark `STRING`/`BINARY` in different Arrow encodings
@@ -334,6 +346,9 @@ impl Planner<'_> {
         }
         for p in published {
             detail.push_str(&format!(", {p}"));
+        }
+        if let Some(c) = &computed {
+            detail.push_str(&format!(", {c}"));
         }
         if let Some((_, probe_stats, build_stats)) = preferred {
             // The statistics that chose to build the left input, labelled
@@ -645,7 +660,7 @@ pub(crate) fn estimated_bytes(rows: f64, schema: &arrow_schema::Schema) -> f64 {
 
 /// Spark's `DataType.defaultSize` (Spark 4.0 source) for the Arrow
 /// carriers of Spark's types.
-fn default_size(t: &arrow_schema::DataType) -> u64 {
+pub(super) fn default_size(t: &arrow_schema::DataType) -> u64 {
     use arrow_schema::DataType as T;
     match t {
         T::Null | T::Boolean | T::Int8 => 1,
