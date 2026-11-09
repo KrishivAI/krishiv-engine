@@ -125,3 +125,84 @@ async fn a_round_asks_an_idle_output_before_a_larger_running_consumer() {
     assert_eq!((output.size(), running.size()), (Q, 5 * Q));
     assert_eq!(running.asked.load(Ordering::Relaxed), 0);
 }
+
+/// An idle output whose spill write is still running, with nothing more to
+/// give.
+struct Writing {
+    signal: SpillSignal,
+}
+
+impl Spillable for Writing {
+    fn spillable_bytes(&self) -> usize {
+        self.signal.spillable_bytes()
+    }
+
+    fn request_spill(&self, target: usize) -> SpillTicket {
+        let ticket = self.signal.request_spill(target);
+        // Its rows are taken for the write.
+        self.signal.set_spillable_bytes(0);
+        ticket
+    }
+
+    fn spill_requested(&self) -> Option<usize> {
+        self.signal.spill_requested()
+    }
+
+    fn idle(&self) -> bool {
+        true
+    }
+}
+
+/// While a driver waits for an idle output's write, another driver's round
+/// asks one of the waiting driver's consumers to spill: the waiting driver
+/// services it, as it would in arbitration, so the round is not left to
+/// time out.
+#[tokio::test(start_paused = true)]
+async fn a_driver_waiting_for_an_idle_spill_services_its_own_consumers() {
+    let root = root(Some(8 * Q), Q);
+    let q = root.child_pool("q", None);
+    let output = Arc::new(Writing {
+        signal: SpillSignal::new(),
+    });
+    let out_id = q.register("output", Some(Arc::clone(&output) as Arc<dyn Spillable>));
+    let mut rows = Reservation::new(Arc::clone(&q) as Arc<dyn MemoryPool>, out_id);
+    rows.try_grow(4 * Q).unwrap();
+    output.signal.set_spillable_bytes(4 * Q);
+
+    let a = Arc::new(SpillOwner::new());
+    let signal = a.signal();
+    let x_id = q.register("x", Some(Arc::clone(&signal) as Arc<dyn Spillable>));
+    let x = Arc::new(std::sync::Mutex::new(Reservation::new(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        x_id,
+    )));
+    x.lock().unwrap().try_grow(3 * Q).unwrap();
+    signal.set_spillable_bytes(3 * Q);
+    let y_id = q.register("y", Some(a.signal() as Arc<dyn Spillable>));
+    let waiting = tokio::spawn({
+        let (a, q, signal, x) = (
+            Arc::clone(&a),
+            Arc::clone(&q),
+            Arc::clone(&signal),
+            Arc::clone(&x),
+        );
+        async move { owner_reserve(&a, &q, y_id, 2 * Q, &signal, &x).await }
+    });
+    while output.signal.spill_requested().is_none() {
+        tokio::task::yield_now().await;
+    }
+    // Another driver needs 2 MiB of the 1 MiB free: only x can give it.
+    let b = SpillOwner::new();
+    let z_id = q.register("z", Some(b.signal() as Arc<dyn Spillable>));
+    let started = tokio::time::Instant::now();
+    q.reserve(z_id, 2 * Q).await.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the round waited for a driver that did not service its consumers"
+    );
+    assert!(x.lock().unwrap().size() < 3 * Q, "x spilled for the round");
+    // The write ends: the waiting request goes on.
+    rows.shrink(2 * Q);
+    output.signal.complete(2 * Q);
+    waiting.await.unwrap().unwrap();
+}

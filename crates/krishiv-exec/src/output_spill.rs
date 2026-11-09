@@ -27,7 +27,9 @@
 //! output per breaker instance, on the worker that finalized it.
 
 use std::sync::{Arc, OnceLock, Weak};
-use std::time::Instant;
+// Tokio's clock, not the wall clock: paused in tests and driven by the
+// simulator, as every other wait of the engine is.
+use tokio::time::Instant;
 
 use futures::future::BoxFuture;
 use krishiv_common::error::{ErrorClass, KrishivError};
@@ -342,8 +344,10 @@ mod tests {
         let (hook, _, _q) = setup(None);
         assert!(!hook.idle(), "not waiting");
         hook.set_idle(true);
-        // The default wait is a second of real time.
+        // The default wait is a second.
         assert!(!hook.idle());
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        assert!(hook.idle(), "waited a second");
         let pool = TreePool::new(&MemoryConfig::default());
         let query = QueryContext::new(
             QueryId(2),

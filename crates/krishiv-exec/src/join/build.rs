@@ -241,6 +241,12 @@ impl SpillUnread for IdleBuild {
                     .filter(|&p| built.tables[p].is_some() && memory.get(p).is_some())
                     .collect();
                 order.sort_by_key(|&p| std::cmp::Reverse(held(&memory[p])));
+                // One partition covers the request: the smallest that does,
+                // so a small request writes no more than it needs.
+                let want = target.max(SPILL_MIN);
+                if let Some(i) = order.iter().rposition(|&p| held(&memory[p]) >= want) {
+                    order.swap(0, i);
+                }
                 let mut freed = 0usize;
                 let chosen: Vec<usize> = order
                     .into_iter()
