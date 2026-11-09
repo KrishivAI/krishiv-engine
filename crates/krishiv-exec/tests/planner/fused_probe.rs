@@ -164,10 +164,11 @@ fn a_filter_below_a_probe_is_fused_into_it() {
     }
 }
 
-/// A key expression that raises under ANSI on a row the filter drops keeps
-/// the filter a node of its own below the key projection: no error.
+/// A key computed by an expression projection above the filter stops the
+/// fusion at that projection, so a key that raises under ANSI on a row the
+/// filter drops never sees that row: no error.
 #[test]
-fn a_raising_key_keeps_the_filter_unfused() {
+fn a_key_computed_above_the_filter_keeps_it_unfused() {
     let (tpch, _rt) = tpch();
     // `CAST(l_comment AS INT)` raises on every comment; the filter drops
     // every row before the key projection sees one.
@@ -187,6 +188,72 @@ fn a_raising_filter_is_not_fused() {
     let (tpch, _rt) = tpch();
     let sql = "SELECT l_orderkey FROM lineitem JOIN part ON l_partkey = p_partkey \
                WHERE l_quantity * 1000 > 10";
+    let plan = tpch.plan_sql(sql).unwrap();
+    assert_eq!(selects(&plan).0, 0, "{plan}");
+    assert!(plan.to_string().contains("Filter "), "{plan}");
+}
+
+/// The guard reads the session's ANSI mode: the filter that may raise under
+/// ANSI is fused with ANSI off, and joins the same rows.
+#[test]
+fn a_filter_that_only_raises_under_ansi_is_fused_with_ansi_off() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf0.01-parquet");
+    let tpch = super::tpch::parquet_dir(&dir, &super::tpch::TABLES, false, &rt);
+    let sql = "SELECT l_orderkey FROM lineitem JOIN part ON l_partkey = p_partkey \
+               WHERE l_quantity * 1000 > 10";
+    let plan = tpch.plan_sql(sql).unwrap();
+    assert_eq!(selects(&plan).0, 1, "{plan}");
+    assert_eq!(sorted_rows(&plan), sorted_rows(&unfused(&plan)));
+}
+
+/// A residual that may raise keeps a fusable filter unfused: the residual
+/// must not see a pair the filter would have dropped.
+#[test]
+fn a_raising_residual_keeps_the_filter_unfused() {
+    let (tpch, _rt) = tpch();
+    let sql = "SELECT l_orderkey FROM lineitem JOIN part \
+               ON l_partkey = p_partkey AND l_quantity * 1000 > p_size \
+               WHERE l_discount > 0.05";
+    let plan = tpch.plan_sql(sql).unwrap();
+    assert_eq!(selects(&plan).0, 0, "{plan}");
+    assert!(plan.to_string().contains("Filter "), "{plan}");
+    assert!(!sorted_rows(&plan).is_empty());
+}
+
+/// `krishiv.exec.join.fuseProbeSelect=false` plans neither fusion: the row
+/// stage stays in the scan and the rows do not change.
+#[test]
+fn the_switch_turns_the_fusion_off() {
+    let env = env_of(300);
+    let sql = "SELECT x.b, y.s FROM t x JOIN (SELECT a, s FROM t WHERE b < 300) y ON x.a = y.a";
+    let on = env.plan_with(sql, Config::new()).unwrap();
+    assert_eq!(selects(&on).1, 1, "{on}");
+    let mut config = Config::new();
+    config
+        .set("krishiv.exec.join.fuseProbeSelect", "false")
+        .unwrap();
+    let off = env.plan_with(sql, config).unwrap();
+    assert_eq!(selects(&off), (0, 0), "{off}");
+    assert_eq!(sorted_rows(&off), sorted_rows(&on));
+}
+
+/// With the switch off a filter below a probe stays a `Filter` node.
+#[test]
+fn the_switch_keeps_a_filter_a_node() {
+    let (mut tpch, _rt) = tpch();
+    let sql = "SELECT l_orderkey FROM lineitem JOIN part ON l_partkey = p_partkey \
+               WHERE l_quantity < 10";
+    assert_eq!(selects(&tpch.plan_sql(sql).unwrap()).0, 1);
+    let mut config = Config::new();
+    config
+        .set("krishiv.exec.join.fuseProbeSelect", "false")
+        .unwrap();
+    tpch.config = Arc::new(config);
     let plan = tpch.plan_sql(sql).unwrap();
     assert_eq!(selects(&plan).0, 0, "{plan}");
     assert!(plan.to_string().contains("Filter "), "{plan}");

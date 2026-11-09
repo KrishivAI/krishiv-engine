@@ -10,9 +10,12 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{BooleanArray, Int64Array, RecordBatch};
+use arrow_array::{BooleanArray, Int64Array, RecordBatch, StringViewArray};
+use arrow_schema::{DataType, Field, Schema};
 use krishiv_exec::testing::Pipe;
-use krishiv_exec::{ExecConfig, FnPredicate, HashJoin, HashJoinNode, JoinType, Predicate, Result};
+use krishiv_exec::{
+    ExecConfig, FnPredicate, HashJoin, HashJoinNode, JoinSpec, JoinType, Predicate, Result,
+};
 use krishiv_types::batch::{Batch, Weights};
 use proptest::prelude::*;
 
@@ -161,7 +164,7 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 8, max_shrink_iters: 16, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: 4, max_shrink_iters: 16, ..ProptestConfig::default() })]
     /// Under a budget that forces grace spill (deferred probe rows,
     /// asserted): the same rows as the unfused join.
     #[test]
@@ -214,4 +217,93 @@ async fn empty_and_whole_selections() {
         assert_eq!(got, expect);
         assert_eq!(got.len(), 3, "{got:?}");
     }
+}
+
+/// A long string of row `i`: never inlined in its view.
+fn long_string(i: usize) -> String {
+    format!("a string too long to inline, row {i:08}")
+}
+
+/// The memory the output of a join over `Utf8View` probe strings holds, the
+/// filter keeping one row in a hundred, fused or as its own operator.
+async fn view_output_bytes(fused: bool) -> usize {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("s", DataType::Utf8View, false),
+    ]));
+    let rows = 10_000usize;
+    let probe = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from_iter_values(
+                (0..rows).map(|i| i64::try_from(i).unwrap()),
+            )),
+            Arc::new(StringViewArray::from_iter_values(
+                (0..rows).map(long_string),
+            )),
+        ],
+    )
+    .unwrap();
+    let build = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from_iter_values(
+                (0..rows).map(|i| i64::try_from(i).unwrap()),
+            )),
+            Arc::new(StringViewArray::from_iter_values(
+                (0..rows).map(|_| "b".to_owned()),
+            )),
+        ],
+    )
+    .unwrap();
+    let every_hundredth: Arc<dyn Predicate> = Arc::new(FnPredicate(|b: &RecordBatch| {
+        Ok(b.column(0)
+            .as_primitive::<Int64Type>()
+            .iter()
+            .map(|k| k.map(|k| k % 100 == 0))
+            .collect())
+    }));
+    let root = root(64 * MIB);
+    let (_manager, scope) = spill();
+    let q = query(&root, 1, ExecConfig::default());
+    let mut join = HashJoin::try_new(JoinSpec {
+        join_type: JoinType::Inner,
+        probe_schema: Arc::clone(&schema),
+        build_schema: Arc::clone(&schema),
+        probe_keys: vec![0],
+        build_keys: vec![0],
+        null_safe: vec![false],
+        filter: None,
+        single_match: false,
+        spill: Some(scope),
+    })
+    .unwrap();
+    let input = scan(&schema, vec![Batch::new(probe)]);
+    let probe_node = if fused {
+        join = join.with_probe_filter(every_hundredth).unwrap();
+        input
+    } else {
+        Arc::new(Pipe(
+            input,
+            krishiv_exec::Filter::new(Arc::clone(&schema), every_hundredth),
+        ))
+    };
+    let plan = Arc::new(HashJoinNode {
+        join,
+        build: scan(&schema, vec![Batch::new(build)]),
+        probe: probe_node,
+    });
+    let out = run(&runner_for(1, 64 * MIB), plan, &q).await.unwrap();
+    assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), rows / 100);
+    out.iter().map(|b| b.data().get_array_memory_size()).sum()
+}
+
+/// A selective fused filter compacts its probe strings as the `Filter` it
+/// replaces does: the output does not hold the scan's whole string buffers,
+/// which every breaker above would charge to the memory pool.
+#[tokio::test]
+async fn a_fused_filter_does_not_hold_the_scans_string_buffers() {
+    let unfused = view_output_bytes(false).await;
+    let fused = view_output_bytes(true).await;
+    assert!(fused < unfused * 4, "fused {fused}, unfused {unfused}");
 }

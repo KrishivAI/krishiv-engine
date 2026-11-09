@@ -1003,7 +1003,8 @@ impl HashJoin {
     /// `predicate` (over the probe input) is TRUE for: a filter fused into
     /// the probe, which selects the rows by id instead of joining a filtered
     /// copy (design P2-E3 U2). The result is the join of the filtered input.
-    /// Call before the join is shared.
+    /// Call before the join is shared. Public for tests and embedders that
+    /// build a join by hand; the planner sets it from the plan.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` for a join already shared.

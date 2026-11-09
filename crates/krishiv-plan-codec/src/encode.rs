@@ -503,6 +503,10 @@ impl Encoder {
     }
 
     fn probe_select(&mut self, select: &ProbeSelect) -> Result<pb::ProbeSelect> {
+        debug_assert!(
+            select.columns.as_ref().is_none_or(|c| !c.is_empty()),
+            "an empty column list would decode as no list; a probe has key columns"
+        );
         Ok(pb::ProbeSelect {
             filter: select
                 .filter

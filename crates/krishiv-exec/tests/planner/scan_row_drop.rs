@@ -164,26 +164,28 @@ fn run(t: &Tpch, q: &str) -> (Result<Vec<String>, KrishivError>, u64) {
     });
     let (out, query) = super::run_in(&plan, &root);
     let ops = &query.metrics().operators;
+    // A scan's runtime-filter row stage under a hash probe runs in the
+    // probe (design P2-E3 U2): such a scan reports the rows before the
+    // stage (out == tested), and the rows it kept are out - dropped.
     let scanned = ops
         .values()
         .filter(|e| e.name == "FileScan")
-        .map(|e| e.metrics.rows_out)
+        .map(|e| {
+            let extra = |metric: &str| {
+                e.extra
+                    .iter()
+                    .filter(|(name, _)| name.as_ref() == metric)
+                    .map(|(_, v)| v.value().unwrap_or(0))
+                    .sum::<u64>()
+            };
+            let out = e.metrics.rows_out;
+            if out == extra("runtime_filter_rows_tested") {
+                out - extra("runtime_filter_rows_dropped")
+            } else {
+                out
+            }
+        })
         .sum::<u64>();
-    // A scan's runtime-filter row stage under a hash probe runs in the
-    // probe (design P2-E3 U2): the rows it keeps are the rows the probe
-    // joins.
-    let probed = ops
-        .values()
-        .filter(|e| e.name == "HashJoinProbe")
-        .flat_map(|e| e.extra.iter())
-        .filter(|(name, _)| name.as_ref() == "probe_rows")
-        .map(|(_, v)| v.value().unwrap_or(0))
-        .sum::<u64>();
-    let scanned = if probed > 0 {
-        scanned.min(probed)
-    } else {
-        scanned
-    };
     let mut out = out.map(|b| rows(&b));
     if let Ok(r) = out.as_mut() {
         r.sort_unstable();

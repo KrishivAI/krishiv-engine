@@ -23,8 +23,10 @@ use std::time::Duration;
 use crate::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig};
 
 mod registry;
+mod registry_join;
 
 pub use registry::*;
+pub use registry_join::*;
 
 /// Where a config entry may be set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

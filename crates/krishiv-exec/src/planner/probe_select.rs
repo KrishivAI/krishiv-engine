@@ -23,6 +23,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use krishiv_common::config::{ConfigValue, EXEC_JOIN_FUSE_PROBE_SELECT};
 use krishiv_plan::{Expr, is_deterministic, may_raise};
 
 use super::build::{Planned, Planner, has_subquery};
@@ -80,6 +81,16 @@ fn below_projections(n: &PhysNode, width: usize) -> (&PhysNode, Vec<usize>, usiz
 }
 
 impl Planner<'_> {
+    /// `krishiv.exec.join.fuseProbeSelect`: whether a filter and a scan's
+    /// row stage may fuse into a hash probe. Off, the plan is the unfused one.
+    pub(super) fn fuse_probe_select(&self) -> bool {
+        self.cx
+            .config
+            .get(&EXEC_JOIN_FUSE_PROBE_SELECT)
+            .and_then(ConfigValue::as_bool)
+            .unwrap_or(true)
+    }
+
     /// Fuses the `Filter` below `probe`'s column-only projections, and those
     /// projections, into the hash probe over it (see the module docs): the
     /// filter's input becomes `probe`'s node and printed tree; `None` (and
@@ -92,6 +103,9 @@ impl Planner<'_> {
         keys: &[Arc<Expr>],
         residual: &[&Expr],
     ) -> Option<(ProbeSelect, String)> {
+        if !self.fuse_probe_select() {
+            return None;
+        }
         let ansi = self.env.ansi;
         if keys.iter().any(|k| may_raise(k, ansi)) || residual.iter().any(|r| may_raise(r, ansi)) {
             return None;
@@ -185,6 +199,26 @@ fn take_filter_input(
     };
     *explain = child;
     Some(detail)
+}
+
+/// Hands each scan under `roots` its runtime filters, and a hash probe the row stage of a scan below (`probe_select`).
+pub(super) fn attach_runtime_filters<'a>(
+    filters: &mut HashMap<ScanId, Vec<ScanRuntimeFilter>>,
+    fuse: bool,
+    roots: impl IntoIterator<Item = &'a mut PhysNode>,
+) {
+    let mut stack: Vec<&mut PhysNode> = roots.into_iter().collect();
+    while let Some(n) = stack.pop() {
+        if fuse {
+            fuse_row_stage(n, filters);
+        }
+        if let PhysNode::Scan(s) = n
+            && let Some(f) = filters.remove(&s.id)
+        {
+            s.runtime_filters = f;
+        }
+        stack.extend(n.children_mut());
+    }
 }
 
 /// Hands the row stage of the runtime-filtered scan under `node`'s probe

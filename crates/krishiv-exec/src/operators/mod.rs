@@ -50,6 +50,7 @@ pub use file_scan::{
 };
 pub use file_write::{FileWrite, FileWriteSink};
 pub use filter::Filter;
+pub(crate) use filter::compact_sparse_views;
 pub use generate::Generate;
 pub use late_fetch::{FetchSlot, LateFetch};
 pub use limit::Limit;

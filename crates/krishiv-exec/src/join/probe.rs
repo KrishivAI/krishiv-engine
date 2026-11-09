@@ -22,6 +22,7 @@ use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::hash::ProbeCount;
 use crate::operator::{FlushOutput, LocalState, Operator, OperatorOutput};
+use crate::operators::compact_sparse_views;
 use crate::operators::select::{RowSelect, Selection, batch_rows};
 use crate::sync::lock;
 
@@ -157,7 +158,7 @@ impl Cursor {
                 lookup[p].push(row);
             } else if tables.spilled(p) {
                 state[i] = SKIP;
-                deferred[p].push(sel.as_ref().map_or(row, |s| s.row(row)));
+                deferred[p].push(sel.as_ref().map_or(Ok(row), |s| s.row(row))?);
             }
         }
         let started = Instant::now();
@@ -276,7 +277,8 @@ impl Cursor {
     ) -> Result<Option<Batch>> {
         let arena = |p: usize| tables.get(p).map(JoinTable::arena);
         let build_cols = shared.build_columns(self.rows, build, arena)?;
-        let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), probe))?;
+        let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), probe)?)?;
+        let taken = self.compact_selected(taken)?;
         let m = probe.len();
         let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
         columns.extend(build_cols);
@@ -356,7 +358,20 @@ impl Cursor {
         if self.sel.is_none() && rows.len() == self.batch.num_rows() {
             return Ok(self.batch.clone());
         }
-        take_batch(&self.batch, &batch_rows(self.sel.as_ref(), rows))
+        let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), rows)?)?;
+        self.compact_selected(taken)
+    }
+
+    /// `taken` (rows of the batch, its columns) with the string views of a
+    /// selective fused filter compacted, as the `Filter` it replaces does:
+    /// a `take` keeps every data buffer of the scan's batch, which each
+    /// breaker above would charge to the memory pool.
+    fn compact_selected(&self, taken: Batch) -> Result<Batch> {
+        if self.sel.is_some() {
+            compact_sparse_views(&self.batch, taken)
+        } else {
+            Ok(taken)
+        }
     }
 
     /// The rows the join type emits once every match is known.
@@ -578,7 +593,10 @@ impl ProbeOp {
                 s.counters.add(Counter::ProbeRows, rows as u64);
                 let kept = match &sel {
                     _ if rows == 0 => None,
-                    Some(sel) => Some(take_batch(input, &sel.array())?),
+                    Some(sel) => Some(compact_sparse_views(
+                        input,
+                        take_batch(input, &sel.array())?,
+                    )?),
                     None => Some(input.clone()),
                 };
                 return Ok(OperatorOutput::NeedMoreInput(kept));
@@ -589,14 +607,8 @@ impl ProbeOp {
             if input.num_rows() == 0 {
                 return Ok(OperatorOutput::NeedMoreInput(None));
             }
-            let (cursor, deferred) = Cursor::new(
-                s,
-                &g.hashing,
-                input.clone(),
-                sel.clone(),
-                &tables,
-                l.detailed,
-            )?;
+            let (cursor, deferred) =
+                Cursor::new(s, &g.hashing, input.clone(), sel, &tables, l.detailed)?;
             let mut chunks = Vec::new();
             for (p, rows) in deferred
                 .into_iter()
@@ -607,7 +619,7 @@ impl ProbeOp {
                 chunks.push((p, super::compact_views(chunk)?));
             }
             if let Err(bytes) = reserve_chunks(&mut l.parts, &chunks) {
-                l.selected = Some(sel);
+                l.selected = Some(cursor.sel);
                 return Ok(OperatorOutput::NeedMemory { bytes });
             }
             for (p, c) in chunks {
@@ -674,6 +686,10 @@ impl Operator for ProbeOp {
                     .row_stage
                     .as_ref()
                     .and_then(|r| r.consumer_stage(ctx.partition()));
+                debug_assert!(
+                    spec.row_stage.is_none() || stage.is_some(),
+                    "a scan handed its row stage to a probe that cannot find it"
+                );
                 RowSelect::new(spec.predicate.clone(), stage)
             }),
             selected: None,

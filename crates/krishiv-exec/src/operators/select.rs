@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use arrow_array::{Array, BooleanArray, UInt32Array};
+use arrow_buffer::ScalarBuffer;
 use krishiv_types::batch::Batch;
 
 use super::expr::Predicate;
@@ -28,7 +29,7 @@ use crate::error::{Result, internal};
 /// selection is optional.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Selection {
-    rows: Vec<u32>,
+    rows: ScalarBuffer<u32>,
 }
 
 impl Selection {
@@ -37,19 +38,12 @@ impl Selection {
     /// # Errors
     /// `INTERNAL_ERROR` for a mask longer than `u32` rows.
     pub(crate) fn of_mask(mask: &BooleanArray) -> Result<Self> {
-        let rows = match mask.nulls() {
-            Some(n) => (mask.values() & n.inner())
-                .set_indices()
-                .collect::<Vec<_>>(),
-            None => mask.values().set_indices().collect(),
+        u32::try_from(mask.len()).map_err(|_| internal("a selection over 2^32 rows".to_owned()))?;
+        let rows: Vec<u32> = match mask.nulls() {
+            Some(n) => (mask.values() & n.inner()).set_indices_u32().collect(),
+            None => mask.values().set_indices_u32().collect(),
         };
-        let rows = rows
-            .into_iter()
-            .map(|i| {
-                u32::try_from(i).map_err(|_| internal("a selection over 2^32 rows".to_owned()))
-            })
-            .collect::<Result<_>>()?;
-        Ok(Self { rows })
+        Ok(Self { rows: rows.into() })
     }
 
     /// How many rows are selected.
@@ -62,30 +56,41 @@ impl Selection {
         self.rows.is_empty()
     }
 
-    /// The batch row of the `i`-th selected row (`i` itself past the end:
-    /// callers index within [`Self::len`]).
-    pub(crate) fn row(&self, i: u32) -> u32 {
-        self.rows.get(i as usize).copied().unwrap_or(i)
+    /// The batch row of the `i`-th selected row.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for `i` at or past [`Self::len`].
+    pub(crate) fn row(&self, i: u32) -> Result<u32> {
+        self.rows
+            .get(i as usize)
+            .copied()
+            .ok_or_else(|| internal(format!("row {i} is past a selection of {}", self.len())))
     }
 
     /// The batch rows of the selected positions `ids`, in their order.
-    pub(crate) fn compose(&self, ids: &[u32]) -> Vec<u32> {
+    ///
+    /// # Errors
+    /// As [`Self::row`].
+    pub(crate) fn compose(&self, ids: &[u32]) -> Result<Vec<u32>> {
         ids.iter().map(|&i| self.row(i)).collect()
     }
 
     /// The selected rows as a `take` index.
     pub(crate) fn array(&self) -> UInt32Array {
-        UInt32Array::from(self.rows.clone())
+        UInt32Array::new(self.rows.clone(), None)
     }
 }
 
 /// The row ids of `selection` composed with `ids` (positions in the
 /// selection), or `ids` themselves without a selection.
-pub(crate) fn batch_rows(selection: Option<&Selection>, ids: &[u32]) -> UInt32Array {
-    match selection {
-        Some(s) => UInt32Array::from(s.compose(ids)),
+///
+/// # Errors
+/// As [`Selection::row`].
+pub(crate) fn batch_rows(selection: Option<&Selection>, ids: &[u32]) -> Result<UInt32Array> {
+    Ok(match selection {
+        Some(s) => UInt32Array::from(s.compose(ids)?),
         None => UInt32Array::from(ids.to_vec()),
-    }
+    })
 }
 
 /// What a fused operator keeps of each input batch: the rows `predicate`
@@ -172,9 +177,13 @@ mod tests {
         let mask = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
         let s = Selection::of_mask(&mask).unwrap_or_else(|e| unreachable!("{e}"));
         assert_eq!(s.array().values().to_vec(), vec![0, 3]);
-        assert_eq!(s.compose(&[1, 0]), vec![3, 0]);
-        assert_eq!(batch_rows(Some(&s), &[1]).values().to_vec(), vec![3]);
-        assert_eq!(batch_rows(None, &[1]).values().to_vec(), vec![1]);
+        assert_eq!(s.compose(&[1, 0]).ok(), Some(vec![3, 0]));
+        let rows = |sel, ids: &[u32]| batch_rows(sel, ids).map(|a| a.values().to_vec()).ok();
+        assert_eq!(rows(Some(&s), &[1]), Some(vec![3]));
+        assert_eq!(rows(None, &[1]), Some(vec![1]));
+        // A position past the selection is an error, never a wrong row.
+        assert!(s.row(2).is_err());
+        assert!(s.compose(&[0, 2]).is_err());
         assert!(!s.is_empty());
         assert_eq!(s.len(), 2);
     }
