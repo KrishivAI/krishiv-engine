@@ -41,20 +41,40 @@ fn python_call(e: &Expr) -> Option<PythonEvalType> {
     }
 }
 
+/// The address of `e`, the key a walk marks a visited node by.
+///
+/// Expressions are DAGs: the analyzer shares a subexpression by `Arc` (a
+/// nested `decode` puts its inner expression in every search condition), so
+/// a walk that does not skip a node it has seen visits the shared part once
+/// per path to it, exponential in the nesting depth.
+fn node_key(e: &Expr) -> usize {
+    std::ptr::from_ref(e).addr()
+}
+
 /// Whether `e` holds a Python UDF call anywhere (not inside subqueries,
-/// which are planned on their own).
+/// which are planned on their own). Each shared node is visited once.
 pub(crate) fn has_python_udf(e: &Expr) -> bool {
+    has_python_udf_in(e, &mut HashSet::new())
+}
+
+fn has_python_udf_in(e: &Expr, seen: &mut HashSet<usize>) -> bool {
     if python_call(e).is_some() {
         return true;
     }
+    if !seen.insert(node_key(e)) {
+        return false;
+    }
     let mut found = false;
-    e.for_each_child(&mut |c| found = found || has_python_udf(c));
+    e.for_each_child(&mut |c| found = found || has_python_udf_in(c, seen));
     found
 }
 
 /// The Python UDF calls of `e` whose arguments hold none, in first-seen
 /// order.
-fn innermost(e: &Arc<Expr>, out: &mut Vec<Arc<Expr>>) {
+fn innermost(e: &Arc<Expr>, out: &mut Vec<Arc<Expr>>, seen: &mut HashSet<usize>) {
+    if !seen.insert(node_key(e)) {
+        return;
+    }
     if python_call(e).is_some() {
         let mut nested = false;
         e.for_each_child(&mut |c| nested = nested || has_python_udf(c));
@@ -65,7 +85,7 @@ fn innermost(e: &Arc<Expr>, out: &mut Vec<Arc<Expr>>) {
             return;
         }
     }
-    e.for_each_child(&mut |c| innermost(c, out));
+    e.for_each_child(&mut |c| innermost(c, out, seen));
 }
 
 /// `e` with each call of `columns` replaced by a read of its column.
@@ -107,10 +127,14 @@ impl Planner<'_> {
         wanted: &dyn Fn(&Expr) -> bool,
     ) -> Result<(Planned, Vec<Arc<Expr>>)> {
         let mut exprs = exprs.to_vec();
+        if !exprs.iter().any(|e| has_python_udf(e)) {
+            return Ok((input, exprs));
+        }
         loop {
             let mut calls = Vec::new();
+            let mut seen = HashSet::new();
             for e in &exprs {
-                innermost(e, &mut calls);
+                innermost(e, &mut calls, &mut seen);
             }
             calls.retain(|c| wanted(c));
             let Some(first) = calls.first().and_then(|c| python_call(c)) else {
@@ -309,10 +333,17 @@ impl Planner<'_> {
 
 /// Calls `f` with every Python UDF call in `e`, outer ones first.
 fn visit_calls(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    visit_calls_in(e, f, &mut HashSet::new());
+}
+
+fn visit_calls_in(e: &Expr, f: &mut dyn FnMut(&Expr), seen: &mut HashSet<usize>) {
+    if !seen.insert(node_key(e)) {
+        return;
+    }
     if python_call(e).is_some() {
         f(e);
     }
-    e.for_each_child(&mut |c| visit_calls(c, f));
+    e.for_each_child(&mut |c| visit_calls_in(c, f, seen));
 }
 
 /// `conjuncts` joined by `AND`; `None` when there are none.
