@@ -118,6 +118,12 @@ impl QueryStart {
                         })
                         .map(|e| i64::try_from(e.metrics.rows_out).unwrap_or(i64::MAX))
                         .fold(0, i64::saturating_add),
+                    rows_written: metrics
+                        .operators
+                        .values()
+                        .filter(|e| e.name == "FileWrite")
+                        .map(|e| i64::try_from(e.metrics.rows_in).unwrap_or(i64::MAX))
+                        .fold(0, i64::saturating_add),
                     workload_class: query.class().as_str(),
                     cpu_ns: i64::try_from(metrics.drivers.busy.as_nanos()).unwrap_or(i64::MAX),
                     spill_bytes: metrics

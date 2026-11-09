@@ -785,3 +785,26 @@ fn a_query_answered_from_the_result_cache_is_flagged() {
     );
     assert_eq!(r, ["false", "true"], "{r:?}");
 }
+
+#[test]
+fn a_file_write_records_the_rows_it_wrote() {
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("w");
+    block_on(async {
+        s.sql("SELECT id FROM range(321)")
+            .await?
+            .write()
+            .mode("overwrite")
+            .format("parquet")
+            .save(out.to_str().unwrap())
+            .await
+    })
+    .unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT CAST(rows_written AS STRING) FROM system.queries \
+         WHERE state = 'finished' AND rows_written > 0",
+    );
+    assert_eq!(r, ["321"], "{r:?}");
+}

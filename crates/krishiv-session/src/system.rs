@@ -256,6 +256,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("rows_produced", Long, true),
             ("bytes_read", Long, true),
             ("rows_read", Long, true),
+            ("rows_written", Long, true),
             ("result_cache_hit", Flag, false),
             ("bytes_written", Long, true),
             ("spill_bytes", Long, true),
@@ -620,6 +621,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.rows_produced)),
             long(rows.iter().map(|r| r.bytes_read)),
             long(rows.iter().map(|r| r.rows_read)),
+            long(rows.iter().map(|r| r.rows_written)),
             Arc::new(BooleanArray::from_iter(
                 rows.iter().map(|r| Some(r.result_cache_hit)),
             )),
@@ -865,6 +867,8 @@ pub(crate) struct QueryRow {
     pub(crate) bytes_read: Option<i64>,
     /// Rows the scan operators produced.
     pub(crate) rows_read: Option<i64>,
+    /// Rows the file write sinks took.
+    pub(crate) rows_written: Option<i64>,
     /// Answered from the result cache, with no execution.
     pub(crate) result_cache_hit: bool,
     pub(crate) bytes_written: Option<i64>,
@@ -982,6 +986,8 @@ pub(crate) struct Totals {
     pub(crate) bytes_read: i64,
     /// Rows the scans of the plan produced (not a breaker's output side).
     pub(crate) rows_read: i64,
+    /// Rows the file write sinks of the plan took.
+    pub(crate) rows_written: i64,
     pub(crate) bytes_written: i64,
     pub(crate) spill_bytes: i64,
     pub(crate) spill_files: i64,
@@ -1118,6 +1124,7 @@ impl QueryLog {
             rows_produced: None,
             bytes_read: None,
             rows_read: None,
+            rows_written: None,
             result_cache_hit: false,
             bytes_written: None,
             spill_bytes: None,
