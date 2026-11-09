@@ -797,13 +797,15 @@ impl RowTable {
         })
     }
 
-    /// The mode the next apply runs in: a fixed index turns append-only
-    /// every [`ADAPT_ROWS`] input rows if nearly every key is unique, and
-    /// grows after it filled ([`grown_limit`](Self::grown_limit)). One that
-    /// does neither skips its lookups for the next interval when they made
-    /// a new row of over [`SKIP_RATE`] of this interval's rows (its keys
-    /// do not fit and seldom repeat within an index's fill: TPC-H q13's
-    /// pre-aggregate), then looks up again and decides anew.
+    /// The mode the next apply runs in, in this order: a fixed index turns
+    /// append-only for good every [`ADAPT_ROWS`] input rows if nearly every
+    /// key is unique; it grows after it filled ([`grown_limit`](Self::grown_limit));
+    /// one that cannot grow skips its lookups for the next interval when
+    /// they made a new row of over [`SKIP_RATE`] of an interval of at least
+    /// a quarter of [`ADAPT_ROWS`] rows (its keys do not fit and seldom
+    /// repeat within an index's fill: TPC-H q13's pre-aggregate), then
+    /// looks up again and decides anew (or stays append-only for good, if
+    /// the keys became nearly unique).
     fn next_mode(&self) -> Mode {
         let Some(a) = &self.adapt else {
             return self.mode;
@@ -811,6 +813,7 @@ impl RowTable {
         let due = a.rows >= a.next;
         let limit = match (self.mode, a.skip) {
             (Mode::Fixed { limit }, _) => limit,
+            (Mode::Append, Some(_)) if due && Self::all_unique(a) => return Mode::Append,
             (Mode::Append, Some(limit)) if due => {
                 return Mode::Fixed {
                     limit: limit.get() as usize,
@@ -821,11 +824,16 @@ impl RowTable {
         if due && Self::all_unique(a) {
             return Mode::Append;
         }
-        match a.filled.then(|| self.grown_limit(limit, a)).flatten() {
-            Some(limit) => Mode::Fixed { limit },
-            None if due && Self::interval_rate(a) > SKIP_RATE => Mode::Append,
-            None => self.mode,
+        if a.filled
+            && let Some(limit) = self.grown_limit(limit, a)
+        {
+            return Mode::Fixed { limit };
         }
+        let skip = due
+            && a.rows - a.window.0 >= ADAPT_ROWS / 4
+            && Self::interval_rate(a) > SKIP_RATE
+            && (a.filled || self.grown_limit(limit, a).is_none());
+        if skip { Mode::Append } else { self.mode }
     }
 
     /// Whether over 95% of the input's keys so far are distinct.
@@ -1059,7 +1067,7 @@ impl RowTable {
             a.skip = (!all_unique)
                 .then(|| u32::try_from(limit).ok().and_then(NonZeroU32::new))
                 .flatten();
-        } else if resumed {
+        } else if resumed || (mode == Mode::Append && all_unique && a.rows >= a.next) {
             a.skip = None;
         }
         if grew {

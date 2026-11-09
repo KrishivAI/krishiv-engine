@@ -35,6 +35,7 @@ fn fixed_index_adapts() {
         }
     }
     assert_eq!(unique.mode, Mode::Append);
+    assert_eq!(unique.adapt.as_ref().unwrap().skip, None);
     // 10,000 keys at load 2/3: 2^14 slots, in one step from 2^11.
     assert_eq!(
         repeat.mode,
@@ -260,20 +261,20 @@ fn a_rebuild_over_partitions_stops_at_its_limit() {
 /// Keys that repeat only after far more rows than the index holds, and
 /// too many to grow to (TPC-H q13's pre-aggregate): after an interval in
 /// which nearly every row made a new row, the table skips its lookups for
-/// the next interval, then looks up again over a rebuilt index; no row is
-/// lost.
+/// the next interval, then looks up again over a rebuilt index, and skips
+/// again while the lookups still miss; no row is lost.
 #[test]
 fn lookups_that_seldom_hit_are_skipped_for_an_interval() {
     let core = core();
     let seed = HashSeed::new(Some(3));
     let fixed = Mode::Fixed { limit: 1024 };
     let mut t = RowTable::new(&core, &seed, fixed, true, RADIX_BITS).unwrap();
-    let mut fed: usize = 0;
-    let mut feed = |t: &mut RowTable, rows: usize, key: fn(i64) -> i64| {
+    let fed = std::cell::Cell::new(0_i64);
+    let feed = |t: &mut RowTable, rows: usize, key: fn(i64) -> i64| {
         for _ in (0..rows).step_by(8192) {
-            let s = i64::try_from(fed).unwrap();
+            let s = fed.get();
             apply(t, &batch(&core, (s..s + 8192).map(key)));
-            fed += 8192;
+            fed.set(s + 8192);
         }
     };
     feed(&mut t, ADAPT_ROWS + 8192, |i| i % 700_000);
@@ -287,14 +288,27 @@ fn lookups_that_seldom_hit_are_skipped_for_an_interval() {
     let a = t.adapt.as_ref().unwrap();
     assert_eq!(a.skip, None);
     assert_eq!(a.next, a.window.0 + ADAPT_ROWS);
-    assert!(!t.index.is_empty());
+    // The lookups work again: the newest keys find their rows.
+    let (groups, last) = (t.groups, fed.get());
+    apply(
+        &mut t,
+        &batch(&core, (last - 512..last).map(|i| i % 700_000)),
+    );
+    assert_eq!(t.groups, groups);
+    fed.set(last + 512);
+    // A resumed interval that still misses skips again (q13's steady state).
+    feed(&mut t, ADAPT_ROWS, |i| i % 700_000);
+    assert_eq!(t.mode, Mode::Append);
+    assert_eq!(t.adapt.as_ref().unwrap().skip, NonZeroU32::new(1024));
+    feed(&mut t, ADAPT_ROWS, |i| i % 700_000);
+    assert_eq!(t.mode, fixed);
     // Keys that now repeat within a fill: the lookups pay, no new skip.
     feed(&mut t, ADAPT_ROWS + 8192, |i| i / 2);
     assert_eq!(t.mode, fixed);
     let out = t.output_batch(&t.ids(0..t.groups)).unwrap();
     let counts = out.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
     let rows: i64 = counts.iter().flatten().sum();
-    assert_eq!(rows, i64::try_from(fed).unwrap());
+    assert_eq!(rows, fed.get());
 }
 
 /// Each key on a few adjacent rows (TPC-H q18's lines of an order): the
