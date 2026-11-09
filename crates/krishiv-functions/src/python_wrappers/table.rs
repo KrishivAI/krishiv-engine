@@ -76,6 +76,22 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("__time_add_interval", "operator: `time + interval`"),
     ("__subtract_times", "operator: `time - time`"),
     (
+        "__contains_lcase",
+        "the analyzer's `contains` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__startswith_lcase",
+        "the analyzer's `startswith` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__endswith_lcase",
+        "the analyzer's `endswith` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__locate_lcase",
+        "the analyzer's `locate` over `UTF8_LCASE` strings",
+    ),
+    (
         "explode",
         "generator: a `Generate` node, not a DataFrame function yet",
     ),

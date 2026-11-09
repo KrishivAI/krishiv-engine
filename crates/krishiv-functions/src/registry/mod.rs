@@ -293,9 +293,21 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         // builds for the operators (the third argument of `__time_add_interval` is the interval's end field).
         "__time_add_interval" => "__time_add_interval",
         "__subtract_times" => "__subtract_times",
+        // `locate` over `UTF8_LCASE` strings, which the analyzer builds for `instr`/`locate`/`position`.
+        "__locate_lcase" => "__locate_lcase",
+        "__contains_lcase" => "__contains_lcase",
+        "__startswith_lcase" => "__startswith_lcase",
+        "__endswith_lcase" => "__endswith_lcase",
         _ => return None,
     };
-    let arity = if matches!(name, "__subscript" | "__subtract_times") {
+    let arity = if matches!(
+        name,
+        "__subscript"
+            | "__subtract_times"
+            | "__contains_lcase"
+            | "__startswith_lcase"
+            | "__endswith_lcase"
+    ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {
         Arity::new([false, false, false, true, false, false, false], "3")

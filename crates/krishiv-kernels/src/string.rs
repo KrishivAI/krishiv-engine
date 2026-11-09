@@ -51,9 +51,9 @@ use arrow_array::{
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 
 pub use chars::{
-    ascii, bit_length, chr, concat_ws, elt, elt_binary, find_in_set, initcap, levenshtein, locate,
-    luhn_check, overlay, overlay_binary, quote, repeat, reverse, reverse_binary, right, soundex,
-    space, split_part, substring_index, translate,
+    LcaseSearch, ascii, bit_length, chr, concat_ws, elt, elt_binary, find_in_set, initcap,
+    levenshtein, locate, locate_lcase, luhn_check, overlay, overlay_binary, quote, repeat, reverse,
+    reverse_binary, right, search_lcase, soundex, space, split_part, substring_index, translate,
 };
 pub use codec::{
     CharsetOptions, base64, decode, decode_with, encode, encode_with, is_valid_utf8,

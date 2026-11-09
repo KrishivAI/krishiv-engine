@@ -63,6 +63,11 @@ const COMPARING: &[&str] = &[
 /// reuse the operands and wait for unit 3b.
 const KEYED: &[&str] = &["==", "<=>", "<", "<=", ">", ">=", "in", "between"];
 
+/// Searches that see a `UTF8_LCASE` operand through its lower-cased key: Spark's
+/// `lowercaseContains` / `lowercaseStartsWith` / `lowercaseEndsWith` compare the lower-cased
+/// code points (unit 5a). `_RTRIM` and the other searches stay with the guard.
+const KEYED_SEARCH: &[&str] = &["contains", "startswith", "endswith"];
+
 /// Calls that fail on operands without one collation (Spark's `canContainIndeterminateCollation`);
 /// any other call over such operands runs on the plain strings.
 const FAILS_INDETERMINATE: &[&str] = &[
@@ -187,7 +192,7 @@ const BINARY_RESULT: &[&str] = &[
 const INSPECTS: &[&str] = &["collation", "typeof"];
 
 /// The comparison key of `x` under `c`, as an expression over plain strings.
-fn key_of(x: &Arc<Expr>, c: Collation, origin: crate::Origin) -> Expr {
+pub(super) fn key_of(x: &Arc<Expr>, c: Collation, origin: crate::Origin) -> Expr {
     let lit =
         |t: &str| Expr::new(ExprNode::Literal(Literal::String(t.to_owned()))).with_origin(origin);
     let mut key = Expr::new(ExprNode::Cast {
@@ -211,6 +216,28 @@ fn key_of(x: &Arc<Expr>, c: Collation, origin: crate::Origin) -> Expr {
         .with_origin(origin);
     }
     key
+}
+
+/// The collation whose key an `IN (subquery)` pair compares through: the collated side of a
+/// string pair when it is `UTF8_LCASE` or `_RTRIM` (Spark compares the pair in that collation).
+pub(super) fn subquery_key_collation(
+    left: Option<&DataType>,
+    right: &DataType,
+) -> Option<Collation> {
+    if !is_string(left) || !is_string(Some(right)) {
+        return None;
+    }
+    // Only a pair in one and the same collation is keyed. A pair of different collations is
+    // Spark's COLLATION_MISMATCH / INDETERMINATE_COLLATION_IN_EXPRESSION (or an explicit
+    // `COLLATE` winning), which keying one side would answer wrongly.
+    match (left, right) {
+        (Some(DataType::CollatedString(l)), DataType::CollatedString(r))
+            if l == r && (l.rtrim() || matches!(l.family(), CollationFamily::Utf8Lcase)) =>
+        {
+            Some(*l)
+        }
+        _ => None,
+    }
 }
 
 /// How many leading arguments of `name` only select (a null test) and so take no part in the
@@ -357,6 +384,19 @@ fn merge(items: &[(Collation, Strength)]) -> Result<Option<(Collation, Strength)
         .map(|c| (*c, Strength::Default)))
 }
 
+/// Whether `e` is a string literal (under casts and collate) that cannot begin with U+0307 or end
+/// with `i`/`I`, so no lower-cased match of it can split the pair `İ` lower-cases to (a pattern
+/// ending in `İ` is refused too: stricter than needed, since its lower-case ends on the dot).
+fn safe_search_pattern(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Literal(Literal::String(s)) => {
+            !s.starts_with('\u{307}') && !s.ends_with(['i', 'I', '\u{130}'])
+        }
+        ExprNode::Cast { expr, .. } | ExprNode::Collate { expr, .. } => safe_search_pattern(expr),
+        _ => false,
+    }
+}
+
 impl Resolver<'_> {
     /// `expr_node_inner`, with the collation rule for a function call over collated strings.
     pub(super) fn expr_node(
@@ -373,12 +413,25 @@ impl Resolver<'_> {
         let n = f.args.len().min(kids.len());
         let name = f.name.to_ascii_lowercase();
         // Comparisons of `UTF8_LCASE` / `_RTRIM` strings compare their keys (design 3.3, unit 3a).
-        if KEYED.contains(&name.as_str())
+        if (KEYED.contains(&name.as_str()) || KEYED_SEARCH.contains(&name.as_str()))
             && !f.distinct
             && kids[..n]
                 .iter()
                 .any(|k| is_collated(k.ty.data_type.as_ref()))
             && let Some(bound) = self.keyed_comparison(e, kids, n, &name, in_agg, window_fn, cx)?
+        {
+            return Ok(bound);
+        }
+        // `instr` / `locate` / `position` over `UTF8_LCASE` strings answer positions in the
+        // original text: the kernel `__locate_lcase` matches the lower-cased code points (unit 5b).
+        if matches!(name.as_str(), "instr" | "locate" | "position")
+            && !f.distinct
+            && (2..=3).contains(&n)
+            && kids[..2].iter().all(|k| is_string(k.ty.data_type.as_ref()))
+            && kids[..2]
+                .iter()
+                .any(|k| is_collated(k.ty.data_type.as_ref()))
+            && let Some(bound) = self.locate_lcase(e, kids, n, &name, in_agg, window_fn, cx)?
         {
             return Ok(bound);
         }
@@ -627,8 +680,19 @@ impl Resolver<'_> {
         if !matches!(
             c.family(),
             CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
-        ) {
+        ) || (KEYED_SEARCH.contains(&name)
+            && (c.rtrim() || !matches!(c.family(), CollationFamily::Utf8Lcase)))
+        {
             return Ok(None);
+        }
+        // Lower-casing `İ` (U+0130) gives `i` + U+0307, and Spark refuses a match that starts or
+        // ends inside that pair (`lowercaseMatchLengthFrom` / `lowercaseMatchUntil`). Only a
+        // literal pattern that cannot start with U+0307 or end with `i` is safe on the key; any
+        // other pattern stays with the execution guard.
+        if KEYED_SEARCH.contains(&name)
+            && !kids.get(1).is_some_and(|k| safe_search_pattern(&k.expr))
+        {
+            return self.search_lcase(e, kids, name, in_agg, window_fn, cx);
         }
         let mut keyed = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
@@ -638,11 +702,117 @@ impl Resolver<'_> {
             }
             let mut b = self.expr(&Arc::new(key_of(&k.expr, c, e.origin)), cx)?;
             b.shown = Some(k.shown());
+            // A literal of another collation is shown cast to the call's, as in the plain path.
+            if KEYED_SEARCH.contains(&name)
+                && matches!(
+                    strength_of(&k.shown(), &mut Memo::new()),
+                    Some((_, Strength::Default))
+                )
+                && k.ty.data_type != Some(DataType::collated_string(c))
+            {
+                b.shown = Some(Arc::new(
+                    Expr::new(ExprNode::Cast {
+                        expr: k.shown(),
+                        to: DataType::collated_string(c),
+                        mode: CastMode::Default,
+                    })
+                    .with_origin(e.origin),
+                ));
+            }
             b.carry_markers(std::slice::from_ref(k));
             keyed.push(b);
         }
         self.expr_node_inner(e, &keyed, in_agg, window_fn, cx)
             .map(Some)
+    }
+
+    /// `contains` / `startswith` / `endswith` with a pattern the lower-cased key cannot answer
+    /// (a column, or a literal that may split `İ`'s pair) as the `__*_lcase` kernel call.
+    fn search_lcase(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        name: &str,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        if kids.len() != 2 {
+            // The wrong argument count is the generic rules' error (`WRONG_NUM_ARGS`).
+            return Ok(None);
+        }
+        let mut plain = Vec::with_capacity(2);
+        for k in &kids[..2] {
+            let cast = Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&k.expr),
+                to: DataType::String,
+                mode: CastMode::Ansi,
+            })
+            .with_origin(e.origin);
+            let mut b = self.expr(&Arc::new(cast), cx)?;
+            b.shown = Some(k.shown());
+            plain.push(b);
+        }
+        let call = Expr::function(
+            format!("__{name}_lcase"),
+            plain.iter().map(|k| (*k.expr).clone()).collect(),
+        )
+        .with_origin(e.origin);
+        let mut b = self.expr_node_inner(&Arc::new(call), &plain, in_agg, window_fn, cx)?;
+        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        Ok(Some(b))
+    }
+
+    /// `instr` / `locate` / `position` as `__locate_lcase(substr, str, start)` when the strings
+    /// compare in `UTF8_LCASE` (not `_RTRIM`); `None` leaves the call to the other rules.
+    #[expect(clippy::too_many_arguments, reason = "the arguments of `expr_node`")]
+    fn locate_lcase(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        n: usize,
+        name: &str,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        if kids.len() != n || n < 2 || (name == "instr" && n != 2) {
+            return Ok(None);
+        }
+        let (chosen, _) = self.choose_collation(e, kids, 2, name)?;
+        let Some(c) = chosen else {
+            return Ok(None);
+        };
+        if c.rtrim() || !matches!(c.family(), CollationFamily::Utf8Lcase) {
+            return Ok(None);
+        }
+        let (sub, text) = if name == "instr" { (1, 0) } else { (0, 1) };
+        let plain = |this: &mut Self, k: &Bound| -> Result<Bound, AnalysisError> {
+            let cast = Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&k.expr),
+                to: DataType::String,
+                mode: CastMode::Ansi,
+            })
+            .with_origin(e.origin);
+            let mut b = this.expr(&Arc::new(cast), cx)?;
+            b.shown = Some(k.shown());
+            Ok(b)
+        };
+        let start = if n == 3 && name != "instr" {
+            kids[2].clone()
+        } else {
+            let one = Expr::new(ExprNode::Literal(Literal::Integer(1))).with_origin(e.origin);
+            self.expr(&Arc::new(one), cx)?
+        };
+        let keyed = vec![plain(self, &kids[sub])?, plain(self, &kids[text])?, start];
+        let call = Expr::function(
+            "__locate_lcase",
+            keyed.iter().map(|k| (*k.expr).clone()).collect(),
+        )
+        .with_origin(e.origin);
+        let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
+        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        Ok(Some(b))
     }
 
     /// The one collation of the string operands of the call `e` (its first `n` arguments),

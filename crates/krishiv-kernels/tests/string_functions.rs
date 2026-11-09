@@ -1256,3 +1256,98 @@ fn single_byte_tables_round_trip() {
         assert_eq!(back.value(0).len(), 256, "{cs}");
     }
 }
+
+/// `locate` over `UTF8_LCASE` operands: values of a Spark 4.2.0 local run (2026-11-08) for the
+/// ASCII and U+0130 cases.
+#[test]
+fn locate_lcase_follows_spark_lowercase_matching() {
+    let at = |sub: &str, text: &str, start: i32| {
+        s::locate_lcase(StrOperand::Array(&r1(sub)), lit(Some(text)), int(start))
+            .unwrap()
+            .value(0)
+    };
+    assert_eq!(at("ab", "xAbAy", 1), 2);
+    assert_eq!(at("a", "xAbAy", 3), 4);
+    assert_eq!(at("zz", "xAbAy", 1), 0);
+    assert_eq!(at("", "xAbAy", 3), 1);
+    // `İ` lower-cases to `i` + U+0307: a match may not end or start inside the pair.
+    assert_eq!(at("i", "a\u{130}", 1), 0);
+    assert_eq!(at("i\u{307}", "a\u{130}", 1), 2);
+    assert_eq!(at("\u{307}", "a\u{130}", 1), 0);
+    // The position counts characters of the original text, not of the lower-cased one.
+    assert_eq!(at("b", "a\u{130}b", 1), 3);
+    assert_eq!(at("\u{3c3}", "x\u{3c2}", 1), 2);
+}
+
+/// `contains` / `startswith` / `endswith` over `UTF8_LCASE` with per-row patterns: values of a
+/// Spark 4.2.0 local run (2026-11-08).
+#[test]
+fn search_lcase_follows_spark_lowercase_matching() {
+    use s::LcaseSearch::{Anywhere, End, Start};
+    let at = |kind, text: &str, pat: &str| {
+        s::search_lcase(kind, lit(Some(text)), StrOperand::Array(&r1(pat)))
+            .unwrap()
+            .value(0)
+    };
+    assert_eq!(
+        [
+            at(Anywhere, "AbC", "bC"),
+            at(Start, "AbC", "bC"),
+            at(End, "AbC", "bC")
+        ],
+        [true, false, true]
+    );
+    assert_eq!(
+        [
+            at(Anywhere, "AbC", "B"),
+            at(Start, "AbC", "B"),
+            at(End, "AbC", "B")
+        ],
+        [true, false, false]
+    );
+    let d = "a\u{130}";
+    assert_eq!(
+        [at(Anywhere, d, "a"), at(Start, d, "a"), at(End, d, "a")],
+        [true, true, false]
+    );
+    assert_eq!(
+        [at(Anywhere, d, "ai"), at(Start, d, "ai"), at(End, d, "ai")],
+        [false; 3]
+    );
+    assert_eq!(
+        [
+            at(Anywhere, d, "ai\u{307}"),
+            at(Start, d, "ai\u{307}"),
+            at(End, d, "ai\u{307}")
+        ],
+        [true; 3]
+    );
+    assert_eq!(
+        [
+            at(Anywhere, d, "\u{307}"),
+            at(Start, d, "\u{307}"),
+            at(End, d, "\u{307}")
+        ],
+        [false; 3]
+    );
+    assert_eq!(
+        [
+            at(Anywhere, d, "i\u{307}"),
+            at(Start, d, "i\u{307}"),
+            at(End, d, "i\u{307}")
+        ],
+        [true, false, true]
+    );
+    assert_eq!(
+        [
+            at(Anywhere, "x\u{3c2}", "\u{3c3}"),
+            at(Start, "x\u{3c2}", "\u{3c3}"),
+            at(End, "x\u{3c2}", "\u{3c3}")
+        ],
+        [true, false, true]
+    );
+    assert_eq!(
+        [at(Anywhere, "abc", ""), at(Start, "", ""), at(End, "", "")],
+        [true; 3]
+    );
+}

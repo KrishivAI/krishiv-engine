@@ -261,14 +261,12 @@ fn search_and_indeterminate_rules_follow_spark() {
 }
 
 /// Calls whose answer depends on the collation refuse a non-binary one instead of matching
-/// bytes (unit 5 brings the collation-aware kernels); binary strings are untouched.
+/// bytes (unit 5 brings the collation-aware kernels; `contains`, `startswith` and `endswith`
+/// over `UTF8_LCASE` are there, unit 5a); binary strings are untouched.
 #[test]
 fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
     let l = "('Ab' COLLATE utf8_lcase)";
     for sql in [
-        format!("SELECT contains({l}, 'a')"),
-        format!("SELECT startswith({l}, 'a')"),
-        format!("SELECT instr({l}, 'a')"),
         format!("SELECT replace({l}, 'a', 'x')"),
         format!("SELECT translate({l}, 'a', 'x')"),
         format!("SELECT trim('a' FROM {l})"),
@@ -293,6 +291,39 @@ fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
         "false"
     );
     assert_eq!(one("SELECT upper('ab' COLLATE utf8_lcase)"), "AB");
+}
+
+/// `İ` (U+0130) lower-cases to `i` + U+0307 and Spark (`lowercaseMatchLengthFrom`,
+/// `lowercaseMatchUntil`) refuses a match that starts or ends inside the pair, so a pattern that
+/// could do that is not run on the lower-cased key but on the position kernel (unit 5a review B1,
+/// unit 5b): the split match is `false`, as in Spark, and a plain literal is answered on the key.
+#[test]
+fn lcase_search_answers_a_pattern_that_could_split_the_dotted_capital_i() {
+    for sql in [
+        "SELECT CAST(contains('\u{130}' COLLATE utf8_lcase, 'i') AS STRING)",
+        "SELECT CAST(startswith('\u{130}' COLLATE utf8_lcase, 'i') AS STRING)",
+        "SELECT CAST(endswith('\u{130}' COLLATE utf8_lcase, '\u{307}') AS STRING)",
+    ] {
+        assert_eq!(one(sql), "false", "{sql}");
+    }
+    assert_eq!(
+        one("SELECT CAST(contains('Ab' COLLATE utf8_lcase, concat('a', '')) AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT CAST(contains('Ab' COLLATE utf8_lcase, 'a') AS STRING)"),
+        "true"
+    );
+    // Values of a real Spark 4.2.0 run (`ops/scripts/spark-local.sh`): a pattern that cannot split
+    // the pair is answered on the key; a split of it is false in Spark too (refused here).
+    assert_eq!(
+        one("SELECT CAST(contains('a\u{130}b' COLLATE utf8_lcase, 'b') AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT CAST(contains('\u{130}' COLLATE utf8_lcase, 'i\u{307}') AS STRING)"),
+        "true"
+    );
 }
 
 /// A collated string inside an array, map or struct would lose its collation (or be compared
@@ -408,15 +439,20 @@ fn class_of(s: &Session, sql: &str) -> ErrorClass {
 #[test]
 fn unusual_operands_and_array_functions_do_not_compare_bytes() {
     for sql in [
-        "SELECT contains((SELECT 'Ab' COLLATE utf8_lcase), 'a')",
         "SELECT (SELECT 'Ab' COLLATE utf8_lcase) LIKE 'a%'",
         "SELECT replace(CAST(array('aAb') AS ARRAY<STRING COLLATE utf8_lcase>)[0], 'a', 'x')",
-        "SELECT contains(CAST(named_struct('f','Ab') AS STRUCT<f: STRING COLLATE utf8_lcase>).f, 'a')",
         "SELECT array_contains(array('a', 'b'), 'A' COLLATE utf8_lcase)",
         "SELECT array_position(array('a'), 'A' COLLATE unicode_ci)",
         "SELECT map_contains_key(map('a', 1), 'A' COLLATE utf8_lcase)",
     ] {
         assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
+    }
+    // A search over a subquery or a struct field of a collated type reads its key (unit 5a).
+    for sql in [
+        "SELECT CAST(contains((SELECT 'Ab' COLLATE utf8_lcase), 'a') AS STRING)",
+        "SELECT CAST(contains(CAST(named_struct('f','Ab') AS STRUCT<f: STRING COLLATE utf8_lcase>).f, 'a') AS STRING)",
+    ] {
+        assert_eq!(one(sql), "true", "{sql}");
     }
     // Plain arrays with plain needles are untouched.
     assert_eq!(
@@ -752,4 +788,156 @@ fn the_marker_unifies_with_string() {
         n("select from_json('{\"a\":1}', 'map<string collate utf8_binary,int>')"),
         1
     );
+}
+
+/// `contains`, `startswith` and `endswith` under `UTF8_LCASE` compare the lower-cased text
+/// (Spark's `lowercaseContains` and friends); other collations keep the guard (unit 5a).
+#[test]
+fn searches_under_utf8_lcase_ignore_case() {
+    assert_eq!(
+        one("SELECT CAST(contains('Hello World' COLLATE UTF8_LCASE, 'WORLD') AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT CAST(startswith('Hello' COLLATE UTF8_LCASE, 'HE') AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT CAST(endswith('Hello' COLLATE UTF8_LCASE, 'LLO') AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT CAST(contains('Hello' COLLATE UTF8_LCASE, 'xyz') AS STRING)"),
+        "false"
+    );
+    // The binary collation stays case-sensitive.
+    assert_eq!(
+        one("SELECT CAST(contains('Hello', 'HELLO') AS STRING)"),
+        "false"
+    );
+    // NULL stays NULL.
+    assert_eq!(
+        one("SELECT CAST(contains(CAST(NULL AS STRING) COLLATE UTF8_LCASE, 'a') AS STRING)"),
+        "NULL"
+    );
+    // The rtrim and ICU variants are still refused until their units land.
+    for sql in [
+        "SELECT contains('a ' COLLATE UTF8_LCASE_RTRIM, 'A')",
+        "SELECT startswith('a' COLLATE UNICODE_CI, 'A')",
+    ] {
+        assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
+    }
+}
+
+/// A string literal under the implicit collation cast is quoted in the column name, as Spark's
+/// `Literal.sql` prints it.
+#[test]
+fn the_implicit_collation_cast_quotes_a_literal_in_the_name() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT contains('Ab' COLLATE UTF8_LCASE, 'a')")).unwrap();
+    let names: Vec<String> = block_on(df.schema())
+        .unwrap()
+        .fields()
+        .iter()
+        .map(|f| f.name().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        ["contains(collate(Ab, UTF8_LCASE), 'a' collate UTF8_LCASE)"]
+    );
+}
+
+/// `x IN (subquery)` over a pair in one collation compares through that collation's keys. A
+/// pair of different collations is not keyed (Spark refuses or an explicit COLLATE wins).
+#[test]
+fn in_subquery_compares_through_the_collation_keys() {
+    for (sql, want) in [
+        (
+            "'a' COLLATE utf8_lcase IN (SELECT 'A' COLLATE utf8_lcase)",
+            "true",
+        ),
+        (
+            "'b' COLLATE utf8_lcase IN (SELECT 'A' COLLATE utf8_lcase)",
+            "false",
+        ),
+        (
+            "'a ' COLLATE utf8_binary_rtrim IN (SELECT 'a' COLLATE utf8_binary_rtrim)",
+            "true",
+        ),
+        ("'a' COLLATE utf8_binary IN (SELECT 'a')", "true"),
+        ("'a' COLLATE utf8_binary IN (SELECT 'A')", "false"),
+    ] {
+        assert_eq!(
+            one(&format!("SELECT CAST(({sql}) AS STRING)")),
+            want,
+            "{sql}"
+        );
+    }
+}
+
+/// `instr` / `locate` over `UTF8_LCASE` strings: values of a Spark 4.2.0 local run (2026-11-08).
+#[test]
+fn positions_over_lcase_strings_match_spark() {
+    let l = "COLLATE utf8_lcase";
+    for (sql, want) in [
+        (format!("instr('xAbAy' {l}, 'ab')"), "2"),
+        (format!("locate('ab', 'xAbAy' {l})"), "2"),
+        (format!("locate('a', 'xAbAy' {l}, 3)"), "4"),
+        (format!("instr('a\u{130}' {l}, 'i')"), "0"),
+        (format!("instr('a\u{130}' {l}, 'i\u{307}')"), "2"),
+        (format!("instr('a\u{130}b' {l}, 'b')"), "3"),
+        (format!("instr('x\u{3c2}' {l}, '\u{3c3}')"), "2"),
+        (format!("locate('', 'xAbAy' {l}, 3)"), "1"),
+    ] {
+        assert_eq!(one(&format!("SELECT CAST({sql} AS STRING)")), want, "{sql}");
+    }
+}
+
+/// A column (or `İ`-splitting) pattern over `UTF8_LCASE`: values of a Spark 4.2.0 local run.
+#[test]
+fn searches_with_column_patterns_over_lcase_match_spark() {
+    let l = "COLLATE utf8_lcase";
+    for (sql, want) in [
+        (format!("contains(t {l}, p)"), "true"),
+        (format!("startswith(t {l}, p)"), "false"),
+        (format!("endswith(t {l}, p)"), "true"),
+    ] {
+        let q = format!("SELECT CAST({sql} AS STRING) FROM (SELECT 'AbC' AS t, 'bC' AS p)");
+        assert_eq!(one(&q), want, "{sql}");
+    }
+}
+
+/// The `İ` rows of the kernel test, through SQL: `İ` lower-cases to `i` + U+0307, so a match may
+/// not end inside the pair (values of a Spark 4.2.0 local run).
+#[test]
+fn searches_over_lcase_split_the_dotted_capital_i_like_spark() {
+    let l = "COLLATE utf8_lcase";
+    for (pat, want) in [
+        ("a", ["true", "true", "false"]),
+        ("ai", ["false", "false", "false"]),
+        ("ai\u{307}", ["true", "true", "true"]),
+    ] {
+        for (f, w) in ["contains", "startswith", "endswith"].iter().zip(want) {
+            let q = format!(
+                "SELECT CAST({f}(t {l}, p) AS STRING) FROM (SELECT 'a\u{130}' AS t, '{pat}' AS p)"
+            );
+            assert_eq!(one(&q), w, "{f} {pat:?}");
+        }
+    }
+}
+
+/// A search call with the wrong argument count is a plain error, never a crash or a quietly
+/// defaulted argument (`instr` has no start argument).
+#[test]
+fn lcase_search_with_the_wrong_argument_count_is_an_error() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "SELECT contains('a' COLLATE utf8_lcase)",
+        "SELECT startswith('a' COLLATE utf8_lcase)",
+        "SELECT instr('abc' COLLATE utf8_lcase, 'b', 3)",
+    ] {
+        let r = block_on(s.sql(sql)).and_then(|df| block_on(df.collect()));
+        let e = r.expect_err(sql).to_string();
+        assert!(!e.contains("INTERNAL_ERROR"), "{sql}: {e}");
+    }
 }

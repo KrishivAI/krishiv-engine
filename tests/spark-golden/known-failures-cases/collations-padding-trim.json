@@ -2,9 +2,7 @@
   "cases": {
     "depends-on-command": [
       16,
-      22,
       24,
-      30,
       33,
       39,
       48,
