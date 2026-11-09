@@ -607,7 +607,7 @@ fn drivers(run: &Arc<PipelineRun>, base: u32, count: usize) -> Result<Vec<TaskHa
         let partition = base
             .checked_add(offset)
             .ok_or_else(|| internal("too many drivers for u32 partition ids".to_owned()))?;
-        out.push(spawn_driver(Arc::clone(run), partition));
+        out.push(spawn_driver(Arc::clone(run), partition, base));
     }
     Ok(out)
 }
