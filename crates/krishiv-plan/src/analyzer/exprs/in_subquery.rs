@@ -46,8 +46,17 @@ impl Resolver<'_> {
             format!("{}:{ty}", parts.join("."))
         };
         let mut targets = Vec::new();
+        let mut keys = Vec::new();
         let mut bad = Vec::new();
         for (k, a) in kids.iter().zip(rel.out.iter()) {
+            // A `UTF8_LCASE` / `_RTRIM` side compares through its key, on both sides.
+            let key =
+                super::collation::subquery_key_collation(k.ty.data_type.as_ref(), &a.col.data_type);
+            keys.push(key);
+            if key.is_some() {
+                targets.push(Some(DataType::String));
+                continue;
+            }
             let out = Arg {
                 ty: Some(&a.col.data_type),
                 nullable: a.col.nullable,
@@ -91,24 +100,31 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
-        let values = kids
-            .iter()
-            .zip(&targets)
-            .map(|(k, t)| {
+        let mut values = Vec::with_capacity(kids.len());
+        for ((k, t), key) in kids.iter().zip(&targets).zip(&keys) {
+            values.push(if let Some(c) = key {
+                let mut b = self.expr(
+                    &Arc::new(super::collation::key_of(&k.expr, *c, e.origin)),
+                    cx,
+                )?;
+                b.shown = Some(k.shown());
+                b
+            } else {
                 self.implicit_cast(k, coerce::cast_to(k.ty.data_type.as_ref(), t.as_ref()))
-            })
-            .collect();
+            });
+        }
         let needs = rel
             .out
             .iter()
             .zip(&targets)
-            .any(|(a, t)| t.as_ref().is_some_and(|t| *t != a.col.data_type));
+            .any(|(a, t)| t.as_ref().is_some_and(|t| *t != a.col.data_type))
+            || keys.iter().any(Option::is_some);
         if !needs {
             return Ok((values, Arc::clone(&rel.plan)));
         }
         let mut exprs = Vec::new();
         let mut out = Vec::new();
-        for (a, t) in rel.out.iter().zip(targets) {
+        for ((a, t), key) in rel.out.iter().zip(targets).zip(keys) {
             let column = Bound {
                 expr: super::super::ops::col_expr(&a.col, Origin::UNKNOWN),
                 ty: column(&a.col),
@@ -118,6 +134,24 @@ impl Resolver<'_> {
                 lateral: Vec::new(),
                 shown: None,
             };
+            if let Some(c) = key {
+                let keyed = self.expr(
+                    &Arc::new(super::collation::key_of(&column.expr, c, Origin::UNKNOWN)),
+                    cx,
+                )?;
+                let output = self.attr(&a.col.name, &keyed.ty);
+                exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
+                    ResolvedExpr::Alias {
+                        expr: keyed.expr,
+                        output: output.clone(),
+                    },
+                ))));
+                out.push(Attr {
+                    col: output,
+                    ..a.clone()
+                });
+                continue;
+            }
             let to = coerce::cast_to(Some(&a.col.data_type), t.as_ref());
             if to.is_none() {
                 exprs.push(column.expr);
