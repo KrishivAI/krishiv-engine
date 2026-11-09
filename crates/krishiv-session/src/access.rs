@@ -780,8 +780,8 @@ pub(crate) fn refuse_secret_options<'a>(
     Ok(options)
 }
 
-/// Whether expression text `t` calls `secret` anywhere: the name bare, back-quoted or double-quoted, or written
-/// `IDENTIFIER('secret')`, in any case, followed by `(`, inside parentheses, casts or other calls too. It reads the
+/// Whether expression text `t` calls `secret` anywhere: the name bare, back-quoted or double-quoted, in any case
+/// (`IDENTIFIER('secret')` was already replaced by a back-quoted name, `Session::sql`), followed by `(`, inside parentheses, casts or other calls too. It reads the
 /// parser's own tokens, so string literals are skipped and comments between the name and `(` are trivia, as in the
 /// parser; anything else that looks like a call counts (the check fails closed: a double-quoted `"secret"` counts
 /// whether or not `spark.sql.ansi.doubleQuotedIdentifiers` makes it a name).
@@ -795,11 +795,9 @@ fn calls_secret(t: &str) -> bool {
         t.get(tokens[i].span.start..tokens[i].span.end)
             .unwrap_or("")
     };
-    let is = |i: usize, kind: TokenKind| tokens.get(i).is_some_and(|k| k.kind == kind);
     // The text between the quotes of a quoted token, with doubled quotes read as one.
     let unquoted = |i: usize, quote: char| -> Option<String> {
         let raw = text(i);
-        let raw = raw.strip_prefix(['r', 'R']).unwrap_or(raw);
         let inner = raw.strip_prefix(quote)?.strip_suffix(quote)?;
         Some(inner.replace(&format!("{quote}{quote}"), &quote.to_string()))
     };
@@ -816,17 +814,10 @@ fn calls_secret(t: &str) -> bool {
             _ => false,
         }
     };
-    let lparen = TokenKind::Sym(Sym::LParen);
     (0..tokens.len()).any(|i| {
-        // `secret(`
-        (names_secret(i) && is(i + 1, lparen))
-            // `IDENTIFIER('secret')(`
-            || (is(i, TokenKind::Word)
-                && text(i).eq_ignore_ascii_case("identifier")
-                && is(i + 1, lparen)
-                && is(i + 2, TokenKind::String)
-                && unquoted(i + 2, '\'').is_some_and(|n| n.eq_ignore_ascii_case("secret"))
-                && is(i + 3, TokenKind::Sym(Sym::RParen))
-                && is(i + 4, lparen))
+        names_secret(i)
+            && tokens
+                .get(i + 1)
+                .is_some_and(|k| k.kind == TokenKind::Sym(Sym::LParen))
     })
 }
