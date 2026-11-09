@@ -89,7 +89,11 @@ impl QueryCatalog {
         let mut notes = Vec::new();
         for (key, table) in opened {
             let name = match &key {
-                super::FilesKey::View(n) | super::FilesKey::Table(n) => n.clone(),
+                // A reference with read options of its own is named by its table, as a
+                // reference without options is; the options never reach the text.
+                super::FilesKey::View(n)
+                | super::FilesKey::Table(n)
+                | super::FilesKey::Reference { key: n, .. } => n.clone(),
                 super::FilesKey::Read(krishiv_plan::ReadSource::Files {
                     format, paths, ..
                 }) => {
