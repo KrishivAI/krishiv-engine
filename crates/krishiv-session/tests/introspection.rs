@@ -453,12 +453,43 @@ fn column_comments_follow_columns_through_queries() {
         comments("SELECT * FROM v1"),
         pairs(&[("a", "ca"), ("b", "cb")])
     );
-    // Known difference: a read of a view takes the comment of the column under it, not the view's stored one
-    // (Spark 4.2.0 gives `y` the view's `cy`: `column-comments/probe3.out`); see the limit in
-    // `research/spark/column-comments.md`.
+    // A read of a view gives each column the view's stored comment, not the one of the column under it
+    // (Spark 4.2.0: `column-comments/probe3.out`).
     assert_eq!(
         comments("SELECT * FROM v2"),
-        pairs(&[("x", "ca"), ("y", "cb")])
+        pairs(&[("x", "ca"), ("y", "cy")])
+    );
+    // A stored view keeps the comments it stored, or none, whatever the columns under it have now; an
+    // `EVOLUTION` view reads its query's (Spark 4.2.0: `column-comments/probe4.out`).
+    run(
+        &s,
+        "CREATE TABLE w (a INT COMMENT 'wa', b INT) USING parquet",
+    );
+    run(&s, "CREATE VIEW v3 AS SELECT a, b FROM w");
+    run(
+        &s,
+        "CREATE VIEW v3b WITH SCHEMA BINDING AS SELECT a, b FROM w",
+    );
+    run(
+        &s,
+        "CREATE VIEW v3c WITH SCHEMA COMPENSATION AS SELECT a, b FROM w",
+    );
+    run(
+        &s,
+        "CREATE VIEW v3e WITH SCHEMA EVOLUTION AS SELECT a, b FROM w",
+    );
+    run(&s, "ALTER TABLE w ALTER COLUMN b COMMENT 'later'");
+    run(&s, "ALTER TABLE w ALTER COLUMN a COMMENT 'wa2'");
+    for v in ["v3", "v3b", "v3c"] {
+        assert_eq!(
+            comments(&format!("SELECT * FROM {v}")),
+            pairs(&[("a", "wa"), ("b", "NULL")]),
+            "{v}"
+        );
+    }
+    assert_eq!(
+        comments("SELECT * FROM v3e"),
+        pairs(&[("a", "wa2"), ("b", "later")])
     );
     // A DataFrame's temporary view holds its analyzed plan: a read of it keeps the scan's comments.
     block_on(s.table("t").create_or_replace_temp_view("dv")).unwrap();
@@ -470,4 +501,211 @@ fn column_comments_follow_columns_through_queries() {
     assert_eq!(comments("SELECT a FROM t"), pairs(&[("a", "ca")]));
     run(&s, "ALTER TABLE t ALTER COLUMN a COMMENT 'new'");
     assert_eq!(comments("SELECT a FROM t"), pairs(&[("a", "new")]));
+}
+
+/// Field metadata (the comment, the declared `CHAR`/`VARCHAR` type) where a column is renamed by position, copied
+/// as a grouping key or repeated in a set operation, and on temporary views with a column list of their own
+/// (Spark 4.2.0: `column-comments/probe5.out`).
+#[test]
+fn column_metadata_follows_renames_keys_and_repeated_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE t (a INT COMMENT 'ca', b STRING COMMENT 'cb') USING parquet",
+    );
+    run(
+        &s,
+        "CREATE TABLE c (k CHAR(3) COMMENT 'ck', n VARCHAR(4) COMMENT 'cn', v INT) USING parquet",
+    );
+    run(&s, "INSERT INTO c VALUES ('a', 'x', 1), ('bb', 'yy', 2)");
+    let comments = |q: &str| -> Vec<(String, String)> {
+        rows(&s, &format!("DESC QUERY {q}"))
+            .into_iter()
+            .map(|r| (r[0].clone(), r[2].clone()))
+            .collect()
+    };
+    let pairs = |p: &[(&str, &str)]| -> Vec<(String, String)> {
+        p.iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect()
+    };
+    let mut wrong = Vec::new();
+    // A view renamed by position over repeated names, and temporary views with their own column list.
+    for (ddl, q, want) in [
+        (
+            "CREATE VIEW vr (x, y COMMENT 'cy') AS SELECT a, a FROM t",
+            "SELECT * FROM vr",
+            &[("x", "ca"), ("y", "cy")][..],
+        ),
+        (
+            "CREATE VIEW vr2 (x COMMENT 'cx', y) AS SELECT a, a FROM t",
+            "SELECT * FROM vr2",
+            &[("x", "cx"), ("y", "ca")],
+        ),
+        (
+            "CREATE VIEW vr3 AS SELECT a, a AS a2, b FROM t",
+            "SELECT * FROM vr3",
+            &[("a", "ca"), ("a2", "ca"), ("b", "cb")],
+        ),
+        (
+            "CREATE TEMPORARY VIEW tv (x COMMENT 'tx', y) AS SELECT a, b FROM t",
+            "SELECT * FROM tv",
+            &[("x", "tx"), ("y", "cb")],
+        ),
+        (
+            "CREATE TEMPORARY VIEW tv2 (x, y COMMENT 'ty') AS SELECT a, a FROM t",
+            "SELECT * FROM tv2",
+            &[("x", "ca"), ("y", "ty")],
+        ),
+        (
+            "CREATE GLOBAL TEMPORARY VIEW gv (x COMMENT 'gx', y) AS SELECT a, b FROM t",
+            "SELECT * FROM global_temp.gv",
+            &[("x", "gx"), ("y", "cb")],
+        ),
+        (
+            "CREATE TEMPORARY VIEW tvc (kk COMMENT 'tk', nn) AS SELECT k, n FROM c",
+            "SELECT * FROM tvc",
+            &[("kk", "tk"), ("nn", "cn")],
+        ),
+    ] {
+        run(&s, ddl);
+        let got = comments(q);
+        if got != pairs(want) {
+            wrong.push(format!("{q}: got {got:?}"));
+        }
+    }
+    // The declared CHAR type after a grouping key copy or a repeated set-operation column: the comparison
+    // pads the literal to the column's length.
+    for (q, want) in [
+        (
+            "SELECT k FROM c GROUP BY ROLLUP(k) HAVING k = 'a'",
+            &["a  "][..],
+        ),
+        (
+            "SELECT k FROM (SELECT k, sum(v) FROM c GROUP BY ROLLUP(k)) WHERE k = 'a'",
+            &["a  "],
+        ),
+        (
+            "SELECT k FROM (SELECT k, sum(v) FROM c GROUP BY CUBE(k)) WHERE k = 'a'",
+            &["a  "],
+        ),
+        (
+            "SELECT k FROM (SELECT k, n FROM c GROUP BY GROUPING SETS ((k), (n))) WHERE k = 'a'",
+            &["a  "],
+        ),
+        (
+            "SELECT q FROM (SELECT k, k FROM c UNION SELECT k, k FROM c) s(p, q) WHERE q = 'a'",
+            &["a  "],
+        ),
+        (
+            "SELECT q FROM (SELECT k, k FROM c UNION ALL SELECT k, k FROM c) s(p, q) WHERE q = 'a'",
+            &["a  ", "a  "],
+        ),
+        (
+            "SELECT q FROM (SELECT k, k FROM c INTERSECT SELECT k, k FROM c) s(p, q) WHERE q = 'a'",
+            &["a  "],
+        ),
+        (
+            "SELECT q FROM (SELECT k, k FROM c EXCEPT SELECT k, n FROM c) s(p, q) WHERE q = 'a'",
+            &["a  "],
+        ),
+    ] {
+        let got: Vec<String> = rows(&s, q).into_iter().map(|r| r[0].clone()).collect();
+        if got != want {
+            wrong.push(format!("{q}: got {got:?}"));
+        }
+    }
+    // CTAS keeps the declared types and comments of the key copies and repeated union columns.
+    let desc = |name: &str| -> Vec<(String, String, String)> {
+        rows(&s, &format!("DESC {name}"))
+            .into_iter()
+            .map(|r| (r[0].clone(), r[1].clone(), r[2].clone()))
+            .collect()
+    };
+    for (name, q, want) in [
+        (
+            "x1",
+            "SELECT k, sum(v) s FROM c GROUP BY ROLLUP(k)",
+            &[("k", "char(3)", "ck"), ("s", "bigint", "")][..],
+        ),
+        (
+            "x2",
+            "SELECT k, n, sum(v) s FROM c GROUP BY CUBE(k, n)",
+            &[
+                ("k", "char(3)", "ck"),
+                ("n", "varchar(4)", "cn"),
+                ("s", "bigint", ""),
+            ],
+        ),
+        (
+            "x3",
+            "SELECT k AS p, k AS q FROM c UNION SELECT k, k FROM c",
+            &[("p", "char(3)", "ck"), ("q", "char(3)", "ck")],
+        ),
+        (
+            "x4",
+            "SELECT k AS p, k AS q FROM c UNION ALL SELECT k, k FROM c",
+            &[("p", "char(3)", "ck"), ("q", "char(3)", "ck")],
+        ),
+    ] {
+        run(&s, &format!("CREATE TABLE {name} USING parquet AS {q}"));
+        let got = desc(name);
+        let want: Vec<(String, String, String)> = want
+            .iter()
+            .map(|(a, b, c)| ((*a).to_owned(), (*b).to_owned(), (*c).to_owned()))
+            .collect();
+        if got != want {
+            wrong.push(format!("{name}: got {got:?}"));
+        }
+    }
+    // A DataFrame temporary view over a commented CHAR column keeps the comment and the padding.
+    block_on(s.table("c").create_or_replace_temp_view("dv")).unwrap();
+    let got = comments("SELECT * FROM dv");
+    if got != pairs(&[("k", "ck"), ("n", "cn"), ("v", "NULL")]) {
+        wrong.push(format!("dv: got {got:?}"));
+    }
+    let got: Vec<String> = rows(&s, "SELECT k FROM dv WHERE k = 'a'")
+        .into_iter()
+        .map(|r| r[0].clone())
+        .collect();
+    if got != ["a  "] {
+        wrong.push(format!("dv k = 'a': got {got:?}"));
+    }
+    // A view over repeated names reads its stored types (and comments) after the column under it changes type.
+    run(&s, "CREATE TABLE r (a INT COMMENT 'ra') USING parquet");
+    for (v, mode) in [
+        ("vrc", "COMPENSATION"),
+        ("vrb", "BINDING"),
+        ("vrt", "TYPE EVOLUTION"),
+    ] {
+        run(
+            &s,
+            &format!(
+                "CREATE VIEW {v} (x, y COMMENT 'vy') WITH SCHEMA {mode} AS SELECT a, a FROM r"
+            ),
+        );
+    }
+    run(&s, "DROP TABLE r");
+    run(&s, "CREATE TABLE r (a BIGINT COMMENT 'rb') USING parquet");
+    let typed = |q: &str| -> Vec<String> {
+        rows(&s, &format!("DESC QUERY {q}"))
+            .into_iter()
+            .map(|r| format!("{} {} {}", r[0], r[1], r[2]))
+            .collect()
+    };
+    for (v, want) in [
+        ("vrc", ["x int ra", "y int vy"]),
+        ("vrt", ["x bigint ra", "y bigint vy"]),
+    ] {
+        let got = typed(&format!("SELECT * FROM {v}"));
+        if got != want {
+            wrong.push(format!("{v}: got {got:?}"));
+        }
+    }
+    let got = class(&s, "SELECT * FROM vrb");
+    if got != "CANNOT_UP_CAST_DATATYPE" {
+        wrong.push(format!("vrb: got {got}"));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

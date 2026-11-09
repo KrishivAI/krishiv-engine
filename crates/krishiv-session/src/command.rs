@@ -346,10 +346,33 @@ impl Session {
         // Spark 4.2 and as [`unique_columns`](crate::session) reports it
         // for writes).
         unique_view_columns(&columns, case_sensitive)?;
+        // A comment in the column list replaces the one of the column under it; a column listed without one
+        // keeps it (Spark's view alias carries `explicitMetadata` only for a written comment,
+        // `column-comments/probe5.out`).
+        let plan = if v.columns.iter().any(|c| c.comment.is_some()) {
+            let names: Vec<String> = v.columns.iter().map(|c| c.name.value.clone()).collect();
+            let exprs = v
+                .columns
+                .iter()
+                .map(|c| {
+                    let comment = c.comment.clone().map(Some);
+                    crate::view_schema::read_column(&c.name.value, None, comment, &c.name.value)
+                })
+                .collect();
+            let input = crate::view_schema::rename_by_position(
+                Arc::clone(&df.plan),
+                &v.name.value,
+                names,
+                krishiv_plan::Origin::UNKNOWN,
+            );
+            Arc::new(LogicalPlan::new(PlanNode::Project { input, exprs }))
+        } else {
+            Arc::clone(&df.plan)
+        };
         self.state.catalog.put(
             &key,
             TempTable::View {
-                plan: Arc::clone(&df.plan),
+                plan,
                 columns,
                 pins: Vec::new(),
             },
@@ -449,7 +472,14 @@ impl Session {
                     return Err(table_not_found(&parts));
                 }
             }
-            CacheKind::Cache { name, query, .. } => {
+            CacheKind::Cache {
+                name,
+                query,
+                options,
+                ..
+            } => {
+                // The options are never resolved: a `secret(..)` value would be kept as its text.
+                crate::access::refuse_secret_options(options, original)?;
                 let Some(parts) = ddl_table_parts(name) else {
                     return Err(KrishivUnsupportedFeature {
                         feature: "CACHE TABLE with a dynamic table name".to_owned(),

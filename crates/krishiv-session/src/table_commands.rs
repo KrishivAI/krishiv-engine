@@ -47,6 +47,7 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
+use crate::access::refuse_secret_options;
 use crate::dataframe::DataFrame;
 use crate::functions::{col, expr, lit_null};
 use crate::query_fold::Admitted;
@@ -708,7 +709,7 @@ impl Session {
                 "datasource views without declared column types",
             ));
         }
-        let mut options = options_of(&v.options, original);
+        let mut options = options_of(refuse_secret_options(&v.options, original)?, original);
         let path_key = options
             .keys()
             .find(|k| k.eq_ignore_ascii_case("path"))
@@ -1335,8 +1336,7 @@ impl Session {
             }
             .into());
         }
-        crate::access::refuse_secret_options(&t.options, original)?;
-        let mut options = options_of(&t.options, original);
+        let mut options = options_of(refuse_secret_options(&t.options, original)?, original);
         let properties = options_of(&t.tblproperties, original);
         // A `path` option is the table's location, as in Spark.
         let path_key = options
