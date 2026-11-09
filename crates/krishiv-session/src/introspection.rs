@@ -643,7 +643,7 @@ impl Session {
             // `CatalogTablePartition.simpleString`: the partition's own entries.
             let entries: Vec<(String, String)> = partition_details(&t, &p)
                 .into_iter()
-                .skip(4)
+                .skip(PARTITION_DETAILS_HEADER_ROWS)
                 .take_while(|(k, _)| !k.is_empty())
                 .collect();
             let rows = vec![vec![
@@ -1384,6 +1384,10 @@ fn storage_rows(t: &CatalogTable, location: &std::path::Path) -> Vec<(String, St
 }
 
 /// The rows `DESCRIBE EXTENDED ... PARTITION` adds (`describeFormattedDetailedPartitionInfo`).
+/// The rows `partition_details` writes before the partition's own entries: a blank line, the
+/// `# Detailed Partition Information` heading, `Database` and `Table`.
+const PARTITION_DETAILS_HEADER_ROWS: usize = 4;
+
 fn partition_details(t: &CatalogTable, p: &CatalogPartition) -> Vec<(String, String)> {
     let mut rows = vec![
         (String::new(), String::new()),
