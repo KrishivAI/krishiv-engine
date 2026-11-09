@@ -32,7 +32,7 @@
 # +14: not_constant walks distinct nodes (review of #529)
 # +6 lines over main: a SQL function call keeps its written name (T184, PR #505)
 # +6 over main: a windowed max_by/min_by keeps its written name (statement 22, #641)
-4665 crates/krishiv-plan/src/analyzer/ops.rs
+4664 crates/krishiv-plan/src/analyzer/ops.rs
 3095 crates/krishiv-plan/src/analyzer/subquery.rs
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
