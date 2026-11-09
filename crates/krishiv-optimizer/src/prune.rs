@@ -393,6 +393,11 @@ fn narrow(input: &Arc<LogicalPlan>, need: &Attrs) -> Arc<LogicalPlan> {
     if exprs.is_empty() {
         exprs.extend(out.first().map(column));
     }
+    // Nothing read of a one-column input: the projection would keep it whole,
+    // and tidying would collapse it again (a cycle that never settles).
+    if exprs.len() == out.len() {
+        return Arc::clone(input);
+    }
     Arc::new(LogicalPlan::new(PlanNode::Project {
         input: Arc::clone(input),
         exprs,

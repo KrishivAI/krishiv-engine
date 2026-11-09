@@ -959,7 +959,7 @@ impl Output {
 }
 
 impl SpillUnread for Output {
-    fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>> {
+    fn spill_unread(self: Arc<Self>, _target: usize) -> BoxFuture<'static, Result<usize>> {
         Box::pin(async move {
             let Some((_, s)) = &self.spill else {
                 return Ok(0);

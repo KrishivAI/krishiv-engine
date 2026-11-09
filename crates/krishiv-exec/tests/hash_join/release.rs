@@ -86,6 +86,37 @@ async fn the_build_goes_back_before_the_sink_above_the_probe_finalizes() {
     }
 }
 
+/// With a spill scope the finished build is idle-spillable until the probe
+/// reads it (`BuildGlobal::built` seals it): the tables' per-partition
+/// memory must then go back with the tables, or the release frees nothing.
+#[tokio::test(start_paused = true)]
+async fn a_sealed_idle_build_goes_back_with_its_per_partition_memory() {
+    let build = rows(40_000);
+    let probe: Vec<Row> = (0..2_000).map(|i| r(Some(i * 7), Some("p"), i)).collect();
+    for drivers in [1, 4] {
+        let (_manager, scope) = spill();
+        let (held, build_bytes, out) = reserved_at_finalize(
+            JoinType::Inner,
+            &build,
+            &probe,
+            drivers,
+            256 * MIB,
+            Some(scope),
+        )
+        .await;
+        assert_eq!(out.len(), 2_000, "{drivers} drivers: the join's rows");
+        assert!(
+            build_bytes > MIB as u64,
+            "{drivers} drivers: a build of size"
+        );
+        assert!(
+            (held as u64) < build_bytes,
+            "{drivers} drivers: the pool held {held} bytes at the sink's finalize, the build \
+             {build_bytes}"
+        );
+    }
+}
+
 /// A join that emits its build rows after the probe (right outer) emits
 /// them all before its tables go back.
 #[tokio::test]

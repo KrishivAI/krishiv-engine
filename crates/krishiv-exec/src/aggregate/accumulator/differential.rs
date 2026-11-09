@@ -588,3 +588,105 @@ const MOMENT_FUNCTIONS: [AggregateFunction; 9] = [
     AggregateFunction::CovarSamp,
     AggregateFunction::CovarPop,
 ];
+
+/// `sum`, `avg` and `count` of column 0 in the order `order` gives.
+fn paired_accs(order: [usize; 3], t: &DataType, ansi: bool) -> Vec<Accumulator> {
+    let fs = [
+        AggregateFunction::Sum,
+        AggregateFunction::Avg,
+        AggregateFunction::Count,
+    ];
+    order.iter().map(|&i| acc(&fs[i], t, ansi, true)).collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 128,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    /// `sum(x)` and `avg(x)` folded as a pair (study 19 A4) == each folded
+    /// on its own: states, values and errors, in either order, with dense
+    /// batches (the pair's path) mixed with NULLs and weights.
+    #[test]
+    fn paired_fold_differential((t, groups, mode, mut batches) in input(), dense in any::<u16>()) {
+        for (i, b) in batches.iter_mut().enumerate() {
+            if dense >> (i % 16) & 1 == 1 {
+                b.0.iter_mut().for_each(|r| r.2 = true);
+            }
+        }
+        for ansi in [true, false] {
+            for d64 in carriers(t) {
+                let at = arg_type(t, d64);
+                for order in [[0, 1, 2], [1, 2, 0], [2, 0, 1]] {
+                    let mut alone = paired_accs(order, &at, ansi);
+                    let mut both = paired_accs(order, &at, ansi);
+                    let exprs: Vec<AggregateExpr> = both.iter().map(|a| a.expr.clone()).collect();
+                    let pairs = paired::fold_pairs(&exprs);
+                    prop_assert_eq!(pairs.len(), 1);
+                    for a in alone.iter_mut().chain(both.iter_mut()) {
+                        a.resize(groups as usize);
+                    }
+                    for b in &batches {
+                        let g: Vec<u32> = b.0.iter().map(|r| r.0).collect();
+                        let (cols, w) = ([column(b, t, d64)], weights(b, mode));
+                        let one = alone.iter_mut().try_for_each(|a| a.update(&g, &cols, &w));
+                        let two = paired::update_all(&mut both, &pairs, &g, &cols, &w);
+                        prop_assert_eq!(one.map_err(|e| e.to_string()), two.map_err(|e| e.to_string()));
+                        for a in &both {
+                            prop_assert!(stored_max(a) <= a.max_sum);
+                        }
+                    }
+                    for (a, b) in alone.iter().zip(&both) {
+                        prop_assert_eq!(outcome(a, groups), outcome(b, groups));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A dense unit-weight batch takes the pair's one pass; a batch with a
+/// NULL, a `FILTER` or a `try_sum` does not pair.
+#[test]
+fn a_dense_batch_folds_the_pair_in_one_pass() {
+    let t = DataType::Decimal128(15, 2);
+    let mut accs = paired_accs([0, 1, 2], &t, true);
+    accs.iter_mut().for_each(|a| a.resize(2));
+    let exprs: Vec<AggregateExpr> = accs.iter().map(|a| a.expr.clone()).collect();
+    assert_eq!(paired::fold_pairs(&exprs), vec![(1, 0)]);
+    let dense: ArrayRef =
+        Arc::new(Decimal128Array::from(vec![150_i128, -25, 7]).with_data_type(t.clone()));
+    assert!(paired::fold_pair_for_test(
+        &mut accs,
+        &[0, 1, 0],
+        &[dense],
+        &Weights::Const(1)
+    ));
+    let nulls: ArrayRef =
+        Arc::new(Decimal128Array::from(vec![Some(1_i128), None]).with_data_type(t));
+    assert!(!paired::fold_pair_for_test(
+        &mut accs,
+        &[0, 1],
+        &[nulls],
+        &Weights::Const(1)
+    ));
+    let out = accs[0].evaluate(&[0, 1]).unwrap();
+    assert_eq!(out.as_primitive::<Decimal128Type>().values(), &[157, -25]);
+    // avg(15, 2) is decimal(19, 6): (150 + 7) / 2 = 0.785, -25 / 1 = -0.25.
+    let avg = accs[1].evaluate(&[0, 1]).unwrap();
+    assert_eq!(
+        avg.as_primitive::<Decimal128Type>().values(),
+        &[785_000, -250_000]
+    );
+    // The pair's one pass leaves `count(*)` to its own fold.
+    let count = accs[2].evaluate(&[0, 1]).unwrap();
+    assert_eq!(count.as_primitive::<Int64Type>().values(), &[0, 0]);
+    let mut masked = exprs.clone();
+    masked[0].mask = Some(1);
+    let mut try_sum = exprs;
+    try_sum[0].function = AggregateFunction::TrySum;
+    assert!(paired::fold_pairs(&masked).is_empty());
+    assert!(paired::fold_pairs(&try_sum).is_empty());
+}

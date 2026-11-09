@@ -502,8 +502,7 @@ impl ProbeLocal {
         if self.level0.is_none() {
             let built = self
                 .build
-                .built
-                .get()
+                .built()
                 .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
             self.level0 = built.level0();
         }
@@ -542,8 +541,7 @@ impl ProbeOp {
         let s = &*self.0;
         let g = &*l.build;
         let built = g
-            .built
-            .get()
+            .built()
             .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
         if s.join_type.builds_preserved() && !input.is_unweighted() {
             // Whether a build row "matched" depends on the net multiplicity
@@ -728,8 +726,7 @@ impl Operator for ProbeOp {
             l.signal.set_spillable_bytes(0);
             let built = l
                 .build
-                .built
-                .get()
+                .built()
                 .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
             let mut grace = lock(&built.grace);
             for (dst, src) in grace.probe.iter_mut().zip(std::mem::take(&mut l.parts)) {
