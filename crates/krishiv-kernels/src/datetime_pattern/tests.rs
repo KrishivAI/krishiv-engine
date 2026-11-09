@@ -424,3 +424,19 @@ fn hour_variants_and_sub_second_fields() {
     );
     assert_eq!(fmt_micros(p, at(1, 0, 0, 0)), "01:00:00.000000 1 1 1");
 }
+
+/// A zone name reads the saving in force at the instant's own time of day
+/// (Berlin springs forward at 01:00 UTC on 2024-03-31).
+#[test]
+fn zone_name_follows_the_time_of_day_across_a_transition() {
+    let short = DateTimePattern::new("z", Purpose::Format).unwrap();
+    let at = |secs: i64, offset: i32| {
+        let zone = Zone {
+            id: "Europe/Berlin",
+            rules: &FixedOffset(offset),
+        };
+        short.format_timestamp(secs * 1_000_000, zone).unwrap()
+    };
+    assert_eq!(at(1_711_845_000, 3600), "CET"); // 00:30 UTC
+    assert_eq!(at(1_711_848_600, 7200), "CEST"); // 01:30 UTC
+}
