@@ -1552,7 +1552,7 @@ pub(super) async fn spill_result_again(local: &mut LocalState) -> Result<usize> 
     let SourceState::Held(held, _) = &l.state else {
         return Err(internal("the reader holds no in-memory result".to_owned()));
     };
-    Arc::clone(held).spill_unread().await
+    Arc::clone(held).spill_unread(usize::MAX).await
 }
 
 /// One step of reading bucket `b` of an in-memory result: the next batch,

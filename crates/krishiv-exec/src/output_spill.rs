@@ -27,6 +27,7 @@
 //! output per breaker instance, on the worker that finalized it.
 
 use std::sync::{Arc, OnceLock, Weak};
+use std::time::Instant;
 
 use futures::future::BoxFuture;
 use krishiv_common::error::{ErrorClass, KrishivError};
@@ -39,10 +40,12 @@ use crate::sync::{Event, Mutex, lock};
 
 /// The spill side of a finished output.
 pub(crate) trait SpillUnread: Send + Sync + 'static {
-    /// Moves the unread in-memory part to disk and frees its memory;
-    /// returns the bytes freed (0 if nothing was left in memory). Runs on
-    /// the hook's own task; blocking I/O goes to the blocking pool.
-    fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>>;
+    /// Moves the unread in-memory part to disk, at least `target` bytes of
+    /// it where the output spills in parts (a join build's partitions), and
+    /// frees its memory; returns the bytes freed (0 if nothing was left in
+    /// memory). Runs on the hook's own task; blocking I/O goes to the
+    /// blocking pool.
+    fn spill_unread(self: Arc<Self>, target: usize) -> BoxFuture<'static, Result<usize>>;
 }
 
 /// A spill's outcome when its write failed: a refused scratch reservation
@@ -92,6 +95,9 @@ pub(crate) struct OutputSpill {
     /// the task's last check for a pending request and a request's check
     /// of this flag are ordered by it, so no request is left unserved.
     running: Mutex<bool>,
+    /// Since when no reader has started on the output, if it is waiting
+    /// for one ([`set_idle`](Self::set_idle)).
+    idle_since: Mutex<Option<Instant>>,
     query: Arc<QueryContext>,
     executor: Arc<dyn Executor>,
 }
@@ -117,6 +123,7 @@ impl OutputSpill {
             signal: SpillSignal::new(),
             output: OnceLock::new(),
             running: Mutex::new(false),
+            idle_since: Mutex::new(None),
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
@@ -137,6 +144,14 @@ impl OutputSpill {
     /// Publishes the bytes a spill would free.
     pub(crate) fn set_spillable_bytes(&self, bytes: usize) {
         self.signal.set_spillable_bytes(bytes);
+    }
+
+    /// Marks the output as waiting for its first reader (`true`) or read
+    /// (`false`). After the query's `krishiv.exec.join.idleSpillAfter` of
+    /// waiting it is [idle](Spillable::idle): asked to spill before running
+    /// consumers are.
+    pub(crate) fn set_idle(&self, idle: bool) {
+        *lock(&self.idle_since) = idle.then(Instant::now);
     }
 
     /// Starts the spill task unless one is running.
@@ -186,7 +201,7 @@ impl OutputSpill {
             // A cancelled query stops waiting (for a reader's step that
             // will not end): the output goes with the query.
             Some(o) => tokio::select! {
-                spilled = o.spill_unread() => spilled.unwrap_or_else(|e| {
+                spilled = o.spill_unread(service.target()) => spilled.unwrap_or_else(|e| {
                     // A failed spill write fails the query, as it does on
                     // a driver.
                     self.query.fail(e);
@@ -220,6 +235,11 @@ impl Spillable for OutputSpill {
     fn owner(&self) -> Option<OwnerId> {
         None
     }
+
+    fn idle(&self) -> bool {
+        let after = self.query.config().join_idle_spill_after;
+        lock(&self.idle_since).is_some_and(|since| since.elapsed() >= after)
+    }
 }
 
 #[cfg(all(test, not(loom)))]
@@ -246,7 +266,7 @@ mod tests {
     }
 
     impl SpillUnread for Fake {
-        fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>> {
+        fn spill_unread(self: Arc<Self>, _target: usize) -> BoxFuture<'static, Result<usize>> {
             Box::pin(async move {
                 self.spills.fetch_add(1, Ordering::Relaxed);
                 if let Some(gate) = &self.gate {
@@ -313,6 +333,34 @@ mod tests {
         assert_eq!((first.await, second.await), (100, 100));
         assert_eq!(fake.spills.load(Ordering::Relaxed), 1);
         assert_eq!(hook.spill_requested(), None);
+    }
+
+    /// An output is idle once it waited `idleSpillAfter` for its reader,
+    /// and no longer once read.
+    #[tokio::test(start_paused = true)]
+    async fn an_output_is_idle_after_its_wait_until_read() {
+        let (hook, _, _q) = setup(None);
+        assert!(!hook.idle(), "not waiting");
+        hook.set_idle(true);
+        // The default wait is a second of real time.
+        assert!(!hook.idle());
+        let pool = TreePool::new(&MemoryConfig::default());
+        let query = QueryContext::new(
+            QueryId(2),
+            WorkloadClass::Batch,
+            ExecConfig {
+                join_idle_spill_after: std::time::Duration::ZERO,
+                ..ExecConfig::default()
+            },
+            pool.child("q", None),
+        );
+        let executor: Arc<dyn Executor> =
+            TokioExecutor::deterministic(1).unwrap_or_else(|e| unreachable!("{e}"));
+        let (now, _consumer) = OutputSpill::register_for(&query, &executor, OperatorId(1), "o");
+        now.set_idle(true);
+        assert!(now.idle());
+        now.set_idle(false);
+        assert!(!now.idle());
     }
 
     #[test]

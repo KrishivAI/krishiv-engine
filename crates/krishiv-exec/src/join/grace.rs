@@ -26,7 +26,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::UInt64Type;
 use arrow_array::{ArrayRef, UInt32Array};
 use arrow_schema::SchemaRef;
-use krishiv_common::error::KrishivJoinPartitionTooLarge;
+use krishiv_common::error::{KrishivError, KrishivJoinPartitionTooLarge};
 use krishiv_memory::{
     ConsumerHandle, ConsumerId, MemoryError, Reservation, Seat, SeatState, SpillError, SpillFile,
     SpillReader, SpillScope, SpillWriter,
@@ -369,6 +369,13 @@ pub(crate) struct Grace {
     /// In-memory level-0 partitions whose build rows a right join still
     /// has to emit by their marks (filled on first use).
     emit: Option<Vec<usize>>,
+    /// Level-0 partitions of a finished build still being written to disk
+    /// (`build::IdleBuild`): their files land in `build` when the write
+    /// ends, so level 0 is not queued before.
+    pub(crate) writing: usize,
+    /// A write of a finished build's partition failed or was cancelled:
+    /// its rows are lost, so no driver claims anything (the query fails).
+    pub(crate) lost: Option<KrishivError>,
 }
 
 impl Grace {
@@ -384,6 +391,8 @@ impl Grace {
             exclusive: None,
             keep_unprobed: false,
             emit: None,
+            writing: 0,
+            lost: None,
         }
     }
 
@@ -401,7 +410,10 @@ impl Grace {
 
     /// What a driver holding no task does next.
     fn next(&mut self) -> Next {
-        if self.exclusive.is_some() {
+        if let Some(e) = &self.lost {
+            return Next::Lost(e.clone());
+        }
+        if self.exclusive.is_some() || (!self.started && self.writing > 0) {
             return Next::Wait;
         }
         match self.pop() {
@@ -444,6 +456,8 @@ enum Next {
     Wait,
     /// Every partition is joined or being joined.
     Done,
+    /// A partition's build rows were lost ([`Grace::lost`]).
+    Lost(KrishivError),
 }
 
 /// A partition being joined by one driver.
@@ -515,7 +529,7 @@ impl Claim {
 
 impl Drop for Claim {
     fn drop(&mut self) {
-        if let Some(built) = self.build.built.get() {
+        if let Some(built) = self.build.built() {
             {
                 let mut g = lock(&built.grace);
                 match self.hold {
@@ -871,8 +885,7 @@ pub(crate) async fn step(
     ctx: &TaskContext,
 ) -> Result<FlushOutput> {
     let built = build
-        .built
-        .get()
+        .built()
         .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
     let limit = ctx.query().config().batch_size.max(1);
     let partition = ctx.partition();
@@ -960,6 +973,7 @@ pub(crate) async fn step(
                         st.task = Some((Loading::new(task, false, ctx), held));
                     }
                     Next::Done => return Ok(FlushOutput::Done),
+                    Next::Lost(e) => return Err(e),
                     Next::Wait => {}
                 }
             }
@@ -1574,12 +1588,12 @@ mod loom_model {
     fn a_waiting_driver_claims_the_split_task() {
         model(|| {
             let build = BuildGlobal::with_grace(Grace::new(PARTITIONS));
-            let built = build.built.get().unwrap();
+            let built = build.built().unwrap();
             let held = Claim::new(&build, &mut lock(&built.grace), Hold::Task);
             let splitter = {
                 let build = Arc::clone(&build);
                 thread::spawn(move || {
-                    let built = build.built.get().unwrap();
+                    let built = build.built().unwrap();
                     lock(&built.grace).queue.push(task());
                     drop(held);
                 })
@@ -1605,7 +1619,7 @@ mod loom_model {
     fn working_alone_waits_for_partitions_and_blocks_claims() {
         model(|| {
             let build = BuildGlobal::with_grace(Grace::new(PARTITIONS));
-            let built = build.built.get().unwrap();
+            let built = build.built().unwrap();
             let (slot, alone) = {
                 let mut g = lock(&built.grace);
                 g.queue.push(task());
@@ -1662,6 +1676,20 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// Level 0 is queued only once every write of an idle build's
+    /// partitions landed, and nothing is claimed once one was lost.
+    #[test]
+    fn level_zero_waits_for_an_idle_builds_writes() {
+        let mut g = Grace::new(4);
+        g.probe[1].rows = 1;
+        g.writing = 1;
+        assert!(matches!(g.next(), Next::Wait));
+        g.writing = 0;
+        assert!(matches!(g.next(), Next::Task(_)));
+        g.lost = Some(crate::error::cancelled());
+        assert!(matches!(g.next(), Next::Lost(_)));
     }
 
     /// Coalescing is size-tiered: a merged chunk is not copied again by the

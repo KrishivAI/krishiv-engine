@@ -174,7 +174,7 @@ impl Held {
 pub(super) type Unwritten = (usize, Option<Box<Merger>>);
 
 impl SpillUnread for Held {
-    fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>> {
+    fn spill_unread(self: Arc<Self>, _target: usize) -> BoxFuture<'static, Result<usize>> {
         Box::pin(async move {
             let Some((_, scope)) = &self.spill else {
                 return Ok(0);
