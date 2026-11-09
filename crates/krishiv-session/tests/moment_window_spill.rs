@@ -58,10 +58,12 @@ fn session(legacy: bool, limited: Option<&std::path::Path>) -> Session {
 
 /// `sql`'s rows as text (every column), and the spill files the Window operator itself wrote.
 fn run(s: &Session, sql: &str) -> (Vec<String>, u64) {
-    // A window under a 6 MB limit can still be refused memory on a loaded or small host (`UnableToAcquireMemory`, a
-    // request of a few KB: the residual of the flaky `udaf` window test, tracked in the queue item "URGENT flaky
-    // test in the UDAF window code"). That refusal is retried, a bounded number of times; any other error, or a
-    // wrong result, fails at once.
+    // A window under a 6 MB limit can still be refused memory on a loaded or small host (a request of a few KB: the
+    // residual of the flaky `udaf` window test, tracked in the queue item "URGENT flaky test in the UDAF window code").
+    // The query is the only one in its pool, so the arbitrator's last resort aborts it: the refused driver fails with
+    // `UnableToAcquireMemory` and the query's other drivers with `KrishivQueryAbortedOutOfMemory`, and either one can
+    // be the query's error (CI run 42501540888 saw the second). Both are that refusal and are retried, a bounded
+    // number of times; any other error, or a wrong result, fails at once.
     let mut attempt = 0;
     let (batches, profile) = loop {
         let result = block_on(async { s.sql(sql).await?.collect_with_profile().await });
@@ -69,8 +71,11 @@ fn run(s: &Session, sql: &str) -> (Vec<String>, u64) {
             Ok(done) => break done,
             Err(e)
                 if attempt < 3
-                    && e.error_class()
-                        == krishiv_common::error::ErrorClass::UnableToAcquireMemory =>
+                    && matches!(
+                        e.error_class(),
+                        krishiv_common::error::ErrorClass::UnableToAcquireMemory
+                            | krishiv_common::error::ErrorClass::KrishivQueryAbortedOutOfMemory
+                    ) =>
             {
                 attempt += 1;
             }
@@ -132,11 +137,6 @@ fn counts(function: &str, frame: &str) -> String {
     )
 }
 
-// QUARANTINED (owner policy 2026-11-07; owner opus-3; deadline 2026-11-10): fails about 1 run in 100 with
-// UNABLE_TO_ACQUIRE_MEMORY in the window flush phase (merge-queue runs 42401250907, 42410371135, after #601).
-// Skipped by the default nextest profile, run by `--profile quarantine` (CI job `test-quarantine`, not required);
-// krishiv-internal `open-issues.md`. Comes back with the root-cause fix. To run it: `cargo nextest run -p
-// krishiv-session --test moment_window_spill --profile quarantine` (a plain `-E` or name filter selects nothing).
 #[test]
 fn moment_windows_from_disk_equal_the_in_memory_result() {
     let dir = tempfile::tempdir().unwrap();

@@ -154,7 +154,7 @@ impl QueryOptions {
     }
 
     /// Limits each query the statement runs to `limit` from the start of
-    /// its execution (`KRISHIV_QUERY_TIMEOUT` past it). With
+    /// its execution (a SQL script is one query: the limit counts from its start) (`KRISHIV_QUERY_TIMEOUT` past it). With
     /// `krishiv.query.maxExecutionTime` also set, the shorter applies: a
     /// statement can tighten the session's limit, never loosen it.
     pub fn deadline(mut self, limit: std::time::Duration) -> Self {
@@ -360,6 +360,19 @@ impl QueryHistory {
                 Rows::trim_parts(rows, held, &principal, 0, self.capacity);
             }
         }
+    }
+
+    /// When the query `id` of session `session` was submitted (monotonic clock), if it is still
+    /// remembered.
+    pub(crate) fn submitted_at(&self, session: &str, id: &str) -> Option<std::time::Instant> {
+        self.rows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .rows
+            .iter()
+            .rev()
+            .find(|r| r.id == id && r.session_id == session)
+            .map(|r| r.submitted_at)
     }
 
     /// Marks the query `id` of session `session` finished.

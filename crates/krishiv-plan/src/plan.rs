@@ -229,8 +229,10 @@ pub enum PlanNode {
     /// `DISTRIBUTE BY exprs` (Spark's `RepartitionByExpression`; `CLUSTER
     /// BY` and `SORT BY` put a local [`PlanNode::Sort`] above it). The
     /// analyzer checks the expressions against the input (a column a
-    /// projection below dropped resolves) and drops the node: one node has
-    /// no partitions to set, as for the partitioning hints.
+    /// projection below dropped resolves) and keeps the node with them
+    /// bound: rows pass through, placed in partitions by a hash of the
+    /// expressions' values, which are evaluated (and may raise) as Spark's
+    /// shuffle evaluates them.
     Repartition {
         /// Input.
         input: Arc<LogicalPlan>,
@@ -1250,6 +1252,7 @@ impl LogicalPlan {
                 | PlanNode::Offset { input, .. }
                 | PlanNode::WithCte { input, .. }
                 | PlanNode::JoinHint { input, .. }
+                | PlanNode::Repartition { input, .. }
                 | PlanNode::ReplicateRows { input, .. } => p = input,
                 PlanNode::Union { inputs, .. } => {
                     let mut out = inputs.first()?.resolved_output()?;
@@ -1388,7 +1391,6 @@ impl LogicalPlan {
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
                 | PlanNode::PipeOperator { .. }
-                | PlanNode::Repartition { .. }
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }

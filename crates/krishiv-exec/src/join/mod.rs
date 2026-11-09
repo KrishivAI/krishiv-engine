@@ -414,6 +414,12 @@ pub(crate) enum Counter {
     /// The largest run of chunks a build-phase coalesce merged (each merge
     /// reserves the run again while it copies).
     MaxCoalesceCopyBytes,
+    /// Partitions of the finished build written to disk while it waited
+    /// for its probe (`build::IdleBuild`; reported with the probe's
+    /// counters, which are read after the build's).
+    IdleSpills,
+    /// The bytes of their spill files.
+    IdleSpilledBytes,
 }
 
 /// The build's counters reported only when not zero (most builds have no
@@ -467,7 +473,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 36]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 38]);
 
 impl Default for Counters {
     // Arrays derive `Default` only up to 32 elements.
@@ -532,6 +538,13 @@ impl Counters {
 
     pub(crate) fn probe(&self) -> crate::metrics::ExtraMetrics {
         let mut out = self.report(&PROBE_COUNTERS);
+        // Only a build spilled while it waited for its probe reports it.
+        if self.get(Counter::IdleSpills) > 0 {
+            out.extend(self.report(&[
+                (Counter::IdleSpills, "idle_spills"),
+                (Counter::IdleSpilledBytes, "idle_spilled_bytes"),
+            ]));
+        }
         // Only a join that fell back to sort-merge reports it.
         if self.get(Counter::MergeFallbacks) > 0 {
             out.extend(self.report(&[(Counter::MergeFallbacks, "merge_fallbacks")]));

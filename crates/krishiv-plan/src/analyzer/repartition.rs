@@ -6,10 +6,12 @@
 //! dropped included (Spark lets the node host missing attributes). They may
 //! be anything a projection allows (a map, `rand()`, a literal) except an
 //! aggregate, a window or a generator, and they may not read the outer
-//! query. The node is then dropped, as the partitioning hints are: one node
-//! has no partitions to set. Spark also evaluates the expressions while it
-//! shuffles, so an expression that fails at run time (`x + 'a'`) fails the
-//! query there; here it is never evaluated.
+//! query. The node stays in the resolved plan with the bound expressions:
+//! Spark evaluates them while it shuffles, so an expression that fails at
+//! run time (`x + 'a'`) fails the query, and the physical planner places a
+//! hash exchange on their values. An expression that reads a column a
+//! projection below dropped widens the input with it, as a filter's does,
+//! and a projection above restores the node's output.
 
 use std::sync::Arc;
 
@@ -18,16 +20,17 @@ use krishiv_common::error::{UnsupportedExprForOperator, UnsupportedGeneratorOuts
 use super::AnalysisError;
 use super::exprs::{Bound, pretty};
 use super::ops::has_generator;
-use super::resolve::{Env, Rel, Resolver};
+use super::resolve::{Env, Rel, Resolver, Widen};
 use super::subquery::correlated_reference;
-use crate::{Expr, ExprNode, FunctionKind, LogicalPlan, Origin, ResolvedExpr};
+use crate::{Expr, ExprNode, FunctionKind, LogicalPlan, Origin, PlanNode, ResolvedExpr};
 
 /// Spark's operator name, as its errors show it.
 const OPERATOR: &str = "RepartitionByExpression";
 
 impl Resolver<'_> {
-    /// Checks `exprs` against `input` and resolves to the input, which a
-    /// sort above reads as it would without the node.
+    /// Checks `exprs` against `input` and resolves to a
+    /// [`PlanNode::Repartition`] over it with the bound expressions; a sort
+    /// above reads the input's columns through it.
     pub(super) fn repartition(
         &mut self,
         p: &LogicalPlan,
@@ -35,8 +38,8 @@ impl Resolver<'_> {
         exprs: &[Arc<Expr>],
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
-        let mut c = self.child(input, env)?;
-        let (bounds, _) = self.bind_missing(&c, exprs, env, OPERATOR, false)?;
+        let c = self.child(input, env)?;
+        let (bounds, wide) = self.bind_missing(&c, exprs, env, OPERATOR, false)?;
         let o = p.origin;
         if bounds.iter().any(|b| b.outer.is_some()) {
             let shown: Vec<Arc<Expr>> = bounds.iter().map(Bound::shown).collect();
@@ -60,10 +63,30 @@ impl Resolver<'_> {
                 o,
             ));
         }
+        let wide = self.reveal(&wide, &bounds)?;
+        let node = PlanNode::Repartition {
+            input: Arc::clone(&wide.plan),
+            exprs: bounds.into_iter().map(|b| b.expr).collect(),
+        };
+        let mut r = self.make(o, node, wide.out.to_vec(), &[&wide]);
+        let extended = wide.out.len() > c.out.len();
+        // A sort above reaches the input's columns through the node, and a
+        // grouping key under it (Spark 4.2.0 resolves `GROUP BY y
+        // DISTRIBUTE BY c SORT BY y`), but grows no aggregate across it
+        // (`... SORT BY max(x)` is UNRESOLVED_COLUMN): `through_to_agg`
+        // stops at the node.
+        r.widen = Some(Arc::new(Widen::Through { child: wide }));
+        let mut r = if extended {
+            let mut kept = self.restore(&r, &c.out);
+            kept.hidden = Arc::clone(&c.hidden);
+            kept
+        } else {
+            r
+        };
         // Spark resolves an aggregate call in a sort only directly over the
         // aggregate: `GROUP BY y DISTRIBUTE BY y SORT BY count(*)` fails.
-        c.agg = None;
-        Ok(c)
+        r.agg = None;
+        Ok(r)
     }
 
     /// `UNSUPPORTED_EXPR_FOR_OPERATOR` for the aggregate calls in `bounds`

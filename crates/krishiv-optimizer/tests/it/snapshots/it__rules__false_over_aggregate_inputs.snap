@@ -1,0 +1,11 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT x.a FROM (SELECT a, count(*) AS n FROM t WHERE b > 'm' GROUP BY a) AS x JOIN (SELECT d, count(*) AS m FROM u GROUP BY d) AS y ON x.n IS NULL"
+---
+Project [a#0]
++- Join Inner
+   :- Aggregate [d#5], [d#5]
+   :  +- Scan spark_catalog.default.u [d#5]
+   +- Aggregate [a#0], [a#0]
+      +- Filter false
+         +- Scan spark_catalog.default.t [a#0]

@@ -275,7 +275,8 @@ impl Session {
     }
 
     /// Cancels the running query `id` of this session (Spark Connect's
-    /// `Interrupt` by operation id): its stream ends with
+    /// `Interrupt` by operation id; a SQL script is one such query, ended between its statements
+    /// too): its stream ends with
     /// `OPERATION_CANCELED` at its next batch boundary (a query whose
     /// execution has not begun fails as it begins), and
     /// `system.queries.cancel_reason` shows `user`. Whether a running query

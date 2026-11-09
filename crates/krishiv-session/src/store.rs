@@ -121,6 +121,10 @@ pub(crate) struct ViewDef {
     /// read projects the stored columns from the query's output by these names, so a base table that gained
     /// columns does not change the view (Spark's schema compensation).
     pub(crate) query_columns: Vec<String>,
+    /// The spans in `sql` of the names the session substituted for `IDENTIFIER(..)` clauses when
+    /// the view was created: a read marks their columns as the creating query did, so the view's
+    /// output names stay the ones Spark gives (`c1.c2` for `IDENTIFIER('c1.c2')`).
+    pub(crate) identifier_spans: Vec<krishiv_sql::ast::Span>,
     /// `WITH SCHEMA ...` as stored; `None` for a view created while `spark.sql.legacy.viewSchemaBindingMode` was
     /// off (Spark then stores no mode, and the view reads as `BINDING` once the feature is on).
     pub(crate) schema_mode: Option<ViewSchemaMode>,

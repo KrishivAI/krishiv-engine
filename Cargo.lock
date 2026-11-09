@@ -2002,11 +2002,13 @@ dependencies = [
  "krishiv-alloc",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-io",
  "krishiv-memory",
  "krishiv-session",
  "mimalloc",
  "parquet",
  "proptest",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]
@@ -4976,6 +4978,8 @@ version = "0.2.0-alpha"
 dependencies = [
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-functions",
+ "krishiv-plan",
  "serde",
  "serde_json",
  "tempfile",

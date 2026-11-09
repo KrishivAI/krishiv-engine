@@ -1,0 +1,91 @@
+name: Docs site
+
+# Prose lint (Vale) and a static HTML preview of the changed pages. The generated reference
+# is checked against its generators (SQL pages, executed examples, Python, configuration) at PR time; the
+# Rust pages need nightly rustdoc and stay in the nightly `docs-reference` job.
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "xtask/src/docs_*.rs"
+      - "tests/scripts/gen_python_docs.py"
+      - "crates/krishiv-functions/**"
+      - "crates/krishiv-common/**"
+      - "crates/krishiv-testkit/src/bin/doc-examples.rs"
+      - "python/**"
+      - ".vale.ini"
+      - ".vale/**"
+      - ".github/scripts/docs-preview.py"
+      - ".github/workflows/docs-site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-site-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install Vale (CI only, checksum pinned)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/vale.tgz" \
+            https://github.com/errata-ai/vale/releases/download/v3.26.0/vale_3.26.0_Linux_64-bit.tar.gz
+          echo "22aa69a556558e4a9dfc63c17030777383d8d3c48dcdfad655fa98e839d666ed  $RUNNER_TEMP/vale.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/vale" && tar -xzf "$RUNNER_TEMP/vale.tgz" -C "$RUNNER_TEMP/vale"
+      - name: Vale (hand-written pages)
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/vale/vale" --minAlertLevel=warning docs/index.md docs/get-started docs/guides docs/concepts docs/releases \
+            docs/reference/index.md docs/reference/config/index.md docs/reference/sql/index.md docs/reference/python-package.md
+      - name: Render the changed pages
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "${BASE:-HEAD~1}" HEAD -- 'docs/*.md' | tr '\n' ' ')
+          # shellcheck disable=SC2086
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet markdown==3.7
+          "$RUNNER_TEMP/venv/bin/python" .github/scripts/docs-preview.py "$RUNNER_TEMP/preview" $changed
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-preview
+          path: ${{ runner.temp }}/preview
+          if-no-files-found: ignore
+
+  generated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - name: Pages match their generators, examples rerun
+        run: |
+          set -euo pipefail
+          cargo xtask docs-sql --check
+          cargo xtask docs-examples --check
+          cargo xtask docs-python --check
+          cargo xtask docs-config "$RUNNER_TEMP/configuration.md"
+          diff -u docs/reference/config/index.md "$RUNNER_TEMP/configuration.md"
