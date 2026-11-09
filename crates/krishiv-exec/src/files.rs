@@ -1171,7 +1171,9 @@ impl FileSchemaResolver for FileReads {
     /// instantiated at listing from the read's options.
     fn qualify(&self, path: &OptionValue) -> std::result::Result<OptionValue, KrishivError> {
         match path.as_plain() {
-            // Not the working directory: Spark refuses the empty location of `` parquet.`` ``.
+            // Not the working directory: Spark refuses the empty location of `` parquet.`` `` as
+            // `INVALID_EMPTY_LOCATION`. A DataFrame or Connect read of `""` reaches this too; Spark 4.2 raises a
+            // plain `IllegalArgumentException` (no error class) there, and reading the working directory was wrong.
             Some("") => Err(InvalidEmptyLocation {
                 location: String::new(),
             }
@@ -1228,8 +1230,8 @@ impl FileSchemaResolver for FileReads {
 /// (Hadoop's HTTP file systems do not implement `listStatus`).
 fn check_sql_location(text: &str) -> Result<()> {
     let class = match scheme(text) {
-        Some(s) if s.eq_ignore_ascii_case("http") => "org.apache.hadoop.fs.http.HttpFileSystem",
-        Some(s) if s.eq_ignore_ascii_case("https") => "org.apache.hadoop.fs.http.HttpsFileSystem",
+        Some("http") => "org.apache.hadoop.fs.http.HttpFileSystem",
+        Some("https") => "org.apache.hadoop.fs.http.HttpsFileSystem",
         _ => return Ok(()),
     };
     Err(FailedReadFileUnsupportedFileSystem {

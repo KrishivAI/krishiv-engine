@@ -572,3 +572,12 @@ fn param_of(e: &krishiv_common::error::KrishivError, name: &str) -> String {
         .map(|(_, v)| v.clone())
         .unwrap_or_default()
 }
+
+/// A DataFrame read of an empty location is `INVALID_EMPTY_LOCATION` too (Spark 4.2 raises a plain
+/// `IllegalArgumentException` there; the point is that it is an error, not a read of the working directory).
+#[test]
+fn a_dataframe_read_of_an_empty_location_is_refused() {
+    let s = Session::new().unwrap();
+    let e = block_on(async { s.read().parquet([""]).collect().await }).unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_EMPTY_LOCATION", "{e}");
+}
