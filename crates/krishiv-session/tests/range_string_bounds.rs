@@ -288,3 +288,104 @@ fn a_boolean_key_reports_the_numeric_bound_beside_an_interval() {
     );
     assert!(err.contains("lower bound"), "{err}");
 }
+
+#[test]
+fn a_decimal_key_rounds_a_finer_bound_half_up_as_the_cast_does() {
+    // Spark casts the bound to the key's DECIMAL(3, 0): 1.5 is 2, 1.4 is 1, and 2.5 PRECEDING is -2.5 cast to -3.
+    let d = tempfile::tempdir().unwrap();
+    let s = session(d.path());
+    for sql in [
+        "create table dk (id int, k decimal(3,0)) using parquet",
+        "insert into dk values (1,1),(2,2),(3,3),(4,4),(5,5)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let frames_of = |bounds: &str| {
+        let sql = format!(
+            "select id, first(id) over w, last(id) over w from dk \
+             window w as (order by k range between {bounds}) order by id"
+        );
+        let b = block_on(async { s.sql(&sql).await?.collect().await }).unwrap();
+        let mut out = Vec::new();
+        for b in &b {
+            let (f, l) = (
+                b.column(1).as_primitive::<Int32Type>(),
+                b.column(2).as_primitive::<Int32Type>(),
+            );
+            out.extend((0..b.num_rows()).map(|i| (f.value(i), l.value(i))));
+        }
+        out
+    };
+    assert_eq!(
+        frames_of("1.5 preceding and 1.5 following"),
+        frames_of("2 preceding and 2 following")
+    );
+    assert_eq!(
+        frames_of("1.4 preceding and 1.4 following"),
+        frames_of("1 preceding and 1 following")
+    );
+    // HALF_UP, not HALF_EVEN: 2.5 rounds to 3 (HALF_EVEN would give 2).
+    assert_eq!(
+        frames_of("2.5 preceding and 2.5 following"),
+        frames_of("3 preceding and 3 following")
+    );
+}
+
+#[test]
+fn an_integral_or_decimal_bound_the_key_cannot_hold_raises_under_ansi() {
+    // Spark 4.2.0 (local run, ANSI on): CAST_OVERFLOW for an integral key, NUMERIC_VALUE_OUT_OF_RANGE for DECIMAL.
+    let d = tempfile::tempdir().unwrap();
+    let s = session(d.path());
+    s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
+    for sql in [
+        "create table ek (id int, t tinyint, k decimal(3,0)) using parquet",
+        "insert into ek values (1,1,1),(2,2,2)",
+        "create table ei (i int) using parquet",
+        "insert into ei values (1),(2)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    for (key, bounds, class) in [
+        ("t", "129 preceding and current row", "CAST_OVERFLOW"),
+        (
+            "k",
+            "1000 preceding and current row",
+            "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION",
+        ),
+        ("i", "current row and 2147483648 following", "CAST_OVERFLOW"),
+    ] {
+        let table = if key == "i" { "ei" } else { "ek" };
+        let sql =
+            format!("select count(*) over (order by {key} range between {bounds}) from {table}");
+        let err = block_on(async { s.sql(&sql).await?.collect().await }).unwrap_err();
+        assert_eq!(err.error_class().name(), class, "{key} {bounds}: {err}");
+    }
+}
+
+#[test]
+fn an_out_of_range_bound_stays_refused_with_ansi_off() {
+    // Spark gives a NULL bound here (empty frames); Krishiv does not match that yet and refuses.
+    let d = tempfile::tempdir().unwrap();
+    let s = session(d.path());
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    for sql in [
+        "create table eo (t tinyint) using parquet",
+        "insert into eo values (1),(2)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let err = block_on(async {
+        s.sql(
+            "select count(*) over (order by t range between 129 preceding and current row) from eo",
+        )
+        .await?
+        .collect()
+        .await
+    })
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+        "{err}"
+    );
+}

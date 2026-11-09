@@ -1,0 +1,26 @@
+name: Install a tool, with one retry
+description: >-
+  taiki-e/install-action, retried once after 20 seconds, so a short github.com or CDN outage costs a retry and not a
+  failed run (2026-11-08: release downloads returned 504 for hours; a retry alone does not cover that, but it covers the
+  common transient failure).
+inputs:
+  tool:
+    description: tool list for install-action (for example cargo-nextest or cargo-deny@0.18)
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: first
+      uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      continue-on-error: true
+      with:
+        tool: ${{ inputs.tool }}
+    - name: Wait before the retry
+      if: steps.first.outcome == 'failure'
+      shell: bash
+      run: sleep 20
+    - name: Retry the install
+      if: steps.first.outcome == 'failure'
+      uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      with:
+        tool: ${{ inputs.tool }}

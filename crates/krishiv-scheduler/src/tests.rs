@@ -192,6 +192,44 @@ fn unpinned_hash_exchanges_and_missing_schemas_are_refused() {
     assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
 }
 
+/// A hash exchange on a key the routing hash cannot hash is refused when the
+/// plan is cut, before any task runs (it would fail mid-query on the map
+/// side); an unknown key column is an internal error.
+#[test]
+fn hash_exchanges_on_keys_the_routing_hash_cannot_hash_are_refused() {
+    let item = Arc::new(Field::new("item", DataType::Int32, true));
+    for key in [
+        DataType::List(item),
+        DataType::Struct(vec![Field::new("a", DataType::Int32, true)].into()),
+        DataType::Decimal256(76, 0),
+    ] {
+        let input: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("k", key.clone(), true),
+        ]));
+        let two = Partitioning::Hash {
+            keys: vec![0, 1],
+            scheme: HashScheme::KeyGroupV1,
+        };
+        let inputs = BTreeMap::from([(ExchangeId(1), input)]);
+        let e = fragment(&plan(exchange(1, range(), two)), &inputs).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{key}: {e}"
+        );
+        assert!(e.to_string().contains("column `k`"), "{e}");
+        // The first key alone routes.
+        assert!(fragment(&plan(exchange(1, range(), hash())), &inputs).is_ok());
+    }
+    let past = Partitioning::Hash {
+        keys: vec![3],
+        scheme: HashScheme::KeyGroupV1,
+    };
+    let e = fragment(&plan(exchange(1, range(), past)), &schemas(&[1])).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
+}
+
 fn shared(id: u64, deterministic: bool) -> SharedPlan {
     SharedPlan {
         id: SharedId(id),

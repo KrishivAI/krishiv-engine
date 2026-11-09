@@ -9,7 +9,7 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
-    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras. A reader ignores members it does not know." },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`. A reader ignores members it does not know." },
     "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
     "environment": {
       "type": "object",
@@ -85,7 +85,9 @@
           "drivers": { "$ref": "#/$defs/u64" },
           "threads": { "$ref": "#/$defs/u64", "description": "Distinct threads that polled its drivers, summed over workers." },
           "started_ns": { "$ref": "#/$defs/u64", "description": "First driver start, after the query started." },
-          "ended_ns": { "$ref": "#/$defs/u64", "description": "Last driver end, after the query started." }
+          "ended_ns": { "$ref": "#/$defs/u64", "description": "Last driver end, after the query started." },
+          "max_slice_ns": { "$ref": "#/$defs/u64", "description": "Added in minor 3 (absent in earlier documents, read as 0): the longest single poll of any of its drivers, wall time." },
+          "stalls": { "$ref": "#/$defs/u64", "description": "Added in minor 3 (absent in earlier documents, read as 0): polls of its drivers longer than the stall threshold, wall time (a thread kept off a CPU mid-poll counts)." }
         }
       }
     },

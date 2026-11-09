@@ -1017,6 +1017,173 @@ fn calendar_rules_follow_spark() {
     assert!(env.scan(&spark2_old, &count, &o).is_ok());
 }
 
+/// A date conjunct does not prune a file whose dates Spark rebases (a Spark
+/// 2 file): Spark rebases the pushed literal to the stored calendar before
+/// comparing (`ParquetFilters`, LEGACY spec); Krishiv does not, so the read
+/// goes on to the calendar guard instead of trusting stored bounds. A Spark 3+
+/// file prunes as usual. (The decoder strips the predicate too, with the read
+/// mode; here statistics decide the conjunct first, so this test does not
+/// exercise that strip on its own.)
+#[test]
+fn rebased_dates_do_not_prune() {
+    use parquet::file::metadata::KeyValue;
+    let env = Env::new();
+    let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Date32, true)]));
+    let file = |name: &str, version: &str| {
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(arrow_array::Date32Array::from(vec![
+                -200_000, 10_957,
+            ]))],
+        )
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![KeyValue::new(
+                "org.apache.spark.version".into(),
+                version.to_owned(),
+            )]))
+            .build();
+        env.put(name, write(&[batch], props))
+    };
+    let o = env.options(&[]);
+    // Outside the stored [min, max]: statistics alone would rule the row group out.
+    let mut req = ScanRequest::all(Arc::clone(&schema));
+    req.predicate = Some(PushdownExpr::cmp(
+        ColumnPath::new("d"),
+        CmpOp::Eq,
+        ScalarValue::Date32(-300_000),
+    ));
+    let pruned = |f: &FileRef| {
+        let meta = env
+            .rt
+            .block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, f, MetadataNeeds::default(), &o),
+            )
+            .unwrap();
+        ParquetFormat
+            .plan_units(meta.as_ref(), &ByteRange::whole(f.size), &req)
+            .unwrap()
+            .pruned_by_statistics
+    };
+    assert_eq!(pruned(&file("s4.parquet", "4.2.0")), 1);
+    let spark2 = file("s2.parquet", "2.4.8");
+    assert_eq!(pruned(&spark2), 0);
+    // So the read reaches the guard, which refuses the value a rebase would change.
+    assert_eq!(
+        env.scan(&spark2, &req, &o).err().map(|e| e.error_class()),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
+    // The same predicate as a row-level prefix reaches the guard in both
+    // forms. A smoke check only: the row filter is never used while a guarded
+    // column is in the output, so the decoder's prefix strip is defensive.
+    let mut prefixed = ScanRequest::all(Arc::clone(&schema));
+    prefixed.row_level = crate::request::RowLevel::Prefix(req.predicate.clone());
+    assert_eq!(
+        env.scan(&spark2, &prefixed, &o)
+            .err()
+            .map(|e| e.error_class()),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
+    // A literal after the switch point compares the same in both calendars:
+    // it still prunes a Spark 2 file (2024-10-03, above the stored maximum).
+    let mut modern = ScanRequest::all(Arc::clone(&schema));
+    modern.predicate = Some(PushdownExpr::cmp(
+        ColumnPath::new("d"),
+        CmpOp::GtEq,
+        ScalarValue::Date32(20_000),
+    ));
+    let pruned_with = |f: &FileRef, req: &ScanRequest, o: &crate::FormatOptions| {
+        let meta = env
+            .rt
+            .block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, f, MetadataNeeds::default(), o),
+            )
+            .unwrap();
+        ParquetFormat
+            .plan_units(meta.as_ref(), &ByteRange::whole(f.size), req)
+            .unwrap()
+            .pruned_by_statistics
+    };
+    assert_eq!(pruned_with(&spark2, &modern, &o), 1);
+    // A file not written by Spark is rebased only in LEGACY mode, which statistics pruning
+    // sees through the metadata (the mode is part of its cache key).
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(arrow_array::Date32Array::from(vec![
+            -200_000, 10_957,
+        ]))],
+    )
+    .unwrap();
+    let other = env.put(
+        "other.parquet",
+        write(&[batch], WriterProperties::default()),
+    );
+    assert_eq!(pruned_with(&other, &req, &o), 1);
+    let legacy = env.options(&[("datetimeRebaseMode", "LEGACY")]);
+    assert_eq!(pruned_with(&other, &req, &legacy), 0);
+    assert_eq!(pruned_with(&other, &modern, &legacy), 1);
+}
+
+/// A runtime filter on a rebased date column is dropped, whatever its keys:
+/// its values are in the reader's calendar, the stored bounds in Spark's.
+/// Without the drop, a modern key set prunes a Spark 2 file's row group
+/// through bounds that mean different days (join rows would go missing).
+#[test]
+fn runtime_filters_on_rebased_dates_do_not_prune() {
+    use crate::{FilterId, FilterSnapshot, KeyFilterBuilder, KeyFilterOptions, RuntimeFilter};
+    use parquet::file::metadata::KeyValue;
+    let env = Env::new();
+    let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Date32, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(arrow_array::Date32Array::from(vec![
+            -200_000, 10_957,
+        ]))],
+    )
+    .unwrap();
+    let props = WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![KeyValue::new(
+            "org.apache.spark.version".into(),
+            "2.4.8".to_owned(),
+        )]))
+        .build();
+    let file = env.put("s2-rf.parquet", write(&[batch], props));
+    let o = env.options(&[]);
+    for key in [-300_000, 20_000] {
+        let mut b = KeyFilterBuilder::new(DataType::Date32, KeyFilterOptions::default()).unwrap();
+        b.add(&arrow_array::Date32Array::from(vec![key]), None)
+            .unwrap();
+        let filter = Arc::new(RuntimeFilter::new(
+            FilterId(1),
+            ColumnPath::new("d"),
+            DataType::Date32,
+        ));
+        filter.publish(FilterSnapshot::Final(Arc::new(b.finish())));
+        let mut req = ScanRequest::all(Arc::clone(&schema));
+        req.dynamic
+            .push(crate::ScanFilter::new(Arc::clone(&filter), &schema).unwrap());
+        let meta = env
+            .rt
+            .block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+            )
+            .unwrap();
+        let plan = ParquetFormat
+            .plan_units(meta.as_ref(), &ByteRange::whole(file.size), &req)
+            .unwrap();
+        assert_eq!(plan.pruned_by_statistics, 0, "key {key}");
+        // The read reaches the calendar guard instead of silently pruning.
+        assert_eq!(
+            env.scan(&file, &req, &o).err().map(|e| e.error_class()),
+            Some(ErrorClass::KrishivUnsupportedFeature),
+            "key {key}"
+        );
+    }
+}
+
 /// The decoder's prefetch hint stops at the budget, whole row groups only.
 #[test]
 fn upcoming_ranges_respect_the_budget() {
@@ -1209,4 +1376,93 @@ fn binary_decimals_read_on_the_canonical_carrier() {
             .to_vec(),
         [150, -275]
     );
+}
+
+/// A scan's demand reads (no prefetch budget, so every data range is read
+/// when the decoder asks for it) run on the scheduler's I/O runtime, not
+/// inline in the caller's poll: a remote response body is never handled on
+/// a compute driver (the FileScan remote-poll stalls, queue-opus-b1).
+#[test]
+fn demand_reads_run_on_the_io_runtime() {
+    let io_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_name("scan-test-io")
+        .enable_all()
+        .build()
+        .unwrap();
+    let caller = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let inner = Arc::new(InMemory::new());
+    let fault = crate::io::FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
+    let sched = IoScheduler::with_runtime(IoConfig::default(), io_rt.handle().clone());
+    sched.register_store(
+        StoreId::new(STORE),
+        Arc::clone(&fault) as Arc<dyn ObjectStore>,
+    );
+    let io = sched.context();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(1000))
+        .build();
+    let bytes = write(&[ints("k", 0..5000)], props);
+    let o = Env::new().options(&[]);
+    let batches = std::thread::Builder::new()
+        .name("scan-test-caller".into())
+        .spawn(move || {
+            caller.block_on(async {
+                let path = Path::from("demand.parquet");
+                object_store::ObjectStoreExt::put(inner.as_ref(), &path, bytes.into())
+                    .await
+                    .unwrap();
+                let meta = object_store::ObjectStoreExt::head(inner.as_ref(), &path)
+                    .await
+                    .unwrap();
+                let file = FileRef::from_meta(StoreId::new(STORE), &meta);
+                let meta = io
+                    .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o)
+                    .await
+                    .unwrap();
+                let req = ScanRequest::all(meta.schema());
+                // The footer is cached now: what follows is the scan's own reads.
+                fault.take_get_threads();
+                let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                    krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+                let id = pool.register("scan", None);
+                let options = ScanOptions {
+                    prefetch_bytes: 0,
+                    ..ScanOptions::default()
+                };
+                let mut s = ScanStream::open(
+                    &io,
+                    &ParquetFormat,
+                    file.clone(),
+                    ByteRange::whole(file.size),
+                    &req,
+                    &o,
+                    krishiv_memory::Reservation::new(pool, id),
+                    options,
+                )
+                .await
+                .unwrap();
+                let mut out = Vec::new();
+                while let Some(b) = s.next_batch().await.unwrap() {
+                    out.push(b);
+                }
+                let threads = fault.take_get_threads();
+                assert!(
+                    threads.len() >= 5,
+                    "one read per row group at least: {threads:?}"
+                );
+                assert!(
+                    threads.iter().all(|t| t.as_deref() == Some("scan-test-io")),
+                    "every data read runs on the I/O runtime: {threads:?}"
+                );
+                out
+            })
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(rows(&batches), 5000);
 }

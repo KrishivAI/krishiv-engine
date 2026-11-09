@@ -48,6 +48,9 @@ pub struct FileTable {
     /// Distinct counts estimated from samples (P2-T164 U6), by column name;
     /// shared by the clones of the table.
     sampled: Arc<Mutex<HashMap<String, Option<u64>>>>,
+    /// What each [`sample_distinct`](Self::sample_distinct) call did, in
+    /// order; shared by the clones of the table.
+    outcomes: Arc<Mutex<Vec<super::ndv_sample::SampleOutcome>>>,
 }
 
 impl FileTable {
@@ -121,6 +124,7 @@ impl FileTable {
             partition_columns: Vec::new(),
             scan_options,
             sampled: Arc::default(),
+            outcomes: Arc::default(),
         })
     }
 }
@@ -215,6 +219,23 @@ impl FileTable {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .contains_key(name)
+    }
+
+    /// What the table's samples did (P2-T164 U6), in order: which columns'
+    /// estimates come from a sample and which stayed the defaults.
+    #[must_use]
+    pub fn sample_outcomes(&self) -> Vec<super::ndv_sample::SampleOutcome> {
+        self.outcomes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(super) fn note_sample(&self, outcome: super::ndv_sample::SampleOutcome) {
+        self.outcomes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(outcome);
     }
 
     /// Keeps the distinct count `sample` gives `name` in a table of `rows`.
