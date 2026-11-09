@@ -323,6 +323,8 @@ impl ScanPushdown for FileScan {
 pub struct FileScanMetrics {
     /// Splits opened.
     pub splits: u64,
+    /// Files opened (a file counts with its split that starts at byte 0).
+    pub files: u64,
     /// Units (row groups) decoders were opened with, after statistics pruning.
     pub units: u64,
     /// Units skipped by dynamic filters or dictionaries.
@@ -371,6 +373,7 @@ impl FileScanMetrics {
         if self.splits > 0 {
             out = crate::metrics::counts([
                 ("scan_splits", self.splits),
+                ("scan_files", self.files),
                 ("scan_units", self.units),
                 ("scan_units_pruned", self.units_pruned),
                 ("scan_rows_decoded", self.rows),
@@ -501,6 +504,7 @@ fn record_split(metrics: &Mutex<FileScanMetrics>, current: &Current) {
     let mut metrics = metrics.lock().unwrap_or_else(PoisonError::into_inner);
     metrics.add(&current.stream.metrics(), current.stream.overcommitted());
     metrics.add_reads(&current.stream.read_stats());
+    metrics.files += u64::from(current.split.start == 0);
 }
 
 /// The piece being read.

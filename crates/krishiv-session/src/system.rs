@@ -257,6 +257,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("bytes_read", Long, true),
             ("rows_read", Long, true),
             ("rows_written", Long, true),
+            ("files_read", Long, true),
             ("files_written", Long, true),
             ("result_cache_hit", Flag, false),
             ("bytes_written", Long, true),
@@ -624,6 +625,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.bytes_read)),
             long(rows.iter().map(|r| r.rows_read)),
             long(rows.iter().map(|r| r.rows_written)),
+            long(rows.iter().map(|r| r.files_read)),
             long(rows.iter().map(|r| r.files_written)),
             Arc::new(BooleanArray::from_iter(
                 rows.iter().map(|r| Some(r.result_cache_hit)),
@@ -875,6 +877,8 @@ pub(crate) struct QueryRow {
     pub(crate) rows_read: Option<i64>,
     /// Rows the file write sinks took.
     pub(crate) rows_written: Option<i64>,
+    /// Files its scans opened.
+    pub(crate) files_read: Option<i64>,
     /// Data files the query wrote to completion.
     pub(crate) files_written: Option<i64>,
     /// Answered from the result cache, with no execution.
@@ -996,6 +1000,8 @@ pub(crate) struct Totals {
     pub(crate) rows_read: i64,
     /// Rows the file write sinks of the plan took.
     pub(crate) rows_written: i64,
+    /// Files its scans opened.
+    pub(crate) files_read: i64,
     /// Files the query's writers completed.
     pub(crate) files_written: i64,
     pub(crate) bytes_written: i64,
@@ -1136,6 +1142,7 @@ impl QueryLog {
             bytes_read: None,
             rows_read: None,
             rows_written: None,
+            files_read: None,
             files_written: None,
             result_cache_hit: false,
             bytes_written: None,

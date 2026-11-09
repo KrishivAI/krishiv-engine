@@ -874,3 +874,27 @@ fn an_error_message_with_a_string_literal_is_masked_when_literals_are_masked() {
     assert_eq!(r.len(), 1, "{r:?}");
     assert!(!r[0].contains("canary99x"), "{r:?}");
 }
+
+#[test]
+fn a_scan_records_the_files_it_opened() {
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("r");
+    block_on(async {
+        s.sql("SELECT id FROM range(40)")
+            .await?
+            .write()
+            .mode("overwrite")
+            .format("parquet")
+            .save(out.to_str().unwrap())
+            .await
+    })
+    .unwrap();
+    let q = format!("SELECT count(*) FROM parquet.`{}`", out.display());
+    block_on(async { s.sql(&q).await?.collect().await }).unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT CAST(files_read AS STRING) FROM system.queries WHERE files_read > 0",
+    );
+    assert_eq!(r.len(), 1, "{r:?}");
+}

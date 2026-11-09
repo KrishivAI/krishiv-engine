@@ -115,6 +115,19 @@ impl QueryStart {
                             .saturating_sub(self.bytes_written),
                     )
                     .unwrap_or(i64::MAX),
+                    files_read: metrics
+                        .operators
+                        .values()
+                        .filter(|e| {
+                            e.role == krishiv_exec::OperatorRole::Source && e.name.ends_with("Scan")
+                        })
+                        .flat_map(|e| e.extra.iter())
+                        .filter(|(n, _)| n == "scan_files")
+                        .map(|(_, m)| match m {
+                            krishiv_exec::Metric::Count(n) => i64::try_from(*n).unwrap_or(i64::MAX),
+                            _ => 0,
+                        })
+                        .fold(0, i64::saturating_add),
                     files_written: i64::try_from(
                         IoCounters::get(&self.io.counters().files_written)
                             .saturating_sub(self.files_written),
