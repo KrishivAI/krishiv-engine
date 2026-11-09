@@ -3,6 +3,7 @@
 # Shell test for .githooks/commit-msg: auto sign-off, AI attribution still refused.
 # Run: sh .githooks/test-commit-msg.sh   (also run by xtask/tests/policy.rs).
 set -eu
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
 
 hooks=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$hooks/.." && pwd)
@@ -28,8 +29,9 @@ echo "ok: sign-off added when missing"
 
 echo 2 >> f
 git commit -q -am "own sign-off" -m "Signed-off-by: Other One <other@example.com>"
-[ "$(git log -1 --format=%B | grep -c '^Signed-off-by:')" = 1 ] || fail "sign-off duplicated"
-echo "ok: existing sign-off kept, none added"
+[ "$(git log -1 --format=%B | grep -c '^Signed-off-by:')" = 2 ] || fail "own sign-off not added next to a foreign one"
+git log -1 --format=%B | grep -q '^Signed-off-by: T <t@example.com>$' || fail "own sign-off missing"
+echo "ok: foreign sign-off kept, own added"
 
 echo 3 >> f
 git commit -q -s -am "with -s"

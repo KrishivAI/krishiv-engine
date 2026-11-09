@@ -10,8 +10,8 @@ set -eu
 root=$(git rev-parse --show-toplevel)
 bash "$root/.github/scripts/check-ai-attribution.sh" --message-file "$1"
 
-if ! grep -q '^Signed-off-by: .* <.*>$' "$1"; then
-  # The committer's own identity, as `git commit -s` writes it.
-  who=$(git var GIT_COMMITTER_IDENT | sed 's/ [0-9][0-9]* [-+][0-9]*$//')
-  git interpret-trailers --in-place --trailer "Signed-off-by: $who" "$1"
-fi
+# The committer's own identity, as `git commit -s` writes it; skipped when that
+# exact sign-off is already a trailer (another person's sign-off does not count).
+who=$(git var GIT_COMMITTER_IDENT | sed 's/ [0-9][0-9]* [-+][0-9]*$//')
+git interpret-trailers --in-place --if-exists addIfDifferent \
+  --trailer "Signed-off-by: $who" "$1"
