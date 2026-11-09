@@ -515,3 +515,37 @@ fn every_fixed_width_type_hashes_its_own_bytes() {
         FixedSizeBinaryArray::try_from_iter(le(8).into_iter()).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(h_of(&[&fixed]), want(&le(8)));
 }
+
+/// The seeded XXH64 entry points (HyperLogLog++ hashes with seed 42) agree with the Spark-pinned
+/// `xxhash64` kernel, which hashes a column's values with the same seed (mutation run 42472191782
+/// missed every constant replacement of the three).
+#[test]
+fn the_seeded_xxh64_entry_points_agree_with_the_xxhash64_kernel() {
+    use krishiv_kernels::hash::routing::{xxh64_seed, xxh64_seed_int, xxh64_seed_long};
+    let ints = Int32Array::from(vec![0, 1, -1, 123_456, i32::MIN, i32::MAX]);
+    let longs = Int64Array::from(vec![0, 1, -1, 1 << 40, i64::MIN, i64::MAX]);
+    let binaries = BinaryArray::from_vec(vec![
+        b"",
+        b"a",
+        b"abcd",
+        b"a longer value than 32 bytes, for sure",
+    ]);
+    let by_kernel = |a: &ArrayRef| {
+        krishiv_kernels::hash::xxhash64(&[a.as_ref()], a.len())
+            .unwrap()
+            .values()
+            .to_vec()
+    };
+    let ia: ArrayRef = Arc::new(ints.clone());
+    for (got, want) in ints.values().iter().zip(by_kernel(&ia)) {
+        assert_eq!(xxh64_seed_int(*got, 42), want, "int {got}");
+    }
+    let la: ArrayRef = Arc::new(longs.clone());
+    for (got, want) in longs.values().iter().zip(by_kernel(&la)) {
+        assert_eq!(xxh64_seed_long(*got, 42), want, "long {got}");
+    }
+    let ba: ArrayRef = Arc::new(binaries.clone());
+    for (i, want) in by_kernel(&ba).into_iter().enumerate() {
+        assert_eq!(xxh64_seed(binaries.value(i), 42), want, "binary {i}");
+    }
+}
