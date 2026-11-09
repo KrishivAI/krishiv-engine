@@ -1636,7 +1636,13 @@ impl Expander<'_> {
                     } else {
                         stored
                     };
-                    Arc::new(typed.alias(&c.name).expr)
+                    // The column's stored field metadata (its comment, or none) replaces what the
+                    // column under it has, as Spark's view read alias does.
+                    let field = crate::column::Column::new(Expr::new(ExprNode::StoredField {
+                        expr: Arc::new(typed.expr),
+                        comment: c.comment.clone(),
+                    }));
+                    Arc::new(field.alias(&c.name).expr)
                 })
                 .collect();
             input = Arc::new(

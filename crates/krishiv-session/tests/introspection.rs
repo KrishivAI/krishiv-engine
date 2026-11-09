@@ -453,12 +453,19 @@ fn column_comments_follow_columns_through_queries() {
         comments("SELECT * FROM v1"),
         pairs(&[("a", "ca"), ("b", "cb")])
     );
-    // Known difference: a read of a view takes the comment of the column under it, not the view's stored one
-    // (Spark 4.2.0 gives `y` the view's `cy`: `column-comments/probe3.out`); see the limit in
-    // `research/spark/column-comments.md`.
+    // A read of a view gives each column the view's stored comment, not the one of the column under it
+    // (Spark 4.2.0: `column-comments/probe3.out`).
     assert_eq!(
         comments("SELECT * FROM v2"),
-        pairs(&[("x", "ca"), ("y", "cb")])
+        pairs(&[("x", "ca"), ("y", "cy")])
+    );
+    // A view column stored without a comment has none, whatever the column under it has now.
+    run(&s, "CREATE TABLE w (a INT COMMENT 'wa', b INT)");
+    run(&s, "CREATE VIEW v3 AS SELECT a, b FROM w");
+    run(&s, "ALTER TABLE w ALTER COLUMN b COMMENT 'later'");
+    assert_eq!(
+        comments("SELECT * FROM v3"),
+        pairs(&[("a", "wa"), ("b", "NULL")])
     );
     // A DataFrame's temporary view holds its analyzed plan: a read of it keeps the scan's comments.
     block_on(s.table("t").create_or_replace_temp_view("dv")).unwrap();
