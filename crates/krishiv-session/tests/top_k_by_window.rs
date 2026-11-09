@@ -3,6 +3,7 @@
 //! golden (statement 22).
 #![cfg(test)]
 
+use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use futures::executor::block_on;
 use krishiv_session::Session;
@@ -81,12 +82,9 @@ fn an_upper_case_call_is_named_like_the_lower_case_one() {
     })
     .unwrap();
     let schema = block_on(df.schema()).unwrap();
-    assert!(
-        schema.fields()[0]
-            .name()
-            .starts_with("max_by(c, a, 2) OVER ("),
-        "{:?}",
-        schema.fields()[0].name()
+    assert_eq!(
+        schema.fields()[0].name(),
+        "max_by(c, a, 2) OVER (PARTITION BY b ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"
     );
 }
 
@@ -103,6 +101,10 @@ fn a_map_payload_over_a_window_sorts_by_the_key_as_the_aggregate_does() {
         .await
     })
     .unwrap();
-    let col = batches[0].column(0).as_string_view();
-    assert_eq!(col.value(0), "[{a -> 1}, {c -> 3}]");
+    let mut got = Vec::new();
+    for b in &batches {
+        let col = b.column(0).as_string_view();
+        got.extend((0..col.len()).map(|i| col.value(i).to_string()));
+    }
+    assert_eq!(got, vec!["[{a -> 1}, {c -> 3}]"; 3]);
 }
