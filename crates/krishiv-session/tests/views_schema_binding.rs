@@ -528,3 +528,81 @@ fn the_krishiv_key_turns_the_binding_mode_off_too() {
     run(&s, "CREATE VIEW v AS SELECT 1");
     assert_eq!(info(&s, "v", "View Schema Mode"), None);
 }
+
+/// A view whose query repeats a name (only under a view column list) reads each stored column by name and ordinal
+/// (Spark's `GetViewColumnByNameAndOrdinal`), in every mode: a base table that reorders its columns or gains one
+/// keeps every label on its column; one that loses a repeat is `INCOMPATIBLE_VIEW_SCHEMA_CHANGE`. Spark 4.2.0
+/// local run: krishiv-internal `research/spark/view-repeated-names/probe6.{py,out}`.
+#[test]
+fn a_repeated_name_view_reads_by_name_and_ordinal() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE z (a INT) USING parquet");
+    let e = err(&s, "CREATE VIEW nolist AS SELECT a AS ID, a AS id FROM z");
+    assert_eq!(e.error_class().name(), "COLUMN_ALREADY_EXISTS", "{e}");
+    let table = |name: &str, cols: &str, row: &str| {
+        run(&s, &format!("DROP TABLE IF EXISTS {name}"));
+        run(&s, &format!("CREATE TABLE {name} ({cols}) USING parquet"));
+        run(&s, &format!("INSERT INTO {name} VALUES {row}"));
+    };
+    for mode in [
+        "",
+        " WITH SCHEMA BINDING",
+        " WITH SCHEMA COMPENSATION",
+        " WITH SCHEMA TYPE EVOLUTION",
+        " WITH SCHEMA EVOLUTION",
+    ] {
+        run(&s, "DROP VIEW IF EXISTS v");
+        table("t1", "id INT, x INT", "(1, 10)");
+        table("t2", "id INT, y INT", "(2, 20)");
+        run(
+            &s,
+            &format!("CREATE VIEW v (p, q, r, s){mode} AS SELECT * FROM t1 CROSS JOIN t2"),
+        );
+        let read = |want: &str| assert_eq!(rows(&s, "SELECT * FROM v"), [want], "{mode}");
+        read("1|10|2|20");
+        table("t1", "x INT, id INT", "(11, 1)");
+        read("1|11|2|20");
+        table("t1", "id INT, x INT, z INT", "(1, 12, 99)");
+        read("1|12|2|20");
+        table("t1", "z INT, x INT, id INT", "(5, 13, 1)");
+        read("1|13|2|20");
+        table("t1", "x INT, w INT", "(14, 1)");
+        let e = err(&s, "SELECT * FROM v");
+        assert_eq!(
+            e.error_class().name(),
+            "INCOMPATIBLE_VIEW_SCHEMA_CHANGE",
+            "{mode}: {e}"
+        );
+        assert_eq!(param(&e, "colName"), "id");
+        assert_eq!(param(&e, "expectedNum"), "2");
+        assert_eq!(param(&e, "actualCols"), "[id]");
+        table("t1", "x INT, ID INT", "(15, 1)");
+        read("1|15|2|20");
+        table("t1", "id INT, x INT", "(1, 10)");
+        table("t2", "id BIGINT, y INT", "(2, 20)");
+        if mode == " WITH SCHEMA BINDING" {
+            let e = err(&s, "SELECT * FROM v");
+            assert_eq!(e.error_class().name(), "CANNOT_UP_CAST_DATATYPE", "{e}");
+        } else {
+            read("1|10|2|20");
+        }
+        table("t2", "y INT, id INT", "(21, 2)");
+        read("1|10|2|21");
+    }
+    // Three columns of one name; the middle table reorders.
+    table("t1", "k INT", "(1)");
+    table("t2", "k INT, m INT", "(2, 3)");
+    table("t3", "k INT", "(4)");
+    run(
+        &s,
+        "CREATE VIEW v3 (a, b, c, d) AS SELECT * FROM t1, t2, t3",
+    );
+    assert_eq!(rows(&s, "SELECT * FROM v3"), ["1|2|3|4"]);
+    table("t2", "m INT, k INT", "(3, 2)");
+    assert_eq!(rows(&s, "SELECT * FROM v3"), ["1|2|3|4"]);
+    // A view over that view reads the inner one renamed by name and ordinal too.
+    run(&s, "CREATE VIEW outer_v AS SELECT d, b FROM v3");
+    assert_eq!(rows(&s, "SELECT * FROM outer_v"), ["4|2"]);
+    assert_eq!(rows(&s, "SELECT (SELECT max(b) FROM v3) AS m"), ["2"]);
+}

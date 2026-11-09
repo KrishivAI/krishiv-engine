@@ -1236,9 +1236,9 @@ impl Session {
         }
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
-        let synced = Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await?;
-        let plan = expansion.plan;
-        let plan = Plan::try_new(plan)?;
+        let (synced, renames) =
+            Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await?;
+        let plan = Plan::try_new(crate::view_schema::apply_renames(&expansion.plan, &renames))?;
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or
         // a failure inside a view's text) is shown. One boxed future for both
@@ -1306,8 +1306,8 @@ impl Session {
     }
 
     /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
-    /// views first. Returns the evolved entries to store once the whole query analyzed. A query that does not
-    /// analyze alone is left to the analysis of the whole query, which reports it as it would without views.
+    /// views first (their renames applied). Returns the evolved entries to store once the whole query analyzed and
+    /// the renames of repeated-name reads; a query that does not analyze alone is left to the whole query's analysis.
     ///
     /// # Errors
     /// What [`crate::view_schema::check_read`] raises.
@@ -1315,29 +1315,28 @@ impl Session {
         &self,
         reads: &[crate::view_schema::StoredRead],
         env: &QueryEnv,
-    ) -> Result<Vec<(Arc<crate::store::CatalogTable>, crate::store::CatalogTable)>, KrishivError>
-    {
+    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
         let compensation = crate::view_schema::compensation(&env.config);
         let mut synced = Vec::new();
+        let mut renames = Vec::new();
         for read in reads {
-            // A view whose query does not analyze is left to the outer query, which raises that error itself;
-            // the views after it still get their checks.
-            let Ok(plan) = Plan::try_new(Arc::clone(&read.query)) else {
+            // A view whose query does not analyze is left to the outer query; the views after it still get checked.
+            let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
+            else {
                 continue;
             };
             let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
                 continue;
             };
-            if let Some(changed) = crate::view_schema::check_read(
-                read,
-                &analyzed,
-                env.analysis.conf.case_sensitive,
-                compensation,
-            )? {
+            let case_sensitive = env.analysis.conf.case_sensitive;
+            let check =
+                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
+            if let Some(changed) = check.changed {
                 synced.push((Arc::clone(&read.entry), changed));
             }
+            renames.extend(check.rename);
         }
-        Ok(synced)
+        Ok((synced, renames))
     }
 
     /// The physical plan of `analyzed`, once the files it scans are

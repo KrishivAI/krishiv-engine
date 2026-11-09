@@ -111,27 +111,109 @@ pub(crate) const fn projection(mode: Option<ViewSchemaMode>) -> ReadProjection {
 }
 
 /// The names a view read finds its stored columns by in `input`, the inlined view query: the query's output names
-/// (`query`). A query that repeats a name (ignoring case) is renamed by position to names of its own, so the stored
-/// types and comments still apply. That reads it by position, where Spark reads by name and ordinal
-/// (`GetViewColumnByNameAndOrdinal`): a base table whose columns changed order or count under a `SELECT *` of such a
-/// view reads differently (open item in `ops/queue-opus-b2.md`).
+/// (`query`). A query that repeats a name (ignoring case) is renamed by position to names of its own
+/// ([`repeats_names`]), so the stored types and comments still apply; once the query is analyzed, [`check_read`]
+/// finds each stored column by name and ordinal (Spark's `GetViewColumnByNameAndOrdinal`) and [`apply_renames`]
+/// replaces that rename by one of the query's current width, so a base table whose columns changed order or count
+/// reads as Spark reads it.
 pub(crate) fn read_names(
     input: Arc<LogicalPlan>,
     query: &[String],
     alias: &str,
     origin: Origin,
 ) -> (Arc<LogicalPlan>, Vec<String>) {
-    let mut seen = std::collections::HashSet::new();
-    if query.iter().all(|c| seen.insert(c.to_lowercase())) {
+    if !repeats_names(query) {
         return (input, query.to_vec());
     }
-    let names: Vec<String> = (0..query.len())
-        .map(|i| format!("__krishiv_view_column_{i}"))
-        .collect();
+    let names: Vec<String> = (0..query.len()).map(read_name).collect();
     (
         rename_by_position(input, alias, names.clone(), origin),
         names,
     )
+}
+
+/// Whether `query` repeats a name, ignoring case: a view read then renames the query's columns ([`read_names`]).
+pub(crate) fn repeats_names(query: &[String]) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    !query.iter().all(|c| seen.insert(c.to_lowercase()))
+}
+
+/// The name a renamed view read gives the query column its `i`-th stored column is read from.
+fn read_name(i: usize) -> String {
+    format!("__krishiv_view_column_{i}")
+}
+
+/// The rename of a repeated-name view read, once its query is analyzed: the `SubqueryAlias` over `query` (the
+/// inlined query, by identity) takes `columns`, one name per column the query outputs now.
+#[derive(Debug, Clone)]
+pub(crate) struct ReadRename {
+    query: Arc<LogicalPlan>,
+    columns: Vec<String>,
+}
+
+/// The rename of `read` when its query output (`width` columns) holds the `i`-th stored column at `positions[i]`:
+/// those take the names the read's projection reads, the others names it never reads.
+fn read_rename(read: &StoredRead, positions: &[usize], width: usize) -> ReadRename {
+    let mut columns: Vec<String> = (0..width)
+        .map(|i| format!("__krishiv_view_unread_{i}"))
+        .collect();
+    for (i, &p) in positions.iter().enumerate() {
+        if let Some(c) = columns.get_mut(p) {
+            *c = read_name(i);
+        }
+    }
+    ReadRename {
+        query: Arc::clone(&read.query),
+        columns,
+    }
+}
+
+/// `plan` with the renames of `renames` in place: each `SubqueryAlias` whose input is a rename's query (the same
+/// `Arc`, as inlined) takes the rename's columns; subquery plans included.
+pub(crate) fn apply_renames(plan: &Arc<LogicalPlan>, renames: &[ReadRename]) -> Arc<LogicalPlan> {
+    if renames.is_empty() {
+        return Arc::clone(plan);
+    }
+    let found = match &plan.node {
+        PlanNode::SubqueryAlias { input, .. } => {
+            renames.iter().find(|r| Arc::ptr_eq(&r.query, input))
+        }
+        _ => None,
+    };
+    let rebuilt: Result<_, std::convert::Infallible> =
+        Arc::clone(plan).map_children(|child| Ok(apply_renames(&child, renames)));
+    let Ok(rebuilt) = rebuilt.and_then(|p| p.map_expressions(|e| Ok(rename_expr(&e, renames))));
+    match (found, &rebuilt.node) {
+        (Some(rename), PlanNode::SubqueryAlias { input, alias, .. }) => Arc::new(
+            LogicalPlan::new(PlanNode::SubqueryAlias {
+                input: Arc::clone(input),
+                alias: alias.clone(),
+                columns: rename.columns.clone(),
+            })
+            .with_origin(rebuilt.origin),
+        ),
+        _ => rebuilt,
+    }
+}
+
+/// `expr` with [`apply_renames`] applied to the subquery plans inside it.
+fn rename_expr(expr: &Arc<Expr>, renames: &[ReadRename]) -> Arc<Expr> {
+    let mapped: Result<_, std::convert::Infallible> =
+        Arc::clone(expr).map_children(|child| Ok(rename_expr(&child, renames)));
+    let Ok(expr) = mapped;
+    if let ExprNode::Subquery { kind, plan } = &expr.node {
+        let renamed = apply_renames(plan, renames);
+        if !Arc::ptr_eq(&renamed, plan) {
+            return Arc::new(Expr {
+                node: ExprNode::Subquery {
+                    kind: kind.clone(),
+                    plan: renamed,
+                },
+                origin: expr.origin,
+            });
+        }
+    }
+    expr
 }
 
 /// `input` with its columns renamed by position to `names` (a `SubqueryAlias` with a column list).
@@ -189,10 +271,28 @@ pub(crate) struct StoredRead {
     pub(crate) query: Arc<LogicalPlan>,
     /// The mode the read went by.
     pub(crate) mode: Option<ViewSchemaMode>,
+    /// Whether the read renamed its query's columns by position ([`read_names`]), to be replaced by a rename by
+    /// name and ordinal once the query is analyzed.
+    pub(crate) renamed: bool,
+}
+
+/// What `Session::check_stored_views` returns: the evolved view entries to store (as found, as changed) and the
+/// renames of repeated-name view reads.
+pub(crate) type StoredViewChecks = (Vec<(Arc<CatalogTable>, CatalogTable)>, Vec<ReadRename>);
+
+/// What [`check_read`] found: the entry to store for the evolution modes, and the rename of a read that renamed
+/// its query ([`StoredRead::renamed`]).
+#[derive(Debug, Default)]
+pub(crate) struct ReadCheck {
+    /// The evolved entry, when its schema changed.
+    pub(crate) changed: Option<CatalogTable>,
+    /// The rename by name and ordinal.
+    pub(crate) rename: Option<ReadRename>,
 }
 
 /// Checks `read` against `analyzed`, the analysis of its query: the errors Spark raises resolving the view's
-/// projection, and for the evolution modes the entry to store if the schema changed.
+/// projection, for the evolution modes the entry to store if the schema changed, and for a renamed read the rename
+/// that finds each stored column by name and ordinal.
 ///
 /// # Errors
 /// `INCOMPATIBLE_VIEW_SCHEMA_CHANGE`, `CANNOT_UP_CAST_DATATYPE`, or `COLUMN_ALREADY_EXISTS` for an evolved schema
@@ -202,10 +302,10 @@ pub(crate) fn check_read(
     analyzed: &AnalyzedPlan,
     case_sensitive: bool,
     compensation: bool,
-) -> Result<Option<CatalogTable>, KrishivError> {
+) -> Result<ReadCheck, KrishivError> {
     let entry = &read.entry;
     let Some(view) = &entry.view else {
-        return Ok(None);
+        return Ok(ReadCheck::default());
     };
     let output = &analyzed.output;
     let fold = |n: &str| {
@@ -230,7 +330,7 @@ pub(crate) fn check_read(
                         || comment(i) != c.comment
                 });
         if !redo {
-            return Ok(None);
+            return Ok(ReadCheck::default());
         }
         check_column_name_duplication(output.iter().map(|o| o.name.as_str()), case_sensitive)?;
         let mut changed = (**entry).clone();
@@ -247,7 +347,10 @@ pub(crate) fn check_read(
         if let Some(v) = &mut changed.view {
             v.query_columns = output.iter().map(|o| o.name.clone()).collect();
         }
-        return Ok(Some(changed));
+        return Ok(ReadCheck {
+            changed: Some(changed),
+            rename: None,
+        });
     }
     let names: Vec<String> = if view.query_columns.len() == entry.columns.len() {
         view.query_columns.clone()
@@ -256,12 +359,16 @@ pub(crate) fn check_read(
     };
     // `GetViewColumnByNameAndOrdinal`: the n-th of the columns of that name, as many as at creation.
     let mut matched = Vec::with_capacity(names.len());
+    let mut positions = Vec::with_capacity(names.len());
     let mut ordinals = std::collections::BTreeMap::<String, usize>::new();
     for name in &names {
         let key = fold(name);
         let expected = names.iter().filter(|n| fold(n) == key).count();
-        let candidates: Vec<&BoundColumn> =
-            output.iter().filter(|o| fold(&o.name) == key).collect();
+        let candidates: Vec<(usize, &BoundColumn)> = output
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| fold(&o.name) == key)
+            .collect();
         if candidates.len() != expected {
             return Err(IncompatibleViewSchemaChange {
                 view_name: format!(
@@ -276,7 +383,7 @@ pub(crate) fn check_read(
                     "[{}]",
                     candidates
                         .iter()
-                        .map(|c| c.name.as_str())
+                        .map(|(_, c)| c.name.as_str())
                         .collect::<Vec<_>>()
                         .join(",")
                 ),
@@ -285,9 +392,19 @@ pub(crate) fn check_read(
             .into());
         }
         let ordinal = ordinals.entry(key).or_insert(0);
-        matched.push(candidates[*ordinal]);
+        let Some(&(position, column)) = candidates.get(*ordinal) else {
+            return Err(krishiv_common::error::InternalError {
+                message: format!("view column `{name}` has no ordinal {ordinal}"),
+            }
+            .into());
+        };
+        matched.push(column);
+        positions.push(position);
         *ordinal += 1;
     }
+    let rename = read
+        .renamed
+        .then(|| read_rename(read, &positions, output.len()));
     let up_cast = match read.mode {
         Some(ViewSchemaMode::Binding) => true,
         None => !compensation,
@@ -309,21 +426,30 @@ pub(crate) fn check_read(
         }
     }
     if read.mode != Some(ViewSchemaMode::TypeEvolution) {
-        return Ok(None);
+        return Ok(ReadCheck {
+            changed: None,
+            rename,
+        });
     }
     let redo = matched
         .iter()
         .zip(&entry.columns)
         .any(|(o, c)| o.data_type != c.data_type || o.nullable != c.nullable);
     if !redo {
-        return Ok(None);
+        return Ok(ReadCheck {
+            changed: None,
+            rename,
+        });
     }
     let mut changed = (**entry).clone();
     for (column, o) in changed.columns.iter_mut().zip(&matched) {
         column.data_type = o.data_type.clone();
         column.nullable = o.nullable;
     }
-    Ok(Some(changed))
+    Ok(ReadCheck {
+        changed: Some(changed),
+        rename,
+    })
 }
 
 /// Spark's `buildViewDDL`: the statement that would recreate the view over its current query, the column list

@@ -1601,13 +1601,16 @@ impl Expander<'_> {
         self.path.pop();
         let mut input = input?;
         let mode = crate::view_schema::effective_mode(view.schema_mode, stored.binding_enabled);
+        let projection = crate::view_schema::projection(mode);
+        let mut columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
         self.stored_reads.push(crate::view_schema::StoredRead {
             entry: Arc::clone(entry),
             query: Arc::clone(&input),
             mode,
+            renamed: projection != crate::view_schema::ReadProjection::Output
+                && view.query_columns.len() == columns.len()
+                && crate::view_schema::repeats_names(&view.query_columns),
         });
-        let projection = crate::view_schema::projection(mode);
-        let mut columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
         if projection == crate::view_schema::ReadProjection::Output {
             // `EVOLUTION`: the view is its query's output, whatever the stored schema says.
             columns.clear();
