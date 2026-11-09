@@ -929,7 +929,22 @@ fn url_encoding_and_decoding() {
     assert_eq!(dec("%+f%-0", false).unwrap().unwrap(), "\u{0F}\0");
     assert_eq!(dec("%٤١", false).unwrap().unwrap(), "A");
     assert_eq!(dec("", false).unwrap().unwrap(), "");
-    for bad in ["%", "%4", "%zz", "a%2", "%-1", "%%41", "%4g"] {
+    // Java reads UTF-16 units: a full-width digit is one unit and a digit (U+1D7D9) outside the
+    // Basic Multilingual Plane is two (Spark 4.2.0: `%\u{ff11}\u{ff10}` is 0x10, `%\u{1d7d9}0` is
+    // CANNOT_DECODE_URL).
+    assert_eq!(dec("%\u{ff11}\u{ff10}", false).unwrap().unwrap(), "\u{10}");
+    assert_eq!(dec("%3\u{663}", false).unwrap().unwrap(), "3");
+    for bad in [
+        "%",
+        "%4",
+        "%zz",
+        "a%2",
+        "%-1",
+        "%%41",
+        "%4g",
+        "%\u{1d7d9}0",
+        "%0\u{1d7d9}",
+    ] {
         assert_eq!(
             dec(bad, false).unwrap_err(),
             (ErrorClass::CannotDecodeUrl, bad.to_owned()),

@@ -26,7 +26,7 @@ use super::{
     BinOperand, BinSink, Slot, StrOperand, StrSink, all_valid, bool_result, check_offset, reserve,
     row_count,
 };
-use crate::cast::text::java_digit;
+use crate::cast::text::utf16_digit;
 use crate::error::KernelError;
 use crate::number_format::unhex_text;
 
@@ -1077,7 +1077,7 @@ pub fn url_encode<O: OffsetSizeTrait>(
 fn url_escape_byte(hi: char, lo: char) -> Option<u8> {
     let digit = |c: char| match c {
         '0'..='9' | 'a'..='f' | 'A'..='F' => c.to_digit(16),
-        c => java_digit(c).map(u32::from),
+        c => utf16_digit(c).map(u32::from),
     };
     let value = match hi {
         '+' => digit(lo)?,
