@@ -115,7 +115,8 @@ pub(crate) const fn projection(mode: Option<ViewSchemaMode>) -> ReadProjection {
 /// ([`repeats_names`]), so the stored types and comments still apply; once the query is analyzed, [`check_read`]
 /// finds each stored column by name and ordinal (Spark's `GetViewColumnByNameAndOrdinal`) and [`apply_renames`]
 /// replaces that rename by one of the query's current width, so a base table whose columns changed order or count
-/// reads as Spark reads it.
+/// reads as Spark reads it. Not yet for the views a SQL function's body reads (`sql_functions.rs` inlines them
+/// without the checks): those are still read by position (open item in `ops/queue-opus-b2.md`).
 pub(crate) fn read_names(
     input: Arc<LogicalPlan>,
     query: &[String],
@@ -392,6 +393,7 @@ pub(crate) fn check_read(
             .into());
         }
         let ordinal = ordinals.entry(key).or_insert(0);
+        // Unreachable: `candidates` holds `expected` columns and `ordinal` counts this name's earlier ones.
         let Some(&(position, column)) = candidates.get(*ordinal) else {
             return Err(krishiv_common::error::InternalError {
                 message: format!("view column `{name}` has no ordinal {ordinal}"),

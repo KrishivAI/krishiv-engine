@@ -532,7 +532,7 @@ fn the_krishiv_key_turns_the_binding_mode_off_too() {
 /// A view whose query repeats a name (only under a view column list) reads each stored column by name and ordinal
 /// (Spark's `GetViewColumnByNameAndOrdinal`), in every mode: a base table that reorders its columns or gains one
 /// keeps every label on its column; one that loses a repeat is `INCOMPATIBLE_VIEW_SCHEMA_CHANGE`. Spark 4.2.0
-/// local run: krishiv-internal `research/spark/view-repeated-names/probe6.{py,out}`.
+/// local runs: krishiv-internal `research/spark/view-repeated-names/probe6.{py,out}` and `probe7.{py,out}`.
 #[test]
 fn a_repeated_name_view_reads_by_name_and_ordinal() {
     let dir = tempfile::tempdir().unwrap();
@@ -605,4 +605,80 @@ fn a_repeated_name_view_reads_by_name_and_ordinal() {
     run(&s, "CREATE VIEW outer_v AS SELECT d, b FROM v3");
     assert_eq!(rows(&s, "SELECT * FROM outer_v"), ["4|2"]);
     assert_eq!(rows(&s, "SELECT (SELECT max(b) FROM v3) AS m"), ["2"]);
+}
+
+/// probe7: a repeated-name view read twice, through a CTE read twice, in subqueries, under a repeated-name view, and
+/// with `spark.sql.legacy.viewSchemaBindingMode` off, reads by name and ordinal each time.
+#[test]
+fn every_read_of_a_repeated_name_view_goes_by_name_and_ordinal() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let table = |name: &str, cols: &str, row: &str| {
+        run(&s, &format!("DROP TABLE IF EXISTS {name}"));
+        run(&s, &format!("CREATE TABLE {name} ({cols}) USING parquet"));
+        run(&s, &format!("INSERT INTO {name} VALUES {row}"));
+    };
+    table("t1", "id INT, x INT", "(1, 10)");
+    table("t2", "id INT, y INT", "(2, 20)");
+    run(
+        &s,
+        "CREATE VIEW v (p, q, r, s) AS SELECT * FROM t1 CROSS JOIN t2",
+    );
+    run(
+        &s,
+        "CREATE VIEW w (a, b, c, d, e) AS SELECT v.p AS k, v.q AS k, v.r AS k, v.s, 0 AS k FROM v",
+    );
+    table("t1", "x INT, id INT", "(11, 1)");
+    assert_eq!(rows(&s, "SELECT * FROM v a, v b"), ["1|11|2|20|1|11|2|20"]);
+    assert_eq!(
+        rows(&s, "WITH c AS (SELECT * FROM v) SELECT * FROM c, c c2"),
+        ["1|11|2|20|1|11|2|20"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT (SELECT max(q) FROM v) AS m, CAST(EXISTS (SELECT 1 FROM v WHERE q = 11) AS INT) AS e"
+        ),
+        ["11|1"]
+    );
+    assert_eq!(rows(&s, "SELECT * FROM w"), ["1|11|2|20|0"]);
+    table("t1", "id INT, x INT, z INT", "(1, 12, 99)");
+    assert_eq!(rows(&s, "SELECT * FROM w"), ["1|12|2|20|0"]);
+    run(&s, "SET spark.sql.legacy.viewSchemaBindingMode = false");
+    table("t1", "id INT, x INT", "(1, 10)");
+    run(
+        &s,
+        "CREATE OR REPLACE VIEW lv (p, q, r, s) AS SELECT * FROM t1 CROSS JOIN t2",
+    );
+    assert_eq!(rows(&s, "SELECT * FROM lv"), ["1|10|2|20"]);
+    table("t1", "x INT, id INT", "(13, 1)");
+    assert_eq!(rows(&s, "SELECT * FROM lv"), ["1|13|2|20"]);
+    run(&s, "SET spark.sql.legacy.viewSchemaCompensation = false");
+    assert_eq!(rows(&s, "SELECT * FROM lv"), ["1|13|2|20"]);
+}
+
+/// KNOWN GAP (krishiv-internal `ops/queue-opus-b2.md`, "views in SQL function bodies"): a view a SQL function's
+/// body reads is inlined without the schema binding checks, so a repeated-name view there is still read by
+/// position. Spark (probe7) returns 11 here, and 12 after `t1` gains a column, where this creation fails. This
+/// test pins the gap so its fix updates it.
+#[test]
+fn a_repeated_name_view_in_a_function_body_is_still_read_by_position() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t1 (id INT, x INT) USING parquet");
+    run(&s, "CREATE TABLE t2 (id INT, y INT) USING parquet");
+    run(&s, "INSERT INTO t2 VALUES (2, 20)");
+    run(
+        &s,
+        "CREATE VIEW v (p, q, r, s) AS SELECT * FROM t1 CROSS JOIN t2",
+    );
+    run(&s, "DROP TABLE t1");
+    run(&s, "CREATE TABLE t1 (x INT, id INT) USING parquet");
+    run(&s, "INSERT INTO t1 VALUES (11, 1)");
+    run(
+        &s,
+        "CREATE TEMPORARY FUNCTION tf() RETURNS INT RETURN SELECT max(q) FROM v",
+    );
+    assert_eq!(rows(&s, "SELECT tf()"), ["1"]);
+    assert_eq!(rows(&s, "SELECT max(q) FROM v"), ["11"]);
 }
