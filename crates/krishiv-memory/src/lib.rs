@@ -202,6 +202,14 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     ) -> BoxFuture<'a, Result<(), MemoryError>> {
         Box::pin(std::future::ready(self.try_reserve(id, bytes)))
     }
+    /// Asks the idle consumers of `id`'s query ([`Spillable::idle`]) to
+    /// spill up to `bytes`, largest first, and resolves to the bytes they
+    /// freed once every request completed. Pools without arbitration free
+    /// nothing.
+    fn spill_idle(&self, id: ConsumerId, bytes: usize) -> BoxFuture<'_, usize> {
+        let _ = (id, bytes);
+        Box::pin(std::future::ready(0))
+    }
     /// Returns up to `bytes` reserved by `id` (clamped to what it holds).
     fn release(&self, id: ConsumerId, bytes: usize);
     /// Moves `bytes` held by consumer `from` to consumer `to` of this pool

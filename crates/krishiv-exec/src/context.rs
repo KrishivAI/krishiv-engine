@@ -73,6 +73,10 @@ pub struct ExecConfig {
     /// (`krishiv.exec.join.sharedBroadcastBytes`; `None`: no cap beyond the
     /// query's memory). A build past it falls back to one per task.
     pub shared_broadcast_bytes: Option<usize>,
+    /// How long a finished hash join build waits for its probe before the
+    /// arbitrator asks it to spill ahead of running consumers
+    /// (`krishiv.exec.join.idleSpillAfter`).
+    pub join_idle_spill_after: Duration,
     /// Every pipeline runs on one driver, so the order of merges and of the
     /// output rows does not depend on how the drivers interleave
     /// (`krishiv.deterministicOrder`).
@@ -95,6 +99,7 @@ impl Default for ExecConfig {
             sort_hash_buckets: true,
             join_merge_buffer_bytes: 0,
             shared_broadcast_bytes: None,
+            join_idle_spill_after: Duration::from_secs(1),
             deterministic_order: false,
         }
     }
@@ -136,6 +141,10 @@ impl ExecConfig {
             .and_then(krishiv_common::config::ConfigValue::as_size)
             .and_then(|n| usize::try_from(n).ok())
             .filter(|n| *n > 0);
+        let join_idle_spill_after = config
+            .get(&krishiv_common::config::EXEC_JOIN_IDLE_SPILL_AFTER)
+            .and_then(krishiv_common::config::ConfigValue::as_duration)
+            .unwrap_or(Duration::from_secs(1));
         let seed = config
             .get(&EXEC_SEED)
             .and_then(krishiv_common::config::ConfigValue::as_int)
@@ -154,6 +163,7 @@ impl ExecConfig {
             join_radix_bits,
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
+            join_idle_spill_after,
             ..Self::default()
         }
     }
