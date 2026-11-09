@@ -522,3 +522,53 @@ fn merge_schema_matches_names_without_regard_to_case_by_default() {
     s.conf().set("spark.sql.caseSensitive", "true").unwrap();
     assert_eq!(read(&s), 2);
 }
+
+/// Spark 4.2.0 `sql-on-files`: an empty location is `INVALID_EMPTY_LOCATION` (not the working directory), and an
+/// `http(s)` one is `FAILED_READ_FILE.UNSUPPORTED_FILE_SYSTEM` naming Hadoop's HTTP file system and `listStatus`.
+#[test]
+fn sql_on_files_refuses_an_empty_location_and_http() {
+    let s = Session::new().unwrap();
+    let err = |q: &str| block_on(async { s.sql(q).await?.collect().await }).unwrap_err();
+    for format in ["parquet", "orc", "csv", "json"] {
+        let e = err(&format!("SELECT * FROM {format}.``"));
+        assert_eq!(
+            e.error_class().name(),
+            "INVALID_EMPTY_LOCATION",
+            "{format}: {e}"
+        );
+        assert_eq!(e.sql_state(), Some("42K05"));
+    }
+    let url = "https://raw.githubusercontent.com/apache/spark/refs/heads/master/examples/src/main/resources/employees.json";
+    let e = err(&format!("SELECT * FROM json.`{url}`"));
+    assert_eq!(
+        e.error_class().name(),
+        "FAILED_READ_FILE.UNSUPPORTED_FILE_SYSTEM",
+        "{e}"
+    );
+    assert_eq!(e.sql_state(), Some("KD001"));
+    let param = |n: &str| {
+        e.message_parameters()
+            .iter()
+            .find(|(k, _)| *k == n)
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(
+        param("fileSystemClass").as_deref(),
+        Some("org.apache.hadoop.fs.http.HttpsFileSystem")
+    );
+    assert_eq!(param("method").as_deref(), Some("listStatus"));
+    assert_eq!(param("path").as_deref(), Some(url));
+    let e = err("SELECT * FROM csv.`http://example.com/a.csv`");
+    assert_eq!(
+        param_of(&e, "fileSystemClass"),
+        "org.apache.hadoop.fs.http.HttpFileSystem"
+    );
+}
+
+fn param_of(e: &krishiv_common::error::KrishivError, name: &str) -> String {
+    e.message_parameters()
+        .iter()
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default()
+}
