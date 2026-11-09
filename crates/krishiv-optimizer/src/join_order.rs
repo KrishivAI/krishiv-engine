@@ -1214,7 +1214,28 @@ impl Graph {
             Enumerator::DpSub if n <= settings.dp_limit.min(MAX_DP_LIMIT) => {
                 let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
                 let rows_of = |s: Set| self.rows_of(&bit(s));
-                let width_of = |s: Set| self.width_of(&bit(s));
+                // Each column as masks, so a subset's width is one flat pass:
+                // (its input, whether read above, inputs its conjuncts touch).
+                let cols: Vec<(Set, bool, Set, f64)> =
+                    self.widths.as_ref().map_or_else(Vec::new, |w| {
+                        w.iter()
+                            .enumerate()
+                            .flat_map(|(i, cs)| {
+                                cs.iter().map(move |c| {
+                                    let need = c.preds.iter().fold(0, |m: Set, &k| {
+                                        self.preds[k].on.iter().fold(m, |m, &x| m | (1 << x))
+                                    });
+                                    (1 << i, c.above, need, c.width)
+                                })
+                            })
+                            .collect()
+                    });
+                let width_of = |s: Set| {
+                    cols.iter()
+                        .filter(|&&(m, above, need, _)| s & m != 0 && (above || need & !s != 0))
+                        .map(|c| c.3)
+                        .sum::<f64>()
+                };
                 let result_cost = |r: f64| self.result_cost(r);
                 let tie_result = |r: f64| self.tie_result(r);
                 let tie_bytes = |r: f64, w: f64| self::rows(r * (ROW_BYTES + w));
