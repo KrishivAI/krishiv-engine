@@ -25,14 +25,14 @@
 //! last chunk's reader is done with them.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock, Weak};
 
-use arrow_array::RecordBatch;
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_memory::{
-    ConsumerHandle, Reservation, SpillFile, SpillReader, SpillScope, SpillSignal, SpillWriter,
+    ConsumerHandle, Reservation, SpillError, SpillFile, SpillReader, SpillScope, SpillSignal,
+    SpillWriter,
 };
 use krishiv_types::batch::{Batch, Weights};
 
@@ -50,6 +50,9 @@ use crate::sync::{Event, Mutex, lock};
 
 mod disk;
 mod parallel;
+mod parts;
+#[cfg(test)]
+pub(super) use parts::{HANDBACKS, PANICS};
 
 /// Groups per state batch when spilling and merging (one finalize step).
 const CHUNK: usize = 1024;
@@ -109,6 +112,27 @@ struct Counters {
     disk_tasks: AtomicU64,
     /// Most disk tasks running at once.
     disk_peak: AtomicU64,
+    /// Most threads that wrote spill runs at once: one run's partition
+    /// files (`sink/parts.rs`), or the final phase's task runs
+    /// (`sink/parallel.rs`). Reported as `spill_writers` when above 1.
+    spill_writers: AtomicU64,
+    /// Work an extra writer handed back for want of scratch: a partition of
+    /// one run (`sink/parts.rs`, written by the calling thread) or a
+    /// final-phase task with the files it finished (`sink/parallel.rs`,
+    /// resumed by the next writer). Reported as `spill_handbacks` when set.
+    spill_handbacks: AtomicU64,
+    /// Final-phase task runs an extra writer finished (`sink/parallel.rs`).
+    /// Reported as `spill_helper_runs` when set.
+    spill_helper_runs: AtomicU64,
+    /// Nanoseconds writers spent writing spill runs (`write_parts`, and
+    /// each writer's time on a run of `write_run_sources`), summed over
+    /// writers: with several writing at once it can exceed the elapsed
+    /// time. Reported as `spill_write_ns` when set.
+    spill_write_ns: AtomicU64,
+    /// The longest single write attempt on a run (a whole run, or one
+    /// writer's share of a resumed one), in nanoseconds. Reported as
+    /// `spill_write_max_ns` when set.
+    spill_write_max_ns: AtomicU64,
     /// Times a disk task was refused memory while others ran (it waited);
     /// a task refused several times counts each time, so this counts
     /// stalls, not tasks (review m5). Reported as `disk_stalls`.
@@ -127,6 +151,17 @@ struct Counters {
 
 fn bump(c: &AtomicU64, n: u64) {
     c.fetch_add(n, AtomicOrdering::Relaxed);
+}
+
+/// The error of a spill writer thread that panicked, with the text of the
+/// panic's payload (a `&str` or `String`; empty otherwise).
+pub(super) fn writer_panicked(p: &(dyn std::any::Any + Send)) -> KrishivError {
+    let what = p
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    internal(format!("a spill writer thread panicked: {what}"))
 }
 
 /// A hash-aggregation pipeline breaker (see the [module docs](super)).
@@ -473,7 +508,7 @@ impl Spiller {
         let parts = table.ids_by_partition(level, from);
         let chunk = spill_chunk(table.memory_size(), table.len());
         self.write_parts(
-            parts,
+            &parts,
             chunk,
             table,
             &|ids| table.state_batch(ids),
@@ -485,11 +520,24 @@ impl Spiller {
     /// partition files at `level`: per partition file, the sources in
     /// order (their merge order; blocking I/O). The sources mix driver
     /// partitions, so the run keeps its insertion order.
+    ///
+    /// `files` holds the run's partition files so far: partitions already
+    /// written are skipped, so a run that stopped (its writer refused) is
+    /// resumed by another writer without writing or counting a file twice.
+    /// Each file's writer comes from `writer`; the inner error is a
+    /// writer's (a refused scratch among them: the partition being written
+    /// is dropped, the finished ones stay in `files`). `stop` set by another
+    /// writer's failure ends the run at its next chunk (an error, which
+    /// loses to that failure).
     fn write_run_sources(
         &self,
         sources: &[(&RowTable, &dyn Fn(u32) -> bool)],
         level: u32,
-    ) -> Result<Run> {
+        writer: &dyn Fn() -> std::result::Result<SpillWriter, SpillError>,
+        files: &mut [Option<SpillFile>],
+        stop: &AtomicBool,
+    ) -> Result<std::result::Result<(), SpillError>> {
+        let started = std::time::Instant::now();
         let per: Vec<Vec<Vec<u32>>> = sources
             .iter()
             .map(|(t, keep)| {
@@ -500,54 +548,45 @@ impl Spiller {
                 parts
             })
             .collect();
-        let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
-        for (p, file) in files.iter_mut().enumerate() {
-            if per.iter().all(|parts| parts[p].is_empty()) {
-                continue;
-            }
-            let mut writer = self.run_writer()?;
-            for ((t, _), parts) in sources.iter().zip(&per) {
-                let chunk = spill_chunk(t.memory_size(), t.len());
-                for ids in row_chunks(&parts[p], chunk, t) {
-                    self.query.check_cancelled()?;
-                    writer
-                        .write(&Batch::new(t.state_batch(ids)?))
-                        .map_err(KrishivError::from)?;
+        let outcome = (|| {
+            for (p, file) in files.iter_mut().enumerate() {
+                if file.is_some() || per.iter().all(|parts| parts[p].is_empty()) {
+                    continue;
                 }
+                let mut w = match writer() {
+                    Ok(w) => w,
+                    Err(e) => return Ok(Err(e)),
+                };
+                for ((t, _), parts) in sources.iter().zip(&per) {
+                    let chunk = spill_chunk(t.memory_size(), t.len());
+                    for ids in row_chunks(&parts[p], chunk, t) {
+                        self.query.check_cancelled()?;
+                        if stop.load(AtomicOrdering::Acquire) {
+                            return Err(internal(
+                                "stopped: another spill writer failed".to_owned(),
+                            ));
+                        }
+                        if let Err(e) = w.write(&Batch::new(t.state_batch(ids)?)) {
+                            return Ok(Err(e));
+                        }
+                    }
+                }
+                *file = Some(self.finish(w)?);
             }
-            *file = Some(self.finish(writer)?);
-        }
-        bump(&self.counters.spill_runs, 1);
-        Ok(Run::new(files, u32::MAX))
+            Ok(Ok(()))
+        })();
+        self.time_run(started);
+        outcome
     }
 
-    /// Writes the state batches of the groups of each partition (`parts`,
-    /// in chunks of `chunk`, of one radix partition each for a row table)
-    /// as one run.
-    fn write_parts(
-        &self,
-        parts: Vec<Vec<u32>>,
-        chunk: usize,
-        table: &Table,
-        state: &dyn Fn(&[u32]) -> Result<RecordBatch>,
-        partition: u32,
-    ) -> Result<Run> {
-        let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
-        for (p, ids) in parts.into_iter().enumerate() {
-            if ids.is_empty() {
-                continue;
-            }
-            let mut writer = self.run_writer()?;
-            for chunk in chunks(&ids, chunk, table) {
-                self.query.check_cancelled()?;
-                writer
-                    .write(&Batch::new(state(chunk)?))
-                    .map_err(KrishivError::from)?;
-            }
-            files[p] = Some(self.finish(writer)?);
-        }
-        bump(&self.counters.spill_runs, 1);
-        Ok(Run::new(files, partition))
+    /// Adds one writer's time on a run, since `started`, to
+    /// `spill_write_ns` and `spill_write_max_ns`.
+    pub(super) fn time_run(&self, started: std::time::Instant) {
+        let ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        bump(&self.counters.spill_write_ns, ns);
+        self.counters
+            .spill_write_max_ns
+            .fetch_max(ns, AtomicOrdering::Relaxed);
     }
 
     /// Writes `chunks` of an in-memory result to one output file
@@ -715,25 +754,20 @@ struct Final {
     chunks: usize,
 }
 
-/// An in-memory result: its tables, read in `chunks` (table, positions),
-/// and the reservations that hold them.
-struct InMemory {
-    tables: Vec<Table>,
-    chunks: Vec<(usize, std::ops::Range<usize>)>,
+/// One piece of an in-memory result (a row table's radix partition, or a
+/// whole key table) with its share of the result's reservation: it goes,
+/// and its memory with it, once the reader of its last chunk is done (a
+/// piece without chunks, an empty key table, once the result goes).
+struct Piece {
+    table: Table,
     held: Vec<Reservation>,
 }
 
-impl InMemory {
-    fn batch(&self, chunk: usize) -> Result<Batch> {
-        let (t, range) = self
-            .chunks
-            .get(chunk)
-            .ok_or_else(|| internal("aggregate chunk out of range".to_owned()))?;
-        let t = self
-            .tables
-            .get(*t)
-            .ok_or_else(|| internal("aggregate chunk without its table".to_owned()))?;
-        Ok(Batch::new(t.output_batch(&t.ids(range.clone()))?))
+impl Piece {
+    /// The output of the groups at positions `range`.
+    fn batch(&self, range: std::ops::Range<usize>) -> Result<Batch> {
+        let t = &self.table;
+        Ok(Batch::new(t.output_batch(&t.ids(range))?))
     }
 
     fn bytes(&self) -> usize {
@@ -741,10 +775,66 @@ impl InMemory {
     }
 }
 
+/// An in-memory result: its pieces, read in `chunks` (piece, positions)
+/// in order. A piece leaves its slot when its last chunk is claimed, so
+/// what readers have copied out stops counting against the pool as they
+/// go, not only once the whole result is read. The slot locks are not
+/// contended: slots are taken only by `claim` under the output's state
+/// lock, and the spill job reads them while that state is `Spilling`.
+struct InMemory {
+    pieces: Vec<Mutex<Option<Arc<Piece>>>>,
+    chunks: Vec<(usize, std::ops::Range<usize>)>,
+}
+
+impl InMemory {
+    /// The piece and positions of `chunk`; with `take`, the piece leaves
+    /// its slot if this is its last chunk.
+    fn piece(&self, chunk: usize, take: bool) -> Result<(Arc<Piece>, std::ops::Range<usize>)> {
+        let (p, range) = self
+            .chunks
+            .get(chunk)
+            .ok_or_else(|| internal("aggregate chunk out of range".to_owned()))?;
+        let slot = self
+            .pieces
+            .get(*p)
+            .ok_or_else(|| internal("aggregate chunk without its piece".to_owned()))?;
+        let mut slot = lock(slot);
+        let piece = if take && self.ends_piece(chunk) {
+            slot.take()
+        } else {
+            slot.clone()
+        };
+        let piece = piece.ok_or_else(|| internal("aggregate chunk of a freed piece".to_owned()))?;
+        Ok((piece, range.clone()))
+    }
+
+    /// Whether `chunk` is the last of its piece (a piece's chunks are
+    /// contiguous).
+    fn ends_piece(&self, chunk: usize) -> bool {
+        let piece = self.chunks.get(chunk).map(|(p, _)| *p);
+        self.chunks.get(chunk + 1).map(|(p, _)| *p) != piece
+    }
+
+    /// Reads `chunk`, an unread one (its piece is still in its slot).
+    fn batch(&self, chunk: usize) -> Result<Batch> {
+        let (piece, range) = self.piece(chunk, false)?;
+        piece.batch(range)
+    }
+
+    /// The bytes of the pieces not yet handed to a reader.
+    fn bytes(&self) -> usize {
+        self.pieces
+            .iter()
+            .filter_map(|slot| lock(slot).as_ref().map(|p| p.bytes()))
+            .sum()
+    }
+}
+
 /// Where the source side reads.
 enum Out {
-    /// In memory; chunks `next..` are unread. Readers share the tables,
-    /// which go (with their memory) once the last chunk's reader is done.
+    /// In memory; chunks `next..` are unread. Readers share the pieces,
+    /// each of which goes (with its memory) once the reader of its last
+    /// chunk is done.
     Memory { mem: Arc<InMemory>, next: usize },
     /// The unread chunks are being written to spill files.
     Spilling,
@@ -763,7 +853,7 @@ enum Out {
 
 /// What a reader got from [`Output::claim`].
 enum Claim {
-    Chunk(Arc<InMemory>, usize),
+    Chunk(Arc<Piece>, std::ops::Range<usize>),
     /// A file, its reader's frames reserved (`true`) or to be reserved
     /// through arbitration (`false`: the only reader).
     File(SpillFile, bool),
@@ -813,10 +903,17 @@ impl Output {
     /// `consumer`.
     fn claim(&self, finished: bool, consumer: &Arc<ConsumerHandle>) -> Claim {
         let mut state = lock(&self.state);
-        let (mem, chunk) = match &mut *state {
+        let (claimed, last) = match &mut *state {
             Out::Memory { mem, next } => {
+                let chunk = *next;
                 *next += 1;
-                (Arc::clone(mem), *next - 1)
+                let last = chunk + 1 >= mem.chunks.len();
+                let claimed = (chunk < mem.chunks.len()).then(|| mem.piece(chunk, true));
+                if !last && mem.ends_piece(chunk) {
+                    // A piece left: only the rest is spillable.
+                    self.set_spillable(mem.bytes());
+                }
+                (claimed, last)
             }
             Out::Spilling => return Claim::Wait,
             Out::Files { files, active } => {
@@ -848,21 +945,21 @@ impl Output {
             Out::Done => return Claim::Done,
             Out::Failed(e) => return Claim::Failed(e.clone()),
         };
-        if chunk + 1 >= mem.chunks.len() {
-            // The last chunk: the readers' clones are all that is left.
+        if last {
+            // The last chunk: the readers' pieces are all that is left.
             *state = Out::Done;
             self.set_spillable(0);
         }
-        if chunk < mem.chunks.len() {
-            Claim::Chunk(mem, chunk)
-        } else {
-            Claim::Done
+        match claimed {
+            Some(Ok((piece, range))) => Claim::Chunk(piece, range),
+            Some(Err(e)) => Claim::Failed(e),
+            None => Claim::Done,
         }
     }
 }
 
 impl SpillUnread for Output {
-    fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>> {
+    fn spill_unread(self: Arc<Self>, _target: usize) -> BoxFuture<'static, Result<usize>> {
         Box::pin(async move {
             let Some((_, s)) = &self.spill else {
                 return Ok(0);
@@ -894,6 +991,11 @@ impl SpillUnread for Output {
             let groups = ranges(from..mem.chunks.len(), self.executor.parallelism());
             let query = Arc::clone(&s.query);
             let guard = query.blocking_started();
+            // Until the memory written is freed, it counts as about to be released,
+            // so another driver's round that cannot spill waits for it instead of
+            // failing (`ConsumerHandle::spilling`). No arbitration inside: the
+            // writes run on the blocking pool, their scratch a sync grow.
+            let _writing = s.consumer.spilling();
             #[cfg(test)]
             let gate = self.gate.clone();
             let written = run_blocking(&*self.executor, move || {
@@ -1012,8 +1114,46 @@ fn reserve_to(r: &mut Reservation, want: usize) -> Result<(), usize> {
     Ok(())
 }
 
+/// Up to `bytes` taken from the end of `from`: whole reservations, then a
+/// split of the next one.
+fn take_bytes(from: &mut Vec<Reservation>, mut bytes: usize) -> Vec<Reservation> {
+    let mut out = Vec::new();
+    while bytes > 0 {
+        let Some(r) = from.last_mut() else { break };
+        if r.size() <= bytes {
+            bytes -= r.size();
+            out.extend(from.pop());
+        } else {
+            out.push(r.split(bytes));
+            bytes = 0;
+        }
+    }
+    out
+}
+
 fn shrink_to(r: &mut Reservation, keep: usize) {
     r.shrink(r.size().saturating_sub(keep));
+}
+
+/// Moves the combined tables' bytes to the spilling driver's consumer
+/// (another driver's, combined into the global state, without passing
+/// through the pool) and marks that consumer as writing until the returned
+/// guard drops: until the tables are freed, their bytes count as about to
+/// be released, so another driver's round that cannot spill waits for them
+/// instead of failing (`ConsumerHandle::spilling`). Take it only for a
+/// write with no arbitration inside (a blocking job). A table whose
+/// transfer is refused keeps its consumer and is freed all the same.
+fn charged_to_writer(
+    tables: &mut [(u32, Table, Reservation)],
+    ctx: &TaskContext,
+) -> krishiv_memory::SpillWriting {
+    let own = ctx.consumer().consumer();
+    for (_, _, r) in tables.iter_mut() {
+        if r.consumer() != own.id() {
+            let _ = r.transfer_to(own);
+        }
+    }
+    own.spilling()
 }
 
 /// Releases the headroom of `r` for a spill file's scratch memory (see
@@ -1090,14 +1230,17 @@ impl HashAggregate {
             return None;
         }
         inner.busy = true;
-        let tables = std::mem::take(&mut inner.tables);
+        let mut tables = std::mem::take(&mut inner.tables);
         let merged = std::mem::take(&mut inner.merged);
+        let writing = charged_to_writer(&mut tables, ctx);
         Some(Box::new(move || {
             let mut runs = Vec::new();
             for (i, (p, t, mut r)) in tables.into_iter().enumerate() {
                 lend_headroom(&mut r);
                 runs.push(s.write_run(&t, if i == 1 { merged } else { 0 }, 0, p)?);
             }
+            // Every table's memory is back in the pool.
+            drop(writing);
             Ok(Box::new(move |inner: &mut Inner| {
                 inner.disk = true;
                 // Runs merge grouped by driver partition (stable, so
@@ -1192,9 +1335,10 @@ impl HashAggregate {
         Ok(Step::Yield)
     }
 
-    /// Publishes an in-memory result: `tables` read in chunks of a batch
-    /// (a row table's within one radix partition, whose states are one
-    /// partition's arrays), held by `held`.
+    /// Publishes an in-memory result: `tables`, held by `held`, in pieces
+    /// freed as they are read (a row table's radix partitions, moved out
+    /// without its index, each one partition's arrays; a key table whole),
+    /// each read in chunks of a batch.
     fn finish_memory(
         &self,
         g: &Global,
@@ -1203,30 +1347,43 @@ impl HashAggregate {
         held: Vec<Reservation>,
     ) -> Result<()> {
         let batch = ctx.query().config().batch_size.max(1);
-        let mut chunks = Vec::new();
-        for (i, t) in tables.iter().enumerate() {
-            let mut start = 0;
-            for len in t.part_lens() {
-                let end = start + len;
-                chunks.extend(
-                    (start..end)
-                        .step_by(batch)
-                        .map(|s| (i, s..(s + batch).min(end))),
-                );
-                start = end;
+        let mut pieces = Vec::new();
+        for t in tables {
+            match t {
+                Table::Rows(mut t) => {
+                    let ranges: Vec<_> = (0..t.part_count())
+                        .filter(|&p| t.part_len(p) > 0)
+                        .map(|p| p..p + 1)
+                        .collect();
+                    // What stays in `t` (its index, empty partitions) is
+                    // dropped here; its bytes go with the rest of `held`.
+                    pieces.extend(t.split_parts(&ranges).into_iter().map(Table::Rows));
+                }
+                keys @ Table::Keys(_) => pieces.push(keys),
             }
         }
-        self.publish_memory(g, ctx, tables, chunks, held)
+        let mut chunks = Vec::new();
+        for (i, t) in pieces.iter().enumerate() {
+            let len = t.len();
+            chunks.extend(
+                (0..len)
+                    .step_by(batch)
+                    .map(|s| (i, s..(s + batch).min(len))),
+            );
+        }
+        self.publish_memory(g, ctx, pieces, chunks, held)
     }
 
-    /// Publishes an in-memory result read in `chunks` (table, positions).
-    /// With a spill directory the result gets a consumer of its own whose
-    /// hook spills the unread chunks on request ([`crate::output_spill`]).
+    /// Publishes an in-memory result read in `chunks` (piece, positions)
+    /// of `pieces`, each holding its memory's share of `held` (the rest is
+    /// released). With a spill directory the result gets a consumer of its
+    /// own whose hook spills the unread chunks on request
+    /// ([`crate::output_spill`]).
     fn publish_memory(
         &self,
         g: &Global,
         ctx: &TaskContext,
-        tables: Vec<Table>,
+        pieces: Vec<Table>,
         chunks: Vec<(usize, std::ops::Range<usize>)>,
         mut held: Vec<Reservation>,
     ) -> Result<()> {
@@ -1242,11 +1399,15 @@ impl HashAggregate {
             None => None,
         };
         let count = chunks.len();
-        let mem = Arc::new(InMemory {
-            tables,
-            chunks,
-            held,
-        });
+        let pieces = pieces
+            .into_iter()
+            .map(|table| {
+                let held = take_bytes(&mut held, table.memory_size());
+                Mutex::new(Some(Arc::new(Piece { table, held })))
+            })
+            .collect();
+        drop(held);
+        let mem = Arc::new(InMemory { pieces, chunks });
         let bytes = mem.bytes();
         let out = Arc::new(Output {
             state: Mutex::new(Out::Memory { mem, next: 0 }),
@@ -1483,7 +1644,7 @@ impl Sink for HashAggregate {
                 return Ok(0);
             };
             let g = global(&l.global)?;
-            let combined = {
+            let mut combined = {
                 let mut inner = lock(&g.inner);
                 g.combined.store(0, AtomicOrdering::Relaxed);
                 std::mem::take(&mut inner.tables)
@@ -1507,6 +1668,11 @@ impl Sink for HashAggregate {
             let own_partition = l.partition;
             // The table spilled is part of this driver's map-task report.
             let mut report = l.exchange.as_ref().map(|_| ExchangeStats::new(PARTS));
+            // Until the memory written is freed, it counts as about to be released,
+            // so another driver's round that cannot spill waits for it instead of
+            // failing. No arbitration inside: the writes run on the blocking pool,
+            // their scratch a sync grow.
+            let _writing = charged_to_writer(&mut combined, ctx);
             let (runs, report) = ctx
                 .run_blocking(move || {
                     let mut runs = Vec::new();
@@ -1605,6 +1771,29 @@ impl Sink for HashAggregate {
                 crate::metrics::Metric::Text("rows".to_owned()),
             ));
         }
+        let writers = c.spill_writers.load(AtomicOrdering::Relaxed);
+        if writers > 1 {
+            out.push((
+                std::borrow::Cow::Borrowed("spill_writers"),
+                crate::metrics::Metric::Max(writers),
+            ));
+        }
+        let handbacks = c.spill_handbacks.load(AtomicOrdering::Relaxed);
+        if handbacks > 0 {
+            out.extend(crate::metrics::counts([("spill_handbacks", handbacks)]));
+        }
+        let helper_runs = c.spill_helper_runs.load(AtomicOrdering::Relaxed);
+        if helper_runs > 0 {
+            out.extend(crate::metrics::counts([("spill_helper_runs", helper_runs)]));
+        }
+        let write_ns = c.spill_write_ns.load(AtomicOrdering::Relaxed);
+        if write_ns > 0 {
+            out.extend(crate::metrics::counts([("spill_write_ns", write_ns)]));
+            out.push((
+                std::borrow::Cow::Borrowed("spill_write_max_ns"),
+                crate::metrics::Metric::Max(c.spill_write_max_ns.load(AtomicOrdering::Relaxed)),
+            ));
+        }
         let disk_tasks = c.disk_tasks.load(AtomicOrdering::Relaxed);
         if disk_tasks > 0 {
             out.extend(crate::metrics::counts([
@@ -1698,7 +1887,7 @@ impl Source for HashAggregate {
             loop {
                 let changed = out.changed.listen();
                 match out.claim(std::mem::take(&mut finished), &l.consumer) {
-                    Claim::Chunk(mem, chunk) => return mem.batch(chunk).map(Some),
+                    Claim::Chunk(piece, range) => return piece.batch(range).map(Some),
                     Claim::Done => return Ok(None),
                     Claim::Failed(e) => return Err(e),
                     Claim::File(file, reserved) => {

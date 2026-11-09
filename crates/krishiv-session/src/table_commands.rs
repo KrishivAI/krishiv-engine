@@ -479,10 +479,11 @@ impl Session {
         &self,
         v: &CreatePermanentView,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         if v.global && v.using.is_none() {
-            return self.create_global_temp_view(v, &env).await;
+            return self.create_global_temp_view(v, &env, ids).await;
         }
         let frozen_path = env.catalog.sql_path_snapshot();
         let frozen_namespace = env
@@ -536,10 +537,11 @@ impl Session {
             .get(query.span.start..query.span.end)
             .unwrap_or_default()
             .to_owned();
-        let plan = krishiv_sql::lower_with(
+        let plan = krishiv_sql::lower_identified(
             query,
             self.next_source_id(),
             self.parser_options().case_sensitive,
+            ids,
         )
         .map_err(|e| e.error)?;
         if let Some(temp) = crate::catalog::reads_temporary(
@@ -637,6 +639,7 @@ impl Session {
                 path: frozen_path,
                 query_columns,
                 schema_mode,
+                identifier_spans: crate::identifier_clause::spans_within(ids, query.span),
             }),
             layout: TableLayout::default(),
             column_stats_requested: false,
@@ -667,6 +670,7 @@ impl Session {
         &self,
         v: &CreatePermanentView,
         env: &QueryEnv,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let parts = crate::access::ddl_parts(&v.name, env)?;
         let (Some(query), [name]) = (&v.query, parts.as_slice()) else {
@@ -697,7 +701,7 @@ impl Session {
             query: query.clone(),
             span: v.span,
         };
-        self.create_temp_view(&view, true).await
+        self.create_temp_view(&view, true, ids).await
     }
 
     /// `CREATE TEMPORARY VIEW name (col type, ...) USING format [OPTIONS (...)]`: a read of the
@@ -806,6 +810,7 @@ impl Session {
                 source,
                 columns,
                 known: true,
+                permanent: false,
                 partitions: Some(Default::default()),
             },
         );
@@ -890,6 +895,7 @@ impl Session {
         &self,
         a: &AlterView,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let frozen_path = env.catalog.sql_path_snapshot();
@@ -925,10 +931,11 @@ impl Session {
                 schema_binding: None,
                 ..
             } => {
-                let plan = krishiv_sql::lower_with(
+                let plan = krishiv_sql::lower_identified(
                     query,
                     self.next_source_id(),
                     self.parser_options().case_sensitive,
+                    ids,
                 )
                 .map_err(|e| e.error)?;
                 if let Some(temp) = crate::catalog::reads_temporary(
@@ -964,6 +971,7 @@ impl Session {
                     path: frozen_path,
                     query_columns,
                     schema_mode,
+                    identifier_spans: crate::identifier_clause::spans_within(ids, query.span),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {
@@ -1300,6 +1308,7 @@ impl Session {
         &self,
         t: &CreateTable,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let warehouse = self.warehouse_dir()?;
@@ -1370,6 +1379,7 @@ impl Session {
             }
             .into());
         }
+        crate::access::refuse_secret_options(&t.options, original)?;
         let mut options = options_of(&t.options, original);
         let properties = options_of(&t.tblproperties, original);
         // A `path` option is the table's location, as in Spark.
@@ -1415,7 +1425,10 @@ impl Session {
             bucket: t.bucket.as_ref(),
         };
         match &t.as_query {
-            Some(query) => self.create_table_as(table, query, mode, &layout).await?,
+            Some(query) => {
+                self.create_table_as(table, query, mode, &layout, ids)
+                    .await?;
+            }
             None => {
                 table.columns = self.columns_of(t, original)?;
                 let mut typed = Vec::with_capacity(typed_partitions.len());
@@ -1675,11 +1688,13 @@ impl Session {
         query: &Query,
         mode: CreateMode,
         layout: &LayoutRequest<'_>,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<(), KrishivError> {
-        let plan = krishiv_sql::lower_with(
+        let plan = krishiv_sql::lower_identified(
             query,
             self.next_source_id(),
             self.parser_options().case_sensitive,
+            ids,
         )
         .map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
@@ -2174,11 +2189,12 @@ impl Session {
     /// a missing table, an unknown column or a column count mismatch in any clause writes nothing,
     /// as in Spark 4.2.0; the clauses are then written in order. Spark plans them as one statement,
     /// so a failure while one runs also leaves the others unwritten; here the clauses before it
-    /// stay written (`docs/known-differences.md`).
+    /// stay written (`docs/concepts/known-differences.md`).
     pub(crate) async fn exec_insert(
         &self,
         i: &Insert,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let clauses: Vec<InsertClause> = match &i.source {
             None => i.clauses.clone(),
@@ -2193,11 +2209,11 @@ impl Session {
                 self.table_for_write(&name, "INSERT", &env)?;
             }
             for clause in &clauses {
-                self.insert_clause(clause, original, true).await?;
+                self.insert_clause(clause, original, ids, true).await?;
             }
         }
         for clause in &clauses {
-            self.insert_clause(clause, original, false).await?;
+            self.insert_clause(clause, original, ids, false).await?;
         }
         self.empty_frame().await
     }
@@ -2207,6 +2223,7 @@ impl Session {
         &self,
         c: &InsertClause,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
         dry: bool,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
@@ -2234,10 +2251,11 @@ impl Session {
                 .iter()
                 .for_each(|r| scalar_subqueries(r, &mut subqueries));
             for query in &subqueries {
-                let plan = krishiv_sql::lower_with(
+                let plan = krishiv_sql::lower_identified(
                     query,
                     self.next_source_id(),
                     self.parser_options().case_sensitive,
+                    ids,
                 )
                 .map_err(|e| e.error)?;
                 DataFrame::new(self.clone(), Arc::clone(plan.root()))
@@ -2251,10 +2269,11 @@ impl Session {
                 );
             }
         }
-        let plan = krishiv_sql::lower_with(
+        let plan = krishiv_sql::lower_identified(
             &c.query,
             self.next_source_id(),
             self.parser_options().case_sensitive,
+            ids,
         )
         .map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
@@ -2622,7 +2641,7 @@ impl Session {
                 // Admitted before the drop: a controller that refuses the write, or a caller that
                 // gives up while it queues, must not have lost the old table. The write takes
                 // this admission instead of asking again.
-                let mut pre = Some(self.admit_query(&analysis.env).await?);
+                let mut pre = Some(self.admit_query(&analysis.env, false).await?);
                 let done = async {
                     self.drop_named_table(&name, &env, true).await?;
                     self.exec_write_v2(df, spec, V2Mode::Create, &mut pre).await

@@ -726,6 +726,7 @@ impl Planner<'_> {
                 | PlanNode::Filter { input, .. }
                 | PlanNode::Aggregate { input, .. }
                 | PlanNode::Sort { input, .. }
+                | PlanNode::Repartition { input, .. }
                 | PlanNode::Limit { input, .. }
                 | PlanNode::Offset { input, .. }
                 | PlanNode::SubqueryAlias { input, .. }

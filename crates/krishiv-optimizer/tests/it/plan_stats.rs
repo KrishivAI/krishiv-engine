@@ -952,3 +952,82 @@ mod ranges {
         }
     }
 }
+
+/// `col = <one value>` (study 26, E10): an aggregate output's distinct count
+/// is only the guess (its rows), and compared with an uncorrelated scalar
+/// subquery it is read as the rows, so about one row stays, not the
+/// default fifth (TPC-H q15's `total_revenue = (SELECT max(..))`). An
+/// expression that reads a column, and a literal (T166 section 2), keep the
+/// default over the guessed count.
+#[test]
+fn an_unknown_count_compared_with_one_value_keeps_about_one_row() {
+    // Ten groups: `m`'s count is the guess, 10.
+    let over = |pred: &str| {
+        filter(&format!(
+            "SELECT * FROM (SELECT b, sum(a) AS m FROM t GROUP BY b) g WHERE {pred}"
+        ))
+    };
+    let one = over("m = (SELECT max(a) FROM t)");
+    close(one.rows(), 1.0, "a scalar subquery");
+    assert_eq!(one.col("m").ndv, 1.0, "one value left");
+    assert_eq!(one.col("m").null_frac, 0.0, "= leaves no NULL");
+    // `a` is 10% NULL: `<=>` keeps those rows, which a NULL result matches.
+    let safe = filter("SELECT a FROM t WHERE a <=> (SELECT max(b) FROM t)");
+    assert!(safe.col("a").null_frac > 0.0, "<=> keeps the NULL rows");
+    close(
+        over("m <=> (SELECT max(a) FROM t)").rows(),
+        1.0,
+        "null-safe",
+    );
+    close(over("m = b + 1").rows(), 2.0, "an expression over a column");
+    close(over("m = 5").rows(), 2.0, "a literal over a guessed count");
+    // A known count divides as before.
+    close(
+        over("b = (SELECT max(b) FROM t)").rows(),
+        1.0,
+        "a known count",
+    );
+}
+
+/// `col IN (<one value>, ...)` (E10's follow-up, review item 5): a list
+/// whose elements are each one value (literals or uncorrelated subqueries)
+/// with at least one subquery keeps `k` of a guessed count's rows, as
+/// `col = <one value>` keeps one. A literal-only list and a list with an
+/// expression over a column keep the default over the guessed count.
+#[test]
+fn an_unknown_count_in_a_list_of_one_values_keeps_k_rows() {
+    // Ten groups: `m`'s count is the guess, 10; the default keeps 2.
+    let over = |pred: &str| {
+        filter(&format!(
+            "SELECT * FROM (SELECT b, sum(a) AS m FROM t GROUP BY b) g WHERE {pred}"
+        ))
+    };
+    let three =
+        over("m IN ((SELECT max(a) FROM t), (SELECT min(a) FROM t), (SELECT max(b) FROM t))");
+    close(three.rows(), 3.0, "three subqueries");
+    assert_eq!(three.col("m").ndv, 3.0, "three values left");
+    assert_eq!(three.col("m").null_frac, 0.0, "IN leaves no NULL");
+    close(
+        over("m IN (5, 6, (SELECT max(a) FROM t))").rows(),
+        3.0,
+        "literals and a subquery",
+    );
+    close(
+        over("m IN (5, 6, 7)").rows(),
+        2.0,
+        "literals over a guessed count",
+    );
+    close(
+        over("m IN (b + 1, 6, (SELECT max(a) FROM t))").rows(),
+        2.0,
+        "an expression over a column",
+    );
+    // A repeated literal is one value: `k` is 2.
+    let two = over("m IN (5L, 5L, (SELECT max(a) FROM t))");
+    close(two.rows(), 2.0, "a repeated literal");
+    assert_eq!(two.col("m").ndv, 2.0, "two values left");
+    // A known count divides by the distinct values too and keeps at most `k`.
+    let known = over("b IN (1, 1, (SELECT max(b) FROM t))");
+    close(known.rows(), 2.0, "a known count");
+    assert_eq!(known.col("b").ndv, 2.0, "two values left of a known count");
+}

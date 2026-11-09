@@ -655,6 +655,31 @@ fn columns_at_identifier_spans_are_marked() {
     assert_eq!(marked(&exprs[0]), Some(false));
 }
 
+/// A substituted name followed by field parts (`IDENTIFIER('c1').c2` is `` `c1`.c2 ``) is marked:
+/// Spark 4.2.0 names it `c1.c2`. A column that only contains the span, or starts inside it, is not.
+#[test]
+fn a_substituted_name_with_fields_after_it_is_marked() {
+    let sql = "SELECT `c1`.c2, `c1`.c2.c3, x.`c1` FROM t";
+    let query = krishiv_sql::parse_query(sql, &ParserOptions::default()).unwrap();
+    let spans = [
+        krishiv_sql::ast::Span::new(7, 11),
+        krishiv_sql::ast::Span::new(16, 20),
+        krishiv_sql::ast::Span::new(30, 34),
+    ];
+    let plan = krishiv_sql::lower_identified(&query, SourceId(0), false, &spans).unwrap();
+    let PlanNode::Project { exprs, .. } = &plan.root().node else {
+        panic!("expected a Project, got {}", plan.root());
+    };
+    let marked: Vec<_> = exprs
+        .iter()
+        .map(|e| match &e.node {
+            ExprNode::Column(c) => Some(c.by_identifier),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(marked, [Some(true), Some(true), Some(false)]);
+}
+
 /// The plan line of `sql`, or its error, for exact comparisons.
 fn line(sql: &str) -> String {
     match lower(sql) {

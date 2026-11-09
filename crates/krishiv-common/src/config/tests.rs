@@ -243,7 +243,7 @@ fn ndv_sampling_entries_parse_and_default() {
         (
             Some(true),
             Some(131_072),
-            Some(std::time::Duration::from_secs(2))
+            Some(std::time::Duration::from_secs(5))
         )
     );
     c.set("krishiv.optimizer.ndvSampling.enabled", "false")
@@ -1118,4 +1118,19 @@ fn system_query_text_entries_parse_and_default() {
     assert!(c.set("krishiv.system.queryText.maxBytes", "0").is_err());
     assert!(c.set("krishiv.system.queryText.literals", "hide").is_err());
     assert_eq!(SYSTEM_QUERY_TEXT_MAX_BYTES.scope, Scope::Session);
+}
+
+#[test]
+fn join_idle_spill_after_parses_and_defaults() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_JOIN_IDLE_SPILL_AFTER)
+            .and_then(ConfigValue::as_duration)
+    };
+    assert_eq!(get(&c), Some(Duration::from_secs(1)));
+    c.set("krishiv.exec.join.idleSpillAfter", "250ms").unwrap();
+    assert_eq!(get(&c), Some(Duration::from_millis(250)));
+    c.set("krishiv.exec.join.idleSpillAfter", "0s").unwrap();
+    assert_eq!(get(&c), Some(Duration::ZERO));
+    assert!(c.set("krishiv.exec.join.idleSpillAfter", "soon").is_err());
 }

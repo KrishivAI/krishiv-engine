@@ -11,7 +11,7 @@ Paths are relative to this crate.
 - `src/lib.rs` rule batches and the `optimize` entry point
 - `src/dag.rs` `dag::Rewriter`, the rewrite-once rule for shared subtrees
 - `src/fold.rs` constant folding; `src/pushdown.rs` predicate pushdown (below a window only on partition keys); `src/prune.rs` column pruning (removes unused window columns)
-- `src/project.rs` projection rules; `src/limit.rs` limit rules; `src/group_limit.rs` Spark's
+- `src/project.rs` projection rules; `src/repartition.rs` Spark's `CollapseRepartition` (a `DISTRIBUTE BY` directly over another drops the inner one; filters move below one in `pushdown.rs`, pruning keeps the columns its expressions read); `src/limit.rs` limit rules; `src/group_limit.rs` Spark's
   `InferWindowGroupLimit` decision (applied by the physical planner)
 - `src/restrict.rs` subquery restriction rules
 - `src/inline_cte.rs` CTE inlining (a nondeterministic definition read twice stays a `CteRef`); `src/share_cte.rs` `ShareCte` (P2-T198): equal deterministic instances with a pipeline breaker become one `WITH` definition, only when a session configuration is given and `krishiv.sql.optimizer.shareCteInstances` is on
@@ -54,7 +54,7 @@ Paths are relative to this crate.
   ranges alone, so a range only stays or widens (the proptest in `plan_stats.rs` holds it to that). An equality with
   a literal outside `[min, max]` estimates 0 rows and removes nothing. A join's keys take the smaller distinct count
   (inner: the ranges intersect, no nulls); an outer join's null-supplying side gains the unmatched fraction as nulls.
-  `col = col` keeps `1 / max(NDV)` with an unknown count read as the rows (T166 note, section 2); only `col = literal` over an unknown count takes the default selectivity. A count from `StatSource::Sampled` (P2-T164 U6: the session samples file columns an equality or `IN` reads before optimizing) is known like any other. Statistics never change results;
+  `col = col` keeps `1 / max(NDV)` with an unknown count read as the rows (T166 note, section 2); `col = <scalar subquery>` (reading no column, deterministic) reads an unknown count as the rows too and leaves one value (study 26, E10: q15's `= (SELECT max(..))` over an aggregate output), and `col IN (..)` whose elements read no column, are deterministic and include a subquery leaves `k` values the same way (`k` counts a repeated literal once; a known count is clamped to `k` too); only `col = literal` over an unknown count takes the default selectivity. A count from `StatSource::Sampled` (P2-T164 U6: the session samples file columns an equality or `IN` reads before optimizing) is known like any other. Statistics never change results;
   `Options::stats_propagation` switches the propagation off for the differential tests.
 - Per-rule and TPC-H plan snapshots live in `tests/it/snapshots/`; differential tests run optimised and
   unoptimised plans through the reference interpreter in `tests/it/support/eval.rs`.

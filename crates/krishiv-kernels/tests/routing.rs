@@ -15,7 +15,7 @@ use arrow_array::{
 };
 use krishiv_kernels::hash::routing::{
     FOLD_INIT, KEY_GROUPS, NULL_HASH, fold_column, hash_columns, key_group, key_group_range,
-    partition_of, radix, xxh64, xxh64_fixed,
+    partition_of, radix, routable, xxh64, xxh64_fixed,
 };
 use proptest::prelude::*;
 
@@ -197,6 +197,90 @@ fn unsupported_types_and_bad_lengths_are_errors() {
     let two = Int32Array::from(vec![1, 2]);
     assert!(hash_columns(&[ints.as_ref(), &two], &mut out).is_err());
     assert!(hash_columns(&[], &mut out).is_ok() && out.is_empty());
+}
+
+/// `routable` says yes exactly for the types `hash_columns` hashes, so a
+/// planner that checks it never routes a key the hash then refuses.
+#[test]
+fn routable_matches_what_hash_columns_hashes() {
+    use arrow_schema::{DataType as D, Field, Fields, IntervalUnit, TimeUnit};
+    let item = Arc::new(Field::new("item", D::Int32, true));
+    let entries = Arc::new(Field::new(
+        "entries",
+        D::Struct(Fields::from(vec![
+            Field::new("key", D::Int32, false),
+            Field::new("value", D::Int32, true),
+        ])),
+        false,
+    ));
+    let types = [
+        D::Null,
+        D::Boolean,
+        D::Int8,
+        D::Int16,
+        D::Int32,
+        D::Int64,
+        D::UInt8,
+        D::UInt16,
+        D::UInt32,
+        D::UInt64,
+        D::Float32,
+        D::Float64,
+        D::Date32,
+        D::Date64,
+        D::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        D::Timestamp(TimeUnit::Nanosecond, None),
+        D::Duration(TimeUnit::Second),
+        D::Interval(IntervalUnit::YearMonth),
+        D::Interval(IntervalUnit::DayTime),
+        D::Interval(IntervalUnit::MonthDayNano),
+        D::Time32(TimeUnit::Second),
+        D::Time32(TimeUnit::Millisecond),
+        D::Time64(TimeUnit::Microsecond),
+        D::Time64(TimeUnit::Nanosecond),
+        D::Float16,
+        D::Decimal32(9, 2),
+        D::Decimal64(18, 2),
+        D::Decimal128(38, 10),
+        D::Decimal256(76, 10),
+        D::Utf8,
+        D::LargeUtf8,
+        D::Utf8View,
+        D::Binary,
+        D::LargeBinary,
+        D::BinaryView,
+        D::FixedSizeBinary(4),
+        D::List(Arc::clone(&item)),
+        D::LargeList(Arc::clone(&item)),
+        D::FixedSizeList(Arc::clone(&item), 2),
+        D::ListView(Arc::clone(&item)),
+        D::LargeListView(Arc::clone(&item)),
+        D::Struct(Fields::from(vec![Field::new("a", D::Int32, true)])),
+        D::Map(entries, false),
+    ];
+    let mut out = Vec::new();
+    for t in &types {
+        let column = arrow_array::new_null_array(t, 3);
+        assert_eq!(
+            routable(t),
+            hash_columns(&[column.as_ref()], &mut out).is_ok(),
+            "{t}"
+        );
+    }
+    let list = D::List(item);
+    for (values, want) in [
+        (D::Utf8, true),
+        (D::Decimal256(76, 0), false),
+        (list, false),
+    ] {
+        let dict = D::Dictionary(Box::new(D::Int32), Box::new(values.clone()));
+        assert_eq!(routable(&dict), want, "{dict}");
+        assert_eq!(routable(&dict), routable(&values));
+    }
+    // A dictionary with values hashes exactly when its value type routes.
+    let dict: DictionaryArray<Int32Type> = vec!["a", "b", "a"].into_iter().collect();
+    assert!(routable(dict.data_type()));
+    assert!(hash_columns(&[&dict], &mut out).is_ok());
 }
 
 /// A dictionary without values (all rows NULL) hashes as NULLs.

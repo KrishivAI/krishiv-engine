@@ -10,7 +10,7 @@ use arrow_row::Rows;
 use arrow_schema::{DataType, SchemaRef};
 use krishiv_types::batch::{Batch, Weights};
 
-use super::accumulator::Accumulator;
+use super::accumulator::{Accumulator, paired};
 use super::rowtable::{RowPrepared, RowTable};
 use super::udf::{UdfAcc, check_state, resolve};
 use super::{AggregateExpr, AggregateFunction, AggregateOutput, AggregateSpec};
@@ -32,6 +32,9 @@ pub(crate) struct AggCore {
     /// `krishiv.exec.agg.rowLayout` need it; dictionary and nested keys keep
     /// the arrow-row [`KeyTable`]).
     pub(crate) rows: Option<RowLayout>,
+    /// The decimal `(avg, sum)` pairs folded in one pass
+    /// ([`paired::fold_pairs`]).
+    pub(crate) pairs: Vec<(usize, usize)>,
 }
 
 impl AggCore {
@@ -67,6 +70,7 @@ impl AggCore {
             ranges.push(at..at + n);
             at += n;
         }
+        let pairs = paired::fold_pairs(&spec.aggregates);
         Ok(Self {
             spec,
             encoder,
@@ -74,6 +78,7 @@ impl AggCore {
             output_schema,
             ranges,
             rows,
+            pairs,
         })
     }
 
@@ -329,9 +334,8 @@ impl AggTable {
                 .zip(&core.ranges)
                 .try_for_each(|(a, r)| a.merge(&ids, &p.cols[r.clone()]))
         } else {
-            self.accs
-                .iter_mut()
-                .try_for_each(|a| a.update(&ids, &p.cols, &p.weights))
+            let pairs = &self.core.pairs;
+            paired::update_all(&mut self.accs, pairs, &ids, &p.cols, &p.weights)
         };
         self.ids = ids;
         result
@@ -503,15 +507,6 @@ impl Table {
                 }
                 _ => t.for_each_hash(|h| into.add(h, per)),
             },
-        }
-    }
-
-    /// Group counts of the table's radix partitions, in position order
-    /// (one partition for an `AggTable`).
-    pub(crate) fn part_lens(&self) -> Vec<usize> {
-        match self {
-            Self::Keys(t) => vec![t.len()],
-            Self::Rows(t) => (0..t.part_count()).map(|p| t.part_len(p)).collect(),
         }
     }
 

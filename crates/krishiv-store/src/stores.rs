@@ -99,6 +99,8 @@ use krishiv_common::secret::{OptionValue, SecretValue};
 #[cfg(feature = "cloud")]
 use krishiv_common::secret::{REDACTED, SecretString};
 use object_store::ObjectStore;
+
+use crate::SharedHttpClients;
 use object_store::path::Path;
 
 use crate::credentials::{CredentialCache, two_credential_sources};
@@ -380,6 +382,9 @@ pub struct StoreRegistry {
     /// The hash of every `fs.*` setting of [`Self::config`], computed once:
     /// `None` when there is none.
     settings_hash: std::sync::OnceLock<Option<u64>>,
+    /// The HTTP clients the S3, GCS, Azure and https stores connect through, when shared
+    /// (see [`Self::with_http_clients`]); else each store builds its own.
+    clients: Option<SharedHttpClients>,
 }
 
 /// Called with each scoped store id when the registry is dropped.
@@ -428,7 +433,18 @@ impl StoreRegistry {
             release: Mutex::new(Vec::new()),
             settings_hash: std::sync::OnceLock::new(),
             cache_scope: CacheScope::Isolated,
+            clients: None,
         }
+    }
+
+    /// This registry's S3, GCS, Azure and https stores connecting through `clients`, so stores
+    /// with equal client options share one HTTP client (its root store and connection pool)
+    /// across registries. Pass one cache per runtime: pooled connections are tasks on the
+    /// runtime that opened them. Credentials stay in each store; connections carry none.
+    #[must_use]
+    pub fn with_http_clients(mut self, clients: SharedHttpClients) -> Self {
+        self.clients = Some(clients);
+        self
     }
 
     /// This registry registering its stores under `scope`, so blocks are reused across the
@@ -544,7 +560,13 @@ impl StoreRegistry {
         {
             return Ok(store);
         }
-        let store = build(self.config.as_ref(), options, url, scoped.map(|e| &e.cache))?;
+        let store = build(
+            self.config.as_ref(),
+            options,
+            url,
+            scoped.map(|e| &e.cache),
+            self.clients.as_ref(),
+        )?;
         if scoped.is_some() {
             self.scoped_ids
                 .lock()
@@ -766,6 +788,7 @@ fn build(
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     scope: Option<&Arc<CredentialCache>>,
+    clients: Option<&SharedHttpClients>,
 ) -> Result<Arc<dyn ObjectStore>> {
     // Configuration errors keep their class; only builder failures become
     // `KRISHIV_OBJECT_STORE_REQUEST_FAILED` (converted in each scheme
@@ -775,10 +798,12 @@ fn build(
         _ => None,
     };
     match url.scheme {
-        ObjectScheme::S3 => s3_store(config, options, url, path_style, scope),
-        ObjectScheme::Gcs => gcs_store(config, options, url, scope),
-        ObjectScheme::Azure => azure_store(config, options, url, scope),
-        ObjectScheme::Http => http_store(url),
+        ObjectScheme::S3 => s3_store(config, options, url, path_style, scope, clients),
+        ObjectScheme::Gcs => gcs_store(config, options, url, scope, clients),
+        ObjectScheme::Azure => azure_store(config, options, url, scope, clients),
+        ObjectScheme::Http => http_store(url, clients),
+        // The token is a default header, which the shared clients' fingerprint does not see:
+        // this store always builds its own client.
         ObjectScheme::HuggingFace => hf_store(config, options, url),
     }
 }
@@ -873,7 +898,10 @@ fn loopback_endpoint(endpoint: &str) -> bool {
 /// is sent but the request itself: no credentials, and redirects are not
 /// followed to another host with a header (the client sends none).
 #[cfg(feature = "cloud")]
-fn http_store(url: &ParsedUrl) -> Result<Arc<dyn ObjectStore>> {
+fn http_store(
+    url: &ParsedUrl,
+    clients: Option<&SharedHttpClients>,
+) -> Result<Arc<dyn ObjectStore>> {
     use object_store::http::HttpBuilder;
     let plain = url.store_id.key().starts_with("http://");
     let host = url
@@ -886,9 +914,13 @@ fn http_store(url: &ParsedUrl) -> Result<Arc<dyn ObjectStore>> {
             url.display
         )));
     }
-    HttpBuilder::new()
+    let mut builder = HttpBuilder::new()
         .with_url(url.store_id.key())
-        .with_client_options(object_store::ClientOptions::new().with_allow_http(plain))
+        .with_client_options(object_store::ClientOptions::new().with_allow_http(plain));
+    if let Some(clients) = clients {
+        builder = builder.with_http_connector(clients.clone());
+    }
+    builder
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
         .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
@@ -902,6 +934,7 @@ fn build(
     _options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     _scope: Option<&Arc<CredentialCache>>,
+    _clients: Option<&SharedHttpClients>,
 ) -> Result<Arc<dyn ObjectStore>> {
     Err(unsupported(format!(
         "cloud object stores are not enabled in this build (enable the `cloud` feature): {}",
@@ -1220,6 +1253,7 @@ fn s3_store(
     url: &ParsedUrl,
     path_style: Option<bool>,
     scope: Option<&Arc<CredentialCache>>,
+    clients: Option<&SharedHttpClients>,
 ) -> Result<Arc<dyn ObjectStore>> {
     use object_store::aws::{AmazonS3Builder, AwsCredential};
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(&url.bucket);
@@ -1249,6 +1283,9 @@ fn s3_store(
     }
     if let Some(path_style) = path_style {
         builder = builder.with_virtual_hosted_style_request(!path_style);
+    }
+    if let Some(clients) = clients {
+        builder = builder.with_http_connector(clients.clone());
     }
     let store = builder
         .build()
@@ -1282,6 +1319,7 @@ fn gcs_store(
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     scope: Option<&Arc<CredentialCache>>,
+    clients: Option<&SharedHttpClients>,
 ) -> Result<Arc<dyn ObjectStore>> {
     use object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder};
     let mut builder = GoogleCloudStorageBuilder::from_env().with_bucket_name(url.bucket.clone());
@@ -1300,6 +1338,9 @@ fn gcs_store(
         text(config, options, GCS_STORAGE_ROOT_URL)?.or(text(config, options, GCS_ENDPOINT)?)
     {
         builder = builder.with_base_url(&base);
+    }
+    if let Some(clients) = clients {
+        builder = builder.with_http_connector(clients.clone());
     }
     let store = builder
         .build()
@@ -1320,6 +1361,7 @@ fn azure_store(
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     scope: Option<&Arc<CredentialCache>>,
+    clients: Option<&SharedHttpClients>,
 ) -> Result<Arc<dyn ObjectStore>> {
     use object_store::azure::{AzureCredential, MicrosoftAzureBuilder};
     let mut builder = MicrosoftAzureBuilder::from_env().with_container_name(url.bucket.clone());
@@ -1345,6 +1387,9 @@ fn azure_store(
     if let Some(endpoint) = text(config, options, AZURE_ENDPOINT)? {
         builder = builder.with_allow_http(allows_http(Some(&endpoint)));
         builder = builder.with_endpoint(endpoint);
+    }
+    if let Some(clients) = clients {
+        builder = builder.with_http_connector(clients.clone());
     }
     let store = builder
         .build()

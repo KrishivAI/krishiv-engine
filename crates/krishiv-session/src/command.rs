@@ -239,8 +239,12 @@ impl Session {
     /// reserved snapshot prefix `` `__krishiv_snapshot_` `` or the cache
     /// prefix `` `__krishiv_cache_` `` (in any letter case), which queries
     /// cannot spell either.
-    pub(crate) async fn exec_create_view(&self, v: &CreateView) -> Result<DataFrame, KrishivError> {
-        self.create_temp_view(v, false).await
+    pub(crate) async fn exec_create_view(
+        &self,
+        v: &CreateView,
+        ids: &[Span],
+    ) -> Result<DataFrame, KrishivError> {
+        self.create_temp_view(v, false, ids).await
     }
 
     /// `CREATE [OR REPLACE] [GLOBAL] TEMPORARY VIEW`: a global view lives in `global_temp`.
@@ -248,6 +252,7 @@ impl Session {
         &self,
         v: &CreateView,
         global: bool,
+        ids: &[Span],
     ) -> Result<DataFrame, KrishivError> {
         let key = if global {
             crate::catalog::global_key(&v.name.value)
@@ -284,7 +289,8 @@ impl Session {
             }
             .into());
         }
-        let plan = krishiv_sql::lower(&v.query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_identified(&v.query, self.next_source_id(), false, ids)
+            .map_err(|e| e.error)?;
         crate::catalog::check_view_cycle(
             &self.state.catalog,
             &key,
@@ -422,6 +428,7 @@ impl Session {
         &self,
         c: &Cache,
         original: &str,
+        ids: &[Span],
     ) -> Result<DataFrame, KrishivError> {
         match &c.kind {
             CacheKind::Clear => {
@@ -455,11 +462,14 @@ impl Session {
                         return Err(table_not_found(&parts));
                     };
                     let body = original.get(q.span.start..q.span.end).unwrap_or_default();
-                    let create = format!(
-                        "CREATE TEMPORARY VIEW `{}` AS {body}",
-                        view.replace('`', "``")
-                    );
-                    Box::pin(self.sql_here(&create)).await?;
+                    let prefix = format!("CREATE TEMPORARY VIEW `{}` AS ", view.replace('`', "``"));
+                    // The body's substituted `IDENTIFIER(..)` names, at their place in `create`.
+                    let spans = crate::identifier_clause::spans_within(ids, q.span)
+                        .into_iter()
+                        .map(|s| Span::new(s.start + prefix.len(), s.end + prefix.len()))
+                        .collect();
+                    let create = format!("{prefix}{body}");
+                    Box::pin(self.sql_here_spanned(&create, spans)).await?;
                 }
                 // The relation is cached by reading it once: `LAZY` is the same here, since a
                 // snapshot is taken the first time anything reads it either way.

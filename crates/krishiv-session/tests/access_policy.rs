@@ -1698,6 +1698,40 @@ fn a_denied_ctas_creates_no_directories() {
     );
 }
 
+/// Table options are stored as text and never resolved, so a secret reference in
+/// `CREATE TABLE ... OPTIONS` is refused instead of being kept as its literal text.
+#[test]
+fn a_secret_in_create_table_options_is_refused() {
+    let s = session(Arc::new(AllowAll));
+    for value in [
+        "secret('scope', 'key')",
+        "SECRET ('scope', 'key')",
+        "`secret`('scope', 'key')",
+        "(secret('scope', 'key'))",
+        "CAST(secret('scope', 'key') AS STRING)",
+        "concat('x', secret('scope', 'key'))",
+        // Comments between the name and `(` are trivia to the parser too.
+        "secret /* c */ ('scope', 'key')",
+        "secret /* a /* nested */ b */ ('scope', 'key')",
+        "secret -- c\n ('scope', 'key')",
+    ] {
+        let r = block_on(s.sql(&format!(
+            "CREATE TABLE t_sec (a INT) USING parquet OPTIONS (k = {value})"
+        )));
+        assert_eq!(class(r), "KRISHIV_UNSUPPORTED_FEATURE", "{value}");
+        let tables = block_on(s.sql("SHOW TABLES LIKE 't_sec'"))
+            .and_then(|df| block_on(df.collect()))
+            .unwrap();
+        let n: usize = tables.iter().map(arrow_array::RecordBatch::num_rows).sum();
+        assert_eq!(n, 0, "no table was created for {value}");
+    }
+    // A string that only mentions the name is not a call.
+    let r = block_on(
+        s.sql("CREATE TABLE t_sec (a INT) USING parquet OPTIONS (k = 'secret(scope, key)')"),
+    );
+    assert!(r.is_ok(), "{:?}", r.err());
+}
+
 /// Whether writes under a `far_t` directory are denied (switched on once the tables exist).
 static DENY_FAR_T: AtomicBool = AtomicBool::new(false);
 
