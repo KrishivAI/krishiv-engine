@@ -827,18 +827,38 @@ pub(crate) fn reads_stored_table(
 }
 
 /// The scans of `plan` and of the subqueries in its expressions.
+///
+/// Expressions are DAGs (the analyzer shares a subexpression by `Arc`, as a
+/// nested `decode` does in every search condition), so each expression node
+/// is visited once: a walk that revisits shared nodes is exponential in the
+/// nesting depth.
 fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
-    fn in_expr<'a>(e: &'a Arc<krishiv_plan::Expr>, out: &mut Vec<&'a Scan>) {
-        if let ExprNode::Subquery { plan, .. } = &e.node {
-            collect_scans(plan, out);
+    collect_scans_in(plan, out, &mut std::collections::HashSet::new());
+}
+
+fn collect_scans_in<'a>(
+    plan: &'a LogicalPlan,
+    out: &mut Vec<&'a Scan>,
+    seen: &mut std::collections::HashSet<usize>,
+) {
+    fn in_expr<'a>(
+        e: &'a Arc<krishiv_plan::Expr>,
+        out: &mut Vec<&'a Scan>,
+        seen: &mut std::collections::HashSet<usize>,
+    ) {
+        if !seen.insert(Arc::as_ptr(e).addr()) {
+            return;
         }
-        e.for_each_child(&mut |c| in_expr(c, out));
+        if let ExprNode::Subquery { plan, .. } = &e.node {
+            collect_scans_in(plan, out, seen);
+        }
+        e.for_each_child(&mut |c| in_expr(c, out, seen));
     }
     if let PlanNode::Scan(scan) = &plan.node {
         out.push(scan);
     }
-    plan.for_each_expr(&mut |e| in_expr(e, out));
-    plan.for_each_child(&mut |c| collect_scans(c, out));
+    plan.for_each_expr(&mut |e| in_expr(e, out, seen));
+    plan.for_each_child(&mut |c| collect_scans_in(c, out, seen));
 }
 
 /// The scans of the streaming pipeline of `root`: those a task splits.
