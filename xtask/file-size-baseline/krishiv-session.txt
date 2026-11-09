@@ -6,7 +6,7 @@
 # +43 lines over main: system-only scan tracking and the admission estimate (QueryCatalog::reads_only_system, set_estimate; PR #525; +1 for the plan-leaf check of the exemption)
 # +4 lines: a stored view re-lowers its query with its IDENTIFIER(..) spans, so its columns keep their names (T179g follow-up, PR #576)
 # +1 line: the `PythonEval` arm of `streaming_leaves` (P2-T059)
-3036 crates/krishiv-session/src/catalog.rs
+3000 crates/krishiv-session/src/catalog.rs
 # +43 lines over main: nested session and script variables (T196, PR #505)
 2294 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
