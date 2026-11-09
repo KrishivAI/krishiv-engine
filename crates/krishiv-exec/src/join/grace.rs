@@ -865,8 +865,8 @@ impl Flush {
 /// next probe batch, or claim, load or split the next partition.
 pub(crate) async fn step(
     shared: &Arc<Shared>,
-    hashing: &Hashing,
     build: &Arc<BuildGlobal>,
+    tables: &[Option<JoinTable>],
     st: &mut Flush,
     ctx: &TaskContext,
 ) -> Result<FlushOutput> {
@@ -874,7 +874,7 @@ pub(crate) async fn step(
         .built
         .get()
         .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
-    let limit = ctx.query().config().batch_size.max(1);
+    let (hashing, limit) = (&build.hashing, ctx.query().config().batch_size.max(1));
     let partition = ctx.partition();
     if let Some((merge, _held)) = &mut st.merge {
         if let Some(out) = merge.step(shared, hashing, ctx).await? {
@@ -889,10 +889,10 @@ pub(crate) async fn step(
         // The in-memory partitions' build rows first: every probe driver's
         // input ended, so their marks are final.
         if st.emitting.is_none() {
-            st.emitting = lock(&built.grace).next_emit(&built.tables).map(|p| (p, 0));
+            st.emitting = lock(&built.grace).next_emit(tables).map(|p| (p, 0));
         }
         if let Some((p, from)) = &mut st.emitting {
-            let table = built.tables.get(*p).and_then(Option::as_ref);
+            let table = tables.get(*p).and_then(Option::as_ref);
             let (out, done) = match table {
                 Some(t) => super::probe::emit_build(shared, hashing.rows(), t, from, limit)?,
                 None => (None, true),
