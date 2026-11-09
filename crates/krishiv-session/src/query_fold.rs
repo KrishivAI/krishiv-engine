@@ -65,6 +65,9 @@ impl QueryStart {
     ) {
         let stored = query.error();
         let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
+        if let Some(e) = error.or(stored.as_ref()) {
+            state.queries.note_error(log_id, e);
+        }
         let metrics = query.metrics();
         let wall = metrics.wall_time;
         // A zero wall time means the query never finished (a cancelled

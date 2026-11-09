@@ -266,6 +266,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("workers", Long, true),
             ("cancel_reason", Text, true),
             ("sqlstate", Text, true),
+            ("error_message", Text, true),
             ("partial", Flag, false),
         ],
         _ => return None,
@@ -640,6 +641,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
                     .and_then(krishiv_common::error::ErrorClass::from_name)
                     .and_then(krishiv_common::error::ErrorClass::sql_state)
             })),
+            text(rows.iter().map(|r| r.error_message.as_deref())),
             // One process, one worker: every row is whole (design §2.7 for the merged rows).
             Arc::new(BooleanArray::from_iter(rows.iter().map(|_| Some(false)))),
         ];
@@ -859,6 +861,8 @@ pub(crate) struct QueryRow {
     pub(crate) wall_ns: Option<i64>,
     pub(crate) peak_memory_bytes: Option<i64>,
     pub(crate) error_class: Option<String>,
+    /// The failure's message, cut and masked like the text.
+    pub(crate) error_message: Option<String>,
     /// The operators it ran (a finished query only); shared, so a copy of
     /// the history doesn't copy them.
     pub(crate) operators: Arc<[OperatorRow]>,
@@ -1124,6 +1128,7 @@ impl QueryLog {
             wall_ns: None,
             peak_memory_bytes: None,
             error_class: None,
+            error_message: None,
             operators: Arc::default(),
             workload_class: None,
             cpu_ns: None,
@@ -1200,6 +1205,7 @@ impl QueryLog {
     pub(crate) fn record_failed_row(&self, id: &str, error: &KrishivError) {
         let class = error.error_class().name();
         let state = outcome_state(class);
+        self.note_error(id, error);
         self.close_unrun(id, state, (state != "cancelled").then_some(class));
     }
 
@@ -1294,6 +1300,7 @@ impl QueryLog {
                 totals: None,
             },
         );
+        self.note_error(&id, error);
         id
     }
 
@@ -1303,10 +1310,23 @@ impl QueryLog {
     pub(crate) fn fail(&self, id: &str, error: &KrishivError) {
         let class = error.error_class().name();
         let state = outcome_state(class);
+        self.note_error(id, error);
         self.history.update(&self.session_id, id, |row| {
             row.state = state;
             row.error_class = (state != "cancelled").then(|| class.to_owned());
         });
+    }
+
+    /// Records the message of `error` on the row `id`, cut and masked by the text policy (a
+    /// cancellation has none).
+    pub(crate) fn note_error(&self, id: &str, error: &KrishivError) {
+        if outcome_state(error.error_class().name()) == "cancelled" {
+            return;
+        }
+        let policy = *self.text.lock().unwrap_or_else(PoisonError::into_inner);
+        let (shown, _) = policy.apply(&error.to_string());
+        self.history
+            .update(&self.session_id, id, |row| row.error_message = Some(shown));
     }
 
     /// Marks the query `id` finished (a row evicted meanwhile is gone).

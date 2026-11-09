@@ -832,3 +832,45 @@ fn a_file_write_records_the_files_it_wrote() {
     assert_eq!(r.len(), 1, "{r:?}");
     assert!(r[0].parse::<i64>().unwrap() >= 1, "{r:?}");
 }
+
+#[test]
+fn a_failed_query_records_its_message_and_masking_hides_literals() {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    let _ = block_on(async {
+        s.sql("SELECT * FROM missing_canary_table")
+            .await?
+            .collect()
+            .await
+    });
+    let r = strings_in(
+        &s,
+        "SELECT error_message FROM system.queries WHERE error_message IS NOT NULL",
+    );
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert!(r[0].contains("missing_canary_table"), "{r:?}");
+    assert!(r[0].contains("TABLE_OR_VIEW_NOT_FOUND"), "{r:?}");
+}
+
+#[test]
+fn an_error_message_with_a_string_literal_is_masked_when_literals_are_masked() {
+    let s = Session::new().unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    let _ = block_on(async {
+        s.sql("SELECT CAST('canary99x' AS INT)")
+            .await?
+            .collect()
+            .await
+    });
+    let r = strings_in(
+        &s,
+        "SELECT error_message FROM system.queries WHERE error_message IS NOT NULL",
+    );
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert!(!r[0].contains("canary99x"), "{r:?}");
+}
