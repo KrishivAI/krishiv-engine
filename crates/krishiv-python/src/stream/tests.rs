@@ -1397,3 +1397,25 @@ fn wait_for_returns_once_another_thread_wakes_the_future() {
     sender.join().unwrap();
     assert_eq!(query::wait_for(async { 3 }), 3);
 }
+
+#[test]
+fn wait_for_polls_again_when_the_future_wakes_itself_during_a_poll() {
+    // Review N1: a wake inside `poll` (before the wait) must not be lost:
+    // the future is pending twice, waking itself each time, then ready.
+    struct SelfWaking(u8);
+    impl std::future::Future for SelfWaking {
+        type Output = u8;
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<u8> {
+            if self.0 == 2 {
+                return std::task::Poll::Ready(self.0);
+            }
+            self.0 += 1;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    }
+    assert_eq!(query::wait_for(SelfWaking(0)), 2);
+}

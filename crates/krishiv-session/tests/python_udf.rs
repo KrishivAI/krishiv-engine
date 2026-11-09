@@ -420,6 +420,25 @@ async fn a_call_reading_both_sides_of_an_inner_join_filters_above_it() {
     .await;
     // (a, b) with a + b = 3, b >= 1, a < 3: (0, 3), (1, 2), (2, 1).
     assert_eq!(got, vec![Some(0), Some(1), Some(2)]);
+    // The plan (review N2): the UDF conjuncts filter above the join, over a
+    // PythonEval of the joined rows; the join keeps the other conjuncts.
+    let text = s
+        .sql(
+            "EXPLAIN SELECT a.id FROM range(4) a JOIN range(4) b \
+             ON py_add(a.id, b.id) = 3 AND py_add(b.id, b.id) >= 2 AND a.id < 3 AND b.id >= 0",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let plan = format!("{text:?}");
+    let at = |needle: &str| plan.find(needle);
+    let (filter, eval, join) = (at("Filter"), at("PythonEval"), at("Join"));
+    assert!(
+        filter.is_some() && eval.is_some() && join.is_some() && filter < eval && eval < join,
+        "{plan}"
+    );
 }
 
 #[tokio::test]
