@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
+use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType, join_cost::JOIN_COST};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -118,6 +118,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &NDV_SAMPLING_ENABLED,
     &NDV_SAMPLING_ROWS,
     &NDV_SAMPLING_TIMEOUT,
+    &JOIN_COST,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -161,6 +162,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.cache.diskBytes", &IO_CACHE_DISK_BYTES),
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
+    ("krishiv.optimizer.joinCost", &JOIN_COST),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),

@@ -9,6 +9,7 @@
 )]
 
 mod cse;
+mod join_cost;
 mod join_enumerator;
 mod join_order;
 mod plan_stats;

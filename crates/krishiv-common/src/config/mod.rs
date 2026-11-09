@@ -22,8 +22,10 @@ use std::time::Duration;
 
 use crate::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig};
 
+mod join_cost;
 mod registry;
 
+pub use join_cost::JOIN_COST;
 pub use registry::*;
 
 /// Where a config entry may be set.
