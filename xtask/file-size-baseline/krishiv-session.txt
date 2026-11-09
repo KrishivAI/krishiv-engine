@@ -12,7 +12,7 @@
 # +1 line: the file view's `partitions` field (reading partitioned tables)
 2540 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
-# +4 lines: EXPLAIN and DESCRIBE QUERY name IDENTIFIER(..) items as the query does (T179g follow-up, PR #576)
+# +33 lines: CTAS, views, CACHE TABLE, INSERT, EXPLAIN and DESCRIBE QUERY pass IDENTIFIER(..) spans to the query they run, which is boxed (T179g follow-up, PR #576)
 2785 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
