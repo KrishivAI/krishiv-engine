@@ -84,6 +84,39 @@ impl BinaryStyle {
         }
     }
 
+    /// The bytes a text printed in this style stands for (`from_xml` of a `BINARY` field reads
+    /// what `to_xml` wrote, Spark 4.2.0 `binary_*` goldens); `None` when the text is not in the
+    /// style's form.
+    #[must_use]
+    pub fn parse(self, text: &str) -> Option<Vec<u8>> {
+        let bracketed = || text.strip_prefix('[')?.strip_suffix(']');
+        match self {
+            Self::Utf8 => Some(text.as_bytes().to_vec()),
+            Self::Basic => {
+                let inner = bracketed()?;
+                if inner.is_empty() {
+                    return Some(Vec::new());
+                }
+                inner
+                    .split(", ")
+                    .map(|n| n.parse::<i8>().ok().map(i8::cast_unsigned))
+                    .collect()
+            }
+            Self::Base64 => base64_decode(text),
+            Self::Hex => hex_decode(text),
+            Self::HexDiscrete => {
+                let inner = bracketed()?;
+                if inner.is_empty() {
+                    return Some(Vec::new());
+                }
+                inner
+                    .split(' ')
+                    .map(|p| u8::from_str_radix(p, 16).ok())
+                    .collect()
+            }
+        }
+    }
+
     /// The bytes as the style prints them.
     #[must_use]
     pub fn render(self, bytes: &[u8]) -> String {
@@ -91,6 +124,39 @@ impl BinaryStyle {
         self.write(bytes, &mut out);
         out
     }
+}
+
+/// Upper- or lower-case hex pairs.
+fn hex_decode(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) || !text.is_ascii() {
+        return None;
+    }
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect()
+}
+
+/// Standard-alphabet base64, padded or not.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let text = text.trim_end_matches('=');
+    if text.len().checked_rem(4) == Some(1) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len());
+    let mut acc = 0_u32;
+    let mut bits = 0_u32;
+    for c in text.bytes() {
+        let v = u32::try_from(ALPHABET.iter().position(|a| *a == c)?).ok()?;
+        acc = (acc << 6) | v;
+        bits = bits.saturating_add(6);
+        if bits >= 8 {
+            bits = bits.saturating_sub(8);
+            out.push(u8::try_from((acc >> bits) & 0xff).ok()?);
+        }
+    }
+    Some(out)
 }
 
 /// Standard-alphabet base64 without `=` padding (Java's `Base64.getEncoder().withoutPadding()`).
@@ -119,6 +185,27 @@ fn base64_unpadded(bytes: &[u8], out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_reads_back_what_render_prints() {
+        for style in [
+            BinaryStyle::Utf8,
+            BinaryStyle::Basic,
+            BinaryStyle::Base64,
+            BinaryStyle::Hex,
+            BinaryStyle::HexDiscrete,
+        ] {
+            for bytes in [&b"Eason"[..], b"", b"a", b"ab"] {
+                assert_eq!(
+                    style.parse(&style.render(bytes)).as_deref(),
+                    Some(bytes),
+                    "{style:?}"
+                );
+            }
+        }
+        assert_eq!(BinaryStyle::Hex.parse("4G"), None);
+        assert_eq!(BinaryStyle::Base64.parse("A"), None);
+    }
 
     /// Spark 4.2.0 `to_csv(named_struct('info', X'4561736F6E'))` and `X'00FF'` under each style.
     #[test]

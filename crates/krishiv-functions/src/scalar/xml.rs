@@ -362,6 +362,8 @@ struct Reading<'a> {
     conv: Converter<'a>,
     zone: &'a dyn TimeZoneRules,
     today: i32,
+    /// `spark.sql.binaryOutputStyle`: a `BINARY` field's text is read back as the style prints it.
+    binary: krishiv_kernels::binary_style::BinaryStyle,
 }
 
 impl Reading<'_> {
@@ -410,6 +412,11 @@ impl Reading<'_> {
                 },
                 bad,
             ),
+            FieldKind::Bin => V::Leaf(Val::Bytes(
+                self.binary
+                    .parse(text)
+                    .unwrap_or_else(|| text.as_bytes().to_vec()),
+            )),
             _ => match self.conv.convert(&kind, Some(text)) {
                 Ok(Val::Null) => V::Null,
                 Ok(v) => V::Leaf(v),
@@ -761,6 +768,7 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
     }
     let return_type = DataType::Struct(fields.clone());
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
+    let binary = opts.binary_style;
     let today = krishiv_kernels::datetime::current_date(opts.query_start_micros, zone.as_ref())
         .map_err(KrishivError::from)?;
     Ok(Binding::new(return_type, move |x: &Inputs<'_>| {
@@ -778,6 +786,7 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
             },
             zone: zone.as_ref(),
             today,
+            binary,
         };
         let mut rows: Vec<V> = Vec::with_capacity(docs.len());
         for i in 0..docs.len() {
