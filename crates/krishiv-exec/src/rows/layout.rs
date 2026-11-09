@@ -19,7 +19,7 @@
 //! the process need not be the routing function.
 
 use std::hash::BuildHasher;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
@@ -30,6 +30,7 @@ use arrow_schema::DataType;
 use krishiv_common::error::KrishivUnsupportedFeature;
 
 use crate::error::{Result, internal};
+use crate::sync::{Mutex, lock};
 
 /// Bytes of a string/binary view in a row.
 pub(super) const VIEW_BYTES: usize = 16;
@@ -147,19 +148,27 @@ pub struct RowLayout {
     spares: Arc<Spares>,
 }
 
-/// Most spare buffer sets a layout keeps (about one per driver that encodes
-/// at once; a set is a batch's rows, heap and hashes).
+/// Most spare buffer sets a layout keeps.
 const SPARE_SETS: usize = 16;
 /// Largest spare set kept, in bytes of capacity: a rare huge batch is
 /// freed, so the spares stay about a batch each.
 const SPARE_BYTES: usize = 2 << 20;
+/// Most bytes of spare capacity a layout keeps in all (about a dozen
+/// drivers' batches of q01's keys); past it a returned set is freed.
+const SPARE_TOTAL: usize = 4 << 20;
 
 /// The buffers of one [`EncodedKeys`].
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Buffers {
     rows: Vec<u8>,
     heap: Vec<u8>,
     hashes: Vec<u64>,
+}
+
+impl Buffers {
+    fn capacity(&self) -> usize {
+        self.rows.capacity() + self.heap.capacity() + self.hashes.capacity() * size_of::<u64>()
+    }
 }
 
 /// The spare [`Buffers`] of one layout (study 19 L3). Every batch used to
@@ -168,26 +177,40 @@ struct Buffers {
 /// (5.9 of 26 ns per row of q01's encode). A set returns here when its
 /// [`EncodedKeys`] drops and the next [`RowLayout::encode`] reuses it,
 /// cleared and zero-filled. They are not charged to a memory pool: a
-/// layout holds at most [`SPARE_SETS`] sets of at most [`SPARE_BYTES`].
-#[derive(Debug, Default)]
+/// layout holds at most [`SPARE_SETS`] sets, none over [`SPARE_BYTES`], and
+/// [`SPARE_TOTAL`] bytes in all (retention ends with the operator; the
+/// sets are a batch's buffers per concurrent driver, which the encode
+/// allocated and freed before).
+#[derive(Default)]
 struct Spares(Mutex<Vec<Buffers>>);
+
+impl std::fmt::Debug for Spares {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let spares = lock(&self.0);
+        f.debug_struct("Spares")
+            .field("sets", &spares.len())
+            .field(
+                "bytes",
+                &spares.iter().map(Buffers::capacity).sum::<usize>(),
+            )
+            .finish()
+    }
+}
 
 impl Spares {
     fn take(&self) -> Buffers {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop()
-            .unwrap_or_default()
+        lock(&self.0).pop().unwrap_or_default()
     }
 
     fn give(&self, b: Buffers) {
-        let bytes = b.rows.capacity() + b.heap.capacity() + b.hashes.capacity() * size_of::<u64>();
+        let bytes = b.capacity();
         if bytes > SPARE_BYTES {
             return;
         }
-        let mut spares = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if spares.len() < SPARE_SETS {
+        let mut spares = lock(&self.0);
+        if spares.len() < SPARE_SETS
+            && spares.iter().map(Buffers::capacity).sum::<usize>() + bytes <= SPARE_TOTAL
+        {
             spares.push(b);
         }
     }
@@ -1175,7 +1198,36 @@ mod tests {
             .map(|_| layout.encode(&second).unwrap())
             .collect();
         drop(held);
-        assert!(layout.spares.0.lock().unwrap().len() <= SPARE_SETS);
+        assert!(lock(&layout.spares.0).len() <= SPARE_SETS);
+    }
+
+    /// A payload layout (no hashes) reuses its buffers too, a reused set grows
+    /// for a larger batch and encodes it as a fresh layout does, and the
+    /// spares of a layout stay within `SPARE_TOTAL` bytes.
+    #[test]
+    fn payload_buffers_grow_and_the_spares_are_bounded() {
+        use arrow_array::Int64Array;
+        let types = [DataType::Int64];
+        let payload = RowLayout::for_payload(&types).unwrap();
+        let col = |n: i64| -> ArrayRef { Arc::new(Int64Array::from((0..n).collect::<Vec<_>>())) };
+        let small = payload.encode(&[col(4)]).unwrap();
+        assert!(small.hashes().is_empty());
+        drop(small);
+        let big = payload.encode(&[col(5000)]).unwrap();
+        let fresh = RowLayout::for_payload(&types)
+            .unwrap()
+            .encode(&[col(5000)])
+            .unwrap();
+        assert_eq!(big.rows, fresh.rows);
+        assert!(big.hashes().is_empty());
+        drop(big);
+        let layout = RowLayout::new(&types, &[false]).unwrap();
+        let sets: Vec<_> = (0..SPARE_SETS)
+            .map(|_| layout.encode(&[col(30_000)]).unwrap())
+            .collect();
+        drop(sets);
+        let kept: usize = lock(&layout.spares.0).iter().map(Buffers::capacity).sum();
+        assert!(kept <= SPARE_TOTAL, "{kept} spare bytes");
     }
 
     /// A huge batch's buffers are freed, not kept.
@@ -1186,7 +1238,7 @@ mod tests {
         let n = SPARE_BYTES / layout.stride() + 1;
         let col: ArrayRef = Arc::new(Int64Array::from(vec![1; n]));
         drop(layout.encode(&[col]).unwrap());
-        assert!(layout.spares.0.lock().unwrap().is_empty());
+        assert!(lock(&layout.spares.0).is_empty());
     }
 
     /// The zero-padded inline view of `value` (at most 12 bytes).
