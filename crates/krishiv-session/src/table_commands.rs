@@ -1335,6 +1335,7 @@ impl Session {
             }
             .into());
         }
+        crate::access::refuse_secret_options(&t.options, original)?;
         let mut options = options_of(&t.options, original);
         let properties = options_of(&t.tblproperties, original);
         // A `path` option is the table's location, as in Spark.
@@ -2596,7 +2597,7 @@ impl Session {
                 // Admitted before the drop: a controller that refuses the write, or a caller that
                 // gives up while it queues, must not have lost the old table. The write takes
                 // this admission instead of asking again.
-                let mut pre = Some(self.admit_query(&analysis.env).await?);
+                let mut pre = Some(self.admit_query(&analysis.env, false).await?);
                 let done = async {
                     self.drop_named_table(&name, &env, true).await?;
                     self.exec_write_v2(df, spec, V2Mode::Create, &mut pre).await
