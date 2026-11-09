@@ -459,13 +459,37 @@ fn column_comments_follow_columns_through_queries() {
         comments("SELECT * FROM v2"),
         pairs(&[("x", "ca"), ("y", "cy")])
     );
-    // A view column stored without a comment has none, whatever the column under it has now.
-    run(&s, "CREATE TABLE w (a INT COMMENT 'wa', b INT)");
+    // A stored view keeps the comments it stored, or none, whatever the columns under it have now; an
+    // `EVOLUTION` view reads its query's (Spark 4.2.0: `column-comments/probe4.out`).
+    run(
+        &s,
+        "CREATE TABLE w (a INT COMMENT 'wa', b INT) USING parquet",
+    );
     run(&s, "CREATE VIEW v3 AS SELECT a, b FROM w");
+    run(
+        &s,
+        "CREATE VIEW v3b WITH SCHEMA BINDING AS SELECT a, b FROM w",
+    );
+    run(
+        &s,
+        "CREATE VIEW v3c WITH SCHEMA COMPENSATION AS SELECT a, b FROM w",
+    );
+    run(
+        &s,
+        "CREATE VIEW v3e WITH SCHEMA EVOLUTION AS SELECT a, b FROM w",
+    );
     run(&s, "ALTER TABLE w ALTER COLUMN b COMMENT 'later'");
+    run(&s, "ALTER TABLE w ALTER COLUMN a COMMENT 'wa2'");
+    for v in ["v3", "v3b", "v3c"] {
+        assert_eq!(
+            comments(&format!("SELECT * FROM {v}")),
+            pairs(&[("a", "wa"), ("b", "NULL")]),
+            "{v}"
+        );
+    }
     assert_eq!(
-        comments("SELECT * FROM v3"),
-        pairs(&[("a", "wa"), ("b", "NULL")])
+        comments("SELECT * FROM v3e"),
+        pairs(&[("a", "wa2"), ("b", "later")])
     );
     // A DataFrame's temporary view holds its analyzed plan: a read of it keeps the scan's comments.
     block_on(s.table("t").create_or_replace_temp_view("dv")).unwrap();
