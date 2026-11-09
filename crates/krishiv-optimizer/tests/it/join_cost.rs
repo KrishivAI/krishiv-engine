@@ -206,7 +206,7 @@ fn tpch_plans_that_bytes_changes() {
             let plan = support::resolve(&support::tpch_sql(q), &ctx);
             let (rows, _) = plan_with(&plan, &stats, &[]);
             let (bytes, _) = plan_with(&plan, &stats, BYTES);
-            rows.root().to_string() != bytes.root().to_string()
+            !rows.structurally_eq(&bytes)
         })
         .collect();
     assert_eq!(changed, [2, 10]);

@@ -1352,6 +1352,9 @@ impl Graph {
             }
             let mut pick: Option<Pick> = None;
             for (&(a, b), (sel, edge, _)) in &pairs {
+                if !*edge {
+                    continue;
+                }
                 let (Some(pa), Some(pb)) = (&parts[a], &parts[b]) else {
                     continue;
                 };
@@ -1361,7 +1364,7 @@ impl Graph {
                     self.result_cost(r) + self.build_cost(sa, sb),
                     self.tie_result(r) + self.tie_build(sa, sb),
                 );
-                if *edge && pick.is_none_or(|(_, _, best)| dp::cheaper(m, best)) {
+                if pick.is_none_or(|(_, _, best)| dp::cheaper(m, best)) {
                     pick = Some(((a, b), r, m));
                 }
             }
