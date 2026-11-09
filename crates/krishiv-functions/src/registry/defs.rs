@@ -1469,6 +1469,15 @@ fn collect_set(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         }
         .into());
     }
+    // Spark refuses a collated string too: its set would be by bytes.
+    if c.data_type(0).is_some_and(DataType::contains_collation) {
+        return Err(DatatypeMismatchUnsupportedInputType {
+            sql_expr: format!("\"collect_set({})\"", c.sql(0).unwrap_or_default()),
+            function_name: "`collect_set`".to_owned(),
+            data_type: "\"MAP\" or \"COLLATED STRING\"".to_owned(),
+        }
+        .into());
+    }
     collect(c)
 }
 

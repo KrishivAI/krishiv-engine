@@ -5,7 +5,9 @@
 //! Rules run in batches, each batch to a fixed point (at most
 //! [`MAX_ITERATIONS`] rounds, as Spark's `spark.sql.optimizer.maxIterations`):
 //!
-//! 0. **Inline CTEs**, once: each reference to a deterministic (or
+//! 0. **Collation keys**, once: the key positions of a collated value compare its key
+//!    ([`collation_keys`]).
+//!    **Inline CTEs**, once: each reference to a deterministic (or
 //!    singly referenced) `WITH` definition becomes a fresh instance of it
 //!    (Spark's `InlineCTE`), so the rules below see through it.
 //!    **Implied join filters**, once: each input of an inner join is
@@ -47,6 +49,7 @@
 
 #![forbid(unsafe_code)]
 
+mod collation_keys;
 mod cse;
 mod dag;
 mod eager;
@@ -347,6 +350,10 @@ fn run(
             on: tracing,
             steps: Vec::new(),
         };
+        // Collated keys first: every later rule then sees operators that compare bytes.
+        let root = t.once("CollationKeys", &root, |r| {
+            collation_keys::rewrite(Arc::clone(r))
+        })?;
         let root = t.once("InlineCTE", &root, |r| inline_cte::inline(Arc::clone(r)))?;
         let root = t.once("ImpliedJoinFilters", &root, |r| {
             dag::rewrite_up(Arc::clone(r), &mut |p| {

@@ -13,7 +13,7 @@ use krishiv_common::error::{
     DatatypeMismatchInvalidOrderingType, DatatypeMismatchMapFunctionDiffTypes,
     DatatypeMismatchUnexpectedInputType, InvalidExtractBaseFieldType, KrishivError,
 };
-use krishiv_types::{ArrayType, DataType, MapType, StructField, StructType};
+use krishiv_types::{DataType, MapType};
 
 use super::defs::{Spec, exact, scalar};
 use super::hof::{call_sql, ordinal, quoted};
@@ -182,28 +182,29 @@ fn subscript_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
 
 /// The type of the key of its first argument: every string leaf becomes `BINARY`, the shape stays.
 fn collation_key_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    fn keyed(t: &DataType) -> DataType {
-        match t {
-            DataType::String | DataType::CollatedString(_) => DataType::Binary,
-            DataType::Array(a) => DataType::Array(std::sync::Arc::new(ArrayType::new(
-                keyed(a.element_type()),
-                a.contains_null(),
-            ))),
-            DataType::Map(m) => DataType::Map(std::sync::Arc::new(MapType::new(
-                keyed(m.key_type()),
-                keyed(m.value_type()),
-                m.value_contains_null(),
-            ))),
-            DataType::Struct(s) => DataType::Struct(StructType::new(
-                s.fields()
-                    .iter()
-                    .map(|f| StructField::new(f.name(), keyed(f.data_type()), f.nullable())),
-            )),
-            other => other.clone(),
-        }
-    }
-    let t = c.data_type(0).map_or(DataType::Binary, keyed);
+    let t = c
+        .data_type(0)
+        .map_or(DataType::Binary, DataType::collation_key_type);
     Ok(ArgType::new(t, c.args().first().is_none_or(|a| a.nullable)))
+}
+
+/// `__collation_map_keys(m, type)`: the map with its keys keyed and its values as they are.
+fn collation_map_keys_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let t = match c.data_type(0) {
+        Some(DataType::Map(m)) => DataType::Map(std::sync::Arc::new(MapType::new(
+            m.key_type().collation_key_type(),
+            m.value_type().clone(),
+            m.value_contains_null(),
+        ))),
+        other => other.cloned().unwrap_or(DataType::Null),
+    };
+    Ok(ArgType::new(t, c.args().first().is_none_or(|a| a.nullable)))
+}
+
+/// `__collation_greatest` and `__collation_least`: a plain string, NULL only if both are.
+fn collation_pick_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let nullable = c.args().iter().skip(1).all(|a| a.nullable);
+    Ok(ArgType::new(DataType::String, nullable))
 }
 
 /// The signatures of this family.
@@ -225,6 +226,20 @@ pub(super) fn specs() -> Vec<Spec> {
         &["__collation_key"],
         &Inputs::Expects(vec![InputType::Any, exact(DataType::String)]),
         collation_key_result,
+    ));
+    out.extend(scalar(
+        &["__collation_map_keys"],
+        &Inputs::Expects(vec![InputType::Any, exact(DataType::String)]),
+        collation_map_keys_result,
+    ));
+    out.extend(scalar(
+        &["__collation_greatest", "__collation_least"],
+        &Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::String),
+        ]),
+        collation_pick_result,
     ));
     out.extend(scalar(&["element_at"], &built, element_at));
     out.extend(scalar(&["try_element_at"], &built, try_element_at));

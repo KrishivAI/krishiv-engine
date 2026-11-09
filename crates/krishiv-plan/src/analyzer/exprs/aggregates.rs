@@ -329,8 +329,13 @@ impl Resolver<'_> {
             let mut memo = std::collections::HashMap::new();
             let mut key = |e: &Arc<Expr>| semantic_key(e, &mut memo);
             let value = &call_kids[0].expr;
-            let same =
-                orders.len() == 1 && orders.first().is_some_and(|o| key(&o.expr) == key(value));
+            // A collated value reads through the carrier cast of the signature: the written value
+            // is what `DISTINCT` and the ordering compare.
+            let written = &kids[0].expr;
+            let same = orders.len() == 1
+                && orders
+                    .first()
+                    .is_some_and(|o| key(&o.expr) == key(value) || key(&o.expr) == key(written));
             if !same {
                 let cast_of = match &call_kids[0].expr.node {
                     ExprNode::Cast { expr, to, .. }

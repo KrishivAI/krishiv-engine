@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::builder::BinaryBuilder;
+use arrow_array::builder::BinaryViewBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, MapArray, StructArray};
 use arrow_buffer::NullBuffer;
@@ -78,12 +78,12 @@ pub fn push_collation_key(
     Ok(())
 }
 
-/// The Arrow type of the key of a value of Arrow type `t`: strings become `Binary`, inside
+/// The Arrow type of the key of a value of Arrow type `t`: strings become `BinaryView` (the engine's binary carrier), inside
 /// arrays, maps and structs too. A map's values keep their type when `keys_only`.
 #[must_use]
 pub fn collation_key_type(t: &ArrowType) -> ArrowType {
     match t {
-        ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View => ArrowType::Binary,
+        ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View => ArrowType::BinaryView,
         ArrowType::List(f) => ArrowType::List(key_field(f)),
         ArrowType::LargeList(f) => ArrowType::LargeList(key_field(f)),
         ArrowType::Map(f, sorted) => ArrowType::Map(key_field(f), *sorted),
@@ -105,7 +105,7 @@ fn key_field(f: &Field) -> Arc<Field> {
 /// The key of every row of the string column `a`.
 fn string_keys(collation: Collation, a: &ArrayRef) -> Result<ArrayRef, KernelError> {
     let rows = a.len();
-    let mut out = BinaryBuilder::with_capacity(rows, a.get_array_memory_size().min(1 << 20));
+    let mut out = BinaryViewBuilder::with_capacity(rows);
     let mut buf = Vec::new();
     let mut row = |s: Option<&str>| -> Result<(), KernelError> {
         match s {
@@ -207,6 +207,66 @@ pub fn collation_key(t: &DataType, a: &ArrayRef) -> Result<ArrayRef, KernelError
     }
 }
 
+/// The Arrow type of [`keyed_map`] of a map of type `t`: the keys become their key type.
+#[must_use]
+pub fn keyed_map_type(t: &ArrowType) -> ArrowType {
+    let ArrowType::Map(entries, sorted) = t else {
+        return t.clone();
+    };
+    let ArrowType::Struct(kv) = entries.data_type() else {
+        return t.clone();
+    };
+    let fields: Fields = kv
+        .iter()
+        .enumerate()
+        .map(|(i, f)| if i == 0 { key_field(f) } else { Arc::clone(f) })
+        .collect();
+    ArrowType::Map(
+        Arc::new(Field::new(
+            entries.name(),
+            ArrowType::Struct(fields),
+            entries.is_nullable(),
+        )),
+        *sorted,
+    )
+}
+
+/// The map `a` of type `t` with each key replaced by its collation key and the values untouched:
+/// a lookup in it with a keyed needle compares as the collation does (`m[k]`, `element_at`).
+///
+/// # Errors
+/// `INTERNAL_ERROR` when `t` does not describe `a`.
+pub fn keyed_map(t: &DataType, a: &ArrayRef) -> Result<ArrayRef, KernelError> {
+    let (DataType::Map(m), ArrowType::Map(..)) = (t, a.data_type()) else {
+        return Err(KernelError::internal(format!(
+            "keyed map of {} as {t:?}",
+            a.data_type()
+        )));
+    };
+    let ArrowType::Map(entries, sorted) = keyed_map_type(a.data_type()) else {
+        return Err(KernelError::internal("a keyed map type".to_owned()));
+    };
+    let ArrowType::Struct(kv) = entries.data_type() else {
+        return Err(KernelError::internal("a keyed map entry type".to_owned()));
+    };
+    let map = a.as_map();
+    let entry = StructArray::new(
+        kv.clone(),
+        vec![
+            collation_key(m.key_type(), map.keys())?,
+            Arc::clone(map.values()),
+        ],
+        None,
+    );
+    Ok(Arc::new(MapArray::new(
+        entries,
+        map.offsets().clone(),
+        entry,
+        map.nulls().cloned(),
+        sorted,
+    )))
+}
+
 fn field_of(t: &ArrowType) -> Option<&Field> {
     match t {
         ArrowType::List(f) | ArrowType::LargeList(f) => Some(f),
@@ -216,7 +276,7 @@ fn field_of(t: &ArrowType) -> Option<&Field> {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{BinaryArray, ListArray, StringArray, StringViewArray};
+    use arrow_array::{BinaryArray, BinaryViewArray, ListArray, StringArray, StringViewArray};
     use krishiv_types::ArrayType;
 
     use super::*;
@@ -280,6 +340,51 @@ mod tests {
         assert!(push_collation_key(c, "a", &mut out).is_err());
     }
 
+    /// `repartition(7, c)` of a real Spark 4.2.0: `pmod(murmur3(key bytes, 42), 7)`, which is
+    /// what `CollationAwareMurmur3Hash` computes.
+    #[test]
+    fn hashing_the_key_gives_sparks_partition_ids() {
+        let check = |collation: &str, rows: &[(&str, i32)]| {
+            let c = Collation::parse(collation).unwrap();
+            for (s, id) in rows {
+                let mut buf = Vec::new();
+                push_collation_key(c, s, &mut buf).unwrap();
+                let col = BinaryArray::from_vec(vec![buf.as_slice()]);
+                let h = crate::hash::hash(&[&col], 1).unwrap().value(0);
+                assert_eq!(h.rem_euclid(7), *id, "{collation} {s:?}");
+            }
+        };
+        let lcase = [
+            ("", 5),
+            ("A", 3),
+            ("ABC", 6),
+            ("B", 2),
+            ("a", 3),
+            ("abc", 6),
+            ("b", 2),
+            ("ß", 2),
+            ("İ", 4),
+            ("Σ", 2),
+            ("ς", 2),
+            ("σ", 2),
+            ("日本", 4),
+        ];
+        check("UTF8_LCASE", &lcase);
+        check("UTF8_LCASE_RTRIM", &lcase);
+        check("UTF8_LCASE_RTRIM", &[("a  ", 3), ("A  ", 3)]);
+        check(
+            "UTF8_BINARY_RTRIM",
+            &[
+                ("", 5),
+                ("A  ", 5),
+                ("ABC", 0),
+                ("a  ", 3),
+                ("ς", 3),
+                ("İ", 1),
+            ],
+        );
+    }
+
     fn lcase() -> DataType {
         DataType::collated_string(Collation::parse("UTF8_LCASE").unwrap())
     }
@@ -291,7 +396,7 @@ mod tests {
             Arc::new(StringViewArray::from(vec![Some("aB"), None])),
         ] {
             let out = collation_key(&lcase(), &a).unwrap();
-            let out = out.as_any().downcast_ref::<BinaryArray>().unwrap();
+            let out = out.as_any().downcast_ref::<BinaryViewArray>().unwrap();
             assert_eq!(out.value(0), b"ab");
             assert!(out.is_null(1));
         }

@@ -60,7 +60,9 @@ pub use codec::{
     CharsetOptions, base64, decode, decode_with, encode, encode_with, is_valid_utf8,
     make_valid_utf8, to_binary, unbase64, url_decode, url_encode, validate_utf8,
 };
-pub use collation_key::{collation_key, collation_key_type, push_collation_key};
+pub use collation_key::{
+    collation_key, collation_key_type, keyed_map, keyed_map_type, push_collation_key,
+};
 pub use like::{LikePattern, like};
 pub use split::{literal_delimiter, split_literal};
 

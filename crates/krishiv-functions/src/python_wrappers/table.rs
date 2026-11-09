@@ -77,6 +77,18 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "__collation_key",
         "internal: the comparison key of a collated value",
     ),
+    (
+        "__collation_map_keys",
+        "internal: a map's keys as collation keys, for lookups",
+    ),
+    (
+        "__collation_greatest",
+        "internal: `greatest` over a collated string",
+    ),
+    (
+        "__collation_least",
+        "internal: `least` over a collated string",
+    ),
     ("__time_add_interval", "operator: `time + interval`"),
     ("__subtract_times", "operator: `time - time`"),
     (

@@ -487,6 +487,8 @@ fn reference(
                         AggregateFunction::AnyValue { .. }
                         | AggregateFunction::MaxBy
                         | AggregateFunction::MinBy
+                        | AggregateFunction::MaxByKeyFirst
+                        | AggregateFunction::MinByKeyFirst
                         | AggregateFunction::StddevSamp
                         | AggregateFunction::StddevPop
                         | AggregateFunction::VarSamp

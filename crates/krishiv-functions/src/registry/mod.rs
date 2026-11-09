@@ -291,13 +291,19 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__subscript" => "__subscript",
         // The comparison key of a collated value (ADR 0043); the analyzer and the optimizer build it.
         "__collation_key" => "__collation_key",
+        "__collation_map_keys" => "__collation_map_keys",
+        "__collation_greatest" => "__collation_greatest",
+        "__collation_least" => "__collation_least",
         // `time + interval` and `time - time`: Spark's `TimeAddInterval` and `SubtractTimes`, which the analyzer
         // builds for the operators (the third argument of `__time_add_interval` is the interval's end field).
         "__time_add_interval" => "__time_add_interval",
         "__subtract_times" => "__subtract_times",
         _ => return None,
     };
-    let arity = if matches!(name, "__subscript" | "__subtract_times" | "__collation_key") {
+    let arity = if matches!(
+        name,
+        "__subscript" | "__subtract_times" | "__collation_key" | "__collation_map_keys"
+    ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {
         Arity::new([false, false, false, true, false, false, false], "3")

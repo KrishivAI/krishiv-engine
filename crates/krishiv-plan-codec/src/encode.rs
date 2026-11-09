@@ -1103,6 +1103,12 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::AnyValue { ignore_nulls } => {
             (pb::AggregateFunction::AnyValue, *ignore_nulls)
         }
+        // `min`/`max` of a collated string have no wire form yet: the plan stays on one node.
+        AggregateFunction::MaxByKeyFirst | AggregateFunction::MinByKeyFirst => {
+            return Err(CodecError::Unsupported(
+                "min/max of a collated string".to_owned(),
+            ));
+        }
         AggregateFunction::MaxBy => (pb::AggregateFunction::MaxBy, false),
         AggregateFunction::MinBy => (pb::AggregateFunction::MinBy, false),
         AggregateFunction::Udf(call) => {
