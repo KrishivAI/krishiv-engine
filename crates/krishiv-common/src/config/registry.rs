@@ -4,8 +4,7 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use super::join_cost::JOIN_COST;
-use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
+use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType, join_cost::JOIN_COST};
 
 const MIB: u64 = 1024 * 1024;
 
