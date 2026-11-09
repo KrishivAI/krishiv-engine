@@ -10,6 +10,15 @@ fn run(s: &Session, sql: &str) -> Vec<RecordBatch> {
     block_on(async { s.sql(sql).await.unwrap().collect().await.unwrap() })
 }
 
+/// Runs `sql`, checks it returns exactly `rows` rows (so a repeat of the
+/// same wrong answer cannot pass) and returns its shape.
+fn first_run(s: &Session, sql: &str, rows: usize) -> String {
+    let batches = run(s, sql);
+    let got: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(got, rows, "row count of `{sql}`");
+    shape(&batches)
+}
+
 /// The rows as text, in the order they came, batch boundaries included.
 fn shape(batches: &[RecordBatch]) -> String {
     batches
@@ -28,14 +37,20 @@ fn repeated_runs_of_unordered_queries_are_byte_identical() {
         "CREATE TABLE d USING parquet AS \
          SELECT id, id % 7 AS g, CAST(id AS DECIMAL(20,2)) AS m FROM range(60000)",
     );
-    for sql in [
-        "SELECT id, m FROM d WHERE id % 3 = 0",
-        "SELECT g, sum(m), avg(m), count(*) FROM d GROUP BY g",
-        "SELECT a.id, b.g FROM d a JOIN d b ON a.id = b.id WHERE a.id < 5000",
-        "SELECT id FROM d WHERE id % 5 = 0 UNION ALL SELECT id FROM d WHERE id % 7 = 0",
-        "SELECT g, count(DISTINCT id), sum(m) FROM d GROUP BY g",
+    for (sql, rows) in [
+        ("SELECT id, m FROM d WHERE id % 3 = 0", 20_000),
+        ("SELECT g, sum(m), avg(m), count(*) FROM d GROUP BY g", 7),
+        (
+            "SELECT a.id, b.g FROM d a JOIN d b ON a.id = b.id WHERE a.id < 5000",
+            5_000,
+        ),
+        (
+            "SELECT id FROM d WHERE id % 5 = 0 UNION ALL SELECT id FROM d WHERE id % 7 = 0",
+            12_000 + 8_572,
+        ),
+        ("SELECT g, count(DISTINCT id), sum(m) FROM d GROUP BY g", 7),
     ] {
-        let first = shape(&run(&s, sql));
+        let first = first_run(&s, sql, rows);
         for i in 1..6 {
             assert_eq!(first, shape(&run(&s, sql)), "run {i} of `{sql}` differs");
         }
@@ -70,7 +85,7 @@ fn many_groups_come_out_in_the_same_order_on_every_run() {
         "SELECT k, count(*), sum(x) FROM w GROUP BY k",
         "SELECT DISTINCT k FROM w",
     ] {
-        let first = shape(&run(&s, sql));
+        let first = first_run(&s, sql, 200_003);
         for i in 1..4 {
             assert!(first == shape(&run(&s, sql)), "run {i} of `{sql}` differs");
         }
@@ -92,7 +107,8 @@ fn fan_ins_and_spills_give_the_same_bytes_on_every_run() {
     let union = "SELECT k, sum(x), count(*) FROM \
                  (SELECT k, x FROM f WHERE id % 2 = 0 UNION ALL SELECT k, x * 1.5 FROM f WHERE id % 3 = 0) \
                  GROUP BY k";
-    let first = shape(&run(&s, union));
+    // Every residue of 50021 (odd) has an even id below 400000.
+    let first = first_run(&s, union, 50_021);
     for i in 1..4 {
         assert!(
             first == shape(&run(&s, union)),
@@ -112,7 +128,7 @@ fn fan_ins_and_spills_give_the_same_bytes_on_every_run() {
         "CREATE TEMPORARY VIEW g AS SELECT id % 150001 AS k, CAST(id AS DOUBLE) / 7 AS x FROM range(600000)",
     );
     let grouped = "SELECT k, sum(x), avg(x) FROM g GROUP BY k";
-    let first = shape(&run(&spill, grouped));
+    let first = first_run(&spill, grouped, 150_001);
     for i in 1..3 {
         assert!(
             first == shape(&run(&spill, grouped)),
@@ -140,7 +156,8 @@ fn a_join_probing_a_union_gives_the_same_order_on_every_run() {
     let sql = "SELECT u.id, u.x, q.v FROM \
                (SELECT id, k, x FROM p WHERE id % 2 = 0 UNION ALL SELECT id, k, x FROM p WHERE id % 3 = 0) u \
                LEFT JOIN q ON u.k = q.k";
-    let first = shape(&run(&s, sql));
+    // 150000 even ids + 100000 multiples of 3; each k matches one q row.
+    let first = first_run(&s, sql, 250_000);
     for i in 1..5 {
         assert!(first == shape(&run(&s, sql)), "run {i} differs");
     }
