@@ -16,10 +16,10 @@ Limit 100
                   :           +- Aggregate [ws_item_sk#3, d_date#36], [ws_item_sk#3 AS item_sk#62, d_date#36, sum(ws_sales_price#21) AS sum(ws_sales_price)#64]
                   :              +- Project [ws_item_sk#3, ws_sales_price#21, d_date#36]
                   :                 +- Join Inner, (ws_sold_date_sk#0 == d_date_sk#34)
-                  :                    :- Filter isnotnull(ws_item_sk#3)
+                  :                    :- Filter (isnotnull(ws_item_sk#3) and isnotnull(ws_sold_date_sk#0))
                   :                    :  +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_sales_price#21]
                   :                    +- Project [d_date_sk#34, d_date#36]
-                  :                       +- Filter ((d_month_seq#37 >= 1200) and (d_month_seq#37 <= 1211))
+                  :                       +- Filter (((d_month_seq#37 >= 1200) and (d_month_seq#37 <= 1211)) and isnotnull(d_date_sk#34))
                   :                          +- Scan spark_catalog.default.date_dim [d_date_sk#34, d_date#36, d_month_seq#37]
                   +- Project [item_sk#318 AS item_sk#124, d_date#292 AS d_date#125, cume_sales#319 AS cume_sales#126]
                      +- Shift +201
@@ -28,8 +28,8 @@ Limit 100
                               +- Aggregate [ss_item_sk#68, d_date#91], [ss_item_sk#68 AS item_sk#117, d_date#91, sum(ss_sales_price#79) AS sum(ss_sales_price)#119]
                                  +- Project [ss_item_sk#68, ss_sales_price#79, d_date#91]
                                     +- Join Inner, (ss_sold_date_sk#66 == d_date_sk#89)
-                                       :- Filter isnotnull(ss_item_sk#68)
+                                       :- Filter (isnotnull(ss_item_sk#68) and isnotnull(ss_sold_date_sk#66))
                                        :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#66, ss_item_sk#68, ss_sales_price#79]
                                        +- Project [d_date_sk#89, d_date#91]
-                                          +- Filter ((d_month_seq#92 >= 1200) and (d_month_seq#92 <= 1211))
+                                          +- Filter (((d_month_seq#92 >= 1200) and (d_month_seq#92 <= 1211)) and isnotnull(d_date_sk#89))
                                              +- Scan spark_catalog.default.date_dim [d_date_sk#89, d_date#91, d_month_seq#92]
