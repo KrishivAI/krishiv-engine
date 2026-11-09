@@ -75,7 +75,9 @@ impl Operator for ReplicateRows {
                 if input.num_rows() == 0 {
                     return Ok(OperatorOutput::NeedMoreInput(None));
                 }
-                let v = self.count.evaluate_in(input.data(), cur.partition)?;
+                let v = self
+                    .count
+                    .evaluate_in(input.data(), input.split().unwrap_or(cur.partition))?;
                 let c = v
                     .as_primitive_opt::<Int64Type>()
                     .ok_or_else(|| internal("a replication count is not BIGINT".to_owned()))?

@@ -285,7 +285,9 @@ impl Operator for Generate {
                 if input.num_rows() == 0 {
                     return Ok(OperatorOutput::NeedMoreInput(None));
                 }
-                let arg = self.arg.evaluate_in(input.data(), cur.partition)?;
+                let arg = self
+                    .arg
+                    .evaluate_in(input.data(), input.split().unwrap_or(cur.partition))?;
                 Pending {
                     elements: Elements::of(self.kind, &arg)?,
                     row: 0,

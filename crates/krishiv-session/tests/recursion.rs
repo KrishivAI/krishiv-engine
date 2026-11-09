@@ -872,3 +872,14 @@ fn a_seeded_random_draws_by_split_not_by_driver() {
         assert_eq!(column(rows(&s, q)), first, "run {run}");
     }
 }
+
+/// Two `UNION ALL` children number their splits one after the other, so a split id (and the ids and seeded draws
+/// keyed by it) is unique across the children even when a child has more slices than drivers.
+#[test]
+fn union_all_children_number_their_splits_without_overlap() {
+    let s = Session::new().unwrap();
+    let q = "SELECT count(DISTINCT m), count(DISTINCT p) FROM (SELECT monotonically_increasing_id() AS m, \
+             spark_partition_id() AS p FROM (SELECT id FROM range(0, 1000, 1, 64) UNION ALL \
+             SELECT id FROM range(0, 1000, 1, 64)))";
+    assert_eq!(rows(&s, q), vec![vec!["2000".to_owned(), "128".to_owned()]]);
+}
