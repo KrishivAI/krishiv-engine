@@ -421,9 +421,12 @@ impl Resolver<'_> {
         }
         // `instr` / `locate` / `position` over `UTF8_LCASE` strings answer positions in the
         // original text: the kernel `__locate_lcase` matches the lower-cased code points (unit 5b).
-        if matches!(name.as_str(), "instr" | "locate" | "position")
-            && !f.distinct
+        if matches!(
+            name.as_str(),
+            "instr" | "locate" | "position" | "find_in_set"
+        ) && !f.distinct
             && (2..=3).contains(&n)
+            && (n == 2 || name != "find_in_set")
             && kids[..2].iter().all(|k| is_string(k.ty.data_type.as_ref()))
             && kids[..2]
                 .iter()
@@ -777,6 +780,7 @@ impl Resolver<'_> {
             return Ok(None);
         }
         let (sub, text) = if name == "instr" { (1, 0) } else { (0, 1) };
+        let find_in_set = name == "find_in_set";
         let plain = |this: &mut Self, k: &Bound| -> Result<Bound, AnalysisError> {
             let cast = Expr::new(ExprNode::Cast {
                 expr: Arc::clone(&k.expr),
@@ -788,15 +792,21 @@ impl Resolver<'_> {
             b.shown = Some(k.shown());
             Ok(b)
         };
-        let start = if n == 3 && name != "instr" {
-            kids[2].clone()
-        } else {
-            let one = Expr::new(ExprNode::Literal(Literal::Integer(1))).with_origin(e.origin);
-            self.expr(&Arc::new(one), cx)?
-        };
-        let keyed = vec![plain(self, &kids[sub])?, plain(self, &kids[text])?, start];
+        let mut keyed = vec![plain(self, &kids[sub])?, plain(self, &kids[text])?];
+        if !find_in_set {
+            keyed.push(if n == 3 && name != "instr" {
+                kids[2].clone()
+            } else {
+                let one = Expr::new(ExprNode::Literal(Literal::Integer(1))).with_origin(e.origin);
+                self.expr(&Arc::new(one), cx)?
+            });
+        }
         let call = Expr::function(
-            "__locate_lcase",
+            if find_in_set {
+                "__find_in_set_lcase"
+            } else {
+                "__locate_lcase"
+            },
             keyed.iter().map(|k| (*k.expr).clone()).collect(),
         )
         .with_origin(e.origin);
