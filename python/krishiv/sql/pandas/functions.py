@@ -2,7 +2,7 @@
 # Ported from Apache Spark v4.2.0, python/pyspark/sql/pandas/functions.py (Apache License 2.0; see NOTICE):
 # `PandasUDFType`, `ArrowUDFType` (lines 32-56), `vectorized_udf`, `_validate_vectorized_udf` and
 # `_create_vectorized_udf` (lines 783-1031) unchanged but for their imports and the Connect branch.
-"""``pyspark.sql.pandas.functions``: :func:`pandas_udf` and :func:`arrow_udf` (design P2-T059 unit 2c).
+"""``pyspark.sql.pandas.functions``: :func:`pandas_udf` and :func:`arrow_udf`.
 
 The engine runs the scalar kinds (``PandasUDFType.SCALAR``, ``ArrowUDFType.SCALAR``); a UDF of another kind is
 made as in Spark and raises ``NOT_IMPLEMENTED`` when called.

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Ported from Apache Spark v4.2.0, python/pyspark/sql/udf.py (Apache License 2.0; see NOTICE): the same
 # classes and checks; the JVM handle (`_judf`) is the engine's (`_native.AnonymousPythonUdf`).
-"""``pyspark.sql.udf``: :class:`UserDefinedFunction` and :class:`UDFRegistration` (design P2-T059 unit 2c).
+"""``pyspark.sql.udf``: :class:`UserDefinedFunction` and :class:`UDFRegistration`.
 
 A UDF is not bound to a session: its first call fixes its wrapper in the process (an unregistered UDF the
 engine resolves in any session, never by name from SQL) and builds a Column shown ``name(args)``, as Spark's
