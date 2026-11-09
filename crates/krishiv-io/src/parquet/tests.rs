@@ -1021,8 +1021,9 @@ fn calendar_rules_follow_spark() {
 /// 2 file): Spark rebases the pushed literal to the stored calendar before
 /// comparing (`ParquetFilters`, LEGACY spec); Krishiv does not, so the read
 /// goes on to the calendar guard instead of trusting stored bounds. A Spark 3+
-/// file prunes as usual. The row filter and page stages see the same predicate
-/// (the decoder strips it too, with the read mode).
+/// file prunes as usual. (The decoder strips the predicate too, with the read
+/// mode; here statistics decide the conjunct first, so this test does not
+/// exercise that strip on its own.)
 #[test]
 fn rebased_dates_do_not_prune() {
     use parquet::file::metadata::KeyValue;
@@ -1073,8 +1074,9 @@ fn rebased_dates_do_not_prune() {
         env.scan(&spark2, &req, &o).err().map(|e| e.error_class()),
         Some(ErrorClass::KrishivUnsupportedFeature)
     );
-    // The same predicate as a row-level prefix is stripped too: the read
-    // reaches the guard in both forms.
+    // The same predicate as a row-level prefix reaches the guard in both
+    // forms. A smoke check only: the row filter is never used while a guarded
+    // column is in the output, so the decoder's prefix strip is defensive.
     let mut prefixed = ScanRequest::all(Arc::clone(&schema));
     prefixed.row_level = crate::request::RowLevel::Prefix(req.predicate.clone());
     assert_eq!(
@@ -1122,6 +1124,64 @@ fn rebased_dates_do_not_prune() {
     let legacy = env.options(&[("datetimeRebaseMode", "LEGACY")]);
     assert_eq!(pruned_with(&other, &req, &legacy), 0);
     assert_eq!(pruned_with(&other, &modern, &legacy), 1);
+}
+
+/// A runtime filter on a rebased date column is dropped, whatever its keys:
+/// its values are in the reader's calendar, the stored bounds in Spark's.
+/// Without the drop, a modern key set prunes a Spark 2 file's row group
+/// through bounds that mean different days (join rows would go missing).
+#[test]
+fn runtime_filters_on_rebased_dates_do_not_prune() {
+    use crate::{FilterId, FilterSnapshot, KeyFilterBuilder, KeyFilterOptions, RuntimeFilter};
+    use parquet::file::metadata::KeyValue;
+    let env = Env::new();
+    let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Date32, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(arrow_array::Date32Array::from(vec![
+            -200_000, 10_957,
+        ]))],
+    )
+    .unwrap();
+    let props = WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![KeyValue::new(
+            "org.apache.spark.version".into(),
+            "2.4.8".to_owned(),
+        )]))
+        .build();
+    let file = env.put("s2-rf.parquet", write(&[batch], props));
+    let o = env.options(&[]);
+    for key in [-300_000, 20_000] {
+        let mut b = KeyFilterBuilder::new(DataType::Date32, KeyFilterOptions::default()).unwrap();
+        b.add(&arrow_array::Date32Array::from(vec![key]), None)
+            .unwrap();
+        let filter = Arc::new(RuntimeFilter::new(
+            FilterId(1),
+            ColumnPath::new("d"),
+            DataType::Date32,
+        ));
+        filter.publish(FilterSnapshot::Final(Arc::new(b.finish())));
+        let mut req = ScanRequest::all(Arc::clone(&schema));
+        req.dynamic
+            .push(crate::ScanFilter::new(Arc::clone(&filter), &schema).unwrap());
+        let meta = env
+            .rt
+            .block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+            )
+            .unwrap();
+        let plan = ParquetFormat
+            .plan_units(meta.as_ref(), &ByteRange::whole(file.size), &req)
+            .unwrap();
+        assert_eq!(plan.pruned_by_statistics, 0, "key {key}");
+        // The read reaches the calendar guard instead of silently pruning.
+        assert_eq!(
+            env.scan(&file, &req, &o).err().map(|e| e.error_class()),
+            Some(ErrorClass::KrishivUnsupportedFeature),
+            "key {key}"
+        );
+    }
 }
 
 /// The decoder's prefetch hint stops at the budget, whole row groups only.
