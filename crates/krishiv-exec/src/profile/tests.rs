@@ -653,6 +653,10 @@ fn schema_matches_the_writer() {
         serde_json::json!({"parsed": "p", "analyzed": "a", "steps": [],
         "optimized": "o", "physical": "x"}),
     );
+    profile.trace = Some(serde_json::json!({
+        "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+        "span_id": "00f067aa0ba902b7"
+    }));
     let doc = profile.to_json_value();
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v
@@ -701,6 +705,7 @@ fn schema_matches_the_writer() {
         &doc["query"]["memory"],
     );
     check(&schema["$defs"]["planning"], &doc["planning"]);
+    check(&props["trace"], &doc["trace"]);
     check(&props["environment"], &doc["environment"]);
     check(&props["usage"], &doc["usage"]);
     check(

@@ -235,3 +235,18 @@ fn analysis_planning_and_execution_are_child_spans() {
         );
     }
 }
+
+/// The profile names the trace the query ran in (`trace` member, profile minor 4).
+#[test]
+fn the_profile_json_carries_the_callers_trace_id() {
+    let s = Session::new().unwrap();
+    let before = block_on(block_on(s.sql("SELECT 1 AS a")).unwrap().explain_analyze()).unwrap();
+    assert!(before.to_json_value().get("trace").is_none());
+    s.set_trace_context("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+        .unwrap();
+    let p = block_on(block_on(s.sql("SELECT 1 AS a")).unwrap().explain_analyze()).unwrap();
+    let doc = p.to_json_value();
+    assert_eq!(doc["trace"]["trace_id"], "4bf92f3577b34da6a3ce929d0e0e4736");
+    let back = krishiv_exec::profile::QueryProfile::from_json(&p.to_json()).unwrap();
+    assert_eq!(back.trace, p.trace);
+}

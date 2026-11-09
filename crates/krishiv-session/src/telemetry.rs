@@ -153,6 +153,29 @@ impl QueryTrace {
     }
 }
 
+/// The trace the running action belongs to, for the query profile (`trace` member): the caller's
+/// trace id and, with the `telemetry-otlp` feature and an active exporter, the OpenTelemetry span id of
+/// the current span. `None` when neither is known.
+pub(crate) fn profile_trace(state: &crate::session::SessionState) -> Option<serde_json::Value> {
+    let mut o = serde_json::Map::new();
+    if let Some(t) = Who::of(state).trace_id {
+        o.insert("trace_id".to_owned(), t.into());
+    }
+    #[cfg(feature = "telemetry-otlp")]
+    {
+        use opentelemetry::trace::TraceContextExt as _;
+        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+        let cx = tracing::Span::current().context();
+        let sc = cx.span().span_context().clone();
+        if sc.is_valid() {
+            o.insert("span_id".to_owned(), sc.span_id().to_string().into());
+            o.entry("trace_id")
+                .or_insert_with(|| sc.trace_id().to_string().into());
+        }
+    }
+    (!o.is_empty()).then_some(serde_json::Value::Object(o))
+}
+
 /// The span of an action of a frame without a statement (a DataFrame
 /// transformation chain): the session and the engine, no query text.
 pub(crate) fn plain_span(who: &Who) -> Span {
