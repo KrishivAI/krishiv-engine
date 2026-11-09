@@ -62,6 +62,33 @@ pub(crate) fn is_system_table(name: &[String]) -> bool {
     matches!(name, [catalog, table] if is_system(catalog) && table_known(table))
 }
 
+/// Whether `plan` reads only system tables: every leaf a scan of a system table (at least one),
+/// and no one-row relation (inline `VALUES`), range, generator or recursion that makes rows of
+/// its own. Admission is skipped only for such a plan; anything else, such as
+/// `system.queries CROSS JOIN range(..)`, is admitted as usual (fail closed).
+pub(crate) fn plan_reads_only_system(plan: &krishiv_exec::physical::PhysicalPlan) -> bool {
+    use krishiv_exec::physical::PhysNode;
+    let mut stack: Vec<&PhysNode> = plan.roots().collect();
+    let mut system_scan = false;
+    while let Some(node) = stack.pop() {
+        match node {
+            PhysNode::Scan(scan) => match &scan.scan.source {
+                krishiv_plan::ReadSource::Table { name, .. } if is_system_table(name) => {
+                    system_scan = true;
+                }
+                _ => return false,
+            },
+            PhysNode::OneRow
+            | PhysNode::Range(_)
+            | PhysNode::Generate { .. }
+            | PhysNode::UnionLoop { .. }
+            | PhysNode::LoopRef { .. } => return false,
+            other => stack.extend(other.children()),
+        }
+    }
+    system_scan
+}
+
 fn table_known(table: &str) -> bool {
     TABLES.iter().any(|t| t.eq_ignore_ascii_case(table))
 }
@@ -734,6 +761,9 @@ pub(crate) struct QueryRow {
     pub(crate) text: Option<String>,
     pub(crate) truncated: bool,
     pub(crate) submitted_ms: i64,
+    /// When it was submitted on the monotonic clock: a queued query's wait
+    /// does not move with the system clock.
+    pub(crate) submitted_at: std::time::Instant,
     pub(crate) ended_ms: Option<i64>,
     pub(crate) wall_ns: Option<i64>,
     pub(crate) peak_memory_bytes: Option<i64>,
@@ -979,6 +1009,7 @@ impl QueryLog {
             text,
             truncated,
             submitted_ms: ms,
+            submitted_at: std::time::Instant::now(),
             ended_ms: None,
             wall_ns: None,
             peak_memory_bytes: None,
@@ -1054,13 +1085,27 @@ impl QueryLog {
     /// admission): `denied`, `cancelled` or `failed` by its class.
     pub(crate) fn record_failed_row(&self, id: &str, error: &KrishivError) {
         let class = error.error_class().name();
+        let state = outcome_state(class);
+        self.close_unrun(id, state, (state != "cancelled").then_some(class));
+    }
+
+    /// Closes the live row `id` of a query that never ran (refused, cancelled while queued,
+    /// or ended before its run): its wall time is the time since it was submitted, so the
+    /// queue time is not lost.
+    pub(crate) fn close_unrun(&self, id: &str, state: &'static str, error_class: Option<&str>) {
+        let waited = self
+            .history
+            .submitted_at(&self.session_id, id)
+            .map_or(0, |at| {
+                i64::try_from(at.elapsed().as_nanos()).unwrap_or(i64::MAX)
+            });
         self.finish(
             id,
             &Finished {
-                state: outcome_state(class),
-                wall_ns: 0,
+                state,
+                wall_ns: waited,
                 peak_memory_bytes: 0,
-                error_class: (outcome_state(class) != "cancelled").then_some(class),
+                error_class,
                 operators: Vec::new(),
                 totals: None,
             },
@@ -1162,7 +1207,7 @@ impl QueryLog {
 }
 
 /// The state a failed query shows for its error class.
-fn outcome_state(class: &str) -> &'static str {
+pub(crate) fn outcome_state(class: &str) -> &'static str {
     match class {
         "KRISHIV_INSUFFICIENT_PERMISSIONS" => "denied",
         "OPERATION_CANCELED" | "KRISHIV_QUERY_TIMEOUT" | "KRISHIV_QUERY_KILLED" => "cancelled",
@@ -1263,6 +1308,7 @@ impl Catalog for SystemCatalog {
                 version: None,
                 kind: TableKind::Table,
                 file_metadata: Default::default(),
+                column_comments: Default::default(),
             }))
         })
     }

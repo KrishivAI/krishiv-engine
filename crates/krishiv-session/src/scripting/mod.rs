@@ -12,8 +12,9 @@
 //! handlers catch the errors raised while their compound runs (never `KRISHIV_*` errors or
 //! cancellation), then end that compound.
 
+mod control;
+
 use std::collections::{BTreeMap, HashSet};
-use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -25,8 +26,8 @@ use krishiv_common::error::{
     UnsupportedFeatureSqlScriptingDropTemporaryVariable, VariableAlreadyExists, VariableNotFound,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::analyzer::{LocalFrame, SessionVariable};
-use krishiv_plan::{Expr as PlanExpr, ExprNode, Literal, LogicalPlan, PlanNode};
+use krishiv_plan::Literal;
+use krishiv_plan::analyzer::{LocalFrame, SessionVariable, VariableValue};
 use krishiv_sql::ast::{
     Compound, DataTypeSpec, DeclareVariable, Expr, ForStatement, Handler, HandlerBody,
     HandlerCondition, ObjectName, ScriptStatement, ScriptStatement as S, SetVariable,
@@ -34,7 +35,6 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
-use crate::column::Column;
 use crate::command::{
     arrow_value, contains_default, contains_subquery, is_bare_default, padded_select,
     unresolved_variable,
@@ -42,14 +42,7 @@ use crate::command::{
 use crate::dataframe::DataFrame;
 use crate::session::{Session, internal};
 use crate::variables::{RESOLVE_SEARCH_PATH, StoredVariable, quote_normalized};
-
-/// The most rows a script's result may have. The result is returned as literal rows, which keeps
-/// it independent of the script's session; a larger one is refused rather than truncated.
-const MAX_RESULT_ROWS: i32 = 256;
-
-/// The most rows a `FOR` loop holds. Spark reads them lazily; this engine holds the query's rows for
-/// the whole loop, so a larger one is refused rather than risking the process's memory.
-const MAX_FOR_ROWS: usize = 100_000;
+use control::ScriptRun;
 
 /// What a statement tells the statements around it to do next.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +53,24 @@ enum Flow {
     Leave(String),
     /// `ITERATE label` is on its way to the labelled loop.
     Iterate(String),
+    /// An `EXIT` handler ran and ended its compound, and nothing follows that compound in the
+    /// compounds around it; the statement that holds them decides what happens next (see [`Body`]).
+    Exited,
+    /// The whole script ends here, silently.
+    Halt,
+}
+
+/// What a list of statements is the body of. It matters only to an `EXIT` handler whose compound
+/// is the last statement of the body (Spark 4.2.0: the `exit_last_in_*` cases of the record).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Body {
+    /// A `BEGIN ... END`: the exit carries on to the statement that holds the compound.
+    Compound,
+    /// An `IF` branch, a `WHILE` or `REPEAT` body or a searched `CASE` branch: Spark ends the whole
+    /// script, silently.
+    EndsScript,
+    /// A `FOR`, `LOOP` or simple `CASE` body (and the rest): the script goes on after the statement.
+    Plain,
 }
 
 /// A local variable: its value and the query that re-evaluates its default.
@@ -90,8 +101,10 @@ struct Run<'a> {
     text: &'a str,
     redacted: &'a RedactedSql,
     scopes: Vec<Scope>,
-    /// The rows of the last query statement that ran.
-    last: Option<(SchemaRef, Vec<RecordBatch>)>,
+    /// The rows of the last query statement that ran, and the bytes reserved for them.
+    last: Option<(SchemaRef, Vec<RecordBatch>, usize)>,
+    /// The script as a registered query: cancellation, time limit, memory.
+    control: ScriptRun,
 }
 
 impl Session {
@@ -103,15 +116,25 @@ impl Session {
         text: &str,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
+        let control = self.begin_script()?;
+        let cancelled = control.watcher();
         let mut run = Run {
             session: self,
             text,
             redacted,
             scopes: Vec::new(),
             last: None,
+            control,
         };
-        run.compound(c).await?;
-        run.finish().await
+        // A cancel between two statements, or the time limit, drops the interpreter where it stands
+        // (and with it the statement running): no handler sees it.
+        let result = tokio::select! {
+            biased;
+            error = cancelled => Err(error),
+            done = run.interpret(c) => done,
+        };
+        run.control.settle(result.as_ref().map(|_| ()));
+        result
     }
 }
 
@@ -123,6 +146,12 @@ fn unsupported(feature: &str) -> KrishivError {
 }
 
 impl Run<'_> {
+    /// Runs the script and returns the rows of its last query statement.
+    async fn interpret(&mut self, c: &Compound) -> Result<DataFrame, KrishivError> {
+        self.compound(c).await?;
+        self.finish().await
+    }
+
     /// A name as the frames key it: in lower case, whatever `spark.sql.caseSensitive` says, as
     /// `VariableSnapshot::get` looks it up (a divergence when that is on: `a` and `A` are one
     /// local).
@@ -132,7 +161,9 @@ impl Run<'_> {
 
     /// The session handle whose queries see the locals as they are now.
     fn handle(&self) -> Session {
-        self.session.with_locals(
+        // The operation id names the script (its registration, `control.rs`); its statements are
+        // queries of their own under minted ids.
+        let mut handle = self.session.with_locals(
             self.scopes
                 .iter()
                 .map(|scope| LocalFrame {
@@ -144,7 +175,9 @@ impl Run<'_> {
                         .collect(),
                 })
                 .collect(),
-        )
+        );
+        handle.operation = None;
+        handle
     }
 
     /// The text of an expression of the script.
@@ -154,10 +187,10 @@ impl Run<'_> {
 
     // ---- statements ------------------------------------------------------------------------
 
-    /// Runs a compound. After an `EXIT` handler the script goes on after the compound that declared it,
-    /// as design note T196 section 2.4 says. A divergence, stated: Spark 4.2 ends the whole script
-    /// silently when that compound is the last statement of an `IF` or `WHILE` body (the record's
-    /// `exit_handler_in_loop_body_compound` cases); this engine continues after the compound there too.
+    /// Runs a compound. After an `EXIT` handler the script goes on after the compound that declared it
+    /// (design note T196 section 2.4), except as Spark 4.2.0 does it: when that compound is the last
+    /// statement of an `IF` branch, a `WHILE` or `REPEAT` body or a searched `CASE` branch (through any
+    /// number of compounds that end the same way) the whole script ends silently; see [`Body`].
     async fn compound(&mut self, c: &Compound) -> Result<Flow, KrishivError> {
         let label = c.label.as_ref().map(|l| self.fold(&l.value));
         let depth = self.scopes.len();
@@ -175,12 +208,14 @@ impl Run<'_> {
             vars: BTreeMap::new(),
             handlers,
         });
-        let mut flow = Box::pin(self.items(&c.body)).await;
+        let mut flow = Box::pin(self.items(&c.body, Body::Compound)).await;
         if let Err(error) = &flow {
             // The scopes inside this one are gone when its handler runs.
             self.scopes.truncate(depth + 1);
             if let Some(handler) = self.find_handler(depth, error) {
-                flow = Box::pin(self.exit_handler(&handler)).await;
+                flow = Box::pin(self.exit_handler(&handler))
+                    .await
+                    .map(|_| Flow::Exited);
             }
         }
         self.scopes.truncate(depth);
@@ -239,12 +274,22 @@ impl Run<'_> {
         Ok(Flow::Normal)
     }
 
-    /// Runs `items` in order until one asks to leave or iterate.
-    async fn items(&mut self, items: &[ScriptStatement]) -> Result<Flow, KrishivError> {
-        for item in items {
+    /// Runs `items`, the statements of a `body`, in order until one asks to leave, iterate or end the script.
+    async fn items(&mut self, items: &[ScriptStatement], body: Body) -> Result<Flow, KrishivError> {
+        for (at, item) in items.iter().enumerate() {
             // Where a dropped `sql()` future lands: the script stops at the next statement.
             tokio::task::yield_now().await;
             let flow = Box::pin(self.item(item)).await?;
+            let flow = match flow {
+                // An exit with statements after it is an ordinary end of the compound.
+                Flow::Exited if at + 1 < items.len() => Flow::Normal,
+                Flow::Exited => match body {
+                    Body::Compound => Flow::Exited,
+                    Body::EndsScript => Flow::Halt,
+                    Body::Plain => Flow::Normal,
+                },
+                other => other,
+            };
             if flow != Flow::Normal {
                 return Ok(flow);
             }
@@ -267,33 +312,41 @@ impl Run<'_> {
             S::If(i) => {
                 for branch in &i.branches {
                     if Box::pin(self.condition(&branch.condition)).await? {
-                        return Box::pin(self.items(&branch.body)).await;
+                        return Box::pin(self.items(&branch.body, Body::EndsScript)).await;
                     }
                 }
                 match &i.else_body {
-                    Some(body) => Box::pin(self.items(body)).await,
+                    Some(body) => Box::pin(self.items(body, Body::EndsScript)).await,
                     None => Ok(Flow::Normal),
                 }
             }
             S::Case(c) => {
+                // Only a searched `CASE` ends the script after an exit (record: `exit_last_in_*_case_body`).
+                let case_body = if c.subject.is_some() {
+                    Body::Plain
+                } else {
+                    Body::EndsScript
+                };
                 for branch in &c.branches {
                     let matched = match &c.subject {
                         Some(subject) => Box::pin(self.equal(subject, &branch.condition)).await?,
                         None => Box::pin(self.condition(&branch.condition)).await?,
                     };
                     if matched {
-                        return Box::pin(self.items(&branch.body)).await;
+                        return Box::pin(self.items(&branch.body, case_body)).await;
                     }
                 }
                 match &c.else_body {
-                    Some(body) => Box::pin(self.items(body)).await,
+                    Some(body) => Box::pin(self.items(body, case_body)).await,
                     None => Ok(Flow::Normal),
                 }
             }
             S::While(w) => {
                 let label = w.label.as_ref().map(|l| self.fold(&l.value));
                 while Box::pin(self.condition(&w.condition)).await? {
-                    if let Some(flow) = Box::pin(self.round(&label, &w.body)).await? {
+                    if let Some(flow) =
+                        Box::pin(self.round(&label, &w.body, Body::EndsScript)).await?
+                    {
                         return Ok(flow);
                     }
                 }
@@ -302,7 +355,9 @@ impl Run<'_> {
             S::Repeat(r) => {
                 let label = r.label.as_ref().map(|l| self.fold(&l.value));
                 loop {
-                    if let Some(flow) = Box::pin(self.round(&label, &r.body)).await? {
+                    if let Some(flow) =
+                        Box::pin(self.round(&label, &r.body, Body::EndsScript)).await?
+                    {
                         return Ok(flow);
                     }
                     if Box::pin(self.condition(&r.condition)).await? {
@@ -313,7 +368,7 @@ impl Run<'_> {
             S::Loop(l) => {
                 let label = l.label.as_ref().map(|x| self.fold(&x.value));
                 loop {
-                    if let Some(flow) = Box::pin(self.round(&label, &l.body)).await? {
+                    if let Some(flow) = Box::pin(self.round(&label, &l.body, Body::Plain)).await? {
                         return Ok(flow);
                     }
                 }
@@ -352,18 +407,30 @@ impl Run<'_> {
                 .into());
             }
         }
-        let Some(batches) = handle
-            .run_analyzed_variable_query_capped(&analysis, MAX_FOR_ROWS)
-            .await?
-        else {
-            return Err(unsupported("a FOR loop over more than 100000 rows"));
-        };
-        for batch in &batches {
+        // Spark reads the query lazily; the rows are held, in the script's pool, for the whole loop.
+        let batches = handle.run_analyzed_variable_query(&analysis).await?;
+        let held = self.control.hold(&batches)?;
+        let flow = self.for_rows(&batches, &names, &label, &variable, f).await;
+        self.control.release(held);
+        flow
+    }
+
+    /// The passes of a `FOR` loop over `batches`.
+    async fn for_rows(
+        &mut self,
+        batches: &[RecordBatch],
+        names: &[String],
+        label: &Option<String>,
+        variable: &Option<String>,
+        f: &ForStatement,
+    ) -> Result<Flow, KrishivError> {
+        for batch in batches {
             for row in 0..batch.num_rows() {
                 tokio::task::yield_now().await;
                 let mut vars = BTreeMap::new();
                 for (i, name) in names.iter().enumerate() {
-                    let (data_type, value) = arrow_value(batch.column(i), row)?;
+                    let (data_type, value) =
+                        crate::nested_value::arrow_variable_value(batch.column(i), row)?;
                     vars.insert(
                         self.fold(name),
                         Local {
@@ -378,7 +445,7 @@ impl Run<'_> {
                     handlers: Vec::new(),
                 });
                 let depth = self.scopes.len();
-                let pass = Box::pin(self.round(&label, &f.body)).await;
+                let pass = Box::pin(self.round(label, &f.body, Body::Plain)).await;
                 self.scopes.truncate(depth - 1);
                 if let Some(flow) = pass? {
                     return Ok(flow);
@@ -394,10 +461,11 @@ impl Run<'_> {
         &mut self,
         label: &Option<String>,
         body: &[ScriptStatement],
+        kind: Body,
     ) -> Result<Option<Flow>, KrishivError> {
         // An empty body must not spin past a dropped future.
         tokio::task::yield_now().await;
-        Ok(match Box::pin(self.items(body)).await? {
+        Ok(match Box::pin(self.items(body, kind)).await? {
             Flow::Normal => None,
             Flow::Leave(l) if label.as_deref() == Some(l.as_str()) => Some(Flow::Normal),
             Flow::Iterate(l) if label.as_deref() == Some(l.as_str()) => None,
@@ -434,15 +502,14 @@ impl Run<'_> {
             Statement::Query(_) | Statement::ExecuteImmediate(_)
         ) {
             let schema = frame.schema().await?;
-            // A script's result is returned as literal rows: refuse a type they cannot hold now, not
-            // after the rest of the script has run.
-            for field in schema.fields() {
-                crate::command::arrow_krishiv_type(field.data_type())?;
-            }
             if !schema.fields().is_empty() {
-                // One row more than the cap shows that it was exceeded; no more is read.
-                let batches = frame.limit(MAX_RESULT_ROWS + 1).collect().await?;
-                self.last = Some((schema, batches));
+                // The rows are held in the script's pool until the next query statement replaces
+                // them or the script returns them.
+                let batches = frame.collect().await?;
+                let bytes = self.control.hold(&batches)?;
+                if let Some((_, _, old)) = self.last.replace((schema, batches, bytes)) {
+                    self.control.release(old);
+                }
             }
         }
         Ok(())
@@ -513,10 +580,12 @@ impl Run<'_> {
         let output = &analysis.analyzed.output;
         let not_boolean = || -> KrishivError {
             InvalidBooleanStatement {
+                // Spark prints the condition's text in upper case (`IF 'abc'` shows `'ABC'`, `IF x` shows
+                // `X`; record: `control_flow/if_condition_*`).
                 invalid_statement: self
                     .redacted
                     .fragment(shown.span.start..shown.span.end)
-                    .to_owned(),
+                    .to_uppercase(),
             }
             .into()
         };
@@ -592,8 +661,8 @@ impl Run<'_> {
             .transpose()?;
         let (data_type, value, default_sql) = match (&declared, &d.default) {
             (_, None) => match declared {
-                Some(t) => (t.clone(), Literal::Null(Some(t)), None),
-                None => (DataType::Null, Literal::Null(None), None),
+                Some(t) => (t.clone(), Literal::Null(Some(t)).into(), None),
+                None => (DataType::Null, Literal::Null(None).into(), None),
             },
             (declared, Some(default)) => {
                 if contains_subquery(default) {
@@ -619,7 +688,7 @@ impl Run<'_> {
                 };
                 let (inferred, value) = self
                     .handle()
-                    .eval_variable_value(&sql, self.redacted, d.span, default.span)
+                    .eval_variable(&sql, self.redacted, d.span, default.span)
                     .await?;
                 (declared.clone().unwrap_or(inferred), value, Some(sql))
             }
@@ -703,7 +772,8 @@ impl Run<'_> {
         }
     }
 
-    fn store(&mut self, target: &Target, value: Literal) {
+    fn store(&mut self, target: &Target, value: impl Into<VariableValue>) {
+        let value = value.into();
         match target {
             Target::Local { scope, key } => {
                 if let Some(local) = self
@@ -756,16 +826,11 @@ impl Run<'_> {
                         match default_sql {
                             Some(sql) => {
                                 handle
-                                    .eval_variable_value(
-                                        &sql,
-                                        self.redacted,
-                                        set.span,
-                                        a.value.span,
-                                    )
+                                    .eval_variable(&sql, self.redacted, set.span, a.value.span)
                                     .await?
                                     .1
                             }
-                            None => Literal::Null(Some(data_type)),
+                            None => Literal::Null(Some(data_type)).into(),
                         }
                     } else {
                         if contains_default(&a.value) {
@@ -778,7 +843,7 @@ impl Run<'_> {
                             &format!(" AS {})", data_type.simple_string()),
                         );
                         handle
-                            .eval_variable_value(&sql, self.redacted, set.span, a.value.span)
+                            .eval_variable(&sql, self.redacted, set.span, a.value.span)
                             .await?
                             .1
                     };
@@ -842,13 +907,18 @@ impl Run<'_> {
                 if rows > 1 {
                     return Err(RowSubqueryTooManyRows {}.into());
                 }
-                let values: Vec<Literal> = match batches.iter().find(|b| b.num_rows() > 0) {
+                // Nested values (an ARRAY, STRUCT or MAP variable) are held as
+                // their constructors, as the session-level row assignment does.
+                let values: Vec<VariableValue> = match batches.iter().find(|b| b.num_rows() > 0) {
                     Some(batch) => (0..types.len())
-                        .map(|i| arrow_value(batch.column(i), 0).map(|(_, v)| v))
+                        .map(|i| {
+                            crate::nested_value::arrow_variable_value(batch.column(i), 0)
+                                .map(|(_, v)| v)
+                        })
                         .collect::<Result<_, _>>()?,
                     None => types
                         .iter()
-                        .map(|t| Literal::Null(Some(t.clone())))
+                        .map(|t| Literal::Null(Some(t.clone())).into())
                         .collect(),
                 };
                 for (target, value) in resolved.iter().zip(values) {
@@ -862,62 +932,14 @@ impl Run<'_> {
 
     // ---- the result ------------------------------------------------------------------------
 
-    /// The script's result: the rows of the last query statement, as literal rows.
-    async fn finish(self) -> Result<DataFrame, KrishivError> {
-        let session = self.session;
-        let Some((schema, batches)) = self.last else {
-            return session.empty_frame().await;
+    /// The script's result: the rows of the last query statement, as a hidden in-memory table.
+    async fn finish(&mut self) -> Result<DataFrame, KrishivError> {
+        let Some((schema, batches, held)) = self.last.take() else {
+            return self.session.empty_frame().await;
         };
-        let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
-        if i32::try_from(rows).map_or(true, |r| r > MAX_RESULT_ROWS) {
-            return Err(unsupported("a script result of more than 256 rows"));
-        }
-        let one = || {
-            DataFrame::new(
-                session.clone(),
-                Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
-            )
-        };
-        let mut frames = Vec::with_capacity(rows);
-        for batch in &batches {
-            for row in 0..batch.num_rows() {
-                let mut columns = Vec::with_capacity(batch.num_columns());
-                for (i, field) in schema.fields().iter().enumerate() {
-                    let (_, literal) = arrow_value(batch.column(i), row)?;
-                    columns.push(
-                        Column::new(PlanExpr::new(ExprNode::Literal(literal))).alias(field.name()),
-                    );
-                }
-                frames.push(one().select(columns));
-            }
-        }
-        let df = match frames.len() {
-            0 => {
-                let columns = schema
-                    .fields()
-                    .iter()
-                    .map(|f| {
-                        let t = DataType::from_arrow_field(f)?;
-                        Ok(
-                            Column::new(PlanExpr::new(ExprNode::Literal(Literal::Null(Some(t)))))
-                                .alias(f.name()),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, KrishivError>>()?;
-                one().select(columns).limit(0)
-            }
-            1 => frames.remove(0),
-            _ => DataFrame::new(
-                session.clone(),
-                Arc::new(LogicalPlan::new(PlanNode::Union {
-                    inputs: frames.iter().map(|f| Arc::clone(&f.plan)).collect(),
-                    by_name: false,
-                    allow_missing_columns: false,
-                })),
-            ),
-        };
-        df.analyzed_in(session.query_env()).await?;
-        Ok(df)
+        let frame = self.session.script_result(schema, batches).await;
+        self.control.release(held);
+        frame
     }
 }
 

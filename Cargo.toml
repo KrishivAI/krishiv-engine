@@ -87,7 +87,8 @@ parquet = { version = "60", default-features = false }
 # Cloud TLS (the `aws`, `gcp` and `azure` features) is opt-in through
 # `krishiv-io/cloud` (which turns on `krishiv-store/cloud`, ADR 0044): it brings reqwest over rustls (aws-lc-rs) and its HTTP
 # stack, which would otherwise blow the dependency and binary-size budgets for
-# the default build. OpenSSL stays banned (deny.toml).
+# the default build. OpenSSL stays banned (deny.toml). On a bump, re-list
+# `ClientConfigKey` in krishiv-store's `http_clients.rs` `KEYS` (it is non-exhaustive).
 object_store = { version = "=0.14.2", default-features = false }
 # Header types for the Hugging Face bearer token (T195); already in the tree through
 # object_store's reqwest. Only under krishiv-io/cloud.

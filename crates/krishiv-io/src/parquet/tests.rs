@@ -1307,3 +1307,92 @@ fn binary_decimals_read_on_the_canonical_carrier() {
         [150, -275]
     );
 }
+
+/// A scan's demand reads (no prefetch budget, so every data range is read
+/// when the decoder asks for it) run on the scheduler's I/O runtime, not
+/// inline in the caller's poll: a remote response body is never handled on
+/// a compute driver (the FileScan remote-poll stalls, queue-opus-b1).
+#[test]
+fn demand_reads_run_on_the_io_runtime() {
+    let io_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_name("scan-test-io")
+        .enable_all()
+        .build()
+        .unwrap();
+    let caller = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let inner = Arc::new(InMemory::new());
+    let fault = crate::io::FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
+    let sched = IoScheduler::with_runtime(IoConfig::default(), io_rt.handle().clone());
+    sched.register_store(
+        StoreId::new(STORE),
+        Arc::clone(&fault) as Arc<dyn ObjectStore>,
+    );
+    let io = sched.context();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(1000))
+        .build();
+    let bytes = write(&[ints("k", 0..5000)], props);
+    let o = Env::new().options(&[]);
+    let batches = std::thread::Builder::new()
+        .name("scan-test-caller".into())
+        .spawn(move || {
+            caller.block_on(async {
+                let path = Path::from("demand.parquet");
+                object_store::ObjectStoreExt::put(inner.as_ref(), &path, bytes.into())
+                    .await
+                    .unwrap();
+                let meta = object_store::ObjectStoreExt::head(inner.as_ref(), &path)
+                    .await
+                    .unwrap();
+                let file = FileRef::from_meta(StoreId::new(STORE), &meta);
+                let meta = io
+                    .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o)
+                    .await
+                    .unwrap();
+                let req = ScanRequest::all(meta.schema());
+                // The footer is cached now: what follows is the scan's own reads.
+                fault.take_get_threads();
+                let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                    krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+                let id = pool.register("scan", None);
+                let options = ScanOptions {
+                    prefetch_bytes: 0,
+                    ..ScanOptions::default()
+                };
+                let mut s = ScanStream::open(
+                    &io,
+                    &ParquetFormat,
+                    file.clone(),
+                    ByteRange::whole(file.size),
+                    &req,
+                    &o,
+                    krishiv_memory::Reservation::new(pool, id),
+                    options,
+                )
+                .await
+                .unwrap();
+                let mut out = Vec::new();
+                while let Some(b) = s.next_batch().await.unwrap() {
+                    out.push(b);
+                }
+                let threads = fault.take_get_threads();
+                assert!(
+                    threads.len() >= 5,
+                    "one read per row group at least: {threads:?}"
+                );
+                assert!(
+                    threads.iter().all(|t| t.as_deref() == Some("scan-test-io")),
+                    "every data read runs on the I/O runtime: {threads:?}"
+                );
+                out
+            })
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(rows(&batches), 5000);
+}

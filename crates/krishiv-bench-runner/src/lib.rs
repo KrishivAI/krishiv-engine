@@ -33,9 +33,10 @@
 //!   same builds (`null` otherwise).
 //!   Each operator also reports `"drivers"`, `"batches_in"`, `"batches_out"`, `"morsels"`,
 //!   `"max_driver_compute_seconds"` (the busiest driver: skew) and `"blocked_sink_seconds"`
-//!   (backpressure); `"pipelines":[{"id","drivers","threads","started_seconds","ended_seconds"}]`
-//!   gives each pipeline's drivers, the threads that ran them, and when its first driver started
-//!   and its last ended, after the query started. `"detailed"` says whether the costlier counters
+//!   (backpressure); `"pipelines":[{"id","drivers","threads","started_seconds","ended_seconds",
+//!   "max_slice_seconds","stalls"}]` gives each pipeline's drivers, the threads that ran them, when its
+//!   first driver started and its last ended, after the query started, its drivers' longest poll and
+//!   their polls over the stall threshold (wall time). `"detailed"` says whether the costlier counters
 //!   of `PROFILE_DETAILED` were collected.
 //! * `PROFILE_DETAILED <query.sql>`: as `PROFILE`, also collecting the counters of a detailed
 //!   profile (`EXPLAIN ANALYZE`): hash-table probe lengths of joins and aggregates
@@ -48,6 +49,10 @@
 //!   a benchmark time (`krishiv-bench explain-diff` reads this).
 //! * `DUMP <query.sql> <out-dir>`: as `RUN`, then writes the result as Parquet to `out-dir`
 //!   (replacing it). The write is not in the reported seconds.
+//! * `LOAD <heavy.sql> <heavies> <short.sql> <rate> <seconds>`: concurrent queries on the one session,
+//!   `heavies` closed loops of the heavy query and the short query open-loop at `rate` per second, for
+//!   `seconds`; replies `OK <json>` with latencies, driver stalls and the store read latency (P2-T104 §3;
+//!   `load.rs` documents the fields).
 //! * `QUIT`: exits.
 //!
 //! `--conf key=value` (repeatable) sets extra session settings, for A/B runs of one binary.
@@ -57,6 +62,7 @@
 #![forbid(unsafe_code)]
 
 mod checksum;
+mod load;
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -441,7 +447,29 @@ impl Runner {
         Ok(written?)
     }
 
+    /// Runs `sql` with the executor's metrics; the metrics are `None` where the query gave none.
+    fn metered(&self, sql: &str) -> Result<Option<QueryMetrics>, RunnerError> {
+        let (_, _, _, metrics) = self.execute_timed(sql, Metered::Plain)?;
+        Ok(metrics)
+    }
+
+    /// The runtime's read-latency histogram counts (every query of the process so far).
+    fn io_latency(&self) -> [u64; krishiv_io::LATENCY_BUCKETS] {
+        self.session.runtime().io_totals().read_latency.counts()
+    }
+
     fn reply(&self, line: &str) -> Result<String, RunnerError> {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if let ["LOAD", heavy, heavies, short, rate, seconds] = words.as_slice() {
+            let load = load::Load::parse(
+                read_sql(&decode_path(heavy)?)?,
+                heavies,
+                read_sql(&decode_path(short)?)?,
+                rate,
+                seconds,
+            )?;
+            return Ok(format!("OK {}", load::run(self, &load)));
+        }
         let mut parts = line.split_whitespace();
         match (parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("RUN"), Some(file), None, _) => {
@@ -681,11 +709,13 @@ impl Timing {
                 .iter()
                 .map(|(id, p)| {
                     format!(
-                        "{{\"id\":{id},\"drivers\":{},\"threads\":{},\"started_seconds\":{:.6},\"ended_seconds\":{:.6}}}",
+                        "{{\"id\":{id},\"drivers\":{},\"threads\":{},\"started_seconds\":{:.6},\"ended_seconds\":{:.6},\"max_slice_seconds\":{:.6},\"stalls\":{}}}",
                         p.drivers,
                         p.threads,
                         p.started.as_secs_f64(),
-                        p.ended.as_secs_f64()
+                        p.ended.as_secs_f64(),
+                        p.max_slice.as_secs_f64(),
+                        p.stalls
                     )
                 })
                 .collect();

@@ -23,7 +23,10 @@ pub const VERBOSE_FORMAT: &str = "krishiv.explain-verbose";
 /// Its version.
 pub const VERBOSE_VERSION: u64 = 1;
 
-/// One optimizer rule application that changed the logical plan.
+/// One optimizer rule application that changed the logical plan, or a
+/// decision a step states without changing it (`rule: decision`; the
+/// distinct-value samples taken before the optimizer are such steps,
+/// batch `Statistics`, one per table).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OptimizerStep {
     /// The rule batch (`Rewrite`, `JoinOrder`, ...).
@@ -46,7 +49,8 @@ pub struct ExplainVerbose {
     /// The analyzed plan.
     pub analyzed: String,
     /// The optimizer's steps that changed the plan, and the decisions of the
-    /// rules that state them (`rule: decision`), in order.
+    /// rules that state them (`rule: decision`), in order; first the
+    /// distinct-value samples' `Statistics` steps, if any table was sampled.
     pub steps: Vec<OptimizerStep>,
     /// The optimized plan.
     pub optimized: String,
@@ -435,7 +439,21 @@ impl DataFrame {
         let (optimized, physical, rules) =
             self.session.physical_traced(analyzed, &a.env, true).await?;
         let mut before = analyzed_text.clone();
-        let mut steps = Vec::new();
+        // The distinct-value samples taken before the optimizer ran: one
+        // step per table, with no plan change (the rule's decision is the note).
+        let mut steps: Vec<OptimizerStep> = a
+            .env
+            .catalog
+            .sample_notes(true)
+            .into_iter()
+            .map(|note| OptimizerStep {
+                batch: "Statistics".to_owned(),
+                round: 1,
+                rule: format!("ndvSampling: {note}"),
+                plan: analyzed_text.clone(),
+                diff: String::new(),
+            })
+            .collect();
         for r in rules {
             let plan = r.plan.to_string();
             if plan == before && r.note.is_empty() {

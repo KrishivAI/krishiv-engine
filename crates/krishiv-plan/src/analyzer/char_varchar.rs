@@ -16,7 +16,7 @@ use super::AnalysisError;
 use super::catalog::FunctionLookup;
 use super::exprs::Bound;
 use super::resolve::{Attr, Rel, Resolver};
-use crate::{BoundColumn, Expr, ExprNode, Literal, Origin, ResolvedExpr, ResolvedFunction};
+use crate::{AttrId, BoundColumn, Expr, ExprNode, Literal, Origin, ResolvedExpr, ResolvedFunction};
 use krishiv_types::DataType;
 
 /// The most spaces a comparison literal is padded with during analysis; a wider pad is an `rpad` call.
@@ -33,6 +33,17 @@ pub(super) fn char_length(declared: &str) -> Option<i32> {
 }
 
 impl Resolver<'_> {
+    /// The field metadata the analyzer keeps per attribute (the declared `CHAR`/`VARCHAR` type, the column
+    /// comment) passes from `from` to `to`, a new attribute standing for the same column.
+    pub(super) fn carry_column_meta(&mut self, from: AttrId, to: AttrId) {
+        if let Some(d) = self.declared.get(&from).cloned() {
+            self.declared.insert(to, d);
+        }
+        if let Some(t) = self.comments.get(&from).cloned() {
+            self.comments.insert(to, t);
+        }
+    }
+
     /// `rel`, a scan, read through `rpad(c, n, ' ')` for each of its `char(n)` columns; `rel` itself when it has
     /// none, when `spark.sql.legacy.charVarcharAsString` is on (the padding rule is off) or when the registry has
     /// no `rpad`.
@@ -96,9 +107,7 @@ impl Resolver<'_> {
                 data_type: DataType::String,
                 nullable: a.col.nullable,
             };
-            if let Some(declared) = self.declared.get(&a.col.id).cloned() {
-                self.declared.insert(col.id, declared);
-            }
+            self.carry_column_meta(a.col.id, col.id);
             exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
                     expr: call,
@@ -133,6 +142,20 @@ fn bare_column(e: &Expr, internal_cast: bool) -> Option<&BoundColumn> {
                 _ => None,
             }
         }
+        _ => None,
+    }
+}
+
+/// The column whose comment `e` keeps: a bare column, or, when `internal_cast`, the engine's cast of one (a
+/// permanent view's read projection: Spark gives that alias the view's stored field metadata, which holds the
+/// comment the column had when the view was stored). A cast the query wrote keeps none, as in Spark.
+fn commented_column(e: &Expr, internal_cast: bool) -> Option<&BoundColumn> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+        ExprNode::Cast { expr, .. } if internal_cast => match &expr.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -286,16 +309,59 @@ impl Resolver<'_> {
         }
     }
 
+    /// `b` without the engine's own cast of a `string` column to `string` (a permanent view's read projection,
+    /// `written` an ANSI cast under an alias, [`is_internal_cast_alias`]): a no-op whose resolved form a stored
+    /// plan (a DataFrame's temporary view over the view) could not tell from a user's cast, which drops the
+    /// declared type. Without it the stored plan holds the bare column and keeps the declared `CHAR`/`VARCHAR`.
+    pub(super) fn without_internal_identity_cast(b: Bound, written: &Expr) -> Bound {
+        if !is_internal_cast_alias(written) {
+            return b;
+        }
+        let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node else {
+            return b;
+        };
+        let ExprNode::Cast {
+            expr: inner, to, ..
+        } = &expr.node
+        else {
+            return b;
+        };
+        let identity = *to == DataType::String
+            && matches!(&inner.node, ExprNode::Resolved(ResolvedExpr::Column(c)) if c.data_type == DataType::String);
+        if !identity {
+            return b;
+        }
+        let alias = Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+            expr: Arc::clone(inner),
+            output: output.clone(),
+        }))
+        .with_origin(b.expr.origin);
+        Bound {
+            expr: Arc::new(alias),
+            ..b
+        }
+    }
+
     /// [`Self::carry_declared`] for one item, `written` its form before resolution when known. The select list
     /// calls it as each item is bound, so a later item that reads the alias (a lateral column alias) sees it.
     pub(super) fn carry_declared_item(&mut self, b: &Bound, written: Option<&Expr>) {
-        if self.declared.is_empty() {
-            return;
-        }
         let internal_cast = written.is_some_and(is_internal_cast_alias);
         // An item already resolved comes from a stored analyzed plan (a DataFrame's temporary view): its
         // read-side padding call stands for the padded column.
         let stored = written.is_some_and(|w| matches!(w.node, ExprNode::Resolved(_)));
+        // A column comment follows the same alias of a bare column (Spark's `Alias` keeps a named child's
+        // metadata; any other expression starts without it), and a stored plan's padded `CHAR` column.
+        if !self.comments.is_empty()
+            && let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
+            && let Some(c) = commented_column(expr, internal_cast)
+                .or_else(|| read_padded_column(expr).filter(|_| stored).map(|(c, _)| c))
+            && let Some(t) = self.comments.get(&c.id).cloned()
+        {
+            self.comments.insert(output.id, t);
+        }
+        if self.declared.is_empty() {
+            return;
+        }
         if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
             && let Some(c) = bare_column(expr, internal_cast).or_else(|| {
                 let (c, n) = read_padded_column(expr).filter(|_| stored)?;

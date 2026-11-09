@@ -600,6 +600,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         .clone()
         .or_else(|| DateTimePattern::new("yyyy-MM-dd'T'HH:mm:ss.SSS", Purpose::Format).ok());
     let to_opts = ToCsvOptions {
+        binary: opts.binary_style,
         syntax: parsed.syntax,
         quote_all: parsed.quote_all,
         escape_quotes: parsed.escape_quotes,

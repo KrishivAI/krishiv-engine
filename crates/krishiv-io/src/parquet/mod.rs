@@ -41,14 +41,8 @@ mod bloom_probe;
 mod calendar;
 mod collation;
 mod decode;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "stage 2b of P2-T080b; T085 decides when to fetch the dictionary and calls it"
-    )
-)]
 mod dict_probe;
+mod geo;
 mod index_guard;
 mod intervals;
 mod meta;
@@ -139,6 +133,15 @@ static OPTIONS: OptionSchema = OptionSchema {
             metadata_key: false,
             doc: "Read: skip the row groups whose stored Bloom filter shows that a pushed \
                   equality or IN literal is absent.",
+        },
+        OptionSpec {
+            name: "dictionaryFilter",
+            kind: OptionKind::Bool,
+            default: OptionDefault::Bool(true),
+            conf_fallback: Some("krishiv.io.parquet.dictionaryFilter.enabled"),
+            metadata_key: false,
+            doc: "Read: skip the row groups whose column chunk is all dictionary encoded and whose \
+                  dictionary holds no literal of a pushed equality or IN.",
         },
         OptionSpec {
             name: "compression",

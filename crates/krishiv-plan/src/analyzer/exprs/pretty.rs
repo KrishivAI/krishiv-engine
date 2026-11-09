@@ -125,6 +125,8 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
         // to `named_struct` shows its children as written).
         ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
         ExprNode::MultiAlias { names, .. } => format!("{} AS ({})", k[0], names.join(", ")),
+        // Spark names a pipe item by the item.
+        ExprNode::Pipe { .. } => k[0].to_owned(),
         // Spark's `Alias.sql`: an alias inside an expression shows its name.
         ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
             format!(
@@ -194,6 +196,17 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             name, qualifier, ..
         }) if name == "__subscript" && qualifier.is_empty() && k.len() == 2 => {
             format!("{}[{}]", k[0], k[1])
+        }
+        // `TimeAddInterval` and `SubtractTimes` show `left + right` / `left - right`, without the parentheses of
+        // Spark's arithmetic operators (`intervals.rs` `time_arithmetic` names them so).
+        ExprNode::Function(FunctionCall {
+            name, qualifier, ..
+        }) if qualifier.is_empty()
+            && k.len() == 2
+            && matches!(name.as_str(), "__time_plus" | "__time_minus") =>
+        {
+            let op = if name == "__time_plus" { '+' } else { '-' };
+            format!("{} {op} {}", k[0], k[1])
         }
         ExprNode::Function(FunctionCall {
             name,
@@ -520,6 +533,9 @@ pub(super) fn call(
             }
             s + " END"
         }
+        // `uuid(seed)`: the seed is no child of Spark's `Uuid`, so it is
+        // not shown (Spark 4.2.0 names `uuid(5)` as `uuid()`).
+        _ if name.eq_ignore_ascii_case("uuid") && k.len() == 1 => "uuid()".to_owned(),
         // Spark's own spellings of `if` and `positive`.
         _ if name.eq_ignore_ascii_case("if") && k.len() == 3 => {
             format!("(IF({}, {}, {}))", k[0], k[1], k[2])
@@ -529,6 +545,10 @@ pub(super) fn call(
         // `time(p)`: not part of the call as written.
         _ if name.eq_ignore_ascii_case("extract") && (2..=3).contains(&k.len()) => {
             format!("extract({} FROM {})", k[0], k[1])
+        }
+        // `datepart` keeps its name and reads like `extract` (`date_part(field, source)` stays a call).
+        _ if name.eq_ignore_ascii_case("datepart") && (2..=3).contains(&k.len()) => {
+            format!("datepart({} FROM {})", k[0], k[1])
         }
         // `trim` family: one argument is `trim(src)` / `ltrim(src)` /
         // `rtrim(src)` / `btrim(...)`; two are Spark's `TRIM(...)` form.
@@ -654,14 +674,10 @@ pub(super) fn call(
             format!("to_char({d}{})", k.join(", "))
         }
         // `current_database` and `current_schema` are one expression
-        // (Spark's `CurrentDatabase`, shown as `current_schema`);
-        // `current_catalog` shows without parentheses.
+        // (Spark's `CurrentDatabase`, shown as `current_schema`).
         _ if name.eq_ignore_ascii_case("current_database") => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("current_schema({d}{})", k.join(", "))
-        }
-        _ if name.eq_ignore_ascii_case("current_catalog") && k.is_empty() && !distinct => {
-            "current_catalog".to_owned()
         }
         // `RLike` prints its function name upper case, whichever spelling
         // (`rlike`, `regexp`, `regexp_like`) the query used.

@@ -1,0 +1,6 @@
+extends: occurrence
+message: "Sentence has more than 40 words; split it (house style: short sentences)."
+level: warning
+scope: sentence
+max: 40
+token: '\b[\w'']+\b'

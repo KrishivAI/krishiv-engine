@@ -163,7 +163,7 @@ impl Output {
         let mut reservation = owner.reservation();
         while let Err(e) = reservation.try_grow(bytes) {
             let freed = if self.spill.is_some() {
-                Arc::clone(self).spill_unread().await?
+                Arc::clone(self).spill_unread(usize::MAX).await?
             } else {
                 0
             };
@@ -227,7 +227,7 @@ enum Place {
 }
 
 impl SpillUnread for Output {
-    fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>> {
+    fn spill_unread(self: Arc<Self>, _target: usize) -> BoxFuture<'static, Result<usize>> {
         Box::pin(async move {
             let Some((hook, consumer, scope)) = &self.spill else {
                 return Ok(0);
@@ -249,6 +249,12 @@ impl SpillUnread for Output {
                 hook.set_spillable_bytes(0);
                 return Ok(0);
             }
+            // Until the written segments' memory is back in the pool, it counts
+            // as about to be released, so another driver's round that cannot
+            // spill waits for it instead of failing. No arbitration inside: the
+            // writers' scratch is a sync grow, the writes run on the blocking
+            // pool.
+            let _writing = consumer.spilling();
             // Working memory for the writers, lent from the first segment in memory (grant credit).
             let lent = lock(&self.state)
                 .iter_mut()
@@ -474,6 +480,9 @@ impl Sink for SharedSink {
             if l.batches.is_empty() {
                 return Ok(0);
             }
+            // Until the batches are freed below, they count as about to be released, so another driver's
+            // round that cannot spill waits for them instead of failing. No arbitration inside.
+            let _writing = ctx.consumer().consumer().spilling();
             // The writer's working memory is lent from the batches' own reservation (as grant credit, so no
             // other consumer takes it meanwhile): a full pool cannot grant it afresh.
             let lent = l.reservation.size().min(SCRATCH_BYTES);
@@ -858,9 +867,12 @@ mod tests {
         // The list after finalize spills as a whole: the memory segment goes to a file.
         let g = global_ref::<SinkGlobal>(&global, "test").unwrap();
         let output = Arc::clone(g.done.get().unwrap());
-        let freed = Arc::clone(&output).spill_unread().await.unwrap();
+        let freed = Arc::clone(&output).spill_unread(usize::MAX).await.unwrap();
         assert!(freed > 0, "the batches in memory were freed");
-        assert_eq!(Arc::clone(&output).spill_unread().await.unwrap(), 0);
+        assert_eq!(
+            Arc::clone(&output).spill_unread(usize::MAX).await.unwrap(),
+            0
+        );
         assert_eq!(read_all(&source, &query, &global).await, want);
         drop(sink);
     }
@@ -881,7 +893,7 @@ mod tests {
         }
         let sink_g = global_ref::<SinkGlobal>(&global, "test").unwrap();
         let output = Arc::clone(sink_g.done.get().unwrap());
-        assert!(output.spill_unread().await.unwrap() > 0);
+        assert!(output.spill_unread(usize::MAX).await.unwrap() > 0);
         // The reader was two batches in: the file continues at the third.
         while let Some(b) = source.get_data(&mut local, &g).await.unwrap() {
             read.extend(values(&b));

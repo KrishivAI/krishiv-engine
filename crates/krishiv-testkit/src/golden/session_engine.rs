@@ -229,6 +229,36 @@ impl SessionEngine {
         if !first.eq_ignore_ascii_case("SET") {
             return;
         }
+        // `SET TIME ZONE 'zone'` sets `spark.sql.session.timeZone` too: the cells render in it. `LOCAL` is the
+        // default (the suite's zone); an interval form is left to the session.
+        let mut rest = words.clone();
+        if rest.next().is_some_and(|w| w.eq_ignore_ascii_case("TIME"))
+            && rest.next().is_some_and(|w| w.eq_ignore_ascii_case("ZONE"))
+        {
+            let value: Vec<&str> = rest.collect();
+            let value = value.join(" ");
+            let key = "spark.sql.session.timeZone";
+            if value.eq_ignore_ascii_case("LOCAL") {
+                self.conf.retain(|(k, _)| !k.eq_ignore_ascii_case(key));
+                if let Some(kv) = self
+                    .base
+                    .iter()
+                    .rev()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                {
+                    self.conf.push(kv.clone());
+                }
+            } else if let Some(zone) = value
+                .strip_prefix('\'')
+                .and_then(|v| v.strip_suffix('\''))
+                .or_else(|| value.strip_prefix('"').and_then(|v| v.strip_suffix('"')))
+                // A zone Spark refuses leaves the configuration as it was.
+                && krishiv_plan::analyzer::SessionZone::resolve(zone).is_some()
+            {
+                self.conf.push((key.to_owned(), zone.to_owned()));
+            }
+            return;
+        }
         if let Some((k, v)) = sql.get(3..).and_then(|rest| rest.split_once('=')) {
             let (k, v) = (k.trim().to_owned(), v.trim().to_owned());
             // A key Krishiv does not know is ignored by the session, as Spark keys are.
@@ -340,7 +370,47 @@ impl Engine for SessionEngine {
         let (analyzed, batches) = self.block_on(async {
             let df = session.sql(sql).await?;
             let analyzed = df.analyzed().await?;
-            let batches = df.collect().await?;
+            // The engine's own carriers: Spark's SQL tests render rows without Arrow, so a calendar interval past
+            // `Interval(MonthDayNano)` is a value here as it is there.
+            let batches = df.collect_engine().await?;
+            // Decimals as a client reads them (`Decimal128`); a calendar interval stays the engine's struct.
+            let batches = batches
+                .iter()
+                .map(|b| {
+                    let columns = b
+                        .columns()
+                        .iter()
+                        .map(|c| {
+                            krishiv_exec::carrier::recarried_array(
+                                c,
+                                &krishiv_types::arrow::client_arrow_type(c.data_type()),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let fields: Vec<arrow_schema::Field> = b
+                        .schema()
+                        .fields()
+                        .iter()
+                        .zip(&columns)
+                        .map(|(f, c)| f.as_ref().clone().with_data_type(c.data_type().clone()))
+                        .collect();
+                    // A batch of no columns keeps its row count.
+                    let options =
+                        arrow_array::RecordBatchOptions::new().with_row_count(Some(b.num_rows()));
+                    RecordBatch::try_new_with_options(
+                        Arc::new(Schema::new(fields)),
+                        columns,
+                        &options,
+                    )
+                    .map_err(|e| {
+                        krishiv_common::error::KrishivError::from(
+                            krishiv_common::error::InternalError {
+                                message: e.to_string(),
+                            },
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             Ok((analyzed, batches))
         })?;
         let format = format?;
@@ -501,6 +571,17 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
                 months: v.months,
                 days: v.days,
                 micros: v.nanoseconds / 1000,
+            }
+        }
+        // The engine's own carrier (`collect_engine`): Spark's months, days and microseconds.
+        (DataType::CalendarInterval, t) if krishiv_types::arrow::is_calendar_struct(t) => {
+            let v = krishiv_types::calendar::Calendars::of(col.as_ref())
+                .ok_or_else(|| harness_error("a calendar interval that is not one"))?
+                .value(row);
+            Cell::Calendar {
+                months: v.months,
+                days: v.days,
+                micros: v.micros,
             }
         }
         (DataType::Geometry { .. } | DataType::Geography { .. }, ArrowType::Struct(_)) => {
@@ -733,6 +814,17 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
                 months: v.months,
                 days: v.days,
                 micros: v.nanoseconds / 1000,
+            }
+        }
+        // The engine's own carrier (`collect_engine`): Spark's months, days and microseconds.
+        (DataType::CalendarInterval, t) if krishiv_types::arrow::is_calendar_struct(t) => {
+            let v = krishiv_types::calendar::Calendars::of(col.as_ref())
+                .ok_or_else(|| harness_error("a calendar interval that is not one"))?
+                .value(row);
+            Cell::Calendar {
+                months: v.months,
+                days: v.days,
+                micros: v.micros,
             }
         }
         (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {

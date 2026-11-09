@@ -6,7 +6,7 @@
 //! This is a library only for now: no SQL function calls it yet, so
 //! `ST_GeomFromWKB` and `ST_GeogFromWKB` do not raise `WKB_PARSE_ERROR`
 //! from SQL (the `st-functions` golden statements stay in the `time-geo-types`
-//! known-failure category, P2-T181, until the functions are registered).
+//! known-failure category, until the functions are registered).
 //!
 //! The input is ISO WKB: the seven OGC geometry types (point to geometry
 //! collection) in XY, XYZ (type + 1000), XYM (+ 2000) or XYZM (+ 3000),
@@ -349,14 +349,46 @@ impl Writer {
     }
 }
 
+mod wkt;
+
 #[cfg(test)]
 mod tests;
 
-/// The text Spark prints a spatial value as (extended well-known text):
-/// `POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0.
+/// A value of `GEOMETRY(ANY)` or `GEOGRAPHY(ANY)` cast to a geography must carry a geographic
+/// SRID of Spark's registry (`STUtils.geometryToGeography`).
 ///
-/// Only a two-dimensional point is printed so far; any other geometry is
-/// `KRISHIV_UNSUPPORTED_FEATURE`.
+/// # Errors
+/// `ST_INVALID_SRID_VALUE` for an SRID that is unknown or not geographic.
+pub fn check_geographic_srid(srid: i32) -> Result<()> {
+    if crate::srs::is_geographic(srid) {
+        Ok(())
+    } else {
+        Err(error::invalid_srid(&srid.to_string()))
+    }
+}
+
+/// The SRID of the CRS string of a Parquet `GEOMETRY` / `GEOGRAPHY` column, as Spark's
+/// `ParquetToSparkSchemaConverter` reads it: no CRS is `OGC:CRS84` (4326); otherwise the string
+/// must be a name of Spark's registry exactly (`OGC:CRS84`, `EPSG:4326`, `EPSG:3857`,
+/// `SRID:0`, ...; case-sensitive, so `srid:0` and PROJJSON are refused), and a geography needs a
+/// geographic system.
+///
+/// # Errors
+/// `ST_INVALID_CRS_VALUE` for any other CRS.
+pub fn srid_of_crs(crs: Option<&str>, geography: bool) -> Result<i32> {
+    let Some(crs) = crs else {
+        return Ok(4326);
+    };
+    match crate::srs::srid_of(crs) {
+        Some(srid) if !geography || crate::srs::is_geographic(srid) => Ok(srid),
+        _ => Err(error::invalid_crs(crs)),
+    }
+}
+
+/// The text Spark prints a spatial value as (extended well-known text):
+/// `POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0. Every
+/// geometry type prints, with `Z`/`M`/`ZM` ordinates, empty geometries and
+/// nested collections; see the `wkt` module for the rules (from a real Spark 4.2.0 run).
 ///
 /// ```
 /// use krishiv_types::geo::{rewrite, to_ewkt, ByteOrder, SpatialKind};
@@ -368,38 +400,9 @@ mod tests;
 /// ```
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for anything but a two-dimensional point.
+/// `WKB_PARSE_ERROR` for a value that is not well-formed ISO WKB.
 pub fn to_ewkt(srid: i32, wkb: &[u8]) -> Result<String> {
-    let coord = |at: usize| -> Option<f64> {
-        let bytes: [u8; 8] = wkb.get(at..at + 8)?.try_into().ok()?;
-        Some(match wkb.first()? {
-            0 => f64::from_be_bytes(bytes),
-            _ => f64::from_le_bytes(bytes),
-        })
-    };
-    let code = wkb
-        .get(1..HEADER)
-        .and_then(|b| <[u8; 4]>::try_from(b).ok())
-        .map(|b| match wkb.first() {
-            Some(0) => u32::from_be_bytes(b),
-            _ => u32::from_le_bytes(b),
-        });
-    let (Some(POINT), Some(x), Some(y), true) = (
-        code,
-        coord(HEADER),
-        coord(HEADER + 8),
-        wkb.len() == HEADER + 16,
-    ) else {
-        return Err(error::unsupported(
-            "printing a geometry that is not a two-dimensional point".to_owned(),
-        ));
-    };
-    let prefix = if srid == 0 {
-        String::new()
-    } else {
-        format!("SRID={srid};")
-    };
-    Ok(format!("{prefix}POINT({x} {y})"))
+    wkt::to_ewkt(srid, wkb)
 }
 
 /// Whether `t` is, or holds anywhere inside it, a geometry or geography.

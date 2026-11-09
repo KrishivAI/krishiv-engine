@@ -445,11 +445,17 @@ impl Resolver<'_> {
                         b = make_nullable(b);
                     }
                     // Shown as Spark names it, over the operands as written
-                    // (a session variable keeps its name).
+                    // (a session variable keeps its name): `date_add` / `date_sub`, or the `try_` call
+                    // itself with its operands in the order written.
+                    let (shown_name, a, c) = if lookup_name.starts_with("try_") {
+                        (lookup_name, 0, 1)
+                    } else {
+                        (name, first, second)
+                    };
                     b.shown = Some(Arc::new(
                         Expr::function(
-                            name,
-                            vec![kids[first].shown(), kids[second].shown()]
+                            shown_name,
+                            vec![kids[a].shown(), kids[c].shown()]
                                 .into_iter()
                                 .map(|k| bare_variable(&k))
                                 .collect(),
@@ -976,6 +982,32 @@ impl Resolver<'_> {
                         false,
                         e.origin,
                     ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 3)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "time_bucket" && n == 2 {
+                    // Spark's builder writes the origin: 1970-01-01 00:00:00 in the session zone for a
+                    // `TIMESTAMP` (or anything that is not a `TIMESTAMP_NTZ`), the epoch for a `TIMESTAMP_NTZ`.
+                    owned = kids[..n].to_vec();
+                    owned.push(if kids[1].ty.data_type == Some(DataType::TimestampNtz) {
+                        default_argument(
+                            Literal::TimestampNtz(0),
+                            DataType::TimestampNtz,
+                            false,
+                            e.origin,
+                        )
+                    } else {
+                        let offset = self.ctx.conf.session_zone.map_or(0, |z| {
+                            krishiv_kernels::cast::TimeZoneRules::offset_for_local(&z, 0)
+                        });
+                        default_argument(
+                            Literal::Timestamp(i64::from(offset).saturating_mul(-1_000_000)),
+                            DataType::Timestamp,
+                            false,
+                            e.origin,
+                        )
+                    });
                     if let Some(filter) = kids.get(n) {
                         owned.push(filter.clone());
                     }
@@ -1526,6 +1558,31 @@ impl Resolver<'_> {
                     ..keep(arg_type(to.clone(), nullable))
                 }
             }
+            // Spark's `ValidateAndStripPipeExpressions`: the item itself,
+            // once its aggregate functions fit the operator.
+            ExprNode::Pipe { clause, .. } => {
+                let first = first_aggregate(&kids[0].expr);
+                match (clause, first) {
+                    (crate::PipeClause::Aggregate, None) => {
+                        return Err(AnalysisError::new(
+                            krishiv_common::error::PipeOperatorAggregateExpressionContainsNoAggregateFunction {
+                                expr: kids[0].expr.to_string(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    (crate::PipeClause::Extend | crate::PipeClause::Set, Some(a)) => {
+                        return Err(AnalysisError::new(
+                            krishiv_common::error::PipeOperatorContainsAggregateFunction {
+                                expr: a.to_string(),
+                                clause: clause.name().to_owned(),
+                            },
+                            a.origin,
+                        ));
+                    }
+                    _ => kids[0].clone(),
+                }
+            }
             ExprNode::Collate {
                 collation, name, ..
             } => {
@@ -1664,6 +1721,19 @@ impl Resolver<'_> {
                 }
             }),
         };
+        if let ExprNode::Function(f) = &e.node
+            && matches!(
+                &b.expr.node,
+                ExprNode::Resolved(ResolvedExpr::Function(r)) if !matches!(r.id, FunctionId::Udf { .. })
+            )
+            && let Some(shown) = super::display::spark_display(
+                &f.name,
+                &kids.iter().map(Bound::shown).collect::<Vec<_>>(),
+                e.origin,
+            )
+        {
+            b.shown = Some(shown);
+        }
         if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
             b.shown = Some(with_children(
                 &b.expr,
@@ -1792,4 +1862,25 @@ fn make_nullable(mut b: Bound) -> Bound {
         );
     }
     b
+}
+
+/// The first aggregate call in `e`, in Spark's order (a node before its
+/// children); window expressions are not entered, as Spark's
+/// `findFirstAggregate` does not enter them.
+fn first_aggregate(e: &Arc<Expr>) -> Option<Arc<Expr>> {
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(x) = stack.pop() {
+        match &x.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
+                return Some(x);
+            }
+            ExprNode::Window(_) => {}
+            _ => {
+                let mut kids = Vec::new();
+                x.for_each_child(&mut |k| kids.push(Arc::clone(k)));
+                stack.extend(kids.into_iter().rev());
+            }
+        }
+    }
+    None
 }

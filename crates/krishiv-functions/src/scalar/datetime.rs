@@ -84,6 +84,9 @@ pub(super) const NAMES: &[&str] = &[
     "next_day",
     "trunc",
     "date_trunc",
+    "time_bucket",
+    "__time_add_interval",
+    "__subtract_times",
     "timestampadd",
     "make_timestamp",
     "make_timestamp_ltz",
@@ -423,6 +426,34 @@ impl PatternCache {
     }
 }
 
+/// `time_bucket(size, ts, origin)` over a batch: a NULL in any argument is NULL; `ts` and `origin` are
+/// instants (a `TIMESTAMP` buckets on the session zone's calendar, a `TIMESTAMP_NTZ` in UTC).
+fn time_bucket(
+    x: &Inputs<'_>,
+    months: bool,
+    ntz: bool,
+    o: &BindOptions,
+) -> Result<TimestampMicrosecondArray, KrishivError> {
+    use arrow_array::types::{DurationMicrosecondType, IntervalYearMonthType};
+    use krishiv_kernels::datetime::time_bucket_batch;
+    let (ts, origin) = (x.timestamps(1)?, x.timestamps(2)?);
+    let sizes: Vec<Option<i64>> = if months {
+        x.array::<IntervalYearMonthType>(0)?
+            .iter()
+            .map(|v| v.map(i64::from))
+            .collect()
+    } else {
+        x.array::<DurationMicrosecondType>(0)?.iter().collect()
+    };
+    let zone: Option<&dyn krishiv_kernels::datetime::TimeZoneRules> = if ntz {
+        None
+    } else {
+        Some(o.time_zone.as_ref())
+    };
+    let a = time_bucket_batch(&sizes, &ts, &origin, months, zone)?;
+    Ok(if ntz { a } else { a.with_timezone("UTC") })
+}
+
 /// The session zone for formatting: its id and rules.
 fn session_zone(opts: &BindOptions) -> Zone<'_> {
     Zone {
@@ -613,7 +644,7 @@ fn parse_ntz_column(
     policy: ParsePolicy,
     operation: &str,
 ) -> Result<ArrayRef, KrishivError> {
-    let mut cache = PatternCache::new(Purpose::Parse, legacy);
+    let mut cache = PatternCache::new(Purpose::ParseNtz, legacy);
     let mut out = reserve::<Option<i64>>(strings.len())?;
     for i in 0..strings.len() {
         if strings.is_null(i) || fmts.is_null(i) {
@@ -964,6 +995,79 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let utc = instants(x, 1, ntz, &o)?;
                 let out = trunc_timestamp(&x.strings(0)?, &utc, o.time_zone.as_ref(), ansi)?;
                 Ok(Arc::new(out.with_timezone("UTC")) as ArrayRef)
+            })
+        }
+        (
+            "__time_add_interval",
+            [
+                DataType::Time64(TimeUnit::Nanosecond),
+                DataType::Duration(TimeUnit::Microsecond),
+                DataType::Int32,
+            ],
+        ) => {
+            // The interval's end field, a literal the analyzer appends (0 DAY .. 3 SECOND), names the interval in
+            // the overflow message.
+            let end = match args.get(2) {
+                Some(BindArg::Literal(a)) => a
+                    .as_primitive_opt::<Int32Type>()
+                    .filter(|f| f.len() == 1 && f.is_valid(0))
+                    .map(|f| f.value(0)),
+                _ => None,
+            };
+            let end = match end {
+                Some(0) => krishiv_types::DayTimeField::Day,
+                Some(1) => krishiv_types::DayTimeField::Hour,
+                Some(2) => krishiv_types::DayTimeField::Minute,
+                Some(3) => krishiv_types::DayTimeField::Second,
+                _ => {
+                    return Some((
+                        listed,
+                        Err(internal(
+                            "__time_add_interval: a malformed end field".to_owned(),
+                        )),
+                    ));
+                }
+            };
+            Binding::new(
+                DataType::Time64(TimeUnit::Nanosecond),
+                move |x: &Inputs<'_>| {
+                    let times = x.array::<Time64NanosecondType>(0)?;
+                    let micros = x.array::<arrow_array::types::DurationMicrosecondType>(1)?;
+                    Ok(Arc::new(krishiv_kernels::datetime::time_add_day_time(
+                        &times, &micros, end,
+                    )?) as ArrayRef)
+                },
+            )
+        }
+        (
+            "__subtract_times",
+            [
+                DataType::Time64(TimeUnit::Nanosecond),
+                DataType::Time64(TimeUnit::Nanosecond),
+            ],
+        ) => Binding::new(
+            DataType::Duration(TimeUnit::Microsecond),
+            |x: &Inputs<'_>| {
+                let (end, start) = (
+                    x.array::<Time64NanosecondType>(0)?,
+                    x.array::<Time64NanosecondType>(1)?,
+                );
+                Ok(Arc::new(krishiv_kernels::datetime::subtract_times(&end, &start)) as ArrayRef)
+            },
+        ),
+        ("time_bucket", [b, t, origin])
+            if is_timestamp(t)
+                && t == origin
+                && matches!(
+                    b,
+                    DataType::Duration(TimeUnit::Microsecond)
+                        | DataType::Interval(arrow_schema::IntervalUnit::YearMonth)
+                ) =>
+        {
+            let ntz = *t == ntz_type();
+            let months = matches!(b, DataType::Interval(_));
+            Binding::new(t.clone(), move |x: &Inputs<'_>| {
+                Ok(Arc::new(time_bucket(x, months, ntz, &o)?) as ArrayRef)
             })
         }
         (
@@ -1325,7 +1429,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 if matches!(
                     t,
                     DataType::Interval(_) | DataType::Duration(TimeUnit::Microsecond)
-                ) =>
+                ) || krishiv_types::arrow::is_calendar_struct(t) =>
             {
                 Binding::new(interval_part_type(part), move |x: &Inputs<'_>| {
                     Ok(interval_part(x.column(1)?.as_ref(), part)?)
@@ -1627,7 +1731,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             }
             // Spark's formatter factory keeps TIMESTAMP_NTZ on the corrected
             // parser under LEGACY.
-            let pat = match pattern_arg(args, 1, Purpose::Parse, false) {
+            let pat = match pattern_arg(args, 1, Purpose::ParseNtz, false) {
                 Ok(p) => p,
                 Err(e) => return Some((listed, Err(e))),
             };
@@ -1726,7 +1830,15 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let pat = if has_fmt {
                 match pattern_arg(args, 1, Purpose::Format, opts.legacy_time_parser) {
                     Ok(p) => p,
-                    Err(e) => return Some((listed, Err(e))),
+                    // Spark builds the formatter lazily, so what its arguments raise comes first (a seconds
+                    // argument that does not cast): read them, then report the pattern.
+                    Err(e) => {
+                        let binding = Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
+                            longs_column(x, 0)?;
+                            Err(e.clone())
+                        });
+                        return Some((listed, Ok(binding)));
+                    }
                 }
             } else {
                 match default_pattern(Purpose::Format, opts.legacy_time_parser) {

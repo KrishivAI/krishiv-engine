@@ -352,11 +352,8 @@ fn json_srid(srid: Srid, geographic: bool) -> String {
 /// system.
 fn crs_to_srid(name: &str) -> Option<Srid> {
     match name {
-        "SRID:0" => Some(Srid::Fixed(0)),
-        "EPSG:3857" => Some(Srid::Fixed(3857)),
-        "OGC:CRS84" => Some(Srid::Fixed(4326)),
         "SRID:ANY" => Some(Srid::Any),
-        _ => None,
+        other => crate::srs::srid_of(other).map(Srid::Fixed),
     }
 }
 

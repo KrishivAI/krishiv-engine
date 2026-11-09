@@ -63,6 +63,8 @@ pub(super) struct Bindings {
     /// The declared `CHAR`/`VARCHAR` types of the columns of already-resolved scans (a DataFrame's stored
     /// plan), by name parts, then column name: the resolved plan holds the types, not the declarations.
     pub(super) scan_declared: HashMap<Vec<String>, HashMap<String, Arc<str>>>,
+    /// The column comments of already-resolved scans, by name parts, then column name (as `scan_declared`).
+    pub(super) scan_comments: HashMap<Vec<String>, HashMap<String, Arc<str>>>,
     /// The lowered plan of each `PlanNode::Sql`, by node address.
     pub(super) sql: HashMap<usize, Arc<LogicalPlan>>,
     pub(super) pins: BTreeMap<TableIdent, TableVersion>,
@@ -893,6 +895,14 @@ async fn load(
                 .collect();
             if !declared.is_empty() {
                 b.scan_declared.insert(name.to_vec(), declared);
+            }
+            if !meta.column_comments.is_empty() {
+                let comments = meta
+                    .column_comments
+                    .iter()
+                    .map(|(c, t)| (c.clone(), Arc::from(t.as_str())))
+                    .collect();
+                b.scan_comments.insert(name.to_vec(), comments);
             }
             validated.entry(name).or_default().push((version, columns));
         } else {

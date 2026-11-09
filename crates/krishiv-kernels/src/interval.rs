@@ -19,8 +19,7 @@ use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::AsArray as _;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
-    Int8Type, Int16Type, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
-    TimestampMicrosecondType,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, ArrowPrimitiveType, Decimal128Array, DurationMicrosecondArray, Float64Array,
@@ -334,15 +333,27 @@ pub fn interval_part(a: &dyn Array, part: DatePart) -> Result<ArrayRef, KernelEr
                 _ => time_part(a, part),
             }
         }
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            let a = a.as_primitive::<IntervalMonthDayNanoType>();
+        t if krishiv_types::arrow::is_calendar_struct(t) => {
+            let c = krishiv_types::calendar::Calendars::of(a)
+                .ok_or_else(|| KernelError::internal("a calendar interval that is not one"))?;
+            let pick = |f: fn(krishiv_types::calendar::CalendarValue) -> i64| -> Vec<Option<i64>> {
+                c.iter().map(|v| v.map(f)).collect()
+            };
             match part {
                 DatePart::Year | DatePart::Month => {
-                    month_part(&a.unary::<_, IntervalYearMonthType>(|v| v.months), part)
+                    let months: IntervalYearMonthArray =
+                        c.iter().map(|v| v.map(|v| v.months)).collect();
+                    month_part(&months, part)
                 }
-                DatePart::Day => Ok(Arc::new(a.unary::<_, Int32Type>(|v| v.days))),
+                DatePart::Day => Ok(Arc::new(
+                    c.iter()
+                        .map(|v| v.map(|v| v.days))
+                        .collect::<arrow_array::Int32Array>(),
+                )),
                 _ => time_part(
-                    &a.unary::<_, DurationMicrosecondType>(|v| v.nanoseconds / 1_000),
+                    &pick(|v| v.micros)
+                        .into_iter()
+                        .collect::<arrow_array::DurationMicrosecondArray>(),
                     part,
                 ),
             }
@@ -864,8 +875,6 @@ mod tests {
 
     #[test]
     fn parts_of_each_interval_type_keep_the_sign() {
-        use arrow_array::IntervalMonthDayNanoArray;
-        use arrow_array::types::IntervalMonthDayNano;
         let int32 = |a: ArrayRef| a.as_primitive::<Int32Type>().value(0);
         let int8 = |a: ArrayRef| a.as_primitive::<Int8Type>().value(0);
         let second = |a: ArrayRef| a.as_primitive::<Decimal128Type>().value(0);
@@ -887,18 +896,17 @@ mod tests {
         interval_part(&d, DatePart::Year).unwrap_err();
 
         // 14 months, 40 days and 25:03:04.5.
-        let c = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(
-            14,
-            40,
-            90_184_500_000_000,
+        let c = krishiv_types::calendar::calendar_array([Some(
+            krishiv_types::calendar::CalendarValue::new(14, 40, 90_184_500_000),
         )]);
-        assert_eq!(int32(interval_part(&c, DatePart::Year).unwrap()), 1);
-        assert_eq!(int8(interval_part(&c, DatePart::Month).unwrap()), 2);
-        assert_eq!(int32(interval_part(&c, DatePart::Day).unwrap()), 40);
-        assert_eq!(int8(interval_part(&c, DatePart::Hour).unwrap()), 1);
-        assert_eq!(int8(interval_part(&c, DatePart::Minute).unwrap()), 3);
+        let c = c.as_ref();
+        assert_eq!(int32(interval_part(c, DatePart::Year).unwrap()), 1);
+        assert_eq!(int8(interval_part(c, DatePart::Month).unwrap()), 2);
+        assert_eq!(int32(interval_part(c, DatePart::Day).unwrap()), 40);
+        assert_eq!(int8(interval_part(c, DatePart::Hour).unwrap()), 1);
+        assert_eq!(int8(interval_part(c, DatePart::Minute).unwrap()), 3);
         assert_eq!(
-            second(interval_part(&c, DatePart::Second).unwrap()),
+            second(interval_part(c, DatePart::Second).unwrap()),
             4_500_000
         );
 

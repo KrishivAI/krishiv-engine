@@ -184,7 +184,7 @@ pub(super) fn evaluate_with(
             WindowFunction::Aggregate(a) if super::udaf::is_udf(a) => {
                 // A UDF's state is charged as it grows, and released with
                 // the function's evaluation.
-                let mut charge = super::udaf::Charge::new(pool.as_deref_mut());
+                let mut charge = super::udaf::Charge::with_slack(pool.as_deref_mut());
                 super::udaf::aggregate(a, f, &unit, ansi, udafs, &mut charge)?
             }
             _ => function(f, &unit, ansi, legacy)?,
@@ -874,8 +874,9 @@ pub(super) fn width(t: &DataType, rows: usize) -> usize {
 /// The bytes the evaluation of `plan` over complete partitions holds for
 /// `rows` rows in `parts` partitions and `peers` peer groups: the row
 /// maps, each function's states and output, and the index vectors that
-/// gather outputs. Linear in its arguments, so the cost of a unit is the
-/// sum of its batches' costs. `held` is [`snapshot_slots`] of the batch.
+/// gather outputs. Subadditive in its arguments (linear terms, and a
+/// chunk's scratch capped by a constant, `frames::chunk_items`), so the
+/// sum of a unit's batches' costs covers the unit. `held` is [`snapshot_slots`] of the batch.
 pub(super) fn cost(
     plan: &WindowPlan,
     rows: usize,
