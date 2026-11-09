@@ -23,7 +23,10 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
-use arrow_array::{Array, ArrayRef, BooleanArray, make_array};
+use arrow_array::{
+    Array, ArrayRef, BinaryViewArray, BooleanArray, GenericBinaryArray, GenericStringArray,
+    PrimitiveArray, StringViewArray, make_array,
+};
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
@@ -507,6 +510,7 @@ impl RowLayout {
                 )));
             }
             let valid = |i: usize| nulls.as_ref().is_none_or(|v| v.is_valid(i));
+            let typed = Typed::resolve(column.kind, array)?;
             for (i, h) in hashes.iter_mut().enumerate() {
                 if !valid(i) {
                     // `write_nulls` mixes it even when the column has no
@@ -516,58 +520,7 @@ impl RowLayout {
                     }
                     continue;
                 }
-                *h = match column.kind {
-                    Kind::Bool => mix(*h, u64::from(u8::from(bool_at(array, i)?))),
-                    Kind::F32 => {
-                        let a = array
-                            .as_primitive_opt::<Float32Type>()
-                            .ok_or_else(|| internal("float key expected".to_owned()))?;
-                        mix(*h, u64::from(normalize32(a.value(i)).to_bits()))
-                    }
-                    Kind::F64 => {
-                        let a = array
-                            .as_primitive_opt::<Float64Type>()
-                            .ok_or_else(|| internal("double key expected".to_owned()))?;
-                        mix(*h, normalize64(a.value(i)).to_bits())
-                    }
-                    Kind::Fixed(w) => {
-                        let data = array.to_data();
-                        let bytes = data
-                            .buffers()
-                            .first()
-                            .and_then(|b| {
-                                b.as_slice()
-                                    .get((data.offset() + i) * w..(data.offset() + i + 1) * w)
-                            })
-                            .ok_or_else(|| {
-                                internal("fixed-width key buffer too short".to_owned())
-                            })?;
-                        let mut acc = *h;
-                        for chunk in bytes.chunks(8) {
-                            let mut word = [0u8; 8];
-                            word[..chunk.len()].copy_from_slice(chunk);
-                            acc = mix(acc, u64::from_le_bytes(word));
-                        }
-                        acc
-                    }
-                    Kind::View => {
-                        let bytes = view_bytes(array, i)?;
-                        if bytes.len() <= INLINE_MAX {
-                            let mut v = [0u8; VIEW_BYTES];
-                            v[..4].copy_from_slice(
-                                &u32::try_from(bytes.len())
-                                    .map_err(|_| {
-                                        internal("a key value longer than 4 GiB".to_owned())
-                                    })?
-                                    .to_le_bytes(),
-                            );
-                            v[4..4 + bytes.len()].copy_from_slice(bytes);
-                            mix(*h, inline_hash(u128::from_le_bytes(v)))
-                        } else {
-                            mix(*h, strings.hash_one(bytes))
-                        }
-                    }
-                };
+                *h = typed.mix_into(*h, i, &strings)?;
             }
         }
         for h in &mut hashes {
@@ -595,8 +548,7 @@ impl RowLayout {
                 )));
             }
             out.push(EqColumn {
-                array,
-                kind: column.kind,
+                typed: Typed::resolve(column.kind, array)?,
                 nulls: array.logical_nulls(),
             });
         }
@@ -707,8 +659,7 @@ pub struct KeyEq<'a> {
 
 #[derive(Debug)]
 struct EqColumn<'a> {
-    array: &'a ArrayRef,
-    kind: Kind,
+    typed: Typed<'a>,
     nulls: Option<NullBuffer>,
 }
 
@@ -716,7 +667,7 @@ impl KeyEq<'_> {
     /// Whether rows `a` and `b` hold the same key.
     ///
     /// # Errors
-    /// `INTERNAL_ERROR` if a column is not of its layout's kind.
+    /// `INTERNAL_ERROR` if a fixed-width column's buffer is too short.
     pub fn eq(&self, a: usize, b: usize) -> Result<bool> {
         for c in &self.columns {
             let (na, nb) = c
@@ -729,43 +680,145 @@ impl KeyEq<'_> {
                 }
                 return Ok(false);
             }
-            let same = match c.kind {
-                Kind::Bool => bool_at(c.array, a)? == bool_at(c.array, b)?,
-                Kind::F32 => {
-                    let x = c
-                        .array
-                        .as_primitive_opt::<Float32Type>()
-                        .ok_or_else(|| internal("float key expected".to_owned()))?;
-                    normalize32(x.value(a)).to_bits() == normalize32(x.value(b)).to_bits()
-                }
-                Kind::F64 => {
-                    let x = c
-                        .array
-                        .as_primitive_opt::<Float64Type>()
-                        .ok_or_else(|| internal("double key expected".to_owned()))?;
-                    normalize64(x.value(a)).to_bits() == normalize64(x.value(b)).to_bits()
-                }
-                Kind::Fixed(w) => {
-                    let data = c.array.to_data();
-                    let bytes = data
-                        .buffers()
-                        .first()
-                        .ok_or_else(|| internal("fixed-width key buffer missing".to_owned()))?
-                        .as_slice();
-                    let at =
-                        |i: usize| bytes.get((data.offset() + i) * w..(data.offset() + i + 1) * w);
-                    match (at(a), at(b)) {
-                        (Some(x), Some(y)) => x == y,
-                        _ => return Err(internal("fixed-width key buffer too short".to_owned())),
-                    }
-                }
-                Kind::View => view_bytes(c.array, a)? == view_bytes(c.array, b)?,
-            };
-            if !same {
+            if !c.typed.same(a, b)? {
                 return Ok(false);
             }
         }
         Ok(true)
+    }
+}
+
+/// A key column resolved to its concrete array once, so reading a row
+/// does not downcast or copy the array's data again.
+#[derive(Debug)]
+enum Typed<'a> {
+    Bool(&'a BooleanArray),
+    F32(&'a PrimitiveArray<Float32Type>),
+    F64(&'a PrimitiveArray<Float64Type>),
+    Fixed { data: ArrayData, w: usize },
+    Str(Strs<'a>),
+}
+
+/// A string or binary column.
+#[derive(Debug)]
+enum Strs<'a> {
+    Utf8(&'a GenericStringArray<i32>),
+    LargeUtf8(&'a GenericStringArray<i64>),
+    Utf8View(&'a StringViewArray),
+    Binary(&'a GenericBinaryArray<i32>),
+    LargeBinary(&'a GenericBinaryArray<i64>),
+    BinaryView(&'a BinaryViewArray),
+}
+
+impl Strs<'_> {
+    #[inline]
+    fn value(&self, i: usize) -> &[u8] {
+        match self {
+            Strs::Utf8(a) => a.value(i).as_bytes(),
+            Strs::LargeUtf8(a) => a.value(i).as_bytes(),
+            Strs::Utf8View(a) => a.value(i).as_bytes(),
+            Strs::Binary(a) => a.value(i),
+            Strs::LargeBinary(a) => a.value(i),
+            Strs::BinaryView(a) => a.value(i),
+        }
+    }
+}
+
+impl<'a> Typed<'a> {
+    fn resolve(kind: Kind, array: &'a ArrayRef) -> Result<Self> {
+        Ok(match kind {
+            Kind::Bool => Typed::Bool(
+                array
+                    .as_boolean_opt()
+                    .ok_or_else(|| internal("boolean key expected".to_owned()))?,
+            ),
+            Kind::F32 => Typed::F32(
+                array
+                    .as_primitive_opt::<Float32Type>()
+                    .ok_or_else(|| internal("float key expected".to_owned()))?,
+            ),
+            Kind::F64 => Typed::F64(
+                array
+                    .as_primitive_opt::<Float64Type>()
+                    .ok_or_else(|| internal("double key expected".to_owned()))?,
+            ),
+            Kind::Fixed(w) => {
+                let data = array.to_data();
+                let end = (data.offset() + data.len()) * w;
+                if data.buffers().first().is_none_or(|b| b.len() < end) {
+                    return Err(internal("fixed-width key buffer too short".to_owned()));
+                }
+                Typed::Fixed { data, w }
+            }
+            Kind::View => Typed::Str(match array.data_type() {
+                DataType::Utf8 => Strs::Utf8(array.as_string::<i32>()),
+                DataType::LargeUtf8 => Strs::LargeUtf8(array.as_string::<i64>()),
+                DataType::Utf8View => Strs::Utf8View(array.as_string_view()),
+                DataType::Binary => Strs::Binary(array.as_binary::<i32>()),
+                DataType::LargeBinary => Strs::LargeBinary(array.as_binary::<i64>()),
+                DataType::BinaryView => Strs::BinaryView(array.as_binary_view()),
+                t => return Err(internal(format!("string key expected, got {t}"))),
+            }),
+        })
+    }
+
+    /// The bytes of fixed-width value `i` (the buffer was checked at
+    /// `resolve`).
+    #[inline]
+    fn fixed(data: &ArrayData, w: usize, i: usize) -> Result<&[u8]> {
+        data.buffers()
+            .first()
+            .and_then(|b| {
+                b.as_slice()
+                    .get((data.offset() + i) * w..(data.offset() + i + 1) * w)
+            })
+            .ok_or_else(|| internal("fixed-width key buffer too short".to_owned()))
+    }
+
+    /// `h` mixed with the (valid) value `i`.
+    #[inline]
+    fn mix_into(&self, h: u64, i: usize, strings: &foldhash::fast::FixedState) -> Result<u64> {
+        Ok(match self {
+            Typed::Bool(a) => mix(h, u64::from(u8::from(a.value(i)))),
+            Typed::F32(a) => mix(h, u64::from(normalize32(a.value(i)).to_bits())),
+            Typed::F64(a) => mix(h, normalize64(a.value(i)).to_bits()),
+            Typed::Fixed { data, w } => {
+                let mut acc = h;
+                for chunk in Self::fixed(data, *w, i)?.chunks(8) {
+                    let mut word = [0u8; 8];
+                    word[..chunk.len()].copy_from_slice(chunk);
+                    acc = mix(acc, u64::from_le_bytes(word));
+                }
+                acc
+            }
+            Typed::Str(a) => {
+                let bytes = a.value(i);
+                if bytes.len() <= INLINE_MAX {
+                    let mut v = [0u8; VIEW_BYTES];
+                    v[..4].copy_from_slice(
+                        &u32::try_from(bytes.len())
+                            .map_err(|_| internal("a key value longer than 4 GiB".to_owned()))?
+                            .to_le_bytes(),
+                    );
+                    v[4..4 + bytes.len()].copy_from_slice(bytes);
+                    mix(h, inline_hash(u128::from_le_bytes(v)))
+                } else {
+                    mix(h, strings.hash_one(bytes))
+                }
+            }
+        })
+    }
+
+    /// Whether valid values `a` and `b` are one key.
+    #[inline]
+    fn same(&self, a: usize, b: usize) -> Result<bool> {
+        Ok(match self {
+            Typed::Bool(x) => x.value(a) == x.value(b),
+            Typed::F32(x) => normalize32(x.value(a)).to_bits() == normalize32(x.value(b)).to_bits(),
+            Typed::F64(x) => normalize64(x.value(a)).to_bits() == normalize64(x.value(b)).to_bits(),
+            Typed::Fixed { data, w } => Self::fixed(data, *w, a)? == Self::fixed(data, *w, b)?,
+            Typed::Str(x) => x.value(a) == x.value(b),
+        })
     }
 }
 
@@ -1229,26 +1282,6 @@ fn inline_hash(view: u128) -> u64 {
     )]
     let (lo, hi) = (view as u64, (view >> 64) as u64);
     fold(fold(lo ^ MIX, FINISH) ^ hi, MIX)
-}
-
-fn bool_at(array: &ArrayRef, i: usize) -> Result<bool> {
-    array
-        .as_boolean_opt()
-        .map(|a| a.value(i))
-        .ok_or_else(|| internal("boolean key expected".to_owned()))
-}
-
-/// The bytes of string or binary value `i`.
-fn view_bytes(array: &ArrayRef, i: usize) -> Result<&[u8]> {
-    Ok(match array.data_type() {
-        DataType::Utf8 => array.as_string::<i32>().value(i).as_bytes(),
-        DataType::LargeUtf8 => array.as_string::<i64>().value(i).as_bytes(),
-        DataType::Utf8View => array.as_string_view().value(i).as_bytes(),
-        DataType::Binary => array.as_binary::<i32>().value(i),
-        DataType::LargeBinary => array.as_binary::<i64>().value(i),
-        DataType::BinaryView => array.as_binary_view().value(i),
-        t => return Err(internal(format!("string key expected, got {t}"))),
-    })
 }
 
 fn round8(n: usize) -> usize {
