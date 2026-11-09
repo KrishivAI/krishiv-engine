@@ -111,8 +111,10 @@ pub(crate) const fn projection(mode: Option<ViewSchemaMode>) -> ReadProjection {
 }
 
 /// The names a view read finds its stored columns by in `input`, the inlined view query: the query's output names
-/// (`query`). A query that repeats a name (ignoring case) is first renamed by position to names of its own, so each
-/// column is still read once by name (Spark reads it by name and ordinal, `GetViewColumnByNameAndOrdinal`).
+/// (`query`). A query that repeats a name (ignoring case) is renamed by position to names of its own, so the stored
+/// types and comments still apply. That reads it by position, where Spark reads by name and ordinal
+/// (`GetViewColumnByNameAndOrdinal`): a base table whose columns changed order or count under a `SELECT *` of such a
+/// view reads differently (open item in `ops/queue-opus-b2.md`).
 pub(crate) fn read_names(
     input: Arc<LogicalPlan>,
     query: &[String],
