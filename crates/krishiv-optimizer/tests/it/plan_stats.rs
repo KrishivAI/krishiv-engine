@@ -461,6 +461,15 @@ fn an_inner_join_narrows_its_keys_and_scales_the_other_columns() {
 }
 
 #[test]
+fn equalities_on_two_column_pairs_are_one_composite_key() {
+    // Independent, `1 / 100 * 1 / 20` of the 200,000 pairs would leave 100
+    // rows; as one key, `1 / min(min(100 * 10, 1000), min(40 * 20, 200))`
+    // leaves 1,000 (every `t` row finds its `u` row).
+    let e = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v");
+    close(e.rows(), 1000.0, "rows");
+}
+
+#[test]
 fn outer_joins_give_the_null_supplying_side_the_unmatched_fraction_as_nulls() {
     // 200 of `t`'s 1,000 rows match.
     let e = join("SELECT * FROM t LEFT JOIN w ON t.a = w.wk");
