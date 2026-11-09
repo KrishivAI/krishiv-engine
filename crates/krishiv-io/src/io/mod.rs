@@ -27,6 +27,7 @@ pub mod cache;
 mod coalesce;
 pub mod distinct_samples;
 pub mod fault;
+pub mod latency;
 #[cfg(unix)]
 pub mod local_listing;
 mod pace;
@@ -68,6 +69,7 @@ pub use self::cache::{CacheKey, CacheStats, MetadataCache};
 pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::distinct_samples::{DistinctSample, DistinctSamples, SampleKey};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
+pub use self::latency::{LATENCY_BUCKETS, LatencyHistogram};
 use self::pace::{Direction, Pacer};
 pub use self::stores::{
     AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
@@ -352,6 +354,10 @@ pub struct IoCounters {
     pub uploads_completed: AtomicU64,
     /// Multipart uploads aborted.
     pub uploads_aborted: AtomicU64,
+    /// Latency of every read attempt (ranged `GET`s and metadata requests)
+    /// to a remote store (`StoreId::is_remote`), from its lane permit to its
+    /// last byte ([`latency`]).
+    pub read_latency: LatencyHistogram,
 }
 
 impl IoCounters {
@@ -404,6 +410,10 @@ pub struct IoScheduler {
     runtime: Option<tokio::runtime::Handle>,
     totals: IoCounters,
     jitter: AtomicU64,
+    /// The HTTP clients this scheduler's cloud stores connect through: one per set of client
+    /// options for the life of the runtime, so a query does not build its client and TLS roots
+    /// again (see `krishiv_store::SharedHttpClients`).
+    http_clients: krishiv_store::SharedHttpClients,
 }
 
 impl fmt::Debug for IoScheduler {
@@ -444,7 +454,15 @@ impl IoScheduler {
             stores: RwLock::new(HashMap::new()),
             runtime,
             totals: IoCounters::default(),
+            http_clients: krishiv_store::SharedHttpClients::new(),
         })
+    }
+
+    /// The HTTP clients stores registered on this scheduler share (see
+    /// [`crate::query_registry`]).
+    #[must_use]
+    pub fn http_clients(&self) -> &krishiv_store::SharedHttpClients {
+        &self.http_clients
     }
 
     /// Registers (or replaces) the store `id`, unpaced (local files,
@@ -934,6 +952,16 @@ impl IoContext {
         f(&self.sched.totals).fetch_add(n, Ordering::Relaxed);
     }
 
+    /// Records one read attempt's latency, for the query and the process,
+    /// when `store` is remote (local files would hide the store's latency).
+    fn read_latency(&self, store: &StoreId, d: std::time::Duration) {
+        if !store.is_remote() {
+            return;
+        }
+        self.counters.read_latency.record(d);
+        self.sched.totals.read_latency.record(d);
+    }
+
     /// The bytes of each of `ranges` of `file` (absolute offsets), fetched
     /// with coalesced, version-checked, retried requests.
     ///
@@ -1084,6 +1112,7 @@ impl IoContext {
             let outcome = {
                 let _permit = lane.admit(Direction::Read, &file.path).await?;
                 self.count(|c| &c.requests, 1);
+                let started = std::time::Instant::now();
                 let mut extensions = ScheduledRequest.into_extensions();
                 extensions.insert(ObjectSize(file.size));
                 let mut opts = GetOptions {
@@ -1103,7 +1132,9 @@ impl IoContext {
                     let size = r.meta.size;
                     r.bytes().await.map(|b| (size, b))
                 };
-                tokio::time::timeout(cfg.request_timeout, request).await
+                let outcome = tokio::time::timeout(cfg.request_timeout, request).await;
+                self.read_latency(&file.store, started.elapsed());
+                outcome
             };
             let (retry_after, reason) = match outcome {
                 Ok(Ok((size, bytes))) => {
@@ -1552,7 +1583,10 @@ impl IoContext {
             let outcome = {
                 let _permit = lane.admit(Direction::Read, path).await?;
                 self.count(|c| &c.requests, 1);
-                tokio::time::timeout(cfg.request_timeout, request()).await
+                let started = std::time::Instant::now();
+                let outcome = tokio::time::timeout(cfg.request_timeout, request()).await;
+                self.read_latency(store, started.elapsed());
+                outcome
             };
             let (retry_after, reason) = match outcome {
                 Ok(Ok(v)) => return Ok(v),

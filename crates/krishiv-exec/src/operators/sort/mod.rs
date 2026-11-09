@@ -19,7 +19,8 @@
 //! the order the driver received them (in-batch ties by row index, runs by
 //! the order they were made, merges by run index). Across drivers, equal
 //! rows come out grouped in the order the drivers combined, which depends
-//! on scheduling (fixed in deterministic mode). Spark makes no promise for
+//! on scheduling; `krishiv.deterministicOrder` runs every pipeline on one
+//! driver, so there the order is fixed. Spark makes no promise for
 //! ties either: its order depends on partitioning and on spills.
 //!
 //! # Weights

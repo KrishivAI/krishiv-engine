@@ -66,7 +66,7 @@ mod shared_tests;
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
 pub(crate) use instantiate::{
-    Detached, Unbuilt, Values, aggregate_node, aggregate_spec, distinct_phases, expand_op,
+    Detached, LoopRun, Unbuilt, Values, aggregate_node, aggregate_spec, distinct_phases, expand_op,
     filter_op, final_of, generate_op, group_limit_op, hash_join, nested_loop_join, project_op,
     replicate_op, scan_filter, sort_merge_join, sort_op, top_n_op,
 };
