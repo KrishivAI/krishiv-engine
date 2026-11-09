@@ -13,6 +13,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ANSI_ENABLED,
     &SESSION_TIME_ZONE,
     &SQL_PATH_ENABLED,
+    &SCHEMA_LEVEL_COLLATIONS_ENABLED,
     &SQL_DEFAULT_PATH,
     &STORE_ASSIGNMENT_POLICY,
     &CTE_PRECEDENCE_POLICY,
@@ -384,6 +385,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &AVRO_DATETIME_REBASE_MODE_IN_READ,
     ),
     (
+        "spark.sql.collation.schemaLevel.enabled",
+        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
+    ),
+    (
         "spark.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
@@ -410,6 +415,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.avro.datetimeRebaseModeInRead",
         &AVRO_DATETIME_REBASE_MODE_IN_READ,
+    ),
+    (
+        "krishiv.sql.collation.schemaLevel.enabled",
+        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
     ),
     (
         "krishiv.sql.legacy.viewSchemaCompensation",
@@ -485,6 +494,22 @@ pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.path.enabled"),
+};
+
+/// Whether schema-level default collations (`CREATE|ALTER SCHEMA .. DEFAULT COLLATION`) are allowed.
+pub static SCHEMA_LEVEL_COLLATIONS_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.collation.schemaLevel.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether a schema may have a default collation (`CREATE SCHEMA .. DEFAULT COLLATION`, \
+          `ALTER SCHEMA .. DEFAULT COLLATION`). Off, as in Spark 4.2, the clause is \
+          `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`. On, the schema stores it and `DESCRIBE \
+          SCHEMA` shows it; tables, views and functions are not created in such a schema yet \
+          (Spark gives their strings the schema's collation; Krishiv does not apply it).",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.collation.schemaLevel.enabled"),
 };
 
 /// What `DEFAULT_PATH` expands to.

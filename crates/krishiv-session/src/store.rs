@@ -259,6 +259,8 @@ pub(crate) struct PartitionStats {
 /// A namespace's metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct NamespaceMeta {
+    /// The schema's `DEFAULT COLLATION` (its canonical name), when schema-level collations are on.
+    pub(crate) collation: Option<String>,
     pub(crate) comment: Option<String>,
     pub(crate) location: Option<String>,
     pub(crate) properties: BTreeMap<String, String>,

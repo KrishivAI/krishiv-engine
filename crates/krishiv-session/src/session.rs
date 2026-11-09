@@ -589,7 +589,10 @@ impl Session {
         query: &str,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
-        crate::collation_defaults::refuse_unhonoured(&statement)?;
+        crate::collation_defaults::refuse_unhonoured(
+            &statement,
+            self.parser_options().schema_level_collations,
+        )?;
         match statement {
             Statement::Query(q) => {
                 let plan = self.lower_identified(&q, &env, redacted)?;
@@ -1346,8 +1349,7 @@ impl Session {
     }
 
     /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
-    /// views first (their renames applied). Returns the evolved entries to store once the whole query analyzed and
-    /// the renames of repeated-name reads; a query that does not analyze alone is left to the whole query's analysis.
+    /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
     ///
     /// # Errors
     /// What [`crate::view_schema::check_read`] raises.
@@ -1360,7 +1362,7 @@ impl Session {
         let mut synced = Vec::new();
         let mut renames = Vec::new();
         for read in reads {
-            // A view whose query does not analyze is left to the outer query; the views after it still get checked.
+            // A view whose query does not analyze alone is left to the outer query.
             let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
             else {
                 continue;
@@ -2503,7 +2505,7 @@ fn job_uuid() -> String {
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 14] = [
+const PARSER_KEYS: [&str; 15] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -2518,6 +2520,7 @@ const PARSER_KEYS: [&str; 14] = [
     "spark.sql.caseSensitive",
     "spark.sql.parser.quotedRegexColumnNames",
     "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
+    "spark.sql.collation.schemaLevel.enabled",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
@@ -2631,8 +2634,7 @@ pub(crate) struct QueryEnv {
     pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
     /// The spans of the names substituted for `IDENTIFIER(..)` clauses (`lower_identified`).
     pub(crate) identifier_spans: Arc<[krishiv_sql::ast::Span]>,
-    /// The `IDENTIFIER(..)` clause each of `identifier_spans` replaced, as written; empty when
-    /// the spans came with text the session built (`CACHE TABLE`).
+    /// The `IDENTIFIER(..)` text each of `identifier_spans` replaced (empty for `CACHE TABLE`).
     pub(crate) identifier_written: Arc<[String]>,
 }
 

@@ -906,6 +906,13 @@ impl Session {
             (None, part)
         } else {
             let (namespace, part) = self.stored_function_name(&f.name.parts)?;
+            // Spark gives a SQL function its schema's default collation (`ApplyDefaultCollation`).
+            self.refuse_collated_namespace(&crate::table_commands::TableName {
+                namespace: namespace.clone(),
+                name: part.value.clone(),
+                written: String::new(),
+                bare: false,
+            })?;
             (Some(namespace), part)
         };
         let name = part.value.to_lowercase();
