@@ -371,7 +371,7 @@ fn quarter_and_day_of_week_in_month() {
     for (days, quarter) in [(18_262, 1), (18_262 + 59, 1), (18_262 + 91, 2), (18_627, 4)] {
         assert_eq!(fmt_date("Q", days), quarter.to_string(), "{days}");
     }
-    for (day, f) in [
+    for (day, week) in [
         (1, 1),
         (7, 7),
         (8, 1),
@@ -381,7 +381,11 @@ fn quarter_and_day_of_week_in_month() {
         (29, 1),
         (31, 3),
     ] {
-        assert_eq!(fmt_date("F", 18_262 + day - 1), f.to_string(), "day {day}");
+        assert_eq!(
+            fmt_date("F", 18_262 + day - 1),
+            week.to_string(),
+            "day {day}"
+        );
     }
 }
 
