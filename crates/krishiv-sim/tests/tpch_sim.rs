@@ -717,6 +717,48 @@ fn a_file_changed_after_listing_fails_the_read_on_a_worker() {
     assert!(e.contains("KRISHIV_FILE_CHANGED_DURING_READ"), "{e}");
 }
 
+/// A grouping key the routing hash cannot hash (an array) needs a hash
+/// exchange no map task could route: the cut plan is refused with a clear
+/// error before any task runs, never a failure mid-query on a worker.
+#[test]
+fn a_nested_grouping_key_is_refused_before_any_task_runs() {
+    let store = store();
+    let config = ClusterConfig {
+        sim: SimConfig::with_seed(5),
+        workers: 2,
+        partitions: 2,
+        slots: 1,
+        fault: None,
+    };
+    let client_store = Arc::clone(&store);
+    let outcome = Arc::new(Mutex::new(None));
+    let out = Arc::clone(&outcome);
+    simulate(
+        config,
+        Arc::new(Setup(Arc::clone(&store))),
+        move |coordinator: Coordinator, worker: WorkerContext| async move {
+            let tpch = open(Arc::clone(&client_store)).await?;
+            let plan = tpch
+                .plan_sql("SELECT count(*) FROM nation GROUP BY array(n_regionkey)")
+                .await?;
+            let pool: Arc<dyn MemoryPool> =
+                TreePool::with_clock(&MemoryConfig::default(), Arc::new(TokioClock));
+            let got = rows(5, &coordinator, &plan, &worker, &pool, 0).await;
+            *out.lock().unwrap() = Some((got.map_err(|e| e.to_string()), coordinator.trace()));
+            Ok(())
+        },
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let (got, trace) = outcome.lock().unwrap().take().unwrap();
+    let e = got.unwrap_err();
+    assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{e}");
+    assert!(
+        e.contains("a hash exchange across stages on a key of type List"),
+        "{e}"
+    );
+    assert!(trace.is_empty(), "no task ran: {trace:?}");
+}
+
 /// The retry case of design P2-T177 §7 across stages: a partitioned join
 /// whose build stage collects the probe scan's filter in several tasks,
 /// one of which is killed once and reruns. Only the committed attempt's

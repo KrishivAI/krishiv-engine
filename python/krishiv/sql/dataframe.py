@@ -1696,8 +1696,8 @@ class DataFrame:
         | f1|   f2|
         +---+-----+
         | 14|  Tom|
-        | 23|Alice|
         | 16|  Bob|
+        | 23|Alice|
         +---+-----+
         """
         for c in cols:

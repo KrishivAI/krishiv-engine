@@ -36,18 +36,21 @@
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 # +6 lines over main: a stored table's column comments reach the analyzer (TableMeta.column_comments, PR #589)
-2909 crates/krishiv-session/src/catalog.rs
+# +7 lines: a file table's registered partitions (`TempTable::Files::partitions`, reading partitioned tables)
+2916 crates/krishiv-session/src/catalog.rs
 # +43 lines over main: nested session and script variables (T196, PR #505)
 2294 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 # +20 lines: collect_engine (unstable-ir) reads results on the engine carriers for the golden harness (calendar carrier)
-2660 crates/krishiv-session/src/dataframe.rs
+2539 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
+# +5 lines (this branch): Parquet writes a top-level GEOMETRY or GEOGRAPHY column as WKB with a logical type (T181 U3)
 2781 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
 # +4 lines over main: a view column list without a comment keeps the query column's comment (Spark's aliasPlan, PR #589)
-3378 crates/krishiv-session/src/table_commands.rs
+# +1 line: the temporary table's `partitions` field (reading partitioned tables)
+3379 crates/krishiv-session/src/table_commands.rs
 # +6 lines over main: CREATE NAMESPACE records a clause written twice and PROPERTIES with DBPROPERTIES (DUPLICATE_CLAUSES, PR #572)
 3879 crates/krishiv-sql/src/ast.rs
 2554 crates/krishiv-sql/src/lower.rs

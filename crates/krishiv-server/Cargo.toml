@@ -36,3 +36,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "ma
 
 [lints]
 workspace = true
+
+[[example]]
+name = "console_capture"
+required-features = ["session"]

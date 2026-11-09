@@ -138,7 +138,6 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
                 | PlanNode::PipeOperator { .. }
-                | PlanNode::Repartition { .. }
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
@@ -165,6 +164,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
                 | PlanNode::JoinHint { .. }
+                | PlanNode::Repartition { .. }
                 | PlanNode::Expand { .. }
                 | PlanNode::Window { .. }
                 | PlanNode::ReplicateRows { .. } => true,
