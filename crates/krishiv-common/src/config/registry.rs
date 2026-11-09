@@ -8,6 +8,8 @@ use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
 
 mod python;
 pub use python::{ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS};
+mod result_cache;
+pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -31,6 +33,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
+    &EXEC_JOIN_IDLE_SPILL_AFTER,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -213,6 +216,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.exec.debug.planRoundTrip",
         &EXEC_DEBUG_PLAN_ROUND_TRIP,
+    ),
+    (
+        "krishiv.exec.join.idleSpillAfter",
+        &EXEC_JOIN_IDLE_SPILL_AFTER,
     ),
     (
         "krishiv.io.maxConcurrentRequests",
@@ -735,6 +742,23 @@ pub static EXEC_JOIN_SHARED_BROADCAST_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// How long a finished hash join build waits for its probe before the
+/// memory arbitrator spills it ahead of running consumers (study 30, M2).
+pub static EXEC_JOIN_IDLE_SPILL_AFTER: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.idleSpillAfter",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(1))),
+    doc: "How long a finished hash join build table may wait for its probe side to start \
+          before it counts as idle. When memory runs short, an idle table is spilled first, \
+          one partition at a time, before an operator that is running spills its own state; \
+          the probe reads the spilled partitions back from disk. A shorter wait keeps less \
+          memory idle; a longer one spills less often when the probe starts soon.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
 /// The seed of deterministic execution (tests and the golden harness).
 pub static EXEC_SEED: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.seed",
@@ -972,53 +996,6 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           probing a union) still run side by side. Off by default.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// Whether the process-wide result cache serves and stores query results.
-pub static RESULT_CACHE_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.resultCache.enabled",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
-    doc: "Keep the rows of a query for later runs of the same query by any session of the process \
-          with the same principal and access-policy version. Only queries over permanent \
-          catalog tables with no non-deterministic function are cached. Entries are dropped by \
-          `REFRESH TABLE`, `CLEAR CACHE` and every write the engine commits to a table they \
-          read; a change made outside the engine is not seen until the entry expires. Off by \
-          default.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// How long a result-cache entry is served.
-pub static RESULT_CACHE_TTL: ConfigEntry = ConfigEntry {
-    key: "krishiv.resultCache.ttl",
-    value_type: ValueType::Duration,
-    default: Some(ConfigValue::Duration(Duration::from_secs(24 * 60 * 60))),
-    doc: "How long the result cache serves an entry, counted from when it was stored; an older \
-          entry is dropped before the next lookup and the query runs again. `0s` never \
-          expires. Needs `krishiv.resultCache.enabled`.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// Byte cap of the process-wide result cache.
-pub static RESULT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
-    key: "krishiv.resultCache.maxBytes",
-    value_type: ValueType::Size,
-    default: Some(ConfigValue::Size(64 * MIB)),
-    doc: "Most bytes the result cache of an engine runtime holds (the process-wide store of \
-          sessions built alone, or a supplied runtime's own), as Arrow batches outside the query \
-          memory pool; fixed when the runtime is built. A result \
-          larger than the cap is not stored; when a new result would pass the cap the oldest \
-          entries go first, and entries past their ttl go whenever a result is stored. Needs `krishiv.resultCache.enabled`.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
