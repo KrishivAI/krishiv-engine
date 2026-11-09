@@ -237,6 +237,11 @@ async fn a_spilling_build_keeps_its_shared_bloom() {
         assert_eq!(k.evaluate(&keys).unwrap().true_count(), n as usize);
         if spills {
             assert_eq!(k.bloom_bytes(), Some(planned), "limit {limit}");
+            // A Bloom, not only a superset: the non-keys inside the keys'
+            // range (`3i + 1`) mostly fail it (planned at 1%).
+            let others = Int64Array::from_iter_values((0..i64::from(n)).map(|i| i * 3 + 1));
+            let passed = k.evaluate(&others).unwrap().true_count();
+            assert!(passed < n as usize / 20, "{passed} of {n} non-keys pass");
             assert_eq!(k.held_bytes(), planned, "limit {limit}");
             // The filter holds the array's reservation until it goes.
             assert!(

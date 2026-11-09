@@ -132,7 +132,8 @@ Paths are relative to this crate.
   (`output_spill.rs`: aggregate and sort results); the coordinator drops a finalized state after its last reader.
   Exception 2: a large hash join build's shared Bloom arrays (design P2b-R1, `join/build.rs` `Funding`) are zeroed once,
   in the `sink` of the driver that reserved them, at most 1/16 of the query's limit; their request is `SinkStatus::WantMemory`,
-  which never aborts a query.
+  which never aborts a query. An array is published only when its build spilled while storing rows (design §2.7); otherwise
+  the filter is the range (`bloom_unspilled`).
 - At query end (success, error, cancel) the query pool is empty: tests assert it.
 - Cancellation-safe, no blocking in async; metrics feed EXPLAIN ANALYZE.
 - New operators follow skill `krishiv-operator`.
