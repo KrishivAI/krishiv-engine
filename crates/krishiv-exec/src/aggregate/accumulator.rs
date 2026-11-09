@@ -1609,8 +1609,7 @@ impl Accumulator {
     /// group, `run.parts[i]`'s state is copied into it. A window's running
     /// frame takes the state after each row or peer group this way: one
     /// pass over the rows, folded one by one and in order as Spark's frames
-    /// fold them, with the argument columns, validity and conversions read
-    /// once.
+    /// fold them, with the argument columns, validity and conversions once.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` for the aggregates a window evaluates elsewhere
@@ -3431,6 +3430,7 @@ fn struct_extremum_batch(
 #[cfg(test)]
 #[cfg(not(loom))]
 mod differential;
+pub(crate) mod paired;
 
 /// The per-batch proofs (design P2-T160) against the per-row path.
 #[cfg(test)]
