@@ -30,9 +30,10 @@ use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use krishiv_common::error::{InternalError, KrishivError, KrishivUdfNotAvailable, PythonException};
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
+use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::sync::MutexExt;
-use pyo3::types::{PyCapsule, PyDict, PyTuple};
+use pyo3::sync::{MutexExt, PyOnceLock};
+use pyo3::types::{PyCapsule, PyDict, PyTuple, PyType};
 
 use super::interrupt::{Call, CancelOnDrop};
 use super::pool::Pool;
@@ -319,17 +320,20 @@ fn invoke(
     declared: &DataType,
     call: &Call,
 ) -> Result<ArrayRef, KrishivError> {
-    let array_type = py
-        .import("pyarrow")
-        .and_then(|pa| pa.getattr("Array"))
+    // Imported once per process (design P2-T059 §6.3 profile): an import per
+    // call takes the `sys.modules` lock, which pool threads contend on.
+    static ARRAY_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+    let array_type = ARRAY_TYPE
+        .import(py, "pyarrow", "Array")
         .map_err(|e| python_error(py, &e))?;
     let mut columns = Vec::with_capacity(args.num_columns());
     for column in args.columns() {
         let (schema, array) = export_column(column)?;
         let imported = PyCapsule::new_with_value(py, schema, SCHEMA_CAPSULE)
             .and_then(|s| {
-                PyCapsule::new_with_value(py, array, ARRAY_CAPSULE)
-                    .and_then(|a| array_type.call_method1("_import_from_c_capsule", (s, a)))
+                PyCapsule::new_with_value(py, array, ARRAY_CAPSULE).and_then(|a| {
+                    array_type.call_method1(intern!(py, "_import_from_c_capsule"), (s, a))
+                })
             })
             .map_err(|e| python_error(py, &e))?;
         columns.push(imported);
@@ -359,7 +363,7 @@ fn invoke(
     .map_err(|e| python_error(py, &e))?;
     // Only pyarrow's arrays are imported (§2.5 "Trusted producer").
     if !returned
-        .is_instance(&array_type)
+        .is_instance(array_type)
         .map_err(|e| python_error(py, &e))?
     {
         return Err(InternalError {
@@ -374,7 +378,7 @@ fn invoke(
         .into());
     }
     let (schema, array): (Bound<'_, PyAny>, Bound<'_, PyAny>) = returned
-        .call_method0("__arrow_c_array__")
+        .call_method0(intern!(py, "__arrow_c_array__"))
         .and_then(|c| c.extract())
         .map_err(|e| python_error(py, &e))?;
     let schema_ptr = capsule_pointer(&schema, SCHEMA_CAPSULE).map_err(|e| python_error(py, &e))?;
