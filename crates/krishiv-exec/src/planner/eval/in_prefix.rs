@@ -42,6 +42,10 @@ fn leading_substring(e: &krishiv_plan::Expr) -> Option<(&krishiv_plan::Expr, usi
     if !(name.eq_ignore_ascii_case("substring") || name.eq_ignore_ascii_case("substr")) {
         return None;
     }
+    // A collated string compares by its collation, never by bytes (ADR 0043).
+    if !matches!(f.data_type, krishiv_types::DataType::String) {
+        return None;
+    }
     let [c, start, len] = f.args.as_slice() else {
         return None;
     };
