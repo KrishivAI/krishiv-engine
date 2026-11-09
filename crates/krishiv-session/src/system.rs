@@ -1464,6 +1464,43 @@ impl Catalog for SystemCatalog {
     }
 }
 
+impl QueryRow {
+    /// What the row holds on the heap, about: its strings, tags and
+    /// operators, plus the struct. Counted for the history's byte bound, so
+    /// an estimate that is stable for a given row is all it needs.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        let opt = |s: &Option<String>| s.as_ref().map_or(0, String::len);
+        let operators: usize = self
+            .operators
+            .iter()
+            .map(|o| {
+                std::mem::size_of::<OperatorRow>()
+                    + o.query_id.len()
+                    + o.name.len()
+                    + o.pipelines.len() * 4
+                    + o.extra
+                        .iter()
+                        .map(|(k, v)| k.len() + v.len())
+                        .sum::<usize>()
+            })
+            .sum();
+        std::mem::size_of::<Self>()
+            + self.id.len()
+            + self.session_id.len()
+            + self.principal.len()
+            + self
+                .tags
+                .iter()
+                .map(|(k, v)| k.len() + v.len())
+                .sum::<usize>()
+            + opt(&self.trace_id)
+            + opt(&self.text)
+            + opt(&self.error_class)
+            + opt(&self.error_message)
+            + operators
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

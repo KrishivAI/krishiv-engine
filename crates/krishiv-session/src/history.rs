@@ -257,6 +257,8 @@ pub(crate) struct QueryHistory {
 struct Rows {
     rows: VecDeque<QueryRow>,
     held: HashMap<String, Held>,
+    /// [`QueryRow::heap_bytes`] of every row held.
+    bytes: usize,
 }
 
 /// One principal's rows: all of them, and the finished ones among them.
@@ -271,6 +273,10 @@ impl Default for QueryHistory {
         Self::new(DEFAULT_CAPACITY)
     }
 }
+
+/// Most bytes the remembered rows may hold (design P2-T126 §3: 64 MiB);
+/// like the row bounds, only finished rows are evicted.
+pub(crate) const MAX_BYTES: usize = 64 << 20;
 
 /// The default of `krishiv.system.queries.capacity`.
 pub(crate) const DEFAULT_CAPACITY: usize = 10_000;
@@ -343,7 +349,7 @@ impl QueryHistory {
     /// remembered.
     pub(crate) fn update(&self, session: &str, id: &str, f: impl FnOnce(&mut QueryRow)) {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
-        let Rows { rows, held } = &mut *rows;
+        let Rows { rows, held, bytes } = &mut *rows;
         // The newest first: a reused id names its latest query.
         if let Some(row) = rows
             .iter_mut()
@@ -351,13 +357,15 @@ impl QueryHistory {
             .find(|r| r.id == id && r.session_id == session)
         {
             let was_running = row.ended_ms.is_none();
+            let before = row.heap_bytes();
             f(row);
+            *bytes = (*bytes + row.heap_bytes()).saturating_sub(before);
             if was_running && row.ended_ms.is_some() {
                 held.entry(row.principal.clone()).or_default().finished += 1;
                 // Rows added while everything was running may have gone past
                 // the bounds: a finished row can now go.
                 let principal = row.principal.clone();
-                Rows::trim_parts(rows, held, &principal, 0, self.capacity);
+                Rows::trim_parts(rows, held, bytes, &principal, 0, self.capacity);
             }
         }
     }
@@ -434,6 +442,7 @@ impl QueryHistory {
 impl Rows {
     /// Appends `row`, counting it for its principal.
     fn add(&mut self, row: QueryRow) {
+        self.bytes += row.heap_bytes();
         self.held.entry(row.principal.clone()).or_default().total += 1;
         self.rows.push_back(row);
     }
@@ -444,13 +453,14 @@ impl Rows {
     /// row of the principal holding the most finished rows. Running rows are
     /// never evicted, so the bounds may be passed while everything runs.
     fn trim(&mut self, principal: &str, incoming: usize, capacity: usize) {
-        let Self { rows, held } = self;
-        Self::trim_parts(rows, held, principal, incoming, capacity);
+        let Self { rows, held, bytes } = self;
+        Self::trim_parts(rows, held, bytes, principal, incoming, capacity);
     }
 
     fn trim_parts(
         rows: &mut VecDeque<QueryRow>,
         held: &mut HashMap<String, Held>,
+        bytes: &mut usize,
         principal: &str,
         incoming: usize,
         capacity: usize,
@@ -459,11 +469,11 @@ impl Rows {
             .get(principal)
             .is_some_and(|h| h.finished > 0 && h.total + incoming > PRINCIPAL_ROWS)
         {
-            if !Self::evict_oldest_finished(rows, held, principal) {
+            if !Self::evict_oldest_finished(rows, held, bytes, principal) {
                 break;
             }
         }
-        while rows.len() + incoming > capacity {
+        while rows.len() + incoming > capacity || *bytes > MAX_BYTES {
             // Ties go to the principal named first, so the choice is stable.
             let heaviest = held
                 .iter()
@@ -471,7 +481,7 @@ impl Rows {
                 .max_by(|a, b| a.1.finished.cmp(&b.1.finished).then_with(|| b.0.cmp(a.0)))
                 .map(|(p, _)| p.clone());
             let Some(p) = heaviest else { break };
-            if !Self::evict_oldest_finished(rows, held, &p) {
+            if !Self::evict_oldest_finished(rows, held, bytes, &p) {
                 break;
             }
         }
@@ -481,6 +491,7 @@ impl Rows {
     fn evict_oldest_finished(
         rows: &mut VecDeque<QueryRow>,
         held: &mut HashMap<String, Held>,
+        bytes: &mut usize,
         principal: &str,
     ) -> bool {
         let Some(at) = rows
@@ -489,7 +500,9 @@ impl Rows {
         else {
             return false;
         };
-        rows.remove(at);
+        if let Some(gone) = rows.remove(at) {
+            *bytes = bytes.saturating_sub(gone.heap_bytes());
+        }
         if let Some(h) = held.get_mut(principal) {
             h.total = h.total.saturating_sub(1);
             h.finished = h.finished.saturating_sub(1);
@@ -621,6 +634,33 @@ mod tests {
         let held = history.rows.lock().unwrap().held.clone();
         assert_eq!((held["a"].total, held["a"].finished), (1, 0));
         assert_eq!((held["b"].total, held["b"].finished), (2, 1));
+    }
+
+    #[test]
+    fn finished_rows_go_oldest_first_past_the_byte_bound() {
+        let history = QueryHistory::new(1_000);
+        let big = |id: &str| {
+            let log = crate::system::QueryLog::default();
+            let mut r = log.snapshot_row_for_tests(id);
+            r.session_id = "s".to_owned();
+            r.text = Some("x".repeat(4 << 20));
+            r
+        };
+        // 20 rows of 4 MiB: 80 MiB, over the 64 MiB bound.
+        for i in 0..20 {
+            let id = i.to_string();
+            history.push(big(&id));
+            history.update("s", &id, |r| r.ended_ms = Some(1));
+        }
+        let rows = history.snapshot(None);
+        assert!(rows.iter().map(QueryRow::heap_bytes).sum::<usize>() <= MAX_BYTES);
+        assert_eq!(rows.last().map(|r| r.id.as_str()), Some("19"));
+        assert!(rows.len() < 20);
+        // A running row is never evicted for bytes.
+        history.push(big("run"));
+        history.push(big("run2"));
+        let ids: Vec<String> = history.snapshot(None).into_iter().map(|r| r.id).collect();
+        assert!(ids.contains(&"run".to_owned()) && ids.contains(&"run2".to_owned()));
     }
 
     /// Rows added past the capacity while everything ran are trimmed as
