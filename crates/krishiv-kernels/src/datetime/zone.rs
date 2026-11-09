@@ -469,6 +469,46 @@ mod tests {
         assert_eq!(pst.offset_at_utc(1_715_000_000), -25_200);
     }
 
+    /// The legacy offset switches to the raw (modern standard) offset only
+    /// strictly before 1900-01-01 UTC; at that instant it is the database's.
+    #[test]
+    fn legacy_offset_switches_strictly_before_1900() {
+        let kolkata = resolve_zone("Asia/Kolkata").expect("Asia/Kolkata");
+        assert_eq!(
+            kolkata.legacy_offset_at_utc(UTC_1900),
+            kolkata.offset_at_utc(UTC_1900)
+        );
+        assert_ne!(kolkata.offset_at_utc(UTC_1900), 19_800);
+        assert_eq!(kolkata.legacy_offset_at_utc(UTC_1900 - 1), 19_800);
+    }
+
+    /// Seconds inside `jiff`'s range, the range ends included, are untouched;
+    /// one past either end folds by whole 400-year cycles back into range.
+    #[test]
+    fn fold_seconds_leaves_the_range_ends_alone() {
+        const CYCLE: i64 = 146_097 * 86_400;
+        let (lo, hi) = (Timestamp::MIN.as_second(), Timestamp::MAX.as_second());
+        assert_eq!(fold_seconds(hi), hi);
+        assert_eq!(fold_seconds(lo), lo);
+        assert_eq!(fold_seconds(hi + 1), hi + 1 - CYCLE);
+        assert_eq!(fold_seconds(lo - 1), lo - 1 + CYCLE);
+        assert_eq!(fold_seconds(hi + CYCLE - 1), hi - 1);
+        assert_eq!(fold_seconds(hi + CYCLE), hi - CYCLE);
+        assert_eq!(fold_seconds(lo - CYCLE + 1), lo + 1);
+        assert_eq!(fold_seconds(lo - CYCLE), lo + CYCLE);
+    }
+
+    /// The per-thread cache clears when full and keeps resolving correctly.
+    #[test]
+    fn resolve_zone_survives_more_names_than_the_cache_holds() {
+        for h in 0..300 {
+            let text = format!("+{:02}:{:02}", h % 18, h % 60);
+            let secs = (h % 18) * 3600 + (h % 60) * 60;
+            assert_eq!(resolve_zone(&text).expect(&text).offset_at_utc(0), secs);
+            assert_eq!(resolve_zone(&text).expect(&text).offset_at_utc(0), secs);
+        }
+    }
+
     #[test]
     fn unknown_ids_are_invalid_timezones() {
         for text in [
