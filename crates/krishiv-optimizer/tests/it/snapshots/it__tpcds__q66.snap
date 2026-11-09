@@ -31,16 +31,16 @@ Limit 100
                   +- Join Inner, (cs_warehouse_sk#132 == w_warehouse_sk#34)
                      :- Shared #1, printed above
                      +- Project [d_year#158, d_moy#160, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
-                        +- Join Inner, (cs_ship_mode_sk#131 == sm_ship_mode_sk#190)
-                           :- Project [sm_ship_mode_sk#190]
-                           :  +- Shift +104
-                           :     +- Filter (sm_carrier#90 IN ('DHL', 'BARIAN'))
-                           :        +- Shared #3, printed above
-                           +- Project [d_year#158, d_moy#160, cs_ship_mode_sk#131, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
-                              +- Join Inner, (cs_sold_date_sk#118 == d_date_sk#152)
-                                 :- Shift +104
-                                 :  +- Filter (d_year#54 == 2001)
-                                 :     +- Shared #2, printed above
+                        +- Join Inner, (cs_sold_date_sk#118 == d_date_sk#152)
+                           :- Shift +104
+                           :  +- Filter (d_year#54 == 2001)
+                           :     +- Shared #2, printed above
+                           +- Project [cs_sold_date_sk#118, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
+                              +- Join Inner, (cs_ship_mode_sk#131 == sm_ship_mode_sk#190)
+                                 :- Project [sm_ship_mode_sk#190]
+                                 :  +- Shift +104
+                                 :     +- Filter (sm_carrier#90 IN ('DHL', 'BARIAN'))
+                                 :        +- Shared #3, printed above
                                  +- Project [cs_sold_date_sk#118, cs_ship_mode_sk#131, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
                                     +- Join Inner, (cs_sold_time_sk#119 == t_time_sk#180)
                                        :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#118, cs_sold_time_sk#119, cs_ship_mode_sk#131, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
