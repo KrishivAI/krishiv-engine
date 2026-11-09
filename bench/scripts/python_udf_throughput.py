@@ -17,6 +17,7 @@ import statistics
 import subprocess
 import sys
 import textwrap
+from typing import cast
 
 CHILD = textwrap.dedent(
     """
@@ -74,7 +75,8 @@ def main() -> None:
         r = run(threads, args.rows, args.reps, args.partitions)
         if r["udf_value"] != expected or r["base_value"] != expected:
             raise SystemExit(f"threads={threads}: wrong sum {r['udf_value']} / {r['base_value']}, expected {expected}")
-        base, udf = statistics.median(r["base"]), statistics.median(r["udf"])  # type: ignore[arg-type]
+        base = statistics.median(cast("list[float]", r["base"]))
+        udf = statistics.median(cast("list[float]", r["udf"]))
         net = udf - base
         report["runs"].append(  # type: ignore[union-attr]
             {
