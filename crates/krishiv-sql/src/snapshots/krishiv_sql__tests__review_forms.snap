@@ -141,6 +141,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..74,
 }
 -- SELECT * FROM t WITH ('k' = 'v', a.b 1, c = true, d) x
@@ -325,6 +326,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..54,
 }
 -- SELECT a IN ((SELECT 1), 2), a IN ((SELECT 1) UNION (SELECT 2)), a IN ((SELECT 1) + 1)
@@ -397,6 +399,7 @@ Query {
                                                 windows: [],
                                                 limit: None,
                                                 offset: None,
+                                                organization_span: None,
                                                 span: 14..22,
                                             },
                                         ),
@@ -486,6 +489,7 @@ Query {
                                                         windows: [],
                                                         limit: None,
                                                         offset: None,
+                                                        organization_span: None,
                                                         span: 36..44,
                                                     },
                                                 ),
@@ -536,6 +540,7 @@ Query {
                                                         windows: [],
                                                         limit: None,
                                                         offset: None,
+                                                        organization_span: None,
                                                         span: 53..61,
                                                     },
                                                 ),
@@ -552,6 +557,7 @@ Query {
                                     windows: [],
                                     limit: None,
                                     offset: None,
+                                    organization_span: None,
                                     span: 35..62,
                                 },
                                 negated: false,
@@ -625,6 +631,7 @@ Query {
                                                         windows: [],
                                                         limit: None,
                                                         offset: None,
+                                                        organization_span: None,
                                                         span: 72..80,
                                                     },
                                                 ),
@@ -674,6 +681,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..86,
 }
 -- SELECT interval '1-2' year to month 1 day, interval 1 day 2 hours '3:4' hour to minute
@@ -806,6 +814,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..86,
 }
 -- SELECT `date` '2020-01-01', geo 'x', dateadd(MICROSECOND, 1, t), extract(dow FROM d)
@@ -1006,6 +1015,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..84,
 }
 -- SELECT sum(a) OVER (CLUSTER BY a), sum(a) OVER (DISTRIBUTE BY a SORT BY b)
@@ -1199,6 +1209,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..74,
 }
 -- SELECT a LIKE ANY ('x') ESCAPE '/', ?, ?, CASE END
@@ -1340,6 +1351,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..50,
 }
 -- FROM t SELECT 1 SELECT 2 ORDER BY 1
@@ -1424,6 +1436,7 @@ Query {
                         windows: [],
                         limit: None,
                         offset: None,
+                        organization_span: None,
                         span: 7..15,
                     },
                     Query {
@@ -1486,6 +1499,9 @@ Query {
                         windows: [],
                         limit: None,
                         offset: None,
+                        organization_span: Some(
+                            25..35,
+                        ),
                         span: 16..35,
                     },
                 ],
@@ -1502,6 +1518,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..35,
 }
 -- WITH order AS (SELECT 1) SELECT * FROM order AS u
@@ -1561,6 +1578,7 @@ Query {
                         windows: [],
                         limit: None,
                         offset: None,
+                        organization_span: None,
                         span: 15..23,
                     },
                     span: 5..24,
@@ -1654,5 +1672,6 @@ Query {
     windows: [],
     limit: None,
     offset: None,
+    organization_span: None,
     span: 0..49,
 }

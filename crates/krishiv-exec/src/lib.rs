@@ -74,6 +74,7 @@ pub mod aggregate;
 mod cancel;
 pub mod carrier;
 mod channel;
+mod cohort;
 pub mod console;
 mod context;
 mod driver;

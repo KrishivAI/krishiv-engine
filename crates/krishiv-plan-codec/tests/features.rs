@@ -28,6 +28,19 @@ fn corrupt(m: &pb::PhysicalPlan, expected: &str) {
 }
 
 #[test]
+fn an_unknown_binary_output_style_is_corrupt() {
+    for style in ["hex", "HEX_DISCRETE", "nonsense", ""] {
+        let mut m = message("binary_output_style");
+        m.env.as_mut().unwrap().binary_output_style = Some(style.to_owned());
+        corrupt(&m, "an unknown binary output style");
+    }
+    let mut m = message("binary_output_style");
+    m.env.as_mut().unwrap().binary_output_style = Some("BASE64".to_owned());
+    let plan = decode(&m.encode_to_vec()).unwrap();
+    assert_eq!(plan.env().binary_output_style.as_deref(), Some("BASE64"));
+}
+
+#[test]
 fn the_header_lists_exactly_the_features_in_use() {
     let m = message("window_ranking");
     assert_eq!(m.features, ["window"]);
@@ -79,6 +92,10 @@ fn the_header_lists_exactly_the_features_in_use() {
     assert_eq!(
         message("legacy_time_parser").features,
         ["legacy_time_parser"]
+    );
+    assert_eq!(
+        message("binary_output_style").features,
+        ["binary_output_style"]
     );
     assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
     // The exchange's schema alone names the collation.
@@ -967,6 +984,31 @@ fn only_udaf_plans_need_rust_udaf_and_a_reader_without_it_refuses() {
 }
 
 #[test]
+fn a_udaf_argument_type_counts_toward_the_header() {
+    use inventory::udaf_call_typed;
+    use krishiv_types::DataType;
+    // The Arrow column of the call cannot say `TIME(3)`; its Spark type can.
+    let plain = plan_of(udaf_call_typed(vec![DataType::Integer]));
+    assert!(!plan_features(&plain).contains(&Feature::TimeType));
+    let timed = plan_of(udaf_call_typed(vec![DataType::Time { precision: 3 }]));
+    let features = plan_features(&timed);
+    assert!(features.contains(&Feature::TimeType) && features.contains(&Feature::RustUdaf));
+    // A reader without `time_type` refuses it, naming the feature.
+    let bytes = encode(&timed).unwrap();
+    let others: Vec<Feature> = features
+        .into_iter()
+        .filter(|f| *f != Feature::TimeType)
+        .collect();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &ReaderFeatures::only(others)).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["time_type".to_owned()]
+        }
+    );
+    assert_eq!(decode(&bytes).unwrap(), timed);
+}
+
+#[test]
 fn only_udf_plans_need_rust_udf_and_every_expression_position_counts() {
     // Negative: no inventory case but `rust_udf` uses it, and the
     // `expressions` case (a registry call) does not.
@@ -1464,10 +1506,13 @@ fn interval_types_and_literals_need_their_feature() {
             Some(Feature::IntervalTypes)
         );
         let arrow = t.to_arrow();
-        assert_eq!(
-            feature_of(Construct::ArrowType(&arrow)),
-            Some(Feature::IntervalTypes)
-        );
+        // A calendar interval rides the struct carrier, its own feature.
+        let want = if t == DataType::CalendarInterval {
+            Feature::CalendarStruct
+        } else {
+            Feature::IntervalTypes
+        };
+        assert_eq!(feature_of(Construct::ArrowType(&arrow)), Some(want));
     }
     // The bare literal predates the feature (`base/expressions` holds one);
     // as an argument it needs it, since nothing else then names the type.

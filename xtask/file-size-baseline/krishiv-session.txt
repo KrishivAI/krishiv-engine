@@ -1,0 +1,27 @@
+# Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
+# (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
+# +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
+# +6 lines over main: a stored table's column comments reach the analyzer (TableMeta.column_comments, PR #589)
+# +7 lines: a file table's registered partitions (`TempTable::Files::partitions`, reading partitioned tables)
+# +43 lines over main: system-only scan tracking and the admission estimate (QueryCatalog::reads_only_system, set_estimate; PR #525; +1 for the plan-leaf check of the exemption)
+# +4 lines: a stored view re-lowers its query with its IDENTIFIER(..) spans, so its columns keep their names (T179g follow-up, PR #576)
+# +1 line: the `PythonEval` arm of `streaming_leaves` (P2-T059)
+3036 crates/krishiv-session/src/catalog.rs
+# +43 lines over main: nested session and script variables (T196, PR #505)
+2294 crates/krishiv-session/src/command.rs
+# +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
+# +20 lines: collect_engine (unstable-ir) reads results on the engine carriers for the golden harness (calendar carrier)
+# +1 line: the file view's `partitions` field (reading partitioned tables)
+2540 crates/krishiv-session/src/dataframe.rs
+# +5 lines over main: write_files' dry flag (multi-table INSERT)
+# +5 lines over main: the admission exemption of system-only reads and the estimate gate (PR #525)
+# +33 lines: CTAS, views, CACHE TABLE, INSERT, EXPLAIN and DESCRIBE QUERY pass IDENTIFIER(..) spans to the query they run, which is boxed (T179g follow-up, PR #576)
+# +7 lines: the session's Python UDF library and runtime fields and the worker's runtime (P2-T059; the methods are in python_udfs.rs)
+2826 crates/krishiv-session/src/session.rs
+# +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
+# +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
+# +4 lines over main: a view column list without a comment keeps the query column's comment (Spark's aliasPlan, PR #589)
+# +1 line: the temporary table's `partitions` field (reading partitioned tables)
+# +1 line over main: CREATE TABLE refuses a secret() call in its options (PR #525)
+# +17 lines: CTAS, CREATE VIEW, CACHE TABLE and INSERT name IDENTIFIER(..) items as the query does (T179g follow-up, PR #576)
+3398 crates/krishiv-session/src/table_commands.rs

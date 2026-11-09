@@ -54,7 +54,7 @@ pub use build::DefaultPlanner;
 pub(crate) use build::concat_schemas;
 pub use explain::ExplainNode;
 pub use file_table::FileTable;
-pub use ndv_sample::SampleOptions;
+pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, TableProvider, TableProviderResolver,
 };

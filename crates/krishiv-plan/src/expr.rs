@@ -45,6 +45,29 @@ pub enum TypedLiteralKind {
     Time,
 }
 
+/// The pipe operator a [`ExprNode::Pipe`] item belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PipeClause {
+    /// `|> EXTEND`: no aggregate function.
+    Extend,
+    /// `|> SET`: no aggregate function.
+    Set,
+    /// `|> AGGREGATE`: at least one aggregate function.
+    Aggregate,
+}
+
+impl PipeClause {
+    /// The clause as Spark's errors name it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Extend => "EXTEND",
+            Self::Set => "SET",
+            Self::Aggregate => "AGGREGATE",
+        }
+    }
+}
+
 /// The expression node kinds.
 ///
 /// Operators are [`ExprNode::Function`] calls with canonical names (see
@@ -131,6 +154,15 @@ pub enum ExprNode {
         expr: Arc<Expr>,
         /// The output name.
         name: String,
+    },
+    /// An unresolved item of a SQL pipe operator (Spark's `PipeExpression`):
+    /// the analyzer checks the aggregate functions `expr` holds against
+    /// `clause` and replaces the node by `expr`.
+    Pipe {
+        /// The item.
+        expr: Arc<Expr>,
+        /// The operator it is an item of.
+        clause: PipeClause,
     },
     /// An unresolved `expr AS (a, b, ..)`: several output names, valid
     /// only over a generator (`MULTI_ALIAS_WITHOUT_GENERATOR` otherwise).
@@ -746,6 +778,7 @@ impl Expr {
             ExprNode::Cast { expr, .. }
             | ExprNode::Collate { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::Pipe { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
@@ -809,6 +842,7 @@ impl Expr {
             ExprNode::Cast { expr, .. }
             | ExprNode::Collate { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::Pipe { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }

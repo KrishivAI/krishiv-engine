@@ -1422,7 +1422,7 @@ fn every_context_input_changes_the_key() {
                 "v".to_owned(),
                 SessionVariable {
                     data_type: DataType::Integer,
-                    value: Literal::Integer(1),
+                    value: Literal::Integer(1).into(),
                 },
             )]
             .into_iter()
@@ -1939,7 +1939,7 @@ fn session_variables_resolve_after_columns() {
                 "var1".to_owned(),
                 SessionVariable {
                     data_type: DataType::Integer,
-                    value: Literal::Integer(1),
+                    value: Literal::Integer(1).into(),
                 },
             )]),
             version: 3,
@@ -1985,7 +1985,7 @@ fn variable_versions_change_the_fingerprint() {
             "var1".to_owned(),
             SessionVariable {
                 data_type: DataType::Integer,
-                value: Literal::Integer(1),
+                value: Literal::Integer(1).into(),
             },
         )]),
         version: base.variables.version + 1,
@@ -2089,7 +2089,7 @@ fn deep_plans_resolve_on_a_small_stack_and_added_nodes_count() {
 #[test]
 fn principals_securables_and_contexts_print_safely() {
     let local = Principal::local_user();
-    assert!(local.id().starts_with("user:``/"));
+    assert!(local.id().starts_with("user:-/"));
     let mut service = Principal::new("etl", crate::analyzer::PrincipalKind::Service);
     service.tenant = Some("acme".to_owned());
     service.groups = vec!["b".to_owned(), "a".to_owned(), "a".to_owned()];

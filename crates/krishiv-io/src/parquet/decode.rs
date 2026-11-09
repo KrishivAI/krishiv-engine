@@ -366,6 +366,7 @@ impl ParquetDecoder {
         // selection are not verified yet (design section 5, stage 3).
         let page = o.bool("pageIndex").unwrap_or(true) && !row_index;
         let bloom = o.bool("bloomFilter").unwrap_or(true);
+        let dict = o.bool("dictionaryFilter").unwrap_or(true);
         // The row filter reads the predicate's and the runtime filters'
         // columns under a projection of its own: an offset index attached
         // for some of a row group's fetched columns and not others would
@@ -388,10 +389,10 @@ impl ParquetDecoder {
         attach_leaves.extend(projection_mask(meta, &filter_columns).1);
         attach_leaves.sort_unstable();
         attach_leaves.dedup();
-        let pages = if page || bloom {
+        let pages = if page || bloom || dict {
             req.predicate.as_ref().and_then(|p| {
                 let units: Vec<usize> = planned.iter().map(|u| u.index).collect();
-                PageStage::plan(meta, &units, p, &attach_leaves, page, bloom)
+                PageStage::plan(meta, &units, p, &attach_leaves, page, bloom, dict)
             })
         } else {
             None
@@ -469,6 +470,9 @@ impl ParquetDecoder {
         }
         if !self.meta.variants.roots.is_empty() {
             batch = variant_columns(&batch, &self.meta.schema, &self.meta.variants.roots)?;
+        }
+        if !self.meta.geos.roots.is_empty() {
+            batch = super::geo::to_engine(&batch, &self.meta.schema, &self.meta.geos.roots)?;
         }
         let projected = project_batch(&batch, &self.projection).map_err(FormatError::Other)?;
         let mut columns = projected
@@ -692,6 +696,8 @@ impl ParquetDecoder {
         self.metrics.page_index_rejected += stage.rejected;
         self.metrics.units_pruned_bloom += stage.bloom_pruned;
         self.metrics.bloom_rejected += stage.bloom_rejected;
+        self.metrics.units_pruned_dictionary += stage.dict_pruned;
+        self.metrics.dictionary_rejected += stage.dict_rejected;
         self.pages = None;
         if outcome.decisions.is_empty() {
             return Ok(());

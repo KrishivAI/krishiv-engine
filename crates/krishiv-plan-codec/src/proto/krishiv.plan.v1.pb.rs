@@ -125,6 +125,12 @@ pub struct ExprEnv {
     /// feature: legacy_time_parser
     #[prost(bool, optional, tag = "10")]
     pub legacy_time_parser: ::core::option::Option<bool>,
+    /// `spark.sql.binaryOutputStyle` when it is not HEX_DISCRETE (what an unset config prints):
+    /// `to_csv` and `to_xml` print binary fields in that style; a worker without the feature
+    /// would print `\[45 61\]`.
+    /// feature: binary_output_style
+    #[prost(string, optional, tag = "11")]
+    pub binary_output_style: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {
@@ -734,7 +740,7 @@ pub struct AggregateExpr {
 /// version, and the columns the planner fixed for it. A worker must hold
 /// the same version, declaring the same state, to run the plan.
 /// feature: rust_udaf
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UdafCall {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
@@ -750,6 +756,10 @@ pub struct UdafCall {
     /// Arrow IPC `Schema` flatbuffer of the declared state fields, in order.
     #[prost(bytes = "vec", tag = "6")]
     pub state: ::prost::alloc::vec::Vec<u8>,
+    /// The Spark type of each argument, in order (`KIND_NULL` for an untyped
+    /// NULL): the Arrow fields in `args` carry only the carrier type.
+    #[prost(message, repeated, tag = "7")]
+    pub arg_types: ::prost::alloc::vec::Vec<DataType>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {

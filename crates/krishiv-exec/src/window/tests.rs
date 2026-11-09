@@ -1626,6 +1626,86 @@ async fn exact_and_string_frames_from_disk() {
     }
 }
 
+/// The flush phase reads each spilled batch with the memory its headroom lends as credit. Here the pool is taken whole
+/// after the input, and spilled batches alternate between small and large: the flush phase must read them all and
+/// give the in-memory result.
+#[tokio::test]
+async fn spilled_batches_of_alternating_sizes_read_back_from_a_full_pool() {
+    for large in [300, 1_500] {
+        alternating_sizes_from_a_full_pool(large, functions(), true).await;
+    }
+}
+
+/// Offsets and `nth_value` keep the batches they read past their read: the flush phase's headroom covers what
+/// their offset spans, so a pool taken whole does not refuse them.
+#[tokio::test]
+async fn offsets_and_nth_value_read_back_from_a_full_pool() {
+    let rows = WindowFrame::running(FrameUnits::Rows);
+    let whole = WindowFrame::whole(FrameUnits::Rows);
+    let functions = vec![(lag_lead(-2, Some(3), false), whole), (nth(3, true), rows)];
+    // With larger batches or more functions, the two batches each keeps are more than the buffered partition lends:
+    // the query's error then comes from the flush phase's headroom, not from a charge with no fallback.
+    alternating_sizes_from_a_full_pool(300, functions, false).await;
+}
+
+/// [`spilled_batches_of_alternating_sizes_read_back_from_a_full_pool`] with batches of 20 and `large` rows: the
+/// external partition's whole-batch evaluation does not fit, so it is evaluated in fewer rows per step.
+async fn alternating_sizes_from_a_full_pool(
+    large: usize,
+    functions: Vec<(WindowFunction, WindowFrame)>,
+    narrows: bool,
+) {
+    let rows: Vec<Row> = (0..3_000)
+        .map(|i| (Some(0), Some(i), i, Some(i % 1_000)))
+        .collect();
+    let window = plan(functions, false);
+    // Batches of 20 and 300 rows, alternating (the rows are already in order).
+    let mut sorted = Vec::new();
+    let (mut at, mut k) = (0, 0);
+    while at < rows.len() {
+        let n = if k % 2 == 0 { 20 } else { large }.min(rows.len() - at);
+        sorted.push(batch(&rows[at..at + n]));
+        at += n;
+        k += 1;
+    }
+    let plain = Window::new(schema(), window.clone(), true, None).unwrap();
+    let (_r, ctx) = task(1 << 30);
+    let want = outputs(
+        &drive(&plain, &ctx, &sorted).unwrap(),
+        window.functions.len(),
+    );
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), window.clone(), true, Some(scope)).unwrap();
+    let limit = 1 << 30;
+    let (root, ctx) = task(limit);
+    let spills = Spills {
+        every: 1,
+        slack: Some(0),
+    };
+    let got = drive_spilling(&op, &ctx, limit, &root, &sorted, spills)
+        .await
+        .unwrap();
+    assert!(
+        op.counters
+            .spills
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0,
+        "the window spilled"
+    );
+    if narrows {
+        assert!(
+            op.counters
+                .narrowed
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0,
+            "the external partition was evaluated in narrower steps ({large} rows)"
+        );
+    }
+    assert_eq!(outputs(&got, window.functions.len()), want, "{large} rows");
+    drop((got, ctx));
+    assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+}
+
 /// A spill whose write fails loses the rows it took: every later call
 /// fails with that error instead of returning a short result. The write
 /// fails with an I/O error (the scope's directory is gone), not a
@@ -1662,6 +1742,35 @@ async fn a_failed_spill_fails_every_later_call() {
         op.flush(&mut local, &ctx).await.unwrap_err().error_class(),
         class
     );
+}
+
+/// A window's spill write runs under its consumer's `spilling` guard, so
+/// another driver's round that cannot spill waits for the rows it frees
+/// (the memory crate's `a_round_waits_for_another_consumers_spill_write`).
+#[tokio::test]
+async fn a_spill_write_holds_the_spilling_guard() {
+    let rows: Vec<Row> = (0..400)
+        .map(|i| (Some(i / 300), Some(i), i, Some(i)))
+        .collect();
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), plan(functions(), true), true, Some(scope.clone())).unwrap();
+    let (root, ctx) = task(1 << 30);
+    let consumer = Arc::clone(ctx.consumer().consumer());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    scope.set_test_writer_hook(Arc::new({
+        let seen = Arc::clone(&seen);
+        move || seen.lock().unwrap().push(consumer.is_spilling())
+    }));
+    let mut local = op.local_state(&ctx).unwrap();
+    assert!(matches!(
+        op.execute(&batch(&rows), &mut local).unwrap(),
+        OperatorOutput::NeedMoreInput(_)
+    ));
+    assert!(op.spill(&mut local, 1, &ctx).await.unwrap() > 0);
+    assert_eq!(*seen.lock().unwrap(), [true]);
+    assert!(!ctx.consumer().consumer().is_spilling());
+    drop((local, op, ctx));
+    assert_eq!(root.reserved(), 0);
 }
 
 /// A spill dropped mid-write (its query cancelled) leaves the window

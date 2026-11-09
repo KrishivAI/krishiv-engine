@@ -109,13 +109,14 @@ pub fn failed_execute(name: &str, signature: &str, result: &str, reason: &str) -
 }
 
 /// The plain Arrow carrier of `t`: what UDFs return (`Utf8` for `STRING`,
-/// `Binary` for `BINARY`, the canonical type otherwise). The evaluator
+/// `Binary` for `BINARY`, decimals on `Decimal128` and calendar intervals on
+/// `Interval(MonthDayNano)`, the session edge's carriers, the canonical type otherwise). The evaluator
 /// converts strings and binaries to views itself, as for built-ins.
 fn plain_carrier(t: &DataType) -> ArrowType {
     match t {
         DataType::String => ArrowType::Utf8,
         DataType::Binary => ArrowType::Binary,
-        _ => krishiv_types::arrow::client_arrow_type(&t.to_arrow()),
+        _ => krishiv_types::arrow::edge_arrow_type(&t.to_arrow()),
     }
 }
 

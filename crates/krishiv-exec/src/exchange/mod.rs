@@ -19,7 +19,8 @@
 //! - **Routing.** [`ExchangeSink`] places each row by the plan's
 //!   partitioning: `Hash` by its [`HashScheme`] over `n` reduce partitions,
 //!   `RoundRobin` by the routing hash of the whole row (design Q4: the same
-//!   rows go to the same partitions whatever the driver interleaving),
+//!   rows go to the same partitions whatever the driver interleaving; the
+//!   columns the hash covers, so a nested column never fails the row),
 //!   `Single`, `Broadcast` and `Range` (run as a gather, design Q3) all to
 //!   partition 0, which every task reading a broadcast reads.
 //! - **Memory (I11).** Rows waiting for a frame are charged to the writing
@@ -105,6 +106,22 @@ pub trait Exchange: Send + Sync + fmt::Debug {
         map: u32,
         reduce: u32,
     ) -> Result<Box<dyn ExchangeReader>>;
+
+    /// The frame bytes the committed map outputs of `exchange` at
+    /// `stage_attempt` hold for reduce partition `reduce`, summed over the
+    /// map partitions, when this exchange knows them without reading
+    /// (`None` by default, and for outputs held elsewhere). A broadcast join
+    /// reads it to skip a shared build that cannot fit (design
+    /// `P2-row30c-m5-shared-skip`).
+    fn committed_bytes(
+        &self,
+        exchange: ExchangeId,
+        stage_attempt: u32,
+        reduce: u32,
+    ) -> Option<u64> {
+        let _ = (exchange, stage_attempt, reduce);
+        None
+    }
 }
 
 /// One map task's writer. Writes are sync: they run on the writing driver
@@ -137,8 +154,8 @@ pub trait ExchangeReader: Send {
 ///
 /// # Errors
 /// An exchange without a routing function ([`HashScheme::Unpinned`]); a
-/// key type the routing hash does not cover (for round-robin, any column
-/// of such a type).
+/// key type the routing hash does not cover. Round-robin hashes only the
+/// row's columns of types it covers (rows with none go to partition 0).
 pub fn route(
     partitioning: &Partitioning,
     batch: &RecordBatch,
@@ -168,7 +185,14 @@ pub fn route(
             }
             return scheme.partitions(&columns, partitions, out);
         }
-        Partitioning::RoundRobin => batch.columns().iter().map(AsRef::as_ref).collect(),
+        // The columns the routing hash covers: a nested column (an array, a
+        // struct) only places its row with the others, never fails it.
+        Partitioning::RoundRobin => batch
+            .columns()
+            .iter()
+            .map(AsRef::as_ref)
+            .filter(|c| HashScheme::KeyGroupV1.routes(c.data_type()))
+            .collect(),
         Partitioning::Single | Partitioning::Broadcast | Partitioning::Range { .. } => {
             out.resize(batch.num_rows(), 0);
             return Ok(());

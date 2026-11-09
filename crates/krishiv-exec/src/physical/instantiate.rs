@@ -1452,6 +1452,7 @@ impl Instantiation<'_> {
                 target_file_bytes: write.target_file_bytes,
                 partition_by: write.partition_by.clone(),
                 zone: self.env.zone,
+                zone_name: self.env.zone_name.clone(),
                 partition_names: write
                     .partition_by
                     .iter()
@@ -2027,6 +2028,7 @@ mod tests {
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
+                binary_output_style: None,
             },
         );
         let worker = super::WorkerContext::new(Arc::new(crate::planner::MemoryTables::new()));
@@ -2092,6 +2094,7 @@ mod tests {
                     legacy_java_charsets: false,
                     legacy_coding_error_action: false,
                     legacy_time_parser: false,
+                    binary_output_style: None,
                 },
             )
         };

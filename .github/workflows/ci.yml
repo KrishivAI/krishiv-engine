@@ -5,20 +5,10 @@ on:
     types: [opened, synchronize, reopened]
   merge_group:
     types: [checks_requested]
-  # A push to main re-runs only `test`, `clippy` and `wheels` (+ `wheels-ok`):
-  # they refresh the main-branch Rust build caches that pull-request and
-  # merge-queue runs restore from, and `wheels` uploads the Python coverage
-  # baseline to Codecov. Every other job already ran on the exact commit in the
-  # merge queue, so it is skipped on a push.
-  push:
-    branches: [main]
-  # The merge queue runs the build, the workspace tests, clippy and the cheap
-  # lints only (about 12 minutes). The long checks that the pull request already
-  # ran (`miri-kernels`, `fuzz-build`, the `wheels` matrix) run on the pull
-  # request, and again on main here every night, so a break that only appears
-  # when several pull requests combine is caught within a day.
-  schedule:
-    - cron: "20 3 * * *"
+  # No push and no schedule trigger (owner 2026-11-08: run each gate once). A push to main only measures
+  # (main-measure.yml: budgets and wheel sizes; codspeed.yml). The nightly run is nightly.yml, which calls this
+  # workflow for every job below and adds the heavy ones; `github.event_name` is then `schedule`.
+  workflow_call:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -29,7 +19,7 @@ permissions:
 
 env:
   # Faster builds and links in CI: line tables only (backtraces and coverage keep
-  # line numbers); mold is installed per job by rui314/setup-mold.
+  # line numbers); mold is installed per job by .github/actions/setup-mold.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
@@ -73,11 +63,11 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - id: filter
         env:
           EVENT: ${{ github.event_name }}
@@ -106,7 +96,7 @@ jobs:
 
   # Formatting and spelling of non-Rust files; no Rust toolchain needed.
   text-lint:
-    if: github.event_name != 'push'
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -116,7 +106,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         with:
           tool: typos,taplo
       - run: typos
@@ -130,12 +120,47 @@ jobs:
           if taplo fmt --check --config .github/ci-fixtures/taplo.toml .github/ci-fixtures/unformatted.toml; then echo "taplo accepted the unformatted fixture"; exit 1; fi
           if docker run --rm -v "$PWD/.github/ci-fixtures:/workdir" davidanson/markdownlint-cli2:v0.23.3 bad.md; then echo "markdownlint accepted the bad fixture"; exit 1; fi
 
+  # T133: the UI. svelte-check, a build whose output must equal the committed
+  # crates/krishiv-ui-assets/assets (ADR 0024: cargo build never needs Node), and the
+  # Playwright page check (ui/tests/check_pages.py) against that build. No Rust toolchain.
+  ui:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04 # Playwright has no chromium build for ubuntu-latest (26.04)
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-uv
+      # The runner image ships Node; pnpm comes from npm (major pinned, the lockfile pins the rest).
+      - name: svelte-check and build
+        working-directory: ui
+        run: |
+          npx --yes pnpm@10 install --frozen-lockfile
+          npx --yes pnpm@10 run check
+          npx --yes pnpm@10 run sync-assets
+      - name: Committed assets equal the build
+        run: git diff --exit-code --stat -- crates/krishiv-ui-assets/assets
+      - name: Upload the rebuilt assets (on drift)
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-assets-rebuilt
+          path: crates/krishiv-ui-assets/assets
+      - name: Page check (360/390/820/1440 px, dark and light)
+        run: |
+          uv run --no-project --python 3.12 --with playwright==1.55.0 playwright install --with-deps chromium
+          uv run --no-project --python 3.12 --with playwright==1.55.0 python ui/tests/check_pages.py
+
   # P2-T151: Python code quality (ruff lint + format, ty) for python/, bench/ and
   # tests/scripts/. Needs no Rust toolchain and no built extension, and it is cheap, so it
   # runs on every PR instead of being gated by `changes`. Required check (a maintainer
   # adds `python-quality` to branch protection). Versions come from each uv.lock.
   python-quality:
-    if: github.event_name != 'push'
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -145,7 +170,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: $/.github/actions/setup-uv
       - name: python/ (ruff, ty)
         working-directory: python
         run: |
@@ -172,7 +197,7 @@ jobs:
 
   fmt:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -182,7 +207,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
           components: rustfmt
@@ -200,12 +225,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # telemetry-otlp is off in every default build: compile its code and tests here too, and
       # keep OpenTelemetry out of the default dependency tree (T125 section 6.5).
@@ -218,6 +243,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    # Debuginfo of the whole workspace test build does not fit the runner's disk next to the spill tests
+    # ("No space left on device" in the bench-runner spill tests, an ld Bus error in otlp_collector; merge-queue
+    # ejections 2026-11-07/08). Line tables keep panic backtraces and cost a fraction of the space.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -226,18 +256,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # The runner image ships toolchains and images the build never uses; same list as the nightly jobs.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/boost \
+            /opt/microsoft /opt/az /usr/lib/google-cloud-sdk /usr/lib/mono /usr/local/julia* /usr/local/graalvm \
+            /opt/hostedtoolcache/Java_* /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy
+          df -h /
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/setup-mold
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-nextest
       # TPC-H SF 0.1 for the simulated two-worker cluster (krishiv-sim
       # `tpch_sim`, design P2-T176 unit 2); without it the test reads the SF
       # 0.01 fixture.
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: $/.github/actions/setup-uv
       - name: TPC-H SF 0.1 Parquet
         run: uv run --frozen --project bench python -I tests/scripts/gen_tpch_parquet.py 0.1 "$RUNNER_TEMP/tpch-sf0.1"
       # Every GitHub-hosted x64 runner has x86-64-v3, so the kernel tests must
@@ -248,10 +287,13 @@ jobs:
           KRISHIV_SIM_TPCH_DIR: ${{ runner.temp }}/tpch-sf0.1
       - run: cargo test --workspace --doc --locked
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
+      - name: Disk left
+        if: always()
+        run: df -h / "$RUNNER_TEMP"
 
   deny:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -261,13 +303,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      # The deny action builds a Docker image that downloads cargo-deny from github.com, so an outage failed the job.
+      - uses: $/.github/actions/install-tool
         with:
-          command: check
+          tool: cargo-deny
+      - name: cargo deny check (one retry, it fetches the advisory database)
+        run: |
+          cargo deny check || { echo "::warning::cargo deny failed once; retrying"; sleep 30; cargo deny check; }
 
   machete:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -277,14 +323,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-machete
       - run: cargo machete
 
   hack:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -294,19 +340,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/setup-mold
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-hack
       - run: cargo hack check --each-feature --workspace --locked
 
   layering:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -316,19 +362,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - run: cargo xtask layering
+      - run: cargo xtask quarantine
 
   # The generated Spark Connect types match the vendored protos (P2-T091a).
   # `tools/connect-protogen` is a workspace of its own (protox, prost-build),
   # so the product dependency graph does not carry the protobuf compiler.
   connect-protos:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -338,7 +385,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -351,7 +398,7 @@ jobs:
   # `tools/plan-protogen` is a workspace of its own, like connect-protogen.
   plan-protos:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -361,7 +408,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -377,7 +424,7 @@ jobs:
   fuzz-build:
     needs: changes
     # Not in the merge queue (it ran on the pull request; the nightly run covers main).
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && github.event_name != 'merge_group'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -392,7 +439,7 @@ jobs:
           persist-credentials: false
       - name: Pinned nightly toolchain (cargo-fuzz needs it)
         run: rustup toolchain install "$NIGHTLY" --profile minimal
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-fuzz@0.13.2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -409,7 +456,7 @@ jobs:
 
   msrv:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -421,18 +468,18 @@ jobs:
           persist-credentials: false
       # rust-version in Cargo.toml is the MSRV (1.97). Check with exactly that
       # toolchain; RUSTUP_TOOLCHAIN overrides rust-toolchain.toml.
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: "1.97"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - run: cargo check --workspace --all-targets --locked
         env:
           RUSTUP_TOOLCHAIN: "1.97"
 
   docs:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     env:
       RUSTDOCFLAGS: -D warnings
@@ -444,11 +491,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - run: cargo doc --workspace --no-deps --locked
 
   # P2-T147: `cargo publish --dry-run` for `krishiv` and the workspace crates it
@@ -456,7 +503,7 @@ jobs:
   # script runs on a scratch copy (see its header and RELEASING.md).
   release-dry-run:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -467,11 +514,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - run: .github/scripts/publish-dry-run.sh
 
   # P2-T020: Miri on krishiv-kernels (ADR 0029; the crate holds unsafe and
@@ -485,7 +532,7 @@ jobs:
   miri-kernels:
     # Not in the merge queue (about 33 minutes; it ran on the pull request, and the nightly
     # run covers main). The check still reports there: a skipped job satisfies it.
-    if: github.event_name != 'push' && github.event_name != 'merge_group'
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -558,11 +605,11 @@ jobs:
           # recorded `measured-base-sha`; the default depth 1 has no parent.
           fetch-depth: 2
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       # --build-time wipes its own target dir, so it measures a clean build.
       - run: cargo xtask budgets --build-time --measure-only
       # The checkout is the PR's merge with the base branch; its first parent
@@ -617,8 +664,8 @@ jobs:
           persist-credentials: false
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: $/.github/actions/setup-mold
+      - uses: $/.github/actions/setup-uv
       - name: Install Python ${{ matrix.python }}
         env:
           PY: ${{ matrix.python }}
@@ -714,12 +761,11 @@ jobs:
           name: wheel-${{ matrix.name }}
           path: dist/*.whl
 
-  # P2-T103: every wheel target (wheels.yml), on PRs that can change them.
-  # Not on a push to main (main-measure.yml builds and measures the wheels there)
-  # nor in the merge queue (it rebuilds them after the push); `wheels-ok` passes.
+  # P2-T103: every wheel target (wheels.yml), on PRs that can change them and in the nightly run (nightly.yml calls
+  # this workflow). Not in the merge queue, and a push to main only measures (main-measure.yml); `wheels-ok` passes.
   wheels-targets:
     needs: changes
-    if: needs.changes.outputs.python == 'true' && github.event_name != 'push' && github.event_name != 'merge_group'
+    if: needs.changes.outputs.python == 'true' && github.event_name != 'merge_group'
     permissions:
       contents: read
       actions: read
@@ -875,12 +921,13 @@ jobs:
         run: |
           source=$(.github/scripts/main-baseline.sh)
           echo "source=$source" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         if: steps.measure.outputs.result == 'measured'
         with:
           toolchain: 1.99.1
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-        if: steps.measure.outputs.result == 'measured'
+      # The gate checks out the base commit, which has the local action only once this change is on main.
+      - uses: $/.github/actions/setup-mold
+        if: steps.measure.outputs.result == 'measured' && hashFiles('.github/actions/setup-mold/action.yml') != ''
       - name: Values the budget approvals are recorded against
         if: steps.measure.outputs.result == 'measured'
         # A base that predates the script has no recorded values: the label then counts only
@@ -1027,12 +1074,13 @@ jobs:
         run: |
           source=$(.github/scripts/main-baseline.sh)
           echo "source=$source" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         if: steps.measure.outputs.result == 'measured'
         with:
           toolchain: 1.99.1
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-        if: steps.measure.outputs.result == 'measured'
+      # The gate checks out the base commit, which has the local action only once this change is on main.
+      - uses: $/.github/actions/setup-mold
+        if: steps.measure.outputs.result == 'measured' && hashFiles('.github/actions/setup-mold/action.yml') != ''
       - name: Values the wheel-size approval is recorded against
         if: steps.measure.outputs.result == 'measured'
         # A base that predates the script has no recorded values: the label then counts only
