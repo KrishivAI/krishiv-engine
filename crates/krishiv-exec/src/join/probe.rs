@@ -640,7 +640,7 @@ impl Operator for ProbeOp {
     }
 
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
-        self.0.counters.probe()
+        self.0.counters.probe(self.0.spill.is_some())
     }
 
     fn needs_flush(&self) -> bool {

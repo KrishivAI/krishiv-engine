@@ -503,10 +503,13 @@ impl Counters {
         out
     }
 
-    pub(crate) fn probe(&self) -> crate::metrics::ExtraMetrics {
+    /// The probe's metrics. `spills` says the join has a spill scope: its
+    /// idle-spill counters are then reported even at 0, so a profile tells
+    /// "the finished build never spilled while it waited" from "not
+    /// reported".
+    pub(crate) fn probe(&self, spills: bool) -> crate::metrics::ExtraMetrics {
         let mut out = self.report(&PROBE_COUNTERS);
-        // Only a build spilled while it waited for its probe reports it.
-        if self.get(Counter::IdleSpills) > 0 {
+        if spills || self.get(Counter::IdleSpills) > 0 {
             out.extend(self.report(&[
                 (Counter::IdleSpills, "idle_spills"),
                 (Counter::IdleSpilledBytes, "idle_spilled_bytes"),
