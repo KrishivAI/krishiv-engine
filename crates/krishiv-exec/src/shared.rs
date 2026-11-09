@@ -163,7 +163,7 @@ impl Output {
         let mut reservation = owner.reservation();
         while let Err(e) = reservation.try_grow(bytes) {
             let freed = if self.spill.is_some() {
-                Arc::clone(self).spill_unread().await?
+                Arc::clone(self).spill_unread(usize::MAX).await?
             } else {
                 0
             };
@@ -227,7 +227,7 @@ enum Place {
 }
 
 impl SpillUnread for Output {
-    fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>> {
+    fn spill_unread(self: Arc<Self>, _target: usize) -> BoxFuture<'static, Result<usize>> {
         Box::pin(async move {
             let Some((hook, consumer, scope)) = &self.spill else {
                 return Ok(0);
@@ -867,9 +867,12 @@ mod tests {
         // The list after finalize spills as a whole: the memory segment goes to a file.
         let g = global_ref::<SinkGlobal>(&global, "test").unwrap();
         let output = Arc::clone(g.done.get().unwrap());
-        let freed = Arc::clone(&output).spill_unread().await.unwrap();
+        let freed = Arc::clone(&output).spill_unread(usize::MAX).await.unwrap();
         assert!(freed > 0, "the batches in memory were freed");
-        assert_eq!(Arc::clone(&output).spill_unread().await.unwrap(), 0);
+        assert_eq!(
+            Arc::clone(&output).spill_unread(usize::MAX).await.unwrap(),
+            0
+        );
         assert_eq!(read_all(&source, &query, &global).await, want);
         drop(sink);
     }
@@ -890,7 +893,7 @@ mod tests {
         }
         let sink_g = global_ref::<SinkGlobal>(&global, "test").unwrap();
         let output = Arc::clone(sink_g.done.get().unwrap());
-        assert!(output.spill_unread().await.unwrap() > 0);
+        assert!(output.spill_unread(usize::MAX).await.unwrap() > 0);
         // The reader was two batches in: the file continues at the third.
         while let Some(b) = source.get_data(&mut local, &g).await.unwrap() {
             read.extend(values(&b));

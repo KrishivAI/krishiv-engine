@@ -28,7 +28,10 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 `join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
-`probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join · `broadcast.rs`
+`probe.rs` probe operator + match cursor (its first read of the build, `BuildGlobal::built`, ends the build's idle
+window: until then a finished build's tables are an `OutputSpill` written partition by partition, largest first, and
+idle after `krishiv.exec.join.idleSpillAfter`, so the arbitrator asks them before a running consumer self-spills; study
+30) · `grace.rs` spill partitions, flush-phase grace join · `broadcast.rs`
 (P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
 broadcast exchange builds its table once per job and worker (its own query over the resource's pool, no spill, its
 reservations never abort a query) and every task probes it through a `PrebuiltSink` that republishes its runtime
@@ -129,7 +132,8 @@ Paths are relative to this crate.
 - All memory through krishiv-memory reservations; every spill path tested with tiny-memory tests.
 - Only the driver yields, awaits memory, spills or checks cancellation; `execute`/`sink` stay sync and bounded.
   Exception: a breaker's finished in-memory result, owned by no driver, spills on a task of its own
-  (`output_spill.rs`: aggregate and sort results); the coordinator drops a finalized state after its last reader.
+  (`output_spill.rs`: aggregate and sort results, and a hash join build's finished tables until the first probe driver
+  reads them, `join/build.rs` `IdleBuild`); the coordinator drops a finalized state after its last reader.
 - At query end (success, error, cancel) the query pool is empty: tests assert it.
 - Cancellation-safe, no blocking in async; metrics feed EXPLAIN ANALYZE.
 - New operators follow skill `krishiv-operator`.
