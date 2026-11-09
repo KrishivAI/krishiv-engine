@@ -92,7 +92,7 @@ impl Raw {
             Field::Minute => &mut self.minute,
             Field::Second => &mut self.second,
             // Not parseable (Spark rejects `Q`, `F` for parsing).
-            Field::Quarter | Field::AlignedWeekOfMonth => return None,
+            Field::Quarter | Field::AlignedDayOfWeekInMonth => return None,
         })
     }
 }
