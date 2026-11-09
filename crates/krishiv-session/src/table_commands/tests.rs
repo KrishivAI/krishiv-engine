@@ -39,6 +39,9 @@ fn a_namespace_location_keeps_a_dotdot_above_the_root_and_refuses_an_empty_one()
     assert_eq!(q("hdfs://nn:8020/a//b/", wh), "hdfs://nn:8020/a/b");
     assert_eq!(q("s3a://B/Up", wh), "s3a://B/Up");
     assert_eq!(q("s3a://b", wh), "s3a://b");
+    // The root slash stays (Hadoop Path, Spark 4.2.0 JVM): `s3a://b/` and `s3a://b//` are `s3a://b/`.
+    assert_eq!(q("s3a://b/", wh), "s3a://b/");
+    assert_eq!(q("s3a://b//", wh), "s3a://b/");
     assert_eq!(q("s3a://b/../x", wh), "s3a://b/../x");
     assert_eq!(q("file:///tmp/x//y/", wh), "file:/tmp/x/y");
     assert_eq!(q("file://host/a//b", wh), "file://host/a/b");

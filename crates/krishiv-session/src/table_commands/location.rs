@@ -58,7 +58,13 @@ pub(super) fn qualified_namespace_location(
         }
     }
     if parts.is_empty() && prefix.contains("//") {
-        return Ok(prefix);
+        // Hadoop's `Path` keeps the root slash of `s3a://b/` and `s3a://b//` (Spark 4.2.0 JVM) and
+        // adds none to `s3a://b`.
+        return Ok(if path.is_empty() {
+            prefix
+        } else {
+            format!("{prefix}/")
+        });
     }
     Ok(format!("{prefix}/{}", parts.join("/")))
 }
