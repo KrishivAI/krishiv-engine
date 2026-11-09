@@ -1383,3 +1383,17 @@ fn owned_tight_copy_of_a_small_slice_copies_only_its_window() {
     assert_eq!(copy, whole);
     assert_eq!(copy.offset(), whole.offset());
 }
+
+#[test]
+fn wait_for_returns_once_another_thread_wakes_the_future() {
+    // `query::wait_for` replaces `futures::executor::block_on` (no `thread::park`, which a forked child cannot
+    // use on Apple platforms): a future that is pending until another thread completes it still finishes.
+    let (tx, rx) = futures::channel::oneshot::channel::<u32>();
+    let sender = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tx.send(7).unwrap();
+    });
+    assert_eq!(query::wait_for(rx), Ok(7));
+    sender.join().unwrap();
+    assert_eq!(query::wait_for(async { 3 }), 3);
+}
