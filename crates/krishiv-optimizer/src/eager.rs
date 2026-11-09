@@ -53,7 +53,6 @@
 //! The upper aggregate stays even when its keys are unique: states are local
 //! to each task, so equal groups of different tasks still have to merge.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -96,7 +95,7 @@ pub(crate) fn rewrite(
     stats: &dyn Statistics,
     propagate: bool,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
-    let mut memo = HashMap::new();
+    let mut memo = Default::default();
     let mut next = max_id(&root, &mut memo).saturating_add(1);
     let mut est = Estimator::with_propagation(stats, propagate);
     let mut notes = Vec::new();
@@ -183,7 +182,7 @@ impl<'a> Shape<'a> {
         if calls.is_empty() {
             return Err("no aggregate call".to_owned());
         }
-        let mut args = Attrs::new();
+        let mut args = Attrs::default();
         for (_, f) in &calls {
             for a in &f.args {
                 references_into(a, &mut args);
@@ -336,7 +335,7 @@ impl<'a> Shape<'a> {
     /// the top join's dimension leaves its keys out of `S`'s.
     fn rotated(&self) -> Option<Arc<LogicalPlan>> {
         let (left, right, on) = inner_join(self.join)?;
-        let mut args = Attrs::new();
+        let mut args = Attrs::default();
         for (_, f) in distinct_calls(self.outputs) {
             for a in &f.args {
                 references_into(a, &mut args);
@@ -396,7 +395,7 @@ impl<'a> Shape<'a> {
 
     /// What the aggregate reads apart from its calls' arguments.
     fn read_by_aggregate(&self) -> Attrs {
-        let mut read = Attrs::new();
+        let mut read = Attrs::default();
         for k in self.keys {
             references_into(k, &mut read);
         }
@@ -464,7 +463,7 @@ fn inner_join(p: &LogicalPlan) -> Option<(&Arc<LogicalPlan>, &Arc<LogicalPlan>, 
 /// What `node`'s input must provide, apart from the arguments, given what is
 /// read of `node`. An item nothing reads goes (this runs before pruning).
 fn read_below(node: &LogicalPlan, read: &Attrs, args: &Attrs) -> Result<Attrs, String> {
-    let mut below = Attrs::new();
+    let mut below = Attrs::default();
     let mut item = |out: &BoundColumn, values: &[&Arc<Expr>]| -> Result<(), String> {
         if !read.contains(&out.id) {
             if args.contains(&out.id) && !values.iter().all(|v| is_column(v, out.id)) {
@@ -743,7 +742,7 @@ fn is_state(e: &Expr) -> bool {
 
 /// The columns of `cols` that an equality conjunct of `on` compares directly.
 fn equi_columns(on: &Arc<Expr>, cols: &[BoundColumn]) -> Attrs {
-    let mut out = Attrs::new();
+    let mut out = Attrs::default();
     for c in conjuncts(on) {
         if let Some((Builtin::Eq | Builtin::EqNullSafe, args, _)) = builtin(&c) {
             for a in args {

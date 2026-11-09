@@ -7,10 +7,11 @@ Aggregate [], [count(1) AS count(1)#8]
    +- Join Inner, (cs_sold_date_sk#0 == d_date_sk#6)
       :- Project [cs_sold_date_sk#0]
       :  +- Join Inner, (cs_bill_cdemo_sk#1 == cd_demo_sk#2)
-      :     :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_bill_cdemo_sk#1]
+      :     :- Filter (isnotnull(cs_bill_cdemo_sk#1) and isnotnull(cs_sold_date_sk#0))
+      :     :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_bill_cdemo_sk#1]
       :     +- Project [cd_demo_sk#2]
-      :        +- Filter (((cd_gender#3 == 'M') and (cd_marital_status#4 == 'S')) and (cd_education_status#5 == 'College'))
+      :        +- Filter ((((cd_gender#3 == 'M') and (cd_marital_status#4 == 'S')) and (cd_education_status#5 == 'College')) and isnotnull(cd_demo_sk#2))
       :           +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#2, cd_gender#3, cd_marital_status#4, cd_education_status#5]
       +- Project [d_date_sk#6]
-         +- Filter (d_year#7 == 2000L)
+         +- Filter ((d_year#7 == 2000L) and isnotnull(d_date_sk#6))
             +- Scan spark_catalog.default.date_dim [d_date_sk#6, d_year#7]

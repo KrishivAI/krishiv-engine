@@ -5,7 +5,7 @@ expression: dot
 digraph {
     n0 [label="Sort [nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST]"];
     n1 [label="Exchange rangepartitioning(nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST)"];
-    n2 [label="Project [nation#50, o_year#51, sum(amount#52)#4611686018427387911 AS sum_profit#53]"];
+    n2 [label="Project [nation#50, o_year#51, sum(amount#52)#4611686018427387937 AS sum_profit#53]"];
     n3 [label="HashAggregate keys=[nation#50, o_year#51], functions=[sum(amount#52)]"];
     n4 [label="Exchange hashpartitioning(nation#50, o_year#51)"];
     n5 [label="PartialHashAggregate keys=[nation#50, o_year#51], functions=[sum(amount#52)]"];
@@ -18,19 +18,19 @@ digraph {
     n12 [label="Project [l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, o_orderdate#41]"];
     n13 [label="HashJoin Inner, [p_partkey#0] = [l_partkey#17], RuntimeFilter #2: p_partkey#0 -> spark_catalog.default.part.p_partkey"];
     n14 [label="Project [p_partkey#0]"];
-    n15 [label="Scan spark_catalog.default.part [p_partkey#0, p_name#1], PushedFilters: [(p_name#1 like '%green%')]"];
+    n15 [label="Scan spark_catalog.default.part [p_partkey#0, p_name#1], PushedFilters: [((p_name#1 like '%green%') and isnotnull(p_partkey#0))]"];
     n16 [label="BroadcastExchange"];
     n17 [label="Project [l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, o_orderdate#41]"];
     n18 [label="HashJoin Inner, [l_orderkey#16] = [o_orderkey#37], RuntimeFilter #1: l_orderkey#16 -> spark_catalog.default.lineitem.l_orderkey"];
-    n19 [label="Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22]"];
+    n19 [label="Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22], PushedFilters: [((isnotnull(l_partkey#17) and isnotnull(l_suppkey#18)) and isnotnull(l_orderkey#16))]"];
     n20 [label="BroadcastExchange"];
-    n21 [label="Scan spark_catalog.default.orders [o_orderkey#37, o_orderdate#41]"];
+    n21 [label="Scan spark_catalog.default.orders [o_orderkey#37, o_orderdate#41], PushedFilters: [isnotnull(o_orderkey#37)]"];
     n22 [label="BroadcastExchange"];
-    n23 [label="Scan spark_catalog.default.supplier [s_suppkey#9, s_nationkey#12]"];
+    n23 [label="Scan spark_catalog.default.supplier [s_suppkey#9, s_nationkey#12], PushedFilters: [(isnotnull(s_suppkey#9) and isnotnull(s_nationkey#12))]"];
     n24 [label="BroadcastExchange"];
-    n25 [label="Scan spark_catalog.default.nation [n_nationkey#46, n_name#47]"];
+    n25 [label="Scan spark_catalog.default.nation [n_nationkey#46, n_name#47], PushedFilters: [isnotnull(n_nationkey#46)]"];
     n26 [label="BroadcastExchange"];
-    n27 [label="Scan spark_catalog.default.partsupp [ps_partkey#32, ps_suppkey#33, ps_supplycost#35]"];
+    n27 [label="Scan spark_catalog.default.partsupp [ps_partkey#32, ps_suppkey#33, ps_supplycost#35], PushedFilters: [(isnotnull(ps_partkey#32) and isnotnull(ps_suppkey#33))]"];
     n0 -> n1;
     n1 -> n2;
     n2 -> n3;

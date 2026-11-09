@@ -12,6 +12,7 @@ mod cse;
 mod join_cost;
 mod join_enumerator;
 mod join_order;
+mod oracle;
 mod plan_stats;
 mod props;
 mod qerror;

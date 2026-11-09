@@ -74,7 +74,7 @@ pub(crate) const MAX_MAGNITUDE: i128 = 1 << 16;
 /// # Errors
 /// As [`dag::rewrite_up`].
 pub(crate) fn rewrite(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let mut next = max_id(&root, &mut std::collections::HashMap::new()).saturating_add(1);
+    let mut next = max_id(&root, &mut Default::default()).saturating_add(1);
     dag::rewrite_up(root, &mut |p| Ok(rewrite_aggregate(p, &mut next)))
 }
 

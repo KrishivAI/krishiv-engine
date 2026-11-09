@@ -18,16 +18,19 @@ Limit 100
             :              +- Aggregate [ca_zip#89], [substring(ca_zip#89, 1, 5) AS ca_zip#112, count(1) AS cnt#113]
             :                 +- Project [ca_zip#89]
             :                    +- Join Inner, (ca_address_sk#80 == c_current_addr_sk#98)
-            :                       :- Shared #1, printed above
+            :                       :- Filter isnotnull(ca_address_sk#80)
+            :                       :  +- Shared #1, printed above
             :                       +- Project [c_current_addr_sk#98]
-            :                          +- Filter (c_preferred_cust_flag#104 == 'Y')
+            :                          +- Filter ((c_preferred_cust_flag#104 == 'Y') and isnotnull(c_current_addr_sk#98))
             :                             +- Scan spark_catalog.default.customer [c_current_addr_sk#98, c_preferred_cust_flag#104]
             +- Project [s_store_name#56, s_zip#76, ss_net_profit#22]
                +- Join Inner, (ss_store_sk#7 == s_store_sk#51)
-                  :- Scan spark_catalog.default.store [s_store_sk#51, s_store_name#56, s_zip#76]
+                  :- Filter isnotnull(s_store_sk#51)
+                  :  +- Scan spark_catalog.default.store [s_store_sk#51, s_store_name#56, s_zip#76]
                   +- Project [ss_store_sk#7, ss_net_profit#22]
                      +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
-                        :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_store_sk#7, ss_net_profit#22]
+                        :- Filter (isnotnull(ss_sold_date_sk#0) and isnotnull(ss_store_sk#7))
+                        :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_store_sk#7, ss_net_profit#22]
                         +- Project [d_date_sk#23]
-                           +- Filter ((d_qoy#33 == 2) and (d_year#29 == 1998))
+                           +- Filter (((d_qoy#33 == 2) and (d_year#29 == 1998)) and isnotnull(d_date_sk#23))
                               +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_year#29, d_qoy#33]
