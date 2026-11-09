@@ -413,3 +413,15 @@ fn is_constant(e: &Expr) -> bool {
     e.for_each_child(&mut |c| constant = constant && is_constant(c));
     constant
 }
+
+/// The spans of `ids` inside `outer`, moved to start at `outer`'s start: the substituted names of
+/// a statement's query, relative to the query's own text (a stored view's).
+pub(crate) fn spans_within(
+    ids: &[krishiv_sql::ast::Span],
+    outer: krishiv_sql::ast::Span,
+) -> Vec<krishiv_sql::ast::Span> {
+    ids.iter()
+        .filter(|s| s.start >= outer.start && s.end <= outer.end)
+        .map(|s| krishiv_sql::ast::Span::new(s.start - outer.start, s.end - outer.start))
+        .collect()
+}
