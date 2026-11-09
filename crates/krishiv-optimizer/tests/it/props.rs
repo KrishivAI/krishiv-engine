@@ -751,3 +751,46 @@ fn an_outer_join_a_derived_filter_makes_inner_is_ordered_with_its_tree() {
         );
     }
 }
+
+/// A nondeterministic predicate must see the rows it saw before, so the order and restrict loop
+/// turns an outer join inner only on what pushdown would move: the deterministic prefix of the top
+/// filter's conjuncts, and only through filters that are deterministic as a whole.
+#[test]
+fn a_nondeterministic_filter_keeps_the_outer_join_under_it() {
+    for (name, sql) in [
+        (
+            "rand before the rejecting conjunct",
+            "SELECT * FROM t LEFT JOIN u ON t.a = u.a WHERE rand() < 0.5 AND u.d = 'z'",
+        ),
+        (
+            "rejecting filter above a rand filter",
+            "SELECT * FROM (SELECT * FROM t LEFT JOIN u ON t.a = u.a WHERE rand() < 0.5) x \
+             WHERE x.d = 'z'",
+        ),
+    ] {
+        let plan = support::resolve(sql, &support::ctx());
+        let optimized = optimize(&plan).unwrap();
+        assert!(
+            optimized.root().to_string().contains("LeftOuter"),
+            "{name}: the join turned inner\n{}",
+            optimized.root()
+        );
+        let again = optimize(&optimized).unwrap();
+        assert!(
+            again.structurally_eq(&optimized),
+            "{name}: not a fixed point"
+        );
+    }
+    // The same joins with a deterministic rejecting filter do turn inner.
+    let plan = support::resolve(
+        "SELECT * FROM t LEFT JOIN u ON t.a = u.a WHERE u.d = 'z'",
+        &support::ctx(),
+    );
+    assert!(
+        !optimize(&plan)
+            .unwrap()
+            .root()
+            .to_string()
+            .contains("LeftOuter")
+    );
+}

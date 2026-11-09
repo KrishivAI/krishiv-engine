@@ -49,11 +49,25 @@ pub(crate) fn push_filter(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
 /// implied across two joins over the outer join below); this lets the order-and-restrict loop turn
 /// the join inner before its last ordering, without running the rewrite batch every round.
 pub(crate) fn eliminate_outer_joins(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
-    fn go(p: &Arc<LogicalPlan>, preds: &mut Vec<Arc<Expr>>) -> Option<Arc<LogicalPlan>> {
+    /// The filters from `p` down to an outer join, read as `push` reads them: the top filter
+    /// gives the deterministic prefix of its conjuncts, and only a filter that is deterministic
+    /// as a whole is looked through (a nondeterministic predicate must see the rows it saw
+    /// before, so the join under it keeps its kind).
+    fn go(p: &Arc<LogicalPlan>, preds: &mut Vec<Arc<Expr>>, top: bool) -> Option<Arc<LogicalPlan>> {
         match &p.node {
             PlanNode::Filter { input, predicate } => {
-                preds.extend(conjuncts(predicate));
-                let below = go(input, preds)?;
+                if top {
+                    preds.extend(
+                        conjuncts(&null_to_false(predicate))
+                            .into_iter()
+                            .take_while(|c| is_deterministic(c)),
+                    );
+                } else if is_deterministic(predicate) {
+                    preds.extend(conjuncts(predicate));
+                } else {
+                    return None;
+                }
+                let below = go(input, preds, false)?;
                 Some(Arc::new(LogicalPlan {
                     node: PlanNode::Filter {
                         input: below,
@@ -87,7 +101,7 @@ pub(crate) fn eliminate_outer_joins(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> 
     if !matches!(node.node, PlanNode::Filter { .. }) {
         return node;
     }
-    go(&node, &mut Vec::new()).unwrap_or(node)
+    go(&node, &mut Vec::new(), true).unwrap_or(node)
 }
 
 /// A predicate in a filter or join condition: a NULL operand of its

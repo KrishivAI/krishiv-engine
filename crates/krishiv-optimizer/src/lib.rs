@@ -114,8 +114,9 @@ const REWRITE: [(&str, Rule); 7] = [
 #[derive(Debug, Clone)]
 pub struct RuleStep {
     /// The batch it ran in: `ImpliedJoinFilters`, `Rewrite`, `Restrict`,
-    /// `JoinOrder` (join ordering alternating with restriction), `Prune`,
-    /// `Tidy` or `Cse`.
+    /// `JoinOrder` (join ordering alternating with restriction; a `Rewrite`
+    /// batch also runs inside it after an outer join turned inner, its rounds
+    /// counting from 1 each time), `Prune`, `Tidy` or `Cse`.
     pub batch: &'static str,
     /// The round of a fixed-point batch, from 1.
     pub round: usize,
@@ -380,7 +381,8 @@ fn run(
         // Restriction and join ordering alternate until neither changes
         // the plan: ordering sees the restricted estimates, and restriction
         // sees every join the ordering forms (which side an aggregate joins
-        // decides its domain), so a second optimization finds nothing new.
+        // decides its domain), and an outer join their filters make inner
+        // is ordered with its tree, so a second optimization finds nothing new.
         let estimates = stats.unwrap_or(&NoStatistics);
         let mut root = t.once("Restrict", &root, |r| {
             restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
