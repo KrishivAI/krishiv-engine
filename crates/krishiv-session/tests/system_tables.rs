@@ -771,3 +771,17 @@ fn a_finished_query_started_no_earlier_than_it_was_submitted() {
     );
     assert_eq!(r, ["true"], "{r:?}");
 }
+
+#[test]
+fn a_query_answered_from_the_result_cache_is_flagged() {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.resultCache.enabled", "true").unwrap();
+    run_all(&s, "SELECT id FROM range(5) WHERE id < 4").unwrap();
+    run_all(&s, "SELECT id FROM range(5) WHERE id < 4").unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT CAST(result_cache_hit AS STRING) FROM system.queries \
+         WHERE state = 'finished' AND query_text LIKE '%id < 4%' ORDER BY submitted_at, query_id",
+    );
+    assert_eq!(r, ["false", "true"], "{r:?}");
+}
