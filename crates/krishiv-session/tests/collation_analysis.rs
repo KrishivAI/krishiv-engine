@@ -877,6 +877,13 @@ fn positions_over_lcase_strings_match_spark() {
         (format!("instr('a\u{130}b' {l}, 'b')"), "3"),
         (format!("instr('x\u{3c2}' {l}, '\u{3c3}')"), "2"),
         (format!("locate('', 'xAbAy' {l}, 3)"), "1"),
+        (format!("find_in_set('B' {l}, 'a,b,c')"), "2"),
+        (format!("find_in_set('b', 'A,B,C' {l})"), "2"),
+        (format!("find_in_set('a,b' {l}, 'a,b')"), "0"),
+        (
+            format!("find_in_set('\u{3a3}' {l}, '\u{3c2},\u{3c3}')"),
+            "1",
+        ),
     ] {
         assert_eq!(one(&format!("SELECT CAST({sql} AS STRING)")), want, "{sql}");
     }

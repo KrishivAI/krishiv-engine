@@ -722,6 +722,37 @@ pub fn search_lcase<O: OffsetSizeTrait>(
         .collect())
 }
 
+/// `find_in_set(word, set)` over `UTF8_LCASE` operands: both sides compare as lower-cased code
+/// points (Spark's `lowerCaseCodePoint`; values from a Spark 4.2.0 run).
+///
+/// # Errors
+/// `INTERNAL_ERROR` for operands of different lengths.
+pub fn find_in_set_lcase<O: OffsetSizeTrait>(
+    word: StrOperand<'_, O>,
+    set: StrOperand<'_, O>,
+) -> Result<Int32Array, KernelError> {
+    fn lower(s: &str) -> String {
+        let mut points = Vec::new();
+        for c in s.chars() {
+            lcase_points(c, &mut points);
+        }
+        points.into_iter().collect()
+    }
+    let slots: [&dyn Slot; 2] = [&word, &set];
+    int_rows(&slots, |i| {
+        let w = lower(word.at(i));
+        if w.contains(',') {
+            return 0;
+        }
+        lower(set.at(i))
+            .split(',')
+            .position(|piece| piece == w)
+            .map_or(0, |p| {
+                i32::try_from(p.saturating_add(1)).unwrap_or(i32::MAX)
+            })
+    })
+}
+
 // ---- overlay ----
 
 /// The part of `n` units Spark's `overlay` keeps before `pos` and after the

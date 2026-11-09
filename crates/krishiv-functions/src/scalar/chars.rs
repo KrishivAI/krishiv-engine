@@ -39,6 +39,7 @@ pub(super) const NAMES: &[&str] = &[
     "find_in_set",
     "locate",
     "__locate_lcase",
+    "__find_in_set_lcase",
     "position",
     "substring_index",
     "split_part",
@@ -124,6 +125,10 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let (s, sub) = (x.str(0)?, x.str(1)?);
             let out = string::locate(sub.operand(), s.operand(), one)?;
             Ok(Arc::new(out) as ArrayRef)
+        }),
+        ("__find_in_set_lcase", "SS") => Binding::new(int, |x| {
+            let (w, s) = (x.str(0)?, x.str(1)?);
+            Ok(Arc::new(string::find_in_set_lcase(w.operand(), s.operand())?) as ArrayRef)
         }),
         ("__locate_lcase", "SSI") => Binding::new(int, |x| {
             let (sub, s, start) = (x.str(0)?, x.str(1)?, x.int(2)?);

@@ -92,6 +92,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "the analyzer's `locate` over `UTF8_LCASE` strings",
     ),
     (
+        "__find_in_set_lcase",
+        "the analyzer's `find_in_set` over `UTF8_LCASE` strings",
+    ),
+    (
         "explode",
         "generator: a `Generate` node, not a DataFrame function yet",
     ),

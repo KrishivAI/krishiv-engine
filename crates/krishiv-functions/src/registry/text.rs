@@ -230,7 +230,7 @@ pub(super) fn specs() -> Vec<Spec> {
         string,
     ));
     out.extend(scalar(
-        &["instr", "find_in_set"],
+        &["instr", "find_in_set", "__find_in_set_lcase"],
         &Inputs::Expects(vec![text.clone(), text.clone()]),
         int,
     ));
