@@ -253,4 +253,60 @@ mod tests {
         assert_eq!(days("1970-01-02").unwrap(), 1);
         assert!(days("2026-13-01").is_err());
     }
+
+    #[test]
+    fn broken_files_and_empty_fields_are_reported() {
+        let d = days("2026-11-08").unwrap();
+        assert!(problems("[[test", NX, d)[0].starts_with("tests/quarantine.toml"));
+        assert!(problems(REG, "[[x", d)[0].starts_with(".config/nextest.toml"));
+        let empty = REG.replace("owner=\"o\"", "owner=\" \"");
+        assert!(problems(&empty, NX, d)[0].contains("must all be set"));
+        let bad_date = REG.replace("2026-11-10", "tomorrow");
+        assert!(problems(&bad_date, NX, d)[0].contains("not a YYYY-MM-DD"));
+        let twice = format!("{REG}{REG}");
+        assert!(
+            problems(&twice, NX, d)
+                .iter()
+                .any(|m| m.contains("listed twice"))
+        );
+    }
+
+    #[test]
+    fn several_entries_and_an_empty_registry_have_their_own_filters() {
+        let d = days("2026-11-08").unwrap();
+        let two = format!("{REG}{}", REG.replace("name=\"a\"", "name=\"b\""));
+        let nx = "[profile.default]\ndefault-filter = \"not test(=a) and not test(=b)\"\n[profile.quarantine]\ndefault-filter = \"test(=a) | test(=b)\"\n";
+        assert!(problems(&two, nx, d).is_empty());
+        let none = "[profile.quarantine]\ndefault-filter = \"none()\"\n";
+        assert!(problems("", none, d).is_empty());
+        assert_eq!(problems("", NX, d).len(), 2);
+    }
+
+    fn repo(name: &str, registry: &str, nextest: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("xtask-quarantine-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::create_dir_all(dir.join(".config")).unwrap();
+        std::fs::write(dir.join("tests/quarantine.toml"), registry).unwrap();
+        std::fs::write(dir.join(".config/nextest.toml"), nextest).unwrap();
+        dir
+    }
+
+    #[test]
+    fn run_checks_lists_and_refuses_unknown_flags() {
+        let ok = repo(
+            "ok",
+            "",
+            "[profile.quarantine]\ndefault-filter = \"none()\"\n",
+        );
+        assert!(run(&ok, &[]).is_ok());
+        assert!(run(&ok, &["--list"]).is_ok());
+        assert!(run(&ok, &["--nope"]).unwrap_err().contains("unknown flags"));
+        let bad = repo("bad", REG, NX.replace("(=a)", "(=b)").as_str());
+        assert!(run(&bad, &[]).unwrap_err().contains("default-filter"));
+        assert!(run(&std::env::temp_dir().join("xtask-quarantine-missing"), &[]).is_err());
+        for d in [ok, bad] {
+            std::fs::remove_dir_all(d).unwrap();
+        }
+    }
 }
