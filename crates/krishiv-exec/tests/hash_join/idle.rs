@@ -337,6 +337,15 @@ async fn run_write_held(
     // Paused time: everything that can run without the write runs.
     tokio::time::sleep(Duration::from_millis(50)).await;
     let handed_before = handed.load(Ordering::Acquire);
+    // The held job is the write the filler waits for: were it any other
+    // job, the filler would have its memory by now (a cancel ends its
+    // wait).
+    if matches!(during, During::Seal) {
+        assert!(
+            !pressing.is_finished(),
+            "the held job is the idle build's write"
+        );
+    }
     executor.release();
     // A cancelled query may have dropped the probe scan already.
     open.send_replace(true);
@@ -409,7 +418,7 @@ async fn a_query_cancelled_while_its_idle_write_is_in_flight_releases_everything
         assert_eq!(
             metric(&held.q, "HashJoinProbe", "idle_spills"),
             0,
-            "the cancelled write never landed ({case:?})"
+            "the cancelled write's spill_unread was dropped before it counted a spill ({case:?})"
         );
     }
 }
