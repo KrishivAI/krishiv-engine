@@ -29,6 +29,7 @@ mod cond;
 mod field;
 mod func;
 mod hof;
+mod in_prefix;
 mod interval;
 pub(crate) mod logic;
 mod nested_cast;
@@ -754,7 +755,10 @@ fn builtin(
                 arith::negative(e, env)?
             }
         }
-        (Builtin::In, n) if n >= 2 => cond::in_list(args, env)?,
+        (Builtin::In, n) if n >= 2 => match in_prefix::in_prefix(f, &args, input)? {
+            Some(prefix) => prefix,
+            None => cond::in_list(args, env)?,
+        },
         (Builtin::Between, 3) => {
             let hi = args.pop().ok_or_else(arity)?;
             let lo = args.pop().ok_or_else(arity)?;

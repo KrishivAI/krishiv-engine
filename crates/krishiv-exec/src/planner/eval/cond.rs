@@ -370,7 +370,7 @@ struct InViews {
 /// A view's low 64 bits (length, first four bytes) and its length.
 #[inline]
 #[expect(clippy::cast_possible_truncation, reason = "a view's 32/64-bit fields")]
-fn view_head(view: u128) -> (u64, u32) {
+pub(super) fn view_head(view: u128) -> (u64, u32) {
     (view as u64, view as u32)
 }
 
