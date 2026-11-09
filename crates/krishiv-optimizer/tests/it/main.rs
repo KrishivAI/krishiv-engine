@@ -11,6 +11,7 @@
 mod cse;
 mod join_enumerator;
 mod join_order;
+mod late_payload;
 mod plan_stats;
 mod props;
 mod qerror;
