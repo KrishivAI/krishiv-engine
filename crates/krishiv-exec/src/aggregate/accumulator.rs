@@ -420,8 +420,7 @@ fn proven<N: DecimalNative>(
 /// A cheap upper bound of [`batch_abs`]: rows × max |v| × max |w|, with
 /// each maximum bounded by an OR of ones'-complement magnitudes (`|x| <=
 /// OR + 1`, branch-free) over every slot, NULL ones included. When it is
-/// too loose (values near the bound, large values under NULLs) the caller
-/// takes the exact sum.
+/// too loose (values near the bound, large values under NULLs) the caller takes the exact sum.
 fn quick_abs<N: DecimalNative>(v: &[N], w: Option<&Weights>) -> u128 {
     let or = v
         .iter()
@@ -508,15 +507,7 @@ impl DecFold<'_> {
         let fast = self.proven(v);
         if fast && self.dense_unit() {
             debug_assert_eq!(v.len(), self.groups.len(), "one value per group id");
-            // Raw rows, all valid, unit weights, no overflow possible in this
-            // batch: a plain add per row (an overflowed group stays NULL).
-            for (&g, x) in self.groups.iter().zip(v) {
-                let g = g as usize;
-                if st[g] != 2 {
-                    sum[g] = sum[g].wrapping_add(x.wide());
-                    st[g] = 1;
-                }
-            }
+            small_fold::dense_sum(self.groups, v, sum, st);
             return;
         }
         for (i, &g) in self.groups.iter().enumerate() {
@@ -573,11 +564,7 @@ impl DecFold<'_> {
         if fast && counts.is_none() && self.dense_unit() {
             debug_assert_eq!(v.len(), self.groups.len(), "one value per group id");
             // As in `sum`: raw rows, all valid, unit weights, proven.
-            for (&g, x) in self.groups.iter().zip(v) {
-                let g = g as usize;
-                sum[g] = sum[g].wrapping_add(x.wide());
-                count[g] = count[g].wrapping_add(1);
-            }
+            small_fold::dense_avg(self.groups, v, sum, count);
             return;
         }
         for (i, &g) in self.groups.iter().enumerate() {
@@ -3428,9 +3415,12 @@ fn struct_extremum_batch(
     Ok(())
 }
 
+mod small_fold;
+
 #[cfg(test)]
 #[cfg(not(loom))]
 mod differential;
+pub(crate) mod paired;
 
 /// The per-batch proofs (design P2-T160) against the per-row path.
 #[cfg(test)]

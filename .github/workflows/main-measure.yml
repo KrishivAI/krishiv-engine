@@ -13,8 +13,7 @@ name: Main measurement
 # pull request may have been built on any of them, so these runs are keyed by
 # commit and never cancelled. ci.yml cancels superseded runs on a branch and
 # would run its whole test suite for each of them; here only the two
-# measurements run. ci.yml skips its wheel build on main to avoid building the
-# wheels twice. The workflow name in main-baseline.sh (`main-measure.yml`),
+# measurements run. ci.yml has no push trigger, so main's wheels are built only here. The workflow name in main-baseline.sh (`main-measure.yml`),
 # the artifact names and the job `budgets` are read by pr-policy.yml; keep them
 # in sync.
 
@@ -51,11 +50,11 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       # --build-time wipes its own target dir, so it measures a clean build.
       - run: cargo xtask budgets --build-time --measure-only
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

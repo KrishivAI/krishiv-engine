@@ -6,4 +6,5 @@ Join LeftSemi, (a#3 == a#0)
 :- Project [a#0]
 :  +- Filter (CAST(c#2 AS INT) == a#0)
 :     +- Scan spark_catalog.default.t [a#0, c#2]
-+- Scan spark_catalog.default.u [a#3]
++- Filter isnotnull(a#3)
+   +- Scan spark_catalog.default.u [a#3]

@@ -35,7 +35,7 @@
 //! Hoisting a surely-evaluated subexpression can change which error is
 //! raised first when two expressions on one row would both raise; Spark
 //! specifies no order there. That divergence is recorded with the ADR 0023
-//! divergences (see `docs/known-differences.md`).
+//! divergences (see `docs/concepts/known-differences.md`).
 //!
 //! Plans are pure data; the rewrite is deterministic and changes no result.
 
@@ -84,7 +84,7 @@ impl Fresh<'_> {
     fn get(&mut self) -> &mut u64 {
         let root = self.root;
         self.next.get_or_insert_with(|| {
-            max_id(root, &mut HashMap::new())
+            max_id(root, &mut Default::default())
                 .saturating_add(1)
                 .max(CSE_BASE)
         })
@@ -997,7 +997,7 @@ fn fresh_columns(extracted: &[Arc<Expr>], next: &mut u64) -> Option<Vec<BoundCol
 
 /// The input columns of `input` that `exprs` still read, in input order.
 fn passthrough(exprs: &[Arc<Expr>], input: &Arc<LogicalPlan>) -> Vec<BoundColumn> {
-    let mut refs = Attrs::new();
+    let mut refs = Attrs::default();
     for e in exprs {
         references_into(e, &mut refs);
     }

@@ -36,6 +36,7 @@
 
 mod credentials;
 mod error;
+mod http_clients;
 mod id;
 mod policy;
 mod refreshing;
@@ -47,6 +48,7 @@ pub use credentials::{
     CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, RefreshingProvider, ScopedCredential,
 };
 pub use error::Result;
+pub use http_clients::SharedHttpClients;
 pub use id::StoreId;
 pub use policy::StorePolicy;
 pub use refreshing::RefreshingStore;

@@ -127,7 +127,7 @@ pub(super) fn misplaced(use_: WindowUse, b: &Bound, origin: Origin) -> AnalysisE
 }
 
 /// The first window expression in `e`, pre-order, outside subqueries.
-fn first_window(e: &Arc<Expr>) -> Option<Arc<Expr>> {
+pub(super) fn first_window(e: &Arc<Expr>) -> Option<Arc<Expr>> {
     let mut stack = vec![Arc::clone(e)];
     while let Some(x) = stack.pop() {
         if matches!(x.node, ExprNode::Window(_)) {
@@ -473,7 +473,19 @@ fn range_value_signed(
                 let max = 10_i128.checked_pow(u32::from(d.precision()))? - 1;
                 (-max..=max).contains(&v).then_some(RangeValue::Int(v))
             }
-            _ => None,
+            // More scale than the key: Spark casts the bound to the key's DECIMAL(p, s), rounding HALF_UP.
+            Lit::Exact(v, s) => {
+                let div = 10_i128.checked_pow(u32::from(s - d.scale()))?;
+                let (q, r) = (v / div, v % div);
+                let v = if r.abs().checked_mul(2)? >= div {
+                    q + v.signum()
+                } else {
+                    q
+                };
+                let max = 10_i128.checked_pow(u32::from(d.precision()))? - 1;
+                (-max..=max).contains(&v).then_some(RangeValue::Int(v))
+            }
+            Lit::Double(_) => None,
         },
         _ => None,
     }
@@ -1570,6 +1582,22 @@ impl Resolver<'_> {
                         mode: crate::expr::CastMode::Default,
                     }));
                     if let Some(Constant::Error(e)) = self.fold(&to_key, self.ctx.conf.ansi) {
+                        return AnalysisError::new(e, origin);
+                    }
+                }
+                // A numeric literal bound (negated for `PRECEDING`) the key's type cannot hold: under ANSI the cast
+                // raises (`CAST_OVERFLOW`, or `NUMERIC_VALUE_OUT_OF_RANGE` for a DECIMAL key). With ANSI off Spark
+                // gets a NULL bound, which stays unsupported.
+                let bare = crate::expr::negated(x).unwrap_or(x);
+                if matches!(&bare.node, ExprNode::Literal(l) if !matches!(l, Literal::String(_)))
+                    && self.ctx.conf.ansi
+                {
+                    let to_key = Arc::new(Expr::new(ExprNode::Cast {
+                        expr: Arc::clone(x),
+                        to: key.clone(),
+                        mode: crate::expr::CastMode::Default,
+                    }));
+                    if let Some(Constant::Error(e)) = self.fold(&to_key, true) {
                         return AnalysisError::new(e, origin);
                     }
                 }

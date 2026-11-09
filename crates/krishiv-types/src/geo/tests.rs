@@ -157,15 +157,69 @@ fn points_print_as_extended_well_known_text() {
     // Big-endian input prints the same.
     let xdr = unhex("00000000013FF00000000000004000000000000000");
     assert_eq!(to_ewkt(0, &xdr).unwrap(), "POINT(1 2)");
-    // Anything but a two-dimensional point is not printed yet.
-    let line = rewrite(
-        &unhex(
-            "010200000002000000000000000000F03F000000000000004000000000000008400000000000001040",
-        ),
-        SpatialKind::Geometry,
-        ByteOrder::Ndr,
-    )
-    .unwrap();
-    assert!(to_ewkt(0, &line).is_err());
     assert!(to_ewkt(0, &[1]).is_err());
+}
+
+/// Every case of a real Spark 4.2.0 run (`tests/scripts` note
+/// `research/2026-11-06-spark-geo-wkt-and-geography-cast.md`): a geometry
+/// prints without an SRID, a geography with `SRID=4326;`. Only the accepted
+/// cases are checked here; refusals are covered by the malformed-value test.
+#[test]
+fn every_spark_text_case_prints_the_same() {
+    use super::to_ewkt;
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/spark-4.2.0/geo-wkt-goldens.json"
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let doc: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
+    let cases = doc["cases"].as_array().expect("cases");
+    assert!(cases.len() >= 30);
+    for c in cases {
+        let name = c["name"].as_str().expect("name");
+        let wkb = unhex(c["wkb_hex"].as_str().expect("wkb"));
+        if let Some(want) = c["geometry"].as_str() {
+            assert_eq!(to_ewkt(0, &wkb).as_deref().ok(), Some(want), "{name}");
+        }
+        if let Some(want) = c["geography"].as_str() {
+            assert_eq!(to_ewkt(4326, &wkb).as_deref().ok(), Some(want), "{name}");
+        }
+    }
+}
+
+#[test]
+fn text_of_a_malformed_value_is_an_error_not_a_panic() {
+    use super::to_ewkt;
+    for bad in [
+        &[][..],
+        &[1, 1, 0, 0, 0][..],
+        &[
+            2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ][..],
+        &[1, 99, 0, 0, 0][..],
+        // A point followed by a stray byte.
+        &[
+            1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x3F, 0, 0, 0, 0, 0, 0, 0x40, 0, 7,
+        ][..],
+        // A line string that claims 2^32 - 1 points.
+        &[1, 2, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF][..],
+    ] {
+        assert!(to_ewkt(0, bad).is_err(), "{bad:?}");
+    }
+    // A collection nesting past the bound is refused, not recursed into.
+    let mut deep = Vec::new();
+    for _ in 0..200 {
+        deep.extend_from_slice(&[1, 7, 0, 0, 0, 1, 0, 0, 0]);
+    }
+    deep.extend_from_slice(&[1, 7, 0, 0, 0, 0, 0, 0, 0]);
+    assert!(to_ewkt(0, &deep).is_err());
+    // A multi-geometry holds only its own member type, and never another multi-geometry.
+    let mut mixed = vec![1, 4, 0, 0, 0, 1, 0, 0, 0];
+    mixed.extend_from_slice(&[1, 2, 0, 0, 0, 0, 0, 0, 0]);
+    assert!(to_ewkt(0, &mixed).is_err());
+    let mut nested = Vec::new();
+    for _ in 0..200 {
+        nested.extend_from_slice(&[1, 4, 0, 0, 0, 1, 0, 0, 0]);
+    }
+    assert!(to_ewkt(0, &nested).is_err());
 }

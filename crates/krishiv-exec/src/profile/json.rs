@@ -64,6 +64,8 @@ impl QueryProfile {
                 "threads": p.threads,
                 "started_ns": ns(p.started),
                 "ended_ns": ns(p.ended),
+                "max_slice_ns": ns(p.max_slice),
+                "stalls": p.stalls,
             })).collect::<Vec<_>>(),
             "plan": plan_json(&self.plan),
             "operators": m.operators.iter().map(|(id, e)| operator_json(*id, e)).collect::<Vec<_>>(),
@@ -135,6 +137,9 @@ impl QueryProfile {
                 threads: u64_of(p, "threads")?,
                 started: dur_of(p, "started_ns")?,
                 ended: dur_of(p, "ended_ns")?,
+                // Minor 3; absent (zero) in earlier documents.
+                max_slice: Duration::from_nanos(opt_u64(p, "max_slice_ns")?.unwrap_or(0)),
+                stalls: opt_u64(p, "stalls")?.unwrap_or(0),
             };
             if metrics.pipelines.insert(id, pm).is_some() {
                 return Err(ProfileError::new(format!("pipeline {id} listed twice")));

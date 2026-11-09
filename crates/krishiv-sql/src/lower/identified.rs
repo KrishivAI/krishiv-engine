@@ -51,11 +51,14 @@ impl Lowerer {
         }
     }
 
-    /// Whether the column at `sp` is a name the session substituted for a clause.
+    /// Whether the column at `sp` is a name the session substituted for a clause, or such a name
+    /// followed by field parts (`IDENTIFIER('c1').c2`, which Spark 4.2.0 names `c1.c2` while
+    /// `(c1).c2` is `c2`).
     pub(super) fn by_identifier(&self, sp: Span) -> bool {
-        // `Span`'s `==` ignores positions; compare the bytes.
+        // `Span`'s `==` ignores positions; compare the byte offsets. A substituted name is whole
+        // identifier tokens, so a column starting where one starts holds it as leading parts.
         self.identifier_spans
             .iter()
-            .any(|s| (s.start, s.end) == (sp.start, sp.end))
+            .any(|s| s.start == sp.start && s.end <= sp.end)
     }
 }

@@ -1,16 +1,13 @@
 # Quarantine (owner policy 2026-11-07: a flaky test moves to a non-blocking profile with an issue and an owner,
-# fixed within 3 days). `two_tasks_of_one_query_share_their_chunks` (krishiv-exec `tests/nested_loop.rs`) fails on
-# CI with UNABLE_TO_ACQUIRE_MEMORY (584 and 64,896 bytes; 0 of 40 local runs) and failed PR #576's test job (run
-# 42433806198); owner opus-3, deadline 2026-11-11. Every run of the default profile skips it; the `quarantine`
-# profile runs only it (CI job `test-quarantine`, not required). Take it out with its root-cause fix. A name or
-# `-E` filter on the default profile selects nothing for it: run `--profile quarantine` (or
-# `--ignore-default-filter`). `moment_windows_from_disk_equal_the_in_memory_result` left with its fix (window
-# fold and offset charges from the flush phase's headroom).
-[profile.default]
-default-filter = "not test(=two_tasks_of_one_query_share_their_chunks)"
-
+# fixed within 3 days). Quarantine a test with `default-filter = "not test(=<name>)"` on the default profile and
+# `default-filter = "test(=<name>)"` here (several: `and`-joined `not` terms, `|`-joined terms; `cargo xtask quarantine` checks the exact strings), register owner and deadline in `tests/quarantine.toml`, and point the CI job
+# `test-quarantine` (not required; see the job in git history, e.g. #633) at its test binary. A name or `-E` filter
+# on the default profile then selects nothing for it: run `--profile quarantine` (or `--ignore-default-filter`).
+# The quarantine is empty: `two_tasks_of_one_query_share_their_chunks` left with its fix (spill writes in progress
+# counted by a round, #627) and `moment_windows_from_disk_equal_the_in_memory_result` with its retry of both memory
+# classes (`p2b/ko1-window-chunk-items`).
 [profile.quarantine]
-default-filter = "test(=two_tasks_of_one_query_share_their_chunks)"
+default-filter = "none()"
 
 # Acceptance tests with stall or wall-clock bounds can flake on loaded
 # shared runners (a driver waiting on a lock held by a thread that is paging

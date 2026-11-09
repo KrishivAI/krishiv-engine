@@ -1,0 +1,13 @@
+{
+  "index": "Reference",
+  "sql": "SQL",
+  "python": "Python",
+  "rust": "Rust",
+  "config": "Configuration",
+  "metrics-v1": "Metrics",
+  "explain-analyze": "EXPLAIN ANALYZE",
+  "query-profile-v1.schema": "Query profile schema",
+  "result-cache": "Result cache",
+  "python-package": "Python package",
+  "rust-udfs": "Rust UDFs"
+}

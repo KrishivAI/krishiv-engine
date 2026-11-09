@@ -11,15 +11,15 @@ Batch execution engine: operators, pipelines, morsel scheduling within a node.
 driver (yields, batch-boundary checks, NeedMemory, spill servicing, stall detector) · `runner.rs` QueryRunner /
 Scheduler (coordinator, first error wins) · `channel.rs` bounded result stream · `executor.rs` Executor seam +
 TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·
-`testing.rs` test operators (also used by benches) · `output_spill.rs` spill hook of finished breaker output · `loom_model.rs`.
+`testing.rs` test operators (also used by benches) · `output_spill.rs` spill hook of finished breaker output · `cohort.rs` `reserve_in_cohort`: a request the pool refuses waits while another member of a query cohort holds memory it frees on its own (nested-loop chunks; sort merge budgets, `operators/sort/budget.rs` `MERGE_COHORT`; grace joins' partition loads and tables, `join/grace.rs` `TABLE_COHORT`, holding seats only) · `loom_model.rs`.
 `operators/` (P2-T051) stateless operators: `scan.rs` MemoryScan + `ScanPushdown` (pushdowns decided once as an
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
 `expr.rs` the `Predicate`/`ScalarExpr` evaluator interface the physical planner plugs in ·
 `hash.rs` shared hash-table blocks (seeded key hash, key normalization + row encoding, `KeyTable`, spill
 partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
-`accumulator.rs` per-group states, `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
-`spill_global`; `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
+`accumulator.rs` per-group states (`accumulator/paired.rs`: a decimal `sum(x)` and `avg(x)` of one aggregate folded in one pass where both take the proof path), `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
+`spill_global`; a batch whose worst case the pool refuses is applied in slices, `slice_tests.rs`, unless a spill of the driver's tables would free the shortfall (then it spills, ADR 0007 addendum 2026-11-08); `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
 (P2-T117b) `file_scan.rs` FileScan/FileScanSource over any `krishiv_io::FileFormat` (Spark partitions cut into
 about four morsels per driver, footer read-ahead, `_metadata` struct column; filters stay `Inexact`) · `file_write.rs` FileWriteSink
 (one writer task per driver behind a bounded channel; nothing visible after a failed or cancelled write) + FileWrite.
@@ -28,7 +28,10 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 `join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
-`probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join · `broadcast.rs`
+`probe.rs` probe operator + match cursor (its first read of the build, `BuildGlobal::built`, ends the build's idle
+window: until then a finished build's tables are an `OutputSpill` written partition by partition, largest first, and
+idle after `krishiv.exec.join.idleSpillAfter`, so the arbitrator asks them before a running consumer self-spills; study
+30) · `grace.rs` spill partitions, flush-phase grace join · `broadcast.rs`
 (P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
 broadcast exchange builds its table once per job and worker (its own query over the resource's pool, no spill, its
 reservations never abort a query) and every task probes it through a `PrebuiltSink` that republishes its runtime
@@ -70,9 +73,7 @@ Operators with work after their input (`needs_flush`) get `end_input` + a per-pi
 round of the recursive term run as queries of their own over a child `QueryContext` (child memory pool, cancelled with the
 outer query); every batch goes downstream at once and into the round's working table (`shared.rs` `Output::open/append`,
 spilled to the query's scope under pressure), which the next round's `LoopRef` reads (`SharedSource::over`). `Detached`
-(`instantiate.rs`) re-instantiates the recursive term per round with the loop tables bound; shared plans are built again each
-round. Limits (`LoopLimits`) are plan data. Seeded random functions draw round `k`'s stream at partition `k - 1` (`EvalEnv::partition_shift`, as Spark does); a working table of at most 100 rows is read by one driver in order (`Output::read_by_one_driver`), as Spark reads its `LocalRelation`. Not matched: Spark round-robins a larger working table into the shuffle partitions, which Krishiv's drivers do not reproduce. Not done: a
-nondeterministic enclosing CTE is evaluated once per round. `EXPLAIN ANALYZE` reports the rounds, their rows and the folded compute time and spill bytes of every round, a LIMIT-stopped one included (`add_run_metrics`).
+(`physical/instantiate/detached.rs`) instantiates the anchor and each round when it starts, with the loop tables bound; shared plans are built again for each run, their unseeded random calls salted as the outer plan salted them, so an enclosing nondeterministic CTE gives the anchor, round 1 and the outer query one value and round `k` the stream of partition `k - 1`, as in Spark (the runs' own calls take a salt range per loop). Limits (`LoopLimits`) are plan data. Seeded random functions draw round `k`'s stream at partition `k - 1` (`EvalEnv::partition_shift`, as Spark does); a working table of at most 100 rows is read by one driver in order (`Output::read_by_one_driver`), as Spark reads its `LocalRelation`. Not matched: Spark round-robins a larger working table into the shuffle partitions, which Krishiv's drivers do not reproduce. `EXPLAIN ANALYZE` reports the rounds, their rows and the folded compute time and spill bytes of every round, a LIMIT-stopped one included (`add_run_metrics`).
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
 worker that runs it; the planner validates nodes with the same builders). `instantiate/distributed.rs`: what only a task of a cut plan
@@ -88,7 +89,7 @@ plan, and a deterministic one (the optimizer's `ShareCte`) only in a second pass
 `ResolvedExpr::StateInput` onto one merging its states; it refuses states the optimizer typed differently.
 `exchange/` (P2-T176 unit 1) the spec 13 §6 traits `Exchange`/`ExchangeWriter`/`ExchangeReader` (blocking mode,
 commit before read, first committed attempt wins), `route` (hash by the plan's `HashScheme`, round-robin by the routing
-hash of the whole row, gathers/broadcasts/ranges to partition 0), `ExchangeSink` (a map task's root: rows routed and
+hash of the whole row's columns it covers (a nested column never fails a row), gathers/broadcasts/ranges to partition 0), `ExchangeSink` (a map task's root: rows routed and
 buffered per reduce partition under the driver's consumer, a spill hands them to the writer as frames, commit at
 finalize) and `ExchangeRead` (a reduce task's `PhysNode::ExchangeSource`: `(map, reduce)` pairs as morsels, one driver
 in map order for a gather). `instantiate_task` writes a root exchange when `TaskSpec::output` is set and reads each
@@ -96,7 +97,7 @@ source as `TaskSpec::exchanges` says; `exchange_schemas` gives a fragmenter each
 `krishiv-shuffle`'s, fragments and stages are `krishiv-scheduler`'s.
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
-only where a requirement is unmet; on one worker instantiation lowers each exchange into the operators around it.
+only where a requirement is unmet, plus one hash exchange for every `DISTRIBUTE BY` (`Planner::repartition`: key expressions computed below, dropped above, so they are evaluated as Spark's shuffle evaluates them); on one worker instantiation lowers each exchange into the operators around it.
 An aggregate over rows that must move is planned in two phases, `Aggregate{Partial}` -> exchange -> `Aggregate{Final}`
 over states (`planner/aggregate.rs`, design P2-T174 unit 2; `DISTINCT`: partial over keys and argument, exchange,
 partial merge, final, `physical::distinct_phases`, fused back by `fused_distinct`); `physical::fused_aggregate`
@@ -106,7 +107,7 @@ partition, `Hll(10)` of the keys) that `EXPLAIN ANALYZE` prints as `exchange_*`.
 
 ## Key files
 Paths are relative to this crate.
-- `src/carrier.rs` moves a value between decimal carriers (nested ones too); `planner/eval/func.rs` `Recarried` keeps registry functions and UDFs on `Decimal128`
+- `src/carrier.rs` moves a value between decimal carriers and between the calendar struct and `Interval(MonthDayNano)` (nested ones too); `planner/eval/func.rs` `Recarried` keeps registry functions and UDFs on `Decimal128`
 - `src/operator.rs` Source, Operator and Sink traits; `src/pipeline.rs` `ExecNode` and `PipelineBuilder`
 - `src/driver.rs` the pipeline driver: yields, memory waits, spill servicing, cancellation
 - `src/runner.rs` `QueryRunner` and the scheduler (first error wins)
@@ -119,7 +120,7 @@ Paths are relative to this crate.
   tables place rows by the seeded `g = finalize(h, seed)`; `rows/flooding_tests.rs` bounds probe runs under crafted and forged `h` collisions
 - `src/window/mod.rs` window operator and plan types; `src/window/eval.rs` frames, ranking and frame aggregates; `src/planner/window.rs` plans it over sorted input
 - `src/operators/file_scan.rs` and `file_write.rs` file scan and write operators over `krishiv-io`
-- `src/planner/ndv_sample.rs` (P2-T164 U6) `FileTable::sample_distinct`: plan-time distinct-value samples of the file columns an equality or `IN` compares (first rows in file order through `ScanStream`, `krishiv.optimizer.ndvSampling.*`), exact for a table the sample read whole, else GEE (`estimate`); cached in `krishiv_io::DistinctSamples`; `FileTable::statistics` reports them as `StatSource::Sampled`
+- `src/planner/ndv_sample.rs` (P2-T164 U6) `FileTable::sample_distinct`: plan-time distinct-value samples of the file columns an equality or `IN` compares (first rows in file order through `ScanStream`, `krishiv.optimizer.ndvSampling.*`), exact for a table the sample read whole, else GEE (`estimate`); cached in `krishiv_io::DistinctSamples`; `FileTable::statistics` reports them as `StatSource::Sampled`; `FileTable::sample_outcomes` says per table what each sample did (`SampleOutcome`: sampled, cached, timed out, no time left), which `EXPLAIN COST` prints as "Distinct-Value Samples" and `EXPLAIN VERBOSE` as a `Statistics` step
 
 ## Extension points
 - New operator: follow skill `krishiv-operator`; stateless ones go in `src/operators/`, stateful ones next to aggregate or join.
@@ -129,7 +130,8 @@ Paths are relative to this crate.
 - All memory through krishiv-memory reservations; every spill path tested with tiny-memory tests.
 - Only the driver yields, awaits memory, spills or checks cancellation; `execute`/`sink` stay sync and bounded.
   Exception: a breaker's finished in-memory result, owned by no driver, spills on a task of its own
-  (`output_spill.rs`: aggregate and sort results); the coordinator drops a finalized state after its last reader.
+  (`output_spill.rs`: aggregate and sort results, and a hash join build's finished tables until the first probe driver
+  reads them, `join/build.rs` `IdleBuild`); the coordinator drops a finalized state after its last reader.
 - At query end (success, error, cancel) the query pool is empty: tests assert it.
 - Cancellation-safe, no blocking in async; metrics feed EXPLAIN ANALYZE.
 - New operators follow skill `krishiv-operator`.
