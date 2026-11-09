@@ -649,11 +649,56 @@ fn implied_by_input(pred: &Arc<Expr>, side: &Arc<LogicalPlan>) -> Vec<Arc<Expr>>
 /// The output ids of a resolved relation (none for an unresolved one, so
 /// nothing moves into it).
 pub(crate) fn ids(plan: &LogicalPlan) -> Attrs {
-    plan.resolved_output()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|c| c.id)
-        .collect()
+    let mut out = Attrs::default();
+    if collect_ids(plan, &mut out) {
+        out
+    } else {
+        Attrs::default()
+    }
+}
+
+/// Adds `plan`'s output ids to `out`; `false` when the relation is
+/// unresolved. The nodes that pass their inputs' columns on are walked
+/// (`resolved_output` would clone every column of a join's subtree, again
+/// at each join of a chain); the others read their own output.
+pub(crate) fn collect_ids(plan: &LogicalPlan, out: &mut Attrs) -> bool {
+    match &plan.node {
+        PlanNode::Filter { input, .. }
+        | PlanNode::Sort { input, .. }
+        | PlanNode::Limit { input, .. }
+        | PlanNode::Offset { input, .. }
+        | PlanNode::WithCte { input, .. }
+        | PlanNode::JoinHint { input, .. }
+        | PlanNode::Repartition { input, .. }
+        | PlanNode::ReplicateRows { input, .. } => collect_ids(input, out),
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            collect_ids(input, out)
+        }
+        PlanNode::Join {
+            left, right, kind, ..
+        } => {
+            if !collect_ids(left, out) {
+                return false;
+            }
+            match kind {
+                JoinKind::Existence(id) => {
+                    out.insert(JoinKind::existence_column(*id).id);
+                    collect_ids(right, &mut Attrs::default())
+                }
+                JoinKind::LeftSemi | JoinKind::LeftAnti => {
+                    collect_ids(right, &mut Attrs::default())
+                }
+                _ => collect_ids(right, out),
+            }
+        }
+        _ => match plan.resolved_output() {
+            Some(cols) => {
+                out.extend(cols.into_iter().map(|c| c.id));
+                true
+            }
+            None => false,
+        },
+    }
 }
 
 /// The references of `p` among the join's own attributes (outer references

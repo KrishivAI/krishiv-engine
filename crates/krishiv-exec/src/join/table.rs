@@ -269,6 +269,12 @@ impl RowArena {
         self.batch.num_rows()
     }
 
+    /// The rows as one batch of the arena schema: what a spilled partition
+    /// writes and its reload concatenates.
+    pub(crate) fn batch(&self) -> &Batch {
+        &self.batch
+    }
+
     /// The arena's bytes by part (`get_array_memory_size`, the measure its reservation uses): the `hash` column, the key
     /// columns (`key*`), and everything else (payload, NULL-key flags).
     pub(crate) fn memory_split(&self) -> ArenaBytes {

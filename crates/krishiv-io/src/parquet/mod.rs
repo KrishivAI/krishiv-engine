@@ -95,7 +95,8 @@ static OPTIONS: OptionSchema = OptionSchema {
             kind: OptionKind::Enum(REBASE_MODES),
             default: OptionDefault::Str("CORRECTED"),
             conf_fallback: Some("spark.sql.parquet.datetimeRebaseModeInRead"),
-            metadata_key: false,
+            // Statistics pruning, which sees only the metadata, needs it.
+            metadata_key: true,
             doc: "Calendar of DATE and TIMESTAMP values (only CORRECTED rebases nothing).",
         },
         OptionSpec {
@@ -227,6 +228,9 @@ impl ParquetFormat {
         SchemaOptions {
             binary_as_string: o.bool("binaryAsString").unwrap_or(false),
             int96_as_timestamp: o.bool("int96AsTimestamp").unwrap_or(true),
+            legacy_rebase: o
+                .str("datetimeRebaseMode")
+                .is_some_and(|m| m.eq_ignore_ascii_case("LEGACY")),
         }
     }
 
@@ -337,19 +341,27 @@ impl FileFormat for ParquetFormat {
         let meta = any
             .downcast_ref::<ParquetMetadata>()
             .ok_or_else(|| FormatError::Corrupt("not Parquet metadata".to_owned()))?;
+        // Dates and timestamps Spark would rebase do not prune by an ancient
+        // literal, nor by a runtime filter's run-time values (`calendar.rs`).
+        let rebased = calendar::rebased_datetime_roots(
+            meta.calendars,
+            meta.reader.parquet_schema(),
+            meta.legacy_rebase.then_some("LEGACY"),
+        );
         let runtime: Vec<_> = req
             .dynamic
             .iter()
+            .filter(|d| !calendar::reads_root(d, &rebased))
             .filter_map(|d| Some((d.predicate()?, d.filter())))
             .collect();
         let mut plan = UnitPlan::default();
+        let predicate = calendar::without_columns(req.predicate.as_ref(), &rebased);
         for (index, rg) in meta.row_groups.iter().enumerate() {
             if !split.owns(&rg.bytes) {
                 continue;
             }
             plan.owned += 1;
-            if req
-                .predicate
+            if predicate
                 .as_ref()
                 .is_some_and(|p| prune(p, &rg.statistics) == TriState::False)
             {

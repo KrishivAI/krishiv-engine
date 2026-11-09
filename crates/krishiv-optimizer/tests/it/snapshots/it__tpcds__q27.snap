@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
-assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -15,14 +14,14 @@ Limit 100
       :  :              :- Filter isnotnull(i_item_sk#89)
       :  :              :  +- Scan spark_catalog.default.item [i_item_sk#89, i_item_id#90]
       :  :              +- Project [s_state#84, ss_item_sk#2, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
-      :  :                 +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#32)
-      :  :                    :- Project [d_date_sk#32]
-      :  :                    :  +- Filter ((d_year#38 == 2002) and isnotnull(d_date_sk#32))
-      :  :                    :     +- Scan spark_catalog.default.date_dim [d_date_sk#32, d_year#38]
-      :  :                    +- Project [s_state#84, ss_sold_date_sk#0, ss_item_sk#2, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
-      :  :                       +- Join Inner, (ss_store_sk#7 == s_store_sk#60)
-      :  :                          :- Filter ((s_state#84 == 'TN') and isnotnull(s_store_sk#60))
-      :  :                          :  +- Scan spark_catalog.default.store [s_store_sk#60, s_state#84]
+      :  :                 +- Join Inner, (ss_store_sk#7 == s_store_sk#60)
+      :  :                    :- Filter ((s_state#84 == 'TN') and isnotnull(s_store_sk#60))
+      :  :                    :  +- Scan spark_catalog.default.store [s_store_sk#60, s_state#84]
+      :  :                    +- Project [ss_item_sk#2, ss_store_sk#7, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
+      :  :                       +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#32)
+      :  :                          :- Project [d_date_sk#32]
+      :  :                          :  +- Filter ((d_year#38 == 2002) and isnotnull(d_date_sk#32))
+      :  :                          :     +- Scan spark_catalog.default.date_dim [d_date_sk#32, d_year#38]
       :  :                          +- Project [ss_sold_date_sk#0, ss_item_sk#2, ss_store_sk#7, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
       :  :                             +- Join Inner, (ss_cdemo_sk#4 == cd_demo_sk#23)
       :  :                                :- Filter (((isnotnull(ss_cdemo_sk#4) and isnotnull(ss_sold_date_sk#0)) and isnotnull(ss_store_sk#7)) and isnotnull(ss_item_sk#2))

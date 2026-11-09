@@ -713,6 +713,36 @@ fn a_conjunct_over_a_projection_estimates_as_once_pushed_below_it() {
     );
 }
 
+/// Seed 16415633519706479466 of `random_queries_reach_the_lowest_operator`:
+/// join ordering put a conjunct that reads no column (`false`, from a right
+/// join's condition) on the first input in canonical order, a `Shift` over an
+/// aggregate of a join. Tidying then pushed it into that join, which the
+/// second optimization ordered again with the filter, so the plan was not a
+/// fixed point. Such a conjunct now filters the first input with no inputs of
+/// its own. Pruning also no longer wraps a one-column input in a projection
+/// that keeps it whole (tidying collapsed it, and the two repeated until the
+/// round limit).
+#[test]
+fn a_constant_conjunct_filters_an_input_pushdown_cannot_move_it_below() {
+    let seed = 16_415_633_519_706_479_466_u64;
+    let sql = Gen::new(seed).top();
+    let plan = support::resolve(&sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{sql}: not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let db = data::small(seed);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root()),
+        "{sql}"
+    );
+}
+
 /// Seed 8434893260344359798 of `random_queries_reach_the_lowest_operator`:
 /// `WHERE x3.a = x1.a` makes the second join inner, and `x2.a = x3.a` with it implies
 /// `x1.a = x2.a`, which join ordering left as a filter over the first (left outer) join.

@@ -47,7 +47,7 @@ use crate::expr::{
     Attrs, Classes, builtin, call_builtin, column, conjuncts, equality, has_aggregate,
     has_subquery, is_deterministic, references, same, substitute, unshift,
 };
-use crate::pushdown::{alias_map, ids, into_side_new, rebuild_join};
+use crate::pushdown::{alias_map, into_side_new, rebuild_join};
 
 /// The rule at a `Join` (see the module docs).
 pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc<LogicalPlan> {
@@ -389,10 +389,23 @@ fn is_not_null(e: &Expr) -> bool {
 /// (either order) for `=`, `<`, `<=`, `>`, `>=`, `col IN (literals)` and
 /// `isnotnull(col)`. Anything else, or anything with a subquery, stays.
 fn literal_constraint(e: &Expr) -> Option<AttrId> {
-    if has_subquery(e) || !is_deterministic(e) {
+    // The shape first: most sources are neither (the walks below are not
+    // free). Sources are deterministic already (the condition is checked,
+    // `Memo::constraints` keeps deterministic conjuncts only).
+    let (op, args, _) = builtin(e)?;
+    if !matches!(
+        op,
+        Builtin::IsNotNull
+            | Builtin::Eq
+            | Builtin::Lt
+            | Builtin::LtEq
+            | Builtin::Gt
+            | Builtin::GtEq
+            | Builtin::In
+    ) || has_subquery(e)
+    {
         return None;
     }
-    let (op, args, _) = builtin(e)?;
     let col = |x: &Expr| match &x.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
         _ => None,
@@ -423,7 +436,7 @@ type Conjuncts = Arc<[Arc<Expr>]>;
 #[derive(Default)]
 pub(crate) struct Memo {
     constraints: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Conjuncts)>,
-    ids: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<Attrs>)>,
+    ids: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool, Arc<Attrs>)>,
 }
 
 impl Memo {
@@ -480,11 +493,68 @@ impl Memo {
 
     /// `plan`'s output ids (`pushdown::ids`, once per node).
     fn ids(&mut self, plan: &Arc<LogicalPlan>) -> Arc<Attrs> {
-        let entry = self
-            .ids
-            .entry(Arc::as_ptr(plan))
-            .or_insert_with(|| (Arc::clone(plan), Arc::new(ids(plan))));
-        Arc::clone(&entry.1)
+        Arc::clone(&self.ids_of(plan).1)
+    }
+
+    /// The output ids of `plan` and whether it is resolved, built from its
+    /// inputs' for the nodes that pass them on (a join's output would
+    /// otherwise be recomputed, columns cloned, from its whole subtree at
+    /// every join of a chain). An unresolved relation has none, as in
+    /// `pushdown::ids`.
+    fn ids_of(&mut self, plan: &Arc<LogicalPlan>) -> (bool, Arc<Attrs>) {
+        if let Some((_, resolved, a)) = self.ids.get(&Arc::as_ptr(plan)) {
+            return (*resolved, Arc::clone(a));
+        }
+        let (resolved, set) = match &plan.node {
+            PlanNode::Filter { input, .. }
+            | PlanNode::Sort { input, .. }
+            | PlanNode::Limit { input, .. }
+            | PlanNode::Offset { input, .. }
+            | PlanNode::WithCte { input, .. }
+            | PlanNode::JoinHint { input, .. }
+            | PlanNode::Repartition { input, .. }
+            | PlanNode::ReplicateRows { input, .. }
+            | PlanNode::SubqueryAlias { input, .. }
+                if !matches!(
+                    &plan.node,
+                    PlanNode::SubqueryAlias { columns, .. } if !columns.is_empty()
+                ) =>
+            {
+                self.ids_of(input)
+            }
+            PlanNode::Join {
+                left, right, kind, ..
+            } => {
+                let (lr, l) = self.ids_of(left);
+                let (rr, r) = self.ids_of(right);
+                if !(lr && rr) {
+                    (false, Arc::new(Attrs::default()))
+                } else {
+                    match kind {
+                        JoinKind::LeftSemi | JoinKind::LeftAnti => (true, l),
+                        JoinKind::Existence(id) => {
+                            let mut all = (*l).clone();
+                            all.insert(JoinKind::existence_column(*id).id);
+                            (true, Arc::new(all))
+                        }
+                        _ => {
+                            let mut all = (*l).clone();
+                            all.extend(r.iter().copied());
+                            (true, Arc::new(all))
+                        }
+                    }
+                }
+            }
+            _ => match plan.resolved_output() {
+                Some(out) => (true, Arc::new(out.into_iter().map(|c| c.id).collect())),
+                None => (false, Arc::new(Attrs::default())),
+            },
+        };
+        self.ids.insert(
+            Arc::as_ptr(plan),
+            (Arc::clone(plan), resolved, Arc::clone(&set)),
+        );
+        (resolved, set)
     }
 }
 

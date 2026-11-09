@@ -330,6 +330,13 @@ pub struct PipelineMetrics {
     pub started: Duration,
     /// When its last driver ended, after the query started.
     pub ended: Duration,
+    /// Longest single poll of any of its drivers (wall time). In the profile
+    /// document from minor 3 (`max_slice_ns`); zero when read from an earlier one.
+    pub max_slice: Duration,
+    /// Polls of its drivers longer than the stall threshold (wall time;
+    /// a thread kept off a CPU mid-poll counts). In the profile document from
+    /// minor 3; zero when read from an earlier one.
+    pub stalls: u64,
 }
 
 impl PipelineMetrics {
@@ -349,6 +356,8 @@ impl PipelineMetrics {
         self.ended = self.ended.max(o.ended);
         self.drivers = self.drivers.saturating_add(o.drivers);
         self.threads = self.threads.saturating_add(o.threads);
+        self.max_slice = self.max_slice.max(o.max_slice);
+        self.stalls = self.stalls.saturating_add(o.stalls);
     }
 }
 
@@ -606,6 +615,7 @@ mod tests {
                     threads: 2,
                     started: Duration::from_millis(started),
                     ended: Duration::from_millis(ended),
+                    ..PipelineMetrics::default()
                 },
             );
             q

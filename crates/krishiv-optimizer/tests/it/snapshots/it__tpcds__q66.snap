@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
-assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -35,16 +34,16 @@ Limit 100
                      :- Filter isnotnull(w_warehouse_sk#34)
                      :  +- Shared #1, printed above
                      +- Project [d_year#158, d_moy#160, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
-                        +- Join Inner, (cs_ship_mode_sk#131 == sm_ship_mode_sk#190)
-                           :- Project [sm_ship_mode_sk#190]
-                           :  +- Shift +104
-                           :     +- Filter ((sm_carrier#90 IN ('DHL', 'BARIAN')) and isnotnull(sm_ship_mode_sk#86))
-                           :        +- Shared #3, printed above
-                           +- Project [d_year#158, d_moy#160, cs_ship_mode_sk#131, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
-                              +- Join Inner, (cs_sold_date_sk#118 == d_date_sk#152)
-                                 :- Shift +104
-                                 :  +- Filter ((d_year#54 == 2001) and isnotnull(d_date_sk#48))
-                                 :     +- Shared #2, printed above
+                        +- Join Inner, (cs_sold_date_sk#118 == d_date_sk#152)
+                           :- Shift +104
+                           :  +- Filter ((d_year#54 == 2001) and isnotnull(d_date_sk#48))
+                           :     +- Shared #2, printed above
+                           +- Project [cs_sold_date_sk#118, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
+                              +- Join Inner, (cs_ship_mode_sk#131 == sm_ship_mode_sk#190)
+                                 :- Project [sm_ship_mode_sk#190]
+                                 :  +- Shift +104
+                                 :     +- Filter ((sm_carrier#90 IN ('DHL', 'BARIAN')) and isnotnull(sm_ship_mode_sk#86))
+                                 :        +- Shared #3, printed above
                                  +- Project [cs_sold_date_sk#118, cs_ship_mode_sk#131, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
                                     +- Join Inner, (cs_sold_time_sk#119 == t_time_sk#180)
                                        :- Filter (((isnotnull(cs_warehouse_sk#132) and isnotnull(cs_sold_date_sk#118)) and isnotnull(cs_sold_time_sk#119)) and isnotnull(cs_ship_mode_sk#131))
