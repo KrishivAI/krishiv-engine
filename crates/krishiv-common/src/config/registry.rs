@@ -1494,7 +1494,7 @@ pub static RUNTIME_FILTER_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.runtimeFilter.enabled",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
-    doc: "Plan runtime filters (design P2-T163): the build side of an inner or left semi hash join \
+    doc: "Plan runtime filters: the build side of an inner or left semi hash join \
           publishes the min/max, a small value set or a Bloom filter of its keys to the scans \
           feeding the probe side, which skip splits, row groups and rows no build key can match. \
           Results are the same either way.",

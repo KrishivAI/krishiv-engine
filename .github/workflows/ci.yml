@@ -315,7 +315,7 @@ jobs:
       - uses: $/.github/actions/install-tool
         with:
           tool: cargo-nextest
-      - run: cargo nextest run -p krishiv-exec --test nested_loop --profile quarantine --locked --no-tests=pass
+      - run: cargo nextest run -p krishiv-session --test moment_window_spill --profile quarantine --locked --no-tests=pass
 
   deny:
     needs: changes
