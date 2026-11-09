@@ -295,17 +295,21 @@ fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
 
 /// `İ` (U+0130) lower-cases to `i` + U+0307 and Spark (`lowercaseMatchLengthFrom`,
 /// `lowercaseMatchUntil`) refuses a match that starts or ends inside the pair, so a pattern that
-/// could do that is not run on the lower-cased key (unit 5a review B1); a plain literal is.
+/// could do that is not run on the lower-cased key but on the position kernel (unit 5a review B1,
+/// unit 5b): the split match is `false`, as in Spark, and a plain literal is answered on the key.
 #[test]
-fn lcase_search_refuses_a_pattern_that_could_split_the_dotted_capital_i() {
+fn lcase_search_answers_a_pattern_that_could_split_the_dotted_capital_i() {
     for sql in [
-        "SELECT contains('\u{130}' COLLATE utf8_lcase, 'i')",
-        "SELECT startswith('\u{130}' COLLATE utf8_lcase, 'i')",
-        "SELECT endswith('\u{130}' COLLATE utf8_lcase, '\u{307}')",
-        "SELECT contains('Ab' COLLATE utf8_lcase, concat('a', ''))",
+        "SELECT CAST(contains('\u{130}' COLLATE utf8_lcase, 'i') AS STRING)",
+        "SELECT CAST(startswith('\u{130}' COLLATE utf8_lcase, 'i') AS STRING)",
+        "SELECT CAST(endswith('\u{130}' COLLATE utf8_lcase, '\u{307}') AS STRING)",
     ] {
-        assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
+        assert_eq!(one(sql), "false", "{sql}");
     }
+    assert_eq!(
+        one("SELECT CAST(contains('Ab' COLLATE utf8_lcase, concat('a', '')) AS STRING)"),
+        "true"
+    );
     assert_eq!(
         one("SELECT CAST(contains('Ab' COLLATE utf8_lcase, 'a') AS STRING)"),
         "true"

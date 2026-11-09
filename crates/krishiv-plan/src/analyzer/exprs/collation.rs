@@ -747,7 +747,7 @@ impl Resolver<'_> {
             plain.push(b);
         }
         let call = Expr::function(
-            &format!("__{name}_lcase"),
+            format!("__{name}_lcase"),
             plain.iter().map(|k| (*k.expr).clone()).collect(),
         )
         .with_origin(e.origin);
