@@ -712,3 +712,42 @@ fn a_conjunct_over_a_projection_estimates_as_once_pushed_below_it() {
         "{sql}"
     );
 }
+
+/// Seed 8434893260344359798 of `random_queries_reach_the_lowest_operator`:
+/// `WHERE x3.a = x1.a` makes the second join inner, and `x2.a = x3.a` with it implies
+/// `x1.a = x2.a`, which join ordering left as a filter over the first (left outer) join.
+/// That filter rejects the NULL rows of `x2`, so tidying turned the join inner, after
+/// ordering: the first optimization ordered two inputs, and the second one saw the three
+/// inputs of the inner-join tree and swapped the sides of the inner join over the shared
+/// scan. A filter ordering or restriction leaves now goes through the rewrite batch inside
+/// their loop, so the outer join is inner before the last ordering.
+#[test]
+fn an_outer_join_a_derived_filter_makes_inner_is_ordered_with_its_tree() {
+    let sql = "SELECT * FROM (SELECT x2.d AS c0, x1.a + 1 AS c1 FROM u AS x1 \
+               LEFT JOIN u AS x2 ON x1.a = x2.a AND (x1.d IS NOT NULL AND x1.a IN (2, 2)) \
+               LEFT JOIN u AS x3 ON x2.a = x3.a AND (x2.a IS NULL OR x1.d <=> x1.d) \
+               WHERE x3.a = x1.a) ORDER BY c0, c1 LIMIT 0";
+    let plan = support::resolve(sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    // No outer join is left, and the rows are those of the written query.
+    assert!(
+        !optimized.root().to_string().contains("LeftOuter"),
+        "{}",
+        optimized.root()
+    );
+    for seed in 0..4 {
+        let db = data::small(seed);
+        assert_eq!(
+            eval::rows(&db, optimized.root()),
+            eval::rows(&db, plan.root()),
+            "seed {seed}"
+        );
+    }
+}
