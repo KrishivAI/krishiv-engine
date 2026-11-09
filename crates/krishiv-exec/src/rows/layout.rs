@@ -576,6 +576,33 @@ impl RowLayout {
         Ok(hashes)
     }
 
+    /// The key equality of `columns`' rows, for [`RowLayout::hash_only`]
+    /// users that encode only some rows.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if the columns do not match the layout's key types.
+    pub fn key_eq<'a>(&self, columns: &'a [ArrayRef]) -> Result<KeyEq<'a>> {
+        if columns.len() != self.columns.len() {
+            return Err(internal("key columns do not match the layout".to_owned()));
+        }
+        let mut out = Vec::with_capacity(columns.len());
+        for (column, array) in self.columns.iter().zip(columns) {
+            if column.kind != Kind::View && array.data_type() != &column.data_type {
+                return Err(internal(format!(
+                    "key column of type {} for a {} key",
+                    array.data_type(),
+                    column.data_type
+                )));
+            }
+            out.push(EqColumn {
+                array,
+                kind: column.kind,
+                nulls: array.logical_nulls(),
+            });
+        }
+        Ok(KeyEq { columns: out })
+    }
+
     /// Whether the rows have string or binary views (and so may point into
     /// a heap).
     pub fn has_views(&self) -> bool {
@@ -666,6 +693,79 @@ impl RowLayout {
                     })
             }
         }
+    }
+}
+
+/// Whether two rows of one batch of key columns hold the same key, by the
+/// table's key equality (`NULL` equals `NULL`, every NaN is one NaN, `-0.0`
+/// is `0.0`, strings compare by bytes): what [`RowLayout::encode`] makes
+/// byte-equal, tested without encoding. Made by [`RowLayout::key_eq`].
+#[derive(Debug)]
+pub struct KeyEq<'a> {
+    columns: Vec<EqColumn<'a>>,
+}
+
+#[derive(Debug)]
+struct EqColumn<'a> {
+    array: &'a ArrayRef,
+    kind: Kind,
+    nulls: Option<NullBuffer>,
+}
+
+impl KeyEq<'_> {
+    /// Whether rows `a` and `b` hold the same key.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if a column is not of its layout's kind.
+    pub fn eq(&self, a: usize, b: usize) -> Result<bool> {
+        for c in &self.columns {
+            let (na, nb) = c
+                .nulls
+                .as_ref()
+                .map_or((false, false), |n| (n.is_null(a), n.is_null(b)));
+            if na || nb {
+                if na && nb {
+                    continue;
+                }
+                return Ok(false);
+            }
+            let same = match c.kind {
+                Kind::Bool => bool_at(c.array, a)? == bool_at(c.array, b)?,
+                Kind::F32 => {
+                    let x = c
+                        .array
+                        .as_primitive_opt::<Float32Type>()
+                        .ok_or_else(|| internal("float key expected".to_owned()))?;
+                    normalize32(x.value(a)).to_bits() == normalize32(x.value(b)).to_bits()
+                }
+                Kind::F64 => {
+                    let x = c
+                        .array
+                        .as_primitive_opt::<Float64Type>()
+                        .ok_or_else(|| internal("double key expected".to_owned()))?;
+                    normalize64(x.value(a)).to_bits() == normalize64(x.value(b)).to_bits()
+                }
+                Kind::Fixed(w) => {
+                    let data = c.array.to_data();
+                    let bytes = data
+                        .buffers()
+                        .first()
+                        .ok_or_else(|| internal("fixed-width key buffer missing".to_owned()))?
+                        .as_slice();
+                    let at =
+                        |i: usize| bytes.get((data.offset() + i) * w..(data.offset() + i + 1) * w);
+                    match (at(a), at(b)) {
+                        (Some(x), Some(y)) => x == y,
+                        _ => return Err(internal("fixed-width key buffer too short".to_owned())),
+                    }
+                }
+                Kind::View => view_bytes(c.array, a)? == view_bytes(c.array, b)?,
+            };
+            if !same {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
 

@@ -65,7 +65,7 @@ pub(crate) use hll::Hll;
 pub use index::{
     FLAT_MAX_BYTES, IndexChoice, JoinIndex, NO_MATCH, RowSource, flat_bytes, salted_bytes,
 };
-pub use layout::{EncodedKeys, GatheredRows, RowLayout, finalize};
+pub use layout::{EncodedKeys, GatheredRows, KeyEq, RowLayout, finalize};
 #[cfg(any(test, feature = "row-table-prototype"))]
 pub use pages::RowPages;
 #[cfg(any(test, feature = "row-table-prototype"))]
