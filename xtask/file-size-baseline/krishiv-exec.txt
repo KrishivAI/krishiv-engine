@@ -17,4 +17,4 @@
 # +70 lines over main: the external-partition headroom reproducer, batches of 20 and 300/1,500 rows from a full pool (window spill flake, PR #601)
 # +10 lines: offsets and nth_value read back from a full pool (window fold charges)
 # +29: a window spill write holds the spilling guard (spill-guard tests, #627)
-3173 crates/krishiv-exec/src/window/tests.rs
+3213 crates/krishiv-exec/src/window/tests.rs
