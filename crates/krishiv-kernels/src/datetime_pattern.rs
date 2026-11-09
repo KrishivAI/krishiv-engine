@@ -84,7 +84,7 @@ enum Field {
     Day,
     DayOfYear,
     Quarter,
-    /// `F`: the aligned week of the month.
+    /// `F`: the day of the week in the month (`(day - 1) % 7 + 1`), as Spark.
     AlignedDayOfWeekInMonth,
     /// `H`: 0..=23.
     HourOfDay,
