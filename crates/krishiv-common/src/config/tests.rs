@@ -243,7 +243,7 @@ fn ndv_sampling_entries_parse_and_default() {
         (
             Some(true),
             Some(131_072),
-            Some(std::time::Duration::from_secs(2))
+            Some(std::time::Duration::from_secs(5))
         )
     );
     c.set("krishiv.optimizer.ndvSampling.enabled", "false")
