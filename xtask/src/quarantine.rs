@@ -17,12 +17,14 @@ use serde::Deserialize;
 const MAX_DAYS: i64 = 3;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Registry {
     #[serde(default)]
     test: Vec<Entry>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Entry {
     name: String,
     package: String,
@@ -41,10 +43,20 @@ fn days(date: &str) -> Result<i64, String> {
         if p.len() != len {
             return Err(bad());
         }
+        if !p.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(bad());
+        }
         p.parse::<i64>().map_err(|_| bad())
     };
     let (y, m, d) = (next(4)?, next(2)?, next(2)?);
-    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let month_days = match m {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=month_days).contains(&d) {
         return Err(bad());
     }
     // Howard Hinnant's days_from_civil.
@@ -60,18 +72,24 @@ fn today() -> i64 {
     i64::try_from(crate::profile::utc_now_millis() / 86_400_000).unwrap_or(0)
 }
 
-/// Names inside `test(=name)` terms of a nextest filter expression.
-fn filter_names(filter: &str) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    let mut rest = filter;
-    while let Some(i) = rest.find("test(=") {
-        rest = &rest[i + 6..];
-        if let Some(j) = rest.find(')') {
-            out.insert(rest[..j].to_owned());
-            rest = &rest[j..];
-        }
+/// The exact `default-filter` a profile must carry for the registered `names` (in registry order):
+/// the default profile skips each one, the quarantine profile runs exactly them. Comparing whole
+/// strings means a missing `not`, an extra `and not package(x)` or a stray `|` fails the gate.
+fn expected_filter(profile: &str, names: &[&str]) -> String {
+    match (profile, names.is_empty()) {
+        ("default", true) => String::new(),
+        ("default", false) => names
+            .iter()
+            .map(|n| format!("not test(={n})"))
+            .collect::<Vec<_>>()
+            .join(" and "),
+        (_, true) => "none()".to_owned(),
+        (_, false) => names
+            .iter()
+            .map(|n| format!("test(={n})"))
+            .collect::<Vec<_>>()
+            .join(" | "),
     }
-    out
 }
 
 fn profile_filter(nextest: &toml::Table, profile: &str) -> String {
@@ -131,15 +149,14 @@ fn problems(registry: &str, nextest: &str, today: i64) -> Vec<String> {
             ),
         }
     }
-    for (profile, what) in [("default", "skip"), ("quarantine", "run")] {
-        let in_config = filter_names(&profile_filter(&nx, profile));
-        for missing in names.difference(&in_config) {
+    let listed: Vec<&str> = reg.test.iter().map(|e| e.name.as_str()).collect();
+    for profile in ["default", "quarantine"] {
+        let want = expected_filter(profile, &listed);
+        let have = profile_filter(&nx, profile);
+        if have.trim() != want {
             out.push(format!(
-                "{missing}: registered but the `{profile}` profile does not {what} it"
+                "the `{profile}` profile's default-filter must be exactly {want:?} for tests/quarantine.toml, found {have:?}"
             ));
-        }
-        for extra in in_config.difference(&names) {
-            out.push(format!("{extra}: the `{profile}` profile {what}s it but tests/quarantine.toml does not list it"));
         }
     }
     out
@@ -199,7 +216,29 @@ mod tests {
     fn a_registry_and_config_that_disagree_fail() {
         let d = days("2026-11-08").unwrap();
         let nx = NX.replace("(=a)", "(=b)");
-        assert_eq!(problems(REG, &nx, d).len(), 4);
+        assert_eq!(problems(REG, &nx, d).len(), 2);
+    }
+
+    #[test]
+    fn a_wrong_filter_shape_fails() {
+        let d = days("2026-11-08").unwrap();
+        for bad in [
+            NX.replace("\"not test(=a)\"", "\"test(=a)\""),
+            NX.replace("\"test(=a)\"", "\"not test(=a)\""),
+            NX.replace("\"not test(=a)\"", "\"not test(=a) | not test(=b)\""),
+            NX.replace("\"not test(=a)\"", "\"not test(=a) and not package(x)\""),
+        ] {
+            assert_eq!(problems(REG, &bad, d).len(), 1, "{bad}");
+        }
+    }
+
+    #[test]
+    fn unknown_fields_and_impossible_dates_fail() {
+        let d = days("2026-11-08").unwrap();
+        assert!(problems(&format!("{REG}extra=1\n"), NX, d)[0].contains("extra"));
+        assert!(days("2026-02-31").is_err());
+        assert!(days("+202-01-01").is_err());
+        assert!(days("2024-02-29").is_ok());
     }
 
     #[test]
