@@ -442,7 +442,14 @@ impl Session {
                     return Err(table_not_found(&parts));
                 }
             }
-            CacheKind::Cache { name, query, .. } => {
+            CacheKind::Cache {
+                name,
+                query,
+                options,
+                ..
+            } => {
+                // The options are never resolved: a `secret(..)` value would be kept as its text.
+                let _ = crate::access::refuse_secret_options(options, original)?;
                 let Some(parts) = ddl_table_parts(name) else {
                     return Err(KrishivUnsupportedFeature {
                         feature: "CACHE TABLE with a dynamic table name".to_owned(),

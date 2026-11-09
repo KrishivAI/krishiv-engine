@@ -758,11 +758,12 @@ fn reject_system_namespace(statement: &Statement) -> Result<(), KrishivError> {
 }
 
 /// Table options are stored as text and never resolved, so a `secret('scope', 'key')` value would
-/// be kept as that literal text; it is refused as it is for `writeTo` (use a read or write option).
-pub(crate) fn refuse_secret_options(
-    options: &[TableOption],
+/// be kept as that literal text; it is refused as it is for `writeTo` (use a read or write option). The
+/// options are returned when none is a secret.
+pub(crate) fn refuse_secret_options<'a>(
+    options: &'a [TableOption],
     original: &str,
-) -> Result<(), KrishivError> {
+) -> Result<&'a [TableOption], KrishivError> {
     let is_secret = |o: &TableOption| {
         o.value.as_ref().is_some_and(|v| {
             original
@@ -776,29 +777,56 @@ pub(crate) fn refuse_secret_options(
         }
         .into());
     }
-    Ok(())
+    Ok(options)
 }
 
-/// Whether expression text `t` calls `secret` anywhere: the name bare or back-quoted, in any case,
-/// followed by `(`, inside parentheses, casts or other calls too. It reads the parser's own tokens,
-/// so string literals are skipped and comments between the name and `(` are trivia, as in the
-/// parser; anything else that looks like a call counts (the check fails closed).
+/// Whether expression text `t` calls `secret` anywhere: the name bare, back-quoted or double-quoted, or written
+/// `IDENTIFIER('secret')`, in any case, followed by `(`, inside parentheses, casts or other calls too. It reads the
+/// parser's own tokens, so string literals are skipped and comments between the name and `(` are trivia, as in the
+/// parser; anything else that looks like a call counts (the check fails closed: a double-quoted `"secret"` counts
+/// whether or not `spark.sql.ansi.doubleQuotedIdentifiers` makes it a name).
 fn calls_secret(t: &str) -> bool {
     use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
     let tokens: Vec<_> = tokenize(t)
         .into_iter()
         .filter(|k| !k.kind.is_trivia())
         .collect();
-    tokens.windows(2).any(|w| {
-        let name = t.get(w[0].span.start..w[0].span.end).unwrap_or("");
-        let named = match w[0].kind {
-            TokenKind::Word => name.eq_ignore_ascii_case("secret"),
-            TokenKind::QuotedIdent => name
-                .strip_prefix('`')
-                .and_then(|n| n.strip_suffix('`'))
-                .is_some_and(|n| n.replace("``", "`").eq_ignore_ascii_case("secret")),
+    let text = |i: usize| {
+        t.get(tokens[i].span.start..tokens[i].span.end)
+            .unwrap_or("")
+    };
+    let is = |i: usize, kind: TokenKind| tokens.get(i).is_some_and(|k| k.kind == kind);
+    // The text between the quotes of a quoted token, with doubled quotes read as one.
+    let unquoted = |i: usize, quote: char| -> Option<String> {
+        let raw = text(i);
+        let raw = raw.strip_prefix(['r', 'R']).unwrap_or(raw);
+        let inner = raw.strip_prefix(quote)?.strip_suffix(quote)?;
+        Some(inner.replace(&format!("{quote}{quote}"), &quote.to_string()))
+    };
+    let names_secret = |i: usize| -> bool {
+        let Some(k) = tokens.get(i) else { return false };
+        match k.kind {
+            TokenKind::Word => text(i).eq_ignore_ascii_case("secret"),
+            TokenKind::QuotedIdent => {
+                unquoted(i, '`').is_some_and(|n| n.eq_ignore_ascii_case("secret"))
+            }
+            TokenKind::DoubleQuoted => {
+                unquoted(i, '"').is_some_and(|n| n.eq_ignore_ascii_case("secret"))
+            }
             _ => false,
-        };
-        named && w[1].kind == TokenKind::Sym(Sym::LParen)
+        }
+    };
+    let lparen = TokenKind::Sym(Sym::LParen);
+    (0..tokens.len()).any(|i| {
+        // `secret(`
+        (names_secret(i) && is(i + 1, lparen))
+            // `IDENTIFIER('secret')(`
+            || (is(i, TokenKind::Word)
+                && text(i).eq_ignore_ascii_case("identifier")
+                && is(i + 1, lparen)
+                && is(i + 2, TokenKind::String)
+                && unquoted(i + 2, '\'').is_some_and(|n| n.eq_ignore_ascii_case("secret"))
+                && is(i + 3, TokenKind::Sym(Sym::RParen))
+                && is(i + 4, lparen))
     })
 }

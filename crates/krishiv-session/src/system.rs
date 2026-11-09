@@ -765,6 +765,10 @@ pub(crate) struct QueryRow {
     /// does not move with the system clock.
     pub(crate) submitted_at: std::time::Instant,
     pub(crate) ended_ms: Option<i64>,
+    /// `system.queries.wall_ns`: for a query that ran, its execution time (from the start of its run, after
+    /// admission, to its end), so a queued wait is not in it; for one that never ran (refused, cancelled while
+    /// queued, or ended before its run) the time since it was submitted, its wait included. `ended_at -
+    /// submitted_at` is the submit-to-end time of either.
     pub(crate) wall_ns: Option<i64>,
     pub(crate) peak_memory_bytes: Option<i64>,
     pub(crate) error_class: Option<String>,
