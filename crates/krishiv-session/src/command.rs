@@ -888,6 +888,7 @@ impl Session {
         &self,
         f: &CreateFunction,
         redacted: &RedactedSql,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         if let Some(language) = &f.characteristics.language
             && !language.value.eq_ignore_ascii_case("SQL")
@@ -911,7 +912,13 @@ impl Session {
         let conf = self.query_env().analysis.conf;
         let case_sensitive = conf.case_sensitive;
         let source = self.next_source_id();
-        let mut entry = self.declare(f, &name, source, case_sensitive, conf.ansi, redacted)?;
+        let declared = crate::sql_functions::Declared {
+            source,
+            case_sensitive,
+            ansi: conf.ansi,
+            ids,
+        };
+        let mut entry = self.declare(f, &name, &declared, redacted)?;
         let reads = self.reads_data(&entry.def);
         if reads && f.characteristics.data_access == Some(SqlDataAccess::ContainsSql) {
             return Err(InvalidSqlFunctionDataAccess {}.into());
@@ -927,7 +934,7 @@ impl Session {
                 ..(*entry.def).clone()
             });
             return self
-                .create_stored_function(f, namespace, part, entry, redacted)
+                .create_stored_function(f, (namespace, part), entry, redacted, ids)
                 .await;
         }
         // A built-in or a registered UDF of the name is not ours to replace
@@ -975,6 +982,7 @@ impl Session {
             env.sql_functions = Arc::clone(&candidate);
             env.functions_version = krishiv_plan::analyzer::FunctionRegistry::version(&*candidate);
             let output = self.probe(&entry.def, &[], env, redacted).await?;
+            crate::sql_functions::check_return_names(f, &part.value, ids)?;
             let mut entry = entry.clone();
             if entry.def.returns.is_none() {
                 let def = SqlFunction {
@@ -1000,11 +1008,15 @@ impl Session {
         &self,
         f: &CreateFunction,
         name: &str,
-        source: krishiv_plan::SourceId,
-        case_sensitive: bool,
-        ansi: bool,
+        declared: &crate::sql_functions::Declared<'_>,
         redacted: &RedactedSql,
     ) -> Result<Entry, KrishivError> {
+        let crate::sql_functions::Declared {
+            source,
+            case_sensitive,
+            ansi,
+            ids,
+        } = *declared;
         let fold = |n: &str| {
             if case_sensitive {
                 n.to_owned()
@@ -1102,25 +1114,33 @@ impl Session {
             Some(FunctionReturnsKind::Type(t)) => Some(data_type(t)?),
             _ => None,
         };
-        let body = match (&f.body.kind, returned.is_some()) {
-            (FunctionBodyKind::Expr(_), true) => {
-                return Err(UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery {
-                    name: name.to_owned(),
-                }
-                .into());
-            }
-            (FunctionBodyKind::Expr(e), false) => {
-                krishiv_sql::lower_expression(e, source).map_err(lower_err)?
-            }
-            // A function's query body is a scalar subquery: for a scalar
-            // function its value, for a table function its rows.
-            (FunctionBodyKind::Query(q), _) => {
-                let plan = krishiv_sql::lower(q, source).map_err(lower_err)?;
+        // A function's query body is a scalar subquery: for a scalar function its value, for a
+        // table function its rows. `RETURN (query)` is a query to Spark's grammar (its `query`
+        // takes brackets), which the parser reads as an expression.
+        let query = match &f.body.kind {
+            FunctionBodyKind::Query(q) => Some(&**q),
+            other if returned.is_some() => crate::sql_functions::bracketed_query(other),
+            _ => None,
+        };
+        let body = match (&f.body.kind, query) {
+            (_, Some(q)) => {
+                // Its `IDENTIFIER(..)` columns are named as in a query (`c1.c2`).
+                let plan =
+                    krishiv_sql::lower_identified(q, source, false, ids).map_err(lower_err)?;
                 PlanExpr::new(ExprNode::Subquery {
                     kind: SubqueryKind::Scalar,
                     plan: Arc::clone(plan.root()),
                 })
                 .with_origin(origin(source, f.body.span))
+            }
+            (FunctionBodyKind::Expr(_), None) if returned.is_some() => {
+                return Err(UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery {
+                    name: name.to_owned(),
+                }
+                .into());
+            }
+            (FunctionBodyKind::Expr(e), None) => {
+                krishiv_sql::lower_expression(e, source).map_err(lower_err)?
             }
             _ => return Err(unsupported("this kind of function body")),
         };
@@ -1352,10 +1372,10 @@ impl Session {
     async fn create_stored_function(
         &self,
         f: &CreateFunction,
-        namespace: &str,
-        part: &Ident,
+        (namespace, part): (&str, &Ident),
         entry: Entry,
         redacted: &RedactedSql,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let store = &self.state.catalog.store;
         let qualified = [
@@ -1363,6 +1383,10 @@ impl Session {
             namespace.to_owned(),
             part.value.clone(),
         ];
+        // Spark names the missing columns before a reference to the session's objects (its
+        // analysis sees them; the probe below cannot, so a body that also fails analysis is
+        // refused here first).
+        crate::sql_functions::check_return_names(f, &part.value, ids)?;
         // A stored function may not depend on an object of the session; Spark
         // names the function by namespace and name, and the object by kind.
         let object = format!("`{namespace}`.{}", quote(&entry.def.name));

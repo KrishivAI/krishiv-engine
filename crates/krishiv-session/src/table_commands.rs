@@ -436,7 +436,7 @@ impl Session {
         &self,
         v: &CreatePermanentView,
         original: &str,
-        ids: &[krishiv_sql::ast::Span],
+        (ids, written): (&[krishiv_sql::ast::Span], &[String]),
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         if v.global && v.using.is_none() {
@@ -597,6 +597,9 @@ impl Session {
                 query_columns,
                 schema_mode,
                 identifier_spans: crate::identifier_clause::spans_within(ids, query.span),
+                written: crate::identifier_clause::written_within(
+                    original, ids, written, query.span,
+                ),
             }),
             layout: TableLayout::default(),
             column_stats_requested: false,
@@ -852,7 +855,7 @@ impl Session {
         &self,
         a: &AlterView,
         original: &str,
-        ids: &[krishiv_sql::ast::Span],
+        (ids, written): (&[krishiv_sql::ast::Span], &[String]),
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let frozen_path = env.catalog.sql_path_snapshot();
@@ -929,6 +932,9 @@ impl Session {
                     query_columns,
                     schema_mode,
                     identifier_spans: crate::identifier_clause::spans_within(ids, query.span),
+                    written: crate::identifier_clause::written_within(
+                        original, ids, written, query.span,
+                    ),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {

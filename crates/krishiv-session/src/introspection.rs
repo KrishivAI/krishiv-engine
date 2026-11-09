@@ -1096,8 +1096,8 @@ impl Session {
             if let Some(c) = &t.comment {
                 rows.push(("Comment".to_owned(), c.clone()));
             }
-            rows.push(("View Text".to_owned(), view.sql.clone()));
-            rows.push(("View Original Text".to_owned(), view.sql.clone()));
+            rows.push(("View Text".to_owned(), view.written.clone()));
+            rows.push(("View Original Text".to_owned(), view.written.clone()));
             let enabled = crate::view_schema::binding_enabled(&self.state.conf.snapshot());
             let mode = crate::view_schema::effective_mode(view.schema_mode, enabled);
             if let Some(mode) = mode {
@@ -1491,7 +1491,7 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
             out.push_str(&format!("WITH SCHEMA {}\n", mode.as_str()));
         }
         out.push_str("AS ");
-        out.push_str(&view.sql);
+        out.push_str(&view.written);
         out.push('\n');
         return Ok(out);
     }

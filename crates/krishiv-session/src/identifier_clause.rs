@@ -82,6 +82,16 @@ fn names_by_reference(sql: &str) -> bool {
     }
 }
 
+/// A statement's text with its `IDENTIFIER(..)` clauses replaced by the names they evaluate to.
+pub(crate) struct Substituted<'a> {
+    /// The text the parser reads.
+    pub(crate) text: Cow<'a, str>,
+    /// The span in `text` of each substituted name, in order.
+    pub(crate) spans: Vec<Span>,
+    /// The clause each name replaced, as written (`IDENTIFIER('c1.c2')`), one per span.
+    pub(crate) written: Vec<String>,
+}
+
 impl Session {
     /// `sql` with every `IDENTIFIER(expr)` replaced by the (quoted) identifier `expr` evaluates to.
     /// Text without the clause is returned as it is.
@@ -90,19 +100,21 @@ impl Session {
         sql: &'a str,
         options: &ParserOptions,
     ) -> Result<Cow<'a, str>, KrishivError> {
-        Ok(self.substitute_identifier_clauses(sql, options).await?.0)
+        Ok(self.substitute_identifier_clauses(sql, options).await?.text)
     }
 
     /// [`Self::resolve_identifier_clauses`] for the statement `env` runs: the spans of the
-    /// substituted names go to `env.identifier_spans`, for [`Self::lower_identified`].
+    /// substituted names go to `env.identifier_spans`, for [`Self::lower_identified`], and the
+    /// clauses they replaced to `env.identifier_written`.
     pub(crate) async fn identifier_clauses_into<'a>(
         &self,
         sql: &'a str,
         env: &mut QueryEnv,
     ) -> Result<Cow<'a, str>, KrishivError> {
-        let (text, spans) = self.substitute_identifier_clauses(sql, &env.parser).await?;
-        env.identifier_spans = spans.into();
-        Ok(text)
+        let substituted = self.substitute_identifier_clauses(sql, &env.parser).await?;
+        env.identifier_spans = substituted.spans.into();
+        env.identifier_written = substituted.written.into();
+        Ok(substituted.text)
     }
 
     /// The plan of the query statement `env` runs, its `IDENTIFIER(..)` columns marked.
@@ -118,20 +130,26 @@ impl Session {
     }
 
     /// [`Self::resolve_identifier_clauses`], with the span of each substituted name in the
-    /// returned text (in order), for `krishiv_sql::lower_identified`.
+    /// returned text (in order), for `krishiv_sql::lower_identified`, and the clause it replaced.
     pub(crate) async fn substitute_identifier_clauses<'a>(
         &self,
         sql: &'a str,
         options: &ParserOptions,
-    ) -> Result<(Cow<'a, str>, Vec<Span>), KrishivError> {
+    ) -> Result<Substituted<'a>, KrishivError> {
         let mut spans = Vec::new();
+        let mut written = Vec::new();
+        let unchanged = |spans, written| Substituted {
+            text: Cow::Borrowed(sql),
+            spans,
+            written,
+        };
         let legacy = options.legacy_identifier_clause;
         // The legacy mode reads `IDENTIFIER(expr)` as a function, which the grammar accepts only
         // where a table or an expression may stand: a statement that does not parse as written
         // (a column list, a rename target) keeps the parser's error.
         if legacy && !names_by_reference(sql) && krishiv_sql::parse_statement(sql, options).is_err()
         {
-            return Ok((Cow::Borrowed(sql), spans));
+            return Ok(unchanged(spans, written));
         }
         let tokens: Vec<_> = tokenize(sql)
             .into_iter()
@@ -150,7 +168,7 @@ impl Session {
                 .is_some_and(|t| t.kind == TokenKind::Sym(Sym::Colon))
                 && word(2).eq_ignore_ascii_case("BEGIN"))
         {
-            return Ok((Cow::Borrowed(sql), spans));
+            return Ok(unchanged(spans, written));
         }
         let mut out = String::new();
         let mut copied = 0;
@@ -267,15 +285,24 @@ impl Session {
             }
             out.push_str(sql.get(copied..t.span.start).unwrap_or_default());
             spans.push(Span::new(out.len(), out.len() + name.len()));
+            written.push(
+                sql.get(t.span.start..last.span.end)
+                    .unwrap_or_default()
+                    .to_owned(),
+            );
             out.push_str(&name);
             copied = last.span.end;
             i = close + 1;
         }
         if copied == 0 {
-            return Ok((Cow::Borrowed(sql), spans));
+            return Ok(unchanged(spans, written));
         }
         out.push_str(sql.get(copied..).unwrap_or_default());
-        Ok((Cow::Owned(out), spans))
+        Ok(Substituted {
+            text: Cow::Owned(out),
+            spans,
+            written,
+        })
     }
 
     /// The identifier the constant string expression `inner` names, quoted part by part.
@@ -424,4 +451,26 @@ pub(crate) fn spans_within(
         .filter(|s| s.start >= outer.start && s.end <= outer.end)
         .map(|s| krishiv_sql::ast::Span::new(s.start - outer.start, s.end - outer.start))
         .collect()
+}
+
+/// The text of `outer` in `sql`, the statement the session substituted, as it was written: each
+/// substituted name inside it (`ids`) put back as the `IDENTIFIER(..)` clause it replaced
+/// (`written`). Spark keeps a view's text as written (`View Text`, `SHOW CREATE TABLE`). Without
+/// the clauses (a statement the session built itself) the substituted text is returned.
+pub(crate) fn written_within(sql: &str, ids: &[Span], written: &[String], outer: Span) -> String {
+    let text = |a: usize, b: usize| sql.get(a..b).unwrap_or_default();
+    if ids.len() != written.len() {
+        return text(outer.start, outer.end).to_owned();
+    }
+    let mut out = String::new();
+    let mut copied = outer.start;
+    for (span, clause) in ids.iter().zip(written) {
+        if span.start >= outer.start && span.end <= outer.end {
+            out.push_str(text(copied, span.start));
+            out.push_str(clause);
+            copied = span.end;
+        }
+    }
+    out.push_str(text(copied, outer.end));
+    out
 }
