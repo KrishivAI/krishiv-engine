@@ -109,6 +109,7 @@ impl Detached {
                 schemas: BTreeMap::new(),
                 unit_weights: HashSet::new(),
                 salts: self.salts.clone(),
+                stages: HashMap::new(),
             };
             cx.declare_filters(node)?;
             for sp in cx.shared_plans.iter() {

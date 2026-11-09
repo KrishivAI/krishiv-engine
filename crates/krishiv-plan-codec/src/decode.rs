@@ -18,7 +18,10 @@ use krishiv_exec::physical::{
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
     SubqueryPlan, SubqueryValueKind, WritePlan,
 };
-use krishiv_exec::physical::{ExchangeFilterPlan, SharedId, SharedPlan};
+use krishiv_exec::physical::{
+    ExchangeFilterPlan, ProbeColumn, ProbeFilter, ProbeFilterColumn, ProbeRowStage, ProbeSelect,
+    SharedId, SharedPlan,
+};
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
@@ -682,6 +685,11 @@ impl Decoder {
                 .map(join_filter)
                 .collect::<Result<_>>()?,
             distribution: distribution(j.distribution)?,
+            select: j
+                .select
+                .as_ref()
+                .map(|sel| self.probe_select(sel))
+                .transpose()?,
         };
         if plan.distinct_build && !plan.distinct_build_allowed() {
             return Err(corrupt(
@@ -689,6 +697,59 @@ impl Decoder {
             ));
         }
         Ok(plan)
+    }
+
+    fn probe_select(&self, s: &pb::ProbeSelect) -> Result<ProbeSelect> {
+        let filter = s
+            .filter
+            .as_ref()
+            .map(|f| {
+                Ok::<_, CodecError>(ProbeFilter {
+                    layout: layout(&f.layout),
+                    predicate: self.expr_ref(f.predicate)?,
+                })
+            })
+            .transpose()?;
+        let row_stage = s
+            .row_stage
+            .as_ref()
+            .map(|r| {
+                Ok::<_, CodecError>(ProbeRowStage {
+                    scan: ScanId(r.scan),
+                    columns: r
+                        .columns
+                        .iter()
+                        .map(|c| {
+                            Ok(ProbeFilterColumn {
+                                id: FilterId(c.id),
+                                column: usize_of(c.column)?,
+                            })
+                        })
+                        .collect::<Result<_>>()?,
+                })
+            })
+            .transpose()?;
+        if filter.is_none() && row_stage.is_none() {
+            return Err(corrupt("a probe selection that selects nothing"));
+        }
+        let columns = (!s.columns.is_empty())
+            .then(|| {
+                s.columns
+                    .iter()
+                    .map(|c| {
+                        Ok(ProbeColumn {
+                            index: usize_of(c.index)?,
+                            name: c.name.clone(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
+        Ok(ProbeSelect {
+            filter,
+            row_stage,
+            columns,
+        })
     }
 
     fn merge_join(&mut self, j: &pb::SortMergeJoinNode) -> Result<SortMergeJoinPlan> {

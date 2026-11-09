@@ -163,13 +163,27 @@ fn run(t: &Tpch, q: &str) -> (Result<Vec<String>, KrishivError>, u64) {
         ..MemoryConfig::default()
     });
     let (out, query) = super::run_in(&plan, &root);
-    let scanned = query
-        .metrics()
-        .operators
+    let ops = &query.metrics().operators;
+    let scanned = ops
         .values()
         .filter(|e| e.name == "FileScan")
         .map(|e| e.metrics.rows_out)
-        .sum();
+        .sum::<u64>();
+    // A scan's runtime-filter row stage under a hash probe runs in the
+    // probe (design P2-E3 U2): the rows it keeps are the rows the probe
+    // joins.
+    let probed = ops
+        .values()
+        .filter(|e| e.name == "HashJoinProbe")
+        .flat_map(|e| e.extra.iter())
+        .filter(|(name, _)| name.as_ref() == "probe_rows")
+        .map(|(_, v)| v.value().unwrap_or(0))
+        .sum::<u64>();
+    let scanned = if probed > 0 {
+        scanned.min(probed)
+    } else {
+        scanned
+    };
     let mut out = out.map(|b| rows(&b));
     if let Ok(r) = out.as_mut() {
         r.sort_unstable();

@@ -128,6 +128,7 @@ registry! {
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (fused_probe, FusedProbe, POST_MIGRATION_READER_VERSION, Optimization, "A hash join's probe selection (`HashJoinPlan.select`, design P2-E3 U2): a filter and a scan's runtime-filter row stage fused into the probe, which joins the selected rows by id; without it the planner keeps the `Filter` node and the scan's own row stage."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
     (interval_types, IntervalTypes, POST_MIGRATION_READER_VERSION, Semantic, "The year-month, day-time and calendar interval types, with their fields; calendar literals, and year-month and day-time literals as a cast or function argument. A bare year-month or day-time literal stays baseline."),
@@ -230,6 +231,8 @@ pub enum Construct<'a> {
     WriteColumnTypes,
     /// A `Generate` node's generator.
     Generator(krishiv_plan::GeneratorKind),
+    /// A hash join's probe selection (`HashJoinPlan.select`).
+    ProbeSelect,
 }
 
 /// The feature a type needs on its own. The walk reports a type inside an
@@ -455,6 +458,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // it misreads the higher-order call's argument.
         Construct::Lambda => Some(Feature::LambdaFunctions),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
+        Construct::ProbeSelect => Some(Feature::FusedProbe),
         Construct::Generator(kind) => match kind {
             krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
             krishiv_plan::GeneratorKind::Explode
@@ -626,7 +630,12 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             .aggregates
             .iter()
             .for_each(|a| aggregate_constructs(a, f)),
-        PhysNode::HashJoin(j) => f(Construct::Join(j.join_type)),
+        PhysNode::HashJoin(j) => {
+            f(Construct::Join(j.join_type));
+            if j.select.is_some() {
+                f(Construct::ProbeSelect);
+            }
+        }
         PhysNode::SortMergeJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Generate { kind, .. } => f(Construct::Generator(*kind)),
@@ -782,7 +791,15 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         }
         PhysNode::ReplicateRows { count, .. } => roots.push(count),
         PhysNode::Generate { arg, .. } => roots.push(arg),
-        PhysNode::HashJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::HashJoin(j) => {
+            roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts));
+            roots.extend(
+                j.select
+                    .iter()
+                    .flat_map(|s| &s.filter)
+                    .map(|f| &f.predicate),
+            );
+        }
         PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::OneRow

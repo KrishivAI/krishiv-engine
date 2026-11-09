@@ -553,6 +553,23 @@ pub(crate) struct Shared {
     runtime: Vec<JoinRuntimeFilter>,
     /// Where the build publishes `runtime`, and as which producer.
     publisher: Option<FilterPublisher>,
+    /// What the probe keeps of each input batch (design P2-E3 U2).
+    select: Option<ProbeSelectSpec>,
+}
+
+/// A filter and a scan's row stage fused into the probe (design P2-E3 U2,
+/// [`crate::physical::ProbeSelect`]): each probe driver selects the rows
+/// of its input batches that `predicate` is TRUE for and the row stage of
+/// its scan driver keeps, and joins only those, by id.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProbeSelectSpec {
+    /// The fused filter's predicate, over the probe input.
+    pub(crate) predicate: Option<Arc<dyn Predicate>>,
+    /// The runtime filters whose row stage the scan handed to the probe.
+    pub(crate) row_stage: Option<crate::operators::RuntimeFilters>,
+    /// The probe input's columns of each batch received (a fused
+    /// projection; `None`: the batch as it is).
+    pub(crate) columns: Option<Vec<usize>>,
 }
 
 /// Where a build publishes its runtime filters.
@@ -771,6 +788,7 @@ impl Shared {
             counters: Counters::default(),
             runtime: Vec::new(),
             publisher: None,
+            select: None,
         })
     }
 
@@ -978,6 +996,58 @@ impl HashJoin {
         }
         shared.runtime = filters;
         shared.publisher = Some(FilterPublisher { values, producer });
+        Ok(self)
+    }
+
+    /// The same join joining only the rows of each probe batch that
+    /// `predicate` (over the probe input) is TRUE for: a filter fused into
+    /// the probe, which selects the rows by id instead of joining a filtered
+    /// copy (design P2-E3 U2). The result is the join of the filtered input.
+    /// Call before the join is shared.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a join already shared.
+    pub fn with_probe_filter(mut self, predicate: Arc<dyn Predicate>) -> Result<Self> {
+        let shared = Arc::get_mut(&mut self.0)
+            .ok_or_else(|| internal("a probe filter added to a shared join".to_owned()))?;
+        shared
+            .select
+            .get_or_insert_with(ProbeSelectSpec::default)
+            .predicate = Some(predicate);
+        Ok(self)
+    }
+
+    /// The same join reading its probe input as columns `columns` of the
+    /// batches it receives, whose rows the selection is evaluated over (a
+    /// fused projection, design P2-E3 U2). Call before the join is shared.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a join already shared.
+    pub(crate) fn with_probe_columns(mut self, columns: Vec<usize>) -> Result<Self> {
+        let shared = Arc::get_mut(&mut self.0)
+            .ok_or_else(|| internal("a probe projection added to a shared join".to_owned()))?;
+        shared
+            .select
+            .get_or_insert_with(ProbeSelectSpec::default)
+            .columns = Some(columns);
+        Ok(self)
+    }
+
+    /// The same join running the row stage `filters`' scan handed it
+    /// (design P2-E3 U2). Call before the join is shared.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a join already shared.
+    pub(crate) fn with_row_stage(
+        mut self,
+        filters: crate::operators::RuntimeFilters,
+    ) -> Result<Self> {
+        let shared = Arc::get_mut(&mut self.0)
+            .ok_or_else(|| internal("a probe row stage added to a shared join".to_owned()))?;
+        shared
+            .select
+            .get_or_insert_with(ProbeSelectSpec::default)
+            .row_stage = Some(filters);
         Ok(self)
     }
 

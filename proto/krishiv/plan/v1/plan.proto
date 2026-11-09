@@ -726,6 +726,48 @@ message HashJoinNode {
   // existence join without a residual.
   // ignorable: a reader without it builds every row, with the same result.
   bool distinct_build = 11;
+  // The rows of each probe batch the probe joins: a filter and a scan's
+  // runtime-filter row stage fused into it (design P2-E3 U2).
+  // feature: fused_probe
+  optional ProbeSelect select = 12;
+}
+
+// feature: fused_probe
+// What a hash probe keeps of each input batch before it joins it.
+message ProbeSelect {
+  optional ProbeFilter filter = 1;
+  optional ProbeRowStage row_stage = 2;
+  // The probe input's columns of each batch received (a fused column-only
+  // projection); empty: the batch as it is.
+  repeated ProbeColumn columns = 3;
+}
+
+// feature: fused_probe
+message ProbeColumn {
+  uint64 index = 1;
+  string name = 2;
+}
+
+// feature: fused_probe
+// A filter fused into a hash probe: `predicate` over the probe input, whose
+// columns it knows as the attributes `layout`.
+message ProbeFilter {
+  repeated uint64 layout = 1;
+  uint32 predicate = 2;
+}
+
+// feature: fused_probe
+// The scan whose runtime-filter row stage the probe runs, with each
+// filter's column in the probe input.
+message ProbeRowStage {
+  uint64 scan = 1;
+  repeated ProbeFilterColumn columns = 2;
+}
+
+// feature: fused_probe
+message ProbeFilterColumn {
+  uint64 id = 1;
+  uint64 column = 2;
 }
 
 // feature: sort_merge_join

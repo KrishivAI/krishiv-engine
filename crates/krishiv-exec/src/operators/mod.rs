@@ -38,6 +38,7 @@ mod range;
 mod replicate;
 mod runtime_filter;
 mod scan;
+pub(crate) mod select;
 mod sort;
 mod union;
 
@@ -55,7 +56,9 @@ pub use limit::Limit;
 pub use project::{Project, ProjectItem};
 pub(crate) use range::Range;
 pub use replicate::ReplicateRows;
+#[cfg(test)]
 pub(crate) use runtime_filter::RowStage;
+pub(crate) use runtime_filter::ScanRows;
 pub use runtime_filter::{RowStageSettings, RuntimeFilters};
 pub(crate) use scan::scan_metadata;
 pub use scan::{

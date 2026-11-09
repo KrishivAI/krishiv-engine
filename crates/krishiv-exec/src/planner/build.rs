@@ -129,13 +129,14 @@ fn plan_once(
     Ok((plan, shareable))
 }
 
-/// Hands each scan under `roots` the runtime filters joins publish to it.
+/// Hands each scan under `roots` its runtime filters, and a hash probe the row stage of a scan below (`probe_select`).
 fn attach_runtime_filters<'a>(
     filters: &mut HashMap<ScanId, Vec<ScanRuntimeFilter>>,
     roots: impl IntoIterator<Item = &'a mut PhysNode>,
 ) {
     let mut stack: Vec<&mut PhysNode> = roots.into_iter().collect();
     while let Some(n) = stack.pop() {
+        super::probe_select::fuse_row_stage(n, filters);
         if let PhysNode::Scan(s) = n
             && let Some(f) = filters.remove(&s.id)
         {
@@ -221,8 +222,7 @@ pub(crate) struct Planned {
     pub(crate) sites: Vec<Site>,
     /// How its rows are placed in partitions.
     pub(crate) placement: Placement,
-    /// The order of its rows within each partition; empty when none is
-    /// known.
+    /// The order of its rows within each partition; empty when none is known.
     pub(crate) ordering: Vec<OrderKey>,
 }
 
@@ -252,8 +252,7 @@ impl Planned {
             .ok_or_else(|| internal(&format!("column {c} is not an input column")))
     }
 
-    /// The node `make` builds over this relation, with output `schema`
-    /// and `layout`.
+    /// The node `make` builds over this relation, with output `schema` and `layout`.
     pub(crate) fn wrap(
         self,
         make: impl FnOnce(Box<PhysNode>) -> PhysNode,
