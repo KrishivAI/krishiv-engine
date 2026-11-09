@@ -98,7 +98,12 @@ impl Load {
         let heavies: usize = heavies.parse().map_err(|_| bad("heavy count", heavies))?;
         let rate: f64 = rate.parse().map_err(|_| bad("rate", rate))?;
         let seconds: f64 = seconds.parse().map_err(|_| bad("seconds", seconds))?;
-        if !(rate.is_finite() && rate >= 0.0 && seconds.is_finite() && seconds > 0.0) {
+        if !(rate.is_finite()
+            && rate >= 0.0
+            && seconds.is_finite()
+            && seconds > 0.0
+            && seconds <= MAX_SECONDS)
+        {
             return Err(bad("rate or seconds", &format!("{rate} {seconds}")));
         }
         if heavies > MAX_HEAVIES {
@@ -124,6 +129,8 @@ impl Load {
 /// (`rate * seconds`): each is an OS thread holding a running query.
 const MAX_HEAVIES: usize = 64;
 const MAX_ARRIVALS: f64 = 10_000.0;
+/// At most one day per run, which keeps the `Duration` and `Instant` sums in range.
+const MAX_SECONDS: f64 = 86_400.0;
 
 impl Class {
     /// Adds one query's outcome; `secs` is its latency.
@@ -217,8 +224,11 @@ pub(crate) fn run(runner: &Runner, load: &Load) -> String {
         }
         if load.rate > 0.0 {
             let mut i = 0u32;
-            loop {
-                let at = start + Duration::from_secs_f64(f64::from(i) / load.rate);
+            // A tiny rate puts the next arrival past any `Duration`: that is the end too.
+            while let Some(at) = Duration::try_from_secs_f64(f64::from(i) / load.rate)
+                .ok()
+                .and_then(|d| start.checked_add(d))
+            {
                 if at >= end {
                     break;
                 }
@@ -356,5 +366,11 @@ mod tests {
         );
         assert!(parse("65", "0", "1").unwrap_err().contains("heavy count"));
         assert!(parse("0", "1000", "11").unwrap_err().contains("arrivals"));
+        assert!(
+            parse("0", "0", "1e20")
+                .unwrap_err()
+                .contains("rate or seconds")
+        );
+        assert!(parse("0", "0", "86400").is_ok());
     }
 }
