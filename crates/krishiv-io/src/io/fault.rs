@@ -76,6 +76,7 @@ struct FaultState {
     latency: Duration,
     list_latency: Duration,
     stats: FaultStats,
+    get_threads: Vec<Option<String>>,
 }
 
 /// Wraps a store with injected faults and request accounting.
@@ -156,6 +157,12 @@ impl FaultStore {
         lock(&self.state).stats
     }
 
+    /// The names of the threads that issued each GET so far, in order
+    /// (`None` for an unnamed thread), and forgets them.
+    pub fn take_get_threads(&self) -> Vec<Option<String>> {
+        std::mem::take(&mut lock(&self.state).get_threads)
+    }
+
     fn check_scheduled(&self, scheduled: bool) {
         if !scheduled {
             lock(&self.state).stats.unscheduled += 1;
@@ -211,6 +218,8 @@ impl ObjectStore for FaultStore {
         let latency = {
             let mut st = lock(&self.state);
             st.stats.gets += 1;
+            st.get_threads
+                .push(std::thread::current().name().map(str::to_owned));
             if st.fail_gets > 0 {
                 st.fail_gets -= 1;
                 return Err(transient(st.retry_after));

@@ -16,11 +16,10 @@
 //!
 //! `rand`/`randn` draw from Spark's `XORShiftRandom` (the MurmurHash3 seed
 //! hash and the shift register below), so seeded results match Spark
-//! exactly (`rand(0)` is `0.7604953758285915`). `uuid` draws its 128 bits
-//! from the same generator and sets the RFC 4122 version and variant bits;
-//! Spark fills those bits from a Mersenne Twister instead, so only the
-//! shape (and the per-seed determinism) matches, not Spark's values. No
-//! golden pins seeded `uuid` values (see `misc`).
+//! exactly (`rand(0)` is `0.7604953758285915`). `uuid` draws from Spark's
+//! `RandomUUIDGenerator`, commons-math's Mersenne Twister seeded with
+//! `seed + partition` (`super::mersenne`), so seeded values match Spark's
+//! too (`uuid(82374)` is `8b88900e-f862-468c-8d3b-828188116155`).
 
 use std::sync::{Arc, Mutex};
 
@@ -33,6 +32,7 @@ use krishiv_kernels::cast::{CastMode, CastOptions, TimeZoneRules, cast};
 
 use super::super::uniform::{UniformKind, uniform_result as shared_result};
 use super::args::{Inputs, internal};
+use super::mersenne::{MersenneTwister, next_uuid};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds (`random` is Spark's alias of `rand`).
@@ -94,11 +94,6 @@ impl XorShift {
                 return v1 * multiplier;
             }
         }
-    }
-
-    /// `java.util.Random.nextLong`.
-    fn next_long(&mut self) -> i64 {
-        (i64::from(self.next(32)) << 32) + i64::from(self.next(32))
     }
 }
 
@@ -349,31 +344,23 @@ fn randn(opts: &BindOptions, args: &[BindArg]) -> Binding {
 fn uuid(opts: &BindOptions, args: &[BindArg]) -> Binding {
     let queries = unseeded_seed(opts);
     let seeded = !args.is_empty();
-    let state = Mutex::new(Streams::default());
+    // Spark's `Uuid.initializeInternal`: one `RandomUUIDGenerator(seed +
+    // partitionIndex)` per partition, seeded once from the first base seed.
+    let state: Mutex<(Option<i64>, std::collections::HashMap<u32, MersenneTwister>)> =
+        Mutex::new((None, std::collections::HashMap::new()));
     Binding::partitioned(DataType::Utf8, move |x, partition| {
         let seed = if seeded {
             seed(x, 0)?.unwrap_or(queries)
         } else {
             queries
         };
-        let mut streams = lock(&state)?;
-        let s = streams.stream(partition, seed);
-        let out: Vec<String> = (0..x.rows())
-            .map(|_| {
-                let most = (s.rng.next_long().cast_unsigned() & 0xffff_ffff_ffff_0fff)
-                    | 0x0000_0000_0000_4000;
-                let least = (s.rng.next_long().cast_unsigned() | 0x8000_0000_0000_0000)
-                    & 0xbfff_ffff_ffff_ffff;
-                format!(
-                    "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-                    (most >> 32) as u32,
-                    ((most >> 16) & 0xffff) as u16,
-                    (most & 0xffff) as u16,
-                    ((least >> 48) & 0xffff) as u16,
-                    least & 0xffff_ffff_ffff,
-                )
-            })
-            .collect();
+        let mut guard = lock(&state)?;
+        let (base, generators) = &mut *guard;
+        let base = *base.get_or_insert(seed);
+        let g = generators
+            .entry(partition)
+            .or_insert_with(|| MersenneTwister::new(base.wrapping_add(i64::from(partition))));
+        let out: Vec<String> = (0..x.rows()).map(|_| next_uuid(g)).collect();
         Ok(Arc::new(StringArray::from(out)) as ArrayRef)
     })
 }

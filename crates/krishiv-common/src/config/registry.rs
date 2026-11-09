@@ -102,6 +102,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &LEGACY_CODING_ERROR_ACTION,
     &LEGACY_JAVA_CHARSETS,
     &LEGACY_STATISTICAL_AGGREGATE,
+    &BINARY_OUTPUT_STYLE,
     &LEGACY_TIME_PARSER_POLICY,
     &LEGACY_VIEW_SCHEMA_BINDING_MODE,
     &LEGACY_VIEW_SCHEMA_COMPENSATION,
@@ -167,6 +168,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
+    ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
@@ -180,6 +182,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.joinDpLimit", &JOIN_DP_LIMIT),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
     ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
+    ("krishiv.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
@@ -879,7 +882,8 @@ pub static QUERY_MAX_EXECUTION_TIME: ConfigEntry = ConfigEntry {
     default: None,
     doc: "The longest a query may run from the start of its execution: past it the query is \
           cancelled and fails with `KRISHIV_QUERY_TIMEOUT`. The limit is read when the query \
-          starts. When unset, queries run without a time limit.",
+          starts. For a SQL script, the whole script is the query: the limit counts from its start. \
+          When unset, queries run without a time limit.",
     scope: Scope::Session,
     version_added: "0.2.0",
     spark_alias: None,
@@ -1490,7 +1494,7 @@ pub static RUNTIME_FILTER_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.runtimeFilter.enabled",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
-    doc: "Plan runtime filters (design P2-T163): the build side of an inner or left semi hash join \
+    doc: "Plan runtime filters: the build side of an inner or left semi hash join \
           publishes the min/max, a small value set or a Bloom filter of its keys to the scans \
           feeding the probe side, which skip splits, row groups and rows no build key can match. \
           Results are the same either way.",
@@ -1686,6 +1690,21 @@ pub static LEGACY_JAVA_CHARSETS: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.javaCharsets"),
+};
+
+/// `spark.sql.binaryOutputStyle`.
+pub static BINARY_OUTPUT_STYLE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.binaryOutputStyle",
+    value_type: ValueType::Enum(&["UTF-8", "BASIC", "BASE64", "HEX", "HEX_DISCRETE"]),
+    default: None,
+    doc: "How `to_csv` and `to_xml` print a `BINARY` value: `UTF-8` text, `BASIC` signed byte \
+          values (`[69, 97]`), `BASE64` without padding, `HEX` (`4561`) or `HEX_DISCRETE` \
+          (`[45 61]`). When unset the values print as `HEX_DISCRETE`, as in Spark. \
+          `CAST(binary AS STRING)` ignores the setting.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.binaryOutputStyle"),
 };
 
 /// `spark.sql.legacy.timeParserPolicy`.

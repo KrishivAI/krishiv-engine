@@ -1,0 +1,15 @@
+name: Set up uv, with one retry
+description: astral-sh/setup-uv, retried once after 20 seconds.
+runs:
+  using: composite
+  steps:
+    - id: first
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      continue-on-error: true
+    - name: Wait before the retry
+      if: steps.first.outcome == 'failure'
+      shell: bash
+      run: sleep 20
+    - name: Retry the uv install
+      if: steps.first.outcome == 'failure'
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0

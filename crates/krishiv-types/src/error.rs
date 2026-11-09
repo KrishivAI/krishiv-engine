@@ -28,8 +28,8 @@ use krishiv_common::error::{
     IncompleteTypeDefinitionMap, IncompleteTypeDefinitionStruct, InternalError, InvalidIdentifier,
     InvalidIntervalFormatUnsupportedFromToExpression, InvalidJsonDataType, KrishivError,
     KrishivUnsupportedFeature, LegacyErrorTemp1228, NegativeScaleDisallowed, ParseEmptyStatement,
-    ParseSyntaxError, StInvalidSridValue, UnclosedBracketedComment, UnsupportedDatatype,
-    UnsupportedTimePrecision, WkbParseError,
+    ParseSyntaxError, StInvalidCrsValue, StInvalidSridValue, UnclosedBracketedComment,
+    UnsupportedDatatype, UnsupportedTimePrecision, WkbParseError,
 };
 
 use crate::DecimalType;
@@ -141,6 +141,14 @@ pub(crate) fn time_precision(precision: &str) -> KrishivError {
 pub(crate) fn invalid_srid(srid: &str) -> KrishivError {
     StInvalidSridValue {
         srid: srid.to_owned(),
+    }
+    .into()
+}
+
+/// `ST_INVALID_CRS_VALUE`; `crs` is the value as written.
+pub(crate) fn invalid_crs(crs: &str) -> KrishivError {
+    StInvalidCrsValue {
+        crs: crs.to_owned(),
     }
     .into()
 }

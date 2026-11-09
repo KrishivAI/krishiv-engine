@@ -355,6 +355,7 @@ impl Display for NodeLine<'_> {
                 write!(f, " ({})", List(params))
             }
             PlanNode::PipeOperator { .. } => f.write_str("PipeOperator"),
+            PlanNode::Repartition { exprs, .. } => write!(f, "Repartition ({})", List(exprs)),
             PlanNode::JoinHint { strategy, .. } => {
                 write!(f, "JoinHint (strategy={})", strategy.name())
             }
@@ -850,6 +851,8 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 Name(std::slice::from_ref(name))
             )));
         }
+        // Spark prints the item only.
+        ExprNode::Pipe { expr, .. } => out.push(Piece::Expr(expr)),
         ExprNode::MultiAlias { expr, names } => {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS ({})", names.join(", "))));

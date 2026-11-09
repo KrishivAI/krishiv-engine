@@ -613,6 +613,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "map_key_dedup_policy"
             | "legacy_charset_switches"
             | "legacy_time_parser"
+            | "binary_output_style"
             | "session_zone_name"
             | "aggregate_filter"
             | "range"
@@ -634,7 +635,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
                 || n.starts_with("geo_")
                 || n.starts_with("interval_")
                 || n.starts_with("collated_")
-                || n.starts_with("variant_") =>
+                || n.starts_with("variant_")
+                || n.starts_with("calendar_") =>
             {
                 6
             }
