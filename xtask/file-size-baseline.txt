@@ -10,8 +10,8 @@
 3277 crates/krishiv-exec/src/aggregate/tests.rs
 2182 crates/krishiv-exec/src/join/grace.rs
 2003 crates/krishiv-exec/src/operators/sort/sort.rs
-2215 crates/krishiv-exec/src/physical/instantiate.rs
-2139 crates/krishiv-exec/src/planner/build.rs
+2208 crates/krishiv-exec/src/physical/instantiate.rs
+2136 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 3064 crates/krishiv-exec/src/window/tests.rs

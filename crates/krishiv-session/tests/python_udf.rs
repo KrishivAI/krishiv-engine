@@ -12,6 +12,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, Int64Array, RecordBatch};
 use futures::future::BoxFuture;
 use krishiv_common::error::{ErrorClass, InternalError};
@@ -154,6 +155,72 @@ async fn calls_are_sliced_to_max_records_per_batch_and_rows_stay_in_order() {
     let calls = seen.lock().unwrap().calls.clone();
     assert!(calls.iter().all(|&n| n <= 3), "{calls:?}");
     assert_eq!(calls.iter().sum::<usize>(), 10);
+}
+
+#[tokio::test]
+async fn a_collected_range_keeps_its_order_through_calls_on_many_slices() {
+    // Spark collects a range's partitions in order, and a Python UDF keeps
+    // each partition's order: the rows come back in range order, as a plain
+    // collected `range` does here (several producing drivers once appended
+    // their slices in completion order).
+    let (s, _) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    s.conf()
+        .set("spark.sql.execution.arrow.maxRecordsPerBatch", "1000")
+        .unwrap();
+    for _ in 0..3 {
+        let got = longs(&s, "SELECT py_plus(id) FROM range(0, 50000, 1, 12)").await;
+        assert_eq!(got, (1..=50_000).map(Some).collect::<Vec<_>>());
+    }
+}
+
+#[tokio::test]
+async fn a_limit_over_calls_on_a_range_takes_its_first_rows() {
+    let (s, _) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    s.conf()
+        .set("spark.sql.execution.arrow.maxRecordsPerBatch", "1000")
+        .unwrap();
+    let got = longs(&s, "SELECT py_plus(id) FROM range(0, 50000, 1, 12) LIMIT 5").await;
+    assert_eq!(got, (1..=5).map(Some).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn an_aggregate_over_calls_on_a_range_reads_their_results_in_parallel() {
+    // Nothing above the calls needs the range's order, so their results are
+    // read by several drivers (design P2-T059 §6.3: one reader made the
+    // aggregate a serial stage that capped the pool's scaling).
+    let (s, _) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    s.conf()
+        .set("spark.sql.execution.arrow.maxRecordsPerBatch", "1000")
+        .unwrap();
+    let sql = "SELECT sum(py_plus(id)) FROM range(0, 100000, 1, 12)";
+    assert_eq!(longs(&s, sql).await, vec![Some(5_000_050_000)]);
+    let text: String = s
+        .sql(&format!("EXPLAIN ANALYZE {sql}"))
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap()
+        .iter()
+        .flat_map(|b| {
+            let c = b.column(0);
+            (0..c.len())
+                .map(|i| match c.data_type() {
+                    arrow_schema::DataType::Utf8View => c.as_string_view().value(i).to_owned(),
+                    _ => c.as_string::<i32>().value(i).to_owned(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let reader = text
+        .lines()
+        .find(|l| l.contains("SharedSource"))
+        .unwrap_or_else(|| panic!("no shared source in {text}"));
+    assert!(!reader.contains(" 1 driver)"), "{reader}");
 }
 
 #[tokio::test]

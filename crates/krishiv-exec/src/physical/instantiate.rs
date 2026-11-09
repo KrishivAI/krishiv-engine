@@ -86,8 +86,10 @@ use crate::values::{
 use crate::window::{GroupLimitPlan, WindowGroupLimit};
 
 mod distributed;
+mod order;
 mod python_eval;
 use distributed::planned_schema_holds;
+use order::{range_ordered_evals, reads_range_in_order};
 
 /// Creates the spill scope of one instantiation: the query's own spill
 /// directory on this worker, removed when the scope's last holder (the
@@ -445,6 +447,7 @@ fn instantiate_with_schemas(
             loops: HashMap::new(),
             schemas: BTreeMap::new(),
             unit_weights: HashSet::new(),
+            range_ordered: range_ordered_evals(plan.roots(), Some(plan.root())),
         };
         for root in plan.roots() {
             cx.declare_filters(root)?;
@@ -518,6 +521,8 @@ struct Instantiation<'a> {
     /// Aggregate nodes (by address) that refuse weights other than 1: the
     /// partial phase of a written-out `DISTINCT` aggregation.
     unit_weights: HashSet<usize>,
+    /// `PythonEval` nodes (by address) keeping a `range`'s order (`order.rs`).
+    range_ordered: HashSet<usize>,
 }
 
 /// What a recursive CTE needs to instantiate its recursive term once per
@@ -571,6 +576,7 @@ impl Detached {
                 loops,
                 schemas: BTreeMap::new(),
                 unit_weights: HashSet::new(),
+                range_ordered: range_ordered_evals([node], None),
             };
             cx.declare_filters(node)?;
             for sp in cx.shared_plans.iter() {
@@ -1584,19 +1590,6 @@ impl Instantiation<'_> {
                 probe: probe.node,
             }),
         })
-    }
-}
-
-/// Whether `n` streams a `range` through row-wise nodes only (filters,
-/// projections and limits), so its rows reach a `LIMIT` or the result in a
-/// defined order.
-fn reads_range_in_order(n: &PhysNode) -> bool {
-    match n {
-        PhysNode::Range(_) => true,
-        PhysNode::Filter { input, .. }
-        | PhysNode::Project { input, .. }
-        | PhysNode::Limit { input, .. } => reads_range_in_order(input),
-        _ => false,
     }
 }
 

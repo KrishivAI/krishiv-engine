@@ -36,8 +36,18 @@ impl Instantiation<'_> {
         else {
             return Err(internal("not a PythonEval node".to_owned()));
         };
-        let ordered = ends_in_sort(input) || reads_range_in_order(input);
-        let input = self.node(input)?;
+        // A range's order is kept only where a `LIMIT` or the result needs it
+        // (`order.rs`); then one driver submits the input, so the list holds
+        // the slices in range order. Elsewhere the results are read in
+        // parallel (design P2-T059 §6.3).
+        let range_ordered = self
+            .range_ordered
+            .contains(&std::ptr::from_ref(node).addr());
+        let ordered = ends_in_sort(input) || range_ordered;
+        let mut input = self.node(input)?;
+        if range_ordered {
+            input.node = Arc::new(OrderedNode { inner: input.node });
+        }
         let sink = self.python_eval_sink(&input.schema, layout, calls)?;
         let source = SharedSource::new(sink.schema());
         Ok(Built {
