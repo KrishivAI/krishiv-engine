@@ -472,6 +472,110 @@ impl RowLayout {
         Ok(keys)
     }
 
+    /// The stored hash `h` of each row of `columns`, as [`encode`](Self::encode)
+    /// computes it, without writing the rows (E2 step 3: a batch with few
+    /// distinct keys encodes only each key's first row). Only for a key
+    /// layout.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` as `encode`, and for a payload layout.
+    pub fn hash_only(&self, columns: &[ArrayRef]) -> Result<Vec<u64>> {
+        if !self.hashed || columns.len() != self.columns.len() {
+            return Err(internal(
+                "hash_only needs a key layout and its columns".to_owned(),
+            ));
+        }
+        let n = columns.first().map_or(0, Array::len);
+        let mut hashes = vec![fold(SEEDLESS, MIX); n];
+        let strings = foldhash::fast::FixedState::with_seed(SEEDLESS);
+        for (column, array) in self.columns.iter().zip(columns) {
+            if array.len() != n {
+                return Err(internal("key columns of different lengths".to_owned()));
+            }
+            let nulls = array.logical_nulls();
+            if column.null_bit.is_none()
+                && !self.lenient
+                && nulls.as_ref().is_some_and(|v| v.null_count() > 0)
+            {
+                return Err(internal("NULL in a key declared non-nullable".to_owned()));
+            }
+            if column.kind != Kind::View && array.data_type() != &column.data_type {
+                return Err(internal(format!(
+                    "key column of type {} for a {} key",
+                    array.data_type(),
+                    column.data_type
+                )));
+            }
+            let valid = |i: usize| nulls.as_ref().is_none_or(|v| v.is_valid(i));
+            for (i, h) in hashes.iter_mut().enumerate() {
+                if !valid(i) {
+                    // `write_nulls` mixes it even when the column has no
+                    // validity bit (the lenient case writes zeros, no hash).
+                    if column.null_bit.is_some() {
+                        *h = mix(*h, NULL_HASH);
+                    }
+                    continue;
+                }
+                *h = match column.kind {
+                    Kind::Bool => mix(*h, u64::from(u8::from(bool_at(array, i)?))),
+                    Kind::F32 => {
+                        let a = array
+                            .as_primitive_opt::<Float32Type>()
+                            .ok_or_else(|| internal("float key expected".to_owned()))?;
+                        mix(*h, u64::from(normalize32(a.value(i)).to_bits()))
+                    }
+                    Kind::F64 => {
+                        let a = array
+                            .as_primitive_opt::<Float64Type>()
+                            .ok_or_else(|| internal("double key expected".to_owned()))?;
+                        mix(*h, normalize64(a.value(i)).to_bits())
+                    }
+                    Kind::Fixed(w) => {
+                        let data = array.to_data();
+                        let bytes = data
+                            .buffers()
+                            .first()
+                            .and_then(|b| {
+                                b.as_slice()
+                                    .get((data.offset() + i) * w..(data.offset() + i + 1) * w)
+                            })
+                            .ok_or_else(|| {
+                                internal("fixed-width key buffer too short".to_owned())
+                            })?;
+                        let mut acc = *h;
+                        for chunk in bytes.chunks(8) {
+                            let mut word = [0u8; 8];
+                            word[..chunk.len()].copy_from_slice(chunk);
+                            acc = mix(acc, u64::from_le_bytes(word));
+                        }
+                        acc
+                    }
+                    Kind::View => {
+                        let bytes = view_bytes(array, i)?;
+                        if bytes.len() <= INLINE_MAX {
+                            let mut v = [0u8; VIEW_BYTES];
+                            v[..4].copy_from_slice(
+                                &u32::try_from(bytes.len())
+                                    .map_err(|_| {
+                                        internal("a key value longer than 4 GiB".to_owned())
+                                    })?
+                                    .to_le_bytes(),
+                            );
+                            v[4..4 + bytes.len()].copy_from_slice(bytes);
+                            mix(*h, inline_hash(u128::from_le_bytes(v)))
+                        } else {
+                            mix(*h, strings.hash_one(bytes))
+                        }
+                    }
+                };
+            }
+        }
+        for h in &mut hashes {
+            *h = fold(*h, FINISH);
+        }
+        Ok(hashes)
+    }
+
     /// Whether the rows have string or binary views (and so may point into
     /// a heap).
     pub fn has_views(&self) -> bool {
@@ -1027,6 +1131,26 @@ fn inline_hash(view: u128) -> u64 {
     fold(fold(lo ^ MIX, FINISH) ^ hi, MIX)
 }
 
+fn bool_at(array: &ArrayRef, i: usize) -> Result<bool> {
+    array
+        .as_boolean_opt()
+        .map(|a| a.value(i))
+        .ok_or_else(|| internal("boolean key expected".to_owned()))
+}
+
+/// The bytes of string or binary value `i`.
+fn view_bytes(array: &ArrayRef, i: usize) -> Result<&[u8]> {
+    Ok(match array.data_type() {
+        DataType::Utf8 => array.as_string::<i32>().value(i).as_bytes(),
+        DataType::LargeUtf8 => array.as_string::<i64>().value(i).as_bytes(),
+        DataType::Utf8View => array.as_string_view().value(i).as_bytes(),
+        DataType::Binary => array.as_binary::<i32>().value(i),
+        DataType::LargeBinary => array.as_binary::<i64>().value(i),
+        DataType::BinaryView => array.as_binary_view().value(i),
+        t => return Err(internal(format!("string key expected, got {t}"))),
+    })
+}
+
 fn round8(n: usize) -> usize {
     n.div_ceil(8) * 8
 }
@@ -1104,5 +1228,93 @@ mod tests {
             (keys.rows, keys.hashes)
         };
         assert_eq!(put(&dirty), put(&clean));
+    }
+    /// `hash_only` is `encode`'s stored hash for every key shape (E2 step 3).
+    #[test]
+    fn hash_only_matches_encode() {
+        use arrow_array::{
+            BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
+            Int64Array, LargeStringArray, StringArray, StringViewArray,
+        };
+        let long = "a string well past the twelve byte inline limit";
+        let strs: Vec<Option<&str>> = vec![
+            None,
+            Some(""),
+            Some("a"),
+            Some("twelve bytes"),
+            Some("thirteen byte"),
+            Some(long),
+            Some("a"),
+            None,
+            Some(long),
+            Some("é"),
+        ];
+        let n = strs.len();
+        let f64s = Float64Array::from(vec![
+            Some(f64::NAN),
+            Some(-0.0),
+            Some(0.0),
+            None,
+            Some(1.5),
+            Some(f64::INFINITY),
+            Some(-f64::NAN),
+            Some(0.0),
+            None,
+            Some(-0.0),
+        ]);
+        let f32s = Float32Array::from(vec![
+            Some(f32::NAN),
+            Some(-0.0),
+            Some(0.0),
+            None,
+            Some(2.5),
+            Some(1.0),
+            Some(-f32::NAN),
+            Some(0.0),
+            None,
+            Some(-0.0),
+        ]);
+        let ints = Int64Array::from(
+            (0..n as i64)
+                .map(|i| (i % 3 != 0).then_some(i))
+                .collect::<Vec<_>>(),
+        );
+        let small = Int32Array::from((0..10).map(Some).collect::<Vec<_>>());
+        let bools = BooleanArray::from(
+            (0..n)
+                .map(|i| (i % 4 != 0).then_some(i % 2 == 0))
+                .collect::<Vec<_>>(),
+        );
+        let dec = Decimal128Array::from(
+            (0..n as i128)
+                .map(|i| (i % 5 != 0).then_some(i - 3))
+                .collect::<Vec<_>>(),
+        )
+        .with_precision_and_scale(20, 2)
+        .unwrap();
+        let bin = BinaryArray::from_iter(strs.iter().map(|s| s.map(str::as_bytes)));
+        let cols: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(strs.clone())),
+            Arc::new(f64s),
+            Arc::new(f32s),
+            Arc::new(ints),
+            Arc::new(small),
+            Arc::new(bools),
+            Arc::new(dec),
+            Arc::new(bin),
+            Arc::new(LargeStringArray::from(strs.clone())),
+            Arc::new(StringViewArray::from(strs)),
+        ];
+        let types: Vec<DataType> = cols.iter().map(|c| c.data_type().clone()).collect();
+        let layout = RowLayout::new(&types, &vec![true; types.len()]).unwrap();
+        let encoded = layout.encode(&cols).unwrap();
+        assert_eq!(layout.hash_only(&cols).unwrap(), encoded.hashes());
+        for k in 1..=cols.len() {
+            let l = RowLayout::new(&types[..k], &vec![true; k]).unwrap();
+            assert_eq!(
+                l.hash_only(&cols[..k]).unwrap(),
+                l.encode(&cols[..k]).unwrap().hashes()
+            );
+        }
     }
 }
