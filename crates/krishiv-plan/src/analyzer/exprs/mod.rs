@@ -59,6 +59,7 @@ use crate::{
 };
 
 mod aggregates;
+mod by_k;
 mod calls;
 mod collation;
 mod columns;
@@ -425,6 +426,8 @@ impl Resolver<'_> {
         // Rewritten calls stay alive for the pass: `done` is keyed by
         // address.
         let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
+        // `max_by(.., k) OVER (..)` calls rewritten to their window form, by the address of the call.
+        let mut by_k_original: HashMap<usize, Arc<Expr>> = HashMap::new();
         // The key argument of an AES call and everything under it (kept on
         // the resolver, see `Resolver::secret`): an error raised there
         // never shows the key (ADR 0042), so its message parameters are
@@ -483,6 +486,13 @@ impl Resolver<'_> {
                         stack.push(Step::Enter(rewritten, ctx));
                         continue;
                     }
+                    if let Some(rewritten) = self.window_by_k(&x) {
+                        by_k_original.insert(addr(&*x), Arc::clone(&x));
+                        rewritten_calls.push(Arc::clone(&rewritten));
+                        stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
+                        stack.push(Step::Enter(rewritten, ctx));
+                        continue;
+                    }
                     // A lambda binds where it is used: a higher-order
                     // call binds its array and lambda children itself
                     // (see `hof`), while a lambda anywhere else is no
@@ -535,7 +545,12 @@ impl Resolver<'_> {
                     stack.extend(kids.into_iter().rev().map(|(c, k)| Step::Enter(c, k)));
                 }
                 Step::Link(from, to, ctx) => {
-                    if let Some(b) = done.get(&(addr(&*to), ctx)).cloned() {
+                    if let Some(mut b) = done.get(&(addr(&*to), ctx)).cloned() {
+                        if let Some(original) = by_k_original.get(&from)
+                            && let Some(shown) = Self::by_k_shown(original, &b)
+                        {
+                            b.shown = Some(shown);
+                        }
                         done.insert((from, ctx), b);
                     }
                 }

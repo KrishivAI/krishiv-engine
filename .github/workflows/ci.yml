@@ -368,6 +368,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: $/.github/actions/setup-mold
       - run: cargo xtask layering
+      - run: cargo xtask quarantine
 
   # The generated Spark Connect types match the vendored protos (P2-T091a).
   # `tools/connect-protogen` is a workspace of its own (protox, prost-build),
