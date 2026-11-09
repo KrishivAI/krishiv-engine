@@ -477,10 +477,7 @@ fn reference(
                         AggregateFunction::Max => vals.iter().max().unwrap().to_string(),
                         AggregateFunction::Avg => {
                             // Spark sums integers as doubles, in order.
-                            #[expect(
-                                clippy::cast_precision_loss,
-                                reason = "Spark's double average"
-                            )]
+                            #[expect(clippy::cast_precision_loss, reason = "Spark's average")]
                             let s = vals.iter().fold(0.0, |s, v| s + *v as f64);
                             format!("{:?}", s / to_f(vals.len()))
                         }
