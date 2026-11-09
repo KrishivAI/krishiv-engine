@@ -19,7 +19,7 @@
 //! the process need not be the routing function.
 
 use std::hash::BuildHasher;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
@@ -143,6 +143,54 @@ pub struct RowLayout {
     validity_at: usize,
     /// The row starts with its hash (a key row); a payload row does not.
     hashed: bool,
+    /// Buffers of encoded batches that were dropped, for the next batch.
+    spares: Arc<Spares>,
+}
+
+/// Most spare buffer sets a layout keeps (about one per driver that encodes
+/// at once; a set is a batch's rows, heap and hashes).
+const SPARE_SETS: usize = 16;
+/// Largest spare set kept, in bytes of capacity: a rare huge batch is
+/// freed, so the spares stay about a batch each.
+const SPARE_BYTES: usize = 2 << 20;
+
+/// The buffers of one [`EncodedKeys`].
+#[derive(Debug, Default)]
+struct Buffers {
+    rows: Vec<u8>,
+    heap: Vec<u8>,
+    hashes: Vec<u64>,
+}
+
+/// The spare [`Buffers`] of one layout (study 19 L3). Every batch used to
+/// allocate its row, hash and heap buffers fresh: above the allocator's
+/// medium-object size each was purged and page-faulted again per batch
+/// (5.9 of 26 ns per row of q01's encode). A set returns here when its
+/// [`EncodedKeys`] drops and the next [`RowLayout::encode`] reuses it,
+/// cleared and zero-filled. They are not charged to a memory pool: a
+/// layout holds at most [`SPARE_SETS`] sets of at most [`SPARE_BYTES`].
+#[derive(Debug, Default)]
+struct Spares(Mutex<Vec<Buffers>>);
+
+impl Spares {
+    fn take(&self) -> Buffers {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop()
+            .unwrap_or_default()
+    }
+
+    fn give(&self, b: Buffers) {
+        let bytes = b.rows.capacity() + b.heap.capacity() + b.hashes.capacity() * size_of::<u64>();
+        if bytes > SPARE_BYTES {
+            return;
+        }
+        let mut spares = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if spares.len() < SPARE_SETS {
+            spares.push(b);
+        }
+    }
 }
 
 impl RowLayout {
@@ -244,6 +292,7 @@ impl RowLayout {
             lenient: false,
             validity_at,
             hashed,
+            spares: Arc::default(),
         })
     }
 
@@ -421,18 +470,27 @@ impl RowLayout {
             )));
         }
         let n = columns.first().map_or(0, Array::len);
+        let Buffers {
+            mut rows,
+            mut heap,
+            mut hashes,
+        } = self.spares.take();
+        rows.clear();
+        rows.resize(n * self.stride, 0);
+        heap.clear();
+        hashes.clear();
+        // A payload layout's rows are never hashed.
+        if self.hashed {
+            hashes.resize(n, fold(SEEDLESS, MIX));
+        }
         let mut keys = EncodedKeys {
             stride: self.stride,
             len: n,
-            rows: vec![0; n * self.stride],
-            heap: Vec::new(),
-            // A payload layout's rows are never hashed.
-            hashes: if self.hashed {
-                vec![fold(SEEDLESS, MIX); n]
-            } else {
-                Vec::new()
-            },
+            rows,
+            heap,
+            hashes,
             hashed: self.hashed,
+            spares: Some(Arc::clone(&self.spares)),
         };
         let strings = foldhash::fast::FixedState::with_seed(SEEDLESS);
         for (column, array) in self.columns.iter().zip(columns) {
@@ -576,6 +634,20 @@ pub struct EncodedKeys {
     /// Empty when the layout is not hashed.
     hashes: Vec<u64>,
     hashed: bool,
+    /// Where the buffers go when this drops (`None`: built by hand).
+    spares: Option<Arc<Spares>>,
+}
+
+impl Drop for EncodedKeys {
+    fn drop(&mut self) {
+        if let Some(spares) = self.spares.take() {
+            spares.give(Buffers {
+                rows: std::mem::take(&mut self.rows),
+                heap: std::mem::take(&mut self.heap),
+                hashes: std::mem::take(&mut self.hashes),
+            });
+        }
+    }
 }
 
 impl EncodedKeys {
@@ -1061,6 +1133,62 @@ fn normalize32(v: f32) -> f32 {
 mod tests {
     use super::*;
 
+    /// Study 19 L3: a dropped batch's buffers are the next batch's, cleared and
+    /// zero-filled, so a reused set encodes exactly what a fresh one does
+    /// (also after a batch whose long strings filled the heap and whose rows
+    /// held NULL bits), and the allocation is reused.
+    #[test]
+    fn encoded_buffers_are_reused_and_encode_as_fresh() {
+        use arrow_array::{Int64Array, StringViewArray};
+        let types = [DataType::Int64, DataType::Utf8View];
+        let layout = RowLayout::new(&types, &[true, true]).unwrap();
+        let long = "a string longer than twelve bytes";
+        let first: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![Some(1), None, Some(3), Some(4)])),
+            Arc::new(StringViewArray::from(vec![
+                Some(long),
+                None,
+                Some("ab"),
+                Some(long),
+            ])),
+        ];
+        let second: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![Some(7), Some(8)])),
+            Arc::new(StringViewArray::from(vec![Some("x"), Some("y")])),
+        ];
+        let fresh = RowLayout::new(&types, &[true, true])
+            .unwrap()
+            .encode(&second)
+            .unwrap();
+        let a = layout.encode(&first).unwrap();
+        assert!(!a.heap().is_empty());
+        let rows_at = a.rows.as_ptr();
+        drop(a);
+        let b = layout.encode(&second).unwrap();
+        assert_eq!(b.rows, fresh.rows);
+        assert_eq!(b.hashes, fresh.hashes);
+        assert!(b.heap().is_empty() && fresh.heap().is_empty());
+        assert_eq!(b.len(), 2);
+        assert_eq!(b.rows.as_ptr(), rows_at, "the buffer was not reused");
+        // A layout keeps a bounded number of spare sets.
+        let held: Vec<_> = (0..SPARE_SETS + 8)
+            .map(|_| layout.encode(&second).unwrap())
+            .collect();
+        drop(held);
+        assert!(layout.spares.0.lock().unwrap().len() <= SPARE_SETS);
+    }
+
+    /// A huge batch's buffers are freed, not kept.
+    #[test]
+    fn huge_encoded_buffers_are_not_kept() {
+        use arrow_array::Int64Array;
+        let layout = RowLayout::new(&[DataType::Int64], &[false]).unwrap();
+        let n = SPARE_BYTES / layout.stride() + 1;
+        let col: ArrayRef = Arc::new(Int64Array::from(vec![1; n]));
+        drop(layout.encode(&[col]).unwrap());
+        assert!(layout.spares.0.lock().unwrap().is_empty());
+    }
+
     /// The zero-padded inline view of `value` (at most 12 bytes).
     fn view(value: &[u8]) -> u128 {
         let mut b = [0u8; VIEW_BYTES];
@@ -1098,10 +1226,14 @@ mod tests {
                 heap: Vec::new(),
                 hashes: vec![0; n],
                 hashed: true,
+                spares: None,
             };
             keys.put_arrow_views(offset, None, &strings, views, |i| values[i])
                 .unwrap();
-            (keys.rows, keys.hashes)
+            (
+                std::mem::take(&mut keys.rows),
+                std::mem::take(&mut keys.hashes),
+            )
         };
         assert_eq!(put(&dirty), put(&clean));
     }

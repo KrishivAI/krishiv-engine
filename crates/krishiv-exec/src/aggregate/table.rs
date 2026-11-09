@@ -419,6 +419,10 @@ pub(crate) fn batch(schema: &SchemaRef, cols: Vec<ArrayRef>, rows: usize) -> Res
 /// "ids" are positions for an `AggTable` and row references for a
 /// `RowTable`; [`ids`](Self::ids) maps positions to ids for both.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one table per partition, built once and never moved in a loop; a box adds an indirection on every batch"
+)]
 pub(crate) enum Table {
     Keys(AggTable),
     Rows(RowTable),
