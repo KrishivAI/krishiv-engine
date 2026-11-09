@@ -260,7 +260,7 @@ def show_string(names: list[str], rows: list[list[str]], n: int, truncate: bool 
         if not body:
             lines.append("(0 rows)")
     else:
-        header = [_truncate(c, limit) for c in names]
+        header = list(names)  # Spark truncates cells, never the header
         widths = [max([3, _width(h)] + [_width(r[i]) for r in body]) for i, h in enumerate(header)]
         rule = "+" + "+".join("-" * w for w in widths) + "+"
         right = limit > 0

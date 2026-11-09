@@ -35,7 +35,7 @@
 //! Hoisting a surely-evaluated subexpression can change which error is
 //! raised first when two expressions on one row would both raise; Spark
 //! specifies no order there. That divergence is recorded with the ADR 0023
-//! divergences (see `docs/known-differences.md`).
+//! divergences (see `docs/concepts/known-differences.md`).
 //!
 //! Plans are pure data; the rewrite is deterministic and changes no result.
 
