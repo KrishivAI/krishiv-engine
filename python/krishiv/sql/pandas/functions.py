@@ -14,7 +14,7 @@ made as in Spark and raises ``NOT_IMPLEMENTED`` when called.
 import functools
 import warnings
 from inspect import getfullargspec, signature
-from typing import Any, get_type_hints
+from typing import Any, cast, get_type_hints
 
 from krishiv._udf.pandas_utils import require_minimum_pandas_version, require_minimum_pyarrow_version
 from krishiv._udf.typehints import infer_eval_type
@@ -70,11 +70,11 @@ def pandas_udf(f: Any = None, returnType: Any = None, functionType: Any = None) 
 
 
 def vectorized_udf(
-    f=None,
-    returnType=None,
-    functionType=None,
+    f: Any = None,
+    returnType: Any = None,
+    functionType: Any = None,
     kind: str = "pandas",
-):
+) -> Any:
     assert kind in ["pandas", "arrow"], "kind should be either 'pandas' or 'arrow'"
 
     # decorator @pandas_udf(returnType, functionType)
@@ -168,7 +168,7 @@ def vectorized_udf(
 
 
 # validate the pandas udf and return the adjusted eval type
-def _validate_vectorized_udf(f, evalType, kind: str = "pandas") -> int:
+def _validate_vectorized_udf(f: Any, evalType: Any, kind: str = "pandas") -> int:
     assert kind in ["pandas", "arrow"], "kind should be either 'pandas' or 'arrow'"
 
     argspec = getfullargspec(f)
@@ -304,10 +304,10 @@ def _validate_vectorized_udf(f, evalType, kind: str = "pandas") -> int:
             },
         )
 
-    return evalType
+    return cast(int, evalType)
 
 
-def _create_vectorized_udf(f, returnType, evalType, kind):
+def _create_vectorized_udf(f: Any, returnType: Any, evalType: Any, kind: str) -> Any:
     evalType = _validate_vectorized_udf(f, evalType, kind)
     # Krishiv: no Spark Connect client (`pandas/functions.py:1025-1028`).
     return _create_udf(f, returnType, evalType)

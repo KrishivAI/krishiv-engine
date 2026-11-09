@@ -1012,6 +1012,14 @@ fn plan_round_trip_is_off_by_default_and_parses() {
 
 #[test]
 fn python_udf_entries_parse_and_default() {
+    assert_eq!(
+        ARROW_MAX_RECORDS_PER_BATCH.key,
+        "krishiv.sql.execution.arrow.maxRecordsPerBatch"
+    );
+    assert_eq!(
+        PYTHON_UDF_ARROW_ENABLED.key,
+        "krishiv.sql.execution.pythonUDF.arrow.enabled"
+    );
     let mut c = Config::new();
     assert_eq!(
         c.get(&ARROW_MAX_RECORDS_PER_BATCH)

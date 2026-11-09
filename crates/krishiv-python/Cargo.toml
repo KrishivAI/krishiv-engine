@@ -55,4 +55,3 @@ mimalloc = { workspace = true, optional = true }
 # use the local-dynamic model there.
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls"] }
-

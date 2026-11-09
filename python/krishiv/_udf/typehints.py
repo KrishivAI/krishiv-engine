@@ -411,7 +411,7 @@ def infer_group_arrow_eval_type(
     sig: Signature,
     type_hints: Dict[str, Any],
 ) -> Optional[Union["ArrowGroupedMapUDFType", "ArrowGroupedMapIterUDFType"]]:
-    from krishiv.sql.pandas.functions import PythonEvalType
+    from krishiv.sql.udf import PythonEvalType
 
     require_minimum_pyarrow_version()
 
@@ -504,7 +504,7 @@ def infer_group_pandas_eval_type(
     sig: Signature,
     type_hints: Dict[str, Any],
 ) -> Optional[Union["PandasGroupedMapUDFType", "PandasGroupedMapIterUDFType"]]:
-    from krishiv.sql.pandas.functions import PythonEvalType
+    from krishiv.sql.udf import PythonEvalType
 
     require_minimum_pandas_version()
 

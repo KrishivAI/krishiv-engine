@@ -129,6 +129,14 @@ show_error_codes = true
 module = ["pyarrow.*"]
 ignore_missing_imports = true
 
+# `krishiv._udf` is PySpark's worker-side conversion code, vendored nearly
+# verbatim (NOTICE); it is not annotated for `--strict` and imports pandas
+# (no inline types). The public entry points (`krishiv.sql.udf`,
+# `krishiv.sql.pandas`) are still checked.
+[[tool.mypy.overrides]]
+module = ["krishiv._udf.*"]
+ignore_errors = true
+
 [tool.coverage.paths]
 # The wheel is tested from its installed location; map it back to the source tree so
 # reports (and Codecov) show repository paths.

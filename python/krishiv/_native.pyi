@@ -24,6 +24,8 @@ __all__ = [
     "WindowSpec",
     "__allocator__",
     "__version__",
+    "_udf_pool_shutdown",
+    "_udf_runner_conf",
     "call_function",
     "col",
     "count_distinct",

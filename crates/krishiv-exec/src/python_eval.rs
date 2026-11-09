@@ -3,14 +3,15 @@
 //!
 //! **Runtime seam.** A plan names a Python UDF by `(name, version)`
 //! ([`FunctionId::PythonUdf`](krishiv_plan::FunctionId::PythonUdf)); the
-//! worker resolves it through the [`UdfRuntime`] its [`WorkerContext`]
+//! worker resolves it through the [`UdfRuntime`] its
+//! [`WorkerContext`](crate::physical::WorkerContext)
 //! holds (`WorkerContext::with_python_udfs`). The embedded runtime lives
 //! in `krishiv-python` (layer 6), so nothing below it links Python. A
 //! worker without a runtime, or a runtime without that version, refuses
 //! the plan with `KRISHIV_UDF_NOT_AVAILABLE`.
 //!
 //! **Evaluation is a pipeline break** ([`PythonEvalSink`] plus a
-//! [`SharedSource`](crate::shared::SharedSource) over its list). A UDF batch
+//! `SharedSource` over its list). A UDF batch
 //! can take tens of milliseconds, far over the ≈1 ms bound of
 //! [`Sink::sink`], so compute workers never run Python and never wait for
 //! it: `sink` slices its input to at most `maxRecordsPerBatch` rows,
@@ -19,7 +20,7 @@
 //! full it returns [`SinkStatus::Blocked`], whose future the driver awaits
 //! between calls (servicing spill requests meanwhile). Finished slices, the
 //! input's columns plus one column per call, are kept as the shared
-//! plan's list is ([`crate::shared`]: memory under the driver's consumer,
+//! plan's list is (`crate::shared`: memory under the driver's consumer,
 //! spilled under pressure); the downstream pipeline reads them after
 //! `finalize`, which awaits the slices still in flight. Every in-flight
 //! slice reserves its input bytes, so a full window is bounded memory (I11).

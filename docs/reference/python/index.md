@@ -13,12 +13,15 @@
 | [`krishiv.sql.functions`](krishiv.sql.functions.md) | `pyspark.sql.functions`: column builders. A function resolves by name in the engine's |
 | [`krishiv.sql.group`](krishiv.sql.group.md) | `GroupedData`: a DataFrame grouped by key columns, as `pyspark.sql.GroupedData`. |
 | [`krishiv.sql.na`](krishiv.sql.na.md) | `DataFrameNaFunctions` (`DataFrame.na`): handling of missing data, as `pyspark.sql.DataFrameNaFunctions`. |
+| [`krishiv.sql.pandas`](krishiv.sql.pandas.md) | `pyspark.sql.pandas`: the pandas and Arrow vectorized UDFs (`krishiv.sql.pandas.functions`). |
+| [`krishiv.sql.pandas.functions`](krishiv.sql.pandas.functions.md) | `pyspark.sql.pandas.functions`: `pandas_udf` and `arrow_udf` (design P2-T059 unit 2c). |
 | [`krishiv.sql.profile_view`](krishiv.sql.profile_view.md) | An offline viewer for `krishiv.query-profile` documents. |
 | [`krishiv.sql.readwriter`](krishiv.sql.readwriter.md) | `DataFrameReader` (`spark.read`), `DataFrameWriter` (`df.write`) |
 | [`krishiv.sql.row`](krishiv.sql.row.md) | `Row`: a result row, as `pyspark.sql.Row` (a tuple with field names). |
 | [`krishiv.sql.session`](krishiv.sql.session.md) | `SparkSession`: the entry point, as `pyspark.sql.SparkSession` (embedded: no server). |
 | [`krishiv.sql.stat`](krishiv.sql.stat.md) | `DataFrameStatFunctions` (`DataFrame.stat`), as `pyspark.sql.DataFrameStatFunctions`. |
 | [`krishiv.sql.types`](krishiv.sql.types.md) | Spark data types, as `pyspark.sql.types`. |
+| [`krishiv.sql.udf`](krishiv.sql.udf.md) | `pyspark.sql.udf`: `UserDefinedFunction` and `UDFRegistration` (design P2-T059 unit 2c). |
 | [`krishiv.sql.variant`](krishiv.sql.variant.md) | `VariantVal`: a `VARIANT` value as PySpark hands it out (`pyspark.sql.types.VariantVal`). |
 | [`krishiv.sql.window`](krishiv.sql.window.md) | `pyspark.sql.Window` and `pyspark.sql.WindowSpec`: windows for `Column.over`. |
 | [`krishiv.storagelevel`](krishiv.storagelevel.md) | Storage levels for `krishiv.sql.DataFrame.persist`, as `pyspark.StorageLevel`. |
