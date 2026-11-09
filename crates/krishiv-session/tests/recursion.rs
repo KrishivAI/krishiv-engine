@@ -817,3 +817,46 @@ fn a_reference_inside_a_subquery_expression_recurses() {
         assert_eq!(column(rows(&s, &sql)), want, "{sql}");
     }
 }
+
+/// Spark 4.2.0 (krishiv-internal `research/spark/loop-enclosing-cte/probe.{py,out}`): a nondeterministic CTE the
+/// loop reads is computed again by the anchor and by every round, from the seeds fixed at analysis, round `k`'s at
+/// partition `k - 1`: the anchor, round 1 and the outer query see one value, round 2 another.
+#[test]
+fn a_nondeterministic_enclosing_cte_is_computed_per_run_from_one_seed() {
+    let s = Session::new().unwrap();
+    let w = "WITH RECURSIVE t AS (SELECT uuid() AS u), ";
+    for (q, want) in [
+        // The anchor and round 1 draw one value, round 2 another.
+        (
+            "r(n, u) AS (SELECT 1, u FROM t UNION ALL SELECT n + 1, t.u FROM r CROSS JOIN t WHERE n < 3) \
+             SELECT count(DISTINCT u) FROM r",
+            "2",
+        ),
+        // The outer query's read of `t` is the anchor's value.
+        (
+            "r(n, u) AS (SELECT 1, u FROM t UNION ALL SELECT n + 1, t.u FROM r CROSS JOIN t WHERE n < 3) \
+             SELECT count(DISTINCT u) FROM (SELECT u FROM r UNION ALL SELECT u FROM t)",
+            "2",
+        ),
+        // Three rounds, three values.
+        (
+            "r(n, u) AS (SELECT 1, 'x' UNION ALL SELECT n + 1, t.u FROM r CROSS JOIN t WHERE n < 4) \
+             SELECT count(DISTINCT u) FROM r WHERE n > 1",
+            "3",
+        ),
+        // Only the anchor reads `t`.
+        (
+            "r(n, u) AS (SELECT 1, u FROM t UNION ALL SELECT n + 1, u FROM r WHERE n < 3) \
+             SELECT count(DISTINCT u) FROM r",
+            "1",
+        ),
+    ] {
+        let sql = format!("{w}{q}");
+        assert_eq!(column(rows(&s, &sql)), vec![want], "{sql}");
+    }
+    // A scalar subquery over `t` in the anchor and the rounds.
+    let q = "WITH RECURSIVE t AS (SELECT rand() AS x FROM range(3)), \
+             r(n, s) AS (SELECT 1, (SELECT sum(x) FROM t) UNION ALL \
+             SELECT n + 1, (SELECT sum(x) FROM t) FROM r WHERE n < 3) SELECT count(DISTINCT s) FROM r";
+    assert_eq!(column(rows(&s, q)), vec!["2"]);
+}

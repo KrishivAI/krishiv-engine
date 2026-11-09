@@ -13,7 +13,6 @@
 # +127: spill guards on spill_parts, and each Loading partition and its Active table hold a seat in the query's grace table cohort (#627)
 2320 crates/krishiv-exec/src/join/grace.rs
 2003 crates/krishiv-exec/src/operators/sort/sort.rs
-2215 crates/krishiv-exec/src/physical/instantiate.rs
 # +1 line: PlanNode::Repartition plans a hash exchange (DISTRIBUTE BY as a real exchange)
 2106 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
