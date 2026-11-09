@@ -364,22 +364,22 @@ fn day_of_year_and_week_follow_the_calendar() {
     assert_eq!(fmt_date("yyyy DDD EEE", 0), "1970 001 Thu");
 }
 
-/// Quarter and `F`, Spark's day of the week in the month (`(day - 1) % 7 + 1`).
+/// Quarter and the aligned week of the month.
 #[test]
-fn quarter_and_day_of_week_in_month() {
+fn quarter_and_aligned_week_of_month() {
     // 2020-01-01 = day 18262.
     for (days, quarter) in [(18_262, 1), (18_262 + 59, 1), (18_262 + 91, 2), (18_627, 4)] {
         assert_eq!(fmt_date("Q", days), quarter.to_string(), "{days}");
     }
     for (day, week) in [
         (1, 1),
-        (7, 7),
-        (8, 1),
-        (14, 7),
-        (15, 1),
-        (28, 7),
-        (29, 1),
-        (31, 3),
+        (7, 1),
+        (8, 2),
+        (14, 2),
+        (15, 3),
+        (28, 4),
+        (29, 5),
+        (31, 5),
     ] {
         assert_eq!(
             fmt_date("F", 18_262 + day - 1),

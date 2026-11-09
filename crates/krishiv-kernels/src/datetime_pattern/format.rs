@@ -131,7 +131,7 @@ impl Fields {
             Field::Day => i64::from(self.day),
             Field::DayOfYear => self.day_of_year,
             Field::Quarter => (i64::from(self.month) - 1) / 3 + 1,
-            Field::AlignedDayOfWeekInMonth => (i64::from(self.day) - 1) % 7 + 1,
+            Field::AlignedWeekOfMonth => (i64::from(self.day) - 1) / 7 + 1,
             Field::HourOfDay => time(self.hour)?,
             Field::ClockHourOfDay => time(if self.hour == 0 { 24 } else { self.hour })?,
             Field::HourOfAmPm => time(self.hour % 12)?,

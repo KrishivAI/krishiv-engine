@@ -85,7 +85,7 @@ enum Field {
     DayOfYear,
     Quarter,
     /// `F`: the aligned week of the month.
-    AlignedDayOfWeekInMonth,
+    AlignedWeekOfMonth,
     /// `H`: 0..=23.
     HourOfDay,
     /// `k`: 1..=24.
@@ -749,7 +749,7 @@ fn letter(c: char, n: usize, era: bool, purpose: Purpose) -> Result<Item, Reject
             },
             _ => return Err(Reject::Invalid),
         },
-        'F' if n == 1 => number(F::AlignedDayOfWeekInMonth, 1, 19, Sign::Normal),
+        'F' if n == 1 => number(F::AlignedWeekOfMonth, 1, 19, Sign::Normal),
         'a' if n == 1 => Item::Text {
             text: Text::AmPm,
             full: false,
