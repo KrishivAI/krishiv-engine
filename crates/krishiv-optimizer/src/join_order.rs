@@ -742,8 +742,22 @@ impl Graph {
             on.sort_unstable();
             on.dedup();
             if let [] | [_] = on.as_slice() {
-                // A conjunct over one input (or none) filters that input.
-                let i = on.first().copied().unwrap_or(0);
+                // A conjunct over one input filters that input. One over none
+                // (a constant `false`) filters the first input without inputs
+                // of its own (a scan): pushdown cannot move it further, so it
+                // is where the next optimization finds and places it again.
+                // On an input with a plan under it, a later pushdown would
+                // carry it into a join tree ordered here without it.
+                let i = on.first().copied().unwrap_or_else(|| {
+                    sorted
+                        .iter()
+                        .position(|l| {
+                            let mut leaf = true;
+                            l.for_each_child(&mut |_| leaf = false);
+                            leaf
+                        })
+                        .unwrap_or(0)
+                });
                 let resolved = leaf_defs
                     .get(i)
                     .map_or_else(|| Arc::clone(&p), |defs| resolve_cse(&p, defs));
