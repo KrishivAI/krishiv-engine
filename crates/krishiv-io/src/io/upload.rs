@@ -271,6 +271,7 @@ impl Upload {
             self.ctx
                 .put(&self.store, &self.lane, &self.path, &self.display, payload)
                 .await?;
+            self.ctx.count(|c| &c.files_written, 1);
             return Ok(self.written);
         }
         if self.buf_len > 0 {
@@ -287,6 +288,7 @@ impl Upload {
             .await
             .map_err(|e| write_failed(&self.display, &e.to_string()))?;
         self.ctx.count(|c| &c.uploads_completed, 1);
+        self.ctx.count(|c| &c.files_written, 1);
         self.multipart = None;
         Ok(self.written)
     }

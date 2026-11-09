@@ -31,6 +31,7 @@ pub(crate) struct QueryStart {
     cache_misses: u64,
     bytes_read: u64,
     bytes_written: u64,
+    files_written: u64,
 }
 
 impl QueryStart {
@@ -45,6 +46,7 @@ impl QueryStart {
             cache_misses: IoCounters::get(&totals.cache_misses),
             bytes_read: IoCounters::get(&own.bytes_read),
             bytes_written: IoCounters::get(&own.bytes_written),
+            files_written: IoCounters::get(&own.files_written),
         }
     }
 
@@ -108,6 +110,11 @@ impl QueryStart {
                     bytes_written: i64::try_from(
                         IoCounters::get(&self.io.counters().bytes_written)
                             .saturating_sub(self.bytes_written),
+                    )
+                    .unwrap_or(i64::MAX),
+                    files_written: i64::try_from(
+                        IoCounters::get(&self.io.counters().files_written)
+                            .saturating_sub(self.files_written),
                     )
                     .unwrap_or(i64::MAX),
                     rows_read: metrics

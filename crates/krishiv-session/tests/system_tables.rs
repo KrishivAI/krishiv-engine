@@ -808,3 +808,27 @@ fn a_file_write_records_the_rows_it_wrote() {
     );
     assert_eq!(r, ["321"], "{r:?}");
 }
+
+#[test]
+fn a_file_write_records_the_files_it_wrote() {
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("w");
+    block_on(async {
+        s.sql("SELECT id FROM range(50)")
+            .await?
+            .write()
+            .mode("overwrite")
+            .format("parquet")
+            .save(out.to_str().unwrap())
+            .await
+    })
+    .unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT CAST(files_written AS STRING) FROM system.queries \
+         WHERE state = 'finished' AND files_written > 0",
+    );
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert!(r[0].parse::<i64>().unwrap() >= 1, "{r:?}");
+}
