@@ -18,7 +18,7 @@ Paths are relative to this crate.
 - `src/wire.rs` the length-prefixed request/reply messages; `src/task.rs` the `krishiv.task.v1alpha` task descriptor
   (with the file splits the coordinator dealt, `Coordinator::deal_scans`; relation batches are refused)
 - `tests/tpch_sim.rs` TPC-H on two workers with dealt scans equals one worker; same seed, same trace; a killed map
-  task reruns; a two-worker write names files as Spark does and commits once; a file changed after listing fails; `krishiv.exec.join.sharedBroadcastBytes` reaches the workers (shared builds uncapped, every build falls back under a one-byte cap)
+  task reruns; a two-worker write names files as Spark does and commits once; a file changed after listing fails; a nested grouping key is refused before any task runs; `krishiv.exec.join.sharedBroadcastBytes` reaches the workers (shared builds uncapped, every build falls back under a one-byte cap)
 
 ## Extension points
 - New scenario: a test calling `simulate` with its own `HostSetup` (which must share nothing between hosts but the object store, and write-only observers such as a log `HostSetup::released` appends to: per released job and host, the broadcast builds and fallbacks).

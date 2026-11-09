@@ -161,7 +161,8 @@ pub(super) fn aggregates_below(p: &LogicalPlan) -> bool {
         PlanNode::Project { input, .. }
         | PlanNode::SubqueryAlias { input, .. }
         | PlanNode::Filter { input, .. }
-        | PlanNode::Sort { input, .. } => aggregates_below(input),
+        | PlanNode::Sort { input, .. }
+        | PlanNode::Repartition { input, .. } => aggregates_below(input),
         _ => false,
     }
 }

@@ -621,12 +621,15 @@ impl TaskContext {
 
     /// A further consumer of this operator that never spills, for memory kept
     /// apart from the driver's consumer: grant credit is per consumer, so two
-    /// merges on one would take each other's.
+    /// merges on one would take each other's. It registers with a signal of
+    /// the driver's owner that is dropped at once (no spillable bytes), so
+    /// arbitration knows which driver it belongs to.
     pub(crate) fn register_plain_consumer(&self, name: &str) -> Arc<ConsumerHandle> {
+        let signal = self.owner.signal();
         ConsumerHandle::register_counted(
             Arc::clone(self.query.pool()),
             name,
-            None,
+            Some(signal as Arc<dyn krishiv_memory::Spillable>),
             self.query.spill_stats(self.op),
         )
     }

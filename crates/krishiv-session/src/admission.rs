@@ -9,6 +9,10 @@
 //! permit arrives, or `failed` with the controller's error class when the
 //! controller refuses. Dropping the query while it is queued cancels it. The
 //! permit lives as long as the query and releases its slot when dropped.
+//!
+//! A query that reads only `system.*` tables skips the controller (no slot, no budget, no wait,
+//! straight to `running`), so an operator can always see why the engine is saturated. Writes and
+//! queries that read anything else are admitted as usual.
 
 use std::fmt;
 use std::sync::Arc;
@@ -29,9 +33,11 @@ pub struct QueryRequest {
     pub tags: Vec<(String, String)>,
     /// The workload class (every session path runs `Interactive` today).
     pub class: WorkloadClass,
-    /// What the query is expected to cost (ADR 0041). `None` means unknown:
-    /// the run path does not compute an estimate yet, so a controller must
-    /// treat `None` as "no information", never as "free".
+    /// What the query is expected to cost (ADR 0041), from the optimized plan the query runs.
+    /// Computed only when the installed controller's [`AdmissionController::uses_estimate`] is
+    /// `true` (the default controller does not), and `None` means unknown: no estimate was
+    /// computed or the plan could not be estimated, so a controller must treat `None` as "no
+    /// information", never as "free".
     pub estimate: Option<Estimate>,
 }
 
@@ -95,6 +101,13 @@ pub trait AdmissionController: Send + Sync + fmt::Debug {
         &'a self,
         request: &'a QueryRequest,
     ) -> BoxFuture<'a, Result<Permit, KrishivError>>;
+
+    /// Whether this controller reads [`QueryRequest::estimate`]. When it returns `false` the
+    /// session does not compute an estimate (planning cost) and the field is `None`. The default
+    /// is `true`; [`Unlimited`] returns `false`.
+    fn uses_estimate(&self) -> bool {
+        true
+    }
 }
 
 /// The default controller: admits every query immediately, with no budget.
@@ -104,5 +117,9 @@ pub struct Unlimited;
 impl AdmissionController for Unlimited {
     fn admit<'a>(&'a self, _: &'a QueryRequest) -> BoxFuture<'a, Result<Permit, KrishivError>> {
         Box::pin(std::future::ready(Ok(Permit::unlimited())))
+    }
+
+    fn uses_estimate(&self) -> bool {
+        false
     }
 }

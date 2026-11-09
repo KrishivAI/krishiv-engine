@@ -4978,6 +4978,8 @@ version = "0.2.0-alpha"
 dependencies = [
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-functions",
+ "krishiv-plan",
  "serde",
  "serde_json",
  "tempfile",

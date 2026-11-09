@@ -29,7 +29,7 @@ multipart `Upload`, `block_cache.rs` (P2-T083) `CachingStore`: remote stores (`S
 `decode.rs` the sans-IO decoder (projection mask, row-group selections, row index, unsigned widening, millisecond
 timestamps as microseconds, runtime filters re-read at row-group boundaries) · `write.rs` (P2-T082a) the encoder: `ArrowWriter` over a drained buffer, Spark codec names
 and file suffixes, `parquet.block.size`/`page.size`/`enable.dictionary`/`writer.version`, page indexes always,
-`outputTimestampType` (INT96 refused), `datetimeRebaseModeInWrite`, `org.apache.spark.version` footer marker · `tests.rs`.
+`outputTimestampType` (INT96 refused), `datetimeRebaseModeInWrite`, `org.apache.spark.version` footer marker · `geo.rs` (P2b row 4) top-level GEOMETRY/GEOGRAPHY columns: BINARY of WKB with the logical type and the CRS string Spark writes, read as the engine's `(srid, wkb)` struct (SRID from the footer's Spark schema, else the CRS; nested ones are refused; the parquet crate's `geospatial` feature is off, so no bounding-box statistics) · `tests.rs`.
 Interop fixtures (pyarrow codecs/pages, INT96, unsigned, DuckDB, Spark 4.2): `tests/fixtures/parquet/`
 (`tests/scripts/gen_parquet_fixtures.py`, checked by `krishiv-testkit/tests/parquet_interop.rs`); TPC-H SF1 parity
 with pyarrow: `tests/scripts/tpch_parquet_checksums.py` + the ignored `tpch_sf1_reads_as_pyarrow_reads_it`; written
