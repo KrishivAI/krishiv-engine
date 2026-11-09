@@ -71,8 +71,8 @@ mod sum_rewrite;
 use std::sync::Arc;
 
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
-    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+    ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, JOIN_COST, JOIN_DP_LIMIT,
+    JOIN_ENUMERATOR, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -499,6 +499,9 @@ fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
     if let Some(config) = config {
         if let Some(name) = config.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str) {
             s.enumerator = join_order::Enumerator::parse(name);
+        }
+        if let Some(name) = config.get(&JOIN_COST).and_then(ConfigValue::as_str) {
+            s.cost = join_order::JoinCost::parse(name);
         }
         if let Some(limit) = config.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int) {
             s.dp_limit = usize::try_from(limit)
