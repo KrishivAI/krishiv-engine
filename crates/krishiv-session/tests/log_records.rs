@@ -118,7 +118,8 @@ fn a_record_carries_the_ids_of_its_query_and_no_literal() {
     assert!(
         span["krishiv.session_id"]
             .as_str()
-            .is_some_and(|q| q.len() == 16)
+            // The session's `system.queries` id, a UUID.
+            .is_some_and(|q| q.len() == 36 && q.matches('-').count() == 4)
     );
     assert!(
         span["krishiv.principal"]
