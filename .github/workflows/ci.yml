@@ -315,7 +315,7 @@ jobs:
       - uses: $/.github/actions/install-tool
         with:
           tool: cargo-nextest
-      - run: cargo nextest run -p krishiv-exec --test nested_loop --profile quarantine --locked --no-tests=pass
+      - run: cargo nextest run -p krishiv-session --test moment_window_spill --profile quarantine --locked --no-tests=pass
 
   deny:
     needs: changes
@@ -394,6 +394,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: $/.github/actions/setup-mold
       - run: cargo xtask layering
+      - run: cargo xtask quarantine
 
   # The generated Spark Connect types match the vendored protos (P2-T091a).
   # `tools/connect-protogen` is a workspace of its own (protox, prost-build),

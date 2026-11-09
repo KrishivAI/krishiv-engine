@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The engine's unit of data: an Arrow [`RecordBatch`] plus per-row
-//! [`Weights`] (ADR 0006, 0009, 0017).
+//! [`Weights`].
 //!
 //! A [`Batch`] is plain Arrow. There is no selection vector and no parallel
 //! vector-encoding enum: dictionary and run-end encodings are Arrow's own

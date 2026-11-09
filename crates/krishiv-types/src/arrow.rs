@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Spark data type ↔ Arrow mapping (ADR 0009).
+//! Spark data type ↔ Arrow mapping.
 //!
 //! | Spark | Canonical Arrow type | Also accepted as storage |
 //! |---|---|---|
@@ -15,7 +15,7 @@
 //! | `time(p)` | `Time64(Nanosecond)`, tagged when `p < 6` | |
 //! | `interval year to month` | `Interval(YearMonth)`, tagged for other fields | |
 //! | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
-//! | `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`; ADR 0009 update 2026-11-06) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
+//! | `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
 //! | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
 //! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
 //! | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
@@ -36,7 +36,7 @@
 //!   is stored as a binary Arrow type, and its field carries the Spark type
 //!   under [`SPARK_TYPE_METADATA_KEY`] so it reads back as `string`.
 //! - **Decimals.** The carrier follows the declared precision alone
-//!   ([`DECIMAL64_MAX_PRECISION`], design P2-T160), so one Spark type has one
+//!   ([`DECIMAL64_MAX_PRECISION`]), so one Spark type has one
 //!   carrier between operators, in spill files and in shuffle. Client edges
 //!   (Connect/Flight, Python, UDFs) widen to `Decimal128`, what Spark sends.
 //!   Arrow rejects precision 0, so `decimal(0,0)` (whose only value is 0) is
@@ -225,7 +225,7 @@ pub fn client_arrow_type(arrow: &ArrowType) -> ArrowType {
 }
 
 /// `arrow` as a caller outside the engine reads it: [`client_arrow_type`], and each calendar interval as Arrow's
-/// `Interval(MonthDayNano)` (Spark's own Arrow form of it; ADR 0009 update 2026-11-06).
+/// `Interval(MonthDayNano)` (Spark's own Arrow form of it).
 #[must_use]
 pub fn edge_arrow_type(arrow: &ArrowType) -> ArrowType {
     map_calendar(&client_arrow_type(arrow), true)

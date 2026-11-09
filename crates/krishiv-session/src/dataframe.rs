@@ -1751,6 +1751,7 @@ impl DataFrame {
                     source: source.clone(),
                     columns,
                     known: false,
+                    permanent: false,
                     partitions: Some(Default::default()),
                 },
             );
