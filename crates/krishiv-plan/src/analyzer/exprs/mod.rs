@@ -473,7 +473,18 @@ impl Resolver<'_> {
                         stack.push(Step::Enter(rewritten, ctx));
                         continue;
                     }
-                    if let Some(rewritten) = Self::top_k_by_window(&x) {
+                    let map_payload = match &x.node {
+                        ExprNode::Window(w) => match &w.function.node {
+                            ExprNode::Function(f) if f.args.len() == 3 => self
+                                .expr_in(ctx, &f.args[0], cx)
+                                .ok()
+                                .and_then(|b| b.ty.data_type)
+                                .is_some_and(|t| node::holds_map(&t)),
+                            _ => false,
+                        },
+                        _ => false,
+                    };
+                    if let Some(rewritten) = Self::top_k_by_window(&x, map_payload) {
                         rewritten_calls.push(Arc::clone(&rewritten));
                         top_k_calls.insert(addr(&*rewritten), Arc::clone(&x));
                         stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
@@ -601,7 +612,7 @@ impl Resolver<'_> {
     /// `max_by(x, y, k) OVER w` / `min_by(x, y, k) OVER w` with a literal `k` in 1..=100000, as the same
     /// `slice(sort_array(collect_list(named_struct('k', y, 'v', x)) FILTER (WHERE y IS NOT NULL) OVER w, asc), 1, k).v`
     /// the aggregate form lowers to (`node.rs`). Other `k` stay on the generic path.
-    fn top_k_by_window(x: &Arc<Expr>) -> Option<Arc<Expr>> {
+    fn top_k_by_window(x: &Arc<Expr>, map_payload: bool) -> Option<Arc<Expr>> {
         let ExprNode::Window(w) = &x.node else {
             return None;
         };
@@ -658,11 +669,7 @@ impl Resolver<'_> {
             }))
             .with_origin(origin),
         );
-        let sorted = mk(
-            "sort_array",
-            vec![windowed, lit(Literal::Boolean(ascending))],
-            None,
-        );
+        let sorted = node::top_k_sorted(windowed, ascending, map_payload, origin);
         let top = mk(
             "slice",
             vec![sorted, lit(Literal::Integer(1)), Arc::clone(&f.args[2])],

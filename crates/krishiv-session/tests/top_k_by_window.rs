@@ -69,3 +69,40 @@ fn the_unaliased_column_is_named_as_written() {
         ]
     );
 }
+
+#[test]
+fn an_upper_case_call_is_named_like_the_lower_case_one() {
+    let s = Session::new().unwrap();
+    let df = block_on(async {
+        s.sql(
+            "select MAX_BY(c, a, 2) over (partition by b) from values (1, 'x', 'p') as t(a, b, c)",
+        )
+        .await
+    })
+    .unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert!(
+        schema.fields()[0]
+            .name()
+            .starts_with("max_by(c, a, 2) OVER ("),
+        "{:?}",
+        schema.fields()[0].name()
+    );
+}
+
+#[test]
+fn a_map_payload_over_a_window_sorts_by_the_key_as_the_aggregate_does() {
+    let s = Session::new().unwrap();
+    let batches = block_on(async {
+        s.sql(
+            "select cast(max_by(m, y, 2) over (partition by 1) as string) \
+             from values (map('a', 1), 3), (map('b', 2), 1), (map('c', 3), 2) as t(m, y)",
+        )
+        .await?
+        .collect()
+        .await
+    })
+    .unwrap();
+    let col = batches[0].column(0).as_string_view();
+    assert_eq!(col.value(0), "[{a -> 1}, {c -> 3}]");
+}
