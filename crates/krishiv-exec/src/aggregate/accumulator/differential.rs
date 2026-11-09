@@ -674,6 +674,15 @@ fn a_dense_batch_folds_the_pair_in_one_pass() {
     ));
     let out = accs[0].evaluate(&[0, 1]).unwrap();
     assert_eq!(out.as_primitive::<Decimal128Type>().values(), &[157, -25]);
+    // avg(15, 2) is decimal(19, 6): (150 + 7) / 2 = 0.785, -25 / 1 = -0.25.
+    let avg = accs[1].evaluate(&[0, 1]).unwrap();
+    assert_eq!(
+        avg.as_primitive::<Decimal128Type>().values(),
+        &[785_000, -250_000]
+    );
+    // The pair's one pass leaves `count(*)` to its own fold.
+    let count = accs[2].evaluate(&[0, 1]).unwrap();
+    assert_eq!(count.as_primitive::<Int64Type>().values(), &[0, 0]);
     let mut masked = exprs.clone();
     masked[0].mask = Some(1);
     let mut try_sum = exprs;

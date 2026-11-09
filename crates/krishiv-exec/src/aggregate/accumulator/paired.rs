@@ -106,11 +106,14 @@ fn fold_pair(
     if !matches!(w, Weights::Const(1))
         || !(avg.proofs && sum.proofs)
         || avg.sum_bound != sum.sum_bound
-        || avg.expr.args != sum.expr.args
     {
         return Ok(false);
     }
-    let col = arg(cols, avg.expr.args[0])?;
+    // `fold_pairs` paired them on one and the same argument column.
+    let Some(&at) = avg.expr.args.first() else {
+        return Ok(false);
+    };
+    let col = arg(cols, at)?;
     if col.len() != groups.len() || col.logical_nulls().is_some_and(|n| n.null_count() > 0) {
         return Ok(false);
     }

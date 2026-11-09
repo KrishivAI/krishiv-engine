@@ -420,8 +420,7 @@ fn proven<N: DecimalNative>(
 /// A cheap upper bound of [`batch_abs`]: rows × max |v| × max |w|, with
 /// each maximum bounded by an OR of ones'-complement magnitudes (`|x| <=
 /// OR + 1`, branch-free) over every slot, NULL ones included. When it is
-/// too loose (values near the bound, large values under NULLs) the caller
-/// takes the exact sum.
+/// too loose (values near the bound, large values under NULLs) the caller takes the exact sum.
 fn quick_abs<N: DecimalNative>(v: &[N], w: Option<&Weights>) -> u128 {
     let or = v
         .iter()
@@ -1609,7 +1608,8 @@ impl Accumulator {
     /// group, `run.parts[i]`'s state is copied into it. A window's running
     /// frame takes the state after each row or peer group this way: one
     /// pass over the rows, folded one by one and in order as Spark's frames
-    /// fold them, with the argument columns, validity and conversions once.
+    /// fold them, with the argument columns, validity and conversions read
+    /// once.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` for the aggregates a window evaluates elsewhere
