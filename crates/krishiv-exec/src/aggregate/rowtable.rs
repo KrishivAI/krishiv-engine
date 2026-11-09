@@ -106,7 +106,7 @@ use hashbrown::HashTable;
 use krishiv_kernels::prefetch_read;
 use krishiv_types::batch::{Batch, Weights};
 
-use super::accumulator::Accumulator;
+use super::accumulator::{Accumulator, paired};
 use super::merge_index::{MergeIndex, Slot};
 use super::table::{AggCore, batch, own_bytes};
 use super::{AggregateOutput, unsupported};
@@ -1258,10 +1258,7 @@ impl RowTable {
             .get_mut(p)
             .ok_or_else(|| internal(format!("radix partition {p} out of range")))?;
         match fold {
-            Fold::Raw => part
-                .accs
-                .iter_mut()
-                .try_for_each(|a| a.update(ids, cols, w)),
+            Fold::Raw => paired::update_all(&mut part.accs, &core.pairs, ids, cols, w),
             Fold::States { offset } => {
                 part.accs
                     .iter_mut()
