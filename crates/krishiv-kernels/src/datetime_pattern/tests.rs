@@ -339,3 +339,88 @@ fn region_zone_names_use_historical_and_out_of_range_daylight_time() {
         "Central Africa Time"
     );
 }
+
+fn fmt_date(pattern: &str, days: i32) -> String {
+    DateTimePattern::new(pattern, Purpose::Format)
+        .unwrap()
+        .format_date(days)
+        .unwrap()
+}
+
+fn fmt_micros(pattern: &str, micros: i64) -> String {
+    DateTimePattern::new(pattern, Purpose::Format)
+        .unwrap()
+        .format_timestamp(micros, utc())
+        .unwrap()
+}
+
+/// Day of year and day of week count from the January 1 of the date's year.
+#[test]
+fn day_of_year_and_week_follow_the_calendar() {
+    // 2020-01-01 is a Wednesday, 2020-12-31 a Thursday (day 366), 1969-12-31 a Wednesday.
+    assert_eq!(fmt_date("yyyy DDD EEE", 18_262), "2020 001 Wed");
+    assert_eq!(fmt_date("yyyy DDD EEE", 18_627), "2020 366 Thu");
+    assert_eq!(fmt_date("yyyy DDD EEE", -1), "1969 365 Wed");
+    assert_eq!(fmt_date("yyyy DDD EEE", 0), "1970 001 Thu");
+}
+
+/// Quarter and the aligned week of the month.
+#[test]
+fn quarter_and_aligned_week_of_month() {
+    // 2020-01-01 = day 18262.
+    for (days, quarter) in [(18_262, 1), (18_262 + 59, 1), (18_262 + 91, 2), (18_627, 4)] {
+        assert_eq!(fmt_date("Q", days), quarter.to_string(), "{days}");
+    }
+    for (day, week) in [
+        (1, 1),
+        (7, 1),
+        (8, 2),
+        (14, 2),
+        (15, 3),
+        (28, 4),
+        (29, 5),
+        (31, 5),
+    ] {
+        assert_eq!(
+            fmt_date("F", 18_262 + day - 1),
+            week.to_string(),
+            "day {day}"
+        );
+    }
+}
+
+/// With an era field, the year counts back from 1 for year 0 and below.
+#[test]
+fn year_of_era_for_years_before_one() {
+    let ad1 = -719_162; // 0001-01-01
+    let year = |days: i32| {
+        fmt_date("yyyy G", days)
+            .split(' ')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(year(ad1), "0001");
+    assert_eq!(year(ad1 - 1), "0001"); // 0000-12-31 is 1 BC
+    assert_eq!(year(ad1 - 366), "0001"); // 0000-01-01
+    assert_eq!(year(ad1 - 731), "0002"); // -0001-01-01 is 2 BC
+    assert_eq!(fmt_date("yyyy", ad1 - 1), "0000");
+}
+
+/// Clock hours, am/pm hours and the sub-hour fields.
+#[test]
+fn hour_variants_and_sub_second_fields() {
+    let at = |h: i64, m: i64, s: i64, us: i64| ((h * 60 + m) * 60 + s) * 1_000_000 + us;
+    let p = "HH:mm:ss.SSSSSS k h K";
+    assert_eq!(
+        fmt_micros(p, at(13, 14, 15, 123_456)),
+        "13:14:15.123456 13 1 1"
+    );
+    assert_eq!(fmt_micros(p, at(0, 5, 6, 7)), "00:05:06.000007 24 12 0");
+    assert_eq!(fmt_micros(p, at(12, 0, 0, 0)), "12:00:00.000000 12 12 0");
+    assert_eq!(
+        fmt_micros(p, at(23, 59, 58, 999_999)),
+        "23:59:58.999999 23 11 11"
+    );
+    assert_eq!(fmt_micros(p, at(1, 0, 0, 0)), "01:00:00.000000 1 1 1");
+}
