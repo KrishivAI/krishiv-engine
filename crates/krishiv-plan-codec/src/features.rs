@@ -128,6 +128,7 @@ registry! {
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (filter_runtime, FilterRuntime, POST_MIGRATION_READER_VERSION, Optimization, "A `Filter` that runs the runtime filters' row stage in its own mask (the scan below it does not)."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
     (interval_types, IntervalTypes, POST_MIGRATION_READER_VERSION, Semantic, "The year-month, day-time and calendar interval types, with their fields; calendar literals, and year-month and day-time literals as a cast or function argument. A bare year-month or day-time literal stays baseline."),
@@ -379,7 +380,11 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::Node(node) => match node {
             PhysNode::Limit { offset, .. } => (*offset != 0).then_some(Feature::LimitOffset),
             PhysNode::LateFetch { .. } => Some(Feature::LateFetch),
-            PhysNode::Scan(s) => s.row_id.then_some(Feature::LateFetch),
+            // A fused scan never has a row id (the planner fuses neither).
+            PhysNode::Scan(s) => s
+                .row_id
+                .then_some(Feature::LateFetch)
+                .or_else(|| s.row_stage_in_filter.then_some(Feature::FilterRuntime)),
             PhysNode::HashJoin(j) => j.single_match.then_some(Feature::JoinSingleMatch),
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
@@ -400,8 +405,10 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                     Feature::PartitionedWrites
                 }
             }),
+            PhysNode::Filter { runtime, .. } => {
+                (!runtime.is_empty()).then_some(Feature::FilterRuntime)
+            }
             PhysNode::OneRow
-            | PhysNode::Filter { .. }
             | PhysNode::Project { .. }
             | PhysNode::ReplicateRows { .. }
             | PhysNode::Sort { .. }

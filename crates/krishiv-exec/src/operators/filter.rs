@@ -6,11 +6,14 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use krishiv_types::batch::Batch;
 
+use arrow_array::{Array, BooleanArray};
+
 use super::expr::Predicate;
-use super::{PartitionState, local_mut};
+use super::{RowStage, RowStageSettings, local_mut};
 use crate::context::TaskContext;
 use crate::error::Result;
 use crate::operator::{LocalState, Operator, OperatorOutput};
+use krishiv_io::ScanFilter;
 
 /// Keeps the rows for which the predicate is true (a null does not select
 /// its row). Each surviving row keeps its weight; a batch with no
@@ -28,13 +31,49 @@ use crate::operator::{LocalState, Operator, OperatorOutput};
 pub struct Filter {
     schema: SchemaRef,
     predicate: Arc<dyn Predicate>,
+    /// Runtime filters whose row stage this filter runs instead of the scan
+    /// below it (design P2-E3 U1), with the stage's settings.
+    runtime: Vec<ScanFilter>,
+    settings: RowStageSettings,
+}
+
+/// A driver's state: its partition and the row stage over this filter's input.
+struct FilterLocal {
+    partition: u32,
+    rows: Option<RowStage>,
 }
 
 impl Filter {
     /// A filter over batches of `schema`.
     pub fn new(schema: SchemaRef, predicate: Arc<dyn Predicate>) -> Arc<Self> {
-        Arc::new(Self { schema, predicate })
+        Self::with_row_stage(schema, predicate, Vec::new(), RowStageSettings::default())
     }
+
+    /// A filter that also runs the row stage of `runtime` (filters on columns
+    /// of `schema`): the rows it drops leave in the same copy as the
+    /// predicate's.
+    pub fn with_row_stage(
+        schema: SchemaRef,
+        predicate: Arc<dyn Predicate>,
+        runtime: Vec<ScanFilter>,
+        settings: RowStageSettings,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            schema,
+            predicate,
+            runtime,
+            settings,
+        })
+    }
+}
+
+/// The rows both masks keep (a null in `predicate` keeps nothing).
+fn both(predicate: &BooleanArray, rows: &BooleanArray) -> BooleanArray {
+    let mut keep = predicate.values().clone();
+    if let Some(nulls) = predicate.nulls() {
+        keep = &keep & nulls.inner();
+    }
+    BooleanArray::new(&keep & rows.values(), None)
 }
 
 impl Operator for Filter {
@@ -47,8 +86,10 @@ impl Operator for Filter {
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
-        Ok(Box::new(PartitionState {
+        Ok(Box::new(FilterLocal {
             partition: ctx.partition(),
+            rows: (!self.runtime.is_empty())
+                .then(|| RowStage::new(&self.runtime, &self.schema, self.settings)),
         }))
     }
 
@@ -56,8 +97,15 @@ impl Operator for Filter {
         if input.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
-        let partition = local_mut::<PartitionState>(local, "Filter")?.partition;
-        let mask = self.predicate.evaluate_in(input.data(), partition)?;
+        let state = local_mut::<FilterLocal>(local, "Filter")?;
+        let mask = self.predicate.evaluate_in(input.data(), state.partition)?;
+        let mask = match state.rows.as_mut() {
+            Some(rows) => match rows.mask(input.data())? {
+                Some(dropped) => both(&mask, &dropped),
+                None => mask,
+            },
+            None => mask,
+        };
         let out = input.filter(&mask)?;
         if out.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));

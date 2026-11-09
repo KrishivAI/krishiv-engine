@@ -142,6 +142,7 @@ impl Planner<'_> {
             runtime_filters: Vec::new(),
             row_stage: self.rf.row_stage(),
             row_id: false,
+            row_stage_in_filter: false,
         };
         let fetched = top.wrap(
             |input| PhysNode::LateFetch {

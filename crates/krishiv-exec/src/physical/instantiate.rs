@@ -88,7 +88,9 @@ use crate::window::{GroupLimitPlan, WindowGroupLimit};
 mod detached;
 mod distributed;
 pub(crate) use detached::{Detached, LoopRun};
+mod filter;
 use distributed::planned_schema_holds;
+pub(crate) use filter::filter_op;
 
 /// Creates the spill scope of one instantiation: the query's own spill
 /// directory on this worker, removed when the scope's last holder (the
@@ -1008,9 +1010,9 @@ impl Instantiation<'_> {
                 layout,
                 predicate,
                 subqueries,
-            } => self.with_subqueries(input, subqueries, |input, v| {
-                filter_op(input, layout, predicate, v)
-            }),
+                runtime,
+                row_stage,
+            } => self.filter(input, layout, predicate, subqueries, (runtime, *row_stage)),
             PhysNode::Project {
                 input,
                 layout,
@@ -1281,6 +1283,7 @@ impl Instantiation<'_> {
         if !s.runtime_filters.is_empty() {
             dynamic.set_settings(s.row_stage);
         }
+        dynamic.set_row_stage_off(s.row_stage_in_filter);
         let source = factory.build(ScanPushdowns {
             projection: Some(s.projection.clone()),
             filters,
@@ -1632,16 +1635,6 @@ fn compile_one(
     compile_all(&[e], layout, schema, v)?
         .pop()
         .ok_or_else(|| internal("an expression compiled to nothing".to_owned()))
-}
-
-pub(crate) fn filter_op(
-    schema: &SchemaRef,
-    layout: &[AttrId],
-    predicate: &Expr,
-    v: &Values<'_>,
-) -> Result<Arc<dyn Operator>> {
-    let e = compile_one(predicate, layout, schema, v)?;
-    Ok(Filter::new(Arc::clone(schema), Arc::new(Compiled(e))))
 }
 
 pub(crate) fn project_op(

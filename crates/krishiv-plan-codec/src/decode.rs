@@ -511,6 +511,16 @@ impl Decoder {
                 layout: layout(&f.layout),
                 predicate: self.expr_ref(f.predicate)?,
                 subqueries: self.subqueries(&f.subqueries)?,
+                runtime: f
+                    .runtime
+                    .iter()
+                    .map(scan_runtime_filter)
+                    .collect::<Result<_>>()?,
+                row_stage: f
+                    .row_stage
+                    .as_ref()
+                    .map(row_stage_settings)
+                    .unwrap_or_default(),
             },
             Kind::Project(p) => PhysNode::Project {
                 input: self.boxed(p.input)?,
@@ -778,19 +788,11 @@ impl Decoder {
             runtime_filters: s
                 .runtime_filters
                 .iter()
-                .map(|f| {
-                    Ok(ScanRuntimeFilter {
-                        id: FilterId(f.id),
-                        column: ColumnPath(required(&f.column, "a filter column")?.parts.clone()),
-                        key_type: type_from(&f.key_type)?,
-                    })
-                })
+                .map(scan_runtime_filter)
                 .collect::<Result<_>>()?,
-            row_stage: RowStageSettings {
-                min_rows: row_stage.min_rows,
-                max_pass_rate: row_stage.max_pass_rate,
-            },
+            row_stage: row_stage_settings(row_stage),
             row_id: s.row_id,
+            row_stage_in_filter: s.row_stage_in_filter,
         })
     }
 
@@ -1592,4 +1594,19 @@ fn day_time_field(v: i32) -> Result<DayTimeField> {
         Minute => DayTimeField::Minute,
         Second => DayTimeField::Second,
     })
+}
+
+fn scan_runtime_filter(f: &pb::ScanRuntimeFilter) -> Result<ScanRuntimeFilter> {
+    Ok(ScanRuntimeFilter {
+        id: FilterId(f.id),
+        column: ColumnPath(required(&f.column, "a filter column")?.parts.clone()),
+        key_type: type_from(&f.key_type)?,
+    })
+}
+
+fn row_stage_settings(s: &pb::RowStageSettings) -> RowStageSettings {
+    RowStageSettings {
+        min_rows: s.min_rows,
+        max_pass_rate: s.max_pass_rate,
+    }
 }

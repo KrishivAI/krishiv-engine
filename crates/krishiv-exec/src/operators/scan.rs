@@ -524,7 +524,15 @@ impl Source for MemoryScan {
             offset: 0,
             claimed: 0,
             position: None,
-            rows: super::RowStage::new(&g.runtime, &self.table, self.runtime.settings()),
+            rows: super::RowStage::new(
+                if self.runtime.row_stage_off() {
+                    &[]
+                } else {
+                    &g.runtime
+                },
+                &self.table,
+                self.runtime.settings(),
+            ),
             partition: _ctx.partition(),
         }))
     }

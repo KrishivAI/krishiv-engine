@@ -65,6 +65,8 @@ impl Default for RowStageSettings {
 struct Inner {
     filters: Vec<Arc<RuntimeFilter>>,
     settings: RowStageSettings,
+    /// A `Filter` above the scan runs the row stage; the scan prunes only.
+    row_stage_off: bool,
 }
 
 /// The runtime filters a planner pushes into one scan (see the module
@@ -79,6 +81,7 @@ impl RuntimeFilters {
         Self(Arc::new(Mutex::new(Inner {
             filters,
             settings: RowStageSettings::default(),
+            row_stage_off: false,
         })))
     }
 
@@ -89,6 +92,17 @@ impl RuntimeFilters {
     /// Adds `filter`.
     pub fn push(&self, filter: Arc<RuntimeFilter>) {
         self.lock().filters.push(filter);
+    }
+
+    /// Whether the scan leaves the row stage to a `Filter` above it.
+    pub fn set_row_stage_off(&self, off: bool) {
+        self.lock().row_stage_off = off;
+    }
+
+    /// Whether the scan leaves the row stage to a `Filter` above it.
+    #[must_use]
+    pub fn row_stage_off(&self) -> bool {
+        self.lock().row_stage_off
     }
 
     /// Sets the row stage's settings.

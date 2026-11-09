@@ -142,6 +142,8 @@ fn a_feature_in_a_subquery_plan_counts() {
             plan: window.root().clone(),
             ..inventory::subquery()
         }],
+        runtime: Vec::new(),
+        row_stage: krishiv_exec::RowStageSettings::default(),
     });
     assert_eq!(
         plan_features(&plan).into_iter().collect::<Vec<_>>(),
@@ -261,6 +263,8 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
                 plan: aggregate_node(),
                 ..inventory::subquery()
             }],
+            runtime: Vec::new(),
+            row_stage: krishiv_exec::RowStageSettings::default(),
         },
         legacy(),
     );
@@ -738,6 +742,27 @@ fn a_reader_without_the_filter_feature_refuses_a_masked_aggregate() {
 }
 
 #[test]
+fn a_reader_without_filter_runtime_refuses_a_fused_filter() {
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "filter_runtime")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::Window]);
+    assert!(!reader.contains(Feature::FilterRuntime));
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["filter_runtime".to_owned()]
+        }
+    );
+}
+
+#[test]
 fn a_reader_without_write_column_types_refuses_the_plan_naming_it() {
     let bytes = encode(
         &cases()
@@ -1041,6 +1066,8 @@ fn only_udf_plans_need_rust_udf_and_every_expression_position_counts() {
             layout: Vec::new(),
             predicate: std::sync::Arc::clone(predicate),
             subqueries: Vec::new(),
+            runtime: Vec::new(),
+            row_stage: krishiv_exec::RowStageSettings::default(),
         });
         assert_eq!(plan_features(&plan).contains(&Feature::RustUdf), wants);
     }
@@ -1348,6 +1375,8 @@ fn a_nested_type_only_in_an_arrow_field_needs_the_feature() {
                 data_type: arrow_list(),
                 ..inventory::subquery()
             }],
+            runtime: Vec::new(),
+            row_stage: krishiv_exec::RowStageSettings::default(),
         }),
         // An aggregate's argument type.
         plan_of(PhysNode::Aggregate {
@@ -1425,6 +1454,8 @@ fn subquery_in_values_with_a_udf_need_rust_udf() {
         layout: Vec::new(),
         predicate: subquery,
         subqueries: Vec::new(),
+        runtime: Vec::new(),
+        row_stage: krishiv_exec::RowStageSettings::default(),
     });
     assert!(plan_features(&plan).contains(&Feature::RustUdf));
 }

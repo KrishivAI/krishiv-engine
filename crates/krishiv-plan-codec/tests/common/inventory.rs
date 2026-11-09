@@ -172,6 +172,7 @@ pub(crate) fn table_scan() -> ScanNode {
             max_pass_rate: 0.75,
         },
         row_id: false,
+        row_stage_in_filter: false,
     }
 }
 
@@ -196,6 +197,7 @@ pub(crate) fn file_scan() -> ScanNode {
         runtime_filters: Vec::new(),
         row_stage: RowStageSettings::default(),
         row_id: false,
+        row_stage_in_filter: false,
     }
 }
 
@@ -817,6 +819,22 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 layout: vec![AttrId(1), AttrId(2)],
                 predicate: predicate(),
                 subqueries: vec![subquery()],
+                runtime: Vec::new(),
+                row_stage: krishiv_exec::RowStageSettings::default(),
+            },
+        ),
+        (
+            "filter_runtime",
+            PhysNode::Filter {
+                input: boxed(PhysNode::Scan(ScanNode {
+                    row_stage_in_filter: true,
+                    ..table_scan()
+                })),
+                layout: vec![AttrId(1), AttrId(2)],
+                predicate: predicate(),
+                subqueries: Vec::new(),
+                runtime: table_scan().runtime_filters,
+                row_stage: table_scan().row_stage,
             },
         ),
         ("project", project),
@@ -987,6 +1005,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 input: boxed(PhysNode::TopN {
                     input: boxed(PhysNode::Scan(ScanNode {
                         row_id: true,
+                        row_stage_in_filter: false,
                         ..file_scan()
                     })),
                     keys: keys.clone(),

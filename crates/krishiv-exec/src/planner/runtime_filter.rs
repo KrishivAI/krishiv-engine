@@ -51,6 +51,7 @@
 //! count, `JoinFilterPushdownInfo::FinalizeFilters`). Spark's size guards are not used:
 //! they are tuned for clusters.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_schema::DataType;
@@ -146,6 +147,57 @@ impl Settings {
     pub(crate) fn row_stage(&self) -> RowStageSettings {
         self.row
     }
+}
+
+/// Moves the runtime filters' row stage of a scan to the `Filter` directly above it (design P2-E3 U1): one
+/// copy of the surviving rows instead of two. The planner already gave the scan no runtime filter when that
+/// filter's predicate may raise (`no_runtime_filters_before`), so the predicate seeing the rows the row stage
+/// used to drop first cannot raise on them (ADR 0008 section 6). Only filters on a top-level column the
+/// scan projects move (the Filter's row stage finds its column by name in its input); any other leaves the
+/// scan as it is.
+fn fuse_row_stages(roots: Vec<&mut PhysNode>) {
+    let mut stack = roots;
+    while let Some(n) = stack.pop() {
+        if let PhysNode::Filter {
+            input,
+            runtime,
+            row_stage,
+            ..
+        } = n
+            && runtime.is_empty()
+            && let PhysNode::Scan(s) = input.as_mut()
+            && !s.row_id
+            && !s.row_stage_in_filter
+            && !s.runtime_filters.is_empty()
+            && s.runtime_filters
+                .iter()
+                .all(|f| f.column.0.len() == 1 && s.projection.contains(&f.column))
+        {
+            *runtime = s.runtime_filters.clone();
+            *row_stage = s.row_stage;
+            s.row_stage_in_filter = true;
+        }
+        stack.extend(n.children_mut());
+    }
+}
+
+/// Hands each scan under `roots` the runtime filters joins publish to it, then moves the row stage of a scan
+/// under a `Filter` to that filter.
+pub(crate) fn attach_runtime_filters<'a>(
+    filters: &mut HashMap<ScanId, Vec<ScanRuntimeFilter>>,
+    roots: impl IntoIterator<Item = &'a mut PhysNode>,
+) {
+    let mut roots: Vec<&mut PhysNode> = roots.into_iter().collect();
+    let mut stack: Vec<&mut PhysNode> = roots.iter_mut().map(|r| &mut **r).collect();
+    while let Some(n) = stack.pop() {
+        if let PhysNode::Scan(s) = n
+            && let Some(f) = filters.remove(&s.id)
+        {
+            s.runtime_filters = f;
+        }
+        stack.extend(n.children_mut());
+    }
+    fuse_row_stages(roots);
 }
 
 /// The attribute `e` reads when it is a column or a widening cast of one
@@ -375,6 +427,7 @@ mod tests {
             runtime_filters: Vec::new(),
             row_stage: crate::operators::RowStageSettings::default(),
             row_id: false,
+            row_stage_in_filter: false,
         });
         assert!(reads_source(&scan, &files("a.parquet")));
         assert!(!reads_source(&scan, &files("b.parquet")));

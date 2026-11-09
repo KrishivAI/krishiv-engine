@@ -299,6 +299,12 @@ pub struct FilterNode {
     pub predicate: u32,
     #[prost(message, repeated, tag = "4")]
     pub subqueries: ::prost::alloc::vec::Vec<SubqueryPlan>,
+    /// feature: filter_runtime
+    #[prost(message, repeated, tag = "5")]
+    pub runtime: ::prost::alloc::vec::Vec<ScanRuntimeFilter>,
+    /// feature: filter_runtime
+    #[prost(message, optional, tag = "6")]
+    pub row_stage: ::core::option::Option<RowStageSettings>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectNode {
@@ -986,6 +992,9 @@ pub struct ScanNode {
     /// feature: late_fetch
     #[prost(bool, tag = "9")]
     pub row_id: bool,
+    /// feature: filter_runtime
+    #[prost(bool, tag = "10")]
+    pub row_stage_in_filter: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ColumnPath {

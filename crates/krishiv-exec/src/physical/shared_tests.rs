@@ -169,6 +169,7 @@ fn filtered_scan(id: u64) -> PhysNode {
         }],
         row_stage: crate::operators::RowStageSettings::default(),
         row_id: false,
+        row_stage_in_filter: false,
     })
 }
 

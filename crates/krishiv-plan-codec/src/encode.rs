@@ -273,11 +273,18 @@ impl Encoder {
                 layout: l,
                 predicate,
                 subqueries,
+                runtime,
+                row_stage: stage,
             } => Kind::Filter(pb::FilterNode {
                 input: self.node_index(input)?,
                 layout: layout(l),
                 predicate: self.expr(predicate)?,
                 subqueries: self.subqueries(subqueries)?,
+                runtime: runtime
+                    .iter()
+                    .map(|f| scan_filter(f, &self.nested))
+                    .collect(),
+                row_stage: (!runtime.is_empty()).then(|| row_stage(stage)),
             }),
             PhysNode::Project {
                 input,
@@ -570,6 +577,7 @@ impl Encoder {
                 .collect(),
             row_stage: Some(row_stage(&node.row_stage)),
             row_id: node.row_id,
+            row_stage_in_filter: node.row_stage_in_filter,
         })
     }
 

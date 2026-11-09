@@ -1501,7 +1501,15 @@ impl Source for FileScanSource {
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
         Ok(Box::new(FileScanLocal {
-            rows: super::RowStage::new(&g.request.dynamic, &self.mapped, self.runtime.settings()),
+            rows: super::RowStage::new(
+                if self.runtime.row_stage_off() {
+                    &[]
+                } else {
+                    &g.request.dynamic
+                },
+                &self.mapped,
+                self.runtime.settings(),
+            ),
             consumer: Arc::clone(ctx.consumer().consumer()),
             gate: Arc::clone(ctx.query().scan_gate()),
             morsel: None,

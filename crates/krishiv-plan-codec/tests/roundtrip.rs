@@ -250,6 +250,8 @@ fn a_shared_subexpression_is_stored_once() {
         layout: Vec::new(),
         predicate: Arc::clone(&predicate),
         subqueries: Vec::new(),
+        runtime: Vec::new(),
+        row_stage: krishiv_exec::RowStageSettings::default(),
     });
     assert_eq!(to_message(&plan).unwrap().exprs.len(), 5);
     assert_eq!(round_trip(&plan), plan);
@@ -270,6 +272,8 @@ fn a_deep_expression_is_not_encoded_recursively() {
         layout: Vec::new(),
         predicate: e,
         subqueries: Vec::new(),
+        runtime: Vec::new(),
+        row_stage: krishiv_exec::RowStageSettings::default(),
     });
     assert_eq!(round_trip(&plan), plan);
 }
@@ -511,6 +515,8 @@ fn unresolved_expressions_are_refused() {
             layout: Vec::new(),
             predicate: Arc::new(e),
             subqueries: Vec::new(),
+            runtime: Vec::new(),
+            row_stage: krishiv_exec::RowStageSettings::default(),
         });
         let err = encode(&plan).unwrap_err();
         assert!(
@@ -647,6 +653,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "nested_loop_existence"
             | "exchange_hash_key_group"
             | "exchange_filters"
+            | "filter_runtime"
             | "window_frames"
             | "window_offset_values"
             | "window_range_values"
@@ -1276,6 +1283,8 @@ fn limits_bound_expression_depth() {
         layout: Vec::new(),
         predicate: e,
         subqueries: Vec::new(),
+        runtime: Vec::new(),
+        row_stage: krishiv_exec::RowStageSettings::default(),
     });
     let bytes = encode(&plan).unwrap();
     // 50 calls over a column: 51 deep.

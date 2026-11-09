@@ -2099,8 +2099,7 @@ mod tests {
     use super::*;
     use arrow_array::Array as _;
     use arrow_array::{Int32Array, RecordBatch};
-    use arrow_schema::Field;
-    use arrow_schema::Schema;
+    use arrow_schema::{Field, Schema};
     use futures::executor::block_on;
     use krishiv_common::error::ErrorClass;
     use krishiv_types::DataType;
@@ -2930,6 +2929,7 @@ mod tests {
                 runtime_filters: Vec::new(),
                 row_stage: RowStageSettings::default(),
                 row_id: false,
+                row_stage_in_filter: false,
             }),
             Arc::new(Schema::new(vec![Field::new(
                 "id",

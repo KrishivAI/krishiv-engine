@@ -228,6 +228,10 @@ message FilterNode {
   repeated uint64 layout = 2;
   uint32 predicate = 3;
   repeated SubqueryPlan subqueries = 4;
+  // feature: filter_runtime
+  repeated ScanRuntimeFilter runtime = 5;
+  // feature: filter_runtime
+  RowStageSettings row_stage = 6;
 }
 
 message ProjectNode {
@@ -878,6 +882,8 @@ message ScanNode {
   RowStageSettings row_stage = 8;
   // feature: late_fetch
   bool row_id = 9;
+  // feature: filter_runtime
+  bool row_stage_in_filter = 10;
 }
 
 message ColumnPath {

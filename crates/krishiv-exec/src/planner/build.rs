@@ -34,7 +34,9 @@ use krishiv_plan::{
 use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
 use super::properties::{Distribution, Placement, range_keys};
-use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
+use super::runtime_filter::{
+    Settings, Site, attach_runtime_filters, column_type, kept, key_source, renamed,
+};
 pub(crate) use super::subquery::has_subquery;
 use super::subquery::{ByPlan, SubqueryValue, subqueries, with_subquery_columns};
 use super::{PhysicalPlanner, PlanningContext};
@@ -127,22 +129,6 @@ fn plan_once(
     .with_shared(shared)?
     .with_warnings(planner.warnings);
     Ok((plan, shareable))
-}
-
-/// Hands each scan under `roots` the runtime filters joins publish to it.
-fn attach_runtime_filters<'a>(
-    filters: &mut HashMap<ScanId, Vec<ScanRuntimeFilter>>,
-    roots: impl IntoIterator<Item = &'a mut PhysNode>,
-) {
-    let mut stack: Vec<&mut PhysNode> = roots.into_iter().collect();
-    while let Some(n) = stack.pop() {
-        if let PhysNode::Scan(s) = n
-            && let Some(f) = filters.remove(&s.id)
-        {
-            s.runtime_filters = f;
-        }
-        stack.extend(n.children_mut());
-    }
 }
 
 /// Whether `n` produces its rows in an order a reader must keep: a sort or top-N, possibly under row-wise
@@ -1187,6 +1173,7 @@ impl<'a> Planner<'a> {
                 runtime_filters: Vec::new(),
                 row_stage: self.rf.row_stage(),
                 row_id,
+                row_stage_in_filter: false,
             }),
             layout,
             explain: ExplainNode::leaf("Scan", detail),
@@ -1234,6 +1221,8 @@ impl<'a> Planner<'a> {
                 layout,
                 predicate: e,
                 subqueries,
+                runtime: Vec::new(),
+                row_stage: crate::operators::RowStageSettings::default(),
             },
         ))
     }
@@ -2077,6 +2066,7 @@ mod attach_tests {
             runtime_filters: Vec::new(),
             row_stage: crate::operators::RowStageSettings::default(),
             row_id: false,
+            row_stage_in_filter: false,
         })
     }
 

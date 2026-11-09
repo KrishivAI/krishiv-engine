@@ -319,6 +319,7 @@ fn scan(id: u64) -> PhysNode {
         runtime_filters: Vec::new(),
         row_stage: krishiv_exec::RowStageSettings::default(),
         row_id: false,
+        row_stage_in_filter: false,
     })
 }
 

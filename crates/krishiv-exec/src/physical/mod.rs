@@ -384,6 +384,12 @@ pub enum PhysNode {
         predicate: Arc<Expr>,
         /// The subqueries `predicate` reads.
         subqueries: Vec<SubqueryPlan>,
+        /// The runtime filters whose row stage this filter runs instead of
+        /// the scan below it (design P2-E3 U1); each targets a column of
+        /// `input`.
+        runtime: Vec<ScanRuntimeFilter>,
+        /// The row stage's settings (default when `runtime` is empty).
+        row_stage: RowStageSettings,
     },
     /// Columns of `input` and computed columns.
     Project {
@@ -626,6 +632,9 @@ pub struct ScanNode {
     /// Whether the output ends in the row id (file, then position) that a
     /// [`PhysNode::LateFetch`] above reads.
     pub row_id: bool,
+    /// The `Filter` above runs the runtime filters' row stage; the scan
+    /// keeps them for pruning only.
+    pub row_stage_in_filter: bool,
 }
 
 /// A range source: `range(start, end, step, numSlices)` (Spark's `Range`).
@@ -940,7 +949,7 @@ plan_data!(enum PhysNode {
     Scan(scan),
     OneRow,
     Range(range),
-    Filter { input, layout, predicate, subqueries },
+    Filter { input, layout, predicate, subqueries, runtime, row_stage },
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
     ReplicateRows { input, layout, count, subqueries },
@@ -975,7 +984,7 @@ plan_data!(struct WritePlan {
     partition_by,
     column_types
 });
-plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id });
+plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id, row_stage_in_filter });
 plan_data!(
     enum FetchSlot {
         Input(index),

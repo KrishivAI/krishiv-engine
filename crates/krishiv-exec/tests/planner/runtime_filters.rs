@@ -730,6 +730,54 @@ fn a_scan_waits_only_for_a_filter_from_another_table() {
     );
 }
 
+fn fused(node: &krishiv_exec::physical::PhysNode, out: &mut Vec<(usize, bool)>) {
+    use krishiv_exec::physical::PhysNode;
+    if let PhysNode::Filter { input, runtime, .. } = node
+        && let PhysNode::Scan(s) = input.as_ref()
+    {
+        out.push((runtime.len(), s.row_stage_in_filter));
+    }
+    for c in node.children() {
+        fused(c, out);
+    }
+}
+
+/// A runtime-filtered scan under a `Filter` hands its row stage to the Filter
+/// (one copy of the surviving rows, design P2-E3 U1) and the rows are those of
+/// a plan without runtime filters.
+#[test]
+fn the_filter_above_a_scan_runs_its_row_stage() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 29;
+    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 4000, 5));
+    write(dir.path(), "small.parquet", &table(&mut rng, 300, 4000, 5));
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let q = "SELECT b.v, s.v FROM big b JOIN small s ON b.k64 = s.k64 WHERE b.v > 10";
+    configured(&mut t, MODES[0].1);
+    let plan = t.plan_sql(q).unwrap();
+    let mut off_plan = Vec::new();
+    fused(plan.plan.root(), &mut off_plan);
+    assert!(off_plan.iter().all(|(n, f)| *n == 0 && !f), "{plan}");
+    let mut off = rows(&run(&plan).0);
+    off.sort();
+    configured(&mut t, MODES[1].1);
+    let plan = t.plan_sql(q).unwrap();
+    let mut on_plan = Vec::new();
+    fused(plan.plan.root(), &mut on_plan);
+    assert!(on_plan.iter().any(|(n, f)| *n > 0 && *f), "{plan}");
+    let mut on = rows(&run(&plan).0);
+    on.sort();
+    assert_eq!(on, off, "{plan}");
+}
+
 /// `ORDER BY ... LIMIT` queries whose rows have one right answer: `v` breaks
 /// every tie. The first key is what a top-N bounds: NULLs on either side,
 /// NaN and signed zeros, decimals, strings, an `OFFSET`, a filter, and more
