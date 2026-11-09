@@ -502,8 +502,8 @@ mod tests {
     #[test]
     fn resolve_zone_survives_more_names_than_the_cache_holds() {
         for h in 0..300 {
-            let text = format!("+{:02}:{:02}", h % 18, h % 60);
-            let secs = (h % 18) * 3600 + (h % 60) * 60;
+            let text = format!("+{:02}:{:02}", h / 60, h % 60);
+            let secs = (h / 60) * 3600 + (h % 60) * 60;
             assert_eq!(resolve_zone(&text).expect(&text).offset_at_utc(0), secs);
             assert_eq!(resolve_zone(&text).expect(&text).offset_at_utc(0), secs);
         }
@@ -519,7 +519,7 @@ mod tests {
     }
 
     /// `Etc/GMT+h` is h hours behind UTC (POSIX signs), a single or double
-    /// digit hour up to 12 with no zero padding.
+    /// digit hour up to 12 (the database answers 13 and 14 east) with no zero padding.
     #[test]
     fn etc_gmt_offsets_flip_the_sign_and_refuse_padding() {
         for (text, secs) in [
