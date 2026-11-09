@@ -145,8 +145,8 @@ pub(super) fn dpsub(n: usize, masks: &[Set], shape: &Shape<'_>) -> (HashMap<Set,
                 && connected(masks, a, b)
             {
                 work.pairs += 1;
-                let (pa, pb) = (planned[at(a)], planned[at(b)]);
                 let build = if shape.by_bytes {
+                    let (pa, pb) = (planned[at(a)], planned[at(b)]);
                     (shape.build_cost)((pa.rows, pa.width), (pb.rows, pb.width))
                 } else {
                     0.0
@@ -159,6 +159,7 @@ pub(super) fn dpsub(n: usize, masks: &[Set], shape: &Shape<'_>) -> (HashMap<Set,
                 // (The halves' stored ties count even with ties off: a combined set's is clamped to
                 // at least 1.0, so of equal splits the one with fewer combined halves wins.)
                 let tie_of_split = || {
+                    let (pa, pb) = (planned[at(a)], planned[at(b)]);
                     x.tie
                         + y.tie
                         + if !shape.ties {
@@ -171,6 +172,8 @@ pub(super) fn dpsub(n: usize, masks: &[Set], shape: &Shape<'_>) -> (HashMap<Set,
                 };
                 let tie = match found {
                     None => Some(tie_of_split()),
+                    // Dearer by more than the tolerance (the common case): skip.
+                    Some(f) if cost - f.cost > 1e-9 * cost => None,
                     Some(f) if same_cost(cost, f.cost) => {
                         Some(tie_of_split()).filter(|&t| t < f.tie)
                     }
