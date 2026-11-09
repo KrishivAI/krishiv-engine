@@ -120,10 +120,10 @@ struct Context {
     broadcast_max: Option<f64>,
 }
 
-/// Appends `line` unless it is there already (the moves below one consumer
-/// walk the same refused candidates again).
+/// Appends `line`; a refusal only once (the moves below one consumer walk
+/// the same refused candidates again), every move.
 fn note(notes: &mut Vec<String>, line: String) {
-    if !notes.contains(&line) {
+    if line.starts_with("moved") || !notes.contains(&line) {
         notes.push(line);
     }
 }

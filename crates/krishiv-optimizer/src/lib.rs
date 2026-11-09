@@ -507,8 +507,6 @@ fn run(
     }
 }
 
-/// The join-ordering settings of a session configuration (defaults
-/// without one), describing each tree when `trace`.
 /// The physical planner's broadcast threshold (`krishiv-exec`
 /// `planner/join.rs` `broadcast_max_bytes`): the session's
 /// `spark.sql.autoBroadcastJoinThreshold`, 10 MiB without a session, `None`
@@ -522,6 +520,8 @@ fn broadcast_max(config: Option<&Config>) -> Option<f64> {
     (max >= 0).then_some(max as f64)
 }
 
+/// The join-ordering settings of a session configuration (defaults
+/// without one), describing each tree when `trace`.
 fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
     let mut s = join_order::Settings {
         trace,
