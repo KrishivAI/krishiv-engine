@@ -13,7 +13,7 @@ use krishiv_common::error::{ArithmeticOverflow, KrishivError, ScalarSubqueryTooM
 use krishiv_memory::SpillSignal;
 use krishiv_types::batch::{Batch, Weights};
 
-use super::build::{BuildGlobal, nanos};
+use super::build::{BuildGlobal, Level0, nanos};
 use super::grace::{self, Flush, Part, WRITE_SLICE, choose, reserve_chunks, spill_parts};
 use super::keys::{Hashing, MAX_RADIX_BITS};
 use super::table::{JoinTable, NONE, RowArena};
@@ -508,6 +508,15 @@ fn too_many_rows() -> KrishivError {
 
 struct ProbeLocal {
     build: Arc<BuildGlobal>,
+    /// The build's level-0 tables, from this driver's first batch or flush
+    /// until it is done with them.
+    level0: Option<Arc<Level0>>,
+    /// The probe owns its build, so the tables go back once every probe
+    /// driver is done ([`BuildGlobal::probe_left`]); `false` for a prebuilt
+    /// build, and once this driver left.
+    releases: bool,
+    /// This driver told the build that the probe's flush started.
+    flushing: bool,
     /// Count probe lengths (`ExecConfig::detailed_metrics`).
     detailed: bool,
     cursor: Option<Cursor>,
@@ -524,6 +533,40 @@ struct ProbeLocal {
     /// retry joins the same rows without evaluating (and counting) the row
     /// stage again.
     selected: Option<Option<Selection>>,
+}
+
+impl ProbeLocal {
+    /// The build's level-0 tables, held from now on by this driver.
+    fn level0(&mut self) -> Result<&Level0> {
+        if self.level0.is_none() {
+            let built = self
+                .build
+                .built()
+                .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
+            self.level0 = built.level0();
+        }
+        self.level0
+            .as_deref()
+            .ok_or_else(|| internal("hash join build released before its probe ended".to_owned()))
+    }
+
+    /// Done with the build's tables: drops this driver's reference, and
+    /// the build's own when this was the last probe driver.
+    fn leave(&mut self) {
+        if !std::mem::take(&mut self.releases) {
+            return;
+        }
+        self.level0 = None;
+        // The last one drops the tables here (freeing large buffers is
+        // quick: a few allocations a partition).
+        drop(self.build.probe_left());
+    }
+}
+
+impl Drop for ProbeLocal {
+    fn drop(&mut self) {
+        self.leave();
+    }
 }
 
 fn local_mut(local: &mut LocalState) -> Result<&mut ProbeLocal> {
@@ -602,7 +645,13 @@ impl ProbeOp {
                 return Ok(OperatorOutput::NeedMoreInput(kept));
             }
         }
-        let tables = Tables::Level0(&built.tables, built.spilled);
+        if l.level0.is_none() {
+            l.level0 = built.level0();
+        }
+        let level0 = l.level0.as_deref().ok_or_else(|| {
+            internal("hash join build released before its probe ended".to_owned())
+        })?;
+        let tables = Tables::Level0(&level0.tables, built.spilled);
         if l.cursor.is_none() {
             if input.num_rows() == 0 {
                 return Ok(OperatorOutput::NeedMoreInput(None));
@@ -683,10 +732,18 @@ impl Operator for ProbeOp {
             .dependency()
             .ok_or_else(|| internal("hash join probe without its build".to_owned()))?;
         let build = super::broadcast::build_of(dep)?;
+        // A build of this join's own (not a prebuilt one other probes share).
+        let releases = dep.downcast_ref::<BuildGlobal>().is_some();
+        if releases {
+            build.probe_joined();
+        }
         let memory = ctx.consumer();
         let fanout = build.hashing.fanout0();
         Ok(Box::new(ProbeLocal {
             build,
+            level0: None,
+            releases,
+            flushing: false,
             detailed: ctx.query().config().detailed_metrics,
             cursor: None,
             parts: (0..fanout)
@@ -788,7 +845,18 @@ impl Operator for ProbeOp {
     ) -> BoxFuture<'a, Result<FlushOutput>> {
         Box::pin(async move {
             let l = local_mut(local)?;
-            grace::step(&self.0, &l.build.hashing, &l.build, &mut l.flush, ctx).await
+            if l.releases && !std::mem::replace(&mut l.flushing, true) {
+                l.build.probe_flushing();
+            }
+            // The build rows a join that preserves them emits come from the
+            // tables: a driver that probed no batch takes them now.
+            l.level0()?;
+            let tables = l.level0.as_deref().map_or(&[][..], |t| &t.tables[..]);
+            let out = grace::step(&self.0, &l.build, tables, &mut l.flush, ctx).await?;
+            if matches!(out, FlushOutput::Done) {
+                l.leave();
+            }
+            Ok(out)
         })
     }
 }
