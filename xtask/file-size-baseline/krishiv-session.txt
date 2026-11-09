@@ -24,5 +24,5 @@
 # +1 line: the temporary table's `partitions` field (reading partitioned tables)
 # +1 line over main: CREATE TABLE refuses a secret() call in its options (PR #525)
 # +17 lines: CTAS, CREATE VIEW, CACHE TABLE and INSERT name IDENTIFIER(..) items as the query does (T179g follow-up, PR #576)
-# +43 lines: tables, views and functions in a collated schema are refused; views keep IDENTIFIER(..) text as written (row 14 batch B-6)
-3441 crates/krishiv-session/src/table_commands.rs
+# +45 lines: tables, views and functions in a collated schema are refused (also before a saveAsTable overwrite drops the old table); views keep IDENTIFIER(..) text as written (row 14 batch B-6)
+3443 crates/krishiv-session/src/table_commands.rs

@@ -2480,6 +2480,8 @@ impl Session {
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
         self.check_namespace(name)?;
+        // Before an overwrite drops the old table: the create below would refuse a collated schema too.
+        self.refuse_collated_namespace(name)?;
         if spec.options.values().any(|v| v.as_plain().is_none()) {
             return Err(unsupported("secret table options"));
         }
