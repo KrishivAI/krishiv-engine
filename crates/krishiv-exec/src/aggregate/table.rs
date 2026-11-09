@@ -5,9 +5,9 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
+use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_row::Rows;
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, SchemaRef};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::accumulator::Accumulator;
@@ -506,15 +506,6 @@ impl Table {
         }
     }
 
-    /// Group counts of the table's radix partitions, in position order
-    /// (one partition for an `AggTable`).
-    pub(crate) fn part_lens(&self) -> Vec<usize> {
-        match self {
-            Self::Keys(t) => vec![t.len()],
-            Self::Rows(t) => (0..t.part_count()).map(|p| t.part_len(p)).collect(),
-        }
-    }
-
     pub(crate) fn memory_size(&self) -> usize {
         match self {
             Self::Keys(t) => t.memory_size(),
@@ -614,4 +605,20 @@ impl Table {
 
 fn mixed() -> krishiv_common::error::KrishivError {
     internal("a batch prepared for another table layout".to_owned())
+}
+
+/// Bytes a copy of `a`'s rows takes (`take`, the row tables' gather): its
+/// own range of its buffers, not a slice's parent's, plus a cache line of
+/// allocation padding per buffer. A view array's copy holds its views and
+/// shares the data buffers.
+pub(crate) fn own_bytes(a: &dyn Array) -> usize {
+    let nulls = a.nulls().map_or(0, |n| n.len().div_ceil(8) + 64);
+    if matches!(a.data_type(), DataType::Utf8View | DataType::BinaryView) {
+        return a.len() * size_of::<u128>() + 64 + nulls;
+    }
+    let d = a.to_data();
+    d.get_slice_memory_size().map_or_else(
+        |_| a.get_array_memory_size(),
+        |b| b + 64 * (d.buffers().len() + d.child_data().len() + 1),
+    )
 }

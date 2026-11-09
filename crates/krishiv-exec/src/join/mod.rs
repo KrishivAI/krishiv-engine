@@ -379,11 +379,42 @@ pub(crate) enum Counter {
     ProbeTableNs,
     /// Spilled partitions that would not split, joined by sort-merge.
     MergeFallbacks,
+    /// What the build's in-memory partitions keep reserved for their rows
+    /// once finalized (the chunks' reservations, which the probe lives with).
+    SteadyReservedBytes,
+    /// The finalized arenas' bytes (all columns), as Arrow's `get_array_memory_size` counts them: buffer
+    /// capacities and the arrays' own structs, the measure the build's reservations use.
+    ArenaBytes,
+    /// Of those, the `hash` column's.
+    ArenaHashBytes,
+    /// Of those, the key columns'.
+    ArenaKeyBytes,
+    /// The bytes of the finalized indexes (and match bitmaps).
+    IndexBytes,
+    /// The most bytes of concatenation copies `finalize` held reserved at
+    /// once (partitions copying in parallel).
+    MaxFinalizeCopyBytes,
+    /// The largest run of chunks a build-phase coalesce merged (each merge
+    /// reserves the run again while it copies).
+    MaxCoalesceCopyBytes,
+    /// Partitions of the finished build written to disk while it waited
+    /// for its probe (`build::IdleBuild`; reported with the probe's
+    /// counters, which are read after the build's).
+    IdleSpills,
+    /// The bytes of their spill files.
+    IdleSpilledBytes,
 }
 
 /// The build sink's counters, by name.
-const BUILD_COUNTERS: [(Counter, &str); 9] = [
+const BUILD_COUNTERS: [(Counter, &str); 16] = [
     (Counter::BuildRows, "build_rows"),
+    (Counter::SteadyReservedBytes, "steady_reserved_bytes"),
+    (Counter::ArenaBytes, "arena_bytes"),
+    (Counter::ArenaHashBytes, "arena_hash_bytes"),
+    (Counter::ArenaKeyBytes, "arena_key_bytes"),
+    (Counter::IndexBytes, "index_bytes"),
+    (Counter::MaxFinalizeCopyBytes, "max_finalize_copy_bytes"),
+    (Counter::MaxCoalesceCopyBytes, "max_coalesce_copy_bytes"),
     (Counter::HashEntries, "hash_entries"),
     (Counter::HashBuckets, "hash_buckets"),
     (Counter::SpilledPartitions, "spilled_partitions"),
@@ -414,8 +445,16 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 ];
 
 /// Counters updated by every driver (relaxed: read once the query ended).
-#[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 24]);
+#[derive(Debug)]
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 33]);
+
+impl Default for Counters {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| {
+            std::sync::atomic::AtomicU64::new(0)
+        }))
+    }
+}
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {
@@ -440,9 +479,11 @@ impl Counters {
             .map(|&(c, name)| {
                 let v = self.get(c);
                 let v = match c {
-                    Counter::RecursionDepth | Counter::MaxProbeLength | Counter::MaxPartitionNs => {
-                        Metric::Max(v)
-                    }
+                    Counter::RecursionDepth
+                    | Counter::MaxProbeLength
+                    | Counter::MaxPartitionNs
+                    | Counter::MaxFinalizeCopyBytes
+                    | Counter::MaxCoalesceCopyBytes => Metric::Max(v),
                     _ => Metric::Count(v),
                 };
                 (std::borrow::Cow::Borrowed(name), v)
@@ -464,6 +505,13 @@ impl Counters {
 
     pub(crate) fn probe(&self) -> crate::metrics::ExtraMetrics {
         let mut out = self.report(&PROBE_COUNTERS);
+        // Only a build spilled while it waited for its probe reports it.
+        if self.get(Counter::IdleSpills) > 0 {
+            out.extend(self.report(&[
+                (Counter::IdleSpills, "idle_spills"),
+                (Counter::IdleSpilledBytes, "idle_spilled_bytes"),
+            ]));
+        }
         // Only a join that fell back to sort-merge reports it.
         if self.get(Counter::MergeFallbacks) > 0 {
             out.extend(self.report(&[(Counter::MergeFallbacks, "merge_fallbacks")]));

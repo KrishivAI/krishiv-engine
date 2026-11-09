@@ -42,3 +42,5 @@ cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --wor
 ## Upgrades
 Renovate groups Arrow family, tonic+prost, OpenTelemetry weekly. Adopt each new **Arrow major within 2 weeks**.
 Bumps are mechanical (Haiku/Sonnet) but still get review; never mix a bump with feature work.
+object_store bumps: re-list `ClientConfigKey` in `crates/krishiv-store/src/http_clients.rs` (`KEYS`); the enum is
+non-exhaustive, so a new key is not caught by the compiler.

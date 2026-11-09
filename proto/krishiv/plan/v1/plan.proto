@@ -119,6 +119,11 @@ message ExprEnv {
   // would read the patterns as DateTimeFormatter ones.
   // feature: legacy_time_parser
   optional bool legacy_time_parser = 10;
+  // `spark.sql.binaryOutputStyle` when it is not HEX_DISCRETE (what an unset config prints):
+  // `to_csv` and `to_xml` print binary fields in that style; a worker without the feature
+  // would print `[45 61]`.
+  // feature: binary_output_style
+  optional string binary_output_style = 11;
 }
 
 message ExplainNode {
@@ -666,6 +671,9 @@ message UdafCall {
   bool nullable = 5;
   // Arrow IPC `Schema` flatbuffer of the declared state fields, in order.
   bytes state = 6;
+  // The Spark type of each argument, in order (`KIND_NULL` for an untyped
+  // NULL): the Arrow fields in `args` carry only the carrier type.
+  repeated DataType arg_types = 7;
 }
 
 enum JoinType {

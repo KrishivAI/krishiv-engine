@@ -803,7 +803,27 @@ async fn events(State(s): State<UiState>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{human_bytes, mask_literals};
+    use super::{CSP, human_bytes, mask_literals};
+
+    /// `ui/tests/fixture_server.py` repeats the policy; the page check is only honest while both agree.
+    #[test]
+    fn the_fixture_server_sends_the_same_csp() {
+        let py = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../ui/tests/fixture_server.py"
+        ))
+        .expect("fixture server source");
+        let block = py
+            .split("CSP = (")
+            .nth(1)
+            .and_then(|r| r.split("\n)").next())
+            .expect("CSP block");
+        let joined: String = block
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix('"').and_then(|l| l.strip_suffix('"')))
+            .collect();
+        assert_eq!(joined, CSP);
+    }
 
     #[test]
     fn byte_sizes_read_like_the_pages_write_them() {

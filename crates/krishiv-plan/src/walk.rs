@@ -164,6 +164,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
                 | PlanNode::JoinHint { .. }
+                | PlanNode::Repartition { .. }
                 | PlanNode::Expand { .. }
                 | PlanNode::Window { .. }
                 | PlanNode::ReplicateRows { .. } => true,
@@ -180,6 +181,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | ExprNode::Field { .. }
                 | ExprNode::UpdateFields { .. }
                 | ExprNode::Alias { .. }
+                | ExprNode::Pipe { .. }
                 | ExprNode::Collate { .. }
                 | ExprNode::MultiAlias { .. } => false,
                 ExprNode::Cast { mode, .. } => match mode {
@@ -392,7 +394,11 @@ impl Teardown {
             | PlanNode::Distinct { input } => {
                 self.plans.push(input);
             }
-            PlanNode::Hint { input, params, .. } => {
+            PlanNode::Hint { input, params, .. }
+            | PlanNode::Repartition {
+                input,
+                exprs: params,
+            } => {
                 self.plans.push(input);
                 self.exprs.extend(params);
             }
@@ -438,6 +444,7 @@ impl Teardown {
             ExprNode::Cast { expr, .. }
             | ExprNode::Collate { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::Pipe { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }

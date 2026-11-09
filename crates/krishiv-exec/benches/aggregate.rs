@@ -229,6 +229,7 @@ fn count_plan(batches: &[Batch], udaf: bool) -> Arc<dyn ExecNode> {
             name: "ucount".to_owned(),
             version: 1,
             args: vec![Field::new("arg0", DataType::Int64, false)],
+            arg_types: vec![krishiv_types::DataType::Long],
             result: krishiv_types::DataType::Long,
             nullable: false,
             state: vec![Field::new("count", DataType::Int64, false)],

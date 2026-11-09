@@ -134,11 +134,25 @@ const CASES: &[(&str, &str)] = &[
     ),
     // Filters into each input of a union, rewritten onto its columns; a
     // branch whose literal makes the filter false keeps only `false`.
-    // A constant `false` that tidying folds into a filter frees a column of a
-    // shared scan: prune and tidy repeat until the plan is a fixed point.
+    // A constant `false` over an inner-join tree filters an input with no
+    // inputs of its own (the scan of t that the other branch shares), where
+    // pushdown cannot move it, so the plan is a fixed point. (Before, it
+    // filtered the shifted aggregate, tidying pushed it into the join below,
+    // freed `b` of the shared scan, and prune and tidy repeated.)
     (
         "tidy_frees_columns_fixed_point",
         "SELECT * FROM (SELECT x1.c0 AS c0 FROM (SELECT x3.d AS c0, count(*) AS c1 FROM t AS x2 JOIN u AS x3 ON x2.c = x3.a CROSS JOIN (SELECT x5.a AS c0, count(*) AS c1 FROM t AS x5 WHERE (NOT (x5.b <= 'z') AND (x5.c <> 2 AND x5.b <> x5.b)) GROUP BY x5.a) AS x4 WHERE (x2.c IN (-2, -2) AND x2.c = 3) GROUP BY x3.d) AS x1 WHERE NOT (NOT (x1.c1 IS NULL))) ORDER BY c0 LIMIT 4",
+    ),
+    // A join tree whose inputs all have plans under them (aggregates): a
+    // condition that folds to `false` filters the first, and pushdown carries
+    // it to that aggregate's scan, where the next optimization leaves it.
+    (
+        "false_over_aggregate_inputs",
+        "SELECT x.a FROM (SELECT a, count(*) AS n FROM t WHERE b > 'm' GROUP BY a) AS x JOIN (SELECT d, count(*) AS m FROM u GROUP BY d) AS y ON x.n IS NULL",
+    ),
+    (
+        "false_over_aggregate_inputs_nested",
+        "SELECT x.a FROM (SELECT a, max(b) AS mb FROM t GROUP BY a) AS x JOIN (SELECT a FROM t WHERE b > 'm' GROUP BY a) AS y ON x.a = y.a JOIN (SELECT d, count(*) AS n FROM u GROUP BY d) AS z ON z.n IS NULL",
     ),
     (
         "push_union",
@@ -510,6 +524,25 @@ const CASES: &[(&str, &str)] = &[
     (
         "expand_duplicate_sets",
         "SELECT a, sum(c) FROM t GROUP BY GROUPING SETS ((a), (a))",
+    ),
+    // `DISTRIBUTE BY`: filters move below it, columns it reads stay under a
+    // `count(*)`, and an outer one directly over another drops the inner one
+    // (Spark's `CollapseRepartition`), unless a local sort sits between them.
+    (
+        "repartition_filter_below",
+        "SELECT * FROM (SELECT a, b FROM t DISTRIBUTE BY CAST(b AS INT)) WHERE a > 1",
+    ),
+    (
+        "repartition_kept_under_count",
+        "SELECT count(*) FROM (SELECT a FROM t DISTRIBUTE BY a + 1)",
+    ),
+    (
+        "repartition_collapse",
+        "SELECT * FROM (SELECT a, b FROM t DISTRIBUTE BY CAST(b AS INT)) DISTRIBUTE BY a",
+    ),
+    (
+        "repartition_sort_keeps_both",
+        "SELECT * FROM (SELECT a, b FROM t DISTRIBUTE BY CAST(b AS INT) SORT BY a) DISTRIBUTE BY a",
     ),
 ];
 

@@ -764,7 +764,9 @@ fn secrets_are_resolved_once_per_context() {
     let counting = Arc::new(Counting::default());
     let s = setup(IoConfig::default());
     let io =
-        s.io.with_secrets(Arc::clone(&counting) as Arc<dyn SecretResolver>);
+        s.io.clone()
+            .with_secrets(Arc::clone(&counting) as Arc<dyn SecretResolver>)
+            .with_principal(Arc::new(krishiv_common::Principal::local_user()));
     rt().block_on(async {
         for _ in 0..3 {
             assert_eq!(
@@ -783,6 +785,19 @@ fn secrets_are_resolved_once_per_context() {
         // Another principal never gets a value cached for the first.
         let other = krishiv_common::Principal::new("other", krishiv_common::PrincipalKind::User);
         io.secrets().resolve(&other, "sc", "k").await.unwrap();
+        // A context nobody told who it acts for resolves nothing and never asks the resolver.
+        let unset =
+            s.io.with_secrets(Arc::clone(&counting) as Arc<dyn SecretResolver>);
+        assert!(unset.principal().is_unset());
+        let e = unset
+            .secrets()
+            .resolve(unset.principal(), "sc", "k")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivInsufficientPermissions
+        );
     });
     assert_eq!(counting.0.load(Ordering::Relaxed), 3);
 }
@@ -985,4 +1000,28 @@ fn held_metadata_edges() {
     c.insert(key.clone(), Arc::clone(&refused));
     assert!(c.is_empty());
     assert!(Arc::ptr_eq(&c.get(&key, none).unwrap(), &refused));
+}
+
+#[test]
+fn read_latency_counts_every_read_attempt_to_a_remote_store_only() {
+    rt().block_on(async {
+        let s = setup(IoConfig::default());
+        let local = put(&s, "a", 1_000).await;
+        s.io.get_ranges(&local, &[0..10]).await.unwrap();
+        let none: u64 = s.sched.totals().read_latency.counts().iter().sum();
+        assert_eq!(none, 0, "a memory:// store is not remote");
+        let remote_id = StoreId::new("s3://lat");
+        s.sched.register_store(
+            remote_id.clone(),
+            Arc::clone(&s.fault) as Arc<dyn ObjectStore>,
+        );
+        let remote = FileRef::from_meta(remote_id, &s.inner.head(&Path::from("a")).await.unwrap());
+        s.io.get_ranges(&remote, &[0..10]).await.unwrap();
+        s.fault.fail_next_gets(1, None);
+        s.io.get_ranges(&remote, &[20..30]).await.unwrap();
+        // Three attempts: one read, then a failed one and its retry.
+        let total: u64 = s.sched.totals().read_latency.counts().iter().sum();
+        let own: u64 = s.io.counters().read_latency.counts().iter().sum();
+        assert_eq!((total, own), (3, 3));
+    });
 }
