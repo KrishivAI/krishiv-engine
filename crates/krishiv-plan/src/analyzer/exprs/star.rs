@@ -732,38 +732,19 @@ impl Resolver<'_> {
             .count();
         if dropped == st.fields().len() {
             // Every field goes: `struct<>`, which a struct update refuses
-            // but Spark's `EXCEPT` gives (null stays null).
-            let call = |name: &str, args: Vec<Arc<Expr>>| {
-                Arc::new(
-                    Expr::new(ExprNode::Function(FunctionCall {
-                        within_group: Vec::new(),
-                        name: name.to_owned(),
-                        qualifier: Vec::new(),
-                        args,
-                        arg_names: Vec::new(),
-                        distinct: false,
-                        filter: None,
-                    }))
-                    .with_origin(origin),
-                )
-            };
-            let null = Arc::new(
-                Expr::new(ExprNode::Cast {
-                    expr: Arc::new(
-                        Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(origin),
-                    ),
-                    to: DataType::Struct(StructType::new([])),
-                    mode: CastMode::Default,
-                })
+            // but Spark's `EXCEPT` gives; as in the general case below a
+            // NULL struct becomes the (empty) struct, not NULL.
+            return Ok(Arc::new(
+                Expr::new(ExprNode::Function(FunctionCall {
+                    within_group: Vec::new(),
+                    name: "named_struct".to_owned(),
+                    qualifier: Vec::new(),
+                    args: Vec::new(),
+                    arg_names: Vec::new(),
+                    distinct: false,
+                    filter: None,
+                }))
                 .with_origin(origin),
-            );
-            return Ok(call(
-                "when",
-                vec![
-                    call("isnull", vec![Arc::clone(base)]),
-                    null,
-                    call("named_struct", vec![]),
-                ],
             ));
         }
         // Spark rebuilds the struct from the kept fields (`CreateStruct`), so

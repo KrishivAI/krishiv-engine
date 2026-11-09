@@ -809,6 +809,26 @@ fn except_drops_columns() -> R {
     Ok(())
 }
 
+/// Spark rebuilds a struct from its kept fields, so a NULL struct under a
+/// nested `EXCEPT` becomes a struct of NULL fields, also when every field is
+/// dropped (`struct<>`): never NULL (Spark 4.2.0 probe,
+/// `research/spark/except-null-struct`).
+#[test]
+fn nested_except_turns_a_null_struct_into_a_struct() -> R {
+    let s = Session::new()?;
+    for sql in [
+        "SELECT s IS NULL FROM (SELECT * EXCEPT (s.a) FROM VALUES \
+         (CAST(NULL AS STRUCT<a: INT, b: INT>)) AS t(s))",
+        "SELECT s IS NULL FROM (SELECT * EXCEPT (s.a) FROM VALUES \
+         (CAST(NULL AS STRUCT<a: INT>)) AS t(s))",
+    ] {
+        let batches = block_on(block_on(s.sql(sql))?.collect())?;
+        let col = batches[0].column(0).as_boolean();
+        assert!(!col.value(0), "{sql}");
+    }
+    Ok(())
+}
+
 /// `* EXCEPT` over a field of a column that is no struct fails naming the
 /// missing field, never dropping a wrong column.
 #[test]
