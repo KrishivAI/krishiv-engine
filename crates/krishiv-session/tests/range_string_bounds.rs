@@ -382,7 +382,10 @@ fn an_out_of_range_bound_stays_refused_with_ansi_off() {
         .collect()
         .await
     })
-    .unwrap_err()
-    .to_string();
-    assert!(err.contains("UNSUPPORTED_FEATURE"), "{err}");
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+        "{err}"
+    );
 }
