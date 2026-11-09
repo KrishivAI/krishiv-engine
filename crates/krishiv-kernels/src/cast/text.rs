@@ -84,7 +84,8 @@ pub(crate) fn parse_integral(s: &[u8], exact: bool) -> Option<i64> {
 
 /// The zero of every Unicode `Nd` run Java 21 knows (`Character.digit(c,
 /// 10) == 0`); each run is ten consecutive digits. Java's `BigDecimal`
-/// accepts them all.
+/// reads UTF-16 units, so only the runs in the Basic Multilingual Plane count
+/// there (`bigdecimal_digit`); the supplementary-plane runs do not.
 const DIGIT_ZEROS: [u32; 68] = [
     0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66,
     0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90,
@@ -101,6 +102,13 @@ pub(crate) fn java_digit(c: char) -> Option<u8> {
     let i = DIGIT_ZEROS.partition_point(|&z| z <= c).checked_sub(1)?;
     let d = c - DIGIT_ZEROS.get(i)?;
     u8::try_from(d).ok().filter(|&d| d < 10)
+}
+
+/// The digit `BigDecimal(String)` reads: it walks UTF-16 units with `Character.digit(char, 10)`,
+/// so a digit outside the Basic Multilingual Plane (two surrogates) is none (Spark 4.2.0:
+/// `CAST('𝟙𝟚' AS DECIMAL)` is NULL, `CAST('١٢٣' AS DECIMAL)` is 123).
+fn bigdecimal_digit(c: char) -> Option<u8> {
+    java_digit(c).filter(|_| u32::from(c) <= 0xffff)
 }
 
 /// A parsed decimal: `digits × 10^exp` (digits without leading zeros;
@@ -237,7 +245,7 @@ pub(crate) fn parse_decimal(s: &str) -> Option<BigDec> {
     let mut chars = rest.chars().peekable();
     let mut exp = 0_i64;
     while let Some(c) = chars.next() {
-        if let Some(d) = java_digit(c) {
+        if let Some(d) = bigdecimal_digit(c) {
             seen_digit = true;
             if !digits.is_empty() || d != 0 {
                 digits.push(d);
@@ -262,7 +270,7 @@ pub(crate) fn parse_decimal(s: &str) -> Option<BigDec> {
             let mut e: i64 = 0;
             let mut any = false;
             for c in chars.by_ref() {
-                e = e * 10 + i64::from(java_digit(c)?);
+                e = e * 10 + i64::from(bigdecimal_digit(c)?);
                 any = true;
                 if e > i64::from(i32::MAX) + 1 {
                     return None;
@@ -916,5 +924,239 @@ mod tests {
         let f = f32::from_bits(0xca05_c3f5);
         assert_eq!(java_float_string(f, false, None), "-2191613.2");
         assert_eq!(java_float_string(3.4e38_f32, false, None), "3.4E38");
+    }
+
+    /// `cast(s AS DOUBLE)` over Java hexadecimal floating-point literals: the IEEE bits of the
+    /// result of a Spark 4.2.0 local run (2026-11-07), `None` where Spark gives NULL. The
+    /// cases cover each rounding edge of `compose` (half-even ties, sticky bits, subnormals,
+    /// overflow, mantissas wider than 120 bits) and every malformed shape of `hex_parts`.
+    #[test]
+    fn hex_floats_round_as_spark_does_for_double() {
+        let cases: &[(&str, Option<u64>)] = &[
+            ("0x1p0", Some(0x3ff0000000000000_u64)),
+            ("0x1.8p3", Some(0x4028000000000000_u64)),
+            ("0x.8p1", Some(0x3ff0000000000000_u64)),
+            ("0x1.p1", Some(0x4000000000000000_u64)),
+            ("0X1P-2", Some(0x3fd0000000000000_u64)),
+            ("0x1.fffffffffffffp1023", Some(0x7fefffffffffffff_u64)),
+            ("0x1.fffffffffffff8p1023", Some(0x7ff0000000000000_u64)),
+            ("0x1.fffffffffffff7p1023", Some(0x7fefffffffffffff_u64)),
+            ("0x0.0000000000001p-1022", Some(0x0000000000000001_u64)),
+            ("0x1p-1074", Some(0x0000000000000001_u64)),
+            ("0x1p-1075", Some(0x0000000000000000_u64)),
+            ("0x1.8p-1075", Some(0x0000000000000001_u64)),
+            ("0x1.0000000000001p-1075", Some(0x0000000000000001_u64)),
+            ("0x1p-1076", Some(0x0000000000000000_u64)),
+            ("0x1.8p-1076", Some(0x0000000000000000_u64)),
+            (
+                "0x123456789abcdef0123456789abcdef0123p0",
+                Some(0x48723456789abcdf_u64),
+            ),
+            (
+                "0x1.23456789abcdef0123456789abcdef0123p0",
+                Some(0x3ff23456789abcdf_u64),
+            ),
+            (
+                "0x123456789abcdef0123456789abcdef0123.8p0",
+                Some(0x48723456789abcdf_u64),
+            ),
+            ("0x1fffffffffffffp0", Some(0x433fffffffffffff_u64)),
+            ("0x20000000000001p0", Some(0x4340000000000000_u64)),
+            ("0x20000000000003p0", Some(0x4340000000000002_u64)),
+            ("0x20000000000002p0", Some(0x4340000000000001_u64)),
+            ("0x1.00000000000008p0", Some(0x3ff0000000000000_u64)),
+            ("0x1.00000000000018p0", Some(0x3ff0000000000002_u64)),
+            ("0x1.000000000000081p0", Some(0x3ff0000000000001_u64)),
+            (
+                "0x1.00000000000008000000000000000000001p0",
+                Some(0x3ff0000000000001_u64),
+            ),
+            ("0x1p1024", Some(0x7ff0000000000000_u64)),
+            ("0x1p-1022", Some(0x0010000000000000_u64)),
+            ("0x1.fffffffffffffp-1023", Some(0x0010000000000000_u64)),
+            ("0x0p0", Some(0x0000000000000000_u64)),
+            ("-0x0p0", Some(0x8000000000000000_u64)),
+            ("0x1p+3", Some(0x4020000000000000_u64)),
+            ("0x1p3d", Some(0x4020000000000000_u64)),
+            ("0x1p3F", Some(0x4020000000000000_u64)),
+            ("-0x1.8p1", Some(0xc008000000000000_u64)),
+            ("+0x1.8p1", Some(0x4008000000000000_u64)),
+            ("0x", None),
+            ("0xp1", None),
+            ("0x1", None),
+            ("0x1p", None),
+            ("0x1pp1", None),
+            ("0x1.2.3p1", None),
+            ("0xgp1", None),
+            ("0x1p1x", None),
+            ("0x1p-", None),
+            ("0x1p+", None),
+            ("0x.p1", None),
+            ("0x1.fffffep127", Some(0x47efffffe0000000_u64)),
+            ("0x1.ffffffp127", Some(0x47effffff0000000_u64)),
+            ("0x1.fffffe8p127", Some(0x47efffffe8000000_u64)),
+            ("0x1p-149", Some(0x36a0000000000000_u64)),
+            ("0x1p-150", Some(0x3690000000000000_u64)),
+            ("0x1.8p-150", Some(0x3698000000000000_u64)),
+            ("0x1.000002p-150", Some(0x3690000020000000_u64)),
+            ("0x1p-126", Some(0x3810000000000000_u64)),
+            ("0x1.fffffep-127", Some(0x380fffffe0000000_u64)),
+            ("0x1.0000008p0", Some(0x3ff0000008000000_u64)),
+            ("0x1.0000018p0", Some(0x3ff0000018000000_u64)),
+            ("0x1.00000080000000000001p0", Some(0x3ff0000008000000_u64)),
+            ("0x1p128", Some(0x47f0000000000000_u64)),
+            ("0x0.000002p-126", Some(0x36a0000000000000_u64)),
+            (
+                "0x00000000000000000000000000001p0",
+                Some(0x3ff0000000000000_u64),
+            ),
+            ("0x1p2147483647", Some(0x7ff0000000000000_u64)),
+            ("0x1p-2147483648", Some(0x0000000000000000_u64)),
+            ("0x1p99999999999", Some(0x7ff0000000000000_u64)),
+            ("0x1p-99999999999", Some(0x0000000000000000_u64)),
+            ("0x0p99999999999", Some(0x0000000000000000_u64)),
+            (
+                "0x1ffffffffffffffffffffffffffffffffp0",
+                Some(0x4800000000000000_u64),
+            ),
+            (
+                "0x1ffffffffffffffffffffffffffffffffffp-200",
+                Some(0x3c00000000000000_u64),
+            ),
+        ];
+        for (s, want) in cases {
+            let got = parse_float::<f64>(s.as_bytes()).map(f64::to_bits);
+            assert_eq!(got, *want, "{s:?}");
+        }
+    }
+
+    /// The same for `CAST(s AS FLOAT)` (24 significand bits).
+    #[test]
+    fn hex_floats_round_as_spark_does_for_float() {
+        let cases: &[(&str, Option<u32>)] = &[
+            ("0x1p0", Some(0x3f800000_u32)),
+            ("0x1.8p3", Some(0x41400000_u32)),
+            ("0x.8p1", Some(0x3f800000_u32)),
+            ("0x1.p1", Some(0x40000000_u32)),
+            ("0X1P-2", Some(0x3e800000_u32)),
+            ("0x1.fffffffffffffp1023", Some(0x7f800000_u32)),
+            ("0x1.fffffffffffff8p1023", Some(0x7f800000_u32)),
+            ("0x1.fffffffffffff7p1023", Some(0x7f800000_u32)),
+            ("0x0.0000000000001p-1022", Some(0x00000000_u32)),
+            ("0x1p-1074", Some(0x00000000_u32)),
+            ("0x1p-1075", Some(0x00000000_u32)),
+            ("0x1.8p-1075", Some(0x00000000_u32)),
+            ("0x1.0000000000001p-1075", Some(0x00000000_u32)),
+            ("0x1p-1076", Some(0x00000000_u32)),
+            ("0x1.8p-1076", Some(0x00000000_u32)),
+            (
+                "0x123456789abcdef0123456789abcdef0123p0",
+                Some(0x7f800000_u32),
+            ),
+            (
+                "0x1.23456789abcdef0123456789abcdef0123p0",
+                Some(0x3f91a2b4_u32),
+            ),
+            (
+                "0x123456789abcdef0123456789abcdef0123.8p0",
+                Some(0x7f800000_u32),
+            ),
+            ("0x1fffffffffffffp0", Some(0x5a000000_u32)),
+            ("0x20000000000001p0", Some(0x5a000000_u32)),
+            ("0x20000000000003p0", Some(0x5a000000_u32)),
+            ("0x20000000000002p0", Some(0x5a000000_u32)),
+            ("0x1.00000000000008p0", Some(0x3f800000_u32)),
+            ("0x1.00000000000018p0", Some(0x3f800000_u32)),
+            ("0x1.000000000000081p0", Some(0x3f800000_u32)),
+            (
+                "0x1.00000000000008000000000000000000001p0",
+                Some(0x3f800000_u32),
+            ),
+            ("0x1p1024", Some(0x7f800000_u32)),
+            ("0x1p-1022", Some(0x00000000_u32)),
+            ("0x1.fffffffffffffp-1023", Some(0x00000000_u32)),
+            ("0x0p0", Some(0x00000000_u32)),
+            ("-0x0p0", Some(0x80000000_u32)),
+            ("0x1p+3", Some(0x41000000_u32)),
+            ("0x1p3d", Some(0x41000000_u32)),
+            ("0x1p3F", Some(0x41000000_u32)),
+            ("-0x1.8p1", Some(0xc0400000_u32)),
+            ("+0x1.8p1", Some(0x40400000_u32)),
+            ("0x", None),
+            ("0xp1", None),
+            ("0x1", None),
+            ("0x1p", None),
+            ("0x1pp1", None),
+            ("0x1.2.3p1", None),
+            ("0xgp1", None),
+            ("0x1p1x", None),
+            ("0x1p-", None),
+            ("0x1p+", None),
+            ("0x.p1", None),
+            ("0x1.fffffep127", Some(0x7f7fffff_u32)),
+            ("0x1.ffffffp127", Some(0x7f800000_u32)),
+            ("0x1.fffffe8p127", Some(0x7f7fffff_u32)),
+            ("0x1p-149", Some(0x00000001_u32)),
+            ("0x1p-150", Some(0x00000000_u32)),
+            ("0x1.8p-150", Some(0x00000001_u32)),
+            ("0x1.000002p-150", Some(0x00000001_u32)),
+            ("0x1p-126", Some(0x00800000_u32)),
+            ("0x1.fffffep-127", Some(0x00800000_u32)),
+            ("0x1.0000008p0", Some(0x3f800000_u32)),
+            ("0x1.0000018p0", Some(0x3f800001_u32)),
+            ("0x1.00000080000000000001p0", Some(0x3f800000_u32)),
+            ("0x1p128", Some(0x7f800000_u32)),
+            ("0x0.000002p-126", Some(0x00000001_u32)),
+            ("0x00000000000000000000000000001p0", Some(0x3f800000_u32)),
+            ("0x1p2147483647", Some(0x7f800000_u32)),
+            ("0x1p-2147483648", Some(0x00000000_u32)),
+            ("0x1p99999999999", Some(0x7f800000_u32)),
+            ("0x1p-99999999999", Some(0x00000000_u32)),
+            ("0x0p99999999999", Some(0x00000000_u32)),
+            (
+                "0x1ffffffffffffffffffffffffffffffffp0",
+                Some(0x7f800000_u32),
+            ),
+            (
+                "0x1ffffffffffffffffffffffffffffffffffp-200",
+                Some(0x20000000_u32),
+            ),
+        ];
+        for (s, want) in cases {
+            let got = parse_float::<f32>(s.as_bytes()).map(f32::to_bits);
+            assert_eq!(got, *want, "{s:?}");
+        }
+    }
+
+    /// `Character.digit(c, 10)`: the first character after a run of ten digits is none.
+    #[test]
+    fn java_digit_stops_at_the_end_of_each_run() {
+        assert_eq!(java_digit('٠'), Some(0));
+        assert_eq!(java_digit('٩'), Some(9));
+        assert_eq!(java_digit('\u{66a}'), None);
+        assert_eq!(java_digit('9'), Some(9));
+        assert_eq!(java_digit(':'), None);
+    }
+
+    /// Spark 4.2.0 (local run, 2026-11-07), `CAST(s AS DECIMAL(38,0))`: digits of any BMP run
+    /// count, a supplementary-plane digit does not, and an exponent up to `i32::MAX` is read.
+    #[test]
+    fn decimal_text_reads_bmp_digits_only_and_bounded_exponents() {
+        let plain = |s: &str| parse_decimal(s).map(|d| d.plain());
+        assert_eq!(plain("١٢٣").as_deref(), Some("123"));
+        assert_eq!(plain("1٠").as_deref(), Some("10"));
+        assert_eq!(plain("০১২").as_deref(), Some("12"));
+        assert_eq!(plain("١٢٣٪"), None);
+        assert_eq!(plain("\u{1d7d9}\u{1d7da}"), None);
+        assert_eq!(plain("1e١٢").as_deref(), Some("1000000000000"));
+        assert_eq!(plain("1.5e3").as_deref(), Some("1500"));
+        assert_eq!(plain("1e12").as_deref(), Some("1000000000000"));
+        assert_eq!(plain("1e+5").as_deref(), Some("100000"));
+        assert_eq!(plain("0e2147483647").as_deref(), Some("0"));
+        assert_eq!(plain("1e2147483648"), None);
+        assert_eq!(plain("1e-2147483649"), None);
+        for bad in ["1e", "1e+", "1e-"] {
+            assert_eq!(plain(bad), None, "{bad:?}");
+        }
     }
 }
