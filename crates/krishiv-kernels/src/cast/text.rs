@@ -85,7 +85,7 @@ pub(crate) fn parse_integral(s: &[u8], exact: bool) -> Option<i64> {
 /// The zero of every Unicode `Nd` run Java 21 knows (`Character.digit(c,
 /// 10) == 0`); each run is ten consecutive digits. Java's `BigDecimal`
 /// reads UTF-16 units, so only the runs in the Basic Multilingual Plane count
-/// there (`bigdecimal_digit`); the supplementary-plane runs do not.
+/// there (`utf16_digit`); the supplementary-plane runs do not.
 const DIGIT_ZEROS: [u32; 68] = [
     0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66,
     0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90,
@@ -104,10 +104,10 @@ pub(crate) fn java_digit(c: char) -> Option<u8> {
     u8::try_from(d).ok().filter(|&d| d < 10)
 }
 
-/// The digit `BigDecimal(String)` reads: it walks UTF-16 units with `Character.digit(char, 10)`,
+/// The digit Java's `BigDecimal(String)`, `Long.parseLong` and `Integer.parseInt` read: they walk UTF-16 units with `Character.digit(char, 10)`,
 /// so a digit outside the Basic Multilingual Plane (two surrogates) is none (Spark 4.2.0:
-/// `CAST('𝟙𝟚' AS DECIMAL)` is NULL, `CAST('١٢٣' AS DECIMAL)` is 123).
-fn bigdecimal_digit(c: char) -> Option<u8> {
+/// `CAST('𝟙𝟚' AS DECIMAL)` is NULL, `CAST('١٢٣' AS DECIMAL)` is 123; a CSV `bigint`/`int` column reads `٣` as 3 and `𝟙` as NULL).
+pub(crate) fn utf16_digit(c: char) -> Option<u8> {
     java_digit(c).filter(|_| u32::from(c) <= 0xffff)
 }
 
@@ -245,7 +245,7 @@ pub(crate) fn parse_decimal(s: &str) -> Option<BigDec> {
     let mut chars = rest.chars().peekable();
     let mut exp = 0_i64;
     while let Some(c) = chars.next() {
-        if let Some(d) = bigdecimal_digit(c) {
+        if let Some(d) = utf16_digit(c) {
             seen_digit = true;
             if !digits.is_empty() || d != 0 {
                 digits.push(d);
@@ -270,7 +270,7 @@ pub(crate) fn parse_decimal(s: &str) -> Option<BigDec> {
             let mut e: i64 = 0;
             let mut any = false;
             for c in chars.by_ref() {
-                e = e * 10 + i64::from(bigdecimal_digit(c)?);
+                e = e * 10 + i64::from(utf16_digit(c)?);
                 any = true;
                 if e > i64::from(i32::MAX) + 1 {
                     return None;
