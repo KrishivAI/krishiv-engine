@@ -68,6 +68,7 @@ impl Gate {
 struct Fake {
     gate: Arc<Gate>,
     calls: Arc<AtomicUsize>,
+    lens: Arc<std::sync::Mutex<Vec<usize>>>,
     fail: bool,
     fail_at_once: Option<i64>,
 }
@@ -75,6 +76,7 @@ struct Fake {
 impl PreparedUdf for Fake {
     fn call(&self, args: RecordBatch) -> BoxFuture<'static, crate::error::Result<ArrayRef>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.lens.lock().unwrap().push(args.num_rows());
         let gate = Arc::clone(&self.gate);
         let fail = self.fail;
         let first = args
@@ -142,6 +144,7 @@ struct Rig {
     ctx: TaskContext,
     gate: Arc<Gate>,
     calls: Arc<AtomicUsize>,
+    lens: Arc<std::sync::Mutex<Vec<usize>>>,
 }
 
 fn rig(limit: usize, max_rows: usize, window: usize, fail: bool) -> Rig {
@@ -158,11 +161,13 @@ fn rig_failing_at_once(
     let schema = Schema::new(vec![Field::new("x", ArrowType::Int64, true)]);
     let gate = Arc::new(Gate::default());
     let calls = Arc::new(AtomicUsize::new(0));
+    let lens = Arc::new(std::sync::Mutex::new(Vec::new()));
     let call = EvalCall {
         args: vec![Arc::new(Col(0))],
         udf: Arc::new(Fake {
             gate: Arc::clone(&gate),
             calls: Arc::clone(&calls),
+            lens: Arc::clone(&lens),
             fail,
             fail_at_once,
         }),
@@ -192,6 +197,7 @@ fn rig_failing_at_once(
         ctx,
         gate,
         calls,
+        lens,
     }
 }
 
@@ -206,8 +212,8 @@ async fn a_full_window_blocks_until_the_oldest_slice_is_done() {
     let r = rig(64 << 20, 2, 2, false);
     let g = r.sink.global_state(&r.ctx).unwrap();
     let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
-    // Five rows in slices of two: three slices, over the window of two.
-    let SinkStatus::Blocked(wait) = r.sink.sink(rows(5), &mut l, &g).unwrap() else {
+    // Six rows in slices of two: three slices, over the window of two.
+    let SinkStatus::Blocked(wait) = r.sink.sink(rows(6), &mut l, &g).unwrap() else {
         panic!("a full window must block the driver");
     };
     assert_eq!(r.calls.load(Ordering::SeqCst), 3, "one call per slice");
@@ -254,6 +260,37 @@ async fn a_failed_slice_behind_a_running_one_frees_a_blocked_driver_with_its_err
     );
     drop((l, g, r.ctx, r.query));
     assert_eq!(r.root.reserved(), 0, "memory left after the failure");
+}
+
+#[tokio::test]
+async fn a_driver_s_rows_go_in_slices_of_exactly_max_records_and_the_rest_at_its_end() {
+    // Spark cuts a partition's rows into batches of exactly
+    // `maxRecordsPerBatch`, whatever the input batches were, and sends the
+    // rest as the last (research/spark-notes/python-udf-batching.md).
+    let r = rig(64 << 20, 3, 8, false);
+    r.gate.open();
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    for n in [2, 2, 2, 1] {
+        assert!(matches!(
+            r.sink.sink(rows(n), &mut l, &g).unwrap(),
+            SinkStatus::NeedMoreInput
+        ));
+    }
+    assert_eq!(
+        *r.lens.lock().unwrap(),
+        vec![3, 3],
+        "full slices only while input comes"
+    );
+    r.sink.combine(l, &g).unwrap();
+    assert_eq!(
+        *r.lens.lock().unwrap(),
+        vec![3, 3, 1],
+        "the rest at the end of input"
+    );
+    r.sink.finalize(&g, &r.ctx).await.unwrap();
+    drop((g, r.ctx, r.query));
+    assert_eq!(r.root.reserved(), 0, "memory left after the phase");
 }
 
 #[tokio::test]

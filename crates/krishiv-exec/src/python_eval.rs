@@ -321,8 +321,15 @@ struct EvalLocal {
     pending: Arc<Mutex<Pending>>,
     /// A finished slice the store could not take yet (it asked for memory).
     ready: Option<Batch>,
-    consumer: Arc<krishiv_memory::ConsumerHandle>,
     partition: u32,
+    /// Input rows not submitted yet: fewer than `maxRecordsPerBatch`, kept
+    /// until more arrive or the input ends (Spark cuts a partition's rows
+    /// into batches of exactly that many, whatever its input batches were;
+    /// `research/spark-notes/python-udf-batching.md`).
+    held: Vec<Batch>,
+    held_rows: usize,
+    /// The reservation of the held rows' bytes.
+    held_bytes: Reservation,
 }
 
 /// The global state: the store's, and the slices drivers left in flight.
@@ -352,6 +359,73 @@ impl PythonEvalSink {
                     .map_err(|e| internal(format!("Python UDF arguments: {e}")))
             })
             .collect()
+    }
+
+    /// Submits the held rows in slices of `max_rows` (all of them as one
+    /// slice when `max_rows` is 0, Krishiv's "no limit": one call per input
+    /// batch); with `flush` the rows left over too, as the driver's last,
+    /// shorter slice (Spark's partition's last batch).
+    fn submit_held(&self, l: &mut EvalLocal, flush: bool) -> Result<()> {
+        if l.held_rows == 0 {
+            return Ok(());
+        }
+        let step = if self.max_rows == 0 {
+            l.held_rows
+        } else {
+            self.max_rows
+        };
+        if l.held_rows < step && !flush {
+            return Ok(());
+        }
+        let held = std::mem::take(&mut l.held);
+        let rows = std::mem::take(&mut l.held_rows);
+        let schema = held
+            .first()
+            .map(Batch::schema)
+            .ok_or_else(|| internal("no held rows".to_owned()))?;
+        let all = if held.len() == 1 {
+            held.into_iter()
+                .next()
+                .ok_or_else(|| internal("no held rows".to_owned()))?
+        } else {
+            Batch::concat(&schema, &held)?
+        };
+        let mut offset = 0;
+        let mut slices = Vec::new();
+        while offset < rows {
+            let len = step.min(rows - offset);
+            if len < step && !flush {
+                // Too few for a full slice: held for the next input.
+                l.held.push(all.slice(offset, len)?);
+                l.held_rows = len;
+                break;
+            }
+            let slice = all.slice(offset, len)?;
+            let args = self.arguments(slice.data(), l.partition)?;
+            // Each slice owns its share of the held rows' reservation; the
+            // rows still held keep the rest.
+            let share = l.held_bytes.size() * len / (rows - offset);
+            let part = l.held_bytes.split(share);
+            let slots = self
+                .calls
+                .iter()
+                .zip(args)
+                .map(|(call, args)| Slot::Pending(call.udf.call(args)))
+                .collect();
+            slices.push(InFlight {
+                input: slice,
+                slots,
+                _reservation: part,
+            });
+            offset += len;
+        }
+        lock(&l.pending).slices.extend(slices);
+        Ok(())
+    }
+
+    /// [`Self::submit_held`] without the rows left over.
+    fn submit_full(&self, l: &mut EvalLocal) -> Result<()> {
+        self.submit_held(l, false)
     }
 
     /// Stores `batch` in the list, or keeps it for the retry after the
@@ -385,8 +459,10 @@ impl Sink for PythonEvalSink {
             store: self.store.local_state(ctx, &g.store)?,
             pending: Arc::new(Mutex::new(Pending::default())),
             ready: None,
-            consumer: Arc::clone(ctx.consumer().consumer()),
             partition: ctx.partition(),
+            held: Vec::new(),
+            held_rows: 0,
+            held_bytes: ctx.consumer().consumer().reservation(),
         }))
     }
 
@@ -420,42 +496,12 @@ impl Sink for PythonEvalSink {
         if rows > 0 {
             let input = crate::operators::owned_rows(input)?;
             let bytes = input.data().get_array_memory_size();
-            let mut reservation = l.consumer.reservation();
-            if reservation.try_grow(bytes).is_err() {
+            if l.held_bytes.try_grow(bytes).is_err() {
                 return Ok(SinkStatus::NeedMemory { bytes });
             }
-            let step = if self.max_rows == 0 {
-                rows
-            } else {
-                self.max_rows
-            };
-            let mut slices = Vec::new();
-            let mut offset = 0;
-            while offset < rows {
-                let len = step.min(rows - offset);
-                let slice = input.slice(offset, len)?;
-                let args = self.arguments(slice.data(), l.partition)?;
-                // Each slice owns its share of the input's reservation.
-                let share = if offset + len == rows {
-                    reservation.size()
-                } else {
-                    bytes * len / rows
-                };
-                let part = reservation.split(share);
-                let slots = self
-                    .calls
-                    .iter()
-                    .zip(args)
-                    .map(|(call, args)| Slot::Pending(call.udf.call(args)))
-                    .collect();
-                slices.push(InFlight {
-                    input: slice,
-                    slots,
-                    _reservation: part,
-                });
-                offset += len;
-            }
-            lock(&l.pending).slices.extend(slices);
+            l.held.push(input);
+            l.held_rows += rows;
+            self.submit_full(l)?;
         }
         if lock(&l.pending).slices.len() >= self.window {
             let pending = Arc::clone(&l.pending);
@@ -478,12 +524,15 @@ impl Sink for PythonEvalSink {
         let l = local
             .downcast::<EvalLocal>()
             .map_err(|_| internal("wrong local state for PythonEval".to_owned()))?;
+        let mut l = *l;
+        // The input ended: the rows held go as the driver's last slice.
+        self.submit_held(&mut l, true)?;
         let EvalLocal {
             store,
             pending,
             ready,
             ..
-        } = *l;
+        } = l;
         let slices = std::mem::take(&mut lock(&pending).slices);
         if ready.is_some() || !slices.is_empty() {
             lock(&g.leftover).push((ready, slices));

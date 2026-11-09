@@ -158,6 +158,29 @@ async fn calls_are_sliced_to_max_records_per_batch_and_rows_stay_in_order() {
 }
 
 #[tokio::test]
+async fn calls_get_exactly_max_records_rows_per_partition_whatever_the_input_batches() {
+    // Spark cuts a partition into batches of exactly `maxRecordsPerBatch`
+    // rows and sends the rest last (research/spark-notes/python-udf-batching.md;
+    // a pandas UDF sees `len(series)`).
+    let (s, seen) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    s.conf()
+        .set("spark.sql.execution.arrow.maxRecordsPerBatch", "10")
+        .unwrap();
+    let got = longs(&s, "SELECT py_plus(id) FROM range(0, 25, 1, 1)").await;
+    assert_eq!(got, (1..=25).map(Some).collect::<Vec<_>>());
+    assert_eq!(seen.lock().unwrap().calls, vec![10, 10, 5]);
+    // Across the engine's 4,096-row input batches too.
+    seen.lock().unwrap().calls.clear();
+    s.conf()
+        .set("spark.sql.execution.arrow.maxRecordsPerBatch", "3000")
+        .unwrap();
+    let got = longs(&s, "SELECT py_plus(id) FROM range(0, 10000, 1, 1)").await;
+    assert_eq!(got.len(), 10_000);
+    assert_eq!(seen.lock().unwrap().calls, vec![3000, 3000, 3000, 1000]);
+}
+
+#[tokio::test]
 async fn a_collected_range_keeps_its_order_through_calls_on_many_slices() {
     // Spark collects a range's partitions in order, and a Python UDF keeps
     // each partition's order: the rows come back in range order, as a plain
