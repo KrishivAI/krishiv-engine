@@ -1947,7 +1947,9 @@ impl Session {
             };
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
-                options: options.clone(),
+                // The session's conf fallbacks travel with the plan: a
+                // worker parses these options against its own config.
+                options: format.options().with_conf_fallbacks(&options, &env.config),
                 store: store.key().to_owned(),
                 dir: at.path.as_ref().to_owned(),
                 job_uuid: job,

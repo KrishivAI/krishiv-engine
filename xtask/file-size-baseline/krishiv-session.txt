@@ -16,8 +16,9 @@
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
 # +5 lines over main: the admission exemption of system-only reads and the estimate gate (PR #525)
 # +33 lines: CTAS, views, CACHE TABLE, INSERT, EXPLAIN and DESCRIBE QUERY pass IDENTIFIER(..) spans to the query they run, which is boxed (T179g follow-up, PR #576)
+# +2 lines: a write's plan carries the session's conf fallbacks (row 36 batch B-8)
 # +7 lines: the session's Python UDF library and runtime fields and the worker's runtime (P2-T059; the methods are in python_udfs.rs)
-2826 crates/krishiv-session/src/session.rs
+2828 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
 # +4 lines over main: a view column list without a comment keeps the query column's comment (Spark's aliasPlan, PR #589)

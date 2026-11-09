@@ -7,16 +7,16 @@ Project [substring(r_reason_desc, 1, 20)#134, avg1#135, avg2#136, avg(wr_fee)#13
    +- Sort [substring(r_reason_desc#133, 1, 20) ASC NULLS FIRST, avg1#135 ASC NULLS FIRST, avg2#136 ASC NULLS FIRST, avg(wr_fee)#137 ASC NULLS FIRST], true
       +- Aggregate [r_reason_desc#133], [substring(r_reason_desc#133, 1, 20) AS substring(r_reason_desc, 1, 20)#134, avg(ws_quantity#18) AS avg1#135, avg(wr_refunded_cash#54) AS avg2#136, avg(wr_fee#52) AS avg(wr_fee)#137, r_reason_desc#133]
          +- Project [r_reason_desc#133, ws_quantity#18, wr_fee#52, wr_refunded_cash#54]
-            +- Join Inner, (ws_web_page_sk#12 == wp_web_page_sk#58)
-               :- Scan spark_catalog.default.web_page [wp_web_page_sk#58]
-               +- Project [r_reason_desc#133, ws_web_page_sk#12, ws_quantity#18, wr_fee#52, wr_refunded_cash#54]
-                  +- Join Inner, (ws_sold_date_sk#0 == d_date_sk#103)
-                     :- Project [d_date_sk#103]
-                     :  +- Filter (d_year#109 == 2000)
-                     :     +- Scan spark_catalog.default.date_dim [d_date_sk#103, d_year#109]
-                     +- Project [r_reason_desc#133, ws_sold_date_sk#0, ws_web_page_sk#12, ws_quantity#18, wr_fee#52, wr_refunded_cash#54]
-                        +- Join Inner, (r_reason_sk#131 == wr_reason_sk#46)
-                           :- Scan spark_catalog.default.reason [r_reason_sk#131, r_reason_desc#133]
+            +- Join Inner, (r_reason_sk#131 == wr_reason_sk#46)
+               :- Scan spark_catalog.default.reason [r_reason_sk#131, r_reason_desc#133]
+               +- Project [ws_quantity#18, wr_reason_sk#46, wr_fee#52, wr_refunded_cash#54]
+                  +- Join Inner, (ws_web_page_sk#12 == wp_web_page_sk#58)
+                     :- Scan spark_catalog.default.web_page [wp_web_page_sk#58]
+                     +- Project [ws_web_page_sk#12, ws_quantity#18, wr_reason_sk#46, wr_fee#52, wr_refunded_cash#54]
+                        +- Join Inner, (ws_sold_date_sk#0 == d_date_sk#103)
+                           :- Project [d_date_sk#103]
+                           :  +- Filter (d_year#109 == 2000)
+                           :     +- Scan spark_catalog.default.date_dim [d_date_sk#103, d_year#109]
                            +- Project [ws_sold_date_sk#0, ws_web_page_sk#12, ws_quantity#18, wr_reason_sk#46, wr_fee#52, wr_refunded_cash#54]
                               +- Join Inner, ((cd_demo_sk#81 == wr_returning_cdemo_sk#42) and ((((((cd_marital_status#74 == 'M') and (cd_marital_status#74 == cd_marital_status#83)) and (cd_education_status#75 == 'Advanced Degree')) and ((cd_education_status#75 == cd_education_status#84) and ((ws_sales_price#21 >= 100.00) and (ws_sales_price#21 <= 150.00)))) or ((((cd_marital_status#74 == 'S') and (cd_marital_status#74 == cd_marital_status#83)) and (cd_education_status#75 == 'College')) and ((cd_education_status#75 == cd_education_status#84) and ((ws_sales_price#21 >= 50.00) and (ws_sales_price#21 <= 100.00))))) or ((((cd_marital_status#74 == 'W') and (cd_marital_status#74 == cd_marital_status#83)) and (cd_education_status#75 == '2 yr Degree')) and ((cd_education_status#75 == cd_education_status#84) and ((ws_sales_price#21 >= 150.00) and (ws_sales_price#21 <= 200.00))))))
                                  :- Shift +9
