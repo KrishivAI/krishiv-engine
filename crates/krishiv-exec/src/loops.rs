@@ -14,9 +14,10 @@
 //! The node runs when its pipeline does: a loop in a branch that is never
 //! evaluated never runs. The bounds ([`LoopLimits`]) are plan data.
 //!
-//! A shared plan (an enclosing non-recursive CTE) read inside the recursive
-//! term is built again for every round, as it was when each round was a
-//! query of its own.
+//! The anchor and every round are instantiated when they start (through
+//! [`Detached`]): a shared plan (an enclosing non-recursive CTE) they read is
+//! built again for each, from the seeds the outer plan gave it, as Spark
+//! computes it again per run (`physical/instantiate/detached.rs`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -34,8 +35,7 @@ use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
 use crate::operator::{GlobalState, LocalState, Source};
 use crate::operators::global_ref;
-use crate::physical::{Detached, LoopLimits, PhysNode};
-use crate::pipeline::ExecNode;
+use crate::physical::{Detached, LoopLimits, LoopRun, PhysNode};
 use crate::runner::QueryRunner;
 use crate::shared::Output;
 
@@ -53,7 +53,7 @@ static NEXT_ROUND: AtomicU64 = AtomicU64::new(1 << 62);
 pub(crate) struct UnionLoopSource {
     id: u32,
     schema: SchemaRef,
-    anchor: Arc<dyn ExecNode>,
+    anchor: Arc<PhysNode>,
     recursive: Arc<PhysNode>,
     limits: LoopLimits,
     detached: Arc<Detached>,
@@ -72,12 +72,12 @@ struct Totals {
 }
 
 impl UnionLoopSource {
-    /// A loop of rows of `schema`: `anchor` built, `recursive` built for each
-    /// round through `detached`.
+    /// A loop of rows of `schema`: `anchor` and `recursive` built when their
+    /// runs start, through `detached`.
     pub(crate) fn new(
         id: u32,
         schema: SchemaRef,
-        anchor: Arc<dyn ExecNode>,
+        anchor: Arc<PhysNode>,
         recursive: PhysNode,
         limits: LoopLimits,
         detached: Arc<Detached>,
@@ -256,15 +256,22 @@ impl UnionLoopSource {
             let detached = Arc::clone(&self.detached);
             let recursive = Arc::clone(&self.recursive);
             let loops = HashMap::from([(self.id, prev)]);
-            let shift = st.level - 1;
+            let run = (self.id, LoopRun::Round, st.level - 1);
             let (node, _schema) = run_blocking(&*g.executor, move || {
-                detached.instantiate(&recursive, loops, shift)
+                detached.instantiate(&recursive, loops, run)
             })
             .await?;
             node
         } else {
             st.started = true;
-            Arc::clone(&self.anchor)
+            let detached = Arc::clone(&self.detached);
+            let anchor = Arc::clone(&self.anchor);
+            let run = (self.id, LoopRun::Anchor, 0);
+            let (node, _schema) = run_blocking(&*g.executor, move || {
+                detached.instantiate(&anchor, HashMap::new(), run)
+            })
+            .await?;
+            node
         };
         let child = QueryContext::new(
             QueryId(NEXT_ROUND.fetch_add(1, Ordering::Relaxed)),
