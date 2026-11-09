@@ -731,6 +731,21 @@ impl Graph {
         } else {
             Vec::new()
         };
+        // Where a conjunct over no input (a constant `false`) goes: the first
+        // input without inputs of its own (a scan), found before the loop
+        // wraps inputs in filters, so the choice does not depend on the order
+        // the conjuncts were written in. Pushdown cannot move it further, so
+        // it is where the next optimization finds and places it again; on an
+        // input with a plan under it, a later pushdown would carry it into a
+        // join tree ordered here without it.
+        let no_input = sorted
+            .iter()
+            .position(|l| {
+                let mut leaf = true;
+                l.for_each_child(&mut |_| leaf = false);
+                leaf
+            })
+            .unwrap_or(0);
         // The conjuncts over each input alone, estimated together after the
         // loop: each narrows the columns the next reads.
         let mut local: Vec<Vec<Arc<Expr>>> = vec![Vec::new(); sorted.len()];
@@ -742,8 +757,9 @@ impl Graph {
             on.sort_unstable();
             on.dedup();
             if let [] | [_] = on.as_slice() {
-                // A conjunct over one input (or none) filters that input.
-                let i = on.first().copied().unwrap_or(0);
+                // A conjunct over one input filters that input; one over none
+                // filters `no_input`.
+                let i = on.first().copied().unwrap_or(no_input);
                 let resolved = leaf_defs
                     .get(i)
                     .map_or_else(|| Arc::clone(&p), |defs| resolve_cse(&p, defs));
