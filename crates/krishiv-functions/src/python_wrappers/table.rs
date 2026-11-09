@@ -73,6 +73,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "__subscript",
         "the lowering of `base[index]`; PySpark: `Column.getItem`",
     ),
+    (
+        "__collation_key",
+        "internal: the comparison key of a collated value",
+    ),
     ("__time_add_interval", "operator: `time + interval`"),
     ("__subtract_times", "operator: `time - time`"),
     (

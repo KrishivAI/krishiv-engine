@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 
 FIXTURE = "tests/fixtures/spark-4.2.0/case-mapping.json"
+LCASE_FIXTURE = "tests/fixtures/spark-4.2.0/collation-lowercase.json"
 
 
 def runs(cps: list[int]) -> list[tuple[int, int, int]]:
@@ -44,12 +45,45 @@ def table(name: str, doc: str, cps: list[int]) -> str:
     return f"/// {doc}\npub(super) const {name}: &[(u32, u32, u32)] = &[\n{rows}\n];\n"
 
 
+def lcase_runs(mapped: dict[int, int]) -> list[tuple[int, int, int, int]]:
+    """Greedy `(first, last, step, delta)` runs (step 1 or 2) of equal `target - cp` over `mapped`."""
+    cps = sorted(mapped)
+    out: list[tuple[int, int, int, int]] = []
+    i = 0
+    while i < len(cps):
+        delta = mapped[cps[i]] - cps[i]
+        best_end, best_step = i, 1
+        for step in (1, 2):
+            j = i
+            while (
+                j + 1 < len(cps) and cps[j + 1] - cps[j] == step and mapped[cps[j + 1]] - cps[j + 1] == delta
+            ):
+                j += 1
+            if j > best_end:
+                best_end, best_step = j, step
+        out.append((cps[i], cps[best_end], best_step, delta))
+        i = best_end + 1
+    return out
+
+
+def lcase_table(mapped: dict[int, int]) -> str:
+    rows = "\n".join(f"    (0x{a:05X}, 0x{b:05X}, {s}, {d})," for a, b, s, d in lcase_runs(mapped))
+    return (
+        "/// `UTF8_LCASE`: every code point Spark's `lowerCaseCodePoints` maps to one code point, as\n"
+        "/// `(first, last, step, target - code point)` runs, sorted. `U+0130` (two code points) is handled by\n"
+        "/// the kernel.\n"
+        f"pub(super) const COLLATION_LOWER: &[(u32, u32, u32, i32)] = &[\n{rows}\n];\n"
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fixture", default=FIXTURE)
     ap.add_argument("--out", default="crates/krishiv-kernels/src/string/case_table.rs")
     args = ap.parse_args()
     fixture = json.loads(Path(args.fixture).read_text(encoding="utf-8"))
+    lcase = json.loads(Path(LCASE_FIXTURE).read_text(encoding="utf-8"))["lower"]
+    singles = {int(cp): v[0] for cp, v in lcase.items() if len(v) == 1}
     upper = sorted(int(cp) for cp in fixture["upper"])
     lower = sorted(int(cp) for cp in fixture["lower"])
     text = (
@@ -60,6 +94,8 @@ def main() -> None:
         + table("UPPER", "The code points `upper` changes, sorted.", upper)
         + "\n"
         + table("LOWER", "The code points `lower` changes, sorted.", lower)
+        + "\n"
+        + lcase_table(singles)
     )
     Path(args.out).write_text(text, encoding="utf-8")
     print(f"wrote {len(upper)} upper / {len(lower)} lower code points -> {args.out}")

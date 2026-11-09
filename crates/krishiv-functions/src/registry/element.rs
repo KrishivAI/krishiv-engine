@@ -13,7 +13,7 @@ use krishiv_common::error::{
     DatatypeMismatchInvalidOrderingType, DatatypeMismatchMapFunctionDiffTypes,
     DatatypeMismatchUnexpectedInputType, InvalidExtractBaseFieldType, KrishivError,
 };
-use krishiv_types::DataType;
+use krishiv_types::{ArrayType, DataType, MapType, StructField, StructType};
 
 use super::defs::{Spec, exact, scalar};
 use super::hof::{call_sql, ordinal, quoted};
@@ -180,6 +180,32 @@ fn subscript_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     index_inputs(c)
 }
 
+/// The type of the key of its first argument: every string leaf becomes `BINARY`, the shape stays.
+fn collation_key_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    fn keyed(t: &DataType) -> DataType {
+        match t {
+            DataType::String | DataType::CollatedString(_) => DataType::Binary,
+            DataType::Array(a) => DataType::Array(std::sync::Arc::new(ArrayType::new(
+                keyed(a.element_type()),
+                a.contains_null(),
+            ))),
+            DataType::Map(m) => DataType::Map(std::sync::Arc::new(MapType::new(
+                keyed(m.key_type()),
+                keyed(m.value_type()),
+                m.value_contains_null(),
+            ))),
+            DataType::Struct(s) => DataType::Struct(StructType::new(
+                s.fields()
+                    .iter()
+                    .map(|f| StructField::new(f.name(), keyed(f.data_type()), f.nullable())),
+            )),
+            other => other.clone(),
+        }
+    }
+    let t = c.data_type(0).map_or(DataType::Binary, keyed);
+    Ok(ArgType::new(t, c.args().first().is_none_or(|a| a.nullable)))
+}
+
 /// The signatures of this family.
 pub(super) fn specs() -> Vec<Spec> {
     let mut out = scalar(
@@ -195,6 +221,11 @@ pub(super) fn specs() -> Vec<Spec> {
     let built = Inputs::Built(InputBuilder(element_at_inputs));
     let sub = Inputs::Built(InputBuilder(subscript_inputs));
     out.extend(scalar(&["__subscript"], &sub, subscript));
+    out.extend(scalar(
+        &["__collation_key"],
+        &Inputs::Expects(vec![InputType::Any, exact(DataType::String)]),
+        collation_key_result,
+    ));
     out.extend(scalar(&["element_at"], &built, element_at));
     out.extend(scalar(&["try_element_at"], &built, try_element_at));
     out
