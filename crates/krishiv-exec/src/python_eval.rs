@@ -293,6 +293,16 @@ impl Pending {
         self.slices.front_mut().is_none_or(|h| h.poll_all(cx))
     }
 
+    /// The first failure among the slices in flight, polling each of them
+    /// (so `cx` is woken by any one): a failure behind a slice still
+    /// running must not wait for it (design P2-T059 §6.3).
+    fn failure(&mut self, cx: &mut Context<'_>) -> Option<KrishivError> {
+        self.slices.iter_mut().find_map(|s| {
+            s.poll_all(cx);
+            s.failed().cloned()
+        })
+    }
+
     /// The oldest slice if every call of it is done, without waiting.
     fn take_ready(&mut self) -> Option<InFlight> {
         let mut cx = Context::from_waker(noop_waker_ref());
@@ -395,6 +405,9 @@ impl Sink for PythonEvalSink {
         {
             return Ok(status);
         }
+        if let Some(e) = lock(&l.pending).failure(&mut Context::from_waker(noop_waker_ref())) {
+            return Err(e);
+        }
         loop {
             let next = lock(&l.pending).take_ready();
             let Some(done) = next else { break };
@@ -447,7 +460,10 @@ impl Sink for PythonEvalSink {
         if lock(&l.pending).slices.len() >= self.window {
             let pending = Arc::clone(&l.pending);
             return Ok(SinkStatus::Blocked(Box::pin(poll_fn(move |cx| {
-                if lock(&pending).head_ready(cx) {
+                let mut p = lock(&pending);
+                // Free once the oldest slice is done, or any slice failed:
+                // the next `sink` call then returns the failure.
+                if p.head_ready(cx) || p.failure(cx).is_some() {
                     Poll::Ready(())
                 } else {
                     Poll::Pending

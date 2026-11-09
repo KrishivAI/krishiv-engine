@@ -62,11 +62,14 @@ impl Gate {
     }
 }
 
-/// `x + 1` once the gate is open; fails every call when `fail` is set.
+/// `x + 1` once the gate is open; fails every call when `fail` is set, and
+/// at once (without waiting for the gate) a call whose first value is at
+/// least `fail_at_once`.
 struct Fake {
     gate: Arc<Gate>,
     calls: Arc<AtomicUsize>,
     fail: bool,
+    fail_at_once: Option<i64>,
 }
 
 impl PreparedUdf for Fake {
@@ -74,7 +77,22 @@ impl PreparedUdf for Fake {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let gate = Arc::clone(&self.gate);
         let fail = self.fail;
+        let first = args
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .filter(|x| !x.is_empty())
+            .map(|x| x.value(0));
+        let at_once = self
+            .fail_at_once
+            .is_some_and(|v| first.is_some_and(|f| f >= v));
         Box::pin(async move {
+            if at_once {
+                return Err(InternalError {
+                    message: "the UDF raised at once".to_owned(),
+                }
+                .into());
+            }
             poll_fn(|cx| {
                 gate.waker.register(cx.waker());
                 if gate.open.load(Ordering::SeqCst) {
@@ -127,6 +145,16 @@ struct Rig {
 }
 
 fn rig(limit: usize, max_rows: usize, window: usize, fail: bool) -> Rig {
+    rig_failing_at_once(limit, max_rows, window, fail, None)
+}
+
+fn rig_failing_at_once(
+    limit: usize,
+    max_rows: usize,
+    window: usize,
+    fail: bool,
+    fail_at_once: Option<i64>,
+) -> Rig {
     let schema = Schema::new(vec![Field::new("x", ArrowType::Int64, true)]);
     let gate = Arc::new(Gate::default());
     let calls = Arc::new(AtomicUsize::new(0));
@@ -136,6 +164,7 @@ fn rig(limit: usize, max_rows: usize, window: usize, fail: bool) -> Rig {
             gate: Arc::clone(&gate),
             calls: Arc::clone(&calls),
             fail,
+            fail_at_once,
         }),
         client: ArrowType::Int64,
         canonical: ArrowType::Int64,
@@ -197,6 +226,34 @@ async fn a_full_window_blocks_until_the_oldest_slice_is_done() {
     r.sink.finalize(&g, &r.ctx).await.unwrap();
     drop((g, r.ctx, r.query));
     assert_eq!(r.root.reserved(), 0, "memory left after the phase");
+}
+
+#[tokio::test]
+async fn a_failed_slice_behind_a_running_one_frees_a_blocked_driver_with_its_error() {
+    // One driver (design P2-T059 §6.3: an ordered input runs one): the
+    // oldest slice never finishes, the newer one fails at once. The blocked
+    // driver must see the failure, not wait for the oldest slice.
+    let r = rig_failing_at_once(64 << 20, 2, 2, false, Some(2));
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let SinkStatus::Blocked(wait) = r.sink.sink(rows(4), &mut l, &g).unwrap() else {
+        panic!("a full window must block the driver");
+    };
+    tokio::time::timeout(Duration::from_secs(5), wait)
+        .await
+        .expect("the failure must free the blocked driver");
+    let err = r
+        .sink
+        .sink(rows(1), &mut l, &g)
+        .expect_err("the next sink call must return the failure");
+    assert!(err.to_string().contains("at once"), "{err}");
+    assert_eq!(
+        r.calls.load(Ordering::SeqCst),
+        2,
+        "nothing submitted after the failure"
+    );
+    drop((l, g, r.ctx, r.query));
+    assert_eq!(r.root.reserved(), 0, "memory left after the failure");
 }
 
 #[tokio::test]
