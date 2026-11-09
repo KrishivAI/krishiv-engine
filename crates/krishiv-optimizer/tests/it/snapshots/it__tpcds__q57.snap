@@ -15,12 +15,12 @@ Limit 100
                :           +- Window [rank() OVER (PARTITION BY i_category#12, i_brand#8, cc_name#90 ORDER BY d_year#62 ASC NULLS FIRST, d_moy#64 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we1#119], [i_category#12, i_brand#8, cc_name#90], [d_year#62 ASC NULLS FIRST, d_moy#64 ASC NULLS FIRST] (shared #2)
                :              +- Window [avg(sum_sales#115) OVER (PARTITION BY i_category#12, i_brand#8, cc_name#90, d_year#62 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS _we0#118], [i_category#12, i_brand#8, cc_name#90, d_year#62], []
                :                 +- Aggregate [i_category#12, i_brand#8, cc_name#90, d_year#62, d_moy#64], [i_category#12, i_brand#8, cc_name#90, d_year#62, d_moy#64, sum(cs_sales_price#43) AS sum_sales#115]
-               :                    +- Project [cc_name#90, i_brand#8, i_category#12, cs_sales_price#43, d_year#62, d_moy#64]
-               :                       +- Join Inner, (cc_call_center_sk#84 == cs_call_center_sk#33)
-               :                          :- Scan spark_catalog.default.call_center [cc_call_center_sk#84, cc_name#90]
-               :                          +- Project [i_brand#8, i_category#12, cs_call_center_sk#33, cs_sales_price#43, d_year#62, d_moy#64]
-               :                             +- Join Inner, (cs_item_sk#37 == i_item_sk#0)
-               :                                :- Scan spark_catalog.default.item [i_item_sk#0, i_brand#8, i_category#12]
+               :                    +- Project [i_brand#8, i_category#12, cc_name#90, cs_sales_price#43, d_year#62, d_moy#64]
+               :                       +- Join Inner, (cs_item_sk#37 == i_item_sk#0)
+               :                          :- Scan spark_catalog.default.item [i_item_sk#0, i_brand#8, i_category#12]
+               :                          +- Project [cc_name#90, cs_item_sk#37, cs_sales_price#43, d_year#62, d_moy#64]
+               :                             +- Join Inner, (cc_call_center_sk#84 == cs_call_center_sk#33)
+               :                                :- Scan spark_catalog.default.call_center [cc_call_center_sk#84, cc_name#90]
                :                                +- Project [cs_call_center_sk#33, cs_item_sk#37, cs_sales_price#43, d_year#62, d_moy#64]
                :                                   +- Join Inner, (cs_sold_date_sk#22 == d_date_sk#56)
                :                                      :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#22, cs_call_center_sk#33, cs_item_sk#37, cs_sales_price#43]
