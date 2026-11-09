@@ -21,7 +21,7 @@ use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
     SecurableUse, TableIdent, authorize, insufficient_permissions, namespace_parts, table_ident,
 };
-use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement};
+use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement, TableOption};
 use krishiv_sql::{
     ExplainKind, StatementClass, Target, TargetObject, parse_multipart_identifier,
     statement_targets,
@@ -755,4 +755,50 @@ fn reject_system_namespace(statement: &Statement) -> Result<(), KrishivError> {
         }
         _ => Ok(()),
     }
+}
+
+/// Table options are stored as text and never resolved, so a `secret('scope', 'key')` value would
+/// be kept as that literal text; it is refused as it is for `writeTo` (use a read or write option).
+pub(crate) fn refuse_secret_options(
+    options: &[TableOption],
+    original: &str,
+) -> Result<(), KrishivError> {
+    let is_secret = |o: &TableOption| {
+        o.value.as_ref().is_some_and(|v| {
+            original
+                .get(v.span.start..v.span.end)
+                .is_some_and(calls_secret)
+        })
+    };
+    if options.iter().any(is_secret) {
+        return Err(KrishivUnsupportedFeature {
+            feature: "secret table options".to_owned(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// Whether expression text `t` calls `secret` anywhere: the name bare or back-quoted, in any case,
+/// followed by `(`, inside parentheses, casts or other calls too. It reads the parser's own tokens,
+/// so string literals are skipped and comments between the name and `(` are trivia, as in the
+/// parser; anything else that looks like a call counts (the check fails closed).
+fn calls_secret(t: &str) -> bool {
+    use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
+    let tokens: Vec<_> = tokenize(t)
+        .into_iter()
+        .filter(|k| !k.kind.is_trivia())
+        .collect();
+    tokens.windows(2).any(|w| {
+        let name = t.get(w[0].span.start..w[0].span.end).unwrap_or("");
+        let named = match w[0].kind {
+            TokenKind::Word => name.eq_ignore_ascii_case("secret"),
+            TokenKind::QuotedIdent => name
+                .strip_prefix('`')
+                .and_then(|n| n.strip_suffix('`'))
+                .is_some_and(|n| n.replace("``", "`").eq_ignore_ascii_case("secret")),
+            _ => false,
+        };
+        named && w[1].kind == TokenKind::Sym(Sym::LParen)
+    })
 }
