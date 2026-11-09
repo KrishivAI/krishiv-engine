@@ -291,8 +291,6 @@ jobs:
         if: always()
         run: df -h / "$RUNNER_TEMP"
 
-  # The quarantined flaky tests (`.config/nextest.toml` profile `quarantine`, owner policy 2026-11-07):
-  # run on every PR so their state stays visible, never required, never blocking.
   deny:
     needs: changes
     if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
