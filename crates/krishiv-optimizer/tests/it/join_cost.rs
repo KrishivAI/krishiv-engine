@@ -117,7 +117,7 @@ fn measures(steps: &[RuleStep]) -> Vec<String> {
 
 /// Whether `p` scans the table `name`.
 fn reads(p: &LogicalPlan, name: &str) -> bool {
-    p.to_string().contains(name)
+    p.to_string().contains(&format!(".{name} ["))
 }
 
 /// For the first join found with one side reading `a` and the other `b`:
