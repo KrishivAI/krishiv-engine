@@ -118,6 +118,39 @@ async fn an_append_that_loses_the_race_takes_the_next_version() {
     assert_eq!(names(&l.snapshot().await.unwrap()), ["f1", "f2", "f3"]);
 }
 
+/// An append overtaken by more commits than `MAX_RACES` still lands, on the version after the
+/// newest, and `snapshot_if_exists` agrees with `exists` + `snapshot`.
+#[tokio::test]
+async fn an_append_overtaken_by_many_commits_takes_the_newest_version() {
+    let s = setup();
+    let l = log(&s);
+    assert!(l.snapshot_if_exists().await.unwrap().is_none());
+    let first = l
+        .commit(None, &entry("a", CommitMode::Append, &["f0"], &[]))
+        .await
+        .unwrap();
+    assert_eq!(first, 0);
+    let mut last = 0;
+    for i in 1..=40u64 {
+        let name = format!("g{i}");
+        last = l
+            .commit(Some(last), &entry("w", CommitMode::Append, &[&name], &[]))
+            .await
+            .unwrap();
+    }
+    assert_eq!(last, 40);
+    // Read at version 0, written after 40 other commits.
+    let v = l
+        .commit(Some(0), &entry("late", CommitMode::Append, &["late"], &[]))
+        .await
+        .unwrap();
+    assert_eq!(v, 41);
+    let snap = l.snapshot_if_exists().await.unwrap().unwrap();
+    assert_eq!(snap.version, Some(41));
+    assert_eq!(snap.files.len(), 42);
+    assert_eq!(snap.files, l.snapshot().await.unwrap().files);
+}
+
 #[tokio::test]
 async fn an_overwrite_conflicts_with_a_later_commit() {
     let s = setup();
