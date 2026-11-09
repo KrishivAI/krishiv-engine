@@ -28,7 +28,7 @@ For publishable numbers run from a clean committed tree (the result JSON records
 ## Baselines (`baselines/docker-compose.yml`, project `krishiv-bench`)
 | Service | Image | Host port | Notes |
 |---|---|---|---|
-| spark | `apache/spark:4.2.0` | 15002 (Connect), 14040 (UI) | `local[*]`, driver 8g, container cap 12g, `$KRISHIV_DATA` mounted **read-only** at `/data` |
+| spark | `apache/spark:4.2.0` | 15002 (Connect), 14040 (UI) | `local[*]`, driver `SPARK_DRIVER_MEMORY` (default 8g), container cap `SPARK_MEM_LIMIT` (default 12g; the benchmarks page's TPC-H baseline uses 20g in 28g, Krishiv's engine memory and scope), `$KRISHIV_DATA` mounted **read-only** at `/data` |
 | minio | `minio/minio` (digest-pinned, RELEASE.2025-09-07) | 19100 (S3), 19101 (console) | own instance, creds `krishiv` / `krishiv-bench-secret`; unrelated to `bench-minio` |
 | kafka | `apache/kafka:4.0.0` (KRaft, 1 node) | 19092 | profile `kafka`: `docker compose ... --profile kafka up -d` |
 

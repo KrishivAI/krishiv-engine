@@ -5,6 +5,8 @@
 #   docker compose -f bench/baselines/docker-compose.yml stop                # stop (agents: never `down`)
 # Host ports (chosen to avoid existing containers): spark-connect 15002, spark UI 14040,
 # minio 19100 (S3) / 19101 (console), kafka 19092.
+# Spark memory: SPARK_DRIVER_MEMORY (default 8g) and SPARK_MEM_LIMIT (container cap, default 12g); the TPC-H
+# baseline on the benchmarks page runs with SPARK_DRIVER_MEMORY=20g SPARK_MEM_LIMIT=28g (Krishiv's engine memory and scope).
 name: krishiv-bench
 
 services:
@@ -19,7 +21,7 @@ services:
       - --master
       - local[*]
       - --driver-memory
-      - 8g
+      - ${SPARK_DRIVER_MEMORY:-8g}
       - --conf
       - spark.sql.shuffle.partitions=24
       - --conf
@@ -34,7 +36,7 @@ services:
     volumes:
       - ${KRISHIV_DATA:-${HOME}/krishiv-data}:/data:ro
       - spark-tmp:/tmp/spark
-    mem_limit: 12g
+    mem_limit: ${SPARK_MEM_LIMIT:-12g}
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/15002'"]
       interval: 5s
