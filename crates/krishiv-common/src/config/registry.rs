@@ -28,6 +28,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
+    &EXEC_JOIN_IDLE_SPILL_AFTER,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -208,6 +209,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.exec.debug.planRoundTrip",
         &EXEC_DEBUG_PLAN_ROUND_TRIP,
+    ),
+    (
+        "krishiv.exec.join.idleSpillAfter",
+        &EXEC_JOIN_IDLE_SPILL_AFTER,
     ),
     (
         "krishiv.io.maxConcurrentRequests",
@@ -708,6 +713,23 @@ pub static EXEC_JOIN_SHARED_BROADCAST_BYTES: ConfigEntry = ConfigEntry {
           stops, and each task of the query builds its own table from the broadcast rows \
           instead, spilling as needed. A cap below the query's memory avoids the spill of the query's \
           other memory that precedes that fallback when the table does not fit.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// How long a finished hash join build waits for its probe before the
+/// memory arbitrator spills it ahead of running consumers (study 30, M2).
+pub static EXEC_JOIN_IDLE_SPILL_AFTER: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.idleSpillAfter",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(1))),
+    doc: "How long a finished hash join build table may wait for its probe side to start \
+          before it counts as idle. When memory runs short, an idle table is spilled first, \
+          one partition at a time, before an operator that is running spills its own state; \
+          the probe reads the spilled partitions back from disk. A shorter wait keeps less \
+          memory idle; a longer one spills less often when the probe starts soon.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",

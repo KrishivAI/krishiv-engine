@@ -1,0 +1,19 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT x.a FROM (SELECT a, max(b) AS mb FROM t GROUP BY a) AS x JOIN (SELECT a FROM t WHERE b > 'm' GROUP BY a) AS y ON x.a = y.a JOIN (SELECT d, count(*) AS n FROM u GROUP BY d) AS z ON z.n IS NULL"
+---
+Project [a#0]
++- Join Inner
+   :- Aggregate [d#8], [d#8]
+   :  +- Scan spark_catalog.default.u [d#8]
+   +- Project [a#0]
+      +- Join Inner, (a#0 == a#4)
+         :- Shift +4
+         :  +- Aggregate [a#0], [a#0]
+         :     +- Project [a#0]
+         :        +- Filter (b#1 > 'm')
+         :           +- Scan spark_catalog.default.t [a#0, b#1] (shared #1)
+         +- Aggregate [a#0], [a#0]
+            +- Project [a#0]
+               +- Filter false
+                  +- Shared #1, printed above

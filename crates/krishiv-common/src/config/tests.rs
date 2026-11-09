@@ -1094,3 +1094,18 @@ fn ui_enabled_defaults_on_and_parses() {
     assert!(c.set("krishiv.ui.enabled", "maybe").is_err());
     assert_eq!(UI_ENABLED.scope, Scope::Cluster);
 }
+
+#[test]
+fn join_idle_spill_after_parses_and_defaults() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_JOIN_IDLE_SPILL_AFTER)
+            .and_then(ConfigValue::as_duration)
+    };
+    assert_eq!(get(&c), Some(Duration::from_secs(1)));
+    c.set("krishiv.exec.join.idleSpillAfter", "250ms").unwrap();
+    assert_eq!(get(&c), Some(Duration::from_millis(250)));
+    c.set("krishiv.exec.join.idleSpillAfter", "0s").unwrap();
+    assert_eq!(get(&c), Some(Duration::ZERO));
+    assert!(c.set("krishiv.exec.join.idleSpillAfter", "soon").is_err());
+}

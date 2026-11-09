@@ -10,6 +10,7 @@ use super::*;
 use crate::pool::{Usage, round_up};
 
 mod abort_waits;
+mod idle;
 
 const Q: usize = 1 << 20;
 
