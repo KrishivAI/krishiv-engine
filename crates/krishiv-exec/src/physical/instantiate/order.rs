@@ -22,9 +22,11 @@ pub(super) fn reads_range_in_order(n: &PhysNode) -> bool {
 }
 
 /// The `PythonEval` nodes (by address) whose output must keep the order of
-/// the `range` below them: those a `LIMIT`, or the result when
-/// `result_ordered`, reads the range through. Any other one reads its
-/// results with several drivers, since nothing above needs the order.
+/// the `range` below them: those a `LIMIT`, or `result` (the plan's root,
+/// when given), reads the range through. Any other one reads its
+/// results with several drivers, since nothing above needs the order. The
+/// addresses are valid only for the plan borrowed while it is instantiated
+/// (`Detached` computes its own per round).
 pub(super) fn range_ordered_evals<'a>(
     roots: impl IntoIterator<Item = &'a PhysNode>,
     result: Option<&PhysNode>,

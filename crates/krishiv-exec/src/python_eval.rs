@@ -503,7 +503,9 @@ impl Sink for PythonEvalSink {
             // failed call (or a cancel) ends the wait, and the error drops
             // the other calls' futures, which interrupts a call still
             // running (design P2-T059 §2.5 "Cancel"). In order, a failure
-            // behind a long call would wait for it.
+            // behind a long call would wait for it. Each wake polls every
+            // slice left: at most the window times the drivers, so this stays
+            // small while the window does (review 2026-11-09 M1).
             let mut cancelled = std::pin::pin!(ctx.query().cancelled());
             poll_fn(|cx| {
                 if cancelled.as_mut().poll(cx).is_ready() {
