@@ -106,9 +106,7 @@ impl Resolver<'_> {
                 .collect();
             // Each reference to a CTE holds the declared `CHAR`/`VARCHAR` types of its definition.
             for (a, c) in def.out.iter().zip(&output) {
-                if let Some(d) = self.declared.get(&a.col.id).cloned() {
-                    self.declared.insert(c.id, d);
-                }
+                self.carry_column_meta(a.col.id, c.id);
             }
             let qual: Arc<[String]> = Arc::from(vec![n.clone()]);
             let out = output
@@ -156,6 +154,9 @@ impl Resolver<'_> {
             };
             if let Some(declared) = &c.char_varchar {
                 self.declared.insert(col.id, Arc::from(declared.as_str()));
+            }
+            if let Some(comment) = meta.column_comments.get(&c.name) {
+                self.comments.insert(col.id, Arc::from(comment.as_str()));
             }
             out.push(Attr {
                 col,
@@ -262,9 +263,7 @@ impl Resolver<'_> {
         }
         // The declared `CHAR`/`VARCHAR` types follow the shifted ids.
         for a in c.out.iter().chain(c.hidden.iter()) {
-            if let Some(d) = self.declared.get(&a.col.id).cloned() {
-                self.declared.insert(AttrId(a.col.id.0 + offset), d);
-            }
+            self.carry_column_meta(a.col.id, AttrId(a.col.id.0 + offset));
         }
         let sh = |a: &Attr| Attr {
             col: BoundColumn {
@@ -709,6 +708,14 @@ impl Resolver<'_> {
                     }
                     items.push(bound);
                 }
+                // A generator written with one alias is a lateral alias of the items after it
+                // (its columns keep their generator qualifier: see `Resolver::column`).
+                if s.qualifier.iter().any(|q| {
+                    q.starts_with(crate::GENERATE_QUALIFIER_PREFIX)
+                        && q.ends_with(crate::GENERATE_ALIAS_SUFFIX)
+                }) {
+                    lateral.extend(expanded.iter().cloned());
+                }
                 continue;
             }
             let b = {
@@ -720,7 +727,7 @@ impl Resolver<'_> {
                 self.bind(e, &cx)?
             };
             let written_identifier = matches!(&e.node, ExprNode::Column(c) if c.by_identifier);
-            let b = self.named(b, !written_identifier)?;
+            let b = Self::without_internal_identity_cast(self.named(b, !written_identifier)?, e);
             // Before the next item binds: it may read this alias (a lateral column alias).
             self.carry_declared_item(&b, Some(e));
             if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &b.expr.node {
@@ -768,10 +775,16 @@ impl Resolver<'_> {
     /// With `bare` false (an item written `IDENTIFIER(..)`), a variable or a field of a dotted
     /// path is named by its full shown form (`variablereference(..)`, `c1.c2`).
     fn named(&mut self, b: Bound, bare: bool) -> Result<Bound, AnalysisError> {
-        if let ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::Alias { .. }) =
-            &b.expr.node
-        {
-            return Ok(b);
+        // A column names itself, unless it stands for a call written in its
+        // place (a SQL function whose body is its parameter, `f(c1)`).
+        let written_call = b
+            .shown
+            .as_ref()
+            .is_some_and(|s| matches!(s.node, ExprNode::Function(_)));
+        match &b.expr.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { .. }) => return Ok(b),
+            ExprNode::Resolved(ResolvedExpr::Column(_)) if !written_call => return Ok(b),
+            _ => {}
         }
         let shown = b.shown();
         let bare = super::exprs::bare_name(&shown).filter(|_| bare);
@@ -1026,7 +1039,7 @@ impl Resolver<'_> {
     }
 
     /// A projection of `out` over `r`: drops what a rewrite added.
-    fn restore(&self, r: &Rel, out: &[Attr]) -> Rel {
+    pub(super) fn restore(&self, r: &Rel, out: &[Attr]) -> Rel {
         let exprs = out
             .iter()
             .map(|a| col_expr(&a.col, Origin::UNKNOWN))
@@ -1351,27 +1364,6 @@ impl Resolver<'_> {
         Ok((bounds, wide))
     }
 
-    /// Whether a `Generate` node sits between `plan` and the aggregate it
-    /// sorts: the search stops at the first aggregate, so a generator in
-    /// that aggregate's input does not count.
-    fn holds_generator(plan: &Arc<LogicalPlan>) -> bool {
-        let mut seen = HashSet::new();
-        let mut stack = vec![Arc::clone(plan)];
-        while let Some(p) = stack.pop() {
-            if !seen.insert(Arc::as_ptr(&p) as usize) {
-                continue;
-            }
-            if matches!(p.node, PlanNode::Generate { .. }) {
-                return true;
-            }
-            if matches!(p.node, PlanNode::Aggregate { .. }) {
-                continue;
-            }
-            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
-        }
-        false
-    }
-
     /// The aggregate under `c`'s filters, sorts and limits (`HAVING`), and
     /// those layers, top first; `None` when `c` is not such a stack. A
     /// `HAVING` that had to grow the aggregate left a projection over its
@@ -1384,6 +1376,13 @@ impl Resolver<'_> {
         loop {
             if cur.agg.is_some() {
                 return Some((layers, cur));
+            }
+            // A `DISTRIBUTE BY` between ends the walk: Spark 4.2.0 resolves
+            // an aggregate call in a sort only directly over the aggregate
+            // or its `HAVING`, so `GROUP BY y [HAVING ...] DISTRIBUTE BY y
+            // SORT BY max(x)` is UNRESOLVED_COLUMN there.
+            if matches!(cur.plan.node, PlanNode::Repartition { .. }) {
+                return None;
             }
             let child = match cur.widen.as_deref() {
                 Some(Widen::Through { child }) => child.clone(),
@@ -1976,6 +1975,22 @@ impl Resolver<'_> {
         self.check_star_ordinals(keys, aggregates)?;
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
+        // Spark wraps a pipe item in `pipeexpression(..)`, so a generator
+        // with several names (`AS (p, y)`) is nested in it there (4.2.0).
+        for e in aggregates {
+            if let ExprNode::Pipe { expr, .. } = &e.node
+                && let ExprNode::MultiAlias { expr: g, .. } = &expr.node
+                && matches!(&g.node, ExprNode::Function(f) if super::generate::is_generator_name(&f.name))
+            {
+                let zone = self.ctx.conf.session_zone;
+                return Err(AnalysisError::new(
+                    UnsupportedGeneratorNestedInExpressions {
+                        expression: format!("\"pipeexpression(multialias({}))\"", pretty(g, zone)),
+                    },
+                    e.origin,
+                ));
+            }
+        }
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
         // The declared `CHAR`/`VARCHAR` types follow the aliases of an explicit `GROUP BY` too.
         self.carry_declared(&items, aggregates);
@@ -1983,9 +1998,14 @@ impl Resolver<'_> {
         // item's place in the aggregate, the generator runs above it.
         // A written alias of the generator (the analyzer names every item,
         // so the written one is read from the unresolved list).
+        // A pipe `AGGREGATE` item is wrapped (`Alias(Pipe(generator))`).
+        let unpiped = |e: &Arc<Expr>| match &e.node {
+            ExprNode::Pipe { expr, .. } => Arc::clone(expr),
+            _ => Arc::clone(e),
+        };
         if let Some(name) = aggregates.iter().find_map(|e| match &e.node {
             ExprNode::Alias { name, expr }
-                if matches!(&expr.node, ExprNode::Function(f)
+                if matches!(&unpiped(expr).node, ExprNode::Function(f)
                 if super::generate::is_generator_name(&f.name)) =>
             {
                 Some(name.clone())
@@ -3805,6 +3825,7 @@ impl Resolver<'_> {
                 })
                 .unwrap_or(e)
         };
+        let mut no_aggregate = false;
         let (bounds, below, extended) = if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
             // The grouping attributes resolve a name the aggregate outputs
             // twice (Spark 4.2.0: `SELECT 1 AS a, 2 AS a FROM t(a) GROUP BY a
@@ -3819,6 +3840,11 @@ impl Resolver<'_> {
             // as Spark does.
             match self.bind_missing(&c, &exprs, env, "Sort", true) {
                 Ok((bounds, wide)) => {
+                    // No aggregate below to run a call in (Spark 4.2.0:
+                    // `SELECT x FROM t ORDER BY sum(x)` and a sort over
+                    // `DISTRIBUTE BY` over an aggregate): refused after the
+                    // ordering-type check below, which Spark makes first.
+                    no_aggregate = c.agg.is_none();
                     let extended = wide.out.len() > c.out.len();
                     (bounds, wide, extended)
                 }
@@ -3884,6 +3910,9 @@ impl Resolver<'_> {
                     o.expr.origin,
                 ));
             }
+        }
+        if no_aggregate && let Some(e) = self.misplaced_aggregates(&bounds, p.origin) {
+            return Err(e);
         }
         // A generator between the sort and the aggregate: the aggregate
         // cannot grow through it, so Spark leaves the call in the sort and
@@ -3970,9 +3999,7 @@ impl Resolver<'_> {
                     name: name.clone(),
                     ..a.col.clone()
                 };
-                if let Some(d) = self.declared.get(&a.col.id).cloned() {
-                    self.declared.insert(output.id, d);
-                }
+                self.carry_column_meta(a.col.id, output.id);
                 exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                     ResolvedExpr::Alias {
                         expr: col_expr(&a.col, Origin::UNKNOWN),
@@ -4271,7 +4298,7 @@ fn is_generator(e: &Arc<Expr>) -> bool {
 fn is_json_tuple_call(e: &Arc<Expr>) -> bool {
     match &e.node {
         ExprNode::Function(f) => f.name.eq_ignore_ascii_case("json_tuple"),
-        ExprNode::Alias { expr, .. } => is_json_tuple_call(expr),
+        ExprNode::Alias { expr, .. } | ExprNode::Pipe { expr, .. } => is_json_tuple_call(expr),
         _ => false,
     }
 }
@@ -4628,6 +4655,7 @@ fn at_most_one_row(p: &LogicalPlan) -> bool {
         PlanNode::Project { input, .. }
         | PlanNode::Filter { input, .. }
         | PlanNode::Sort { input, .. }
+        | PlanNode::Repartition { input, .. }
         | PlanNode::SubqueryAlias { input, .. }
         | PlanNode::Shift { input, .. }
         | PlanNode::Window { input, .. } => at_most_one_row(input),

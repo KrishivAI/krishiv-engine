@@ -28,6 +28,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
+    &EXEC_JOIN_IDLE_SPILL_AFTER,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -102,6 +103,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &LEGACY_CODING_ERROR_ACTION,
     &LEGACY_JAVA_CHARSETS,
     &LEGACY_STATISTICAL_AGGREGATE,
+    &BINARY_OUTPUT_STYLE,
     &LEGACY_TIME_PARSER_POLICY,
     &LEGACY_VIEW_SCHEMA_BINDING_MODE,
     &LEGACY_VIEW_SCHEMA_COMPENSATION,
@@ -111,6 +113,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
+    &JOIN_ENUMERATOR,
+    &JOIN_DP_LIMIT,
     &NDV_SAMPLING_ENABLED,
     &NDV_SAMPLING_ROWS,
     &NDV_SAMPLING_TIMEOUT,
@@ -165,6 +169,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
+    ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
@@ -175,8 +180,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.coalesceWasteBytes", &IO_COALESCE_WASTE_BYTES),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
+    ("krishiv.optimizer.joinDpLimit", &JOIN_DP_LIMIT),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
     ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
+    ("krishiv.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
@@ -202,9 +209,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_DEBUG_PLAN_ROUND_TRIP,
     ),
     (
+        "krishiv.exec.join.idleSpillAfter",
+        &EXEC_JOIN_IDLE_SPILL_AFTER,
+    ),
+    (
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
+    ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
     ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     ("krishiv.sql.files.commitProtocol", &FILES_COMMIT_PROTOCOL),
     ("spark.sql.avro.compression.codec", &AVRO_COMPRESSION_CODEC),
@@ -705,6 +717,23 @@ pub static EXEC_JOIN_SHARED_BROADCAST_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// How long a finished hash join build waits for its probe before the
+/// memory arbitrator spills it ahead of running consumers (study 30, M2).
+pub static EXEC_JOIN_IDLE_SPILL_AFTER: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.idleSpillAfter",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(1))),
+    doc: "How long a finished hash join build table may wait for its probe side to start \
+          before it counts as idle. When memory runs short, an idle table is spilled first, \
+          one partition at a time, before an operator that is running spills its own state; \
+          the probe reads the spilled partitions back from disk. A shorter wait keeps less \
+          memory idle; a longer one spills less often when the probe starts soon.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
 /// The seed of deterministic execution (tests and the golden harness).
 pub static EXEC_SEED: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.seed",
@@ -875,7 +904,8 @@ pub static QUERY_MAX_EXECUTION_TIME: ConfigEntry = ConfigEntry {
     default: None,
     doc: "The longest a query may run from the start of its execution: past it the query is \
           cancelled and fails with `KRISHIV_QUERY_TIMEOUT`. The limit is read when the query \
-          starts. When unset, queries run without a time limit.",
+          starts. For a SQL script, the whole script is the query: the limit counts from its start. \
+          When unset, queries run without a time limit.",
     scope: Scope::Session,
     version_added: "0.2.0",
     spark_alias: None,
@@ -1486,7 +1516,7 @@ pub static RUNTIME_FILTER_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.runtimeFilter.enabled",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
-    doc: "Plan runtime filters (design P2-T163): the build side of an inner or left semi hash join \
+    doc: "Plan runtime filters: the build side of an inner or left semi hash join \
           publishes the min/max, a small value set or a Bloom filter of its keys to the scans \
           feeding the probe side, which skip splits, row groups and rows no build key can match. \
           Results are the same either way.",
@@ -1684,6 +1714,21 @@ pub static LEGACY_JAVA_CHARSETS: ConfigEntry = ConfigEntry {
     spark_alias: Some("spark.sql.legacy.javaCharsets"),
 };
 
+/// `spark.sql.binaryOutputStyle`.
+pub static BINARY_OUTPUT_STYLE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.binaryOutputStyle",
+    value_type: ValueType::Enum(&["UTF-8", "BASIC", "BASE64", "HEX", "HEX_DISCRETE"]),
+    default: None,
+    doc: "How `to_csv` and `to_xml` print a `BINARY` value: `UTF-8` text, `BASIC` signed byte \
+          values (`[69, 97]`), `BASE64` without padding, `HEX` (`4561`) or `HEX_DISCRETE` \
+          (`[45 61]`). When unset the values print as `HEX_DISCRETE`, as in Spark. \
+          `CAST(binary AS STRING)` ignores the setting.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.binaryOutputStyle"),
+};
+
 /// `spark.sql.legacy.timeParserPolicy`.
 pub static LEGACY_TIME_PARSER_POLICY: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.legacy.timeParserPolicy",
@@ -1871,14 +1916,16 @@ pub static NDV_SAMPLING_ROWS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// Time a distinct-value sample may take (`krishiv.optimizer.ndvSampling.timeout`).
+/// Time a query's distinct-value samples may take (`krishiv.optimizer.ndvSampling.timeout`).
 pub static NDV_SAMPLING_TIMEOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.ndvSampling.timeout",
     value_type: ValueType::Duration,
-    default: Some(ConfigValue::Duration(Duration::from_secs(2))),
-    doc: "The time a distinct-value sample of one table may take; past it the table keeps its \
-          default estimates. The row limit is what bounds a sample; this only guards against slow \
-          storage, so that how fast the machine is does not decide the plan.",
+    default: Some(ConfigValue::Duration(Duration::from_secs(5))),
+    doc: "The time one query's distinct-value samples may take together: its tables are sampled \
+          in turn, each with what the ones before it left. A table that runs out of time, or \
+          gets none, keeps its default estimates; EXPLAIN COST and EXPLAIN VERBOSE say which \
+          (\"Distinct-Value Samples\"). The row limit is what bounds a sample; this only guards \
+          against slow storage, so that how fast the machine is does not decide the plan.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
@@ -1898,6 +1945,36 @@ pub static EAGER_AGGREGATION: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
+};
+
+/// Join enumerator (`krishiv.optimizer.joinEnumerator`).
+pub static JOIN_ENUMERATOR: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.joinEnumerator",
+    value_type: ValueType::Enum(&["dpsub", "greedy"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("dpsub"))),
+    doc: "How the join optimizer orders each tree of inner joins. `dpsub`: dynamic programming \
+          over every split of every subset of the inputs, for trees of at most \
+          `krishiv.optimizer.joinDpLimit` inputs, greedy above. `greedy`: always join the connected \
+          pair with the fewest result rows. Results are the same either way; for comparing plans \
+          and planning time.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
+};
+
+/// `krishiv.optimizer.joinDpLimit`.
+pub static JOIN_DP_LIMIT: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.joinDpLimit",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10)),
+    doc: "Most inputs of an inner-join tree the `dpsub` join enumerator plans exactly; larger \
+          trees are planned greedily. Values above 14 count as 14: the work grows as 3 to the \
+          power of the inputs. Results are the same either way.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
 };
 
 /// `krishiv.sql.optimizer.shareCteInstances`.

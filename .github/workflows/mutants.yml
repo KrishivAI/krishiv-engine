@@ -120,7 +120,7 @@ jobs:
           df -h /
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-mutants@27.1.0,cargo-nextest@0.9.148
       # `--in-place`: the runner is disposable. cargo-mutants refuses it with

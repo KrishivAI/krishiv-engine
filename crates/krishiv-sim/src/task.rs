@@ -295,6 +295,9 @@ struct Settings {
     deterministic_order: bool,
     #[prost(uint64, optional, tag = "14")]
     shared_broadcast_bytes: Option<u64>,
+    /// `krishiv.exec.join.idleSpillAfter`; absent: the default.
+    #[prost(uint64, optional, tag = "15")]
+    join_idle_spill_after_nanos: Option<u64>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -322,6 +325,7 @@ impl Settings {
             sort_hash_buckets,
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
+            join_idle_spill_after,
             deterministic_order,
         } = c.clone();
         Self {
@@ -338,6 +342,9 @@ impl Settings {
             sort_hash_buckets,
             join_merge_buffer_bytes: wide(join_merge_buffer_bytes),
             shared_broadcast_bytes: shared_broadcast_bytes.map(wide),
+            join_idle_spill_after_nanos: Some(
+                u64::try_from(join_idle_spill_after.as_nanos()).unwrap_or(u64::MAX),
+            ),
             deterministic_order,
         }
     }
@@ -360,6 +367,10 @@ impl Settings {
                 .shared_broadcast_bytes
                 .map(|n| narrow(n, "shared broadcast bytes"))
                 .transpose()?,
+            join_idle_spill_after: self.join_idle_spill_after_nanos.map_or(
+                ExecConfig::default().join_idle_spill_after,
+                Duration::from_nanos,
+            ),
             deterministic_order: self.deterministic_order,
         })
     }

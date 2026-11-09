@@ -233,17 +233,7 @@ pub(crate) struct QueuedRow<'a> {
 impl Drop for QueuedRow<'_> {
     fn drop(&mut self) {
         if self.open {
-            self.state.queries.finish(
-                self.id,
-                &crate::system::Finished {
-                    state: "cancelled",
-                    wall_ns: 0,
-                    peak_memory_bytes: 0,
-                    error_class: None,
-                    operators: Vec::new(),
-                    totals: None,
-                },
-            );
+            self.state.queries.close_unrun(self.id, "cancelled", None);
         }
     }
 }
@@ -371,17 +361,9 @@ impl Admitted {
     }
 
     fn close(&self, state: &'static str, error_class: Option<&str>) {
-        self.state.queries.finish(
-            &self.log_id,
-            &crate::system::Finished {
-                state,
-                wall_ns: 0,
-                peak_memory_bytes: 0,
-                error_class,
-                operators: Vec::new(),
-                totals: None,
-            },
-        );
+        self.state
+            .queries
+            .close_unrun(&self.log_id, state, error_class);
     }
 }
 

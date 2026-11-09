@@ -107,6 +107,9 @@ impl Graph {
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
             | PlanNode::JoinHint { input, .. }
+            // A repartition reads its expressions' columns whatever is
+            // read above it: Spark evaluates them under `count(*)` too.
+            | PlanNode::Repartition { input, .. }
             | PlanNode::Generate { input, .. }
             | PlanNode::ReplicateRows { input, .. } => {
                 let mut need = req.clone();
@@ -389,6 +392,11 @@ fn narrow(input: &Arc<LogicalPlan>, need: &Attrs) -> Arc<LogicalPlan> {
         .collect();
     if exprs.is_empty() {
         exprs.extend(out.first().map(column));
+    }
+    // Nothing read of a one-column input: the projection would keep it whole,
+    // and tidying would collapse it again (a cycle that never settles).
+    if exprs.len() == out.len() {
+        return Arc::clone(input);
     }
     Arc::new(LogicalPlan::new(PlanNode::Project {
         input: Arc::clone(input),

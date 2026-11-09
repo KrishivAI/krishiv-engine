@@ -36,22 +36,25 @@
 
 use std::collections::VecDeque;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use krishiv_common::error::KrishivError;
-use krishiv_memory::{Reservation, SpillWriter};
+use krishiv_memory::{Reservation, SpillError, SpillFile, SpillWriter};
 
 use super::super::is_order_sensitive;
 use super::super::rowtable::{FinalTask, Mode, RowTable, final_tasks};
 use super::super::table::Table;
+use super::parts::{Helper, MAX_WRITERS};
 use super::{
     CHUNK, Final, Global, HEADROOM, HashAggregate, Output, Run, Spiller, bump, lend_headroom,
-    reserve_to, shrink_to, tasks_of,
+    reserve_to, shrink_to, tasks_of, writer_panicked,
 };
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
+use crate::hash::PARTITIONS;
 use crate::sync::lock;
 
 /// One final-phase task.
@@ -413,6 +416,11 @@ impl HashAggregate {
     ) -> Result<()> {
         bump(&self.counters.row_final_spills, 1);
         let s = s.clone();
+        // Until the memory written is freed, it counts as about to be released,
+        // so another driver's round that cannot spill waits for it instead of
+        // failing (`ConsumerHandle::spilling`). No arbitration inside: the
+        // writes run on the blocking pool, their scratch a sync grow.
+        let _writing = ctx.consumer().consumer().spilling();
         let runs = ctx
             .run_blocking(move || {
                 let mut runs = Vec::with_capacity(inputs.len());
@@ -508,6 +516,11 @@ impl HashAggregate {
         bump(&self.counters.row_final_flushes, 1);
         let lent = spare.as_mut().map_or(0, lend_headroom);
         let s = s.clone();
+        // The finished tables count as about to be released until they are
+        // written and dropped. Only across this job: the output writer lives
+        // on between flushes, and a guard tied to it would span the final
+        // phase's arbitrations (review H1 of the nested-loop flake).
+        let writing = ctx.consumer().consumer().spilling();
         let out = ctx
             .run_blocking(move || {
                 let mut out = match out {
@@ -522,7 +535,9 @@ impl HashAggregate {
                 }
                 Ok(out)
             })
-            .await?;
+            .await;
+        drop(writing);
+        let out = out?;
         if let Some(r) = spare.as_mut() {
             super::regrow(r, lent);
         }
@@ -544,35 +559,17 @@ impl HashAggregate {
         bump(&self.counters.row_final_spills, 1);
         let s = s.clone();
         let mut spare = spare;
+        // Until the memory written is freed, it counts as about to be released,
+        // so another driver's round that cannot spill waits for it instead of
+        // failing (`ConsumerHandle::spilling`). No arbitration inside: the
+        // writes run on the blocking pool, their scratch a sync grow.
+        let _writing = ctx.consumer().consumer().spilling();
         let runs = ctx
             .run_blocking(move || {
                 if let Some(r) = spare.as_mut() {
                     lend_headroom(r);
                 }
-                let mut runs: Vec<Run> = Vec::new();
-                for task in tasks {
-                    // Per key, merge order: what the task merged precedes
-                    // every input row it did not reach.
-                    let at = task.at;
-                    let all = |_: u32| true;
-                    let keeps: Vec<_> = task
-                        .inputs
-                        .iter()
-                        .enumerate()
-                        .map(|(i, (input, _))| {
-                            move |r: u32| {
-                                let (p, row) = input.split_ref(r);
-                                (i, p, row) >= at
-                            }
-                        })
-                        .collect();
-                    let mut sources: Vec<(&RowTable, &dyn Fn(u32) -> bool)> =
-                        vec![(&task.table, &all)];
-                    for ((input, _), keep) in task.inputs.iter().zip(&keeps) {
-                        sources.push((input, keep));
-                    }
-                    runs.push(s.write_run_sources(&sources, 0)?);
-                }
+                let runs = s.write_task_runs(tasks)?;
                 drop(spare);
                 Ok(runs)
             })
@@ -585,5 +582,241 @@ impl HashAggregate {
         inner.out = out;
         tasks_of(runs, 0, &mut inner.tasks);
         Ok(())
+    }
+}
+
+/// One final-phase task to write as a spill run: its index (the run's
+/// place), the task, and the partition files written so far (a task an
+/// extra writer handed back keeps the files it finished).
+type Pending = (usize, Task, Vec<Option<SpillFile>>);
+
+/// Writes `task`'s run with writers from `writer`, resuming at the
+/// partitions `files` does not hold: its table, then every input row it did
+/// not merge yet (per key, merge order: what the task merged precedes every
+/// input row it did not reach).
+fn write_task(
+    s: &Spiller,
+    task: &Task,
+    files: &mut [Option<SpillFile>],
+    writer: &dyn Fn() -> std::result::Result<SpillWriter, SpillError>,
+    stop: &AtomicBool,
+) -> Result<std::result::Result<(), SpillError>> {
+    let at = task.at;
+    let all = |_: u32| true;
+    let keeps: Vec<_> = task
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(i, (input, _))| {
+            move |r: u32| {
+                let (p, row) = input.split_ref(r);
+                (i, p, row) >= at
+            }
+        })
+        .collect();
+    let mut sources: Vec<(&RowTable, &dyn Fn(u32) -> bool)> = vec![(&task.table, &all)];
+    for ((input, _), keep) in task.inputs.iter().zip(&keeps) {
+        sources.push((input, keep));
+    }
+    s.write_run_sources(&sources, 0, writer, files, stop)
+}
+
+/// What the writers of [`Spiller::write_task_runs`] share.
+struct TaskRuns {
+    /// Tasks not written yet.
+    todo: Mutex<VecDeque<Pending>>,
+    /// Each task's run, by index.
+    runs: Mutex<Vec<Option<Run>>>,
+    /// The first failure; every writer stops at its next chunk.
+    failed: Mutex<Option<KrishivError>>,
+    /// Set with `failed`: what the writers check while writing.
+    stop: AtomicBool,
+    /// Extra writers running now.
+    live: AtomicUsize,
+}
+
+impl TaskRuns {
+    fn next(&self) -> Option<Pending> {
+        if self.stop.load(Ordering::Acquire) {
+            return None;
+        }
+        lock(&self.todo).pop_front()
+    }
+
+    fn fail(&self, e: KrishivError) {
+        lock(&self.failed).get_or_insert(e);
+        self.stop.store(true, Ordering::Release);
+    }
+
+    /// Records the outcome of writing `pending` (taken by `writer`); a
+    /// refused writer's task goes back to the front of the queue with the
+    /// files it finished. Returns whether the writer goes on.
+    fn done(
+        &self,
+        s: &Spiller,
+        (i, task, files): Pending,
+        outcome: Result<std::result::Result<(), SpillError>>,
+        helper: bool,
+    ) -> bool {
+        match outcome {
+            Ok(Ok(())) => {
+                bump(&s.counters.spill_runs, 1);
+                if helper {
+                    bump(&s.counters.spill_helper_runs, 1);
+                }
+                lock(&self.runs)[i] = Some(Run::new(files, u32::MAX));
+                // `task` drops here: its memory goes back to the pool.
+                true
+            }
+            Ok(Err(SpillError::Memory(_))) if helper => {
+                bump(&s.counters.spill_handbacks, 1);
+                lock(&self.todo).push_front((i, task, files));
+                false
+            }
+            Ok(Err(e)) => {
+                self.fail(e.into());
+                false
+            }
+            Err(e) => {
+                self.fail(e);
+                false
+            }
+        }
+    }
+}
+
+/// Counts one extra writer as running while it lives.
+struct Live<'a>(&'a AtomicUsize);
+
+impl Drop for Live<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl Spiller {
+    /// Writes each task as one spill run (X2b', design P2-X2 §11.3), the
+    /// runs in the tasks' order. The calling thread writes from the pool's
+    /// spill-scratch floor, as before; each run it finishes drops its task,
+    /// whose memory goes back to the pool, and then extra writers start, as
+    /// many as the pool gives scratch for ([`Spiller::one_helper`]), up to
+    /// [`MAX_WRITERS`] running at once, each taking the next task. An extra
+    /// writer refused scratch puts its task back with the partition files
+    /// it finished and stops; the next writer resumes it. The tasks share
+    /// nothing, so their runs are written independently.
+    fn write_task_runs(&self, tasks: VecDeque<Task>) -> Result<Vec<Run>> {
+        let n = tasks.len();
+        let shared = TaskRuns {
+            todo: Mutex::new(
+                tasks
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, t)| (i, t, (0..PARTITIONS).map(|_| None).collect()))
+                    .collect(),
+            ),
+            runs: Mutex::new((0..n).map(|_| None).collect()),
+            failed: Mutex::new(None),
+            stop: AtomicBool::new(false),
+            live: AtomicUsize::new(0),
+        };
+        let floor = || {
+            self.scope.writer(
+                Arc::clone(&self.core.state_schema),
+                self.consumer.reservation().for_spill_scratch(),
+            )
+        };
+        let write_own = |mut pending: Pending| {
+            let outcome = write_task(self, &pending.1, &mut pending.2, &floor, &shared.stop);
+            shared.done(self, pending, outcome, false);
+        };
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            while let Some(pending) = shared.next() {
+                write_own(pending);
+                // The task's memory is back in the pool: start writers for
+                // the tasks left (one for each but the next, which this
+                // thread takes), while there is room for their scratch.
+                let room = lock(&shared.todo).len().saturating_sub(1);
+                let mut started_now = 0;
+                while shared.live.load(Ordering::Acquire) + 1 < MAX_WRITERS && started_now < room {
+                    let Some(h) = self.one_helper() else { break };
+                    shared.live.fetch_add(1, Ordering::AcqRel);
+                    let live = Live(&shared.live);
+                    let shared = &shared;
+                    let started = std::thread::Builder::new()
+                        .name("krishiv-spill-write".to_owned())
+                        .spawn_scoped(scope, move || {
+                            let _live = live;
+                            // A panic is the run's error at once, with its
+                            // message (`fail` records it before setting
+                            // `stop`, so no writer's "stopped" wins).
+                            let run = std::panic::AssertUnwindSafe(|| self.help_tasks(&h, shared));
+                            if let Err(p) = std::panic::catch_unwind(run) {
+                                shared.fail(writer_panicked(p.as_ref()));
+                            }
+                        });
+                    match started {
+                        Ok(j) => {
+                            handles.push(j);
+                            started_now += 1;
+                        }
+                        // The closure (and `live`) dropped: one writer fewer.
+                        Err(_) => break,
+                    }
+                    let writers = shared.live.load(Ordering::Acquire) + 1;
+                    self.counters.spill_writers.fetch_max(
+                        u64::try_from(writers).unwrap_or(u64::MAX),
+                        Ordering::Relaxed,
+                    );
+                }
+            }
+            for j in handles {
+                // Helpers catch their own panics; this is for a panic outside
+                // `help_tasks` (dropping the helper or its place).
+                if let Err(p) = j.join() {
+                    shared.fail(writer_panicked(p.as_ref()));
+                }
+            }
+        });
+        // Tasks handed back after the loop above ended.
+        while let Some(pending) = shared.next() {
+            write_own(pending);
+        }
+        if let Some(e) = lock(&shared.failed).take() {
+            return Err(e);
+        }
+        // Every task's run is written unless a writer failed (returned above).
+        let unwritten = || internal("a spill run of the final phase was not written".to_owned());
+        let runs = std::mem::take(&mut *lock(&shared.runs));
+        runs.into_iter().map(|r| r.ok_or_else(unwritten)).collect()
+    }
+
+    /// An extra writer of [`Self::write_task_runs`]: tasks until none are
+    /// left, a run failed, or the pool refuses its scratch (that task goes
+    /// back to the front of the queue, with the files it finished).
+    fn help_tasks(&self, h: &Helper, shared: &TaskRuns) {
+        // Files this writer opened for its current task: tests refuse the
+        // second one (`refused_in_test`), so a handed-back task carries a
+        // finished file and is resumed, as when the pool refuses scratch
+        // part-way through a run.
+        let opened = std::cell::Cell::new(0usize);
+        let writer = || {
+            if opened.get() > 0 && self.refused_in_test() {
+                return Err(SpillError::Memory(krishiv_memory::MemoryError::Exhausted {
+                    requested: HEADROOM,
+                    available: 0,
+                }));
+            }
+            opened.set(opened.get() + 1);
+            self.helper_writer(h)
+        };
+        while let Some(mut pending) = shared.next() {
+            opened.set(0);
+            self.panic_in_test();
+            let outcome = write_task(self, &pending.1, &mut pending.2, &writer, &shared.stop);
+            if !shared.done(self, pending, outcome, true) {
+                return;
+            }
+        }
     }
 }

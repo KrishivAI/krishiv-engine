@@ -51,7 +51,7 @@ pub(super) enum Fold {
     /// `charge` covers it, refusing rows past the memory left.
     Rows {
         acc: Box<Accumulator>,
-        charge: Option<Reservation>,
+        charge: Option<Kept>,
     },
     /// A decimal `sum` or `avg`, exact.
     Decimal {
@@ -76,15 +76,24 @@ pub(super) enum Fold {
     /// fold).
     Udf {
         acc: Box<Accumulator>,
-        charge: Option<Reservation>,
+        charge: Option<Kept>,
     },
 }
 
-/// Brings `charge` to `size`: grows it through `shed` (which may spill
-/// others), shrinks it when the state got smaller.
-fn reconcile(charge: &mut Reservation, size: usize, shed: &mut Shed<'_>) -> Result<()> {
+/// A fold state's charge, holding at least `floor` bytes: the state's size
+/// when it opened, taken from the flush phase's lent headroom
+/// ([`Fold::charged`]), so only growth past it goes to the pool.
+pub(super) struct Kept {
+    charge: Reservation,
+    floor: usize,
+}
+
+/// Brings `kept` to `size` (not below its floor): grows it through `shed`
+/// (which may spill others), shrinks it when the state got smaller.
+fn reconcile(kept: &mut Kept, size: usize, shed: &mut Shed<'_>) -> Result<()> {
+    let charge = &mut kept.charge;
     shed.grow(charge, size.saturating_sub(charge.size()))?;
-    charge.shrink(charge.size().saturating_sub(size));
+    charge.shrink(charge.size().saturating_sub(size.max(kept.floor)));
     Ok(())
 }
 
@@ -141,17 +150,46 @@ impl Fold {
         })
     }
 
-    /// Charges a state that grows with its rows to `consumer`, from the pool.
-    /// A UDF's state is opaque, so it is always charged.
-    pub(super) fn charged(mut self, a: &AggregateExpr, consumer: &ConsumerHandle) -> Self {
-        let reservation =
-            || Some(Reservation::new(Arc::clone(consumer.pool()), consumer.id()).unguarded());
+    /// Charges a state that grows with its rows to `consumer`: its size now
+    /// from `consumer`'s grant credit when `lent` (the flush phase's
+    /// headroom counts it, [`opened_bytes`](Self::opened_bytes)), its growth
+    /// from the pool, never from credit the readers are lent. A UDF's state
+    /// is opaque, so it is always charged.
+    pub(super) fn charged(
+        mut self,
+        a: &AggregateExpr,
+        consumer: &ConsumerHandle,
+        lent: bool,
+    ) -> Self {
+        let floor = if lent { self.charged_bytes(a) } else { 0 };
+        let kept = || {
+            Some(Kept {
+                charge: consumer.reservation_from_credit(floor).unguarded(),
+                floor,
+            })
+        };
         match &mut self {
-            Self::Rows { charge, .. } if keeps_values(a) => *charge = reservation(),
-            Self::Udf { charge, .. } => *charge = reservation(),
+            Self::Rows { charge, .. } if keeps_values(a) => *charge = kept(),
+            Self::Udf { charge, .. } => *charge = kept(),
             _ => {}
         }
         self
+    }
+
+    /// The bytes [`charged`](Self::charged) takes from the credit for a
+    /// fold of `a` as it opens (0 if it charges nothing).
+    pub(super) fn opened_bytes(a: &AggregateExpr, env: &Env) -> Result<usize> {
+        Ok(Self::new(a, env.ansi, env.legacy, env.udafs.as_ref())?.charged_bytes(a))
+    }
+
+    /// The size of the state [`charged`](Self::charged) charges, 0 if it
+    /// charges none.
+    fn charged_bytes(&self, a: &AggregateExpr) -> usize {
+        match self {
+            Self::Rows { acc, .. } if keeps_values(a) => acc.size(),
+            Self::Udf { acc, .. } => acc.size(),
+            _ => 0,
+        }
     }
 
     /// Folds `rows` rows (`args`, the rows `mask` drops folding nothing)
@@ -439,12 +477,14 @@ pub(super) fn copy_partition(
     consumer: &ConsumerHandle,
     query: &QueryContext,
 ) -> Result<Copied> {
+    // The copy runs on credit holding the whole buffered partition (lent for the writer's scratch): the folds'
+    // opening states come from it too.
     let mut whole: Vec<Option<Fold>> = Vec::with_capacity(env.plan.functions.len());
     for f in &env.plan.functions {
         whole.push(match &f.function {
-            WindowFunction::Aggregate(a) if f.shape()? == Shape::Whole => {
-                Some(Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?.charged(a, consumer))
-            }
+            WindowFunction::Aggregate(a) if f.shape()? == Shape::Whole => Some(
+                Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?.charged(a, consumer, true),
+            ),
             _ => None,
         });
     }
@@ -632,6 +672,11 @@ pub(super) struct Emit {
     consumer: Arc<ConsumerHandle>,
     counters: Arc<Counters>,
     query: Arc<QueryContext>,
+    /// The most rows one step evaluates: the file's batch rows, or fewer when the flush phase's headroom cannot
+    /// cover a whole batch's evaluation ([`super::disk::headroom`]).
+    eval_rows: usize,
+    /// The rows of the trail reader's last batch past `eval_rows`, evaluated by the next steps.
+    rest: Option<RecordBatch>,
 }
 
 impl Emit {
@@ -643,6 +688,7 @@ impl Emit {
         consumer: &Arc<ConsumerHandle>,
         counters: Arc<Counters>,
         query: Arc<QueryContext>,
+        eval_rows: usize,
     ) -> Result<Self> {
         let reader = || -> Result<SpillReader> {
             Ok(disk
@@ -660,7 +706,7 @@ impl Emit {
                     Shape::RunningRows => (
                         Some(
                             Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?
-                                .charged(a, consumer),
+                                .charged(a, consumer, true),
                         ),
                         None,
                     ),
@@ -668,7 +714,7 @@ impl Emit {
                         None,
                         Some(
                             Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?
-                                .charged(a, consumer),
+                                .charged(a, consumer, true),
                         ),
                     ),
                 },
@@ -710,15 +756,27 @@ impl Emit {
             consumer: Arc::clone(consumer),
             counters,
             query,
+            eval_rows: eval_rows.max(1),
+            rest: None,
         })
     }
 
     /// The next output batch, `None` at the partition's end. Blocking.
     pub(super) fn step(&mut self, env: &Env) -> Result<Option<RecordBatch>> {
-        let Some(b) = self.trail.next().transpose()? else {
-            return Ok(None);
+        let b = match self.rest.take() {
+            Some(b) => b,
+            None => match self.trail.next().transpose()? {
+                Some(b) => b.data().clone(),
+                None => return Ok(None),
+            },
         };
-        let b = b.data().clone();
+        // At most `eval_rows` rows per step: the rest waits for the next one.
+        let b = if b.num_rows() > self.eval_rows {
+            self.rest = Some(b.slice(self.eval_rows, b.num_rows() - self.eval_rows));
+            b.slice(0, self.eval_rows)
+        } else {
+            b
+        };
         let n = b.num_rows();
         let first = self.at == 0;
         let flags = peer_flags(env.order_keys.as_deref(), &b, &mut self.prev_order, first)?;
