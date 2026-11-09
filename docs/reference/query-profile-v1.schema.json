@@ -9,7 +9,7 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
-    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`. A reader ignores members it does not know." },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`. A reader ignores members it does not know." },
     "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
     "trace": {
       "type": "object",
@@ -34,7 +34,7 @@
     },
     "usage": {
       "type": "object",
-      "description": "Measured usage (T138): sums of the operators' counters. Derived, so a reader recomputes it. Object-store counts, principal and tags follow with the session context (T136).",
+      "description": "Measured usage (T138): sums of the operators' counters. Derived, so a reader recomputes it. Object-store counts follow. `principal` and `tags` (added in minor 5) come from the session context (T136) and are dropped by `--share`.",
       "required": ["fidelity", "wall_ns", "cpu_ns", "rows_out", "peak_memory_bytes", "spill_bytes", "scan"],
       "additionalProperties": false,
       "properties": {
@@ -44,6 +44,8 @@
         "rows_out": { "$ref": "#/$defs/u64", "description": "Rows the sinks received." },
         "peak_memory_bytes": { "$ref": "#/$defs/u64", "description": "Summed over workers: an upper bound." },
         "spill_bytes": { "$ref": "#/$defs/u64" },
+        "principal": { "type": "string", "description": "Who ran the query (minor 5). Absent outside a session and in a shared profile." },
+        "tags": { "type": "object", "additionalProperties": { "type": "string" }, "description": "The session's tags (minor 5). Absent with `principal`." },
         "scan": {
           "type": "object",
           "required": ["bytes", "rows"],

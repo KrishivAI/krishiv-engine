@@ -354,6 +354,22 @@ fn explain_analyze_planning_adds_the_stages() {
 }
 
 #[test]
+fn explain_analyze_share_drops_who_ran_the_query() {
+    let q = "select a from (select 1 as a, 2 as b) where a > 0";
+    let plain = krishiv(&["sql", "--explain-analyze", "--json", "-e", q], None);
+    assert!(plain.status.success(), "{}", err(&plain));
+    let o = krishiv(&["sql", "--explain-analyze", "--share", "-e", q], None);
+    assert!(o.status.success(), "{}", err(&o));
+    let doc: serde_json::Value = serde_json::from_str(out(&o).trim()).expect("profile JSON");
+    assert!(doc.get("trace").is_none(), "{doc}");
+    assert!(doc["usage"].get("principal").is_none(), "{doc}");
+    assert!(doc["usage"].get("tags").is_none(), "{doc}");
+    assert!(doc["usage"]["rows_out"].is_u64(), "numbers are kept: {doc}");
+    let p = krishiv::QueryProfile::from_json(out(&o).trim()).expect("a shared profile still reads");
+    assert!(p.trace.is_none() && p.identity.is_none());
+}
+
+#[test]
 fn explain_verbose_prints_the_rules() {
     let q = "select a from (select 1 as a, 2 as b) where a > 0";
     let o = krishiv(&["sql", "--explain-verbose", "-e", q], None);

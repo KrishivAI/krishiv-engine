@@ -173,6 +173,7 @@ pub fn dot_of_plan(root: &ExplainNode) -> String {
 ///     detailed: false,
 ///     planning: None,
 ///     trace: None,
+///     identity: None,
 /// };
 /// let text = mermaid_of_profile(&profile);
 /// assert!(text.starts_with("flowchart TD\n"));
@@ -762,6 +763,7 @@ mod tests {
             detailed: false,
             planning: None,
             trace: None,
+            identity: None,
         };
         let text = mermaid_of_profile(&profile);
         assert!(text.contains("Scan t"), "{text}");
@@ -810,6 +812,7 @@ mod tests {
             detailed: false,
             planning: None,
             trace: None,
+            identity: None,
         };
         let text = dot_of_profile(&with_sink);
         assert!(text.contains("Result:"), "{text}");
@@ -838,6 +841,7 @@ mod tests {
             detailed: true,
             planning: None,
             trace: None,
+            identity: None,
         };
         assert_eq!(
             mermaid_of_profile(&profile),
@@ -855,6 +859,7 @@ mod tests {
             detailed: true,
             planning: None,
             trace: None,
+            identity: None,
         };
         assert_eq!(
             mermaid_of_profile(&profile),

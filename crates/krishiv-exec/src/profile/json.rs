@@ -69,7 +69,7 @@ impl QueryProfile {
             })).collect::<Vec<_>>(),
             "plan": plan_json(&self.plan),
             "operators": m.operators.iter().map(|(id, e)| operator_json(*id, e)).collect::<Vec<_>>(),
-            "usage": usage_json(&QueryUsage::of(m)),
+            "usage": usage_json(&QueryUsage::of(m), self.identity.as_ref()),
             "environment": {
                 "krishiv_version": env!("CARGO_PKG_VERSION"),
                 "os": std::env::consts::OS,
@@ -160,6 +160,24 @@ impl QueryProfile {
             Some(p) if p.is_object() => Some(p.clone()),
             Some(_) => return Err(ProfileError::new("planning is not an object")),
         };
+        let identity = match member(o, "usage")?
+            .as_object()
+            .and_then(|u| u.get("principal"))
+        {
+            Some(Value::String(p)) => Some(super::ProfileIdentity {
+                principal: p.clone(),
+                tags: member(o, "usage")?
+                    .get("tags")
+                    .and_then(Value::as_object)
+                    .map(|t| {
+                        t.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_owned())))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            }),
+            _ => None,
+        };
         let trace = match o.get("trace") {
             None | Some(Value::Null) => None,
             Some(t) if t.is_object() => Some(t.clone()),
@@ -171,6 +189,7 @@ impl QueryProfile {
             detailed,
             planning,
             trace,
+            identity,
         })
     }
 }
@@ -205,8 +224,8 @@ fn plan_json(root: &ProfileNode) -> Value {
     )
 }
 
-fn usage_json(u: &QueryUsage) -> Value {
-    json!({
+fn usage_json(u: &QueryUsage, who: Option<&super::ProfileIdentity>) -> Value {
+    let mut v = json!({
         "fidelity": u.fidelity,
         "wall_ns": ns(u.wall),
         "cpu_ns": ns(u.cpu),
@@ -214,7 +233,12 @@ fn usage_json(u: &QueryUsage) -> Value {
         "peak_memory_bytes": u.peak_memory_bytes,
         "spill_bytes": u.spill_bytes,
         "scan": { "bytes": u.scan_bytes, "rows": u.scan_rows },
-    })
+    });
+    if let (Some(w), Some(o)) = (who, v.as_object_mut()) {
+        o.insert("principal".to_owned(), w.principal.clone().into());
+        o.insert("tags".to_owned(), json!(w.tags));
+    }
+    v
 }
 
 fn operator_json(id: OperatorId, e: &OperatorEntry) -> Value {

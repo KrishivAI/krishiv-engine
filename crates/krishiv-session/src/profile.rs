@@ -358,6 +358,10 @@ impl DataFrame {
             o.insert("trace_id".to_owned(), t.clone().into());
         }
         profile.trace = Some(trace);
+        profile.identity = Some(krishiv_exec::profile::ProfileIdentity {
+            principal: self.session.state.principal.name.clone(),
+            tags: self.session.state.queries.tags().into_iter().collect(),
+        });
         Ok((out, profile))
     }
 

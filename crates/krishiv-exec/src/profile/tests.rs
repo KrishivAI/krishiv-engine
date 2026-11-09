@@ -654,6 +654,10 @@ fn schema_matches_the_writer() {
         "optimized": "o", "physical": "x"}),
     );
     profile.trace = Some(serde_json::json!({"trace_id": "t", "session_id": "s"}));
+    profile.identity = Some(ProfileIdentity {
+        principal: "user:a".into(),
+        tags: [("team".to_owned(), "x".to_owned())].into(),
+    });
     let doc = profile.to_json_value();
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v
@@ -795,4 +799,32 @@ fn the_trace_member_round_trips_and_is_absent_without_one() {
     p.trace = Some(serde_json::json!({"trace_id": "abc", "session_id": "s1"}));
     let back = QueryProfile::from_json(&p.to_json()).expect("reads its own document");
     assert_eq!(back.trace, p.trace);
+}
+
+#[test]
+fn identity_round_trips_and_a_shared_profile_drops_it_with_the_trace() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), true);
+    p.trace = Some(serde_json::json!({"trace_id": "abc", "session_id": "s1"}));
+    p.identity = Some(ProfileIdentity {
+        principal: "user:ada".into(),
+        tags: [("team".to_owned(), "data".to_owned())].into(),
+    });
+    let v = p.to_json_value();
+    assert_eq!(v["usage"]["principal"], "user:ada");
+    assert_eq!(v["usage"]["tags"]["team"], "data");
+    assert_eq!(
+        QueryProfile::from_json(&p.to_json())
+            .expect("reads")
+            .identity,
+        p.identity
+    );
+
+    let shared = p.shareable();
+    let text = shared.to_json();
+    for secret in ["user:ada", "data", "abc", "s1", "\"trace\""] {
+        assert!(!text.contains(secret), "{secret} survived --share: {text}");
+    }
+    // Every number is kept.
+    assert_eq!(shared.metrics, p.metrics);
+    assert_eq!(shared.plan, p.plan);
 }

@@ -152,6 +152,10 @@ pub(crate) struct SqlArgs {
     /// stage (as --explain-verbose shows it) to the profile's `planning` member.
     #[arg(long, requires = "explain_analyze")]
     planning: bool,
+    /// With --explain-analyze: print the profile as JSON for sharing outside the deployment,
+    /// without the principal, tags, session and trace ids. Every number and the plan are kept.
+    #[arg(long, requires = "explain_analyze")]
+    share: bool,
 }
 
 impl SqlArgs {
@@ -358,7 +362,15 @@ fn print_explain(out: &mut dyn Write, df: &DataFrame, args: &SqlArgs) -> Result<
     // `explain_*_with`, so there is a single route to each document and no
     // second rendering that can drift.
     let format = explain_format(args);
-    let text = if args.explain_analyze && args.planning {
+    let text = if args.share {
+        let profile = if args.planning {
+            futures::executor::block_on(df.explain_analyze_verbose())
+        } else {
+            futures::executor::block_on(df.explain_analyze())
+        }
+        .map_err(|e| e.to_string())?;
+        profile.shareable().to_json()
+    } else if args.explain_analyze && args.planning {
         futures::executor::block_on(df.explain_analyze_verbose())
             .map_err(|e| e.to_string())?
             .to_json()
