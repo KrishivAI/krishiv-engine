@@ -549,7 +549,7 @@ impl IoScheduler {
             sched: Arc::clone(self),
             counters: Arc::new(IoCounters::default()),
             secrets: Arc::new(CachedSecrets::new(Arc::new(NoSecrets))),
-            principal: Arc::new(Principal::local_user()),
+            principal: Arc::new(Principal::unset()),
             memory: None,
         }
     }
@@ -775,6 +775,15 @@ impl SecretResolver for CachedSecrets {
         key: &'a str,
     ) -> BoxFuture<'a, Result<SecretString>> {
         Box::pin(async move {
+            // A context nobody told who it acts for resolves nothing: fail closed.
+            if principal.is_unset() {
+                return Err(krishiv_common::error::KrishivInsufficientPermissions {
+                    principal: "(none)".to_owned(),
+                    privilege: "USAGE".to_owned(),
+                    securable: format!("SECRET {scope}"),
+                }
+                .into());
+            }
             if let Some(s) = self.cached(principal, scope, key) {
                 return Ok(s);
             }
@@ -831,7 +840,8 @@ impl IoContext {
     }
 
     /// This context acting for `principal`, the one secret references are
-    /// resolved for. The default is the local user (the embedded session).
+    /// resolved for. A context that was never given one acts for nobody
+    /// ([`Principal::unset`]) and resolves no secret.
     #[must_use]
     pub fn with_principal(mut self, principal: Arc<Principal>) -> Self {
         self.principal = principal;

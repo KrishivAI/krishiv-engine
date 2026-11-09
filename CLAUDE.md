@@ -30,6 +30,7 @@ cargo deny check                                 # licenses, bans, advisories, d
 cargo machete                                    # unused deps
 cargo hack check --each-feature --workspace --locked   # features stay additive
 cargo xtask layering                             # L0–L7 layer rule (xtask/layers.toml)
+cargo xtask quarantine [--list]                 # flaky-test registry tests/quarantine.toml vs .config/nextest.toml; a test is quarantined at most 3 days (owner, issue, deadline), then fixed or removed
 cargo xtask docs-config | docs-errors            # regenerate config / error-class docs
 cargo xtask docs-sql | docs-python | docs-rust [--check]   # docs/reference/{sql/functions,python,rust}/ (docs-rust needs nightly rustdoc + `cargo install rustdoc-md --version 0.2.0 --locked`; the docs-reference nightly job diffs them); docs-config docs/reference/config/index.md
 cargo xtask budgets [--build-time] [--write-baseline]   # crate-count / build-time / size budgets; PRs are gated against CI's measurement of main, `budgets.json` is only a reference record / fallback
