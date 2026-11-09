@@ -32,9 +32,9 @@ pub const PROFILE_VERSION: u64 = 1;
 /// The minor version this build writes: it counts additive changes within
 /// [`PROFILE_VERSION`] (0 or absent: the first v1; 1: `usage`; 2: the scan read
 /// costs, `query.scan_reads_in_flight_mean` and the `scan_read*` operator
-/// extras; 3: each pipeline's `max_slice_ns` and `stalls`). A reader ignores
+/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`). A reader ignores
 /// members it does not know, so a later minor still loads.
-pub const PROFILE_MINOR: u64 = 3;
+pub const PROFILE_MINOR: u64 = 4;
 
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -219,6 +219,10 @@ pub struct QueryProfile {
     /// `optimized` and `physical` the session fills; `None` when not asked
     /// for. Kept as data: this crate does not plan.
     pub planning: Option<serde_json::Value>,
+    /// The ids that tie the profile to the query's log records and exported span (minor 4):
+    /// the `trace` member, an object of `trace_id` (the session's traceparent trace id, when it
+    /// has one) and `session_id`; the session fills it, `None` for a profile built elsewhere.
+    pub trace: Option<serde_json::Value>,
 }
 
 impl QueryProfile {
@@ -230,6 +234,7 @@ impl QueryProfile {
             metrics,
             detailed,
             planning: None,
+            trace: None,
         }
     }
 

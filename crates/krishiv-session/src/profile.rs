@@ -351,7 +351,14 @@ impl DataFrame {
         drop(stream);
         // Every driver has merged its counters once the query finished.
         query.finished().await;
-        Ok((out, QueryProfile::new(physical, query.metrics(), true)))
+        let mut profile = QueryProfile::new(physical, query.metrics(), true);
+        let who = crate::telemetry::Who::of(&self.session.state);
+        let mut trace = serde_json::json!({ "session_id": who.session_id });
+        if let (Some(t), Some(o)) = (&who.trace_id, trace.as_object_mut()) {
+            o.insert("trace_id".to_owned(), t.clone().into());
+        }
+        profile.trace = Some(trace);
+        Ok((out, profile))
     }
 
     /// The plan at every stage (`EXPLAIN VERBOSE`): parsed, analyzed, after

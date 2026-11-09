@@ -653,6 +653,7 @@ fn schema_matches_the_writer() {
         serde_json::json!({"parsed": "p", "analyzed": "a", "steps": [],
         "optimized": "o", "physical": "x"}),
     );
+    profile.trace = Some(serde_json::json!({"trace_id": "t", "session_id": "s"}));
     let doc = profile.to_json_value();
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v
@@ -785,4 +786,13 @@ fn a_minor_2_document_reads_pipeline_stalls_as_zero() {
     let read = &back.metrics.pipelines[&0];
     assert_eq!((read.max_slice, read.stalls), (Duration::ZERO, 0));
     assert_eq!(read.ended, Duration::from_millis(3));
+}
+
+#[test]
+fn the_trace_member_round_trips_and_is_absent_without_one() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), true);
+    assert!(p.to_json_value().get("trace").is_none());
+    p.trace = Some(serde_json::json!({"trace_id": "abc", "session_id": "s1"}));
+    let back = QueryProfile::from_json(&p.to_json()).expect("reads its own document");
+    assert_eq!(back.trace, p.trace);
 }

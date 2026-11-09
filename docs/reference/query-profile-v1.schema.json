@@ -9,8 +9,18 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
-    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`. A reader ignores members it does not know." },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`. A reader ignores members it does not know." },
     "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
+    "trace": {
+      "type": "object",
+      "description": "The ids that tie the profile to the query's log records and exported span (added in minor 4). Absent for a profile built outside a session.",
+      "required": ["session_id"],
+      "additionalProperties": false,
+      "properties": {
+        "trace_id": { "type": "string", "description": "The session's traceparent trace id (32 hex digits), when it has one." },
+        "session_id": { "type": "string" }
+      }
+    },
     "environment": {
       "type": "object",
       "description": "The build that wrote the document (added in minor 1). Never configuration values. A reader ignores it.",
