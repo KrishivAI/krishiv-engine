@@ -859,18 +859,25 @@ fn the_implicit_collation_cast_quotes_a_literal_in_the_name() {
     );
 }
 
-/// `x IN (subquery)` compares in the collated side's collation; values are those of a real
-/// Spark 4.2.0 run (`ops/scripts/spark-local.sh`, 2026-11-07).
+/// `x IN (subquery)` over a pair in one collation compares through that collation's keys. A
+/// pair of different collations is not keyed (Spark refuses or an explicit COLLATE wins).
 #[test]
 fn in_subquery_compares_through_the_collation_keys() {
     for (sql, want) in [
-        ("('a' COLLATE utf8_lcase) IN (SELECT 'A')", "true"),
-        ("('b' COLLATE utf8_lcase) IN (SELECT 'A')", "false"),
-        ("'a' IN (SELECT 'A' COLLATE utf8_lcase)", "true"),
-        ("'a ' COLLATE utf8_binary_rtrim IN (SELECT 'a')", "true"),
-        ("'b' IN (SELECT 'A' COLLATE utf8_lcase)", "false"),
-        ("('a' COLLATE utf8_binary) IN (SELECT 'a')", "true"),
-        ("('a' COLLATE utf8_binary) IN (SELECT 'A')", "false"),
+        (
+            "'a' COLLATE utf8_lcase IN (SELECT 'A' COLLATE utf8_lcase)",
+            "true",
+        ),
+        (
+            "'b' COLLATE utf8_lcase IN (SELECT 'A' COLLATE utf8_lcase)",
+            "false",
+        ),
+        (
+            "'a ' COLLATE utf8_binary_rtrim IN (SELECT 'a' COLLATE utf8_binary_rtrim)",
+            "true",
+        ),
+        ("'a' COLLATE utf8_binary IN (SELECT 'a')", "true"),
+        ("'a' COLLATE utf8_binary IN (SELECT 'A')", "false"),
     ] {
         assert_eq!(
             one(&format!("SELECT CAST(({sql}) AS STRING)")),
@@ -977,5 +984,21 @@ fn using_having_correlated_and_special_letters_match_spark() {
             "true",
             "{l} {r}"
         );
+    }
+}
+
+/// A search call with the wrong argument count is a plain error, never a crash or a quietly
+/// defaulted argument (`instr` has no start argument).
+#[test]
+fn lcase_search_with_the_wrong_argument_count_is_an_error() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "SELECT contains('a' COLLATE utf8_lcase)",
+        "SELECT startswith('a' COLLATE utf8_lcase)",
+        "SELECT instr('abc' COLLATE utf8_lcase, 'b', 3)",
+    ] {
+        let r = block_on(s.sql(sql)).and_then(|df| block_on(df.collect()));
+        let e = r.expect_err(sql).to_string();
+        assert!(!e.contains("INTERNAL_ERROR"), "{sql}: {e}");
     }
 }
