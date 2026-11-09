@@ -405,10 +405,34 @@ async fn a_call_over_a_call_on_each_side_of_an_outer_join_is_evaluated_below_it(
 }
 
 #[tokio::test]
+async fn a_call_reading_both_sides_of_an_inner_join_filters_above_it() {
+    // Spark's `ExtractPythonUDFFromJoinCondition`: an inner join's conjuncts
+    // that call a UDF over both sides become a filter above the join; the
+    // other conjuncts stay the join's condition.
+    let (s, _) = session(None);
+    s.register_python_udf(add_def());
+    let got = longs(
+        &s,
+        "SELECT a.id FROM range(4) a JOIN range(4) b \
+         ON py_add(a.id, b.id) = 3 AND py_add(b.id, b.id) >= 2 AND a.id < 3 AND b.id >= 0 \
+         ORDER BY a.id",
+    )
+    .await;
+    // (a, b) with a + b = 3, b >= 1, a < 3: (0, 3), (1, 2), (2, 1).
+    assert_eq!(got, vec![Some(0), Some(1), Some(2)]);
+}
+
+#[tokio::test]
 async fn a_call_reading_both_sides_of_an_outer_join_is_refused_with_its_join_type() {
     let (s, _) = session(None);
     s.register_python_udf(add_def());
-    for (join, name) in [("LEFT JOIN", "LEFT OUTER"), ("LEFT ANTI JOIN", "LEFT ANTI")] {
+    for (join, name) in [
+        ("LEFT JOIN", "LEFT OUTER"),
+        ("RIGHT JOIN", "RIGHT OUTER"),
+        ("FULL JOIN", "FULL OUTER"),
+        ("LEFT SEMI JOIN", "LEFT SEMI"),
+        ("LEFT ANTI JOIN", "LEFT ANTI"),
+    ] {
         let sql =
             format!("SELECT a.id FROM range(3) a {join} range(3) b ON py_add(a.id, b.id) = 2");
         let err = match s.sql(&sql).await {
