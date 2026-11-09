@@ -6,7 +6,8 @@
 //! the moment it holds its lane's permit to its last byte, so the time
 //! includes how long the I/O runtime took to poll it: a starved I/O runtime
 //! shows as latency here (P2-T104 §3, E01's I/O check). Pacing waits and
-//! retry backoff are not in it.
+//! retry backoff are not in it. Every attempt counts, a retried one
+//! each time, and one that timed out as about the request timeout.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;

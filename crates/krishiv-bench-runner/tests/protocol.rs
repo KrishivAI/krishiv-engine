@@ -888,10 +888,10 @@ fn load_runs_heavy_loops_and_an_open_loop_and_reports_store_latency() {
     assert!(v["heavy"]["done"].as_u64().unwrap() >= 2, "{v}");
     assert_eq!(v["short"]["done"], 5, "{v}");
     assert_eq!(v["heavy"]["errors"].as_array().unwrap().len(), 0, "{v}");
-    // Each short query that read its file reports its mean read time.
+    // Each short query that read its file reports its mean read time (local Parquet reads count).
     let fetch = v["short"]["fetch_mean_seconds"].as_array().unwrap();
     assert!(
-        fetch.len() <= 5 && fetch.iter().all(|s| s.as_f64().unwrap() >= 0.0),
+        !fetch.is_empty() && fetch.len() <= 5 && fetch.iter().all(|s| s.as_f64().unwrap() >= 0.0),
         "{v}"
     );
     // Pipelines that stalled are listed by their operators (often none at all here).
@@ -904,6 +904,14 @@ fn load_runs_heavy_loops_and_an_open_loop_and_reports_store_latency() {
     // cover the remote case).
     assert_eq!(v["io"]["requests"], 0, "{v}");
     assert!(v["io"]["p99_us"].is_null(), "{v}");
+    // A failing short query is counted as an error, not a latency.
+    let bad = dir.path().join("bad.sql");
+    std::fs::write(&bad, "SELECT * FROM no_such_table").unwrap();
+    let b = encode_path(bad.to_str().unwrap());
+    let reply = r.handle_line(&format!("LOAD {q} 0 {b} 10 0.15")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(reply.strip_prefix("OK ").unwrap()).unwrap();
+    assert_eq!(v["short"]["done"], 0, "{v}");
+    assert_eq!(v["short"]["errors"].as_array().unwrap().len(), 2, "{v}");
     // A load with nothing to run still answers; bad arguments are an error, and the runner keeps serving.
     assert!(
         r.handle_line(&format!("LOAD {q} 0 {q} 0 0.1"))

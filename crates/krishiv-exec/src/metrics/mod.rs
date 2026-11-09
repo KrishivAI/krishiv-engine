@@ -330,10 +330,12 @@ pub struct PipelineMetrics {
     pub started: Duration,
     /// When its last driver ended, after the query started.
     pub ended: Duration,
-    /// Longest single poll of any of its drivers (wall time).
+    /// Longest single poll of any of its drivers (wall time). In the profile
+    /// document from minor 3 (`max_slice_ns`); zero when read from an earlier one.
     pub max_slice: Duration,
     /// Polls of its drivers longer than the stall threshold (wall time;
-    /// a thread kept off a CPU mid-poll counts).
+    /// a thread kept off a CPU mid-poll counts). In the profile document from
+    /// minor 3; zero when read from an earlier one.
     pub stalls: u64,
 }
 
