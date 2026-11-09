@@ -755,11 +755,10 @@ impl FileReads {
             at.path.clone(),
             at.display.clone(),
         );
-        if log.exists().await? {
-            Ok(Some(log.snapshot().await?.files))
-        } else {
-            Ok(None)
-        }
+        Ok(log
+            .snapshot_if_exists()
+            .await?
+            .map(|snapshot| snapshot.files))
     }
 
     /// The log of the nearest ancestor of `at`, reached through `name=value` directories only (a
