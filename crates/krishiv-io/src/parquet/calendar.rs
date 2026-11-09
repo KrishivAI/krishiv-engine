@@ -551,4 +551,98 @@ mod tests {
         ));
         assert!(!ancient(&under_null));
     }
+
+    #[test]
+    fn rebased_roots_follow_the_calendar_and_the_mode() {
+        use parquet::basic::{LogicalType, Repetition, Type};
+        use parquet::schema::types::Type as T;
+        use std::sync::Arc;
+        let leaf = |n: &str, ty, lt: Option<LogicalType>| {
+            Arc::new(
+                T::primitive_type_builder(n, ty)
+                    .with_repetition(Repetition::OPTIONAL)
+                    .with_logical_type(lt)
+                    .build()
+                    .unwrap(),
+            )
+        };
+        let ts = LogicalType::Timestamp(parquet::basic::TimestampType {
+            is_adjusted_to_u_t_c: true,
+            unit: parquet::basic::TimeUnit::MICROS,
+        });
+        let group = T::group_type_builder("m")
+            .with_fields(vec![
+                leaf("d", Type::INT32, Some(LogicalType::Date)),
+                leaf("t", Type::INT64, Some(ts)),
+                leaf("i", Type::INT32, None),
+                leaf("old", Type::INT96, None),
+            ])
+            .build()
+            .unwrap();
+        let descr = SchemaDescriptor::new(Arc::new(group));
+        let cal = |c| Calendars {
+            datetime: c,
+            int96: c,
+        };
+        // Date and timestamp columns count; INT96 and
+        // plain integers never count.
+        let roots = |c, mode| rebased_datetime_roots(cal(c), &descr, mode);
+        assert_eq!(
+            roots(Calendar::Legacy, None),
+            vec!["d".to_owned(), "t".to_owned()]
+        );
+        assert!(roots(Calendar::Proleptic, Some("LEGACY")).is_empty());
+        assert!(roots(Calendar::Unknown, None).is_empty());
+        assert!(roots(Calendar::Unknown, Some("CORRECTED")).is_empty());
+        assert_eq!(
+            roots(Calendar::Unknown, Some("legacy")),
+            vec!["d".to_owned(), "t".to_owned()]
+        );
+    }
+
+    #[test]
+    fn only_conjuncts_with_an_ancient_literal_on_a_rebased_root_are_dropped() {
+        use crate::request::{CmpOp, ColumnPath, PushdownExpr as E, ScalarValue as V};
+        let cmp = |c: &str, v: V| E::cmp(ColumnPath::new(c), CmpOp::Eq, v);
+        let old = |c: &str| cmp(c, V::Date32(-300_000));
+        let old_ts = |c: &str| cmp(c, V::TimestampMicros(SWITCH_MICROS - 1));
+        let modern = |c: &str| cmp(c, V::Date32(20_000));
+        let roots = vec!["d".to_owned()];
+        let strip = |e: E| without_columns(Some(&e), &roots);
+        // No predicate, no roots: unchanged.
+        assert_eq!(without_columns(None, &roots), None);
+        assert_eq!(without_columns(Some(&old("d")), &[]), Some(old("d")));
+        // A lone ancient conjunct goes; a modern one, another column, and
+        // non-comparison shapes stay.
+        assert_eq!(strip(old("d")), None);
+        assert_eq!(strip(old_ts("d")), None);
+        assert_eq!(strip(modern("d")), Some(modern("d")));
+        assert_eq!(strip(old("other")), Some(old("other")));
+        assert_eq!(
+            strip(E::IsNull(ColumnPath::new("d"))),
+            Some(E::IsNull(ColumnPath::new("d")))
+        );
+        // One survivor of an AND comes back unwrapped, several stay an AND.
+        assert_eq!(
+            strip(E::And(vec![old("d"), modern("d")])),
+            Some(modern("d"))
+        );
+        assert_eq!(
+            strip(E::And(vec![modern("d"), old("other"), old("d")])),
+            Some(E::And(vec![modern("d"), old("other")]))
+        );
+        // An ancient literal below OR / NOT / IN drops the conjunct as a whole.
+        assert_eq!(strip(E::Or(vec![old("d"), modern("d")])), None);
+        assert_eq!(strip(E::Not(Box::new(old("d")))), None);
+        let inn = |vs| E::In {
+            column: ColumnPath::new("d"),
+            values: vs,
+            collation: Default::default(),
+        };
+        assert_eq!(strip(inn(vec![V::Date32(1), V::Date32(-300_000)])), None);
+        let keep = inn(vec![V::Date32(1)]);
+        assert_eq!(strip(keep.clone()), Some(keep));
+        // The values of other scalar types never count as ancient.
+        assert_eq!(strip(cmp("d", V::Int64(-1))), Some(cmp("d", V::Int64(-1))));
+    }
 }

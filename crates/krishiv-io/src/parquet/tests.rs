@@ -1073,6 +1073,16 @@ fn rebased_dates_do_not_prune() {
         env.scan(&spark2, &req, &o).err().map(|e| e.error_class()),
         Some(ErrorClass::KrishivUnsupportedFeature)
     );
+    // The same predicate as a row-level prefix is stripped too: the read
+    // reaches the guard in both forms.
+    let mut prefixed = ScanRequest::all(Arc::clone(&schema));
+    prefixed.row_level = crate::request::RowLevel::Prefix(req.predicate.clone());
+    assert_eq!(
+        env.scan(&spark2, &prefixed, &o)
+            .err()
+            .map(|e| e.error_class()),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
     // A literal after the switch point compares the same in both calendars:
     // it still prunes a Spark 2 file (2024-10-03, above the stored maximum).
     let mut modern = ScanRequest::all(Arc::clone(&schema));
