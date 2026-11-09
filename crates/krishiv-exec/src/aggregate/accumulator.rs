@@ -420,8 +420,7 @@ fn proven<N: DecimalNative>(
 /// A cheap upper bound of [`batch_abs`]: rows × max |v| × max |w|, with
 /// each maximum bounded by an OR of ones'-complement magnitudes (`|x| <=
 /// OR + 1`, branch-free) over every slot, NULL ones included. When it is
-/// too loose (values near the bound, large values under NULLs) the caller
-/// takes the exact sum.
+/// too loose (values near the bound, large values under NULLs) the caller takes the exact sum.
 fn quick_abs<N: DecimalNative>(v: &[N], w: Option<&Weights>) -> u128 {
     let or = v
         .iter()
@@ -3421,6 +3420,7 @@ mod small_fold;
 #[cfg(test)]
 #[cfg(not(loom))]
 mod differential;
+pub(crate) mod paired;
 
 /// The per-batch proofs (design P2-T160) against the per-row path.
 #[cfg(test)]
