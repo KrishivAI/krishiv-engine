@@ -10,7 +10,7 @@
 
 use krishiv_common::error::{
     CollationMismatchExplicit, DatatypeMismatchUnexpectedInputType,
-    IndeterminateCollationInExpression,
+    IndeterminateCollationInExpression, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::{Collation, CollationFamily};
 
@@ -738,8 +738,7 @@ impl Resolver<'_> {
         cx: &Cx<'_>,
     ) -> Result<Option<Bound>, AnalysisError> {
         if kids.len() != 2 {
-            // The wrong argument count is the generic rules' error (`WRONG_NUM_ARGS`).
-            return Ok(None);
+            return Err(wrong_num_args(name, "2", kids.len(), e));
         }
         let mut plain = Vec::with_capacity(2);
         for k in &kids[..2] {
@@ -776,8 +775,11 @@ impl Resolver<'_> {
         window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Option<Bound>, AnalysisError> {
-        if kids.len() != n || n < 2 || (name == "instr" && n != 2) {
-            return Ok(None);
+        if name == "instr" && n != 2 {
+            return Err(wrong_num_args(name, "2", n, e));
+        }
+        if !(2..=3).contains(&n) {
+            return Err(wrong_num_args(name, "[2, 3]", n, e));
         }
         let (chosen, _) = self.choose_collation(e, kids, 2, name)?;
         let Some(c) = chosen else {
@@ -872,6 +874,19 @@ impl Resolver<'_> {
         };
         Ok((chosen, indeterminate))
     }
+}
+
+/// `WRONG_NUM_ARGS` for a call of `name` with `actual` arguments where `expected` is allowed.
+fn wrong_num_args(name: &str, expected: &str, actual: usize, e: &Arc<Expr>) -> AnalysisError {
+    AnalysisError::new(
+        WrongNumArgsWithoutSuggestion {
+            function_name: format!("`{name}`"),
+            expected_num: expected.to_owned(),
+            actual_num: actual.to_string(),
+            docroot: SPARK_DOC_ROOT.to_owned(),
+        },
+        e.origin,
+    )
 }
 
 #[cfg(test)]

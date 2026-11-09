@@ -409,6 +409,11 @@ impl Resolver<'_> {
         {
             return None;
         }
+        // Spark pads nothing when the list holds an untyped NULL (`c IN ('a', NULL)` over `char(3)`
+        // finds no row): the operands stay as written.
+        if list.iter().any(is_null) {
+            return Some(kids.to_vec());
+        }
         let target = list.iter().filter_map(width).fold(n, i32::max);
         let mut out = Vec::with_capacity(kids.len());
         let col = self.rpad_call(Arc::clone(&first.expr), target, first.ty.nullable)?;

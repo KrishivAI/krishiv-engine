@@ -938,6 +938,6 @@ fn lcase_search_with_the_wrong_argument_count_is_an_error() {
     ] {
         let r = block_on(s.sql(sql)).and_then(|df| block_on(df.collect()));
         let e = r.expect_err(sql).to_string();
-        assert!(!e.contains("INTERNAL_ERROR"), "{sql}: {e}");
+        assert!(e.contains("WRONG_NUM_ARGS"), "{sql}: {e}");
     }
 }

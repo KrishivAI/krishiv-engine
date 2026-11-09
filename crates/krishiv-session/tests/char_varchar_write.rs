@@ -406,7 +406,7 @@ fn in_over_a_char_column_pads_to_the_common_width_and_nested_char_writes_are_ref
     assert_eq!(count(&s, "select * from t where c in ('a', 'b')"), 2);
     assert_eq!(count(&s, "select * from t where c in ('abc')"), 1);
     assert_eq!(count(&s, "select * from t where c in ('abcd')"), 0);
-    assert_eq!(count(&s, "select * from t where c in ('a', NULL)"), 1);
+    assert_eq!(count(&s, "select * from t where c in ('a', NULL)"), 0);
     assert_eq!(count(&s, "select * from t where c not in ('a', 'b')"), 1);
     // A list member that is not a literal stays refused.
     let e = block_on(async {
