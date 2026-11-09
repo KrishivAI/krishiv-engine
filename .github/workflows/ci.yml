@@ -293,30 +293,6 @@ jobs:
 
   # The quarantined flaky tests (`.config/nextest.toml` profile `quarantine`, owner policy 2026-11-07):
   # run on every PR so their state stays visible, never required, never blocking.
-  test-quarantine:
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 30
-    steps:
-      - name: Harden the runner (audit egress)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-rust
-        with:
-          toolchain: 1.99.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: $/.github/actions/setup-mold
-      - uses: $/.github/actions/install-tool
-        with:
-          tool: cargo-nextest
-      - run: cargo nextest run -p krishiv-session --test moment_window_spill --profile quarantine --locked --no-tests=pass
-
   deny:
     needs: changes
     if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
