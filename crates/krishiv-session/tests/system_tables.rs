@@ -455,10 +455,11 @@ fn queries_count_result_rows_and_io() {
     .unwrap();
     let r = strings_in(
         &s,
-        "SELECT concat_ws('|', CAST(rows_produced AS STRING), CAST(bytes_read > 0 AS STRING)) \
+        "SELECT concat_ws('|', CAST(rows_produced AS STRING), CAST(bytes_read > 0 AS STRING), \
+         CAST(rows_read >= 7 AS STRING)) \
          FROM system.queries WHERE state = 'finished' AND query_text LIKE '%WHERE id < 7%'",
     );
-    assert_eq!(r, ["7|true"], "{r:?}");
+    assert_eq!(r, ["7|true|true"], "{r:?}");
 }
 
 #[test]

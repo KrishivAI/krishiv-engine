@@ -110,6 +110,14 @@ impl QueryStart {
                             .saturating_sub(self.bytes_written),
                     )
                     .unwrap_or(i64::MAX),
+                    rows_read: metrics
+                        .operators
+                        .values()
+                        .filter(|e| {
+                            e.role == krishiv_exec::OperatorRole::Source && e.name.ends_with("Scan")
+                        })
+                        .map(|e| i64::try_from(e.metrics.rows_out).unwrap_or(i64::MAX))
+                        .fold(0, i64::saturating_add),
                     workload_class: query.class().as_str(),
                     cpu_ns: i64::try_from(metrics.drivers.busy.as_nanos()).unwrap_or(i64::MAX),
                     spill_bytes: metrics

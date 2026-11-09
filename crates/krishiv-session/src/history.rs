@@ -389,6 +389,7 @@ impl QueryHistory {
                 row.cpu_ns = Some(t.cpu_ns);
                 row.rows_produced = t.rows_produced;
                 row.bytes_read = Some(t.bytes_read);
+                row.rows_read = Some(t.rows_read);
                 row.bytes_written = Some(t.bytes_written);
                 row.spill_bytes = Some(t.spill_bytes);
                 row.spill_files = Some(t.spill_files);

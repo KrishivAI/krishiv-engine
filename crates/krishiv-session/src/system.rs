@@ -254,6 +254,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("cpu_ns", Long, true),
             ("rows_produced", Long, true),
             ("bytes_read", Long, true),
+            ("rows_read", Long, true),
             ("bytes_written", Long, true),
             ("spill_bytes", Long, true),
             ("spill_files", Long, true),
@@ -612,6 +613,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.cpu_ns)),
             long(rows.iter().map(|r| r.rows_produced)),
             long(rows.iter().map(|r| r.bytes_read)),
+            long(rows.iter().map(|r| r.rows_read)),
             long(rows.iter().map(|r| r.bytes_written)),
             long(rows.iter().map(|r| r.spill_bytes)),
             long(rows.iter().map(|r| r.spill_files)),
@@ -850,6 +852,8 @@ pub(crate) struct QueryRow {
     pub(crate) cpu_ns: Option<i64>,
     pub(crate) rows_produced: Option<i64>,
     pub(crate) bytes_read: Option<i64>,
+    /// Rows the scan operators produced.
+    pub(crate) rows_read: Option<i64>,
     pub(crate) bytes_written: Option<i64>,
     pub(crate) spill_bytes: Option<i64>,
     pub(crate) spill_files: Option<i64>,
@@ -963,6 +967,8 @@ pub(crate) struct Totals {
     pub(crate) rows_produced: Option<i64>,
     /// The query's own I/O since it started (its I/O context; design P2-E1 R3).
     pub(crate) bytes_read: i64,
+    /// Rows the scans of the plan produced (not a breaker's output side).
+    pub(crate) rows_read: i64,
     pub(crate) bytes_written: i64,
     pub(crate) spill_bytes: i64,
     pub(crate) spill_files: i64,
@@ -1097,6 +1103,7 @@ impl QueryLog {
             cpu_ns: None,
             rows_produced: None,
             bytes_read: None,
+            rows_read: None,
             bytes_written: None,
             spill_bytes: None,
             spill_files: None,
