@@ -6,7 +6,7 @@
 /// whatever its scheme, is then normalised as Hadoop's `Path` does: no empty, `.` or trailing segment, a
 /// `..` removes the segment before it and is kept when there is none; the scheme and authority stay as
 /// written (Spark 4.2.0, `new Path(..)`: `s3a://b/x//y/` is `s3a://b/x/y`, `file:///a/b//c/` is
-/// `file:/a/b/c`, `/../x` is `file:/../x`). An empty location is `INVALID_EMPTY_LOCATION`. A scheme whose
+/// `file:/a/b/c`, `/../x` is `file:/../x`; the root slash of `s3a://b/` stays). No other trailing slash remains. An empty location is `INVALID_EMPTY_LOCATION`. A scheme whose
 /// file system Spark cannot open (`s3a`, `hdfs` without the connector) is refused by Spark itself; here it is
 /// only normalised, which is not checked against a real Spark run with that file system.
 pub(super) fn qualified_namespace_location(

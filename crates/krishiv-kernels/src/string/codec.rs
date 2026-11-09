@@ -1077,6 +1077,10 @@ pub fn url_encode<O: OffsetSizeTrait>(
 fn url_escape_byte(hi: char, lo: char) -> Option<u8> {
     let digit = |c: char| match c {
         '0'..='9' | 'a'..='f' | 'A'..='F' => c.to_digit(16),
+        // `Character.digit(c, 16)` also reads the full-width Latin letters (Spark 4.2.0: `%` +
+        // U+FF21 U+FF26 is 0xAF, malformed UTF-8, so U+FFFD).
+        '\u{ff21}'..='\u{ff26}' => u32::from(c).checked_sub(0xff21 - 10),
+        '\u{ff41}'..='\u{ff46}' => u32::from(c).checked_sub(0xff41 - 10),
         c => utf16_digit(c).map(u32::from),
     };
     let value = match hi {

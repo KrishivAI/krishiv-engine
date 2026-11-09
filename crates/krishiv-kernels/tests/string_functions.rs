@@ -934,6 +934,15 @@ fn url_encoding_and_decoding() {
     // CANNOT_DECODE_URL).
     assert_eq!(dec("%\u{ff11}\u{ff10}", false).unwrap().unwrap(), "\u{10}");
     assert_eq!(dec("%3\u{663}", false).unwrap().unwrap(), "3");
+    assert_eq!(
+        dec("%\u{ff21}\u{ff26}", false).unwrap().unwrap(),
+        "\u{fffd}"
+    );
+    assert_eq!(
+        dec("%\u{ff41}\u{ff46}", false).unwrap().unwrap(),
+        "\u{fffd}"
+    );
+    assert!(dec("%\u{ff47}\u{ff10}", false).is_err());
     for bad in [
         "%",
         "%4",
