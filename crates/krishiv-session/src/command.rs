@@ -242,9 +242,10 @@ impl Session {
     pub(crate) async fn exec_create_view(
         &self,
         v: &CreateView,
+        original: &str,
         ids: &[Span],
     ) -> Result<DataFrame, KrishivError> {
-        self.create_temp_view(v, false, ids).await
+        self.create_temp_view(v, false, ids, Some(original)).await
     }
 
     /// `CREATE [OR REPLACE] [GLOBAL] TEMPORARY VIEW`: a global view lives in `global_temp`.
@@ -253,6 +254,7 @@ impl Session {
         v: &CreateView,
         global: bool,
         ids: &[Span],
+        original: Option<&str>,
     ) -> Result<DataFrame, KrishivError> {
         let key = if global {
             crate::catalog::global_key(&v.name.value)
@@ -375,6 +377,9 @@ impl Session {
                 plan,
                 columns,
                 pins: Vec::new(),
+                text: original
+                    .and_then(|o| o.get(v.query.span.start..v.query.span.end))
+                    .map(str::to_owned),
             },
         );
         self.state.cache.invalidate_table(&v.name.value);

@@ -697,12 +697,20 @@ impl Session {
             let Some(entry) = self.state.catalog.get(&name, case_sensitive) else {
                 continue;
             };
-            // A data source view: its columns are all it has. A query view would print its text, which
-            // the session does not keep.
-            let crate::catalog::TempTable::Files { columns, .. } = &*entry else {
-                return Err(unsupported(
-                    "SHOW TABLE EXTENDED of a temporary view over a query or DataFrame",
-                ));
+            // A data source view: its columns are all it has. A view over a query prints its text (a
+            // DataFrame view has none, and is refused).
+            let (columns, text) = match &*entry {
+                crate::catalog::TempTable::Files { columns, .. } => (columns, None),
+                crate::catalog::TempTable::View {
+                    columns,
+                    text: Some(text),
+                    ..
+                } => (columns, Some(text)),
+                _ => {
+                    return Err(unsupported(
+                        "SHOW TABLE EXTENDED of a temporary view over a DataFrame",
+                    ));
+                }
             };
             let mut entries = vec![
                 ("Table".to_owned(), name.clone()),
@@ -711,7 +719,33 @@ impl Session {
                 ("Created By".to_owned(), "Spark 4.2.0".to_owned()),
                 ("Type".to_owned(), "VIEW".to_owned()),
             ];
-            if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
+            if let Some(text) = text {
+                // Spark prints no original text for a temporary view; its schema mode (when the feature is on)
+                // sits between the text and the catalog.
+                entries.push(("View Text".to_owned(), text.clone()));
+                if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
+                    entries.push(("View Schema Mode".to_owned(), "BINDING".to_owned()));
+                }
+                entries.push((
+                    "View Catalog and Namespace".to_owned(),
+                    format!(
+                        "{}.{}",
+                        crate::catalog::CATALOG,
+                        self.state.catalog.current_namespace()
+                    ),
+                ));
+                entries.push((
+                    "View Query Output Columns".to_owned(),
+                    format!(
+                        "[{}]",
+                        columns
+                            .iter()
+                            .map(|c| format!("`{}`", c.name.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            } else if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
                 entries.push(("View Schema Mode".to_owned(), "BINDING".to_owned()));
             }
             let fields: Vec<(&str, &DataType, bool)> = columns

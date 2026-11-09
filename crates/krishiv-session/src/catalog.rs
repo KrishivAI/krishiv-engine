@@ -103,6 +103,9 @@ pub(crate) enum TempTable {
         columns: Vec<TableColumn>,
         /// The hidden names this view pinned, owned by this view.
         pins: Vec<String>,
+        /// The query text of a view `CREATE TEMPORARY VIEW` made (`SHOW TABLE EXTENDED` prints it as
+        /// `View Text`); `None` for a DataFrame view.
+        text: Option<String>,
     },
 }
 
@@ -204,6 +207,7 @@ impl SessionCatalog {
                     plan,
                     columns,
                     pins,
+                    text: None,
                 }),
             ),
         );
@@ -2158,6 +2162,7 @@ mod tests {
             plan: Arc::new(LogicalPlan::table([name])),
             columns: Vec::new(),
             pins: Vec::new(),
+            text: None,
         };
         session.put("a", view("b"));
         session.put("b", view("a"));

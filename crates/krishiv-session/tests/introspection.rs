@@ -746,3 +746,26 @@ fn schema_level_collations_are_stored_only_when_enabled() {
         "COLLATION_INVALID_NAME"
     );
 }
+
+/// `SHOW TABLE EXTENDED` of a temporary view made by `CREATE TEMPORARY VIEW .. AS <query>` prints the query text,
+/// the catalog and namespace and the output columns (Spark 4.2.0 `view-schema-binding-config`); a DataFrame view
+/// has no text and is refused.
+#[test]
+fn show_table_extended_of_a_temporary_view_prints_its_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1");
+    let shown = rows(&s, "SHOW TABLE EXTENDED LIKE 'tv'");
+    let info = shown[0][3].clone();
+    for want in [
+        "Table: tv",
+        "Type: VIEW",
+        "View Text: SELECT 1",
+        "View Catalog and Namespace: spark_catalog.default",
+        "View Query Output Columns: [`1`]",
+        " |-- 1: integer (nullable = false)",
+    ] {
+        assert!(info.contains(want), "{want} not in {info}");
+    }
+    assert_eq!(shown[0][2], "true");
+}

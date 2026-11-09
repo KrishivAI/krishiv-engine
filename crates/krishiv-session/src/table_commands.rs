@@ -695,7 +695,7 @@ impl Session {
             query: query.clone(),
             span: v.span,
         };
-        self.create_temp_view(&view, true, ids).await
+        self.create_temp_view(&view, true, ids, None).await
     }
 
     /// `CREATE TEMPORARY VIEW name (col type, ...) USING format [OPTIONS (...)]`: a read of the

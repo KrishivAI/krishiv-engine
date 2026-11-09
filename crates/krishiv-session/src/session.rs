@@ -603,7 +603,10 @@ impl Session {
             Statement::Explain(e) => self.explain_statement(&e, env, redacted).await,
             Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
-            Statement::CreateView(v) => self.exec_create_view(&v, &env.identifier_spans).await,
+            Statement::CreateView(v) => {
+                self.exec_create_view(&v, query, &env.identifier_spans)
+                    .await
+            }
             Statement::DropView(v) => self.exec_drop_view(&v).await,
             Statement::Cache(c) => {
                 Box::pin(self.exec_cache(&c, query, &env.identifier_spans)).await
