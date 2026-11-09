@@ -73,6 +73,10 @@ pub struct ExecConfig {
     /// (`krishiv.exec.join.sharedBroadcastBytes`; `None`: no cap beyond the
     /// query's memory). A build past it falls back to one per task.
     pub shared_broadcast_bytes: Option<usize>,
+    /// How long a finished hash join build waits for its probe before the
+    /// arbitrator asks it to spill ahead of running consumers
+    /// (`krishiv.exec.join.idleSpillAfter`).
+    pub join_idle_spill_after: Duration,
     /// Every pipeline runs on one driver, so the order of merges and of the
     /// output rows does not depend on how the drivers interleave, and the key
     /// hashes take a fixed seed (a constant unless
@@ -101,6 +105,7 @@ impl Default for ExecConfig {
             sort_hash_buckets: true,
             join_merge_buffer_bytes: 0,
             shared_broadcast_bytes: None,
+            join_idle_spill_after: Duration::from_secs(1),
             deterministic_order: false,
         }
     }
@@ -142,6 +147,10 @@ impl ExecConfig {
             .and_then(krishiv_common::config::ConfigValue::as_size)
             .and_then(|n| usize::try_from(n).ok())
             .filter(|n| *n > 0);
+        let join_idle_spill_after = config
+            .get(&krishiv_common::config::EXEC_JOIN_IDLE_SPILL_AFTER)
+            .and_then(krishiv_common::config::ConfigValue::as_duration)
+            .unwrap_or(Duration::from_secs(1));
         let deterministic_order = config
             .get(&krishiv_common::config::DETERMINISTIC_ORDER)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
@@ -165,6 +174,7 @@ impl ExecConfig {
             join_radix_bits,
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
+            join_idle_spill_after,
             ..Self::default()
         }
     }
@@ -450,13 +460,15 @@ impl QueryContext {
     }
 
     /// Records one driver of pipeline `pipeline`: it ran from `started`
-    /// to `ended` (offsets) on `threads`.
+    /// to `ended` (offsets) on `threads`, its longest poll `max_slice`, with
+    /// `stalls` polls over the stall threshold.
     pub(crate) fn record_driver(
         &self,
         pipeline: u32,
         started: Duration,
         ended: Duration,
         threads: &[u64],
+        (max_slice, stalls): (Duration, u64),
     ) {
         let count = {
             let mut all = lock(&self.threads);
@@ -471,6 +483,8 @@ impl QueryContext {
                 threads: 0,
                 started,
                 ended,
+                max_slice,
+                stalls,
             });
             // The set only grows, but a driver that read it earlier may
             // merge later: keep the larger count.

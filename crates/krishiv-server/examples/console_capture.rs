@@ -29,10 +29,14 @@ async fn main() {
     let port: u16 = args.next().map_or(0, |p| p.parse().unwrap());
     let rt = EngineRuntime::builder().build().unwrap();
     let s = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    // Registered through the DataFrame reader, not SQL, so the setup does not appear in the History page.
     for t in TABLES {
-        let sql =
-            format!("CREATE TEMPORARY VIEW {t} AS SELECT * FROM parquet.`{data}/{t}.parquet`");
-        s.sql(&sql).await.unwrap().collect().await.unwrap();
+        let path = format!("{data}/{t}.parquet");
+        s.read()
+            .parquet([path.as_str()])
+            .create_or_replace_temp_view(t)
+            .await
+            .unwrap();
     }
     let queries = std::env::var("CONSOLE_QUERIES").unwrap_or_default();
     for path in queries.split(':').filter(|p| !p.is_empty()) {

@@ -407,11 +407,12 @@ impl Drop for Timed {
     fn drop(&mut self) {
         let stats = std::mem::take(&mut self.stats);
         self.query.merge_metrics(|m| m.drivers.merge(&stats));
+        let slices = (stats.max_slice, stats.stalls);
         // A driver never polled (cancelled before it started) ran nowhere.
         if let Some(started) = self.started {
             let ended = self.query.offset(self.executor.now());
             self.query
-                .record_driver(self.pipeline, started, ended, &self.threads);
+                .record_driver(self.pipeline, started, ended, &self.threads, slices);
         }
     }
 }

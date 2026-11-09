@@ -9,11 +9,12 @@ Limit 4
          +- Join Inner
             :- Project [d#4]
             :  +- Join Inner, (c#2 == CAST(a#3 AS BIGINT))
-            :     :- Project [c#2]
-            :     :  +- Scan spark_catalog.default.t [a#0, c#2] (shared #1)
-            :     +- Scan spark_catalog.default.u [a#3, d#4]
+            :     :- Scan spark_catalog.default.u [a#3, d#4]
+            :     +- Project [c#2]
+            :        +- Filter false
+            :           +- Scan spark_catalog.default.t [a#0, b#1, c#2] (shared #1)
             +- Shift +7
                +- Aggregate [a#0], [a#0 AS c0#5]
                   +- Project [a#0]
-                     +- Filter false
+                     +- Filter ((b#1 > 'z') and ((NOT (c#2 == 2L)) and (NOT (b#1 == b#1))))
                         +- Shared #1, printed above
