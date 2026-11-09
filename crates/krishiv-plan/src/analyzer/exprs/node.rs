@@ -813,12 +813,52 @@ impl Resolver<'_> {
                     // `sort_array` orders the whole `(y, x)` struct (ties by
                     // `x`), which needs `x` orderable; a value holding a map
                     // sorts through a comparator on `y` instead.
-                    let sorted = top_k_sorted(
-                        collected,
-                        ascending,
-                        kids[0].ty.data_type.as_ref().is_some_and(holds_map),
-                        origin,
-                    );
+                    let sorted = if kids[0].ty.data_type.as_ref().is_some_and(holds_map) {
+                        let var = |name: &str| {
+                            Arc::new(
+                                Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+                                    name.to_owned(),
+                                ])))
+                                .with_origin(origin),
+                            )
+                        };
+                        let key = |name: &str| {
+                            mk(
+                                "__subscript",
+                                vec![var(name), lit(Literal::String("k".to_owned()))],
+                                None,
+                            )
+                        };
+                        let (before, after) = if ascending { (-1, 1) } else { (1, -1) };
+                        let compare = mk(
+                            "if",
+                            vec![
+                                mk("<", vec![key("l"), key("r")], None),
+                                lit(Literal::Integer(before)),
+                                mk(
+                                    "if",
+                                    vec![
+                                        mk(">", vec![key("l"), key("r")], None),
+                                        lit(Literal::Integer(after)),
+                                        lit(Literal::Integer(0)),
+                                    ],
+                                    None,
+                                ),
+                            ],
+                            None,
+                        );
+                        let comparator = Arc::new(
+                            Expr::lambda(vec!["l".to_owned(), "r".to_owned()], (*compare).clone())
+                                .with_origin(origin),
+                        );
+                        mk("array_sort", vec![collected, comparator], None)
+                    } else {
+                        mk(
+                            "sort_array",
+                            vec![collected, lit(Literal::Boolean(ascending))],
+                            None,
+                        )
+                    };
                     let top = mk(
                         "slice",
                         vec![sorted, lit(Literal::Integer(1)), Arc::clone(k)],
@@ -1802,73 +1842,7 @@ impl Resolver<'_> {
 }
 
 /// Whether `t` is or holds a map at any depth (Spark does not order it).
-/// Orders the `(k, v)` entries of a windowed or grouped `max_by`/`min_by` top-k by `k` only: `v` is an opaque
-/// payload. `sort_array` orders the whole struct (ties by `v`), which needs `v` orderable; a payload holding a map
-/// (`by_comparator`) sorts through a comparator on `k` instead.
-pub(super) fn top_k_sorted(
-    collected: Arc<Expr>,
-    ascending: bool,
-    by_comparator: bool,
-    origin: crate::Origin,
-) -> Arc<Expr> {
-    let lit = |l: Literal| Arc::new(Expr::new(ExprNode::Literal(l)).with_origin(origin));
-    let mk = |name: &str, args: Vec<Arc<Expr>>| {
-        Arc::new(
-            Expr::new(ExprNode::Function(FunctionCall {
-                name: name.to_owned(),
-                qualifier: Vec::new(),
-                args,
-                arg_names: Vec::new(),
-                distinct: false,
-                filter: None,
-                within_group: Vec::new(),
-            }))
-            .with_origin(origin),
-        )
-    };
-    if !by_comparator {
-        return mk(
-            "sort_array",
-            vec![collected, lit(Literal::Boolean(ascending))],
-        );
-    }
-    let var = |name: &str| {
-        Arc::new(
-            Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
-                name.to_owned(),
-            ])))
-            .with_origin(origin),
-        )
-    };
-    let key = |name: &str| {
-        mk(
-            "__subscript",
-            vec![var(name), lit(Literal::String("k".to_owned()))],
-        )
-    };
-    let (before, after) = if ascending { (-1, 1) } else { (1, -1) };
-    let compare = mk(
-        "if",
-        vec![
-            mk("<", vec![key("l"), key("r")]),
-            lit(Literal::Integer(before)),
-            mk(
-                "if",
-                vec![
-                    mk(">", vec![key("l"), key("r")]),
-                    lit(Literal::Integer(after)),
-                    lit(Literal::Integer(0)),
-                ],
-            ),
-        ],
-    );
-    let comparator = Arc::new(
-        Expr::lambda(vec!["l".to_owned(), "r".to_owned()], (*compare).clone()).with_origin(origin),
-    );
-    mk("array_sort", vec![collected, comparator])
-}
-
-pub(super) fn holds_map(t: &DataType) -> bool {
+fn holds_map(t: &DataType) -> bool {
     match t {
         DataType::Map(_) => true,
         DataType::Array(a) => holds_map(a.element_type()),

@@ -59,6 +59,7 @@ use crate::{
 };
 
 mod aggregates;
+mod by_k;
 mod calls;
 mod collation;
 mod columns;
@@ -425,9 +426,8 @@ impl Resolver<'_> {
         // Rewritten calls stay alive for the pass: `done` is keyed by
         // address.
         let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
-        // The windowed `max_by`/`min_by` calls rewritten by `top_k_by_window`, by the rewrite's address: the
-        // result keeps the call as written for its name.
-        let mut top_k_calls: HashMap<usize, Arc<Expr>> = HashMap::new();
+        // `max_by(.., k) OVER (..)` calls rewritten to their window form, by the address of the call.
+        let mut by_k_original: HashMap<usize, Arc<Expr>> = HashMap::new();
         // The key argument of an AES call and everything under it (kept on
         // the resolver, see `Resolver::secret`): an error raised there
         // never shows the key (ADR 0042), so its message parameters are
@@ -486,20 +486,9 @@ impl Resolver<'_> {
                         stack.push(Step::Enter(rewritten, ctx));
                         continue;
                     }
-                    let map_payload = match &x.node {
-                        ExprNode::Window(w) => match &w.function.node {
-                            ExprNode::Function(f) if f.args.len() == 3 => self
-                                .expr_in(ctx, &f.args[0], cx)
-                                .ok()
-                                .and_then(|b| b.ty.data_type)
-                                .is_some_and(|t| node::holds_map(&t)),
-                            _ => false,
-                        },
-                        _ => false,
-                    };
-                    if let Some(rewritten) = Self::top_k_by_window(&x, map_payload) {
+                    if let Some(rewritten) = self.window_by_k(&x) {
+                        by_k_original.insert(addr(&*x), Arc::clone(&x));
                         rewritten_calls.push(Arc::clone(&rewritten));
-                        top_k_calls.insert(addr(&*rewritten), Arc::clone(&x));
                         stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
                         stack.push(Step::Enter(rewritten, ctx));
                         continue;
@@ -557,8 +546,10 @@ impl Resolver<'_> {
                 }
                 Step::Link(from, to, ctx) => {
                     if let Some(mut b) = done.get(&(addr(&*to), ctx)).cloned() {
-                        if let Some(orig) = top_k_calls.get(&addr(&*to)) {
-                            b.shown = Some(Self::top_k_shown(orig, &b.shown()));
+                        if let Some(original) = by_k_original.get(&from)
+                            && let Some(shown) = Self::by_k_shown(original, &b)
+                        {
+                            b.shown = Some(shown);
                         }
                         done.insert((from, ctx), b);
                     }
@@ -620,113 +611,6 @@ impl Resolver<'_> {
             first.window_fn = true;
         }
         kids
-    }
-
-    /// `max_by(x, y, k) OVER w` / `min_by(x, y, k) OVER w` with a literal `k` in 1..=100000, as the same
-    /// `slice(sort_array(collect_list(named_struct('k', y, 'v', x)) FILTER (WHERE y IS NOT NULL) OVER w, asc), 1, k).v`
-    /// the aggregate form lowers to (`node.rs`). Other `k` stay on the generic path.
-    fn top_k_by_window(x: &Arc<Expr>, map_payload: bool) -> Option<Arc<Expr>> {
-        let ExprNode::Window(w) = &x.node else {
-            return None;
-        };
-        let ExprNode::Function(f) = &w.function.node else {
-            return None;
-        };
-        let ascending = f.name.eq_ignore_ascii_case("min_by");
-        if !(ascending || f.name.eq_ignore_ascii_case("max_by"))
-            || f.args.len() != 3
-            || f.distinct
-            || f.filter.is_some()
-            || !f.qualifier.is_empty()
-        {
-            return None;
-        }
-        let ExprNode::Literal(Literal::Integer(k)) = &f.args[2].node else {
-            return None;
-        };
-        if !(1..=100_000).contains(k) {
-            return None;
-        }
-        let origin = x.origin;
-        let lit = |l: Literal| Arc::new(Expr::new(ExprNode::Literal(l)).with_origin(origin));
-        let mk = |name: &str, args: Vec<Arc<Expr>>, filter: Option<Arc<Expr>>| {
-            Arc::new(
-                Expr::new(ExprNode::Function(FunctionCall {
-                    name: name.to_owned(),
-                    qualifier: Vec::new(),
-                    args,
-                    arg_names: Vec::new(),
-                    distinct: false,
-                    filter,
-                    within_group: Vec::new(),
-                }))
-                .with_origin(origin),
-            )
-        };
-        let pair = mk(
-            "named_struct",
-            vec![
-                lit(Literal::String("k".to_owned())),
-                Arc::clone(&f.args[1]),
-                lit(Literal::String("v".to_owned())),
-                Arc::clone(&f.args[0]),
-            ],
-            None,
-        );
-        let present = mk("isnotnull", vec![Arc::clone(&f.args[1])], None);
-        let collected = mk("collect_list", vec![pair], Some(present));
-        let windowed = Arc::new(
-            Expr::new(ExprNode::Window(crate::expr::WindowExpr {
-                function: collected,
-                window: w.window.clone(),
-            }))
-            .with_origin(origin),
-        );
-        let sorted = node::top_k_sorted(windowed, ascending, map_payload, origin);
-        let top = mk(
-            "slice",
-            vec![sorted, lit(Literal::Integer(1)), Arc::clone(&f.args[2])],
-            None,
-        );
-        Some(mk(
-            "__subscript",
-            vec![top, lit(Literal::String("v".to_owned()))],
-            None,
-        ))
-    }
-
-    /// The call as written (`orig`) over the window as the rewrite's result shows it (the frame spelled out):
-    /// `max_by(c, a, 2) OVER (PARTITION BY b ROWS BETWEEN ...)`. `rewritten` is
-    /// `__subscript(slice(sort_array(<window>, ..), ..), 'v')`.
-    fn top_k_shown(orig: &Arc<Expr>, rewritten: &Arc<Expr>) -> Arc<Expr> {
-        let first = |e: &Arc<Expr>| match &e.node {
-            ExprNode::Function(f) => f.args.first().cloned(),
-            ExprNode::Resolved(ResolvedExpr::Function(f)) => f.args.first().cloned(),
-            ExprNode::Field { base, .. } => Some(Arc::clone(base)),
-            _ => None,
-        };
-        // Down the first arguments (`transform`/`slice`/`sort_array`) to the window call.
-        let mut cur = Some(Arc::clone(rewritten));
-        let mut window = None;
-        for _ in 0..8 {
-            let Some(x) = cur else { break };
-            if let ExprNode::Window(w) = &x.node {
-                window = Some(w.window.clone());
-                break;
-            }
-            cur = first(&x);
-        }
-        match (&orig.node, window) {
-            (ExprNode::Window(w), Some(window)) => {
-                let mut shown = (**orig).clone();
-                shown.node = ExprNode::Window(crate::expr::WindowExpr {
-                    function: Arc::clone(&w.function),
-                    window,
-                });
-                Arc::new(shown)
-            }
-            _ => Arc::clone(rewritten),
-        }
     }
 
     pub(super) fn is_aggregate(&self, e: &Expr) -> bool {

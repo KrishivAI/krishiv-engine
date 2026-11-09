@@ -809,10 +809,10 @@ impl Resolver<'_> {
             // A higher-order call names its output from the bound call:
             // lambdas read `namedlambdavariable()`, and a three-argument
             // `aggregate`/`reduce` shows the identity `finish` (see `hof`
-            // and Spark's `toPrettySQL`); `max_by(x, y, k)` keeps its own name.
+            // and Spark's `toPrettySQL`).
+            // (`max_by(x, y, k)` is bound as a `transform` but keeps its own name.)
             _ if !matches!(shown.node, ExprNode::Field { .. })
-                && !matches!(&shown.node, ExprNode::Function(c) if (c.name.eq_ignore_ascii_case("max_by") || c.name.eq_ignore_ascii_case("min_by")))
-                && !matches!(&shown.node, ExprNode::Window(w) if matches!(&w.function.node, ExprNode::Function(c) if (c.name.eq_ignore_ascii_case("max_by") || c.name.eq_ignore_ascii_case("min_by"))))
+                && !matches!(&shown.node, ExprNode::Function(c) if matches!(c.name.as_str(), "max_by" | "min_by"))
                 && matches!(&b.expr.node, ExprNode::Resolved(ResolvedExpr::Function(f)) if super::hof::Hof::of(f.id.name()).is_some()) =>
             {
                 pretty(&lateral_refs(&b.expr, &b.lateral), zone)

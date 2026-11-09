@@ -28,6 +28,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
+    &EXEC_JOIN_IDLE_SPILL_AFTER,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -206,6 +207,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.exec.debug.planRoundTrip",
         &EXEC_DEBUG_PLAN_ROUND_TRIP,
+    ),
+    (
+        "krishiv.exec.join.idleSpillAfter",
+        &EXEC_JOIN_IDLE_SPILL_AFTER,
     ),
     (
         "krishiv.io.maxConcurrentRequests",
@@ -712,6 +717,23 @@ pub static EXEC_JOIN_SHARED_BROADCAST_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// How long a finished hash join build waits for its probe before the
+/// memory arbitrator spills it ahead of running consumers (study 30, M2).
+pub static EXEC_JOIN_IDLE_SPILL_AFTER: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.idleSpillAfter",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(1))),
+    doc: "How long a finished hash join build table may wait for its probe side to start \
+          before it counts as idle. When memory runs short, an idle table is spilled first, \
+          one partition at a time, before an operator that is running spills its own state; \
+          the probe reads the spilled partitions back from disk. A shorter wait keeps less \
+          memory idle; a longer one spills less often when the probe starts soon.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
 /// The seed of deterministic execution (tests and the golden harness).
 pub static EXEC_SEED: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.seed",
@@ -942,11 +964,14 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           states (a decimal `sum` or `avg`, whose overflow can depend on the order of the \
           merges) are merged in the order the input arrives and a query without `ORDER BY` \
           returns its rows in the same order on every run, byte for byte, for the engine's \
-          own scans. Costs the parallelism of the query: meant for reproducing a result, \
+          own scans. The key hashes take a fixed seed, so an operator that spills splits \
+          its rows the same way on every run. Costs the parallelism of the query: meant for \
+          reproducing a result, \
           comparing two builds, and tests. Memory pressure from other queries in the process \
-          can still change when an operator spills, and so the order of what it returns, and the \
+          can still change when an operator spills, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
-          probing a union) still run side by side. Off by default.",
+          probing a union) take turns in branch order, so they lose their overlap too. Off by \
+          default.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
@@ -1894,14 +1919,16 @@ pub static NDV_SAMPLING_ROWS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// Time a distinct-value sample may take (`krishiv.optimizer.ndvSampling.timeout`).
+/// Time a query's distinct-value samples may take (`krishiv.optimizer.ndvSampling.timeout`).
 pub static NDV_SAMPLING_TIMEOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.ndvSampling.timeout",
     value_type: ValueType::Duration,
-    default: Some(ConfigValue::Duration(Duration::from_secs(2))),
-    doc: "The time a distinct-value sample of one table may take; past it the table keeps its \
-          default estimates. The row limit is what bounds a sample; this only guards against slow \
-          storage, so that how fast the machine is does not decide the plan.",
+    default: Some(ConfigValue::Duration(Duration::from_secs(5))),
+    doc: "The time one query's distinct-value samples may take together: its tables are sampled \
+          in turn, each with what the ones before it left. A table that runs out of time, or \
+          gets none, keeps its default estimates; EXPLAIN COST and EXPLAIN VERBOSE say which \
+          (\"Distinct-Value Samples\"). The row limit is what bounds a sample; this only guards \
+          against slow storage, so that how fast the machine is does not decide the plan.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",

@@ -12,7 +12,8 @@
 //!    (`limit / active queries`), then by spillable bytes; last-resort
 //!    consumers ([`Spillable::last_resort`](crate::Spillable::last_resort):
 //!    reservations given up while the memory stays in use) come after all
-//!    others; the requester's
+//!    others, idle finished outputs ([`Spillable::idle`](crate::Spillable::idle))
+//!    before the rest of their rank; the requester's
 //!    own consumer is never asked, and the other consumers of its driver
 //!    ([`crate::SpillOwner`]) only after every other victim (the driver
 //!    services them while it waits; a caller that does not is given up on
@@ -116,6 +117,57 @@ pub(crate) async fn reserve(
             Step::Rebind(b) | Step::Short(b, _) => binding = b,
         }
     }
+}
+
+/// [`MemoryPool::spill_idle`](crate::MemoryPool::spill_idle) of a tree
+/// pool: idle consumers of the requester's query, largest first, asked for
+/// `bytes` together. No round is entered: the requester's own consumers
+/// have not spilled yet, so this asks nothing of anyone else's driver.
+pub(crate) async fn spill_idle(node: Arc<Node>, id: ConsumerId, bytes: usize) -> usize {
+    if bytes == 0 {
+        return 0;
+    }
+    let Some(query) = node
+        .consumer(id)
+        .ok()
+        .and_then(|c| c.node.upgrade())
+        .and_then(|n| n.group_node())
+        .filter(|q| q.group.as_ref().is_some_and(|g| g.kind == GroupKind::Query))
+    else {
+        return 0;
+    };
+    let mut idle: Vec<_> = node
+        .shared
+        .consumers()
+        .into_iter()
+        .filter(|c| c.id != id)
+        .filter_map(|c| {
+            let n = c.node.upgrade()?;
+            let spill = c.spillable().filter(|s| s.idle())?;
+            let held = spill.spillable_bytes().min(c.used());
+            (n.is_within(&query) && !aborted(&n) && held > 0).then_some((held, spill))
+        })
+        .collect();
+    idle.sort_by_key(|(held, _)| std::cmp::Reverse(*held));
+    let mut remaining = bytes;
+    let mut tickets = Vec::new();
+    for (held, spill) in idle {
+        if remaining == 0 {
+            break;
+        }
+        let target = held.min(remaining);
+        remaining -= target;
+        node.shared
+            .stats
+            .spill_requests
+            .fetch_add(1, Ordering::Relaxed);
+        tickets.push(spill.request_spill(target));
+    }
+    let mut freed = 0usize;
+    for t in tickets {
+        freed = freed.saturating_add(t.await);
+    }
+    freed
 }
 
 /// Marks a consumer as waiting in arbitration while it lives: its unsettled
@@ -571,7 +623,8 @@ impl Round {
                 let own = c.owner.is_some() && c.owner == me.owner;
                 // Consumers that only give up reservations (memory still in
                 // use) come after every real spill.
-                let rank = (spill.last_resort(), own);
+                // An idle finished output first (`Spillable::idle`).
+                let rank = (spill.last_resort(), own, !spill.idle());
                 (bytes > 0).then(|| (rank, excess, bytes, spill, Arc::clone(c), Arc::clone(n)))
             })
             .collect();
