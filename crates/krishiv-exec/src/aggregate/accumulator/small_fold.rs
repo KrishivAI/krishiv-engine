@@ -5,6 +5,7 @@ use krishiv_kernels::decimal::DecimalNative;
 
 /// The most groups a [`fold_small`] batch can have.
 const SMALL_GROUPS: usize = 8;
+const _: () = assert!(SMALL_GROUPS.is_power_of_two());
 
 /// The proven dense fold (see `DecFold::sum`) of a table of at most
 /// [`SMALL_GROUPS`] groups: the batch adds into stack arrays indexed by
@@ -22,6 +23,10 @@ fn fold_small<N: DecimalNative>(
 ) {
     // Two lanes (even and odd rows) break the dependency chain through a
     // group's running total when consecutive rows share a group.
+    debug_assert!(
+        groups.iter().all(|&g| (g as usize) < sum.len()),
+        "a group id past the table"
+    );
     let mut acc = [[0_i128; SMALL_GROUPS]; 2];
     let mut rows = [[0_i64; SMALL_GROUPS]; 2];
     let (gp, gr) = groups.as_chunks::<2>();
@@ -138,6 +143,18 @@ mod tests {
                 assert_eq!((s1, t1), (s3, t3), "sum: {n_groups} groups, {len} rows");
             }
         }
+    }
+
+    #[test]
+    fn an_overflowed_group_stays_overflowed_and_big_tables_use_the_row_loop() {
+        let mut sum = [5_i128, 0];
+        let mut st = [1_u8, 2];
+        dense_sum(&[0, 1, 0], &[1_i64, 9, 2], &mut sum, &mut st);
+        assert_eq!((sum, st), ([8, 0], [1, 2]));
+        let groups: Vec<u32> = (0..20).collect();
+        let (mut s, mut c) = (vec![0_i128; 20], vec![0_i64; 20]);
+        dense_avg(&groups, &[3_i64; 20], &mut s, &mut c);
+        assert!(s.iter().all(|&x| x == 3) && c.iter().all(|&x| x == 1));
     }
 
     #[test]
