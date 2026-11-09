@@ -239,7 +239,7 @@ impl<'a> CommitLog<'a> {
     /// writer read before it wrote; `None` for an empty log). Returns the
     /// version taken.
     ///
-    /// An append that loses a race retries on the next version. An overwrite
+    /// An append that loses a race lists the log once and retries on the version after the newest. An overwrite
     /// conflicts with any commit after `base`. A commit whose response was
     /// lost is recognised by its bytes (see `IoContext::put_if_absent`).
     ///
@@ -371,8 +371,15 @@ impl<'a> CommitLog<'a> {
                 return Err(self.corrupt(&format!("version {} is missing", next + i as u64)));
             }
         }
-        let read = futures::future::try_join_all(wanted.iter().map(|v| self.read_entry(*v)));
-        for (v, (entry, _)) in wanted.into_iter().zip(read.await?) {
+        // At most 16 reads at once, in order: a failed checkpoint leaves the whole log since the
+        // last one to replay.
+        let mut read = Vec::with_capacity(wanted.len());
+        for chunk in wanted.chunks(16) {
+            read.extend(
+                futures::future::try_join_all(chunk.iter().map(|v| self.read_entry(*v))).await?,
+            );
+        }
+        for (v, (entry, _)) in wanted.into_iter().zip(read) {
             apply(&mut snap, &entry);
             snap.version = Some(v);
         }
