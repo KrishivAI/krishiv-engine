@@ -59,9 +59,19 @@ const COMPARING: &[&str] = &[
 ];
 
 /// Comparisons that run on collation keys when their collation has a key built from existing
-/// functions (`UTF8_LCASE`, `_RTRIM`). `greatest`, `least`, `nullif` and `equal_null` return or
-/// reuse the operands and wait for unit 3b.
-const KEYED: &[&str] = &["==", "<=>", "<", "<=", ">", ">=", "in", "between"];
+/// functions (`UTF8_LCASE`, `_RTRIM`). `equal_null` is `<=>`. `greatest`, `least` and `nullif`
+/// return the operands and wait for unit 3b.
+const KEYED: &[&str] = &[
+    "==",
+    "<=>",
+    "<",
+    "<=",
+    ">",
+    ">=",
+    "in",
+    "between",
+    "equal_null",
+];
 
 /// Searches that see a `UTF8_LCASE` operand through its lower-cased key: Spark's
 /// `lowercaseContains` / `lowercaseStartsWith` / `lowercaseEndsWith` compare the lower-cased

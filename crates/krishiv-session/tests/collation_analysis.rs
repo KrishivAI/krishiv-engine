@@ -557,7 +557,11 @@ fn result_boundaries_and_equal_null() {
         "string collate UNICODE_CI"
     );
     assert_eq!(
-        class("SELECT equal_null('a' COLLATE UTF8_LCASE, 'A' COLLATE UTF8_LCASE)"),
+        one("SELECT CAST(equal_null('a' COLLATE UTF8_LCASE, 'A' COLLATE UTF8_LCASE) AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        class("SELECT equal_null('a' COLLATE UNICODE_CI, 'A' COLLATE UNICODE_CI)"),
         ErrorClass::KrishivUnsupportedFeature
     );
 }
@@ -941,5 +945,20 @@ fn searches_over_lcase_split_the_dotted_capital_i_like_spark() {
             );
             assert_eq!(one(&q), w, "{f} {pat:?}");
         }
+    }
+}
+
+#[test]
+fn equal_null_compares_lcase_keys() {
+    for (call, want) in [
+        ("equal_null('A' COLLATE utf8_lcase, 'a')", "true"),
+        ("equal_null('A' COLLATE utf8_lcase, 'b')", "false"),
+        ("equal_null('A' COLLATE utf8_lcase, NULL)", "false"),
+    ] {
+        assert_eq!(
+            one(&format!("SELECT CAST({call} AS STRING)")),
+            want,
+            "{call}"
+        );
     }
 }
