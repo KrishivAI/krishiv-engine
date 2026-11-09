@@ -1417,4 +1417,45 @@ mod tests {
             );
         }
     }
+
+    proptest::proptest! {
+        /// Grouping rows by `hash_only` plus `key_eq` gives the groups of
+        /// byte-equal encoded rows (short strings, so no heap values): the
+        /// batch-local ids of E2 step 3 are the ids a per-row probe would give.
+        #[test]
+        fn hash_first_groups_equal_encoded_groups(
+            rows in proptest::collection::vec(
+                (0u8..4, 0u8..7, 0u8..5, 0u8..4), 1..300)
+        ) {
+            use arrow_array::{Float64Array, Int64Array, StringArray};
+            let floats = [Some(f64::NAN), Some(-f64::NAN), Some(0.0), Some(-0.0), None, Some(1.5), Some(f64::INFINITY)];
+            let strs = [None, Some(""), Some("a"), Some("twelve bytes"), Some("b")];
+            let f = Float64Array::from(rows.iter().map(|r| floats[r.1 as usize]).collect::<Vec<_>>());
+            let s = StringArray::from(rows.iter().map(|r| strs[r.2 as usize]).collect::<Vec<_>>());
+            let i = Int64Array::from(rows.iter().map(|r| (r.0 != 0).then_some(i64::from(r.3))).collect::<Vec<_>>());
+            let cols: Vec<ArrayRef> = vec![Arc::new(i), Arc::new(f), Arc::new(s)];
+            let types: Vec<DataType> = cols.iter().map(|c| c.data_type().clone()).collect();
+            let layout = RowLayout::new(&types, &[true; 3]).unwrap();
+            let enc = layout.encode(&cols).unwrap();
+            let hashes = layout.hash_only(&cols).unwrap();
+            proptest::prop_assert_eq!(&hashes[..], enc.hashes());
+            let same = layout.key_eq(&cols).unwrap();
+            let mut firsts: Vec<usize> = Vec::new();
+            let mut by_hash: Vec<usize> = Vec::new();
+            let mut by_bytes: Vec<usize> = Vec::new();
+            let mut first_bytes: Vec<&[u8]> = Vec::new();
+            for k in 0..rows.len() {
+                let id = firsts
+                    .iter()
+                    .position(|&j| hashes[j] == hashes[k] && same.eq(j, k).unwrap())
+                    .unwrap_or_else(|| { firsts.push(k); firsts.len() - 1 });
+                by_hash.push(id);
+                let b = enc.row(k);
+                let id = first_bytes.iter().position(|x| *x == b)
+                    .unwrap_or_else(|| { first_bytes.push(b); first_bytes.len() - 1 });
+                by_bytes.push(id);
+            }
+            proptest::prop_assert_eq!(by_hash, by_bytes);
+        }
+    }
 }
