@@ -53,6 +53,8 @@ impl Planner<'_> {
         kind: JoinKind,
         condition: &JoinCondition,
     ) -> Result<Planned> {
+        // Taken first: every path below either uses it or drops it.
+        let request = self.take_request(left, right);
         let on = match condition {
             JoinCondition::On(e) => Some(e),
             JoinCondition::None => None,
@@ -157,7 +159,7 @@ impl Planner<'_> {
                 .map(AsRef::as_ref)
                 .chain(residual.iter().copied())
                 .collect();
-            self.project_build((&logical.0, &logical.1), built, build, &fixed)?
+            self.project_build(request, built, build, &fixed)?
         } else {
             (build, None)
         };

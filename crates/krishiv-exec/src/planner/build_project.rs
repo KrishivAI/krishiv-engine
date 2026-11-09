@@ -6,7 +6,8 @@
 //!
 //! TPC-H q09's `amount = l_extendedprice * (1 - l_discount) - ps_supplycost *
 //! l_quantity` reads four 16-byte decimals of the orders join's build side and
-//! gives one: the table loses 48 bytes a row (15.7 GB at SF1000).
+//! gives one `decimal(33,4)`: as `Decimal64` inputs (8 bytes each) and one
+//! `Decimal128` result, the table loses 16 bytes a row (5.2 GB at SF1000).
 //!
 //! # How
 //!
@@ -220,19 +221,30 @@ impl Planner<'_> {
             .collect()
     }
 
-    /// Wraps the planned build side of the inner join of `left` and `right`
-    /// in the projection its consumer's request allows, or returns it as it
-    /// is. `logical` is the build input; `fixed` holds what the join itself
+    /// Takes the request a consumer left at the join of `left` and `right`.
+    /// The join calls it first, so a join that plans no hash join (no
+    /// equality key, a nested-loop hint) never leaves one behind for another
+    /// join over the same inputs.
+    pub(super) fn take_request(
+        &mut self,
+        left: &Arc<LogicalPlan>,
+        right: &Arc<LogicalPlan>,
+    ) -> Option<Request> {
+        self.moves.requests.remove(&(addr(left), addr(right)))
+    }
+
+    /// Wraps the planned build side of a hash join in the projection the
+    /// consumer's request `req` allows, or returns it as it is. `logical` is the build input; `fixed` holds what the join itself
     /// reads (its keys and residual). The text, when it moved something, is
     /// for the join's `EXPLAIN` line (`computes on build: ...`).
     pub(super) fn project_build(
         &mut self,
-        (left, right): (&Arc<LogicalPlan>, &Arc<LogicalPlan>),
+        req: Option<Request>,
         logical: &Arc<LogicalPlan>,
         build: Planned,
         fixed: &[&Expr],
     ) -> Result<(Planned, Option<String>)> {
-        let Some(req) = self.moves.requests.remove(&(addr(left), addr(right))) else {
+        let Some(req) = req else {
             return Ok((build, None));
         };
         let ansi = self.env.ansi;

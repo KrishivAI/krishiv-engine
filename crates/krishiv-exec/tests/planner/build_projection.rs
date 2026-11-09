@@ -169,3 +169,76 @@ fn tpch_q09_computes_amount_on_the_orders_join_build() {
     );
     assert!(!plan_off.contains("computes on build"), "{plan_off}");
 }
+
+/// A left build under a hint is served too: the rule follows the side the
+/// join builds.
+#[test]
+fn a_hinted_left_build_computes_on_the_left() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    tables(dir.path(), &many(), &KEYS, &rt);
+    let sources = [
+        ("f", vec!["f.parquet".to_owned()]),
+        ("w", vec!["w.parquet".to_owned()]),
+    ];
+    let on = parquet_files_with(dir.path(), &sources, true, &[], &rt);
+    let off = parquet_files_with(dir.path(), &sources, true, &[OFF], &rt);
+    let q = "SELECT /*+ BROADCAST(f) */ w.wk, f.d + f.i AS di FROM f JOIN w ON f.k = w.wk";
+    let (rows_on, plan_on) = answer(&on, q);
+    let (rows_off, _) = answer(&off, q);
+    assert_eq!(rows_on, rows_off);
+    assert!(projects_below_join(&plan_on), "{plan_on}");
+}
+
+/// A column selection between the consumer and the join passes the moved
+/// column instead of the ones it frees (SQL plans collapse such a
+/// selection, so the plan is built by hand).
+#[test]
+fn a_selection_between_the_consumer_and_the_join_is_rewritten() {
+    use std::sync::Arc;
+
+    use krishiv_plan::{Expr, ExprNode, LogicalPlan, Plan, PlanNode, ResolvedExpr};
+
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    tables(dir.path(), &many(), &KEYS, &rt);
+    let sources = [
+        ("f", vec!["f.parquet".to_owned()]),
+        ("w", vec!["w.parquet".to_owned()]),
+    ];
+    let on = parquet_files_with(dir.path(), &sources, true, &[], &rt);
+    let off = parquet_files_with(dir.path(), &sources, true, &[OFF], &rt);
+    let with_selection = |t: &Tpch| {
+        let plan = t.optimized(FIRES[0], Order::Written).unwrap();
+        // The query's root is the consumer `Project` over the join.
+        let PlanNode::Project { input, exprs } = &plan.root().node else {
+            panic!("not a projection: {}", plan.root());
+        };
+        assert!(
+            matches!(input.node, PlanNode::Join { .. }),
+            "{}",
+            plan.root()
+        );
+        let columns = input
+            .resolved_output()
+            .unwrap()
+            .into_iter()
+            .map(|c| Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(c)))))
+            .collect();
+        let selection = Arc::new(LogicalPlan::new(PlanNode::Project {
+            input: Arc::clone(input),
+            exprs: columns,
+        }));
+        let top = LogicalPlan::new(PlanNode::Project {
+            input: selection,
+            exprs: exprs.clone(),
+        });
+        let plan = Plan::try_new(top).unwrap();
+        let runnable = physical(t, &plan).unwrap();
+        (sorted(&run(&runnable).unwrap()), runnable.to_string())
+    };
+    let (rows_on, plan_on) = with_selection(&on);
+    let (rows_off, _) = with_selection(&off);
+    assert_eq!(rows_on, rows_off);
+    assert!(projects_below_join(&plan_on), "{plan_on}");
+}
