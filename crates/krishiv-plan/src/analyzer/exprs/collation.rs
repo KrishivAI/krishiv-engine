@@ -227,14 +227,17 @@ pub(super) fn subquery_key_collation(
     if !is_string(left) || !is_string(Some(right)) {
         return None;
     }
-    [left, Some(right)].into_iter().find_map(|t| match t {
-        Some(DataType::CollatedString(c))
-            if c.rtrim() || matches!(c.family(), CollationFamily::Utf8Lcase) =>
+    // Only a pair in one and the same collation is keyed. A pair of different collations is
+    // Spark's COLLATION_MISMATCH / INDETERMINATE_COLLATION_IN_EXPRESSION (or an explicit
+    // `COLLATE` winning), which keying one side would answer wrongly.
+    match (left, right) {
+        (Some(DataType::CollatedString(l)), DataType::CollatedString(r))
+            if l == r && (l.rtrim() || matches!(l.family(), CollationFamily::Utf8Lcase)) =>
         {
-            Some(*c)
+            Some(*l)
         }
         _ => None,
-    })
+    }
 }
 
 /// How many leading arguments of `name` only select (a null test) and so take no part in the
@@ -734,6 +737,10 @@ impl Resolver<'_> {
         window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Option<Bound>, AnalysisError> {
+        if kids.len() != 2 {
+            // The wrong argument count is the generic rules' error (`WRONG_NUM_ARGS`).
+            return Ok(None);
+        }
         let mut plain = Vec::with_capacity(2);
         for k in &kids[..2] {
             let cast = Expr::new(ExprNode::Cast {
@@ -769,6 +776,9 @@ impl Resolver<'_> {
         window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Option<Bound>, AnalysisError> {
+        if kids.len() != n || n < 2 || (name == "instr" && n != 2) {
+            return Ok(None);
+        }
         let (chosen, _) = self.choose_collation(e, kids, 2, name)?;
         let Some(c) = chosen else {
             return Ok(None);
