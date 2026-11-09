@@ -32,7 +32,10 @@ sink (also the runtime filter producer, P2-T163: per-driver partials, published 
 `probe.rs` probe operator + match cursor (its first read of the build, `BuildGlobal::built`, ends the build's idle
 window: until then a finished build's tables are an `OutputSpill` written partition by partition, largest first, and
 idle after `krishiv.exec.join.idleSpillAfter`, so the arbitrator asks them before a running consumer self-spills; study
-30) · `grace.rs` spill partitions, flush-phase grace join · `broadcast.rs`
+30. Each probe driver then holds the build's level-0 tables, `build.rs` `Level0`, whose memory includes the per-partition
+reservations moved at the seal; the last probe driver done after the flush barrier releases them, so a downstream
+sink's final phase gets that memory; a `Prebuilt` broadcast build is never released) · `grace.rs` spill partitions,
+flush-phase grace join · `broadcast.rs`
 (P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
 broadcast exchange builds its table once per job and worker (its own query over the resource's pool, no spill, its
 reservations never abort a query) and every task probes it through a `PrebuiltSink` that republishes its runtime
