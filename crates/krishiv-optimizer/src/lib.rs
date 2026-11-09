@@ -526,14 +526,24 @@ fn order_and_restrict(
         t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
         // A filter ordering or restriction leaves can reject the NULL rows of an outer join's
         // null-supplied side (an equality implied across two joins, `a = c` from `a = b` and
-        // `b = c`, over the outer join below): the rewrite batch turns that join into an inner
-        // one now, so the next ordering sees the larger inner-join tree, instead of a second
-        // optimization finding it.
-        let moved = !Arc::ptr_eq(&ordered, &root) || !Arc::ptr_eq(&restricted, &ordered);
-        let rewritten = if moved {
-            batch(Arc::clone(&restricted), "Rewrite", t)?
+        // `b = c`, over the outer join below). Such a join turns inner here, and the rewrite batch
+        // then settles the filters, so the next ordering sees the larger inner-join tree instead of
+        // a second optimization finding it. Nothing else runs, and nothing at all unless a join
+        // turned inner.
+        let narrowed = dag::rewrite_up(Arc::clone(&restricted), &mut |p| {
+            Ok(pushdown::eliminate_outer_joins(p))
+        })?;
+        let rewritten = if Arc::ptr_eq(&narrowed, &restricted) {
+            restricted
         } else {
-            Arc::clone(&restricted)
+            t.step(
+                "JoinOrder",
+                round,
+                "EliminateOuterJoins",
+                &restricted,
+                &narrowed,
+            );
+            batch(narrowed, "Rewrite", t)?
         };
         let done = Arc::ptr_eq(&rewritten, &ordered);
         root = rewritten;

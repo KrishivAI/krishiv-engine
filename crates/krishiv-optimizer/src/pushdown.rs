@@ -43,6 +43,53 @@ pub(crate) fn push_filter(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     wrap(below, rest, &node)
 }
 
+/// The rule at a `Filter`: the outer join under a chain of filters becomes the join type those
+/// filters allow (an outer side whose all-NULL rows some conjunct rejects is no longer preserved),
+/// and nothing else moves. Join ordering and restriction leave filters like that (an equality
+/// implied across two joins over the outer join below); this lets the order-and-restrict loop turn
+/// the join inner before its last ordering, without running the rewrite batch every round.
+pub(crate) fn eliminate_outer_joins(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    fn go(p: &Arc<LogicalPlan>, preds: &mut Vec<Arc<Expr>>) -> Option<Arc<LogicalPlan>> {
+        match &p.node {
+            PlanNode::Filter { input, predicate } => {
+                preds.extend(conjuncts(predicate));
+                let below = go(input, preds)?;
+                Some(Arc::new(LogicalPlan {
+                    node: PlanNode::Filter {
+                        input: below,
+                        predicate: Arc::clone(predicate),
+                    },
+                    origin: p.origin,
+                }))
+            }
+            PlanNode::Join {
+                left,
+                right,
+                kind: kind @ (JoinKind::LeftOuter | JoinKind::RightOuter | JoinKind::FullOuter),
+                condition,
+            } => {
+                let narrowed = eliminate_outer(*kind, preds, left, right, &ids(left), &ids(right));
+                (narrowed != *kind).then(|| {
+                    Arc::new(LogicalPlan {
+                        node: PlanNode::Join {
+                            left: Arc::clone(left),
+                            right: Arc::clone(right),
+                            kind: narrowed,
+                            condition: condition.clone(),
+                        },
+                        origin: p.origin,
+                    })
+                })
+            }
+            _ => None,
+        }
+    }
+    if !matches!(node.node, PlanNode::Filter { .. }) {
+        return node;
+    }
+    go(&node, &mut Vec::new()).unwrap_or(node)
+}
+
 /// A predicate in a filter or join condition: a NULL operand of its
 /// `and`/`or` tree acts as false (Spark's `ReplaceNullWithFalseInPredicate`),
 /// so the tree folds further. `predicate` itself when there is none.
