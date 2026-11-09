@@ -18,9 +18,8 @@ Sort [o_year#60 ASC NULLS FIRST]
                         :     :     :- Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_extendedprice#21, l_discount#22]
                         :     :     +- BroadcastExchange
                         :     :        +- Project [o_orderkey#32, o_orderdate#36]
-                        :     :           +- HashJoin Inner, [o_custkey#33] = [c_custkey#41], RuntimeFilter #3: o_custkey#33 -> spark_catalog.default.orders.o_custkey
-                        :     :              :- Filter ((o_orderdate#36 >= DATE '1995-01-01') and (o_orderdate#36 <= DATE '1996-12-31'))
-                        :     :              :  +- Scan spark_catalog.default.orders [o_orderkey#32, o_custkey#33, o_orderdate#36], PushedFilters: [((o_orderdate#36 >= DATE '1995-01-01') and (o_orderdate#36 <= DATE '1996-12-31'))]
+                        :     :           +- HashJoin Inner, [o_custkey#33] = [c_custkey#41], RuntimeFilter #3: o_custkey#33 -> spark_catalog.default.orders.o_custkey, probe filter: ((o_orderdate#36 >= DATE '1995-01-01') and (o_orderdate#36 <= DATE '1996-12-31'))
+                        :     :              :- Scan spark_catalog.default.orders [o_orderkey#32, o_custkey#33, o_orderdate#36], PushedFilters: [((o_orderdate#36 >= DATE '1995-01-01') and (o_orderdate#36 <= DATE '1996-12-31'))]
                         :     :              +- BroadcastExchange
                         :     :                 +- Project [c_custkey#41]
                         :     :                    +- HashJoin Inner, [c_nationkey#44] = [n_nationkey#49], RuntimeFilter #2: c_nationkey#44 -> spark_catalog.default.customer.c_nationkey
