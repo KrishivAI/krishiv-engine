@@ -11,7 +11,6 @@
 3345 crates/krishiv-exec/src/aggregate/tests.rs
 # +11: the coalesce test asserts the merged-run bytes it now returns (X3' step 1, #586)
 # +127: spill guards on spill_parts, and each Loading partition and its Active table hold a seat in the query's grace table cohort (#627)
-2320 crates/krishiv-exec/src/join/grace.rs
 2003 crates/krishiv-exec/src/operators/sort/sort.rs
 2215 crates/krishiv-exec/src/physical/instantiate.rs
 # +1 line: PlanNode::Repartition plans a hash exchange (DISTRIBUTE BY as a real exchange)
