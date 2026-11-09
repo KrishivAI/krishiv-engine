@@ -936,7 +936,12 @@ impl Graph {
             // A column is carried while something still reads it: an
             // operator above the tree, or a conjunct over the tree's inputs.
             // One read only by a filter of its own input is not.
-            let readers: Vec<Attrs> = kept.iter().map(|p| references(&p.expr)).collect();
+            let mut read_by: HashMap<AttrId, Vec<usize>> = HashMap::new();
+            for (k, p) in kept.iter().enumerate() {
+                for id in references(&p.expr) {
+                    read_by.entry(id).or_default().push(k);
+                }
+            }
             order
                 .iter()
                 .map(|&i| {
@@ -945,9 +950,7 @@ impl Graph {
                         .unwrap_or_default()
                         .iter()
                         .filter_map(|c| {
-                            let preds: Vec<usize> = (0..readers.len())
-                                .filter(|&k| readers[k].contains(&c.id))
-                                .collect();
+                            let preds: Vec<usize> = read_by.get(&c.id).cloned().unwrap_or_default();
                             let above = above.contains(&c.id);
                             (above || !preds.is_empty()).then(|| ColumnUse {
                                 width: f64::from(
