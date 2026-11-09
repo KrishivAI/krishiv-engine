@@ -945,3 +945,38 @@ fn shared_stats_peak_is_the_concurrent_peak_not_the_sum() {
     ra.try_grow(4 * MIB).unwrap();
     assert_eq!(stats.peak_held(), 12 * MIB);
 }
+
+/// A release is counted before the pool hands the bytes to another consumer,
+/// so two consumers passing one pool's whole budget back and forth never
+/// record a shared peak above the pool limit.
+#[test]
+fn shared_peak_never_exceeds_the_pool_when_consumers_hand_bytes_over() {
+    use krishiv_memory::{ConsumerHandle, SpillStats};
+    let limit = 8 * MIB;
+    let root = new_root(limit);
+    let stats = Arc::new(SpillStats::default());
+    let pool: Arc<dyn MemoryPool> = root;
+    let workers: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|name| {
+            let h =
+                ConsumerHandle::register_counted(Arc::clone(&pool), name, None, Arc::clone(&stats));
+            std::thread::spawn(move || {
+                let mut r = h.reservation();
+                for _ in 0..20_000 {
+                    if r.try_grow(limit).is_ok() {
+                        r.shrink(limit);
+                    }
+                }
+            })
+        })
+        .collect();
+    for w in workers {
+        w.join().unwrap();
+    }
+    assert!(
+        stats.peak_held() <= limit,
+        "peak {} > {limit}",
+        stats.peak_held()
+    );
+}
