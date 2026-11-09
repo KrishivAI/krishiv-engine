@@ -391,6 +391,56 @@ impl Resolver<'_> {
         Ok(())
     }
 
+    /// `c IN (...)` over a bare `char(n)` column with only string literals (and NULLs) in the list: Spark's
+    /// `ApplyCharTypePadding` pads the column to the common width `max(n, longest literal)` and each shorter
+    /// literal to it. `None` when the operand is not a bare `char(n)` or the list holds anything else (that
+    /// stays refused by [`Self::refuse_char_in`]).
+    pub(super) fn pad_char_in(&self, kids: &[Bound]) -> Option<Vec<Bound>> {
+        if self.ctx.conf.char_varchar_as_string || self.declared.is_empty() {
+            return None;
+        }
+        let (first, list) = kids.split_first()?;
+        let n = bare_char(&self.declared, first)?;
+        let is_null = |k: &Bound| matches!(&k.expr.node, ExprNode::Literal(Literal::Null(_)));
+        let width = |k: &Bound| i32::try_from(string_literal(k)?.chars().count()).ok();
+        if !list
+            .iter()
+            .all(|k| is_null(k) || string_literal(k).is_some())
+        {
+            return None;
+        }
+        let target = list.iter().filter_map(width).fold(n, i32::max);
+        let mut out = Vec::with_capacity(kids.len());
+        let col = self.rpad_call(Arc::clone(&first.expr), target, first.ty.nullable)?;
+        out.push(Bound {
+            expr: col,
+            shown: Some(first.shown()),
+            ..first.clone()
+        });
+        for k in list {
+            let Some(l) = width(k) else {
+                out.push(k.clone());
+                continue;
+            };
+            if l >= target {
+                out.push(k.clone());
+                continue;
+            }
+            let text = string_literal(k)?;
+            let padded = if target - l > MAX_LITERAL_PADDING {
+                return None;
+            } else {
+                format!("{text}{}", " ".repeat(usize::try_from(target - l).ok()?))
+            };
+            out.push(Bound {
+                expr: Arc::new(Expr::literal(Literal::String(padded)).with_origin(k.expr.origin)),
+                shown: Some(k.shown()),
+                ..k.clone()
+            });
+        }
+        Some(out)
+    }
+
     /// Spark's `ApplyCharTypePadding` for the comparison of `kids` (`=`, `<=>`, `<`, `<=`, `>`, `>=`): only a bare
     /// `char(n)` attribute is padded. Two of them pad the shorter to the longer; against a string literal of
     /// length L the column pads up to L when n < L, and the literal pads up to n when n > L. The operands as

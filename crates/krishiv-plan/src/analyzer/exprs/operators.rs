@@ -230,9 +230,15 @@ impl Resolver<'_> {
                 }
             }
         }
-        if matches!(op, Builtin::In) {
-            self.refuse_char_in(kids, origin)?;
-        }
+        let padded_in = if matches!(op, Builtin::In) {
+            let padded = self.pad_char_in(kids);
+            if padded.is_none() {
+                self.refuse_char_in(kids, origin)?;
+            }
+            padded
+        } else {
+            None
+        };
         // `ApplyCharTypePadding`: a bare `char(n)` operand of a comparison pads (see `char_varchar`).
         let padded = matches!(
             op,
@@ -244,7 +250,8 @@ impl Resolver<'_> {
                 | Builtin::GtEq
         )
         .then(|| self.pad_char_comparison(kids))
-        .flatten();
+        .flatten()
+        .or(padded_in);
         let kids = padded.as_deref().unwrap_or(kids);
         let args: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let conf = self.ctx.conf;

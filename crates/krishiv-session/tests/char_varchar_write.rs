@@ -395,10 +395,22 @@ fn the_declared_type_follows_aliases_instances_and_unions() {
 }
 
 #[test]
-fn in_over_a_char_column_and_nested_char_writes_are_refused() {
+fn in_over_a_char_column_pads_to_the_common_width_and_nested_char_writes_are_refused() {
     let s = fresh();
+    run(
+        &s,
+        "insert into t values ('a', 'x'), ('b', 'y'), ('abc', 'z')",
+    )
+    .unwrap();
+    // `ApplyCharTypePadding`: the column and the shorter literals pad to max(n, longest literal).
+    assert_eq!(count(&s, "select * from t where c in ('a', 'b')"), 2);
+    assert_eq!(count(&s, "select * from t where c in ('abc')"), 1);
+    assert_eq!(count(&s, "select * from t where c in ('abcd')"), 0);
+    assert_eq!(count(&s, "select * from t where c in ('a', NULL)"), 1);
+    assert_eq!(count(&s, "select * from t where c not in ('a', 'b')"), 1);
+    // A list member that is not a literal stays refused.
     let e = block_on(async {
-        s.sql("select * from t where c in ('a', 'b')")
+        s.sql("select * from t where c in ('a', v)")
             .await?
             .collect()
             .await
