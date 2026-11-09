@@ -404,6 +404,10 @@ pub struct IoScheduler {
     runtime: Option<tokio::runtime::Handle>,
     totals: IoCounters,
     jitter: AtomicU64,
+    /// The HTTP clients this scheduler's cloud stores connect through: one per set of client
+    /// options for the life of the runtime, so a query does not build its client and TLS roots
+    /// again (see `krishiv_store::SharedHttpClients`).
+    http_clients: krishiv_store::SharedHttpClients,
 }
 
 impl fmt::Debug for IoScheduler {
@@ -444,7 +448,15 @@ impl IoScheduler {
             stores: RwLock::new(HashMap::new()),
             runtime,
             totals: IoCounters::default(),
+            http_clients: krishiv_store::SharedHttpClients::new(),
         })
+    }
+
+    /// The HTTP clients stores registered on this scheduler share (see
+    /// [`crate::query_registry`]).
+    #[must_use]
+    pub fn http_clients(&self) -> &krishiv_store::SharedHttpClients {
+        &self.http_clients
     }
 
     /// Registers (or replaces) the store `id`, unpaced (local files,

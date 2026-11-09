@@ -19,9 +19,10 @@
 //! ([`krishiv_io::DistinctSamples`]), keyed by the files' versions.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arrow_array::{Array, ArrayRef};
 use arrow_row::{RowConverter, SortField};
@@ -42,9 +43,86 @@ pub(super) const MAX_TRACKED: usize = 1 << 16;
 pub struct SampleOptions {
     /// Rows read at most (`krishiv.optimizer.ndvSampling.rows`).
     pub rows: u64,
-    /// Time allowed for one table (`krishiv.optimizer.ndvSampling.timeout`);
-    /// past it the table keeps its estimates.
+    /// Time left for this table: what is left of the query's budget
+    /// (`krishiv.optimizer.ndvSampling.timeout`). Past it the table keeps
+    /// its estimates; zero reads nothing.
     pub timeout: Duration,
+}
+
+/// What a table's sample did for some of its columns, as `EXPLAIN COST`
+/// and `EXPLAIN VERBOSE` report it: whether the estimates of `columns`
+/// come from a sample or stayed the defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SampleOutcome {
+    /// The columns, in the order asked.
+    pub columns: Vec<String>,
+    /// What happened to them.
+    pub result: SampleResult,
+}
+
+/// How a sample of some columns ended ([`SampleOutcome`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SampleResult {
+    /// Read `rows` rows (every row of the table when `whole`) in `took`.
+    Sampled {
+        /// Rows read, nulls included.
+        rows: u64,
+        /// The sample is the whole table: the counts are exact.
+        whole: bool,
+        /// The read's time.
+        took: Duration,
+    },
+    /// An earlier query's sample of the same files.
+    Cached,
+    /// The read did not finish within `after`: the defaults stay.
+    TimedOut {
+        /// The time it had.
+        after: Duration,
+    },
+    /// An earlier query's sample of the same files did not finish (out of
+    /// time, or a read error) within as much time as this one has: the
+    /// defaults stay, nothing is read.
+    TimedOutBefore,
+    /// The read failed: the defaults stay.
+    Failed,
+    /// No sampling time was left for this table (the query's other tables
+    /// spent it, or the budget is zero): the defaults stay, nothing is read.
+    NoTime,
+}
+
+impl SampleOutcome {
+    /// The outcome's text with the read's time (`EXPLAIN VERBOSE`); the
+    /// `Display` text leaves it out, so `EXPLAIN COST` reads the same from
+    /// run to run.
+    #[must_use]
+    pub fn with_time(&self) -> String {
+        match self.result {
+            SampleResult::Sampled { took, .. } => format!("{self} in {} ms", took.as_millis()),
+            _ => self.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for SampleOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: ", self.columns.join(", "))?;
+        match self.result {
+            SampleResult::Sampled { rows, whole, .. } => write!(
+                f,
+                "sampled {rows} rows{}",
+                if whole { " (the whole table)" } else { "" },
+            ),
+            SampleResult::Cached => f.write_str("sampled by an earlier query"),
+            SampleResult::TimedOut { after } => {
+                write!(f, "timed out after {} ms, defaults kept", after.as_millis())
+            }
+            SampleResult::TimedOutBefore => f.write_str(
+                "an earlier query's sample with as much time did not finish, defaults kept",
+            ),
+            SampleResult::Failed => f.write_str("the read failed, defaults kept"),
+            SampleResult::NoTime => f.write_str("no sampling time left, defaults kept"),
+        }
+    }
 }
 
 /// The table's distinct non-null values estimated from `s`, for a table of
@@ -132,7 +210,8 @@ impl FileTable {
     /// estimated distinct count for [`statistics`](super::table::TableProvider::statistics).
     /// Columns already sampled, or with a distinct count from the footers,
     /// are not read again. Past the time limit the table keeps its
-    /// estimates.
+    /// estimates. What happened is kept for
+    /// [`sample_outcomes`](Self::sample_outcomes).
     ///
     /// # Errors
     /// Read errors of the sampled files.
@@ -173,19 +252,44 @@ impl FileTable {
         let key = |c: &str| SampleKey::new(keys.clone(), c, options.rows, table_files);
         let timeout_ms = u64::try_from(options.timeout.as_millis()).unwrap_or(u64::MAX);
         let mut missing = Vec::new();
+        let (mut cached, mut failed_before) = (Vec::new(), Vec::new());
         for c in wanted {
             match cache.get(&key(c)) {
                 // A sample that did not finish is tried again only with more time.
                 Some(s) if s.failed_within_ms > 0 && timeout_ms > s.failed_within_ms => {
                     missing.push(c.clone());
                 }
-                Some(s) => self.keep_sample(c, &s, stats.rows),
+                Some(s) => {
+                    self.keep_sample(c, &s, stats.rows);
+                    if s.failed_within_ms > 0 {
+                        failed_before.push(c.clone());
+                    } else {
+                        cached.push(c.clone());
+                    }
+                }
                 None => missing.push(c.clone()),
+            }
+        }
+        for (columns, result) in [
+            (cached, SampleResult::Cached),
+            (failed_before, SampleResult::TimedOutBefore),
+        ] {
+            if !columns.is_empty() {
+                self.note_sample(SampleOutcome { columns, result });
             }
         }
         if missing.is_empty() {
             return Ok(());
         }
+        if options.timeout.is_zero() {
+            // Nothing recorded in the cache: a later query with time samples.
+            self.note_sample(SampleOutcome {
+                columns: missing,
+                result: SampleResult::NoTime,
+            });
+            return Ok(());
+        }
+        let started = Instant::now();
         let read = self.read_sample(&files, &missing, options.rows);
         let counters = match tokio::time::timeout(options.timeout, read).await {
             Ok(Ok(counters)) => counters,
@@ -205,19 +309,44 @@ impl FileTable {
                     self.keep_sample(c, &failure, stats.rows);
                 }
                 return match failed {
-                    Ok(Err(e)) => Err(e),
+                    Ok(Err(e)) => {
+                        self.note_sample(SampleOutcome {
+                            columns: missing,
+                            result: SampleResult::Failed,
+                        });
+                        Err(e)
+                    }
                     _ => {
                         tracing::debug!(columns = ?missing, "distinct-value sample timed out");
+                        self.note_sample(SampleOutcome {
+                            columns: missing,
+                            result: SampleResult::TimedOut {
+                                after: options.timeout,
+                            },
+                        });
                         Ok(())
                     }
                 };
             }
         };
+        let took = started.elapsed();
+        let mut rows = 0;
+        let mut all_whole = true;
         for (c, counter) in missing.iter().zip(counters) {
             let s = counter.sample(whole);
+            rows = rows.max(counter.rows.saturating_add(counter.nulls));
+            all_whole &= s.whole;
             cache.insert(key(c), s);
             self.keep_sample(c, &s, stats.rows);
         }
+        self.note_sample(SampleOutcome {
+            columns: missing,
+            result: SampleResult::Sampled {
+                rows,
+                whole: all_whole,
+                took,
+            },
+        });
         Ok(())
     }
 
@@ -280,8 +409,9 @@ mod tests {
 
     use arrow_array::{ArrayRef, Int32Array, StringArray};
 
-    use super::{Counter, MAX_TRACKED, estimate};
+    use super::{Counter, MAX_TRACKED, SampleOutcome, SampleResult, estimate};
     use krishiv_io::DistinctSample;
+    use std::time::Duration;
 
     fn sample(rows: u64, distinct: u64, singletons: u64, whole: bool) -> DistinctSample {
         DistinctSample {
@@ -377,5 +507,64 @@ mod tests {
         // Further batches are not counted.
         c.add(&a).unwrap();
         assert_eq!(c.sample(true).rows, MAX_TRACKED as u64);
+    }
+
+    /// Each outcome's line, as `EXPLAIN COST` prints it after the table.
+    #[test]
+    fn outcomes_say_whether_the_defaults_stayed() {
+        let line = |result| {
+            SampleOutcome {
+                columns: vec!["a".into(), "b".into()],
+                result,
+            }
+            .to_string()
+        };
+        assert_eq!(
+            line(SampleResult::Sampled {
+                rows: 4096,
+                whole: false,
+                took: Duration::from_millis(12),
+            }),
+            "a, b: sampled 4096 rows"
+        );
+        let timed = SampleOutcome {
+            columns: vec!["a".into()],
+            result: SampleResult::Sampled {
+                rows: 1,
+                whole: false,
+                took: Duration::from_millis(12),
+            },
+        };
+        assert_eq!(timed.with_time(), "a: sampled 1 rows in 12 ms");
+        assert_eq!(
+            line(SampleResult::Sampled {
+                rows: 25,
+                whole: true,
+                took: Duration::ZERO,
+            }),
+            "a, b: sampled 25 rows (the whole table)"
+        );
+        assert_eq!(
+            line(SampleResult::Cached),
+            "a, b: sampled by an earlier query"
+        );
+        assert_eq!(
+            line(SampleResult::TimedOut {
+                after: Duration::from_millis(1),
+            }),
+            "a, b: timed out after 1 ms, defaults kept"
+        );
+        assert_eq!(
+            line(SampleResult::TimedOutBefore),
+            "a, b: an earlier query's sample with as much time did not finish, defaults kept"
+        );
+        assert_eq!(
+            line(SampleResult::Failed),
+            "a, b: the read failed, defaults kept"
+        );
+        assert_eq!(
+            line(SampleResult::NoTime),
+            "a, b: no sampling time left, defaults kept"
+        );
     }
 }

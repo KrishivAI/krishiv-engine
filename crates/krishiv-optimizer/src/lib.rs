@@ -114,8 +114,9 @@ const REWRITE: [(&str, Rule); 7] = [
 #[derive(Debug, Clone)]
 pub struct RuleStep {
     /// The batch it ran in: `ImpliedJoinFilters`, `Rewrite`, `Restrict`,
-    /// `JoinOrder` (join ordering alternating with restriction), `Prune`,
-    /// `Tidy` or `Cse`.
+    /// `JoinOrder` (join ordering alternating with restriction; a `Rewrite`
+    /// batch also runs inside it after an outer join turned inner, its rounds
+    /// counting from 1 each time), `Prune`, `Tidy` or `Cse`.
     pub batch: &'static str,
     /// The round of a fixed-point batch, from 1.
     pub round: usize,
@@ -380,7 +381,8 @@ fn run(
         // Restriction and join ordering alternate until neither changes
         // the plan: ordering sees the restricted estimates, and restriction
         // sees every join the ordering forms (which side an aggregate joins
-        // decides its domain), so a second optimization finds nothing new.
+        // decides its domain), and an outer join their filters make inner
+        // is ordered with its tree, so a second optimization finds nothing new.
         let estimates = stats.unwrap_or(&NoStatistics);
         let mut root = t.once("Restrict", &root, |r| {
             restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
@@ -527,8 +529,29 @@ fn order_and_restrict(
         t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
         let restricted = restrict::restrict(Arc::clone(&ordered), stats, propagate)?;
         t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
-        let done = Arc::ptr_eq(&restricted, &ordered);
-        root = restricted;
+        // A filter ordering or restriction leaves can reject the NULL rows of an outer join's
+        // null-supplied side (an equality implied across two joins, `a = c` from `a = b` and
+        // `b = c`, over the outer join below). Such a join turns inner here, and the rewrite batch
+        // then settles the filters, so the next ordering sees the larger inner-join tree instead of
+        // a second optimization finding it. Nothing else runs, and nothing at all unless a join
+        // turned inner.
+        let narrowed = dag::rewrite_up(Arc::clone(&restricted), &mut |p| {
+            Ok(pushdown::eliminate_outer_joins(p))
+        })?;
+        let rewritten = if Arc::ptr_eq(&narrowed, &restricted) {
+            restricted
+        } else {
+            t.step(
+                "JoinOrder",
+                round,
+                "EliminateOuterJoins",
+                &restricted,
+                &narrowed,
+            );
+            batch(narrowed, "Rewrite", t)?
+        };
+        let done = Arc::ptr_eq(&rewritten, &ordered);
+        root = rewritten;
         if done {
             break;
         }
