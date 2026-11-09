@@ -964,11 +964,14 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           states (a decimal `sum` or `avg`, whose overflow can depend on the order of the \
           merges) are merged in the order the input arrives and a query without `ORDER BY` \
           returns its rows in the same order on every run, byte for byte, for the engine's \
-          own scans. Costs the parallelism of the query: meant for reproducing a result, \
+          own scans. The key hashes take a fixed seed, so an operator that spills splits \
+          its rows the same way on every run. Costs the parallelism of the query: meant for \
+          reproducing a result, \
           comparing two builds, and tests. Memory pressure from other queries in the process \
-          can still change when an operator spills, and so the order of what it returns, and the \
+          can still change when an operator spills, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
-          probing a union) still run side by side. Off by default.",
+          probing a union) take turns in branch order, so they lose their overlap too. Off by \
+          default.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
