@@ -42,8 +42,8 @@ use arrow_schema::{FieldRef, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::config::Config;
 use krishiv_common::error::{
-    CannotMergeIncompatibleDataType, KrishivError, KrishivUnsupportedFeature, PathNotFound,
-    UnableToInferSchema,
+    CannotMergeIncompatibleDataType, FailedReadFileUnsupportedFileSystem, InvalidEmptyLocation,
+    KrishivError, KrishivUnsupportedFeature, PathNotFound, UnableToInferSchema,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_io::{
@@ -1171,6 +1171,13 @@ impl FileSchemaResolver for FileReads {
     /// instantiated at listing from the read's options.
     fn qualify(&self, path: &OptionValue) -> std::result::Result<OptionValue, KrishivError> {
         match path.as_plain() {
+            // Not the working directory: Spark refuses the empty location of `` parquet.`` `` as
+            // `INVALID_EMPTY_LOCATION`. A DataFrame or Connect read of `""` reaches this too; Spark 4.2 raises a
+            // plain `IllegalArgumentException` (no error class) there, and reading the working directory was wrong.
+            Some("") => Err(InvalidEmptyLocation {
+                location: String::new(),
+            }
+            .into()),
             Some(text) => Ok(OptionValue::from_user(
                 "path",
                 self.paths.qualified_display(text)?,
@@ -1197,6 +1204,10 @@ impl FileSchemaResolver for FileReads {
         options: &'a BTreeMap<String, OptionValue>,
     ) -> BoxFuture<'a, std::result::Result<Vec<TableColumn>, KrishivError>> {
         Box::pin(async move {
+            // Spark's `ResolveSQLOnFile` refuses these before it lists anything.
+            for text in paths.iter().filter_map(OptionValue::as_plain) {
+                check_sql_location(text)?;
+            }
             let listing = self.listing(format, paths, options).await?;
             listing
                 .schema
@@ -1213,6 +1224,22 @@ impl FileSchemaResolver for FileReads {
                 .collect()
         })
     }
+}
+
+/// The error Spark raises for a `` format.`location` `` on `http` or `https`: `FAILED_READ_FILE.UNSUPPORTED_FILE_SYSTEM`
+/// (Hadoop's HTTP file systems do not implement `listStatus`).
+fn check_sql_location(text: &str) -> Result<()> {
+    let class = match scheme(text) {
+        Some("http") => "org.apache.hadoop.fs.http.HttpFileSystem",
+        Some("https") => "org.apache.hadoop.fs.http.HttpsFileSystem",
+        _ => return Ok(()),
+    };
+    Err(FailedReadFileUnsupportedFileSystem {
+        path: text.to_owned(),
+        file_system_class: class.to_owned(),
+        method: "listStatus".to_owned(),
+    }
+    .into())
 }
 
 /// Whether Spark skips a file or directory named `name`.

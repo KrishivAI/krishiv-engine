@@ -31,6 +31,21 @@ pub(crate) fn prune(root: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     pass.node(0)
 }
 
+/// What the plan reads of each node of `root` (by address, valid while
+/// `root` is alive): the columns pruning would keep at the node's output,
+/// the union over its consumers. Join ordering reads it to cost a tree by
+/// the columns read above it (`krishiv.optimizer.joinCost=bytes`).
+pub(crate) fn requirements(root: &Arc<LogicalPlan>) -> HashMap<*const LogicalPlan, Attrs> {
+    let graph = Graph::new(root);
+    let req = graph.requirements();
+    graph
+        .nodes
+        .iter()
+        .zip(req)
+        .map(|(n, r)| (Arc::as_ptr(n), r))
+        .collect()
+}
+
 /// An edge to a child relation, with what the parent reads of it (`None`:
 /// everything).
 type Demand = (usize, Option<Attrs>);
