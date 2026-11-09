@@ -948,62 +948,6 @@ async fn unspillable_out_of_memory_fails_cleanly() {
     assert!(exec(single(&s, &b), o).await.is_err());
 }
 
-/// `spill_global` during `finalize` (an arbitration request after the last
-/// driver combined) moves the merge to disk; the result is unchanged.
-#[tokio::test]
-async fn spill_global_during_finalize() {
-    let (s, b) = grouped_input(30_000, 20_000);
-    let expected = run_rows(single(&s, &b)).await;
-    for rows_layout in [false, true] {
-        let (_m, scope) = spill_dir();
-        let mut sp = spec(&s, vec![0], grouped_aggs(&s));
-        sp.spill = Some(scope);
-        let agg = HashAggregate::new(sp).unwrap();
-        let root = pool(1 << 30);
-        let config = ExecConfig {
-            agg_row_layout: rows_layout,
-            ..ExecConfig::default()
-        };
-        let q = QueryContext::new(
-            QueryId(9),
-            WorkloadClass::Batch,
-            config,
-            root.child("q", None),
-        );
-        let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
-        let ctx = |id, name| {
-            let e = Arc::clone(&executor);
-            TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), name)
-        };
-        let sink_ctx = ctx(0, "agg");
-        let g = Sink::global_state(&*agg, &sink_ctx).unwrap();
-        for part in b.chunks(10) {
-            let mut l = Sink::local_state(&*agg, &sink_ctx, &g).unwrap();
-            for cols in part {
-                let batch = Batch::new(RecordBatch::try_new(Arc::clone(&s), cols.clone()).unwrap());
-                agg.sink(batch, &mut l, &g).unwrap();
-            }
-            agg.combine(l, &g).unwrap();
-        }
-        assert!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap() > 0);
-        assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
-        agg.finalize(&g, &sink_ctx).await.unwrap();
-        assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
-        let src = ctx(1, "src").with_dependency(Arc::clone(&g));
-        let sg = Source::global_state(&*agg, &src).unwrap();
-        assert!(agg.max_parallelism(&sg) > 1, "a file per disk task");
-        let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
-        let mut out = Vec::new();
-        while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
-            out.push(b);
-        }
-        assert_eq!(rows(&out), expected);
-        assert!(agg.metrics().spill_runs >= 2);
-        drop((sl, sg, src, g, sink_ctx));
-        assert_eq!(root.reserved(), 0);
-    }
-}
-
 /// Same seed, same output order and metrics (deterministic mode).
 #[tokio::test]
 async fn deterministic_replay() {
@@ -1685,6 +1629,7 @@ mod collect;
 mod disk;
 mod misc;
 mod simple;
+mod spill_writers;
 mod structs;
 
 #[test]
@@ -2687,7 +2632,7 @@ async fn an_unread_result_spills_for_its_reader() {
     let want = rows(&want);
     assert_eq!(want.len(), 20_000);
     for slots in [1, 3] {
-        for limit in (5..=10).map(|fifth| fifth * 200_000) {
+        for limit in [10, 12, 14, 16, 17, 18, 20].map(|tenth| tenth * 100_000) {
             for layout in [false, true] {
                 let o = Opts {
                     slots,
@@ -2698,7 +2643,7 @@ async fn an_unread_result_spills_for_its_reader() {
                 let r = exec_with(plan, o, layout).await;
                 let (got, m) = r.unwrap_or_else(|e| panic!("{slots} slots, {limit} B: {e}"));
                 assert_eq!(rows(&got), want, "{slots} slots, {limit} B");
-                if slots == 1 && limit == 1_800_000 && !layout {
+                if slots == 1 && limit == 1_700_000 && !layout {
                     // The aggregate finished in memory; only its result
                     // was written to disk, by its own consumer.
                     assert_eq!(extra(&m, "HashAggregate", "spill_runs"), 0);
@@ -2732,7 +2677,7 @@ async fn a_cancel_during_a_result_spill_releases_everything() {
     })
     .unwrap();
     let runner = QueryRunner::new(executor);
-    let root = pool(1_800_000);
+    let root = pool(1_700_000);
     let q = QueryContext::new(
         QueryId(1),
         WorkloadClass::Batch,
@@ -2741,7 +2686,7 @@ async fn a_cancel_during_a_result_spill_releases_everything() {
             agg_row_layout: false,
             ..ExecConfig::default()
         },
-        root.child("q", Some(1_800_000)),
+        root.child("q", Some(1_700_000)),
     );
     let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
     let drained = tokio::spawn(async move {
@@ -2790,7 +2735,7 @@ async fn a_failed_result_spill_fails_the_query() {
     let (spill, scope) = spill_dir_capped(4096);
     let o = Opts {
         slots: 1,
-        limit: 1_800_000,
+        limit: 1_700_000,
         ..Opts::default()
     };
     let r = exec_with(unread_plan(20_000, Some(scope)), o, false).await;
