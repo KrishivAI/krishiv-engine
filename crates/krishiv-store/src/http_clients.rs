@@ -190,3 +190,16 @@ impl HttpConnector for SharedHttpClients {
 
 #[cfg(all(test, feature = "cloud"))]
 mod tests;
+
+#[cfg(test)]
+mod debug_tests {
+    use super::SharedHttpClients;
+
+    #[test]
+    fn debug_names_the_cache_and_no_options() {
+        let text = format!("{:?}", SharedHttpClients::new());
+        assert!(text.starts_with("SharedHttpClients"), "{text}");
+        #[cfg(feature = "cloud")]
+        assert!(text.contains("clients: 0"), "{text}");
+    }
+}
