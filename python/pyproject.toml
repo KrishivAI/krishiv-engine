@@ -49,6 +49,10 @@ python-source = "."
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A test still running after 300 s dumps every thread's stack to stderr (pytest's
+# built-in faulthandler): a hang in CI then names its test and its waits instead of
+# running silently into the job's 60-minute limit (musllinux cp314t, 2026-11-09).
+faulthandler_timeout = 300
 
 [tool.coverage.run]
 source = ["krishiv"]
