@@ -246,6 +246,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("query_text", Text, true),
             ("query_text_truncated", Flag, false),
             ("submitted_at", Time, false),
+            ("started_at", Time, true),
             ("ended_at", Time, true),
             ("wall_ns", Long, true),
             ("peak_memory_bytes", Long, true),
@@ -603,6 +604,10 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
                 .with_timezone("UTC"),
             ),
             Arc::new(
+                TimestampMicrosecondArray::from_iter(rows.iter().map(|r| micros(r.started_ms)))
+                    .with_timezone("UTC"),
+            ),
+            Arc::new(
                 TimestampMicrosecondArray::from_iter(rows.iter().map(|r| micros(r.ended_ms)))
                     .with_timezone("UTC"),
             ),
@@ -837,6 +842,8 @@ pub(crate) struct QueryRow {
     pub(crate) text: Option<String>,
     pub(crate) truncated: bool,
     pub(crate) submitted_ms: i64,
+    /// When admission let the query run (`None` while queued, or for a row that never ran).
+    pub(crate) started_ms: Option<i64>,
     /// When it was submitted on the monotonic clock: a queued query's wait
     /// does not move with the system clock.
     pub(crate) submitted_at: std::time::Instant,
@@ -1093,6 +1100,7 @@ impl QueryLog {
             text,
             truncated,
             submitted_ms: ms,
+            started_ms: None,
             submitted_at: std::time::Instant::now(),
             ended_ms: None,
             wall_ns: None,
@@ -1202,6 +1210,13 @@ impl QueryLog {
     pub(crate) fn set_state(&self, id: &str, state: &'static str) {
         self.history
             .update(&self.session_id, id, |row| row.state = state);
+    }
+
+    /// Stamps the start of live row `id`: admission let it run.
+    pub(crate) fn mark_started(&self, id: &str) {
+        self.history.update(&self.session_id, id, |row| {
+            row.started_ms = Some(now_ms());
+        });
     }
 
     /// The session's tags now.

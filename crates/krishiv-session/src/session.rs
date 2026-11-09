@@ -1564,7 +1564,10 @@ impl Session {
         };
         queued.open = false;
         match admitted {
-            Ok(permit) => Ok(permit),
+            Ok(permit) => {
+                self.state.queries.mark_started(log_id);
+                Ok(permit)
+            }
             Err(error) => {
                 self.state.queries.record_failed_row(log_id, &error);
                 Err(error)

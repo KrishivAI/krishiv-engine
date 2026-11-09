@@ -759,3 +759,15 @@ fn show_catalogs_lists_both_and_follows_use() {
     run(&s, "USE system").unwrap();
     assert_eq!(column_of(&s, "SHOW CATALOGS", 0).len(), 2);
 }
+
+#[test]
+fn a_finished_query_started_no_earlier_than_it_was_submitted() {
+    let s = Session::new().unwrap();
+    run_all(&s, "SELECT 1").unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT CAST(started_at >= submitted_at AS STRING) FROM system.queries \
+         WHERE state = 'finished' AND query_text = 'SELECT 1'",
+    );
+    assert_eq!(r, ["true"], "{r:?}");
+}
