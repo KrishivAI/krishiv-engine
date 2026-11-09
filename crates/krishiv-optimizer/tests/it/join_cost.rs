@@ -24,7 +24,7 @@ const BYTES: &[(&str, &str)] = &[("krishiv.optimizer.joinCost", "bytes")];
 /// points costed by rows either (`ShareCte`'s shared CTE plans); every
 /// other plan must be one.
 const TPCH_SHARED: &[usize] = &[15];
-const TPCDS_SHARED: &[usize] = &[1, 23, 64, 81, 95];
+const TPCDS_SHARED: &[usize] = &[1, 2, 14, 23, 47, 57, 59, 64, 81, 95];
 
 const GREEDY_BYTES: &[(&str, &str)] = &[
     ("krishiv.optimizer.joinCost", "bytes"),

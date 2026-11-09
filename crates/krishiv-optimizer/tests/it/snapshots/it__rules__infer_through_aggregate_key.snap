@@ -1,0 +1,12 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 607
+expression: "SELECT g.a FROM (SELECT a, count(*) AS n FROM t GROUP BY a) g JOIN u ON g.a = u.a WHERE u.a < 4"
+---
+Project [a#0]
++- Join Inner, (a#0 == a#4)
+   :- Aggregate [a#0], [a#0]
+   :  +- Filter (isnotnull(a#0) and (a#0 < 4))
+   :     +- Scan spark_catalog.default.t [a#0]
+   +- Filter (a#4 < 4)
+      +- Scan spark_catalog.default.u [a#4]

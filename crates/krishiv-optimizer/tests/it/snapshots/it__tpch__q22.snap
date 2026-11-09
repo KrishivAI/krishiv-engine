@@ -13,4 +13,5 @@ Sort [cntrycode#26 ASC NULLS FIRST], true
          :  :           +- Filter ((c_acctbal#5 > 0.00) and (substring(c_phone#4, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17')))
          :  :              +- Scan spark_catalog.default.customer [c_custkey#0, c_phone#4, c_acctbal#5] (shared #1)
          :  +- Shared #1, printed above
-         +- Scan spark_catalog.default.orders [o_custkey#18]
+         +- Filter isnotnull(o_custkey#18)
+            +- Scan spark_catalog.default.orders [o_custkey#18]
