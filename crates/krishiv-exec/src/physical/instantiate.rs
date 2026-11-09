@@ -954,6 +954,8 @@ impl Instantiation<'_> {
                 limits,
                 ..
             } => {
+                // The outer build of the anchor below gives the loop its schema only: every run
+                // (the anchor's too) is instantiated again from this plan (`detached.rs`).
                 let anchor_plan = Arc::new((**anchor).clone());
                 let anchor = self.node(anchor)?;
                 // The loop's rows are the anchor's, with the nullability the

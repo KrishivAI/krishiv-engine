@@ -859,4 +859,8 @@ fn a_nondeterministic_enclosing_cte_is_computed_per_run_from_one_seed() {
              r(n, s) AS (SELECT 1, (SELECT sum(x) FROM t) UNION ALL \
              SELECT n + 1, (SELECT sum(x) FROM t) FROM r WHERE n < 3) SELECT count(DISTINCT s) FROM r";
     assert_eq!(column(rows(&s, q)), vec!["2"]);
+    // A nondeterministic CTE read twice outside any loop is one value (probe: 1).
+    let q = "WITH RECURSIVE t AS (SELECT uuid() AS u), r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) \
+             SELECT count(DISTINCT u) FROM (SELECT u FROM t UNION ALL SELECT u FROM t)";
+    assert_eq!(column(rows(&s, q)), vec!["1"]);
 }
