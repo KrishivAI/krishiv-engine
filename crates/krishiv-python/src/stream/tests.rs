@@ -1338,3 +1338,48 @@ fn owned_copy_shares_no_buffer_and_keeps_the_values() {
     )]));
     assert_owned_copy(&structs);
 }
+
+/// Review 2026-11-09 I3: a small slice of a large array (what pyarrow exports
+/// for a UDF returning `big.slice(i, n)`) is copied as its window, not as the
+/// parent's whole buffers; values kept, no buffer shared.
+#[test]
+fn owned_tight_copy_of_a_small_slice_copies_only_its_window() {
+    // Under Miri a smaller parent: still past the 4 KiB bound when copied whole.
+    let n: i64 = if cfg!(miri) { 2_000 } else { 100_000 };
+    let ints: ArrayRef = Arc::new(Int64Array::from_iter(
+        (0..n).map(|i| (i % 7 != 0).then_some(i)),
+    ));
+    let strings: ArrayRef = Arc::new(StringArray::from_iter(
+        (0..n).map(|i| Some(format!("s{i}"))),
+    ));
+    let list: ArrayRef = Arc::new(arrow_array::ListArray::from_iter_primitive::<
+        arrow_array::types::Int64Type,
+        _,
+        _,
+    >((0..n).map(|i| Some(vec![Some(i), None]))));
+    for parent in [ints, strings, list] {
+        let slice = parent.slice(usize::try_from(n / 2).unwrap(), 3).to_data();
+        let copy = ffi::owned_tight_copy(&slice).unwrap();
+        copy.validate_full().unwrap();
+        assert_eq!(copy, slice, "{}", slice.data_type());
+        assert!(
+            copy.get_buffer_memory_size() < 4096,
+            "{}: copied {} bytes for 3 rows",
+            slice.data_type(),
+            copy.get_buffer_memory_size()
+        );
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        all_addresses(&slice, &mut before);
+        all_addresses(&copy, &mut after);
+        assert!(
+            after.iter().all(|a| !before.contains(a)),
+            "{}: a buffer is shared",
+            slice.data_type()
+        );
+    }
+    // Not sliced: the plain deep copy, same layout.
+    let whole = Int64Array::from(vec![Some(1), None, Some(3)]).into_data();
+    let copy = ffi::owned_tight_copy(&whole).unwrap();
+    assert_eq!(copy, whole);
+    assert_eq!(copy.offset(), whole.offset());
+}

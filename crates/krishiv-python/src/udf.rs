@@ -113,7 +113,11 @@ pub(crate) fn _udf_pool_shutdown(py: Python<'_>) -> usize {
         slot.take()
     };
     match taken {
-        Some(pool) if pool.is_local() => py.detach(|| pool.stop(STOP_LIMIT)),
+        Some(pool) if pool.is_local() => py.detach(|| {
+            // The interrupter sees `SHUT` before finalization can begin.
+            interrupt::quiesce(STOP_LIMIT);
+            pool.stop(STOP_LIMIT)
+        }),
         Some(inherited) => {
             let _leaked = std::mem::ManuallyDrop::new(inherited);
             0

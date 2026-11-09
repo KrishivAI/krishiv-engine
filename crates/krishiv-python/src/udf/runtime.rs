@@ -38,7 +38,9 @@ use pyo3::types::{PyCapsule, PyDict, PyTuple, PyType};
 use super::interrupt::{Call, CancelOnDrop};
 use super::pool::Pool;
 use crate::stream::capsule_pointer;
-use crate::stream::ffi::{ARRAY_CAPSULE, SCHEMA_CAPSULE, export_column, import_column, owned_copy};
+use crate::stream::ffi::{
+    ARRAY_CAPSULE, SCHEMA_CAPSULE, export_column, import_column, owned_tight_copy,
+};
 
 thread_local! {
     /// Set on a pool thread while a UDF's Python code runs: a call back into
@@ -312,6 +314,31 @@ impl PreparedUdf for Prepared {
     }
 }
 
+/// A call's Python code running on this pool thread: ends it when dropped,
+/// also when the call unwinds (review 2026-11-09 I1). The in-UDF flag is
+/// cleared and the call marked finished (an interrupt that came too late is
+/// cleared with it), so neither reaches the thread's next call; a panic left
+/// between `start` and `finish` would otherwise let a later cancel interrupt
+/// that next call.
+struct Running<'a, 'py> {
+    call: &'a Call,
+    py: Python<'py>,
+}
+
+impl<'a, 'py> Running<'a, 'py> {
+    fn enter(call: &'a Call, py: Python<'py>) -> Self {
+        IN_UDF.with(|f| f.set(true));
+        Self { call, py }
+    }
+}
+
+impl Drop for Running<'_, '_> {
+    fn drop(&mut self) {
+        IN_UDF.with(|f| f.set(false));
+        self.call.finish(self.py);
+    }
+}
+
 /// One call on a pool thread, attached.
 fn invoke(
     py: Python<'_>,
@@ -321,7 +348,9 @@ fn invoke(
     call: &Call,
 ) -> Result<ArrayRef, KrishivError> {
     // Imported once per process (design P2-T059 §6.3 profile): an import per
-    // call takes the `sys.modules` lock, which pool threads contend on.
+    // call takes the `sys.modules` lock, which pool threads contend on. A
+    // forked child keeps the parent's object, the same type in its copied
+    // interpreter; the reference is never released (one at exit).
     static ARRAY_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
     let array_type = ARRAY_TYPE
         .import(py, "pyarrow", "Array")
@@ -353,11 +382,10 @@ fn invoke(
             }
             .into());
         }
-        IN_UDF.with(|f| f.set(true));
+        let running = Running::enter(call, py);
         let r = registered.wrapper.bind(py).call1(call_args);
-        IN_UDF.with(|f| f.set(false));
         // At once: an interrupt that came too late is cleared here.
-        call.finish(py);
+        drop(running);
         r
     }
     .map_err(|e| python_error(py, &e))?;
@@ -398,7 +426,7 @@ fn invoke(
     // The engine gets Rust-owned buffers; `imported` (and so the producer's
     // release, which may take the GIL for numpy-owned memory) is dropped here,
     // on this attached pool thread (design P2-T059 unit 3b, review M3).
-    let owned = owned_copy(&imported.to_data())?;
+    let owned = owned_tight_copy(&imported.to_data())?;
     drop(imported);
     crate::stream::ffi::catch_panic(|| arrow_array::make_array(owned))
 }

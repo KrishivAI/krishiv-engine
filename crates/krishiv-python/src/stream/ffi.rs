@@ -975,6 +975,47 @@ fn panic_message(p: &(dyn Any + Send)) -> String {
         .unwrap_or_else(|| "unknown panic".to_owned())
 }
 
+/// Bytes an unsliced result's buffers may exceed twice its window by before
+/// [`owned_tight_copy`] compacts it first.
+const TIGHT_SLACK: usize = 4096;
+
+/// [`owned_copy`] of `data`, first cut to the bytes its window reaches when
+/// its buffers are much larger than that window: pyarrow exports a slice of
+/// a larger array (a UDF returning `big.slice(i, n)`) as the parent's whole
+/// buffers with an offset, which a plain copy would copy whole on every call
+/// (review 2026-11-09 I3). Compacted when the offset is nonzero, the type is
+/// nested (not a dictionary), or the buffers exceed twice the window plus
+/// [`TIGHT_SLACK`]; a layout the compaction cannot take (an arrow-rs panic)
+/// is copied whole, as before.
+///
+/// # Errors
+/// As [`owned_copy`].
+pub(crate) fn owned_tight_copy(data: &ArrayData) -> Result<ArrayData, KrishivError> {
+    // A nonzero offset is a slice. A nested array can be one at offset 0
+    // (arrow-rs slices a list's offsets and keeps its whole child, which
+    // `get_slice_memory_size` counts), so one is always compacted: a second
+    // copy of the window, never of the parent. A dictionary's keys are its
+    // only sliced part, so it takes the size check like a flat array.
+    let nested =
+        !data.child_data().is_empty() && !matches!(data.data_type(), DataType::Dictionary(..));
+    let window = data.get_slice_memory_size().unwrap_or(usize::MAX);
+    let oversized =
+        data.get_buffer_memory_size() > window.saturating_mul(2).saturating_add(TIGHT_SLACK);
+    if data.offset() == 0 && !oversized && !nested {
+        return owned_copy(data);
+    }
+    let compacted = catch_panic(|| {
+        let mut m = arrow_data::transform::MutableArrayData::new(vec![data], false, data.len());
+        m.try_extend(0, 0, data.len()).map(|()| m.freeze())
+    });
+    match compacted {
+        // The compaction's buffers are Rust's, but a dictionary's values are
+        // still the producer's: the deep copy owns every one.
+        Ok(Ok(c)) => owned_copy(&c),
+        Ok(Err(_)) | Err(_) => owned_copy(data),
+    }
+}
+
 /// A copy of `data` whose every buffer is newly allocated by Rust: each
 /// buffer, the null bitmap and, recursively, all `child_data` (a
 /// dictionary's values, run ends and values, list, struct and map children),

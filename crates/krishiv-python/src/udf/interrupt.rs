@@ -15,11 +15,18 @@
 //! clears an interrupt that came too late to be raised. Both steps happen
 //! under the state's lock, so an interrupt never reaches the thread's next
 //! call.
+//!
+//! The exit hook sets `SHUT` and then waits ([`quiesce`]) until the
+//! interrupter is between calls, so the interrupter never attaches once
+//! finalization may have begun (review 2026-11-09 I2). On a build with a GIL,
+//! a UDF stuck in C while holding it keeps the interrupter waiting to attach,
+//! so later interrupts are delayed behind it, not lost.
 
 use std::ffi::{c_long, c_ulong};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Sender, channel};
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError, TryLockError};
+use std::time::{Duration, Instant};
 
 use pyo3::ffi;
 use pyo3::prelude::*;
@@ -123,6 +130,33 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Held by the interrupter while it checks `SHUT` and is attached.
+static BUSY: Mutex<()> = Mutex::new(());
+
+/// The process the interrupter thread was started in (0: none yet): a
+/// forked child has the parent's queue but not its thread.
+static STARTED_IN: AtomicU32 = AtomicU32::new(0);
+
+/// Waits, at most `limit`, until the interrupter is between calls, after
+/// the exit hook set `SHUT`: from then on it never attaches. Called
+/// detached (it may wait for the interrupter to attach and finish). `false`
+/// when it was still busy at the deadline (attached to a stuck interpreter,
+/// as a stuck pool thread is; left to the process's exit). Returns at once
+/// when no interrupter runs in this process.
+pub(crate) fn quiesce(limit: Duration) -> bool {
+    if STARTED_IN.load(Ordering::SeqCst) != std::process::id() {
+        return true;
+    }
+    let deadline = Instant::now() + limit;
+    loop {
+        match BUSY.try_lock() {
+            Ok(_) | Err(TryLockError::Poisoned(_)) => return true,
+            Err(TryLockError::WouldBlock) if Instant::now() >= deadline => return false,
+            Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
+        }
+    }
+}
+
 /// The interrupter thread's queue; `None` if it could not be spawned (a
 /// cancelled call then runs to its end, as before this existed).
 static INTERRUPTER: LazyLock<Option<Mutex<Sender<Arc<Call>>>>> = LazyLock::new(|| {
@@ -133,6 +167,9 @@ static INTERRUPTER: LazyLock<Option<Mutex<Sender<Arc<Call>>>>> = LazyLock::new(|
             for call in rx {
                 // Never attach once the exit hook ran: the interpreter may be
                 // finalizing. A call still running then is the hook's to leak.
+                // The check and the attach are one step under `BUSY`, which
+                // the hook waits for after setting `SHUT` ([`quiesce`]).
+                let _busy = lock(&BUSY);
                 if super::SHUT.load(Ordering::SeqCst) {
                     continue;
                 }
@@ -140,7 +177,10 @@ static INTERRUPTER: LazyLock<Option<Mutex<Sender<Arc<Call>>>>> = LazyLock::new(|
             }
         })
         .ok()
-        .map(|_| Mutex::new(tx))
+        .map(|_| {
+            STARTED_IN.store(std::process::id(), Ordering::SeqCst);
+            Mutex::new(tx)
+        })
 });
 
 /// Cancels its call when dropped: the guard a call's future holds, so a
