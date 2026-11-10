@@ -613,8 +613,10 @@ impl Driver {
         let local = self.slots.get_mut().slot(k)?.local.take();
         let local = local.ok_or_else(|| internal("sink state combined twice".to_owned()))?;
         // Logical partitions combine in lane order, so partial aggregates, builds and
-        // runs merge the same way on every run. The guard lets the next lane go
-        // even when this one fails or is aborted before it combines.
+        // runs merge the same way on every run. The guard is made after this lane's turn
+        // came, and lets the next lane go when its combine ends or fails. A lane that fails
+        // earlier (source, operators) never passes: the higher lanes stay parked until the
+        // query's failure cancels the query and the drivers are aborted.
         let _lane = match (&run.combine_order, run.lanes) {
             (Some(order), Some((first, _))) => {
                 let lane = (self.partition - first) as usize;

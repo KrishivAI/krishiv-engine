@@ -102,6 +102,8 @@ impl crate::operator::Source for Range {
         global_ref::<RangeGlobal>(global, "Range").map_or(1, |g| (g.partitions as usize).max(1))
     }
 
+    // A `Range` never carries a pushed-down LIMIT (the scans that do, refuse a split under
+    // one), so there is no limit to check here.
     fn deterministic_split(&self, global: &GlobalState) -> Option<usize> {
         global_ref::<RangeGlobal>(global, "Range")
             .ok()
