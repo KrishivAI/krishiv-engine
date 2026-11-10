@@ -937,3 +937,33 @@ fn lcase_search_with_the_wrong_argument_count_is_an_error() {
         assert!(e.contains("WRONG_NUM_ARGS"), "{sql}: {e}");
     }
 }
+
+#[test]
+fn lcase_search_over_an_aggregate_is_planned_as_an_aggregate() {
+    assert_eq!(
+        one(
+            "SELECT CAST(contains(max(x) COLLATE utf8_lcase, 'i') AS STRING) \
+             FROM VALUES ('Hi') AS t(x)"
+        ),
+        "true"
+    );
+    assert_eq!(
+        one(
+            "SELECT CAST(instr(max(x) COLLATE utf8_lcase, 'i') AS STRING) \
+             FROM VALUES ('Hi') AS t(x)"
+        ),
+        "2"
+    );
+}
+
+#[test]
+fn a_qualified_search_is_not_rewritten_to_the_builtin() {
+    assert_eq!(
+        class("SELECT missing_schema.instr('Ab' COLLATE utf8_lcase, 'a')"),
+        ErrorClass::from_name("UNRESOLVED_ROUTINE").unwrap()
+    );
+    assert_eq!(
+        one("SELECT CAST(builtin.instr('Ab' COLLATE utf8_lcase, 'b') AS STRING)"),
+        "2"
+    );
+}
