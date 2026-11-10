@@ -45,8 +45,10 @@ services:
   minio:
     # Docker Hub no longer serves minio/minio (pull access denied), so MinIO comes from Chainguard, pinned by digest
     # (RELEASE.2026-11-09, entrypoint /usr/bin/minio). The image runs as uid 65532 by default; `user: root` keeps an
-    # existing `minio-data` volume (written as root by the old image) readable and writable. The image is distroless
-    # (no shell or curl), so there is no exec health check: probe http://127.0.0.1:19100/minio/health/live from the host.
+    # existing `minio-data` volume (written as root by the old image) readable and writable. The image has bash but
+    # no curl, so there is no exec health check here: probe http://127.0.0.1:19100/minio/health/live from the host.
+    # If the digest ever stops pulling (Chainguard keeps only recent builds free), re-pin with
+    # `docker pull cgr.dev/chainguard/minio:latest` and `docker image inspect --format '{{index .RepoDigests 0}}'`.
     image: cgr.dev/chainguard/minio@sha256:fb893e36fc369d41e92f678b17ec27378fa5bf0576aeef7ac15460c13629ab5a
     user: root
     container_name: krishiv-bench-minio
