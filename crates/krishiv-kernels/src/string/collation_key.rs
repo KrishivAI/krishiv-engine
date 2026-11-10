@@ -293,6 +293,7 @@ mod tests {
     /// Every code point against what Spark's own function returned
     /// (`tests/scripts/gen_collation_lowercase.py`).
     #[test]
+    #[cfg_attr(miri, ignore = "reads a fixture file, which miri's isolation forbids")]
     fn lowercase_is_sparks_for_every_code_point() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),

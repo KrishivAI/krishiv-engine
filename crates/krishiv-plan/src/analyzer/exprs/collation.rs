@@ -261,7 +261,9 @@ fn carried_collations(e: &Expr) -> Option<Vec<Collation>> {
     let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
         if let crate::walk::Node::Expr(x) = n {
             match &x.node {
-                ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {
+                // Spark gives a column and a scalar subquery implicit strength.
+                ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_))
+                | ExprNode::Subquery { .. } => {
                     column = true;
                 }
                 ExprNode::Collate { collation, .. } => named.push(*collation),

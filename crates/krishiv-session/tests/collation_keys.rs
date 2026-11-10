@@ -484,6 +484,8 @@ fn nested_operands_that_could_win_a_leaf_are_refused() {
         "SELECT array(c) = array('A' COLLATE utf8_binary) FROM (SELECT 'a' COLLATE utf8_lcase c)",
         // Spark: two implicit collations, `COLLATION_MISMATCH.IMPLICIT`.
         "SELECT array(c) = array(d) FROM (SELECT 'a' COLLATE utf8_lcase c, 'A' d)",
+        // Spark gives a scalar subquery implicit strength too: `COLLATION_MISMATCH.IMPLICIT`.
+        "SELECT array((SELECT 'A')) = array(c) FROM (SELECT 'a' COLLATE utf8_lcase c)",
     ] {
         assert_eq!(
             rows_in(&s, sql).map_err(|e| e.error_class()),

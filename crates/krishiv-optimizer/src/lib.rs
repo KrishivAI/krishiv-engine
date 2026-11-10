@@ -6,7 +6,7 @@
 //! [`MAX_ITERATIONS`] rounds, as Spark's `spark.sql.optimizer.maxIterations`):
 //!
 //! 0. **Collation keys**, once: the key positions of a collated value compare its key
-//!    ([`collation_keys`]).
+//!    (`collation_keys`).
 //!    **Inline CTEs**, once: each reference to a deterministic (or
 //!    singly referenced) `WITH` definition becomes a fresh instance of it
 //!    (Spark's `InlineCTE`), so the rules below see through it.
