@@ -243,7 +243,7 @@ fn ndv_sampling_entries_parse_and_default() {
         (
             Some(true),
             Some(131_072),
-            Some(std::time::Duration::from_secs(2))
+            Some(std::time::Duration::from_secs(5))
         )
     );
     c.set("krishiv.optimizer.ndvSampling.enabled", "false")
@@ -486,6 +486,30 @@ fn spark_aliases_map_to_krishiv_keys() {
     assert_eq!(
         lookup("krishiv.sql.ansi.enabled").map(|e| e.key),
         Some(ANSI_ENABLED.key)
+    );
+    assert_eq!(
+        lookup("spark.sql.collation.schemaLevel.enabled").map(|e| e.key),
+        Some(SCHEMA_LEVEL_COLLATIONS_ENABLED.key)
+    );
+}
+
+/// Schema-level collations: off by default (Spark 4.2), a boolean.
+#[test]
+fn schema_level_collations_default_off_and_parse() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&SCHEMA_LEVEL_COLLATIONS_ENABLED),
+        Some(&ConfigValue::Bool(false))
+    );
+    c.set("spark.sql.collation.schemaLevel.enabled", "true")
+        .unwrap();
+    assert_eq!(
+        c.get(&SCHEMA_LEVEL_COLLATIONS_ENABLED),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert!(
+        c.set("krishiv.sql.collation.schemaLevel.enabled", "maybe")
+            .is_err()
     );
 }
 
@@ -1109,4 +1133,19 @@ fn build_side_projection_defaults_on_and_parses_booleans() {
         c.set("krishiv.exec.join.buildProjection", "sometimes")
             .is_err()
     );
+}
+
+#[test]
+fn join_idle_spill_after_parses_and_defaults() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_JOIN_IDLE_SPILL_AFTER)
+            .and_then(ConfigValue::as_duration)
+    };
+    assert_eq!(get(&c), Some(Duration::from_secs(1)));
+    c.set("krishiv.exec.join.idleSpillAfter", "250ms").unwrap();
+    assert_eq!(get(&c), Some(Duration::from_millis(250)));
+    c.set("krishiv.exec.join.idleSpillAfter", "0s").unwrap();
+    assert_eq!(get(&c), Some(Duration::ZERO));
+    assert!(c.set("krishiv.exec.join.idleSpillAfter", "soon").is_err());
 }

@@ -48,6 +48,15 @@ fn tpch_traced_plans_match() {
             "q{q:02}"
         );
         assert!(steps.iter().all(|s| s.round >= 1 && !s.rule.is_empty()));
+        // Ordering and restriction settle in a few rounds: a loop that ran on to its cap
+        // would show here (and in the planning time) long before a query got slow.
+        let rounds = steps
+            .iter()
+            .filter(|s| s.batch == "JoinOrder" && s.rule == "JoinOrder")
+            .map(|s| s.round)
+            .max()
+            .unwrap_or(0);
+        assert!(rounds <= 4, "q{q:02} needed {rounds} ordering rounds");
         rules.extend(steps.iter().map(|s| (s.batch, s.rule)));
     }
     for want in [

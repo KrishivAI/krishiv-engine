@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpch.rs
+assertion_line: 27
 expression: optimized.root().to_string()
 ---
 Sort [custdist#20 DESC NULLS LAST, c_count#19 DESC NULLS LAST], true
@@ -9,5 +10,5 @@ Sort [custdist#20 DESC NULLS LAST, c_count#19 DESC NULLS LAST], true
          +- Join LeftOuter, (c_custkey#0 == o_custkey#9)
             :- Scan spark_catalog.default.customer [c_custkey#0]
             +- Project [o_orderkey#8, o_custkey#9]
-               +- Filter (NOT (o_comment#16 like '%special%requests%'))
+               +- Filter ((NOT (o_comment#16 like '%special%requests%')) and isnotnull(o_custkey#9))
                   +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_comment#16]

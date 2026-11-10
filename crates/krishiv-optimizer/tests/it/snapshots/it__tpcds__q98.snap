@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Sort [i_category#35 ASC NULLS FIRST, i_class#33 ASC NULLS FIRST, i_item_id#24 ASC NULLS FIRST, i_item_desc#27 ASC NULLS FIRST, revenueratio#74 ASC NULLS FIRST], true
@@ -8,11 +9,12 @@ Sort [i_category#35 ASC NULLS FIRST, i_class#33 ASC NULLS FIRST, i_item_id#24 AS
       +- Aggregate [i_item_id#24, i_item_desc#27, i_category#35, i_class#33, i_current_price#28], [i_item_id#24, i_item_desc#27, i_category#35, i_class#33, i_current_price#28, sum(ss_ext_sales_price#15) AS itemrevenue#73]
          +- Project [i_item_id#24, i_item_desc#27, i_current_price#28, i_class#33, i_category#35, ss_ext_sales_price#15]
             +- Join Inner, (ss_item_sk#2 == i_item_sk#23)
-               :- Filter (i_category#35 IN ('Sports', 'Books', 'Home'))
+               :- Filter ((i_category#35 IN ('Sports', 'Books', 'Home')) and isnotnull(i_item_sk#23))
                :  +- Scan spark_catalog.default.item [i_item_sk#23, i_item_id#24, i_item_desc#27, i_current_price#28, i_class#33, i_category#35]
                +- Project [ss_item_sk#2, ss_ext_sales_price#15]
                   +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#45)
-                     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_ext_sales_price#15]
+                     :- Filter (isnotnull(ss_item_sk#2) and isnotnull(ss_sold_date_sk#0))
+                     :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_ext_sales_price#15]
                      +- Project [d_date_sk#45]
-                        +- Filter ((d_date#47 >= DATE '1999-02-22') and (d_date#47 <= DATE '1999-03-24'))
+                        +- Filter (((d_date#47 >= DATE '1999-02-22') and (d_date#47 <= DATE '1999-03-24')) and isnotnull(d_date_sk#45))
                            +- Scan spark_catalog.default.date_dim [d_date_sk#45, d_date#47]

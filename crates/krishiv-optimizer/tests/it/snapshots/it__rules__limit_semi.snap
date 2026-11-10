@@ -8,7 +8,10 @@ Project [a#0]
       :- Limit 1
       :  +- Sort [a#0 ASC NULLS FIRST], true
       :     +- Join LeftSemi, (a#0 == a#3)
-      :        :- Scan spark_catalog.default.t [a#0]
-      :        +- Scan spark_catalog.default.u [a#3] (shared #1)
+      :        :- Filter isnotnull(a#0)
+      :        :  +- Scan spark_catalog.default.t [a#0]
+      :        +- Filter isnotnull(a#3)
+      :           +- Scan spark_catalog.default.u [a#3] (shared #1)
       +- Shift +2
-         +- Shared #1, printed above
+         +- Filter isnotnull(a#3)
+            +- Shared #1, printed above

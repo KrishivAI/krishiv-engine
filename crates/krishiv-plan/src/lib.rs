@@ -97,6 +97,7 @@
 //! | `ExprNode::Function` | U | all | `operators`, `functions` |
 //! | `ExprNode::Cast` | U, R | Q1, Q3-Q8, Q10, Q12, Q14, Q15, Q20 | `cast` |
 //! | `ExprNode::Collate` | U | - | - |
+//! | `ExprNode::StoredField` | U | - | - |
 //! | `ExprNode::Alias` | U | Q1, Q3-Q17, Q19, Q21, Q22 | `col.alias` |
 //! | `ExprNode::Field` | U | - | - |
 //! | `ExprNode::UpdateFields` | U | - | - |

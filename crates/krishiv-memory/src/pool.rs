@@ -1070,6 +1070,14 @@ impl MemoryPool for TreePool {
         ))
     }
 
+    fn spill_idle(&self, id: ConsumerId, bytes: usize) -> BoxFuture<'_, usize> {
+        Box::pin(crate::arbitrate::spill_idle(
+            Arc::clone(&self.node),
+            id,
+            bytes,
+        ))
+    }
+
     fn release(&self, id: ConsumerId, bytes: usize) {
         if let Ok(c) = self.node.consumer(id) {
             self.node.release_for(&c, bytes);

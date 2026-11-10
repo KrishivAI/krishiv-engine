@@ -516,24 +516,46 @@ impl Session {
         }
     }
 
-    pub(crate) async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
-        self.sql_here_marked(query, Arc::default()).await
+    /// Runs `query` on the calling task as `sql` would, for text the session built from a
+    /// statement it already substituted (`CACHE TABLE t AS query`): `spans` are the substituted
+    /// names in `query`, kept while substituting again leaves the text as it is.
+    pub(crate) async fn sql_here_spanned(
+        &self,
+        query: &str,
+        spans: Vec<krishiv_sql::ast::Span>,
+    ) -> Result<DataFrame, KrishivError> {
+        // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans)).await
     }
 
-    /// [`Self::sql_here`], with `row` as the statement's slot for the id of the `system.queries`
-    /// row a query of it began.
+    /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
+    /// the id of the `system.queries` row a query of it began.
     pub(crate) async fn sql_here_marked(
         &self,
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
     ) -> Result<DataFrame, KrishivError> {
+        // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
+        Box::pin(self.sql_here_inner(query, row, Vec::new())).await
+    }
+
+    async fn sql_here_inner(
+        &self,
+        query: &str,
+        row: Arc<std::sync::Mutex<Option<String>>>,
+        spans: Vec<krishiv_sql::ast::Span>,
+    ) -> Result<DataFrame, KrishivError> {
         let mut env = self.query_env();
         env.row = row;
+        let written = query;
         let query = self.substituted(query);
         let query: &str = &query;
         // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
         let resolved = self.identifier_clauses_into(query, &mut env).await?;
         let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
+        if !spans.is_empty() && !named_by_clause && query == written {
+            env.identifier_spans = spans.into();
+        }
         let query: &str = &resolved;
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
@@ -567,7 +589,10 @@ impl Session {
         query: &str,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
-        crate::collation_defaults::refuse_unhonoured(&statement)?;
+        crate::collation_defaults::refuse_unhonoured(
+            &statement,
+            self.parser_options().schema_level_collations,
+        )?;
         match statement {
             Statement::Query(q) => {
                 let plan = self.lower_identified(&q, &env, redacted)?;
@@ -578,9 +603,14 @@ impl Session {
             Statement::Explain(e) => self.explain_statement(&e, env, redacted).await,
             Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
-            Statement::CreateView(v) => self.exec_create_view(&v).await,
+            Statement::CreateView(v) => {
+                self.exec_create_view(&v, query, &env.identifier_spans)
+                    .await
+            }
             Statement::DropView(v) => self.exec_drop_view(&v).await,
-            Statement::Cache(c) => Box::pin(self.exec_cache(&c, query)).await,
+            Statement::Cache(c) => {
+                Box::pin(self.exec_cache(&c, query, &env.identifier_spans)).await
+            }
             Statement::Refresh(r) => self.exec_refresh(&r).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
@@ -588,9 +618,14 @@ impl Session {
             Statement::ExecuteImmediate(e) => {
                 Box::pin(self.exec_execute_immediate(&e, query, redacted, 0)).await
             }
-            Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
+            Statement::CreateFunction(f) => {
+                self.exec_create_function(&f, redacted, &env.identifier_spans)
+                    .await
+            }
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
-            Statement::CreateTable(t) => Box::pin(self.exec_create_table(&t, query)).await,
+            Statement::CreateTable(t) => {
+                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans)).await
+            }
             Statement::CreateTableLike(t) => Box::pin(self.exec_create_table_like(&t, query)).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
@@ -599,12 +634,22 @@ impl Session {
             Statement::Repair(r) => self.exec_repair(&r).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
-            Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
-            Statement::CreatePermanentView(v) => self.exec_create_permanent_view(&v, query).await,
+            Statement::Describe(d) => {
+                Box::pin(self.exec_describe(&d, query, &env.identifier_spans)).await
+            }
+            Statement::CreatePermanentView(v) => {
+                let ids = (&*env.identifier_spans, &*env.identifier_written);
+                self.exec_create_permanent_view(&v, query, ids).await
+            }
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
-            Statement::AlterView(a) => self.exec_alter_view(&a, query).await,
+            Statement::AlterView(a) => {
+                let ids = (&*env.identifier_spans, &*env.identifier_written);
+                self.exec_alter_view(&a, query, ids).await
+            }
             Statement::AlterTable(a) => Box::pin(self.exec_alter_table(&a, query)).await,
-            Statement::Insert(i) => Box::pin(self.exec_insert(&i, query)).await,
+            Statement::Insert(i) => {
+                Box::pin(self.exec_insert(&i, query, &env.identifier_spans)).await
+            }
             Statement::Truncate(t) => self.exec_truncate(&t).await,
             Statement::Script(c) => {
                 let off =
@@ -1187,6 +1232,7 @@ impl Session {
             statement_class: None,
             row: Arc::default(),
             identifier_spans: Arc::default(),
+            identifier_written: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1236,9 +1282,9 @@ impl Session {
         }
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
-        let synced = Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await?;
-        let plan = expansion.plan;
-        let plan = Plan::try_new(plan)?;
+        let (synced, renames) =
+            Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await?;
+        let plan = Plan::try_new(crate::view_schema::apply_renames(&expansion.plan, &renames))?;
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or
         // a failure inside a view's text) is shown. One boxed future for both
@@ -1306,8 +1352,7 @@ impl Session {
     }
 
     /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
-    /// views first. Returns the evolved entries to store once the whole query analyzed. A query that does not
-    /// analyze alone is left to the analysis of the whole query, which reports it as it would without views.
+    /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
     ///
     /// # Errors
     /// What [`crate::view_schema::check_read`] raises.
@@ -1315,29 +1360,28 @@ impl Session {
         &self,
         reads: &[crate::view_schema::StoredRead],
         env: &QueryEnv,
-    ) -> Result<Vec<(Arc<crate::store::CatalogTable>, crate::store::CatalogTable)>, KrishivError>
-    {
+    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
         let compensation = crate::view_schema::compensation(&env.config);
         let mut synced = Vec::new();
+        let mut renames = Vec::new();
         for read in reads {
-            // A view whose query does not analyze is left to the outer query, which raises that error itself;
-            // the views after it still get their checks.
-            let Ok(plan) = Plan::try_new(Arc::clone(&read.query)) else {
+            // A view whose query does not analyze alone is left to the outer query.
+            let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
+            else {
                 continue;
             };
             let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
                 continue;
             };
-            if let Some(changed) = crate::view_schema::check_read(
-                read,
-                &analyzed,
-                env.analysis.conf.case_sensitive,
-                compensation,
-            )? {
+            let case_sensitive = env.analysis.conf.case_sensitive;
+            let check =
+                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
+            if let Some(changed) = check.changed {
                 synced.push((Arc::clone(&read.entry), changed));
             }
+            renames.extend(check.rename);
         }
-        Ok(synced)
+        Ok((synced, renames))
     }
 
     /// The physical plan of `analyzed`, once the files it scans are
@@ -1908,7 +1952,9 @@ impl Session {
             };
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
-                options: options.clone(),
+                // The session's conf fallbacks travel with the plan: a
+                // worker parses these options against its own config.
+                options: format.options().with_conf_fallbacks(&options, &env.config),
                 store: store.key().to_owned(),
                 dir: at.path.as_ref().to_owned(),
                 job_uuid: job,
@@ -2464,7 +2510,7 @@ fn job_uuid() -> String {
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 14] = [
+const PARSER_KEYS: [&str; 15] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -2479,6 +2525,7 @@ const PARSER_KEYS: [&str; 14] = [
     "spark.sql.caseSensitive",
     "spark.sql.parser.quotedRegexColumnNames",
     "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
+    "spark.sql.collation.schemaLevel.enabled",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
@@ -2592,6 +2639,8 @@ pub(crate) struct QueryEnv {
     pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
     /// The spans of the names substituted for `IDENTIFIER(..)` clauses (`lower_identified`).
     pub(crate) identifier_spans: Arc<[krishiv_sql::ast::Span]>,
+    /// The `IDENTIFIER(..)` text each of `identifier_spans` replaced (empty for `CACHE TABLE`).
+    pub(crate) identifier_written: Arc<[String]>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a
