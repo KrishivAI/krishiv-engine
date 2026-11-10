@@ -1364,6 +1364,8 @@ fn string_functions_over_lcase_follow_spark() {
     assert_eq!(tr("\u{130}i", "i", "1"), "\u{130}1");
     assert_eq!(tr("\u{130}i", "\u{130}", "1"), "1i");
     assert_eq!(tr("i\u{307}i", "\u{130}", "1"), "1i");
+    // A capital `I` and U+0307 are not the entry of `İ` (Spark 4.2.0 run): only a written `i` is.
+    assert_eq!(tr("I\u{307}", "\u{130}", "1"), "I\u{307}");
     assert_eq!(tr("i\u{307}i", "i\u{307}", "12"), "121");
     assert_eq!(tr("aAbB", "Aab", "xy"), "xx");
     assert_eq!(tr("aAbB", "ab", "xyz"), "xxyy");

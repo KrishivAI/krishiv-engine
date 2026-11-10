@@ -265,6 +265,10 @@ pub fn translate_lcase<O: OffsetSizeTrait>(
                 let Some(window) = text.get(at..at.saturating_add(w)) else {
                     continue;
                 };
+                // Spark joins only a written `i` and U+0307 into the entry of `İ`.
+                if w == 2 && !matches!(window, ['i', '\u{307}']) {
+                    continue;
+                }
                 buf.clear();
                 for c in window {
                     lcase_points(*c, &mut buf);

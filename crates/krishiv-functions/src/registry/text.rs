@@ -234,6 +234,28 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::Expects(vec![text.clone(), text.clone()]),
         int,
     ));
+    // The analyzer's rewrites of the collation-dependent calls over `UTF8_LCASE` and `_RTRIM`
+    // strings (collations unit 5c); `__trim_collated` takes the mode first.
+    out.extend(scalar(
+        &["__trim_collated"],
+        &Inputs::Expects(vec![int_arg.clone(), text.clone(), text.clone()]),
+        string,
+    ));
+    out.extend(scalar(
+        &["__replace_lcase", "__translate_lcase"],
+        &Inputs::Expects(vec![text.clone(), text.clone(), text.clone()]),
+        string,
+    ));
+    out.extend(scalar(
+        &["__split_part_lcase"],
+        &Inputs::Expects(vec![text.clone(), text.clone(), int_arg.clone()]),
+        nullable_string,
+    ));
+    out.extend(scalar(
+        &["__substring_index_lcase"],
+        &Inputs::Expects(vec![text.clone(), text.clone(), int_arg.clone()]),
+        string,
+    ));
     out.extend(scalar(
         &["locate", "position"],
         &Inputs::Expects(vec![text.clone(), text.clone(), int_arg.clone()]),
