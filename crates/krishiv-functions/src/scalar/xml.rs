@@ -387,6 +387,14 @@ impl Reading<'_> {
                 V::Null
             });
         }
+        if kind == FieldKind::Bin {
+            // Spark 4.2.0's XML reader has no text-to-BINARY conversion: a
+            // non-empty element is a malformed record (NULL field in
+            // PERMISSIVE, an error in FAILFAST). Only empty text and
+            // `nullValue` (handled above) give NULL without that.
+            *bad = true;
+            return Ok(V::Null);
+        }
         let fatal = |e: KernelError| e.error().clone();
         let micros = |parsed: Result<Option<i64>, KrishivError>, bad: &mut bool| match parsed {
             Ok(Some(m)) => V::Leaf(Val::I64(m)),

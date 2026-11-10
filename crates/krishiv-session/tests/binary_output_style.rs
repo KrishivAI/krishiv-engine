@@ -77,21 +77,35 @@ fn utf8_style_prints_the_bytes_as_text() {
 }
 
 #[test]
-fn from_xml_reads_a_binary_field_as_the_text_bytes() {
-    // The element's text as UTF-8 bytes, whatever the output style.
+fn from_xml_treats_text_in_a_binary_field_as_a_malformed_record() {
+    // Spark 4.2.0 has no text-to-BINARY conversion in its XML reader: the field is NULL
+    // (PERMISSIVE) and FAILFAST raises; the style does not matter. `from_csv` does read bytes.
     for style in [None, Some("HEX"), Some("UTF-8")] {
         let s = with_style(style);
-        let batches = block_on(
-            block_on(s.sql(
-                "SELECT length(from_xml('<ROW><name>Eason</name></ROW>', 'name binary').name)",
-            ))
-            .unwrap()
-            .collect(),
-        )
-        .unwrap();
-        let c = batches[0].column(0);
-        let n = arrow_array::cast::as_primitive_array::<arrow_array::types::Int32Type>(c).value(0);
-        assert_eq!(n, 5, "{style:?}");
+        assert_eq!(
+            text(
+                &s,
+                "SELECT CAST(from_xml('<ROW><name>Eason</name></ROW>', 'name binary').name IS NULL AS STRING)"
+            ),
+            "true",
+            "{style:?}"
+        );
+        assert!(
+            rows(
+                &s,
+                "SELECT from_xml('<ROW><name>Eason</name></ROW>', 'name binary', map('mode','FAILFAST'))"
+            )
+            .is_err(),
+            "{style:?}"
+        );
+        assert_eq!(
+            text(
+                &s,
+                "SELECT CAST(length(from_csv('Eason', 'n binary').n) AS STRING)"
+            ),
+            "5",
+            "{style:?}"
+        );
     }
 }
 
