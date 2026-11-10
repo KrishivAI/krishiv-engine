@@ -1003,3 +1003,30 @@ fn a_failure_message_in_the_history_is_the_client_form() {
         "{m:?}"
     );
 }
+
+#[test]
+fn a_bare_drop_of_a_function_or_view_does_not_reach_the_session_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE VIEW v AS SELECT 1 AS n").unwrap();
+    run(&s, "CREATE FUNCTION f() RETURNS INT RETURN 1").unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in ["DROP VIEW v", "DROP FUNCTION f"] {
+        assert!(run(&s, sql).is_err(), "{sql}");
+    }
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(column_of(&s, "SELECT CAST(n AS STRING) FROM v", 0), ["1"]);
+    assert_eq!(column_of(&s, "SELECT CAST(f() AS STRING)", 0), ["1"]);
+}
+
+#[test]
+fn a_replayed_query_masks_literals_by_the_session_policy() {
+    let s = Session::new().unwrap();
+    run(&s, "SET krishiv.resultCache.enabled=true").unwrap();
+    run(&s, "SET krishiv.system.queryText.literals=mask").unwrap();
+    run(&s, "CREATE TABLE rc (a INT)").unwrap();
+    run(&s, "INSERT INTO rc VALUES (1)").unwrap();
+    run(&s, "SELECT a FROM rc WHERE a = 12345").unwrap();
+    run(&s, "SELECT a FROM rc WHERE a = 12345").unwrap();
+    let texts = column_of(&s, "SELECT query_text FROM system.queries", 0);
+    assert!(texts.iter().all(|t| !t.contains("12345")), "{texts:?}");
+}

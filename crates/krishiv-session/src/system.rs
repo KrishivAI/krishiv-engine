@@ -30,6 +30,7 @@ use krishiv_plan::analyzer::{
 };
 
 use crate::history::QueryHistory;
+use crate::session::Session;
 use krishiv_types::DataType;
 use krishiv_types::batch::Batch;
 
@@ -1551,6 +1552,35 @@ impl QueryRow {
             + opt(&self.error_class)
             + opt(&self.error_message)
             + operators
+    }
+}
+
+/// Resolution of bare names while the current catalog is `system`, which holds no stored objects:
+/// a bare name must not fall through to `spark_catalog.default`, which authorization did not check.
+impl Session {
+    /// The namespace a bare name of a stored object resolves in, refused under `system`.
+    pub(crate) fn stored_namespace(&self) -> Result<String, KrishivError> {
+        let (catalog, namespace) = self.state.catalog.position_pair();
+        if is_system(&catalog) {
+            return Err(krishiv_common::error::SchemaNotFound {
+                schema_name: format!("`{catalog}`"),
+            }
+            .into());
+        }
+        Ok(namespace)
+    }
+
+    /// The namespace `parts` (a table or view name as written) resolve in: the current one, and a
+    /// bare name is `TABLE_OR_VIEW_NOT_FOUND` under `system`.
+    pub(crate) fn namespace_for(&self, parts: &[String]) -> Result<String, KrishivError> {
+        if parts.len() == 1 && is_system(&self.state.catalog.current_catalog()) {
+            return Err(krishiv_common::error::TableOrViewNotFound {
+                relation_name: format!("`{}`", parts[0]),
+                search_path: crate::catalog::search_path(),
+            }
+            .into());
+        }
+        Ok(self.state.catalog.current_namespace())
     }
 }
 
