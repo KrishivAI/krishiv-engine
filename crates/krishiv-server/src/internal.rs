@@ -271,6 +271,17 @@ pub fn mask_literals(text: &str) -> String {
     if is_set && let Some(eq) = masked.find('=') {
         return format!("{}=?", &masked[..eq]);
     }
+    // `SET key value` (no `=`): Spark reads the rest of the line as the key and the value: keep the key's
+    // first word, drop what follows.
+    if is_set {
+        let mut words = masked.split_whitespace();
+        if let (Some(set), Some(key), Some(_)) = (words.next(), words.next(), words.next())
+            && !masked.contains('?')
+            && !key.eq_ignore_ascii_case("time")
+        {
+            return format!("{set} {key} ?");
+        }
+    }
     masked
 }
 
@@ -324,11 +335,20 @@ fn mask_pass(text: &str) -> String {
                 out.push(' ');
             }
             '/' if chars.get(i + 1) == Some(&'*') => {
+                // Bracketed comments nest (Spark's lexer): a `*/` closes only the innermost.
                 i += 2;
-                while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
-                    i += 1;
+                let mut depth = 1;
+                while i < chars.len() && depth > 0 {
+                    if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
                 }
-                i = (i + 2).min(chars.len());
                 out.push(' ');
             }
             // A number: `42`, `1.5e3`, `10L`, `0xFF`, and `.5`.
@@ -862,6 +882,8 @@ mod tests {
                 "select ?  \nfrom t",
             ),
             ("select /* secret */ 1", "select   ?"),
+            ("select /* a /* b */ hunter2 */ 1", "select   ?"),
+            ("select /* a /* b */ hunter2", "select  "),
             ("select a from `unclosed", "select a from ?"),
             ("select 'é', 'ü'", "select ?, ?"),
             ("select 'ends in a backslash\\", "select ?"),
@@ -892,6 +914,9 @@ mod tests {
             ("SET -- tok abc\nk = v", "SET  \nk =?"),
             ("SET k = 'quoted secret'", "SET k =?"),
             ("SET TIME ZONE 'UTC'", "SET TIME ZONE ?"),
+            ("SET k hunter2", "SET k ?"),
+            ("SET   k   hunter2 more", "SET k ?"),
+            ("SET k", "SET k"),
         ] {
             let got = mask_literals(input);
             assert_eq!(got, want, "{input:?}");
