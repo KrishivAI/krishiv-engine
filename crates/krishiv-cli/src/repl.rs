@@ -2,13 +2,12 @@
 //! The interactive REPL: `krishiv sql` with no `-e`/`-f` and a terminal on
 //! stdin.
 //!
-//! The loop is deliberately line-based (no line-editor dependency): it
-//! prints a `krishiv>` prompt, reads lines, runs dot-commands
-//! (`.timer`, `.format`, `.help`, ...) and SQL statements, and persists
-//! history through [`crate::history`]. Completion ([`crate::complete`])
-//! and highlighting ([`crate::highlight`]) are pure functions over the
-//! current line so that a line editor can adopt them later without
-//! changing their behavior or tests.
+//! On a terminal the line editor ([`crate::editor`], `reedline`) reads: cursor
+//! editing, history search, a Tab menu fed by [`crate::complete`] and
+//! multi-line statements. Piped input uses the plain loop below, which prints
+//! a `krishiv>` prompt per line. Both run dot-commands (`.timer`, `.format`,
+//! `.help`, ...) and SQL statements and persist history through
+//! [`crate::history`].
 
 use std::io::{self, BufRead, Write};
 
@@ -179,21 +178,43 @@ pub(crate) fn run_repl(session: &krishiv::Session, args: &SqlArgs) -> i32 {
     let mut stdout = io::stdout().lock();
     let mut buffer = String::new();
     let history_file = crate::history::history_path();
+    // On a terminal the line editor reads (cursor editing, history, Tab);
+    // piped input, or an editor that cannot start, uses the plain loop.
+    let mut editor = {
+        use std::io::IsTerminal;
+        if stdin.is_terminal() && io::stdout().is_terminal() {
+            let past = history_file
+                .as_deref()
+                .map(crate::history::load)
+                .unwrap_or_default();
+            crate::editor::Editor::new(ctx.clone(), &past)
+        } else {
+            None
+        }
+    };
     let mut history_failed = false;
     let mut failures = 0;
     loop {
-        if buffer.trim().is_empty() {
-            let _ = write!(stdout, "krishiv> ");
+        let line = if let Some(ed) = editor.as_mut() {
+            match ed.read() {
+                crate::editor::Read::Text(t) => t,
+                crate::editor::Read::Interrupt => {
+                    buffer.clear();
+                    continue;
+                }
+                crate::editor::Read::Eof => break,
+            }
         } else {
-            let _ = write!(stdout, "     ...> ");
-        }
-        let _ = stdout.flush();
-        let next = lines.next();
-        let Some(read) = next else {
-            break;
-        };
-        let Ok(line) = read else {
-            break;
+            if buffer.trim().is_empty() {
+                let _ = write!(stdout, "krishiv> ");
+            } else {
+                let _ = write!(stdout, "     ...> ");
+            }
+            let _ = stdout.flush();
+            match lines.next() {
+                Some(Ok(line)) => line,
+                _ => break,
+            }
         };
         if buffer.trim().is_empty() {
             if let Some(quit) = repl.handle_dot(&line, &ctx, &mut stdout) {
@@ -288,7 +309,7 @@ fn run_statement(
 
 /// Whether `buffer` holds a complete statement: a `;` outside quotes and
 /// comments, or a dot-command line.
-fn statement_complete(buffer: &str) -> bool {
+pub(crate) fn statement_complete(buffer: &str) -> bool {
     if buffer.trim_start().starts_with('.') && !buffer.contains('\n') {
         return true;
     }

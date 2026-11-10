@@ -10,10 +10,8 @@
 //! from `crates/krishiv-sql/src/keywords.rs`. If the engine ever publishes
 //! the list, this copy should go.
 //!
-//! The interactive wiring (a line editor calling [`complete`]) is a
-//! follow-up: it needs the workspace's `reedline` crate wired into
-//! `krishiv-cli`, which this unit does not add (no new dependencies).
-//! Until then the same function backs the REPL's dumb-terminal loop.
+//! The line editor ([`crate::editor`]) calls [`complete`] on Tab; the same
+//! function backs the `.complete` dot-command of the plain loop.
 
 use std::collections::BTreeMap;
 
@@ -183,7 +181,7 @@ pub(crate) fn column_names(session: &krishiv::Session, table: &str) -> Vec<Strin
 }
 
 /// What the completer may offer: tables and, per table, columns.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct CompletionContext {
     /// Table names of the session catalog.
     pub(crate) tables: Vec<String>,
@@ -278,6 +276,20 @@ fn word_start(prefix: &str) -> usize {
 fn tail_word(prefix: &str) -> &str {
     let word = &prefix[word_start(prefix)..];
     word.rsplit('.').next().unwrap_or(word)
+}
+
+/// Where the word [`complete`] replaces starts in `line` (a byte offset
+/// no later than `cursor`): a `SET` key is replaced whole, any other word
+/// after its last `.`.
+pub(crate) fn completion_start(line: &str, cursor: usize) -> usize {
+    let end = line.floor_char_boundary(cursor.min(line.len()));
+    let prefix = &line[..end];
+    let start = word_start(prefix);
+    if in_set_context(prefix) {
+        start + (prefix[start..].len() - dotted_word(prefix).len())
+    } else {
+        end - tail_word(prefix).len()
+    }
 }
 
 /// The dotted run right before the cursor (`spark.sql.ansi`), for `SET`

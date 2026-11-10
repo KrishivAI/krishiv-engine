@@ -21,6 +21,7 @@ mod bundle;
 mod common;
 mod complete;
 mod deadline;
+mod editor;
 mod format;
 mod highlight;
 mod history;

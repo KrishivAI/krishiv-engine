@@ -24,6 +24,7 @@ krishiv-memory = { path = "../krishiv-memory", optional = true }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-functions = { path = "../krishiv-functions" }
 krishiv-sql = { path = "../krishiv-sql" }
+reedline = { workspace = true }
 krishiv-server = { path = "../krishiv-server", optional = true }
 krishiv-session = { path = "../krishiv-session", optional = true }
 krishiv-mcp = { path = "../krishiv-mcp", optional = true }
