@@ -661,7 +661,7 @@ static OPTS: OptionSchema = OptionSchema {
             name: "key",
             kind: OptionKind::Secret,
             default: OptionDefault::None,
-            conf_fallback: None,
+            conf_fallback: Some("spark.sql.t.key"),
             metadata_key: true,
             doc: "",
         },
@@ -1815,4 +1815,40 @@ fn the_async_bridge_rejects_pushes_of_the_wrong_length() {
     assert!(reversed.is_err());
     assert_eq!(d.buffered_bytes(), 0);
     assert!(matches!(d.step().unwrap(), Step::NeedData(_)));
+}
+
+#[test]
+fn conf_fallbacks_are_written_into_the_options_for_a_worker() {
+    let (session, _) = Config::from_pairs([
+        ("spark.sql.t.flag", "true"),
+        ("krishiv.io.maxRetries", "7"),
+        // A secret option's fallback is never written into a plan.
+        ("spark.sql.t.key", "hunter2"),
+    ])
+    .unwrap();
+    // The user set `LEVEL` (any case): its conf is not consulted.
+    let user: BTreeMap<String, OptionValue> =
+        [("LEVEL".to_owned(), OptionValue::from_user("LEVEL", "2"))].into();
+    let carried = OPTS.with_conf_fallbacks(&user, &session);
+    assert_eq!(
+        carried.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["LEVEL", "flag"]
+    );
+    // A worker whose own config says otherwise reads the session's values.
+    let (worker, _) = Config::from_pairs([
+        ("spark.sql.t.flag", "false"),
+        ("krishiv.io.maxRetries", "9"),
+    ])
+    .unwrap();
+    let (o, _) = OPTS.parse(&carried, &worker).unwrap();
+    assert_eq!((o.bool("flag"), o.int("level")), (Some(true), Some(2)));
+    // Unset in the session: a registered key carries its registry default,
+    // an unregistered one is not added.
+    assert_eq!(
+        OPTS.with_conf_fallbacks(&BTreeMap::new(), &Config::new())
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["level"]
+    );
 }
