@@ -2467,7 +2467,7 @@ pub(crate) struct WriteTarget {
 /// UUID form. Its bits come from the standard library's per-process
 /// random hash keys, a clock reading and a counter, so two writes never
 /// share one, within or across processes.
-fn job_uuid() -> String {
+pub(crate) fn job_uuid() -> String {
     use std::hash::{BuildHasher, Hasher};
     static WRITES: AtomicU64 = AtomicU64::new(0);
     let n = WRITES.fetch_add(1, Ordering::Relaxed);

@@ -1404,3 +1404,111 @@ fn a_timestamp_partition_renders_in_a_region_session_zone() {
         ["c=1969-12-31 16%3A00%3A00", "c=2018-07-01 12%3A00%3A00"]
     );
 }
+
+fn dropped(dir: &std::path::Path, relative: &str) {
+    std::fs::remove_dir_all(dir.join(relative)).unwrap();
+}
+
+/// The rows below are a real Spark 4.2.0 run's (`RepairTableCommand`).
+#[test]
+fn msck_repair_drop_and_sync_forget_partitions_whose_directory_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table pt(a int, p int, q string) using parquet partitioned by (p,q)",
+    );
+    run(&s, "insert into pt values (1,1,'x'),(2,2,'y'),(3,3,'z')");
+    let root = dir.path().join("pt");
+    dropped(&root, "p=2");
+    run(&s, "msck repair table pt");
+    assert_eq!(rows(&s, "show partitions pt").len(), 3);
+    run(&s, "msck repair table pt drop partitions");
+    assert_eq!(rows(&s, "show partitions pt"), ["p=1/q=x", "p=3/q=z"]);
+    assert_eq!(
+        rows(&s, "select cast(a as string) from pt order by a"),
+        ["1", "3"]
+    );
+    // SYNC does both.
+    dropped(&root, "p=3");
+    std::fs::create_dir_all(root.join("p=9/q=w")).unwrap();
+    run(&s, "repair table pt sync partitions");
+    assert_eq!(rows(&s, "show partitions pt"), ["p=1/q=x", "p=9/q=w"]);
+    // ADD never forgets one.
+    dropped(&root, "p=9");
+    run(&s, "msck repair table pt add partitions");
+    assert_eq!(rows(&s, "show partitions pt"), ["p=1/q=x", "p=9/q=w"]);
+    run(&s, "create table pu(a int) using parquet");
+    assert_eq!(
+        class(&s, "msck repair table pu drop partitions"),
+        "NOT_A_PARTITIONED_TABLE"
+    );
+}
+
+/// The rows below are a real Spark 4.2.0 run's (`AlterTableRenamePartitionCommand`).
+#[test]
+fn rename_partition_moves_a_managed_partition() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table r1(a int, p int, q string) using parquet partitioned by (p,q)",
+    );
+    run(&s, "insert into r1 values (1,1,'x'),(2,2,'y')");
+    run(
+        &s,
+        "alter table r1 partition (p=1,q='x') rename to partition (p=5,q='new val')",
+    );
+    assert_eq!(rows(&s, "show partitions r1"), ["p=2/q=y", "p=5/q=new val"]);
+    assert_eq!(
+        rows(&s, "select concat_ws('|', a, p, q) from r1 order by a"),
+        ["1|5|new val", "2|2|y"]
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=1,q='x') rename to partition (p=7,q='a')"
+        ),
+        "PARTITIONS_NOT_FOUND"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=2,q='y') rename to partition (p=5,q='new val')"
+        ),
+        "PARTITIONS_ALREADY_EXIST"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=2) rename to partition (p=3,q='y')"
+        ),
+        "_LEGACY_ERROR_TEMP_1232"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=2,q='y') rename to partition (p=3)"
+        ),
+        "_LEGACY_ERROR_TEMP_1232"
+    );
+    run(
+        &s,
+        "alter table r1 partition (P=2,Q='y') rename to partition (P=3,Q='Y')",
+    );
+    assert_eq!(rows(&s, "show partitions r1"), ["p=3/q=Y", "p=5/q=new val"]);
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=3,q='Y') rename to partition (p=3,q='Y')"
+        ),
+        "PARTITIONS_ALREADY_EXIST"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=3,q='Y') rename to partition (p='abc',q='Y')"
+        ),
+        "CAST_INVALID_INPUT"
+    );
+}

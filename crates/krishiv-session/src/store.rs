@@ -183,9 +183,8 @@ pub(crate) struct CatalogTable {
     pub(crate) view: Option<ViewDef>,
     /// Partitioning, bucketing and the partitions the catalog tracks.
     pub(crate) layout: TableLayout,
-    /// `ANALYZE TABLE .. FOR COLUMNS` ran on it. The engine stores no column statistics, so
-    /// `DESCRIBE EXTENDED t col` refuses rather than print NULLs where Spark prints values.
-    pub(crate) column_stats_requested: bool,
+    /// `ANALYZE TABLE .. FOR COLUMNS` results by column name (Spark's `CatalogStatistics.colStats`).
+    pub(crate) column_stats: BTreeMap<String, ColumnStats>,
 }
 
 impl CatalogTable {
@@ -209,6 +208,19 @@ impl CatalogTable {
             .filter_map(|p| self.columns.iter().find(|c| &c.name == p))
             .collect()
     }
+}
+
+/// What `ANALYZE TABLE .. FOR COLUMNS` found for a column, as `DESCRIBE EXTENDED t col` prints it. A `min` or `max`
+/// is `None` for a string or binary column and for one with no value; a timestamp's is microseconds since the
+/// epoch, rendered in the session time zone of the `DESCRIBE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ColumnStats {
+    pub(crate) min: Option<String>,
+    pub(crate) max: Option<String>,
+    pub(crate) num_nulls: String,
+    pub(crate) distinct_count: String,
+    pub(crate) avg_col_len: String,
+    pub(crate) max_col_len: String,
 }
 
 /// How a table's files are laid out (Spark's `partitionColumnNames`, `bucketSpec` and, for a partitioned
@@ -692,7 +704,7 @@ mod tests {
             root: PathBuf::new(),
             view: None,
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
         }
     }
 

@@ -32,6 +32,118 @@ pub(super) fn char_length(declared: &str) -> Option<i32> {
         .ok()
 }
 
+/// A column's declared type as far as `CHAR` / `VARCHAR` matter, read from its catalog string
+/// (`array<struct<x:char(2)>>`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclaredType {
+    /// `char(n)`.
+    Char(i32),
+    /// `varchar(n)`.
+    Varchar(i32),
+    /// `struct<...>`: the fields in order.
+    Struct(Vec<DeclaredType>),
+    /// `array<...>`.
+    Array(Box<DeclaredType>),
+    /// `map<key, value>`.
+    Map(Box<DeclaredType>, Box<DeclaredType>),
+    /// Anything else: no field of it is limited.
+    Other,
+}
+
+impl DeclaredType {
+    /// Reads a catalog string; a part it cannot follow is [`DeclaredType::Other`].
+    #[must_use]
+    pub fn parse(declared: &str) -> Self {
+        let d = declared.trim();
+        let lower = d.to_ascii_lowercase();
+        let number = |inner: &str| inner.trim().parse::<i32>().ok().filter(|n| *n >= 0);
+        if let Some(n) = lower
+            .strip_prefix("char(")
+            .and_then(|r| r.strip_suffix(')'))
+            .and_then(number)
+        {
+            return Self::Char(n);
+        }
+        if let Some(n) = lower
+            .strip_prefix("varchar(")
+            .and_then(|r| r.strip_suffix(')'))
+            .and_then(number)
+        {
+            return Self::Varchar(n);
+        }
+        let inner = |prefix: &str| {
+            lower
+                .starts_with(prefix)
+                .then(|| d.get(prefix.len()..d.len().checked_sub(1)?))
+                .flatten()
+                .filter(|_| d.ends_with('>'))
+        };
+        if let Some(body) = inner("array<") {
+            return Self::Array(Box::new(Self::parse(body)));
+        }
+        if let Some(body) = inner("map<")
+            && let [k, v] = split_top(body, ',').as_slice()
+        {
+            return Self::Map(Box::new(Self::parse(k)), Box::new(Self::parse(v)));
+        }
+        if let Some(body) = inner("struct<") {
+            let fields = split_top(body, ',')
+                .into_iter()
+                .map(|f| {
+                    split_top(f, ':').get(1).map_or(Self::Other, |t| {
+                        // The type is everything after the field name's `:`.
+                        Self::parse(f.split_once(':').map_or(*t, |(_, ty)| ty))
+                    })
+                })
+                .collect();
+            return Self::Struct(fields);
+        }
+        Self::Other
+    }
+
+    /// Whether a `CHAR` or `VARCHAR` limit applies somewhere in the type.
+    #[must_use]
+    pub fn is_limited(&self) -> bool {
+        match self {
+            Self::Char(_) | Self::Varchar(_) => true,
+            Self::Struct(f) => f.iter().any(Self::is_limited),
+            Self::Array(e) => e.is_limited(),
+            Self::Map(k, v) => k.is_limited() || v.is_limited(),
+            Self::Other => false,
+        }
+    }
+
+    /// Whether a `CHAR` applies somewhere in the type, the only limit a read pads for.
+    fn has_char(&self) -> bool {
+        match self {
+            Self::Char(_) => true,
+            Self::Struct(f) => f.iter().any(Self::has_char),
+            Self::Array(e) => e.has_char(),
+            Self::Map(k, v) => k.has_char() || v.has_char(),
+            Self::Varchar(_) | Self::Other => false,
+        }
+    }
+}
+
+/// `s` split at each `sep` outside `<...>` and `(...)`.
+fn split_top(s: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0_i32, 0);
+    for (i, c) in s.char_indices() {
+        match c {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth -= 1,
+            _ if c == sep && depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
 impl Resolver<'_> {
     /// The field metadata the analyzer keeps per attribute (the declared `CHAR`/`VARCHAR` type, the column
     /// comment) passes from `from` to `to`, a new attribute standing for the same column.
@@ -55,26 +167,13 @@ impl Resolver<'_> {
         if self.ctx.conf.char_varchar_as_string {
             return Ok(rel);
         }
-        // Spark pads `CHAR` inside arrays, maps and structs on read too; that is not implemented, so a scan of
-        // such a column is refused rather than returning unpadded values.
-        let nested = rel.out.iter().any(|a| {
-            self.declared.get(&a.col.id).is_some_and(|d| {
-                char_length(d).is_none() && d.replace("varchar(", "").contains("char(")
-            })
-        });
-        if nested {
-            return Err(super::bind::unsupported(
-                "reads of nested CHAR columns",
-                origin,
-            ));
-        }
-        let padded: Vec<(usize, i32)> = rel
+        let padded: Vec<(usize, DeclaredType)> = rel
             .out
             .iter()
             .enumerate()
             .filter_map(|(i, a)| {
-                let n = char_length(self.declared.get(&a.col.id)?)?;
-                Some((i, n))
+                let d = DeclaredType::parse(self.declared.get(&a.col.id)?);
+                d.has_char().then_some((i, d))
             })
             .collect();
         if padded.is_empty() {
@@ -89,22 +188,26 @@ impl Resolver<'_> {
         let mut exprs = Vec::with_capacity(rel.out.len());
         let mut out: Vec<Attr> = Vec::with_capacity(rel.out.len());
         for (i, a) in rel.out.iter().enumerate() {
-            let Some(&(_, n)) = padded.iter().find(|(p, _)| *p == i) else {
+            let Some((_, declared)) = padded.iter().find(|(p, _)| *p == i) else {
                 exprs.push(super::ops::col_expr(&a.col, Origin::UNKNOWN));
                 out.push(a.clone());
                 continue;
             };
-            let Some(call) = self.read_pad_call(
-                super::ops::col_expr(&a.col, Origin::UNKNOWN),
-                n,
-                a.col.nullable,
-            ) else {
-                return Ok(rel);
+            let read = super::ops::col_expr(&a.col, Origin::UNKNOWN);
+            let call = match self.read_pad(read, declared, &a.col.data_type, a.col.nullable) {
+                Ok(Some(call)) => call,
+                Ok(None) => return Ok(rel),
+                Err(()) => {
+                    return Err(super::bind::unsupported(
+                        "reads of a CHAR column whose declared type does not match the schema",
+                        origin,
+                    ));
+                }
             };
             let col = BoundColumn {
                 id: self.fresh(),
                 name: a.col.name.clone(),
-                data_type: DataType::String,
+                data_type: a.col.data_type.clone(),
                 nullable: a.col.nullable,
             };
             self.carry_column_meta(a.col.id, col.id);
@@ -298,6 +401,143 @@ impl Resolver<'_> {
         self.rpad_to(arg, len, nullable)
     }
 
+    /// `if(cond, a, b)`: the resolved form is the `When` operator, not a registry call.
+    fn when_call(&self, args: Vec<Arc<Expr>>, data_type: DataType) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: crate::FunctionId::Builtin(crate::Builtin::When),
+                kind: crate::FunctionKind::Scalar,
+                args,
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type,
+                nullable: true,
+                deterministic: true,
+            },
+        ))))
+    }
+
+    /// `arg` read as Spark's `processStringForCharVarchar` with only `readSidePadding` set: each `CHAR` in it pads
+    /// and a `VARCHAR` does not. `Ok(None)` when the registry lacks a function, `Err` when `declared` does not
+    /// follow `ty`.
+    fn read_pad(
+        &mut self,
+        arg: Arc<Expr>,
+        declared: &DeclaredType,
+        ty: &DataType,
+        nullable: bool,
+    ) -> Result<Option<Arc<Expr>>, ()> {
+        Ok(match (declared, ty) {
+            (DeclaredType::Char(n), DataType::String) => self.read_pad_call(arg, *n, nullable),
+            (DeclaredType::Struct(fields), DataType::Struct(st))
+                if fields.len() == st.fields().len() =>
+            {
+                let mut args = Vec::with_capacity(fields.len() * 2);
+                for (ordinal, (d, f)) in fields.iter().zip(st.fields().iter()).enumerate() {
+                    let field_nullable = f.nullable() || nullable;
+                    let read = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                        base: Arc::clone(&arg),
+                        ordinal,
+                        name: f.name().to_owned(),
+                        data_type: f.data_type().clone(),
+                        nullable: field_nullable,
+                    })));
+                    let value = if d.has_char() {
+                        match self.read_pad(read, d, f.data_type(), field_nullable)? {
+                            Some(v) => v,
+                            None => return Ok(None),
+                        }
+                    } else {
+                        read
+                    };
+                    args.push(Arc::new(Expr::literal(Literal::String(
+                        f.name().to_owned(),
+                    ))));
+                    args.push(value);
+                }
+                let built = self.named_call("named_struct", args, ty.clone(), false);
+                match built {
+                    Some(s) if nullable => {
+                        let test = self.named_call("isnull", vec![arg], DataType::Boolean, false);
+                        let null = Arc::new(Expr::literal(Literal::Null(Some(ty.clone()))));
+                        test.map(|t| self.when_call(vec![t, null, s], ty.clone()))
+                    }
+                    other => other,
+                }
+            }
+            (DeclaredType::Array(e), DataType::Array(a)) => {
+                self.read_pad_array(arg, e, a.element_type(), a.contains_null(), ty, nullable)?
+            }
+            (DeclaredType::Map(k, v), DataType::Map(m)) => {
+                let (key_ty, value_ty) = (m.key_type().clone(), m.value_type().clone());
+                let contains_null = m.value_contains_null();
+                let array = |e: &DataType, n: bool| {
+                    DataType::Array(krishiv_types::ArrayType::new(e.clone(), n).into())
+                };
+                let keys_ty = array(&key_ty, false);
+                let values_ty = array(&value_ty, contains_null);
+                let keys = self.named_call(
+                    "map_keys",
+                    vec![Arc::clone(&arg)],
+                    keys_ty.clone(),
+                    nullable,
+                );
+                let values = self.named_call("map_values", vec![arg], values_ty.clone(), nullable);
+                let (Some(keys), Some(values)) = (keys, values) else {
+                    return Ok(None);
+                };
+                let keys = if k.has_char() {
+                    self.read_pad_array(keys, k, &key_ty, false, &keys_ty, nullable)?
+                } else {
+                    Some(keys)
+                };
+                let values = if v.has_char() {
+                    self.read_pad_array(values, v, &value_ty, contains_null, &values_ty, nullable)?
+                } else {
+                    Some(values)
+                };
+                let (Some(keys), Some(values)) = (keys, values) else {
+                    return Ok(None);
+                };
+                self.named_call("map_from_arrays", vec![keys, values], ty.clone(), nullable)
+            }
+            _ => return Err(()),
+        })
+    }
+
+    /// `transform(arr, x -> <x read as declared>)`.
+    fn read_pad_array(
+        &mut self,
+        arr: Arc<Expr>,
+        declared: &DeclaredType,
+        element: &DataType,
+        contains_null: bool,
+        ty: &DataType,
+        nullable: bool,
+    ) -> Result<Option<Arc<Expr>>, ()> {
+        if !declared.has_char() {
+            return Ok(Some(arr));
+        }
+        let var = BoundColumn {
+            id: self.fresh(),
+            name: "x".to_owned(),
+            data_type: element.clone(),
+            nullable: contains_null,
+        };
+        let read = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(
+            var.clone(),
+        ))));
+        let Some(body) = self.read_pad(read, declared, element, contains_null)? else {
+            return Ok(None);
+        };
+        let lambda = Arc::new(Expr::new(ExprNode::Lambda {
+            params: vec![var],
+            body,
+        }));
+        Ok(self.named_call("transform", vec![arr, lambda], ty.clone(), nullable))
+    }
+
     /// The declared type follows `c AS x` (Spark keeps the field metadata through an alias of a bare column).
     /// `written` are the select items before resolution: a cast passes the declared type on only if the engine
     /// built it in ANSI mode before analysis (a permanent view's read projection, `cast_ansi`); the casts a
@@ -373,20 +613,156 @@ impl Resolver<'_> {
         }
     }
 
-    /// `c IN (...)` over a bare `char(n)` column: Spark pads the column and the literals to a common width
-    /// (`ApplyCharTypePadding`), which is not implemented yet, so it is refused rather than answered with
-    /// unpadded literals (that matches no row).
-    pub(super) fn refuse_char_in(
+    /// Spark's `ApplyCharTypePadding` for `c IN (...)`, `kids` being the value and then the list; `None` when
+    /// nothing pads.
+    ///
+    /// Over a bare `char(n)` value and a list of constants, the value and the literals pad to the longest of `n`
+    /// and the literals, a value already that long staying as it is. Over a list of bare attributes, all of them
+    /// `char`, each pads to the longest declared length. Any other list is left alone. The operands as Spark shows
+    /// them (`shown`) are kept, so names do not change.
+    ///
+    /// A `NULL` in the list turns all of that off, and so does a constant that is not a string (a real Spark 4.2.0
+    /// run: `c IN ('a', NULL)` matches no padded `'a'`, and `c IN (1)` casts `c`).
+    pub(super) fn pad_char_in(&self, kids: &[Bound]) -> Result<Option<Vec<Bound>>, AnalysisError> {
+        if self.ctx.conf.char_varchar_as_string || self.declared.is_empty() {
+            return Ok(None);
+        }
+        let Some((value, list)) = kids.split_first() else {
+            return Ok(None);
+        };
+        if list.is_empty() {
+            return Ok(None);
+        }
+        let Some(n) = bare_char(&self.declared, value) else {
+            return Ok(None);
+        };
+        // A list of `char` attributes: each pads to the longest.
+        let lengths: Option<Vec<i32>> = list.iter().map(|k| bare_char(&self.declared, k)).collect();
+        if let Some(lengths) = lengths {
+            let target = lengths.iter().copied().fold(n, i32::max);
+            let mut out = Vec::with_capacity(kids.len());
+            for (k, len) in kids.iter().zip(std::iter::once(n).chain(lengths)) {
+                out.push(if len < target {
+                    match self.pad_operand(k, target) {
+                        Some(p) => p,
+                        None => return Ok(None),
+                    }
+                } else {
+                    k.clone()
+                });
+            }
+            return Ok(Some(out));
+        }
+        // Spark's run (4.2.0): a `NULL` anywhere in the list leaves everything unpadded.
+        let mut widths = Vec::with_capacity(list.len());
+        for k in list {
+            if self.constant_string(k)?.is_none() {
+                return Ok(None);
+            }
+            widths.push(
+                self.constant_string(k)?
+                    .and_then(|s| i32::try_from(s.chars().count()).ok()),
+            );
+        }
+        let mut target = n;
+        for w in &widths {
+            let Some(l) = w else { return Ok(None) };
+            target = target.max(*l);
+        }
+        let mut out = Vec::with_capacity(kids.len());
+        out.push(if n < target {
+            match self.pad_operand(value, target) {
+                Some(p) => p,
+                None => return Ok(None),
+            }
+        } else {
+            value.clone()
+        });
+        for (k, w) in list.iter().zip(&widths) {
+            out.push(match w {
+                Some(l) if *l < target => match self.pad_string_literal(k, target) {
+                    Some(p) => p,
+                    None => return Ok(None),
+                },
+                _ => k.clone(),
+            });
+        }
+        Ok(Some(out))
+    }
+
+    /// The text of the constant string `k` (a literal, or a call that folds to one); `None` for a `NULL`, another
+    /// type or a constant the analyzer cannot fold.
+    fn constant_string(&self, k: &Bound) -> Result<Option<String>, AnalysisError> {
+        if let Some(s) = string_literal(k) {
+            return Ok(Some(s.to_owned()));
+        }
+        if k.ty.data_type != Some(DataType::String) {
+            return Ok(None);
+        }
+        Ok(match self.fold(&k.expr, self.ctx.conf.ansi) {
+            Some(krishiv_functions::signature::Constant::String(s)) => Some(s),
+            _ => None,
+        })
+    }
+
+    /// `k` through `rpad(k, to, ' ')`, still shown as it was written.
+    fn pad_operand(&self, k: &Bound, to: i32) -> Option<Bound> {
+        let e = self.rpad_call(Arc::clone(&k.expr), to, k.ty.nullable)?;
+        Some(Bound {
+            expr: e,
+            shown: Some(k.shown()),
+            ..k.clone()
+        })
+    }
+
+    /// The string literal `k` padded to `to`, still shown as it was written; a constant that is no literal goes
+    /// through `rpad`. A wide declaration (`CHAR(2147483647)`) would build a huge literal while analyzing even an
+    /// empty table: past `MAX_LITERAL_PADDING` the literal pads at run time instead (same value, `rpad`).
+    fn pad_string_literal(&self, k: &Bound, to: i32) -> Option<Bound> {
+        let Some(text) = string_literal(k) else {
+            return self.pad_operand(k, to);
+        };
+        let width = i32::try_from(text.chars().count()).ok()?;
+        if to.saturating_sub(width) > MAX_LITERAL_PADDING {
+            return self.pad_operand(k, to);
+        }
+        let padded = format!("{text}{}", " ".repeat(usize::try_from(to - width).ok()?));
+        Some(Bound {
+            expr: Arc::new(Expr::literal(Literal::String(padded)).with_origin(k.expr.origin)),
+            shown: Some(k.shown()),
+            ..k.clone()
+        })
+    }
+
+    /// `ApplyCharTypePadding` also pads a comparison of two nested columns whose `CHAR` lengths differ, field by
+    /// field. That is not implemented, so such a comparison is refused rather than answered unpadded.
+    pub(super) fn refuse_nested_char_comparison(
         &self,
         kids: &[Bound],
         origin: Origin,
     ) -> Result<(), AnalysisError> {
-        if !self.ctx.conf.char_varchar_as_string
-            && kids
-                .first()
-                .is_some_and(|k| bare_char(&self.declared, k).is_some())
-        {
-            return Err(super::bind::unsupported("IN over a CHAR column", origin));
+        if self.ctx.conf.char_varchar_as_string || self.declared.is_empty() {
+            return Ok(());
+        }
+        let nested = |b: &Bound| -> Option<Arc<str>> {
+            if b.shown.is_some() {
+                return None;
+            }
+            match &b.expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                    let d = self.declared.get(&c.id)?;
+                    (char_length(d).is_none() && DeclaredType::parse(d).has_char())
+                        .then(|| Arc::clone(d))
+                }
+                _ => None,
+            }
+        };
+        let types: Vec<Arc<str>> = kids.iter().filter_map(nested).collect();
+        if types.len() == kids.len() && types.windows(2).any(|w| w[0] != w[1]) {
+            return Err(super::bind::unsupported(
+                "comparisons of nested CHAR columns of different lengths",
+                origin,
+            ));
         }
         Ok(())
     }
@@ -400,29 +776,8 @@ impl Resolver<'_> {
             return None;
         }
         let [a, b] = kids else { return None };
-        let pad = |k: &Bound, to: i32| -> Option<Bound> {
-            let e = self.rpad_call(Arc::clone(&k.expr), to, k.ty.nullable)?;
-            Some(Bound {
-                expr: e,
-                shown: Some(k.shown()),
-                ..k.clone()
-            })
-        };
-        let literal = |k: &Bound, to: i32| -> Option<Bound> {
-            let text = string_literal(k)?;
-            let width = i32::try_from(text.chars().count()).ok()?;
-            // A wide declaration (`CHAR(2147483647)`) would build a huge literal while analyzing even an empty
-            // table: past `MAX_LITERAL_PADDING` the literal pads at run time instead (same value, `rpad`).
-            if to.saturating_sub(width) > MAX_LITERAL_PADDING {
-                return pad(k, to);
-            }
-            let padded = format!("{text}{}", " ".repeat(usize::try_from(to - width).ok()?));
-            Some(Bound {
-                expr: Arc::new(Expr::literal(Literal::String(padded)).with_origin(k.expr.origin)),
-                shown: Some(k.shown()),
-                ..k.clone()
-            })
-        };
+        let pad = |k: &Bound, to: i32| self.pad_operand(k, to);
+        let literal = |k: &Bound, to: i32| self.pad_string_literal(k, to);
         let length = |s: &str| i32::try_from(s.chars().count()).ok();
         match (bare_char(&self.declared, a), bare_char(&self.declared, b)) {
             (Some(la), Some(lb)) if la < lb => Some(vec![pad(a, lb)?, b.clone()]),

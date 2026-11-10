@@ -598,7 +598,7 @@ impl Session {
                 identifier_spans: crate::identifier_clause::spans_within(ids, query.span),
             }),
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
         };
         self.state.catalog.store.create_table(view, mode)?;
         self.empty_frame().await
@@ -1374,7 +1374,7 @@ impl Session {
             root: warehouse.clone(),
             view: None,
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
         };
         let layout = LayoutRequest {
             partition_by: &partition_names,
@@ -1853,7 +1853,7 @@ impl Session {
             root: warehouse.clone(),
             view: None,
             layout,
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -1932,15 +1932,16 @@ impl Session {
         // Data may have changed even when the cleanup failed part way.
         self.state.catalog.store.bump();
         self.forget_cached(&name);
+        self.forget_column_stats(&name);
         deleted?;
         self.empty_frame().await
     }
 
     /// `ANALYZE TABLE name COMPUTE STATISTICS [NOSCAN | FOR COLUMNS ...]`.
     ///
-    /// The table (and the listed columns) must exist, as in Spark. The engine
-    /// keeps no table statistics, so nothing is computed or stored: the
-    /// command only validates its target.
+    /// The table (and the listed columns) must exist, as in Spark. Column
+    /// statistics are computed and kept in the catalog; the engine keeps no
+    /// table-level statistics, so the other forms only validate their target.
     pub(crate) async fn exec_analyze(
         &self,
         a: &Analyze,
@@ -1987,7 +1988,7 @@ impl Session {
             _ => return Err(unsupported("this ANALYZE TABLE form")),
         };
         // Spark gathers statistics of numbers, booleans, dates and times, strings and binary only.
-        for column in chosen {
+        for column in &chosen {
             let supported = matches!(
                 column.data_type,
                 DataType::Boolean
@@ -2016,17 +2017,8 @@ impl Session {
                 );
             }
         }
-        // Nothing is computed, but the table remembers that column statistics were asked for, so that
-        // `DESCRIBE EXTENDED t col` refuses instead of printing NULLs (review of #496 M2).
-        if matches!(
-            a.columns,
-            AnalyzeColumns::ForAll | AnalyzeColumns::ForColumns(_)
-        ) && !table.column_stats_requested
-        {
-            let mut marked = CatalogTable::clone(&table);
-            marked.column_stats_requested = true;
-            // A concurrent change of the table wins; the mark is only a guard.
-            self.state.catalog.store.replace_table(&table, marked);
+        if !chosen.is_empty() {
+            self.store_column_stats(&name, &table, &chosen).await?;
         }
         self.empty_frame().await
     }
@@ -2378,6 +2370,7 @@ impl Session {
         let written = self.write_table_rows(table, &df, mode, &mut None).await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
+        self.forget_column_stats(name);
         self.forget_cached(name);
         let dirs =
             written.map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment))?;
@@ -2750,7 +2743,7 @@ impl Session {
             root: warehouse,
             view: None,
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
         };
         let layout = LayoutRequest {
             partition_by: &[],

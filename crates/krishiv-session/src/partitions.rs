@@ -596,9 +596,10 @@ impl Session {
             .collect())
     }
 
-    /// `MSCK REPAIR TABLE name [ADD PARTITIONS]` (`RepairTableCommand`): the `col=value/...` directories of the
-    /// table's location that the catalog does not know are registered, with their file statistics.
-    /// `DROP` and `SYNC PARTITIONS` (which forget partitions whose directory is gone) are not supported yet.
+    /// `MSCK REPAIR TABLE name [ADD | DROP | SYNC PARTITIONS]` (`RepairTableCommand`): `DROP` (and `SYNC`, first)
+    /// forget the partitions whose directory is gone; `ADD` (the default, and `SYNC`) registers the
+    /// `col=value/...` directories of the table's location that the catalog does not know, with their file
+    /// statistics.
     pub(crate) async fn exec_repair(
         &self,
         r: &krishiv_sql::ast::Repair,
@@ -607,9 +608,31 @@ impl Session {
         let env = self.query_env();
         let name = self.table_name(&r.table, &env)?;
         let table = self.table_for_write(&name, "MSCK REPAIR TABLE", &env)?;
+        // `RepairTableCommand` asks for partition columns before the partition provider.
+        if table.layout.partition_columns.is_empty() {
+            return Err(krishiv_common::error::NotAPartitionedTable {
+                operation: "MSCK REPAIR TABLE".to_owned(),
+                table_ident_with_d_b: table_sql_id(&table),
+            }
+            .into());
+        }
         require_partition_provider(&table, "MSCK REPAIR TABLE")?;
         if matches!(r.action, Some(RepairAction::Drop | RepairAction::Sync)) {
-            return Err(unsupported("MSCK REPAIR TABLE ... DROP | SYNC PARTITIONS"));
+            // A logged root still lists the files of a directory that is gone: they leave the log too, or every
+            // read of the table would see them missing.
+            for p in table
+                .layout
+                .partitions
+                .iter()
+                .filter(|p| !p.location.exists())
+            {
+                self.relog_partition(&table.location, &p.location, None)
+                    .await?;
+            }
+            self.forget_missing_partitions(&name);
+        }
+        if matches!(r.action, Some(RepairAction::Drop)) {
+            return self.empty_frame().await;
         }
         // Spark 4.2.0 fails on a missing table directory (an unclassified `FileNotFoundException`) rather than
         // registering nothing.
@@ -632,6 +655,132 @@ impl Session {
         }
         self.register_partitions(&name, &dirs, true);
         self.empty_frame().await
+    }
+
+    /// Spark's `ResolvePartitionSpec`: each value of a typed partition column casts to the column's type
+    /// (`CAST_INVALID_INPUT` under ANSI). `__HIVE_DEFAULT_PARTITION__` is NULL and always casts.
+    async fn check_partition_types(
+        &self,
+        table: &CatalogTable,
+        spec: &[(String, String)],
+    ) -> Result<(), KrishivError> {
+        for (key, value) in spec {
+            let Some(column) = table.columns.iter().find(|c| &c.name == key) else {
+                continue;
+            };
+            if matches!(column.data_type, DataType::String)
+                || value == krishiv_io::partition::DEFAULT_PARTITION
+            {
+                continue;
+            }
+            let sql = format!(
+                "SELECT CAST('{}' AS {})",
+                value.replace('\\', "\\\\").replace('\'', "\\'"),
+                column.data_type.simple_string()
+            );
+            let analysis = self.analyze_variable_query(&sql).await?;
+            self.run_analyzed_variable_query(&analysis).await?;
+        }
+        Ok(())
+    }
+
+    /// Follows a partition directory `from` of the table root `root` that moved to `to` (or is gone, `None`) in
+    /// the root's commit log, when it has one: one overwrite entry removes the files below `from` and adds them
+    /// below `to` with the new partition values. Paths are taken relative to the root as a write records them.
+    async fn relog_partition(
+        &self,
+        root: &Path,
+        from: &Path,
+        to: Option<&Path>,
+    ) -> Result<(), KrishivError> {
+        use krishiv_io::commit_log::{AddedFile, CommitLog, CommitMode, LogEntry};
+        let env = self.query_env();
+        let locate = |p: &Path| {
+            self.locate_write_path(&format!("file:{}", p.display()), &BTreeMap::new(), &env)
+        };
+        let at = locate(root)?;
+        let below = |p: &Path| -> Result<Option<String>, KrishivError> {
+            let located = locate(p)?;
+            Ok(located.path.prefix_match(&at.path).map(|parts| {
+                let mut rel = parts
+                    .map(|part| part.as_ref().to_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                rel.push('/');
+                rel
+            }))
+        };
+        // A directory outside the root is not in the root's log.
+        let Some(old) = below(from)? else {
+            return Ok(());
+        };
+        let new = to.map(below).transpose()?;
+        let log = CommitLog::new(
+            &env.io,
+            at.store.clone(),
+            at.path.clone(),
+            at.display.clone(),
+        );
+        if !log.exists().await? {
+            return Ok(());
+        }
+        let snapshot = log.snapshot().await?;
+        let mut remove = Vec::new();
+        let mut add = Vec::new();
+        for (path, file) in snapshot.files.range(old.clone()..) {
+            let Some(rest) = path.strip_prefix(&old) else {
+                break;
+            };
+            remove.push(path.clone());
+            if let Some(Some(new)) = &new {
+                let moved = format!("{new}{rest}");
+                let mut dirs: Vec<&str> = moved.split('/').collect();
+                dirs.pop();
+                add.push(AddedFile {
+                    partition: dirs
+                        .into_iter()
+                        .filter_map(krishiv_io::parse_segment)
+                        .collect(),
+                    path: moved.clone(),
+                    ..file.clone()
+                });
+            }
+        }
+        if remove.is_empty() {
+            return Ok(());
+        }
+        let job = crate::session::job_uuid();
+        log.commit(
+            snapshot.version,
+            &LogEntry {
+                query_id: job.clone(),
+                write_id: job.clone(),
+                job_uuid: job,
+                mode: CommitMode::Overwrite,
+                add,
+                remove,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Drops from the catalog the partitions of `name` whose directory does not exist (`dropPartitions` with
+    /// `retainData`: no file is touched). The swap can lose to a concurrent change: it is read and merged again.
+    fn forget_missing_partitions(&self, name: &TableName) {
+        let store = &self.state.catalog.store;
+        loop {
+            let Some(table) = store.table(&name.namespace, &name.name) else {
+                return;
+            };
+            let mut changed = (*table).clone();
+            changed.layout.partitions.retain(|p| p.location.exists());
+            if changed.layout.partitions.len() == table.layout.partitions.len()
+                || store.replace_table(&table, changed)
+            {
+                return;
+            }
+        }
     }
 
     /// `ALTER TABLE name PARTITION (...) SET LOCATION '...'`: only the catalog entry changes.
@@ -668,11 +817,14 @@ impl Session {
             .into());
         };
         found.location = path;
+        changed.column_stats.clear();
         Ok(changed)
     }
 
-    /// `ALTER TABLE name PARTITION (...) RENAME TO PARTITION (...)`: both specs must name every partition
-    /// column (`_LEGACY_ERROR_TEMP_1232`); the rename itself (it moves the directory) is not supported yet.
+    /// `ALTER TABLE name PARTITION (...) RENAME TO PARTITION (...)` (`AlterTableRenamePartitionCommand`): both specs
+    /// name every partition column (`_LEGACY_ERROR_TEMP_1232`); the old partition must exist and the new one must
+    /// not. A managed table's partition directory moves to the new spec's path, as `InMemoryCatalog
+    /// .renamePartitions` does; the caller swaps the catalog entry returned here.
     pub(crate) async fn rename_partition(
         &self,
         table: &Arc<CatalogTable>,
@@ -681,11 +833,67 @@ impl Session {
     ) -> Result<CatalogTable, KrishivError> {
         require_partition_provider(table, "ALTER TABLE RENAME PARTITION")?;
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+        let mut exact = Vec::with_capacity(2);
         for spec in specs {
             let written = self.written_spec(spec, original).await?;
-            exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
+            exact.push(ordered(
+                table,
+                &exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?,
+            ));
         }
-        Err(unsupported("ALTER TABLE ... RENAME PARTITION"))
+        let [from, to] = exact.as_slice() else {
+            return Err(internal("two partition specs expected".to_owned()));
+        };
+        for spec in [from, to] {
+            self.check_partition_types(table, spec).await?;
+        }
+        if find_partition(table, from).is_none() {
+            return Err(PartitionsNotFound {
+                partition_list: spec_text(from),
+                table_name: db_table(table),
+            }
+            .into());
+        }
+        if find_partition(table, to).is_some() {
+            return Err(PartitionsAlreadyExist {
+                partition_list: spec_text(to),
+                table_name: db_table(table),
+            }
+            .into());
+        }
+        // Reads follow the table root, so an external table's data could not be read under a new spec with its
+        // directory left where it is (Spark keeps reading the old directory).
+        if !table.managed {
+            return Err(unsupported(
+                "ALTER TABLE ... RENAME PARTITION of an external table",
+            ));
+        }
+        let mut changed = (**table).clone();
+        let target = partition_path(&table.location, to);
+        self.authorize_dir(&target).await?;
+        let found = changed
+            .layout
+            .partitions
+            .iter_mut()
+            .find(|p| from.iter().all(|kv| p.spec.contains(kv)))
+            .ok_or_else(|| internal("the partition was found above".to_owned()))?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| internal(format!("cannot create {}: {e}", parent.display())))?;
+        }
+        std::fs::rename(&found.location, &target).map_err(|e| {
+            internal(format!(
+                "cannot rename {} to {}: {e}",
+                found.location.display(),
+                target.display()
+            ))
+        })?;
+        let moved = found.location.clone();
+        found.spec.clone_from(to);
+        found.location.clone_from(&target);
+        self.relog_partition(&table.location, &moved, Some(&target))
+            .await?;
+        Ok(changed)
     }
 
     /// `ALTER TABLE name ADD [IF NOT EXISTS] PARTITION (...) [LOCATION '...'] ...`.
@@ -756,6 +964,7 @@ impl Session {
             created.push(&p.location);
         }
         changed.layout.partitions.extend(added);
+        changed.column_stats.clear();
         Ok(changed)
     }
 
