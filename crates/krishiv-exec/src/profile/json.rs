@@ -160,7 +160,8 @@ impl QueryProfile {
             Some(p) if p.is_object() => Some(p.clone()),
             Some(_) => return Err(ProfileError::new("planning is not an object")),
         };
-        let usage = member(o, "usage")?;
+        // Optional: a profile written before minor 1 has no `usage`.
+        let usage = o.get("usage").unwrap_or(&Value::Null);
         let identity = match usage.as_object().and_then(|u| u.get("principal")) {
             Some(Value::String(p)) => Some(super::ProfileIdentity {
                 principal: p.clone(),

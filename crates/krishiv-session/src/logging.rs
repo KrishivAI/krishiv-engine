@@ -100,6 +100,10 @@ impl<S: Subscriber> Filter<S> for EventRateLimit {
     }
 }
 
+/// The target of the planner's warnings, which can quote the statement's literals (a hint's
+/// string parameter): the JSON logs never carry it.
+pub(crate) const WARNING_TARGET: &str = "krishiv::session::warnings";
+
 /// The JSON layer: one object per event with the fields, the current span and the span list,
 /// written to `writer`, at `INFO` and above, at most `per_second` events per callsite per second.
 pub fn json_layer<S, W>(per_second: u32, writer: W) -> impl Layer<S>
@@ -112,7 +116,9 @@ where
         .with_current_span(true)
         .with_span_list(true)
         .with_writer(writer)
-        .with_filter(EventRateLimit::new(per_second).and(LevelFilter::INFO))
+        .with_filter(EventRateLimit::new(per_second).and(LevelFilter::INFO).and(
+            tracing_subscriber::filter::filter_fn(|m| m.target() != WARNING_TARGET),
+        ))
 }
 
 /// Installs [`json_layer`] on standard error as the process's subscriber.

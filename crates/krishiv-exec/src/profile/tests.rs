@@ -838,3 +838,12 @@ fn identity_round_trips_and_a_shared_profile_drops_it_with_the_trace() {
     assert_eq!(shared.metrics, p.metrics);
     assert_eq!(shared.plan, p.plan);
 }
+
+#[test]
+fn a_profile_without_usage_still_reads_with_no_identity() {
+    let p = QueryProfile::new(&plan(matching()), metrics(), true);
+    let mut v = p.to_json_value();
+    v.as_object_mut().expect("object").remove("usage");
+    let back = QueryProfile::from_json(&v.to_string()).expect("an older document reads");
+    assert!(back.identity.is_none());
+}
