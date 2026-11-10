@@ -1052,6 +1052,9 @@ impl Drop for Driver {
         let slots = self.slots.get_mut();
         slots.metrics[0].morsels += p.source.1.morsels_claimed(&self.source_local);
         for (k, slot) in slots.slots.iter().enumerate() {
+            // Per-driver peak. `QueryContext::metrics` overwrites it for local queries with the
+            // concurrent peak over all consumers of the operator; task metrics merged directly
+            // (distributed folds) still carry this value.
             if let Some(m) = slot.ctx.registered() {
                 slots.metrics[k].peak_reserved = m.consumer().peak() as u64;
             }
