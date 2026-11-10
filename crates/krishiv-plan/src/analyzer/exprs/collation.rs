@@ -506,8 +506,12 @@ impl Resolver<'_> {
         if let Some(bound) = self.collated_call(e, kids, n, &name, in_agg, window_fn, cx)? {
             return Ok(bound);
         }
+        // A call qualified by anything but the built-in catalog is resolved (or refused) by
+        // `expr_node_inner`; the rewrites below would replace it with the built-in.
+        let rewritable =
+            f.qualifier.is_empty() || super::super::bind::is_builtin_qualifier(&f.qualifier);
         // Comparisons of `UTF8_LCASE` / `_RTRIM` strings compare their keys (design 3.3, unit 3a).
-        if (KEYED.contains(&name.as_str()) || KEYED_SEARCH.contains(&name.as_str()))
+        if (KEYED.contains(&name.as_str()) || (rewritable && KEYED_SEARCH.contains(&name.as_str())))
             && !f.distinct
             && kids[..n].iter().any(|k| {
                 k.ty.data_type
@@ -520,10 +524,12 @@ impl Resolver<'_> {
         }
         // `instr` / `locate` / `position` over `UTF8_LCASE` strings answer positions in the
         // original text: the kernel `__locate_lcase` matches the lower-cased code points (unit 5b).
-        if matches!(
-            name.as_str(),
-            "instr" | "locate" | "position" | "find_in_set"
-        ) && !f.distinct
+        if rewritable
+            && matches!(
+                name.as_str(),
+                "instr" | "locate" | "position" | "find_in_set"
+            )
+            && !f.distinct
             && (2..=3).contains(&n)
             && (n == 2 || name != "find_in_set")
             && kids[..2].iter().all(|k| is_string(k.ty.data_type.as_ref()))
@@ -1085,6 +1091,7 @@ impl Resolver<'_> {
             .with_origin(e.origin);
             let mut b = self.expr(&Arc::new(cast), cx)?;
             b.shown = Some(k.shown());
+            b.carry_markers(std::slice::from_ref(k));
             plain.push(b);
         }
         let call = Expr::function(
@@ -1131,6 +1138,7 @@ impl Resolver<'_> {
             .with_origin(e.origin);
             let mut b = this.expr(&Arc::new(cast), cx)?;
             b.shown = Some(k.shown());
+            b.carry_markers(std::slice::from_ref(k));
             Ok(b)
         };
         let mut keyed = vec![plain(self, &kids[sub])?, plain(self, &kids[text])?];
