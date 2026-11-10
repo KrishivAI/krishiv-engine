@@ -9,7 +9,6 @@
 # +37 lines over main: rows of batches that take the batch-local key map equal the columnar tables' (E2 step 2)
 # +68: an aggregate spill write holds the spilling guard, and the combined tables are the writer's during it (spill-guard tests, #627)
 3345 crates/krishiv-exec/src/aggregate/tests.rs
-2003 crates/krishiv-exec/src/operators/sort/sort.rs
 # +1 line: PlanNode::Repartition plans a hash exchange (DISTRIBUTE BY as a real exchange)
 2106 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
