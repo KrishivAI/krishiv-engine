@@ -172,6 +172,7 @@ pub fn dot_of_plan(root: &ExplainNode) -> String {
 ///     metrics: QueryMetrics::default(),
 ///     detailed: false,
 ///     planning: None,
+///     trace: None,
 /// };
 /// let text = mermaid_of_profile(&profile);
 /// assert!(text.starts_with("flowchart TD\n"));
