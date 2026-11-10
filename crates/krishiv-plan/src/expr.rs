@@ -136,6 +136,16 @@ pub enum ExprNode {
         /// Error behaviour on invalid input.
         mode: CastMode,
     },
+    /// A column of a permanent view's read projection, with the field metadata the view stored for it
+    /// (Spark's `Alias(UpCast(col), name)(explicitMetadata = ...)` in `View` resolution): the comment the
+    /// view's column has, whatever the column under it says (`None`: the stored column has none). The value
+    /// is `expr`'s; the analyzer resolves it away (only the comment stays, on the alias it is under).
+    StoredField {
+        /// The value.
+        expr: Arc<Expr>,
+        /// The stored column comment.
+        comment: Option<String>,
+    },
     /// `expr COLLATE name` / `collate(expr, name)`: the value with an *explicit* collation
     /// (the strongest of the coercion pass, ADR 0043). It resolves to a cast to the collated
     /// type, free at run time; a non-string child is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`.
@@ -770,6 +780,7 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Collate { expr, .. }
+            | ExprNode::StoredField { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::Pipe { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
@@ -834,6 +845,7 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Collate { expr, .. }
+            | ExprNode::StoredField { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::Pipe { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
