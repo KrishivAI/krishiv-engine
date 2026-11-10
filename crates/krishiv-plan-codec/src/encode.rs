@@ -317,6 +317,23 @@ impl Encoder {
                 count: self.expr(count)?,
                 subqueries: self.subqueries(subqueries)?,
             }),
+            PhysNode::PythonEval {
+                input,
+                layout: l,
+                calls,
+            } => Kind::PythonEval(pb::PythonEvalNode {
+                input: self.node_index(input)?,
+                layout: layout(l),
+                calls: calls
+                    .iter()
+                    .map(|c| {
+                        Ok(pb::PythonCall {
+                            call: self.expr(&c.call)?,
+                            output: c.output.0,
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+            }),
             PhysNode::Generate {
                 input,
                 layout: l,
@@ -689,6 +706,17 @@ impl Encoder {
                     output: Some(bound_column(output, &self.nested)?),
                 })
             }
+            ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi,
+                expr,
+                data_type,
+                nullable,
+            }) => Kind::EvalMode(pb::EvalModeExpr {
+                expr: self.child(expr),
+                ansi: *ansi,
+                data_type: Some(spark_type(data_type, &self.nested)?),
+                nullable: *nullable,
+            }),
             ExprNode::Resolved(ResolvedExpr::Field {
                 base,
                 ordinal,
@@ -725,6 +753,17 @@ impl Encoder {
             FunctionId::Udf { name, version } => pb::function::Id::Udf(pb::UdfFunction {
                 name: name.clone(),
                 version: u64::from(*version),
+            }),
+            FunctionId::PythonUdf {
+                name,
+                version,
+                eval_type,
+                thread_safe,
+            } => pb::function::Id::PythonUdf(pb::PythonUdfFunction {
+                name: name.clone(),
+                version: u64::from(*version),
+                eval_type: eval_type.code(),
+                thread_safe: *thread_safe,
             }),
             _ => return Err(unresolved("a function identity this version does not know")),
         };

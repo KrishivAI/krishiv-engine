@@ -15,8 +15,8 @@ use krishiv_exec::aggregate::{
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
-    SubqueryPlan, SubqueryValueKind, WritePlan,
+    PythonCallPlan, Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan,
+    SubqueryId, SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::physical::{
     ExchangeFilterPlan, ProbeColumn, ProbeFilter, ProbeFilterColumn, ProbeRowStage, ProbeSelect,
@@ -31,8 +31,8 @@ use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind,
-    Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
-    TableVersion, YearMonthField,
+    Literal, Origin, PlanId, PythonEvalType, ReadSource, ResolvedExpr, ResolvedFunction, Scan,
+    SourceId, Span, TableVersion, YearMonthField,
 };
 use krishiv_types::{Collation, DataType, DecimalType, Srid};
 
@@ -376,6 +376,7 @@ fn expr_children(m: &pb::Expr) -> impl Iterator<Item = u32> + '_ {
     let (one, many): (Option<u32>, &[u32]) = match &m.kind {
         Some(Kind::Cast(c)) => (Some(c.expr), &[]),
         Some(Kind::Alias(a)) => (Some(a.expr), &[]),
+        Some(Kind::EvalMode(m)) => (Some(m.expr), &[]),
         Some(Kind::Lambda(l)) => (Some(l.body), &[]),
         Some(Kind::Field(f)) => (Some(f.base), &[]),
         Some(Kind::Function(f)) => (f.filter, &f.args),
@@ -536,6 +537,20 @@ impl Decoder {
                 layout: layout(&r.layout),
                 count: self.expr_ref(r.count)?,
                 subqueries: self.subqueries(&r.subqueries)?,
+            },
+            Kind::PythonEval(p) => PhysNode::PythonEval {
+                input: self.boxed(p.input)?,
+                layout: layout(&p.layout),
+                calls: p
+                    .calls
+                    .iter()
+                    .map(|c| {
+                        Ok(PythonCallPlan {
+                            call: self.expr_ref(c.call)?,
+                            output: AttrId(c.output),
+                        })
+                    })
+                    .collect::<Result<_>>()?,
             },
             Kind::Generate(g) => PhysNode::Generate {
                 input: self.boxed(g.input)?,
@@ -879,6 +894,12 @@ impl Decoder {
                 expr: self.expr_ref(a.expr)?,
                 output: bound_column(required(&a.output, "an alias output")?)?,
             }),
+            Kind::EvalMode(m) => ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi: m.ansi,
+                expr: self.expr_ref(m.expr)?,
+                data_type: spark_type(required(&m.data_type, "an eval mode type")?)?,
+                nullable: m.nullable,
+            }),
             Kind::Function(f) => ExprNode::Resolved(ResolvedExpr::Function(self.function(f)?)),
             Kind::Field(f) => ExprNode::Resolved(ResolvedExpr::Field {
                 base: self.expr_ref(f.base)?,
@@ -914,6 +935,14 @@ impl Decoder {
                 name: u.name.clone(),
                 version: u32::try_from(u.version)
                     .map_err(|_| corrupt("a UDF version out of range"))?,
+            },
+            pb::function::Id::PythonUdf(u) => FunctionId::PythonUdf {
+                name: u.name.clone(),
+                version: u32::try_from(u.version)
+                    .map_err(|_| corrupt("a Python UDF version out of range"))?,
+                eval_type: PythonEvalType::from_code(u.eval_type)
+                    .ok_or_else(|| corrupt("an unknown Python UDF eval type"))?,
+                thread_safe: u.thread_safe,
             },
         };
         Ok(ResolvedFunction {

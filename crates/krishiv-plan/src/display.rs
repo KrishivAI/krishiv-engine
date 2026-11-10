@@ -765,11 +765,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             filter,
             within_group,
         }) => {
-            let qualified = if qualifier.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{name}", Name(qualifier))
-            };
+            let qualified = crate::function::shown_call_name(&Name(qualifier).to_string(), name);
             call(
                 &qualified,
                 Builtin::from_name(name),
@@ -812,7 +808,9 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             }
             let op = match id {
                 FunctionId::Builtin(b) => Some(*b),
-                FunctionId::Registry { .. } | FunctionId::Udf { .. } => None,
+                FunctionId::Registry { .. }
+                | FunctionId::Udf { .. }
+                | FunctionId::PythonUdf { .. } => None,
             };
             // A session UDF may share a built-in's name: its identity
             // says which (the shown name stays Spark's).
@@ -936,6 +934,11 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
         ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS {}#{}", output.name, output.id.0)));
+        }
+        ExprNode::Resolved(ResolvedExpr::EvalMode { ansi, expr, .. }) => {
+            out.push(Piece::Owned(format!("eval_mode(ansi={ansi}, ")));
+            out.push(Piece::Expr(expr));
+            out.push(Piece::Owned(")".to_owned()));
         }
         ExprNode::Window(w) => {
             out.push(Piece::Expr(&w.function));

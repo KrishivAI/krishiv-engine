@@ -170,7 +170,25 @@ message Node {
     LateFetchNode late_fetch = 24;
     // feature: exchange_source
     ExchangeSourceNode exchange_source = 25;
+    // feature: python_udf
+    PythonEvalNode python_eval = 26;
   }
+}
+
+// feature: python_udf
+// The rows of `input`, then one column per Python UDF call over every row.
+message PythonEvalNode {
+  uint32 input = 1;
+  repeated uint64 layout = 2;
+  repeated PythonCall calls = 3;
+}
+
+// feature: python_udf
+// One call of a `PythonEvalNode`: the call expression and the attribute of
+// its output column.
+message PythonCall {
+  uint32 call = 1;
+  uint64 output = 2;
 }
 
 // feature: exchange_source
@@ -1010,7 +1028,19 @@ message Expr {
     Lambda lambda = 9;
     // feature: lambda_functions
     BoundColumn lambda_var = 10;
+    // feature: captured_eval_mode
+    EvalModeExpr eval_mode = 11;
   }
+}
+
+// An expression evaluated in ANSI mode `ansi` whatever the query's mode is: the body
+// of a SQL function created under the other mode (T184).
+// feature: captured_eval_mode
+message EvalModeExpr {
+  uint32 expr = 1;
+  bool ansi = 2;
+  DataType data_type = 3;
+  bool nullable = 4;
 }
 
 // A lambda (`x -> body`): the bound body of a higher-order function's
@@ -1065,6 +1095,8 @@ message Function {
     RegistryFunction registry = 2;
     // feature: rust_udf
     UdfFunction udf = 10;
+    // feature: python_udf
+    PythonUdfFunction python_udf = 11;
   }
   FunctionKind kind = 3;
   repeated uint32 args = 4;
@@ -1088,6 +1120,17 @@ message RegistryFunction {
 message UdfFunction {
   string name = 1;
   uint64 version = 2;
+}
+
+// A session-registered Python UDF, by name and registration version; the
+// worker resolves the callable through its UDF runtime.
+// feature: python_udf
+message PythonUdfFunction {
+  string name = 1;
+  uint64 version = 2;
+  // Spark's `PythonEvalType` code.
+  int32 eval_type = 3;
+  bool thread_safe = 4;
 }
 
 // A Spark type.

@@ -1035,6 +1035,53 @@ fn plan_round_trip_is_off_by_default_and_parses() {
 }
 
 #[test]
+fn python_udf_entries_parse_and_default() {
+    assert_eq!(
+        ARROW_MAX_RECORDS_PER_BATCH.key,
+        "krishiv.sql.execution.arrow.maxRecordsPerBatch"
+    );
+    assert_eq!(
+        PYTHON_UDF_ARROW_ENABLED.key,
+        "krishiv.sql.execution.pythonUDF.arrow.enabled"
+    );
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&ARROW_MAX_RECORDS_PER_BATCH)
+            .and_then(ConfigValue::as_int),
+        Some(10_000)
+    );
+    assert_eq!(
+        c.get(&PYTHON_UDF_ARROW_ENABLED)
+            .and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        c.get(&PYTHON_UDF_THREADS).and_then(ConfigValue::as_int),
+        Some(0)
+    );
+    c.set("spark.sql.execution.arrow.maxRecordsPerBatch", "-1")
+        .unwrap();
+    c.set("spark.sql.execution.pythonUDF.arrow.enabled", "false")
+        .unwrap();
+    c.set("krishiv.python.udf.threads", "8").unwrap();
+    assert_eq!(
+        c.get(&ARROW_MAX_RECORDS_PER_BATCH)
+            .and_then(ConfigValue::as_int),
+        Some(-1)
+    );
+    assert_eq!(
+        c.get(&PYTHON_UDF_ARROW_ENABLED)
+            .and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        c.get(&PYTHON_UDF_THREADS).and_then(ConfigValue::as_int),
+        Some(8)
+    );
+    assert!(c.set("krishiv.python.udf.threads", "many").is_err());
+}
+
+#[test]
 fn engine_runtime_entries_parse_and_default() {
     let mut c = Config::new();
     assert_eq!(c.get(&SESSION_MEMORY_LIMIT), None);

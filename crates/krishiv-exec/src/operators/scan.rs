@@ -265,9 +265,11 @@ pub(super) struct ScanLocal {
     pub(super) position: Option<u64>,
     /// The runtime filters' row stage.
     pub(super) rows: super::ScanRows,
-    /// The driver's partition: pushed filters evaluate stateful functions
-    /// in it (see [`Predicate::evaluate_in`]).
+    /// The claimed morsel's split (the driver's partition before the first
+    /// claim): pushed filters evaluate stateful functions in it (see [`Predicate::evaluate_in`]).
     pub(super) partition: u32,
+    /// The first partition id of the scan's group member.
+    pub(super) base: u32,
 }
 
 impl MemoryScan {
@@ -425,6 +427,11 @@ impl MemoryScan {
                 .ok_or_else(|| internal(format!("morsel {m} out of {}", g.morsels.len())))?;
             local.offset = 0;
             local.claimed += 1;
+            // Stateful functions draw from the morsel's split, not from the
+            // driver that claimed it (Spark's partition index).
+            local.partition = local
+                .base
+                .saturating_add(u32::try_from(m).unwrap_or(u32::MAX));
             // Runtime filter decisions are per morsel (the partition here).
             local.rows.start_partition();
         }
@@ -432,7 +439,9 @@ impl MemoryScan {
         // filter emptied: the driver must reach a batch boundary (cancel,
         // abort and spill checks) after every piece read.
         let partition = local.partition;
-        let piece = self.next_piece(local, g.batch_rows, partition)?;
+        let piece = self
+            .next_piece(local, g.batch_rows, partition)?
+            .with_split(Some(partition));
         g.returned
             .fetch_add(piece.num_rows() as u64, Ordering::Relaxed);
         Ok(Some(piece))
@@ -528,6 +537,7 @@ impl Source for MemoryScan {
                 .runtime
                 .scan_stage(&g.runtime, &self.table, ctx.partition()),
             partition: ctx.partition(),
+            base: ctx.partition_base(),
         }))
     }
 
