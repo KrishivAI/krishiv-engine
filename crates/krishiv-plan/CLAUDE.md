@@ -77,3 +77,7 @@ Paths are relative to this crate.
 
 ## Tests
 `cargo nextest run -p krishiv-plan --no-tests=pass` · `cargo clippy -p krishiv-plan --all-targets -- -D warnings`
+
+## Split modules (T193)
+Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
+- `analyzer/ops/` `aggregate.rs`, `distinct.rs`, `join.rs`, `sortlimit.rs`, `qualify.rs` (`impl Resolver` by topic), `lift.rs` (aggregate lifting); `analyzer/subquery/` `scalar.rs`, `domain.rs`, `support.rs`; `analyzer/coerce/tests.rs`; `tests/analyzer/partN.rs`.

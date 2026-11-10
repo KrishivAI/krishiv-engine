@@ -150,3 +150,7 @@ Paths are relative to this crate.
 loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release loom_model::` (use a separate target dir) ·
 benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators` · `--bench routing_hash` (per-row
 `H_kg` vs the row layout's table hash and seeded foldhash)
+
+## Split modules (T193)
+Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
+- `aggregate/accumulator/` `fold.rs` (the batch fold match), `output.rs` (state and result columns), `results.rs` (percentile and struct-extremum results), `helpers.rs` (decimal proofs, column readers, decimal text), `tests.rs`, `proof_tests.rs`; `aggregate/rowtable/` `probe.rs` (lookups), `merge.rs` (merging tables, the salted index), `tests.rs`; `aggregate/hll/tables.rs` (bias tables); `planner/build/util.rs` (plan-building helpers); `planner/eval/hof/sort.rs` (the sort-with-comparator function); test modules of `aggregate/tests/`, `window/tests/` in `partN.rs`.
