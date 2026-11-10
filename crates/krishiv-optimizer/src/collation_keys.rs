@@ -357,9 +357,24 @@ fn distinct_over_keys(
             carried.push((arg, read));
         }
     }
+    // A `listagg`'s ordering expressions are its arguments from the third on: they read the
+    // inner aggregate's columns as those arguments do.
+    let within_group = call
+        .within_group
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let mut o = o.clone();
+            if let Some(a) = args.get(2 + i) {
+                o.expr = Arc::clone(a);
+            }
+            o
+        })
+        .collect();
     let outer_call = resolved(
         ResolvedFunction {
             args,
+            within_group,
             distinct: false,
             ..(*call).clone()
         },
