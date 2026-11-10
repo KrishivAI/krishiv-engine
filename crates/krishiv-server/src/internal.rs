@@ -271,13 +271,13 @@ pub fn mask_literals(text: &str) -> String {
     if is_set && let Some(eq) = masked.find('=') {
         return format!("{}=?", &masked[..eq]);
     }
-    // `SET key value` (no `=`): Spark reads the rest of the line as the key and the value: keep the key's
-    // first word, drop what follows.
+    // `SET key value` (no `=`): Spark rejects it (INVALID_SET_SYNTAX) but the failed statement's text is
+    // recorded, and its value is a secret as often as not: keep SET and the key, drop the rest. `SET TIME ZONE`
+    // is the one SET with a word after the first.
     if is_set {
         let mut words = masked.split_whitespace();
-        if let (Some(set), Some(key), Some(_)) = (words.next(), words.next(), words.next())
-            && !masked.contains('?')
-            && !key.eq_ignore_ascii_case("time")
+        if let (Some(set), Some(key), Some(third)) = (words.next(), words.next(), words.next())
+            && !(key.eq_ignore_ascii_case("time") && third.eq_ignore_ascii_case("zone"))
         {
             return format!("{set} {key} ?");
         }
@@ -917,6 +917,11 @@ mod tests {
             ("SET k hunter2", "SET k ?"),
             ("SET   k   hunter2 more", "SET k ?"),
             ("SET k", "SET k"),
+            ("SET k hunter2 'x'", "SET k ?"),
+            ("SET k hunter2 42", "SET k ?"),
+            ("SET k hunter2; SELECT 1", "SET k ?"),
+            ("SET time hunter2", "SET time ?"),
+            ("SET k ?", "SET k ?"),
         ] {
             let got = mask_literals(input);
             assert_eq!(got, want, "{input:?}");
