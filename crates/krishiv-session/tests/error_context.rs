@@ -98,11 +98,21 @@ fn multi_byte_text_counts_characters() {
 
 #[test]
 fn an_error_without_a_context_is_the_message() {
-    let sql = "SELECT 1/0";
+    // Spark 4.2.0 raises a cast overflow without a query context.
+    let sql = "SELECT CAST(1000 AS TINYINT)";
     let e = fails(sql);
-    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert_eq!(e.error_class().name(), "CAST_OVERFLOW");
     assert!(e.query_contexts().is_empty());
     assert_eq!(render_with_context(&e, sql), e.to_string());
+}
+
+/// A run-time error carries the span of the expression that raised it (Spark 4.2.0:
+/// `DIVIDE_BY_ZERO` of `SELECT 1/0` quotes `1/0`, 7..9).
+#[test]
+fn a_run_time_error_carries_the_span_of_its_expression() {
+    let e = fails("SELECT 1/0");
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert_eq!(span(&e), (7, 9, "1/0"));
 }
 
 /// `Display` and the message parameters stay Spark's: the unknown function

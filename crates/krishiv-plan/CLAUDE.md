@@ -69,6 +69,7 @@ Paths are relative to this crate.
 - Over an aggregate, `ORDER BY`/`HAVING` expressions are matched to grouping and output expressions by
   `semantic_key` (Spark's `semanticEquals`: commutative operands sorted, `a > b` as `b < a`); a memo keyed by
   address must never see an expression that is dropped (`group_substitute` keys probes with a fresh memo).
+- An implicit cast the analyzer inserts for an operator or function argument takes the call's origin, not the argument's (`Resolver::implicit_cast_under`; Spark's rule transform gives inserted casts the origin of the expression being rewritten), so a run-time `CAST_INVALID_INPUT` of `x + 'a'` quotes `x + 'a'`.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 

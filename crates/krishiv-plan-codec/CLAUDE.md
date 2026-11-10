@@ -21,6 +21,7 @@ enforcement of design P2-T171 invariant I1 (plans are pure data) and the wire fo
 - `format_version` is frozen at 5 and `min_reader_version` is kept for readers that predate features; plans
   without an `epoch` are such older plans and decode by their content. `tests/golden/v1`-`v5` are frozen and
   decode-only; `base/` and the feature directories are byte-exact against the encoder forever.
+- `ExprEnv::sql_texts` (`SourceText` with its `RedactedRegion`s) is ignorable: it only gives run-time errors a SQL context, so it adds no feature and a reader that skips it computes the same rows; the decoder refuses regions no redaction could make (`RedactedSql::from_redacted_parts`).
 - Function behaviour is not a codec matter: functions travel by name and registry id (registry version).
 - Flat tables with child indices, no recursion in the encoder or decoder; the decoder bounds size, counts and depth
   (`Limits`), and every reference must point to an earlier entry.
