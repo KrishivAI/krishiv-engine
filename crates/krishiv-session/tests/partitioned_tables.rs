@@ -1748,8 +1748,11 @@ fn drop_partition_drops_exact_partitions_of_a_managed_table() {
     );
     assert_eq!(rows(&s, "show partitions c"), ["p=1/s=b", "p=3/s=c"]);
     assert_eq!(
-        class(&s, "alter table c drop partition (q=1)"),
-        "PARTITIONS_NOT_FOUND"
+        params(&s, "alter table c drop partition (q=1)"),
+        [
+            "partitionList=`q`",
+            "tableName=`spark_catalog`.`default`.`c`"
+        ]
     );
     assert_eq!(
         class(&s, "alter table c drop partition (p='abc')"),
@@ -1764,6 +1767,173 @@ fn drop_partition_drops_exact_partitions_of_a_managed_table() {
         class(&s, "alter table n drop partition (p=1)"),
         "_LEGACY_ERROR_TEMP_1251"
     );
+}
+
+/// More of Spark 4.2.0's `DROP PARTITION` (krishiv-internal `research/spark/partition-followups/probe2.{py,out}`):
+/// a bare key is a parse error for every partition `ALTER`, every missing spec is listed, every spec is cast
+/// before any is looked up, a repeated spec drops once, and `p=NULL` is the default partition.
+#[test]
+fn drop_partition_checks_every_spec_as_spark() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table c(x int, p int, s string) using parquet partitioned by (p, s)",
+    );
+    run(&s, "insert into c values (1,1,'a'),(2,2,'b'),(3,NULL,'c')");
+    for (sql, key) in [
+        ("alter table c drop partition (p, s)", "`p`"),
+        ("alter table c drop partition (p=1, s)", "`s`"),
+        ("alter table c add partition (p, s)", "`p`"),
+        (
+            "alter table c partition (p=1, s) rename to partition (p=5, s='x')",
+            "`s`",
+        ),
+        (
+            "alter table c partition (p=1, s) set location '/tmp/x'",
+            "`s`",
+        ),
+    ] {
+        assert_eq!(
+            class(&s, sql),
+            "INVALID_SQL_SYNTAX.EMPTY_PARTITION_VALUE",
+            "{sql}"
+        );
+        assert_eq!(params(&s, sql), [format!("partKey={key}")], "{sql}");
+    }
+    assert_eq!(
+        params(
+            &s,
+            "alter table c drop partition (p=8, s='z'), partition (p=9, s='y')"
+        ),
+        [
+            "partitionList=PARTITION (`p` = 8, `s` = z), PARTITION (`p` = 9, `s` = y)",
+            "tableName=`default`.`c`"
+        ]
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table c drop partition (p=9, s='z'), partition (p='abc', s='a')"
+        ),
+        "CAST_INVALID_INPUT"
+    );
+    assert_eq!(
+        params(
+            &s,
+            "alter table c drop partition (p=9, s='z'), partition (q=1)"
+        ),
+        [
+            "partitionList=`q`",
+            "tableName=`spark_catalog`.`default`.`c`"
+        ]
+    );
+    run(
+        &s,
+        "alter table c drop partition (p=1, s='a'), partition (p=1, s='a')",
+    );
+    run(&s, "alter table c drop partition (p=NULL, s='c')");
+    assert_eq!(rows(&s, "show partitions c"), ["p=2/s=b"]);
+    assert_eq!(rows(&s, "select cast(x as string) from c"), ["2"]);
+}
+
+/// `spark.sql.legacy.skipTypeValidationOnAlterPartition` keeps `ALTER TABLE` partition values as written (Spark
+/// 4.2.0); `INSERT`'s static values follow `storeAssignmentPolicy` alone, whatever `spark.sql.ansi.enabled` says.
+#[test]
+fn partition_value_casts_follow_the_legacy_settings_as_spark() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table c(x int, p int, s string) using parquet partitioned by (p, s)",
+    );
+    run(
+        &s,
+        "set spark.sql.legacy.skipTypeValidationOnAlterPartition=true",
+    );
+    run(&s, "alter table c add partition (p='abc', s='k')");
+    run(&s, "alter table c add partition (p='007', s='k')");
+    assert_eq!(rows(&s, "show partitions c"), ["p=007/s=k", "p=abc/s=k"]);
+    run(&s, "alter table c drop partition (p='abc', s='k')");
+    run(&s, "alter table c drop partition (p='007', s='k')");
+    assert_eq!(rows(&s, "show partitions c"), Vec::<String>::new());
+    run(
+        &s,
+        "set spark.sql.legacy.skipTypeValidationOnAlterPartition=false",
+    );
+    run(
+        &s,
+        "create table b(x int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "set spark.sql.storeAssignmentPolicy=LEGACY");
+    run(&s, "insert into b partition (p='abc') select 1");
+    run(&s, "insert into b partition (p='008') select 2");
+    assert_eq!(
+        rows(&s, "show partitions b"),
+        ["p=8", "p=__HIVE_DEFAULT_PARTITION__"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select concat_ws('|', x, coalesce(cast(p as string), 'null')) from b order by x"
+        ),
+        ["1|null", "2|8"]
+    );
+    run(&s, "set spark.sql.storeAssignmentPolicy=ANSI");
+    run(&s, "set spark.sql.ansi.enabled=false");
+    assert_eq!(
+        class(&s, "insert into b partition (p='xyz') select 3"),
+        "CAST_INVALID_INPUT"
+    );
+    assert_eq!(
+        class(&s, "alter table b add partition (p='xyz')"),
+        "CAST_INVALID_INPUT"
+    );
+    run(&s, "set spark.sql.ansi.enabled=true");
+    run(&s, "insert into b partition (p=NULL) select 4");
+    assert_eq!(
+        rows(&s, "show partitions b"),
+        ["p=8", "p=__HIVE_DEFAULT_PARTITION__"]
+    );
+}
+
+/// A partition registered away from its default directory is never deleted: its directory may be anything (the
+/// table root itself, another table's data), and reads of the table never list it.
+#[test]
+fn drop_partition_refuses_a_partition_outside_its_default_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table o(x int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into o values (1,1)");
+    let root = dir.path().join("o");
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("keep.txt"), "x").unwrap();
+    run(
+        &s,
+        &format!(
+            "alter table o add partition (p=2) location '{}'",
+            elsewhere.path().display()
+        ),
+    );
+    run(
+        &s,
+        &format!(
+            "alter table o add partition (p=3) location '{}'",
+            root.display()
+        ),
+    );
+    for p in [2, 3] {
+        assert_eq!(
+            class(&s, &format!("alter table o drop partition (p={p})")),
+            "KRISHIV_UNSUPPORTED_FEATURE"
+        );
+    }
+    assert!(elsewhere.path().join("keep.txt").is_file());
+    assert!(root.join("p=1").is_dir());
+    assert_eq!(rows(&s, "show partitions o"), ["p=1", "p=2", "p=3"]);
 }
 
 /// Spark keeps an external table's files of a dropped partition and stops reading them; the engine's reads refuse

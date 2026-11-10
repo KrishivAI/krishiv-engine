@@ -731,17 +731,26 @@ impl Checker<'_> {
                 self.property_list(keys, false, a.span)?;
                 self.option_values(keys)
             }
-            AlterTableAction::AddPartition { parts, .. } => parts
-                .iter()
-                .try_for_each(|p| self.partition_values(Some(&p.spec))),
-            AlterTableAction::DropPartition { specs, .. } => specs
-                .iter()
-                .try_for_each(|s| self.partition_values(Some(s))),
+            AlterTableAction::AddPartition { parts, .. } => {
+                parts.iter().try_for_each(|p| non_optional(&p.spec))?;
+                parts
+                    .iter()
+                    .try_for_each(|p| self.partition_values(Some(&p.spec)))
+            }
+            AlterTableAction::DropPartition { specs, .. } => {
+                specs.iter().try_for_each(non_optional)?;
+                specs
+                    .iter()
+                    .try_for_each(|s| self.partition_values(Some(s)))
+            }
             AlterTableAction::RenamePartition { from, to, .. } => {
+                non_optional(from)?;
+                non_optional(to)?;
                 self.partition_values(Some(from))?;
                 self.partition_values(Some(to))
             }
             AlterTableAction::SetPartitionLocation { partition, .. } => {
+                non_optional(partition)?;
                 self.partition_values(Some(partition))
             }
             AlterTableAction::SetLocation(_)
@@ -1838,6 +1847,25 @@ fn property_list_span(sql: &str, first: Span, last: Span) -> Span {
         .filter(|t| paren(t, Sym::RParen))
         .map_or(last.end, |t| last.end + t.span.end);
     Span::new(start, end)
+}
+
+/// Spark's `visitNonOptionalPartitionSpec` (`ALTER TABLE` ADD, DROP, RENAME and SET LOCATION of a partition):
+/// a key without a value is `INVALID_SQL_SYNTAX.EMPTY_PARTITION_VALUE`, the first in the spec map's order.
+fn non_optional(spec: &PartitionSpec) -> R {
+    let keys: Vec<&str> = spec.parts.iter().map(|p| p.key.value.as_str()).collect();
+    match keys::to_map_order(&keys).into_iter().find(|k| {
+        spec.parts
+            .iter()
+            .any(|p| p.key.value == *k && p.value.is_none())
+    }) {
+        Some(key) => Err(at(
+            InvalidSqlSyntaxEmptyPartitionValue {
+                part_key: quote(key),
+            },
+            spec.span,
+        )),
+        None => Ok(()),
+    }
 }
 
 fn quote(name: &str) -> String {

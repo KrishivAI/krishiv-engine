@@ -155,7 +155,7 @@ fn unsupported(feature: &str) -> KrishivError {
 }
 
 /// An `ALTER` found its table dropped or altered by another statement while it ran.
-fn concurrent_change(name: &TableName) -> KrishivError {
+pub(crate) fn concurrent_change(name: &TableName) -> KrishivError {
     internal(format!(
         "{} was changed by another statement while this one ran; retry",
         name.quoted()
@@ -1112,9 +1112,16 @@ impl Session {
             }
             AlterTableAction::AddPartition { .. }
             | AlterTableAction::SetPartitionLocation { .. }
-            | AlterTableAction::RenamePartition { .. }
-            | AlterTableAction::DropPartition { .. } => {
+            | AlterTableAction::RenamePartition { .. } => {
                 changed = self.alter_partitions(&table, &a.action, original).await?;
+            }
+            // It swaps the catalog entry itself, between its log commit and its deletes.
+            AlterTableAction::DropPartition {
+                if_exists, specs, ..
+            } => {
+                self.drop_partitions(&table, &name, specs, *if_exists, original)
+                    .await?;
+                return self.empty_frame().await;
             }
             AlterTableAction::SetTblProperties(props) => {
                 // The `comment` property is the table comment (`AlterTableSetPropertiesCommand`); the
@@ -1152,10 +1159,6 @@ impl Session {
         if !self.state.catalog.store.replace_table(&table, changed) {
             return Err(concurrent_change(&name));
         }
-        // A change alters what a read of the table returns: its cached relations and results go.
-        self.state
-            .cache
-            .invalidate_table(&format!("{}.{}", name.namespace, name.name));
         self.empty_frame().await
     }
 
