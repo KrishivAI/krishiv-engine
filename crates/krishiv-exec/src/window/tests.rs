@@ -1303,5 +1303,9 @@ fn skewed_rows(n: i64) -> Vec<Row> {
         .collect()
 }
 
+fn internal_for_test() -> krishiv_common::error::KrishivError {
+    crate::error::internal("a read failed".to_owned())
+}
+
 mod part1;
 mod part2;

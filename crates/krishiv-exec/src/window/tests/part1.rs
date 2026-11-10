@@ -942,3 +942,34 @@ async fn a_refused_flush_headroom_fails_the_window() {
     assert_eq!(again.error_class(), ErrorClass::UnableToAcquireMemory);
     drop((hog, local));
 }
+
+/// The reservation for frames with offsets covers their outputs and row
+/// maps (it also holds the frames, the tree and a chunk of scratch).
+#[test]
+fn frame_costs_cover_their_outputs() {
+    for (rows, parts) in [(10_000, 100), (4_096, 4_096)] {
+        for f in frame_functions() {
+            let window = plan(vec![f.clone()], true);
+            let (b, part, peer) = sorted_unit(rows, parts);
+            let n = b.num_rows();
+            let slice = super::super::eval::Slice {
+                batch: b.data(),
+                offset: 0,
+                len: n,
+                part_start: &part,
+                peer_start: &peer,
+            };
+            let out =
+                super::super::eval::evaluate(&window, &[slice], false, &super::super::utc_zone())
+                    .unwrap();
+            let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
+            let held: usize = out
+                .iter()
+                .map(|c| Array::get_array_memory_size(c.as_ref()))
+                .sum::<usize>()
+                + 8 * n * 2;
+            let cost = super::super::eval::cost(&window, n, count(&part), count(&peer), 0).unwrap();
+            assert!(cost >= held, "{f:?}: reserved {cost} < held {held}");
+        }
+    }
+}

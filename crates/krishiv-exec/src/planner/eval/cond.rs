@@ -100,7 +100,7 @@ pub(super) fn string_target<'a>(
 /// More constant list elements than this make an `IN` a hash-set lookup
 /// (Spark's `spark.sql.optimizer.inSetConversionThreshold` default, above
 /// which its optimizer rewrites `In` to `InSet`).
-const IN_SET_THRESHOLD: usize = 10;
+pub(super) const IN_SET_THRESHOLD: usize = 10;
 
 /// `v IN (constants)` as a set lookup (Spark's `InSet`): one hash probe
 /// per row instead of one comparison per element. The same answers as
@@ -361,10 +361,17 @@ struct InViews {
     v: Arc<dyn PhysExpr>,
     /// Values of 12 bytes or fewer, as their whole views.
     inline: Vec<u128>,
-    /// Longer values.
-    long: Vec<Vec<u8>>,
+    /// Longer values: the view's low 64 bits (length and first four bytes) and the whole value.
+    long: Vec<(u64, Vec<u8>)>,
     /// The list holds a NULL.
     has_null: bool,
+}
+
+/// A view's low 64 bits (length, first four bytes) and its length.
+#[inline]
+#[expect(clippy::cast_possible_truncation, reason = "a view's 32/64-bit fields")]
+pub(super) fn view_head(view: u128) -> (u64, u32) {
+    (view as u64, view as u32)
 }
 
 impl InViews {
@@ -399,9 +406,11 @@ impl InViews {
             if u32::try_from(view & u128::from(u32::MAX)).ok()? <= 12 {
                 out.inline.push(view);
             } else {
-                out.long.push(long_bytes(view, buffers)?.to_vec());
+                out.long
+                    .push((view_head(view).0, long_bytes(view, buffers)?.to_vec()));
             }
         }
+        // Sorted only so that dedup drops repeated literals (each costs a pass per batch).
         out.inline.sort_unstable();
         out.inline.dedup();
         Some(out)
@@ -421,17 +430,39 @@ impl PhysExpr for InViews {
         let v = self.v.eval(batch, partition)?;
         let a = v.array();
         let (views, buffers) = view_parts(a.as_ref());
-        let values = BooleanBuffer::collect_bool(views.len(), |i| {
-            let Some(&view) = views.get(i) else {
-                return false;
-            };
-            self.inline.contains(&view)
-                || (!self.long.is_empty()
-                    && long_bytes(view, buffers).is_some_and(|b| {
-                        u32::try_from(view & u128::from(u32::MAX)).is_ok_and(|n| n > 12)
-                            && self.long.iter().any(|k| k.as_slice() == b)
-                    }))
-        });
+        let n = views.len();
+        // One pass over the views per literal, 64 rows to a word: a plain compare the compiler
+        // vectorises, with no per-row closure and no search of the list.
+        let mut words: Vec<u64> = views
+            .chunks(64)
+            .map(|chunk| {
+                let mut word = 0u64;
+                for &k in &self.inline {
+                    let mut hit = 0u64;
+                    for (j, &row) in chunk.iter().enumerate() {
+                        hit |= u64::from(row == k) << j;
+                    }
+                    word |= hit;
+                }
+                word
+            })
+            .collect();
+        if !self.long.is_empty() {
+            for (i, &view) in views.iter().enumerate() {
+                // The length and first four bytes decide most rows without touching a buffer.
+                let (head, len) = view_head(view);
+                if len > 12
+                    && self.long.iter().any(|(h, bytes)| {
+                        *h == head
+                            && long_bytes(view, buffers).is_some_and(|b| b == bytes.as_slice())
+                    })
+                    && let Some(word) = words.get_mut(i / 64)
+                {
+                    *word |= 1 << (i % 64);
+                }
+            }
+        }
+        let values = BooleanBuffer::new(arrow_buffer::Buffer::from_vec(words), 0, n);
         // A row that found nothing is NULL when the list holds a NULL.
         let nulls = if self.has_null {
             NullBuffer::union(

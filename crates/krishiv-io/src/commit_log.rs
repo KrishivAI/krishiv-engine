@@ -162,6 +162,19 @@ impl<'a> CommitLog<'a> {
         self.snapshot_to(u64::MAX).await
     }
 
+    /// The snapshot at the newest version, or `None` when the root has no log:
+    /// [`Self::exists`] and [`Self::snapshot`] over one listing of `_krishiv_log/`.
+    ///
+    /// # Errors
+    /// As [`Self::snapshot`].
+    pub async fn snapshot_if_exists(&self) -> Result<Option<Snapshot>> {
+        let (entries, checkpoint) = self.versions().await?;
+        if entries.is_empty() && checkpoint.is_none() {
+            return Ok(None);
+        }
+        self.replay(entries, checkpoint, u64::MAX).await.map(Some)
+    }
+
     /// Entry versions (ascending) and the newest checkpoint.
     async fn versions(&self) -> Result<(Vec<u64>, Option<u64>)> {
         let mut entries = Vec::new();
@@ -226,7 +239,7 @@ impl<'a> CommitLog<'a> {
     /// writer read before it wrote; `None` for an empty log). Returns the
     /// version taken.
     ///
-    /// An append that loses a race retries on the next version. An overwrite
+    /// An append that loses a race lists the log once and retries on the version after the newest. An overwrite
     /// conflicts with any commit after `base`. A commit whose response was
     /// lost is recognised by its bytes (see `IoContext::put_if_absent`).
     ///
@@ -261,7 +274,11 @@ impl<'a> CommitLog<'a> {
                     if entry.mode == CommitMode::Overwrite {
                         return Err(self.conflict(version));
                     }
-                    version += 1;
+                    // One listing finds the newest version, instead of one
+                    // put_if_absent per commit that overtook this append.
+                    let (entries, checkpoint) = self.versions().await?;
+                    let newest = entries.last().copied().max(checkpoint);
+                    version = newest.map_or(version, |n| n + 1).max(version + 1);
                 }
             }
         }
@@ -321,6 +338,17 @@ impl<'a> CommitLog<'a> {
     /// The snapshot as of `version` (not later).
     async fn snapshot_to(&self, version: u64) -> Result<Snapshot> {
         let (entries, checkpoint) = self.versions().await?;
+        self.replay(entries, checkpoint, version).await
+    }
+
+    /// Replays the listed `entries` (after `checkpoint`) up to `version`; the entries are read
+    /// concurrently and applied in order.
+    async fn replay(
+        &self,
+        entries: Vec<u64>,
+        checkpoint: Option<u64>,
+        version: u64,
+    ) -> Result<Snapshot> {
         let mut snap = Snapshot::default();
         let mut next = 0;
         if let Some(c) = checkpoint.filter(|c| *c <= version) {
@@ -333,14 +361,26 @@ impl<'a> CommitLog<'a> {
             next = c + 1;
         }
         let start = next;
-        for v in entries.into_iter().filter(|v| *v >= start && *v <= version) {
-            if v != next {
-                return Err(self.corrupt(&format!("version {next} is missing")));
+        let wanted: Vec<u64> = entries
+            .into_iter()
+            .filter(|v| *v >= start && *v <= version)
+            .collect();
+        // A gap is a corrupt log whatever the reads would return.
+        for (i, v) in wanted.iter().enumerate() {
+            if *v != next + i as u64 {
+                return Err(self.corrupt(&format!("version {} is missing", next + i as u64)));
             }
-            let (entry, _) = self.read_entry(v).await?;
-            apply(&mut snap, &entry);
-            snap.version = Some(v);
-            next = v + 1;
+        }
+        // At most 16 reads at once, and each chunk is applied in version order before the next is
+        // read: a failed checkpoint leaves the whole log since the last one to replay, and its
+        // entries (with their JSON bytes) must not all be held at once.
+        for chunk in wanted.chunks(16) {
+            let read =
+                futures::future::try_join_all(chunk.iter().map(|v| self.read_entry(*v))).await?;
+            for (v, (entry, _)) in chunk.iter().zip(read) {
+                apply(&mut snap, &entry);
+                snap.version = Some(*v);
+            }
         }
         Ok(snap)
     }

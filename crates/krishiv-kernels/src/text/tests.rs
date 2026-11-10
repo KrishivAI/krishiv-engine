@@ -10,6 +10,12 @@ fn integers_follow_java_not_cast() {
     assert_eq!(java_parse_long("-0"), Some(0));
     assert_eq!(java_parse_long("007"), Some(7));
     assert_eq!(java_parse_long("\u{661}\u{662}"), Some(12));
+    // Java reads UTF-16 units: a digit outside the BMP is two surrogates and no digit (Spark 4.2.0,
+    // a CSV bigint/int column: `\u{663}` is 3, U+1D7D9 is NULL).
+    assert_eq!(java_parse_long("\u{663}"), Some(3));
+    assert_eq!(java_parse_long("\u{1d7d9}"), None);
+    assert_eq!(java_parse_long("1\u{1d7da}"), None);
+    assert_eq!(java_parse_integral("\u{1d7d9}", 32), None);
     assert_eq!(java_parse_long("-9223372036854775808"), Some(i64::MIN));
     for bad in [
         " 1",
