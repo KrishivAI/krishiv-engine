@@ -8,6 +8,7 @@ that is what makes the `thread_safe=False` test able to fail.
 
 from __future__ import annotations
 
+import importlib
 import sys
 import threading
 import time
@@ -268,7 +269,7 @@ def test_a_failed_query_interrupts_a_call_only_after_the_import_it_is_in(tmp_pat
             raise ValueError("boom")
         sys.modules.pop("krishiv_test_slow_module", None)
         try:
-            import krishiv_test_slow_module  # noqa: F401
+            importlib.import_module("krishiv_test_slow_module")
 
             seen["imported"] = True
             started = time.monotonic()
