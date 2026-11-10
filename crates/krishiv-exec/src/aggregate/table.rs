@@ -395,17 +395,76 @@ impl AggTable {
         self::batch(&core.state_schema, out, n)
     }
 
-    /// Group ids per spill partition at `level`.
-    pub(crate) fn ids_by_partition(&self, level: u32) -> Vec<Vec<u32>> {
-        let mut parts = vec![Vec::new(); crate::hash::PARTITIONS];
+    /// Group ids per spill partition at `level`, of the groups at
+    /// positions `from..` that `keep` accepts.
+    pub(crate) fn ids_by_partition(
+        &self,
+        level: u32,
+        from: usize,
+        keep: &dyn Fn(u32) -> bool,
+    ) -> PartIds {
         if self.core.keys() == 0 {
-            parts[0].push(0);
-            return parts;
+            return PartIds::build(|| std::iter::once((0, 0)).filter(|&(_, id)| keep(id)));
         }
-        for (id, &h) in (0u32..).zip(self.keys.hashes()) {
-            parts[spill_partition(h, level)].push(id);
+        PartIds::build(|| {
+            (0u32..)
+                .zip(self.keys.hashes())
+                .skip(from)
+                .filter(|&(id, _)| keep(id))
+                .map(|(id, &h)| (spill_partition(h, level), id))
+        })
+    }
+}
+
+/// Group ids by spill partition in one buffer of exactly their count
+/// (counted first, then placed): a `Vec` per partition grown by pushes
+/// peaks at up to twice the ids' bytes, outside the memory pool.
+#[derive(Debug)]
+pub(crate) struct PartIds {
+    ids: Vec<u32>,
+    /// Partition `p` is `ids[starts[p]..starts[p + 1]]`.
+    starts: Vec<usize>,
+}
+
+impl PartIds {
+    /// The ids `make` yields (called twice, the same items both times) as
+    /// `(partition, id)`, each partition's ids in the order yielded.
+    pub(crate) fn build<I: Iterator<Item = (usize, u32)>>(make: impl Fn() -> I) -> Self {
+        let mut starts = vec![0usize; crate::hash::PARTITIONS + 1];
+        for (p, _) in make() {
+            starts[p + 1] += 1;
         }
-        parts
+        for p in 0..crate::hash::PARTITIONS {
+            starts[p + 1] += starts[p];
+        }
+        let mut next = starts.clone();
+        let mut ids = vec![0u32; starts[crate::hash::PARTITIONS]];
+        for (p, id) in make() {
+            ids[next[p]] = id;
+            next[p] += 1;
+        }
+        Self { ids, starts }
+    }
+
+    /// The ids of partition `p`.
+    pub(crate) fn part(&self, p: usize) -> &[u32] {
+        &self.ids[self.starts[p]..self.starts[p + 1]]
+    }
+
+    /// The number of partitions.
+    pub(crate) fn partitions(&self) -> usize {
+        self.starts.len() - 1
+    }
+
+    /// Bytes the ids hold.
+    pub(crate) fn bytes(&self) -> usize {
+        self.ids.len() * std::mem::size_of::<u32>()
+    }
+
+    /// All ids, partition by partition.
+    #[cfg(test)]
+    pub(crate) fn all(&self) -> &[u32] {
+        &self.ids
     }
 }
 
@@ -584,16 +643,15 @@ impl Table {
 
     /// Group ids per spill partition at `level`, of the groups at
     /// positions `from..` (ids are positions only for an `AggTable`).
-    pub(crate) fn ids_by_partition(&self, level: u32, from: usize) -> Vec<Vec<u32>> {
+    pub(crate) fn ids_by_partition(
+        &self,
+        level: u32,
+        from: usize,
+        keep: &dyn Fn(u32) -> bool,
+    ) -> PartIds {
         match self {
-            Self::Keys(t) => {
-                let mut parts = t.ids_by_partition(level);
-                for ids in &mut parts {
-                    ids.retain(|&i| i as usize >= from);
-                }
-                parts
-            }
-            Self::Rows(t) => t.ids_by_partition(level, from),
+            Self::Keys(t) => t.ids_by_partition(level, from, keep),
+            Self::Rows(t) => t.ids_by_partition(level, from, keep),
         }
     }
 
@@ -625,4 +683,27 @@ pub(crate) fn own_bytes(a: &dyn Array) -> usize {
         |_| a.get_array_memory_size(),
         |b| b + 64 * (d.buffers().len() + d.child_data().len() + 1),
     )
+}
+
+#[cfg(test)]
+mod part_ids_tests {
+    use super::PartIds;
+
+    #[test]
+    fn ids_land_in_their_partition_in_order_in_an_exact_buffer() {
+        let items = [
+            (3usize, 10u32),
+            (0, 11),
+            (3, 12),
+            (crate::hash::PARTITIONS - 1, 13),
+            (0, 14),
+        ];
+        let ids = PartIds::build(|| items.iter().copied());
+        assert_eq!(ids.partitions(), crate::hash::PARTITIONS);
+        assert_eq!(ids.part(0), &[11, 14]);
+        assert_eq!(ids.part(3), &[10, 12]);
+        assert_eq!(ids.part(crate::hash::PARTITIONS - 1), &[13]);
+        assert!(ids.part(1).is_empty());
+        assert_eq!(ids.bytes(), 5 * 4);
+    }
 }

@@ -108,7 +108,7 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::accumulator::{Accumulator, paired};
 use super::merge_index::{MergeIndex, Slot};
-use super::table::{AggCore, batch, own_bytes};
+use super::table::{AggCore, PartIds, batch, own_bytes};
 use super::{AggregateOutput, unsupported};
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
@@ -1545,18 +1545,31 @@ impl RowTable {
 
     /// Row references per spill partition at `level` (by `g`) of the rows
     /// at positions `from..` of the partition order (see [`ids`](Self::ids)).
-    pub(crate) fn ids_by_partition(&self, level: u32, from: usize) -> Vec<Vec<u32>> {
-        let mut out = vec![Vec::new(); PARTITIONS];
-        let mut start = 0;
-        for (p, part) in self.parts.iter().enumerate() {
-            let skip = from.saturating_sub(start);
-            start += self.part_len(p);
-            for (i, row) in part.rows.chunks_exact(self.stride).enumerate().skip(skip) {
-                let g = fin(word(row, 0), self.gseed);
-                out[spill_partition(g, level)].push(self.refs.make(p, i));
-            }
-        }
-        out
+    pub(crate) fn ids_by_partition(
+        &self,
+        level: u32,
+        from: usize,
+        keep: &dyn Fn(u32) -> bool,
+    ) -> PartIds {
+        PartIds::build(|| {
+            let mut start = 0;
+            self.parts
+                .iter()
+                .enumerate()
+                .flat_map(move |(p, part)| {
+                    let skip = from.saturating_sub(start);
+                    start += self.part_len(p);
+                    part.rows
+                        .chunks_exact(self.stride)
+                        .enumerate()
+                        .skip(skip)
+                        .map(move |(i, row)| (p, i, row))
+                })
+                .filter_map(|(p, i, row)| {
+                    let id = self.refs.make(p, i);
+                    keep(id).then(|| (spill_partition(fin(word(row, 0), self.gseed), level), id))
+                })
+        })
     }
 
     /// Row indices of a state batch per spill partition at `level`.
@@ -2570,7 +2583,7 @@ mod tests {
         assert_eq!(all.len(), 40);
         // Spilling from a position skips exactly the rows before it.
         for from in [0, 1, 17, 39, 40, 41] {
-            let mut got: Vec<u32> = append.ids_by_partition(0, from).concat();
+            let mut got: Vec<u32> = append.ids_by_partition(0, from, &|_| true).all().to_vec();
             let mut want = append.ids(from..append.len());
             got.sort_unstable();
             want.sort_unstable();

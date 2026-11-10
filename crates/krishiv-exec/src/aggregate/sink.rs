@@ -37,7 +37,7 @@ use krishiv_memory::{
 use krishiv_types::batch::{Batch, Weights};
 
 use super::rowtable::{Mode, PARTS, RowTable, WIDEN_GROUPS};
-use super::table::{AggCore, AggTable, Table};
+use super::table::{AggCore, AggTable, PartIds, Table};
 use super::{AggregateSpec, is_order_sensitive, unsupported};
 use crate::ExchangeStats;
 use crate::context::{QueryContext, TaskContext};
@@ -504,8 +504,16 @@ impl Spiller {
 
     /// Writes groups `from..` of `table` as one run of partition files at
     /// `level` (blocking I/O).
-    fn write_run(&self, table: &Table, from: usize, level: u32, partition: u32) -> Result<Run> {
-        let parts = table.ids_by_partition(level, from);
+    fn write_run(
+        &self,
+        table: &Table,
+        from: usize,
+        level: u32,
+        partition: u32,
+        reservation: &mut Reservation,
+    ) -> Result<Run> {
+        let parts = table.ids_by_partition(level, from, &|_| true);
+        let _ids = charge_ids(reservation, parts.bytes());
         let chunk = spill_chunk(table.memory_size(), table.len());
         self.write_parts(
             &parts,
@@ -538,19 +546,13 @@ impl Spiller {
         stop: &AtomicBool,
     ) -> Result<std::result::Result<(), SpillError>> {
         let started = std::time::Instant::now();
-        let per: Vec<Vec<Vec<u32>>> = sources
+        let per: Vec<PartIds> = sources
             .iter()
-            .map(|(t, keep)| {
-                let mut parts = t.ids_by_partition(level, 0);
-                for ids in &mut parts {
-                    ids.retain(|&r| keep(r));
-                }
-                parts
-            })
+            .map(|(t, keep)| t.ids_by_partition(level, 0, keep))
             .collect();
         let outcome = (|| {
             for (p, file) in files.iter_mut().enumerate() {
-                if file.is_some() || per.iter().all(|parts| parts[p].is_empty()) {
+                if file.is_some() || per.iter().all(|parts| parts.part(p).is_empty()) {
                     continue;
                 }
                 let mut w = match writer() {
@@ -559,7 +561,7 @@ impl Spiller {
                 };
                 for ((t, _), parts) in sources.iter().zip(&per) {
                     let chunk = spill_chunk(t.memory_size(), t.len());
-                    for ids in row_chunks(&parts[p], chunk, t) {
+                    for ids in row_chunks(parts.part(p), chunk, t) {
                         self.query.check_cancelled()?;
                         if stop.load(AtomicOrdering::Acquire) {
                             return Err(internal(
@@ -1105,6 +1107,25 @@ pub(super) fn resumes_at(l: &LocalState) -> Option<usize> {
         .and_then(|l| l.applied.map(|(_, at)| at))
 }
 
+/// The group ids of a spill (4 bytes a group, [`PartIds`]) counted against
+/// `r` while they live. Best effort: where the pool refuses, the ids stay
+/// untracked, as the spill cannot wait for memory it is about to free.
+struct IdsCharge<'a> {
+    r: &'a mut Reservation,
+    bytes: usize,
+}
+
+impl Drop for IdsCharge<'_> {
+    fn drop(&mut self) {
+        self.r.shrink(self.bytes);
+    }
+}
+
+fn charge_ids(r: &mut Reservation, bytes: usize) -> IdsCharge<'_> {
+    let bytes = if r.try_grow(bytes).is_ok() { bytes } else { 0 };
+    IdsCharge { r, bytes }
+}
+
 /// Grows `r` to `want` bytes; `Err(missing)` if the pool refuses.
 fn reserve_to(r: &mut Reservation, want: usize) -> Result<(), usize> {
     let need = want.saturating_sub(r.size());
@@ -1237,7 +1258,7 @@ impl HashAggregate {
             let mut runs = Vec::new();
             for (i, (p, t, mut r)) in tables.into_iter().enumerate() {
                 lend_headroom(&mut r);
-                runs.push(s.write_run(&t, if i == 1 { merged } else { 0 }, 0, p)?);
+                runs.push(s.write_run(&t, if i == 1 { merged } else { 0 }, 0, p, &mut r)?);
             }
             // Every table's memory is back in the pool.
             drop(writing);
@@ -1683,12 +1704,14 @@ impl Sink for HashAggregate {
                         if let Some(h) = held.as_mut() {
                             lend_headroom(h);
                         }
-                        runs.push(s.write_run(t, 0, 0, own_partition)?);
+                        let mut spare = s.consumer.reservation();
+                        let r = held.as_mut().unwrap_or(&mut spare);
+                        runs.push(s.write_run(t, 0, 0, own_partition, r)?);
                     }
                     drop((own, held));
                     for (p, t, mut r) in combined {
                         lend_headroom(&mut r);
-                        runs.push(s.write_run(&t, 0, 0, p)?);
+                        runs.push(s.write_run(&t, 0, 0, p, &mut r)?);
                     }
                     Ok((runs, report))
                 })

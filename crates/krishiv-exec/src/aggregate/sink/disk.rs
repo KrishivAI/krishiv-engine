@@ -298,7 +298,7 @@ impl DiskTask {
         // pool, and the run's writer must not lose the headroom to them.
         // What it leaves goes back with the phase's `release_credit`.
         lend(&mut reservation, HEADROOM);
-        let first = s.write_run(&table, 0, level, u32::MAX)?;
+        let first = s.write_run(&table, 0, level, u32::MAX, &mut reservation)?;
         drop((table, reservation));
         let mut writers: Vec<Option<SpillWriter>> = (0..PARTITIONS).map(|_| None).collect();
         let mut write = |batch: &Batch| -> Result<()> {

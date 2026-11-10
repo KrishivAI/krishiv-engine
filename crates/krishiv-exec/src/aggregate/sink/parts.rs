@@ -33,6 +33,7 @@ use krishiv_memory::{ConsumerHandle, SpillError, SpillFile, SpillWriter};
 use krishiv_types::batch::Batch;
 
 use super::{HEADROOM, Run, Spiller, Table, bump, chunks, writer_panicked};
+use crate::aggregate::table::PartIds;
 use crate::error::Result;
 use crate::hash::PARTITIONS;
 
@@ -117,7 +118,7 @@ impl Spiller {
     /// module docs).
     pub(super) fn write_parts(
         &self,
-        parts: &[Vec<u32>],
+        parts: &PartIds,
         chunk: usize,
         table: &Table,
         state: &(dyn Fn(&[u32]) -> Result<RecordBatch> + Sync),
@@ -125,7 +126,9 @@ impl Spiller {
     ) -> Result<Run> {
         let started = std::time::Instant::now();
         let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
-        let todo: Vec<usize> = (0..parts.len()).filter(|&p| !parts[p].is_empty()).collect();
+        let todo: Vec<usize> = (0..parts.partitions())
+            .filter(|&p| !parts.part(p).is_empty())
+            .collect();
         let helpers = self.helpers(table.memory_size(), todo.len());
         let next = AtomicUsize::new(0);
         let stop = AtomicBool::new(false);
@@ -135,7 +138,8 @@ impl Spiller {
             }
             todo.get(next.fetch_add(1, Ordering::AcqRel)).copied()
         };
-        let write = |p: usize, w: SpillWriter| self.write_part(w, &parts[p], chunk, table, state);
+        let write =
+            |p: usize, w: SpillWriter| self.write_part(w, parts.part(p), chunk, table, state);
         let (mine, done) = std::thread::scope(|s| {
             let mut handles = Vec::new();
             for h in &helpers.0 {
@@ -176,7 +180,7 @@ impl Spiller {
         bump(&self.counters.spill_handbacks, back.len() as u64);
         for p in back {
             let w = self.run_writer()?;
-            files[p] = Some(self.write_part(w, &parts[p], chunk, table, state)??);
+            files[p] = Some(self.write_part(w, parts.part(p), chunk, table, state)??);
         }
         self.time_run(started);
         bump(&self.counters.spill_runs, 1);

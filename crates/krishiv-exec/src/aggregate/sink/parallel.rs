@@ -426,7 +426,7 @@ impl HashAggregate {
                 let mut runs = Vec::with_capacity(inputs.len());
                 for (t, mut r) in inputs.into_iter().zip(held) {
                     lend_headroom(&mut r);
-                    runs.push(s.write_run(&Table::Rows(t), 0, 0, u32::MAX)?);
+                    runs.push(s.write_run(&Table::Rows(t), 0, 0, u32::MAX, &mut r)?);
                 }
                 Ok(runs)
             })
