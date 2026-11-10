@@ -1397,19 +1397,22 @@ fn pinned_bodies_survive_the_optimizer_and_grouping() {
         &s,
         "CREATE TEMPORARY FUNCTION off_div2(x INT) RETURNS DOUBLE RETURN 1 / x",
     );
-    // B1, lenient caller: the strict body raises although the caller's own `big + 1` wraps.
-    let e = fails(
-        &s,
-        "SELECT on_add(0 * id + 2147483647), 0 * id + 2147483647 + 1 FROM people",
-    );
+    // A plain INT column holding the maximum: the body's `x + 1` and the caller's `z + 1` are
+    // the same expression, which common subexpression elimination would share.
+    let schema = Arc::new(Schema::new(vec![Field::new("z", ArrowType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![i32::MAX]))],
+    )
+    .unwrap();
+    s.register_batches("big", schema, vec![batch]).unwrap();
+    // B1, lenient caller: the strict body raises although the caller's own `z + 1` wraps.
+    let e = fails(&s, "SELECT on_add(z), z + 1 FROM big");
     assert_eq!(class_and_params(&e).0, "ARITHMETIC_OVERFLOW");
     // B1, strict caller: two equal calls of a lenient body wrap, they do not raise.
     ok(&s, "SET spark.sql.ansi.enabled=true");
-    let rows = ok(
-        &s,
-        "SELECT off_add(0 * id + 2147483647), off_add(0 * id + 2147483647) FROM people",
-    );
-    assert_eq!(rows.len(), 3, "{rows:?}");
+    let rows = ok(&s, "SELECT z, off_add(z), off_add(z) FROM big");
+    assert_eq!(rows.len(), 1, "{rows:?}");
     // B2: grouping by a call whose body runs in the other mode.
     let rows = ok(&s, "SELECT off_div2(id) FROM people GROUP BY off_div2(id)");
     assert_eq!(rows.len(), 3, "{rows:?}");
