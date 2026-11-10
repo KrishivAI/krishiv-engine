@@ -872,3 +872,17 @@ fn a_seeded_random_over_range_draws_by_split_not_by_driver() {
         assert_eq!(column(rows(&s, q)), first);
     }
 }
+
+#[test]
+fn a_seeded_random_enclosing_cte_is_the_same_set_on_every_run() {
+    let s = Session::new().unwrap();
+    // The loop's anchor and round 1 read the CTE's rows; with split-keyed streams the
+    // set of values no longer depends on which driver took which row.
+    let q = "WITH RECURSIVE t AS (SELECT rand(7) AS x FROM range(0, 6, 1, 3)), \
+             r(n, x) AS (SELECT 1, x FROM t UNION ALL SELECT n + 1, t.x FROM r CROSS JOIN t WHERE n < 2 AND r.x = t.x) \
+             SELECT CAST(sort_array(collect_list(x)) AS STRING) FROM r";
+    let first = column(rows(&s, q));
+    for _ in 0..30 {
+        assert_eq!(column(rows(&s, q)), first);
+    }
+}
