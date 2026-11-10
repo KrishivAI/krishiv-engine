@@ -182,4 +182,28 @@ mod tests {
         assert!(got.suggestions().iter().all(|s| s.span.start == 4));
         assert!(!got.suggestions().is_empty());
     }
+
+    #[test]
+    fn the_prompts_are_the_repls() {
+        let p = SqlPrompt;
+        assert_eq!(p.render_prompt_left(), "krishiv");
+        assert_eq!(p.render_prompt_right(), "");
+        assert_eq!(p.render_prompt_indicator(PromptEditMode::Default), "> ");
+        assert_eq!(p.render_prompt_multiline_indicator(), "     ...> ");
+        let search = PromptHistorySearch::new(
+            reedline::PromptHistorySearchStatus::Passing,
+            "sel".to_owned(),
+        );
+        assert_eq!(
+            p.render_prompt_history_search_indicator(search),
+            "(search: sel) "
+        );
+    }
+
+    #[test]
+    fn an_editor_starts_with_its_history_without_a_terminal() {
+        let past = vec!["select 1;".to_owned(), "select 2;".to_owned()];
+        assert!(Editor::new(CompletionContext::default(), &past).is_some());
+        assert!(Editor::new(CompletionContext::default(), &[]).is_some());
+    }
 }

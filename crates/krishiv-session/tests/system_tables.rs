@@ -1087,3 +1087,26 @@ fn a_system_only_query_has_a_start_time() {
     );
     assert_eq!(started, ["true"]);
 }
+
+#[test]
+fn use_system_dot_name_is_a_missing_schema_of_system() {
+    let s = Session::new().unwrap();
+    let e = run(&s, "USE system.x").unwrap_err();
+    assert!(
+        e.contains("SCHEMA_NOT_FOUND") && e.contains("`system`"),
+        "{e}"
+    );
+}
+
+#[test]
+fn query_text_is_cut_at_a_character_boundary() {
+    let s = Session::new().unwrap();
+    run(&s, "SET krishiv.system.queryText.maxBytes=40").unwrap();
+    run(&s, "SELECT 'ééééééééééééééééééééééééééééééé' AS wide").unwrap();
+    let texts = column_of(&s, "SELECT query_text FROM system.queries", 0);
+    assert!(texts.iter().all(|t| t.len() <= 40), "{texts:?}");
+    assert!(
+        texts.iter().any(|t| t.starts_with("SELECT 'é")),
+        "{texts:?}"
+    );
+}
