@@ -97,6 +97,7 @@
 //! | `ExprNode::Function` | U | all | `operators`, `functions` |
 //! | `ExprNode::Cast` | U, R | Q1, Q3-Q8, Q10, Q12, Q14, Q15, Q20 | `cast` |
 //! | `ExprNode::Collate` | U | - | - |
+//! | `ExprNode::StoredField` | U | - | - |
 //! | `ExprNode::Alias` | U | Q1, Q3-Q17, Q19, Q21, Q22 | `col.alias` |
 //! | `ExprNode::Field` | U | - | - |
 //! | `ExprNode::UpdateFields` | U | - | - |
@@ -146,7 +147,7 @@ pub use expr::{
     SortOrder, Star, SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec,
     WindowSpecRef,
 };
-pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
+pub use function::{Builtin, FunctionId, FunctionKind, PythonEvalType, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
@@ -171,5 +172,5 @@ pub use plan::{
     TABLE_FUNCTION_NAME_SEP, TableVersion, UnpivotColumnSet, generator_arg,
     without_generated_marker,
 };
-pub use raises::{conjuncts, is_deterministic, may_raise};
+pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
 pub use walk::{MAX_DEPTH, check_depth};

@@ -2789,6 +2789,23 @@ def ucase(str: ColumnOrName) -> Column
 
 Calls the registry function `ucase`.
 
+### `udf`
+
+```python
+def udf(f: Any=None, returnType: DataType | str=StringType(), *, useArrow: bool | None=None) -> Any
+```
+
+Creates a user defined function (`pyspark.sql.functions.udf`, PySpark 4.2.0
+`sql/functions/builtin.py:30428-30635`): `udf(f, returnType)`, `@udf`, `@udf(returnType)` or
+`@udf(returnType=...)`. `returnType` defaults to `StringType`; `useArrow=None` follows
+`spark.sql.execution.pythonUDF.arrow.enabled` and the function's type hints (`pd.Series -> pd.Series` is
+a pandas UDF, `pa.Array -> pa.Array` an Arrow UDF). Calling the result gives a Column named
+`<function name>(<args>)` (`<lambda>` for a lambda); it is not callable from SQL until
+`spark.udf.register`.
+
+Only the Arrow paths are implemented: a UDF Spark would run pickled (`useArrow=False`) runs Arrow-batched
+with a warning (a documented divergence).
+
 ### `unbase64`
 
 ```python

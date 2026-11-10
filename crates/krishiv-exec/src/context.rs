@@ -417,6 +417,9 @@ impl QueryContext {
             let om = &mut m.operators.entry(*id).or_default().metrics;
             om.spill_files = stats.files();
             om.spill_write_bytes = stats.bytes();
+            // The drivers' peaks fall at different moments, so their sum can
+            // pass the query limit; the shared stats saw them together.
+            om.peak_reserved = stats.peak_held() as u64;
         }
         m.memory = QueryMemory {
             limit: self.pool.effective_limit().map(|l| l as u64),
@@ -516,6 +519,9 @@ pub struct TaskContext {
     /// driver computes): stateful functions own one value stream per
     /// partition. The first driver of a group reads partition 0.
     partition: u32,
+    /// The first partition id of the driver's pipeline-group member (the
+    /// offset of a `UNION ALL` child).
+    partition_base: u32,
 }
 
 impl fmt::Debug for TaskContext {
@@ -546,6 +552,7 @@ impl TaskContext {
             dependency: None,
             second_dependency: None,
             partition: 0,
+            partition_base: 0,
         }
     }
 
@@ -555,6 +562,18 @@ impl TaskContext {
     pub(crate) fn with_partition(mut self, partition: u32) -> Self {
         self.partition = partition;
         self
+    }
+
+    #[must_use]
+    pub(crate) fn with_partition_base(mut self, base: u32) -> Self {
+        self.partition_base = base;
+        self
+    }
+
+    /// The first partition id of this driver's pipeline-group member: the
+    /// partition a split-numbered source adds its split index to.
+    pub fn partition_base(&self) -> u32 {
+        self.partition_base
     }
 
     /// The driver's scheduler-assigned partition id (set when the driver is
