@@ -619,7 +619,7 @@ fn lane_count(
 const LANES_MIN_MEMORY_LIMIT: usize = 4 << 30;
 
 /// The most logical partitions a deterministic pipeline runs.
-const DETERMINISTIC_LOGICAL_PARTITIONS: usize = 16;
+pub(crate) const DETERMINISTIC_LOGICAL_PARTITIONS: usize = 16;
 
 /// A pipeline group planned but not yet running: the state its members
 /// share and the members in pipeline order.

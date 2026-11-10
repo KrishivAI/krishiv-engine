@@ -874,7 +874,7 @@ impl FileScanSource {
                 .get(f)
                 .is_some_and(|f| caps.is_splittable(f.path.as_ref()))
         };
-        let drivers = ctx.executor().parallelism();
+        let drivers = ctx.layout_parallelism();
         if self.request.metadata_cols.row_index && caps.random_access.is_none() {
             return krishiv_io::split::morsels(&self.partitions, u64::MAX, splittable);
         }

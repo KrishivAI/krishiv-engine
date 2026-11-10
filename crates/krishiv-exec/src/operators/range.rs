@@ -80,7 +80,7 @@ impl crate::operator::Source for Range {
         let config = ctx.query().config();
         let wanted = match self.num_slices {
             Some(n) => n.max(1),
-            None => u32::try_from(ctx.executor().parallelism().max(1)).unwrap_or(u32::MAX),
+            None => u32::try_from(ctx.layout_parallelism().max(1)).unwrap_or(u32::MAX),
         };
         // Slices beyond the row count are empty: they only cost the
         // morsel cursor (a seeded one allocates a permutation of them).

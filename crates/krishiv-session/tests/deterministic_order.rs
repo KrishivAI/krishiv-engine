@@ -177,6 +177,11 @@ fn the_result_does_not_depend_on_the_thread_count() {
         "SELECT id, id % 7 AS k FROM range(0, 400000, 1, 24) ORDER BY k LIMIT 50",
         "SELECT id, id % 7 AS k, CAST(id AS DOUBLE) / 3 AS x FROM range(0, 300000, 1, 24) ORDER BY k",
         "SELECT a.id, b.id FROM range(0, 20000, 1, 24) a JOIN (SELECT id, id % 100 AS k FROM range(0, 20000, 1, 24)) b ON a.id % 100 = b.k WHERE a.id < 300 LIMIT 500",
+        // Sources that cut their morsels by the executor's parallelism (review RB1): a range
+        // without a slice count, and a parquet scan.
+        "SELECT sum(CAST(id AS DOUBLE) / 7), count(*) FROM range(0, 400000)",
+        "SELECT sum(x), sum(r), sum(m) FROM (SELECT x, rand(7) AS r, monotonically_increasing_id() AS m FROM tp)",
+        "SELECT k, sum(y) FROM (SELECT k, x * rand(3) AS y FROM tp) GROUP BY k",
         // A fan-in mixing a branch that splits into lanes with one holding a flush barrier
         // (review B1): every member keeps one driver.
         "SELECT x FROM (SELECT a.id AS x FROM range(0,20000,1,24) a FULL JOIN range(0,1000,1,4) b ON a.id=b.id*3 \
@@ -191,9 +196,15 @@ fn the_result_does_not_depend_on_the_thread_count() {
         .unwrap();
         let s = Session::builder()
             .config("krishiv.deterministicOrder", "true")
+            // Lanes need a pool of at least 4 GiB; below it the mode keeps one driver.
+            .config("krishiv.memory.limit", "16GB")
             .executor(executor)
             .build()
             .unwrap();
+        run(
+            &s,
+            "CREATE TABLE tp USING parquet AS SELECT id, id % 7 AS k, CAST(id AS DOUBLE) / 3 AS x FROM range(300000)",
+        );
         shapes.push(
             queries
                 .iter()
@@ -318,4 +329,39 @@ fn lane_eligible_pipelines_over_every_operator_are_repeatable() {
             "`{q}` depends on the thread count"
         );
     }
+}
+
+/// Review RB1: the morsel layout of a range without a slice count and of a file scan must not
+/// follow the executor's thread count under the mode, or the lanes (one per morsel group) and so
+/// the bytes of a float sum would.
+#[test]
+fn morsel_layouts_do_not_follow_the_thread_count() {
+    use krishiv_exec::{ExecutorConfig, TokioExecutor};
+    let mut seen: Vec<(u64, u64)> = Vec::new();
+    for threads in [1, 4, 12] {
+        let executor = TokioExecutor::new(&ExecutorConfig {
+            compute_threads: threads,
+            ..ExecutorConfig::default()
+        })
+        .unwrap();
+        let s = Session::builder()
+            .config("krishiv.deterministicOrder", "true")
+            .config("krishiv.memory.limit", "16GB")
+            .executor(executor)
+            .build()
+            .unwrap();
+        run(
+            &s,
+            "CREATE TABLE tp USING parquet AS SELECT id, CAST(id AS DOUBLE) / 3 AS x FROM range(300000)",
+        );
+        seen.push((
+            max_drivers(
+                &s,
+                "SELECT sum(CAST(id AS DOUBLE) / 7) FROM range(0, 400000)",
+            ),
+            max_drivers(&s, "SELECT sum(x) FROM tp"),
+        ));
+    }
+    assert!(seen.windows(2).all(|w| w[0] == w[1]), "{seen:?}");
+    assert_eq!(seen[0].0, 16, "{seen:?}");
 }

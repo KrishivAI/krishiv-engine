@@ -633,6 +633,18 @@ impl TaskContext {
         &self.executor
     }
 
+    /// The driver count a source cuts its morsels for. Under `krishiv.deterministicOrder` it is
+    /// a constant (the logical partitions), never the executor's thread count: which rows a
+    /// morsel holds decides the result's bytes, and must not follow the machine (T094 G1).
+    #[must_use]
+    pub fn layout_parallelism(&self) -> usize {
+        if self.query.config().deterministic_order {
+            crate::runner::DETERMINISTIC_LOGICAL_PARTITIONS
+        } else {
+            self.executor.parallelism()
+        }
+    }
+
     /// Runs non-yielding work over ~1 ms on the bounded blocking pool and
     /// returns its result. Long closures check
     /// [`QueryContext::is_cancelled`] between chunks of ≤ 10 ms; the query
