@@ -895,3 +895,14 @@ fn a_seeded_random_above_a_generator_draws_by_split_not_by_driver() {
         assert_eq!(column(rows(&s, q)), first, "run {run}");
     }
 }
+
+/// Two reads of one shared CTE number their splits apart: the stored batches carry no split tag of the
+/// pipeline that produced them, so ids drawn per split stay unique across the readers.
+#[test]
+fn two_reads_of_a_shared_cte_draw_ids_from_distinct_splits() {
+    let s = Session::new().unwrap();
+    let q = "WITH t AS (SELECT id, rand() AS r FROM range(0, 1000, 1, 4) UNION ALL SELECT count(*), rand() FROM range(10)) \
+             SELECT count(DISTINCT m) FROM (SELECT monotonically_increasing_id() AS m FROM t \
+             UNION ALL SELECT monotonically_increasing_id() AS m FROM t)";
+    assert_eq!(column(rows(&s, q)), vec!["2002"]);
+}
