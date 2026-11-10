@@ -52,14 +52,14 @@ type Demand = (usize, Option<Attrs>);
 
 struct Graph {
     nodes: Vec<Arc<LogicalPlan>>,
-    index: HashMap<*const LogicalPlan, usize>,
+    index: crate::expr::AddrMap<LogicalPlan, usize>,
 }
 
 impl Graph {
     fn new(root: &Arc<LogicalPlan>) -> Self {
         let mut g = Self {
             nodes: Vec::new(),
-            index: HashMap::new(),
+            index: Default::default(),
         };
         let mut stack = vec![Arc::clone(root)];
         while let Some(p) = stack.pop() {
@@ -97,7 +97,7 @@ impl Graph {
                 projections,
                 output,
             } => {
-                let mut need = Attrs::new();
+                let mut need = Attrs::default();
                 for j in expand_keep(output, req) {
                     projections
                         .iter()
@@ -113,7 +113,7 @@ impl Graph {
             // Every state column stays: an aggregate above reads a call's
             // states together, or not at all.
             PlanNode::PartialAggregate { input, .. } => {
-                let mut need = Attrs::new();
+                let mut need = Attrs::default();
                 p.for_each_expr(&mut |e| references_into(e, &mut need));
                 child(input, Some(need));
             }
@@ -158,7 +158,7 @@ impl Graph {
         }
         subqueries(p, &mut |kind, s| {
             // `EXISTS` reads no column of its plan.
-            let demand = matches!(kind, SubqueryKind::Exists).then(Attrs::new);
+            let demand = matches!(kind, SubqueryKind::Exists).then(Attrs::default);
             out.push((self.id(s), demand));
         });
         out
@@ -168,14 +168,14 @@ impl Graph {
     /// node sees the union of its consumers' demands.
     fn requirements(&self) -> Vec<Attrs> {
         let n = self.nodes.len();
-        let empty = Attrs::new();
+        let empty = Attrs::default();
         let mut indegree = vec![0_usize; n];
         for i in 0..n {
             for (c, _) in self.demands(i, &empty) {
                 indegree[c] += 1;
             }
         }
-        let mut req = vec![Attrs::new(); n];
+        let mut req = vec![Attrs::default(); n];
         if let Some(root) = self.nodes.first() {
             req[0] = output_ids(root);
         }
@@ -487,7 +487,7 @@ fn expand_keep(output: &[BoundColumn], req: &Attrs) -> Vec<usize> {
 }
 
 fn refs(exprs: &[Arc<Expr>]) -> Attrs {
-    let mut out = Attrs::new();
+    let mut out = Attrs::default();
     exprs.iter().for_each(|e| references_into(e, &mut out));
     out
 }

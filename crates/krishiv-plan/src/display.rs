@@ -850,7 +850,9 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             )));
         }
         // Spark prints the item only.
-        ExprNode::Pipe { expr, .. } => out.push(Piece::Expr(expr)),
+        ExprNode::Pipe { expr, .. } | ExprNode::StoredField { expr, .. } => {
+            out.push(Piece::Expr(expr));
+        }
         ExprNode::MultiAlias { expr, names } => {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS ({})", names.join(", "))));

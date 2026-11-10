@@ -5,7 +5,7 @@ expression: tpch.plan(q).to_string()
 TopN 20, [revenue#37 DESC NULLS LAST]
 +- Exchange SinglePartition
    +- LocalTopN 20, [revenue#37 DESC NULLS LAST]
-      +- Project [c_custkey#0, c_name#1, sum((l_extendedprice#22 * (1 - l_discount#23)))#4611686018427387922 AS revenue#37, c_acctbal#5, n_name#34, c_address#2, c_phone#4, c_comment#7]
+      +- Project [c_custkey#0, c_name#1, sum((l_extendedprice#22 * (1 - l_discount#23)))#4611686018427387925 AS revenue#37, c_acctbal#5, n_name#34, c_address#2, c_phone#4, c_comment#7]
          +- HashAggregate keys=[c_custkey#0, c_name#1, c_acctbal#5, c_phone#4, n_name#34, c_address#2, c_comment#7], functions=[sum((l_extendedprice#22 * (1 - l_discount#23)))]
             +- Exchange hashpartitioning(c_custkey#0, c_name#1, c_acctbal#5, c_phone#4, n_name#34, c_address#2, c_comment#7)
                +- PartialHashAggregate keys=[c_custkey#0, c_name#1, c_acctbal#5, c_phone#4, n_name#34, c_address#2, c_comment#7], functions=[sum((l_extendedprice#22 * (1 - l_discount#23)))]
@@ -14,16 +14,18 @@ TopN 20, [revenue#37 DESC NULLS LAST]
                         +- HashJoin Inner, [c_nationkey#3] = [n_nationkey#33], RuntimeFilter #3: c_nationkey#3 -> spark_catalog.default.customer.c_nationkey
                            :- Project [c_custkey#0, c_name#1, c_address#2, c_nationkey#3, c_phone#4, c_acctbal#5, c_comment#7, l_extendedprice#22, l_discount#23]
                            :  +- HashJoin Inner, [c_custkey#0] = [o_custkey#9], RuntimeFilter #2: c_custkey#0 -> spark_catalog.default.customer.c_custkey
-                           :     :- Scan spark_catalog.default.customer [c_custkey#0, c_name#1, c_address#2, c_nationkey#3, c_phone#4, c_acctbal#5, c_comment#7]
+                           :     :- Filter (isnotnull(c_custkey#0) and isnotnull(c_nationkey#3))
+                           :     :  +- Scan spark_catalog.default.customer [c_custkey#0, c_name#1, c_address#2, c_nationkey#3, c_phone#4, c_acctbal#5, c_comment#7], PushedFilters: [(isnotnull(c_custkey#0) and isnotnull(c_nationkey#3))]
                            :     +- BroadcastExchange
                            :        +- Project [l_extendedprice#22, l_discount#23, o_custkey#9]
                            :           +- HashJoin Inner, [l_orderkey#17] = [o_orderkey#8], RuntimeFilter #1: l_orderkey#17 -> spark_catalog.default.lineitem.l_orderkey
                            :              :- Project [l_orderkey#17, l_extendedprice#22, l_discount#23]
-                           :              :  +- Filter (l_returnflag#25 == 'R')
-                           :              :     +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_returnflag#25], PushedFilters: [(l_returnflag#25 == 'R')]
+                           :              :  +- Filter ((l_returnflag#25 == 'R') and isnotnull(l_orderkey#17))
+                           :              :     +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_returnflag#25], PushedFilters: [((l_returnflag#25 == 'R') and isnotnull(l_orderkey#17))]
                            :              +- BroadcastExchange
                            :                 +- Project [o_orderkey#8, o_custkey#9]
-                           :                    +- Filter ((o_orderdate#12 >= DATE '1993-10-01') and (o_orderdate#12 < DATE '1994-01-01'))
-                           :                       +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12], PushedFilters: [((o_orderdate#12 >= DATE '1993-10-01') and (o_orderdate#12 < DATE '1994-01-01'))]
+                           :                    +- Filter ((((o_orderdate#12 >= DATE '1993-10-01') and (o_orderdate#12 < DATE '1994-01-01')) and isnotnull(o_custkey#9)) and isnotnull(o_orderkey#8))
+                           :                       +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12], PushedFilters: [((((o_orderdate#12 >= DATE '1993-10-01') and (o_orderdate#12 < DATE '1994-01-01')) and isnotnull(o_custkey#9)) and isnotnull(o_orderkey#8))]
                            +- BroadcastExchange
-                              +- Scan spark_catalog.default.nation [n_nationkey#33, n_name#34]
+                              +- Filter isnotnull(n_nationkey#33)
+                                 +- Scan spark_catalog.default.nation [n_nationkey#33, n_name#34], PushedFilters: [isnotnull(n_nationkey#33)]

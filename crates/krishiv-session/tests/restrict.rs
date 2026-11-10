@@ -151,6 +151,14 @@ fn restricted(s: &Session, query: &str) -> bool {
     semis(&section("== Optimized Logical Plan ==")) > semis(&section("== Analyzed Logical Plan =="))
 }
 
+/// Whether the optimized plan holds `filter` (an inferred join filter).
+fn inferred_literal(s: &Session, query: &str, filter: &str) -> bool {
+    let df = block_on(s.sql(query)).unwrap();
+    let text = block_on(df.explain(ExplainMode::Extended)).unwrap();
+    let start = text.find("== Optimized Logical Plan ==").unwrap_or(0);
+    text[start..].contains(filter)
+}
+
 #[test]
 fn restricted_aggregates_return_sparks_rows() {
     let s = session();
@@ -187,7 +195,17 @@ fn restricted_aggregates_return_sparks_rows() {
         ),
     ];
     for (query, want) in cases {
-        assert!(restricted(&s, query), "not restricted: {query}");
+        // Two correlation columns with a literal on one: the inferred join
+        // filter carries `t.b = 'x'` across `u.d = t.b` onto the aggregate's
+        // input (`d = 'x'`), and restriction leaves that aggregate alone.
+        if query.contains("u.d = t.b") {
+            assert!(
+                inferred_literal(&s, query, "(d#4 == 'x')"),
+                "no inferred filter: {query}"
+            );
+        } else {
+            assert!(restricted(&s, query), "not restricted: {query}");
+        }
         assert_eq!(rows(&s, query), *want, "{query}");
     }
 }

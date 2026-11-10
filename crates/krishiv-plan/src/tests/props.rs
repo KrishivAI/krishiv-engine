@@ -169,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 19 };
+        let kinds = if depth == 0 { 5 } else { 20 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -311,6 +311,10 @@ impl Gen<'_> {
                 )
                 .unwrap(),
                 name: self.name(),
+            },
+            19 => ExprNode::StoredField {
+                expr: Arc::new(self.expr(d)),
+                comment: self.flag().then(|| self.name()),
             },
             _ => ExprNode::Subquery {
                 kind: match self.pick(3) {
@@ -843,6 +847,17 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             m_string(name, w) || m_expr(expr, w)
         }
         ExprNode::Alias { expr, name } => m_string(name, w) || m_expr(expr, w),
+        ExprNode::StoredField { expr, comment } => {
+            site!(
+                w,
+                *comment = if comment.is_some() {
+                    None
+                } else {
+                    Some("c".to_owned())
+                }
+            );
+            m_expr(expr, w)
+        }
         ExprNode::MultiAlias { expr, names } => {
             names.iter_mut().any(|n| m_string(n, w)) || m_expr(expr, w)
         }

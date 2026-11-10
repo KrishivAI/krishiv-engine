@@ -1,0 +1,17 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 622
+expression: SELECT t.a FROM t JOIN u ON t.a = u.a JOIN t t2 ON t.c = t2.c WHERE u.a = 7 AND t2.c = 2
+---
+Project [a#0]
++- Join Inner, (a#0 == a#3)
+   :- Project [a#0]
+   :  +- Join Inner, (c#2 == c#7)
+   :     :- Filter (((isnotnull(a#0) and (a#0 == 7)) and isnotnull(c#2)) and (c#2 == 2L))
+   :     :  +- Scan spark_catalog.default.t [a#0, c#2] (shared #1)
+   :     +- Project [c#7]
+   :        +- Shift +5
+   :           +- Filter (c#2 == 2L)
+   :              +- Shared #1, printed above
+   +- Filter (a#3 == 7)
+      +- Scan spark_catalog.default.u [a#3]

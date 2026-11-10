@@ -143,6 +143,7 @@ pub(crate) fn expr_tag(node: &ExprNode) -> u8 {
         ExprNode::MultiAlias { .. } => 33,
         ExprNode::Pipe { .. } => 34,
         ExprNode::Collate { .. } => 40,
+        ExprNode::StoredField { .. } => 41,
     }
 }
 
@@ -1252,6 +1253,17 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 self.call(args, *distinct, filter.as_ref());
                 self.call_within_group(e);
+            }
+            ExprNode::StoredField { expr, comment } => {
+                self.u8(41);
+                match comment {
+                    None => self.u8(0),
+                    Some(c) => {
+                        self.u8(1);
+                        self.str(c);
+                    }
+                }
+                self.expr(expr);
             }
             ExprNode::Collate {
                 expr,

@@ -47,11 +47,17 @@ pub(crate) fn catalog() -> MemoryCatalog {
 
 /// The text of TPC-DS query `q` (1-based) from the benchmark harness, as Spark's own TPC-DS files write it: the
 /// harness copies quote column aliases with double quotes (`AS "order count"`), which Spark reads as strings, so
-/// they become backtick-quoted identifiers. (Single quotes are the literals.)
+/// they become backtick-quoted identifiers. (Single quotes are the literals.) The harness's q30 reads the
+/// TPC-DS v2 column `c_last_review_date_sk`; Spark's schema and its own q30 name it `c_last_review_date`.
 pub(crate) fn sql(q: usize) -> String {
     let text =
         std::fs::read_to_string(support::root().join(format!("bench/queries/tpcds/q{q:02}.sql")))
             .unwrap();
+    let text = if q == 30 {
+        text.replace("c_last_review_date_sk", "c_last_review_date")
+    } else {
+        text
+    };
     let mut out = String::with_capacity(text.len());
     let mut quoted = false;
     for c in text.chars() {
@@ -69,8 +75,7 @@ pub(crate) fn sql(q: usize) -> String {
 
 /// TPC-DS queries that do not resolve yet (with the reason): snapshots
 /// cannot cover them until their features land.
-pub(crate) const UNSUPPORTED: &[(usize, &str)] =
-    &[(30, "column c_last_review_date_sk missing from schemas")];
+pub(crate) const UNSUPPORTED: &[(usize, &str)] = &[];
 
 #[test]
 fn tpcds_plans() {
