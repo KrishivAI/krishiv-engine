@@ -3,5 +3,7 @@ source: crates/krishiv-optimizer/tests/it/rules.rs
 expression: SELECT a FROM t WHERE EXISTS (SELECT * FROM u WHERE u.a = t.a)
 ---
 Join LeftSemi, (a#3 == a#0)
-:- Scan spark_catalog.default.t [a#0]
-+- Scan spark_catalog.default.u [a#3]
+:- Filter isnotnull(a#0)
+:  +- Scan spark_catalog.default.t [a#0]
++- Filter isnotnull(a#3)
+   +- Scan spark_catalog.default.u [a#3]
