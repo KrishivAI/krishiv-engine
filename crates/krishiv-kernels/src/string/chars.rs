@@ -40,7 +40,7 @@ fn int_rows(
 
 /// A string result column: `fill` writes the row's value into the cleared
 /// scratch buffer for every row whose operands are all valid.
-fn str_rows<O: OffsetSizeTrait>(
+pub(super) fn str_rows<O: OffsetSizeTrait>(
     slots: &[&dyn Slot],
     mut fill: impl FnMut(usize, &mut String) -> Result<(), KernelError>,
 ) -> Result<GenericStringArray<O>, KernelError> {
@@ -61,7 +61,7 @@ fn str_rows<O: OffsetSizeTrait>(
 
 /// Reserves `need` bytes of scratch, reporting failure as
 /// `UNABLE_TO_ACQUIRE_MEMORY` instead of aborting.
-fn reserve_str(scratch: &mut String, need: usize) -> Result<(), KernelError> {
+pub(super) fn reserve_str(scratch: &mut String, need: usize) -> Result<(), KernelError> {
     scratch
         .try_reserve(need)
         .map_err(|_| KernelError::out_of_memory(need))
