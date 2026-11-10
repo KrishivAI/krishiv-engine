@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `spark.sql.binaryOutputStyle` for `to_csv` and `to_xml`, and `from_xml` into `BINARY`, against
-//! values from a real Spark 4.2.0 run (`spark-sql --conf spark.sql.binaryOutputStyle=...`).
+//! `spark.sql.binaryOutputStyle` for `to_csv` and `to_xml`: values from a real Spark 4.2.0 run
+//! (`spark-sql --conf spark.sql.binaryOutputStyle=...`). The `from_xml` into `BINARY` read-back
+//! tests are SOURCE-DERIVED from Spark v4.2.0 / v4.1.1 `ToStringBase.getBinaryParser` and
+//! `StaxXmlParser` (brief pr670-binary-readback-semantics.md); no Spark run backs them yet.
 #![cfg(test)]
 
 use arrow_array::Array;
@@ -76,22 +78,139 @@ fn utf8_style_prints_the_bytes_as_text() {
     );
 }
 
-#[test]
-fn from_xml_reads_a_binary_field_as_the_text_bytes() {
-    // The element's text as the output style prints it, decoded back (the text of the style, else its UTF-8 bytes).
-    for style in [None, Some("HEX"), Some("UTF-8")] {
-        let s = with_style(style);
-        let batches = block_on(
-            block_on(s.sql(
-                "SELECT length(from_xml('<ROW><name>Eason</name></ROW>', 'name binary').name)",
-            ))
+/// The first cell as text (`None` for NULL) of `SELECT cast(<expr> as string)`.
+fn cell(s: &Session, expr: &str) -> Option<String> {
+    let batches = block_on(
+        block_on(s.sql(&format!("SELECT cast({expr} as string)")))
             .unwrap()
             .collect(),
-        )
-        .unwrap();
-        let c = batches[0].column(0);
-        let n = arrow_array::cast::as_primitive_array::<arrow_array::types::Int32Type>(c).value(0);
-        assert_eq!(n, 5, "{style:?}");
+    )
+    .unwrap();
+    let c = batches[0].column(0);
+    if c.is_null(0) {
+        return None;
+    }
+    Some(match c.as_string_opt::<i32>() {
+        Some(v) => v.value(0).to_owned(),
+        None => c.as_string_view().value(0).to_owned(),
+    })
+}
+
+fn from_xml_b(text: &str, opts: &str) -> String {
+    format!("from_xml('<ROW><b>{text}</b><n>7</n></ROW>', 'b binary, n int'{opts})")
+}
+
+fn error_class_of(s: &Session, sql: &str) -> krishiv_common::error::ErrorClass {
+    match block_on(s.sql(sql)) {
+        Ok(df) => block_on(df.collect()).unwrap_err().error_class(),
+        Err(e) => e.error_class(),
+    }
+}
+
+/// Spark 4.2.0 (source-derived): `Eason` is not a hex/basic/base64 text, so the field is a miss
+/// (NULL, siblings kept) in every style but UTF-8, where it is its 5 bytes.
+#[test]
+fn from_xml_eason_only_reads_in_utf8_style() {
+    for (style, len) in [
+        (None, None),
+        (Some("HEX"), None),
+        (Some("HEX_DISCRETE"), None),
+        (Some("BASIC"), None),
+        (Some("BASE64"), None),
+        (Some("UTF-8"), Some("5")),
+    ] {
+        let s = with_style(style);
+        let got = cell(
+            &s,
+            "length(from_xml('<ROW><name>Eason</name></ROW>', 'name binary').name)",
+        );
+        assert_eq!(got.as_deref(), len, "{style:?}");
+        // The miss keeps the siblings and the struct itself.
+        assert_eq!(
+            cell(&s, &format!("{}.n", from_xml_b("Eason", ""))).as_deref(),
+            Some("7"),
+            "{style:?}"
+        );
+    }
+}
+
+/// Each style reads back what it printed (`X'00FF'`), and the lenient forms Spark decodes.
+#[test]
+fn from_xml_reads_back_each_style_source_derived() {
+    for style in [
+        None,
+        Some("HEX_DISCRETE"),
+        Some("HEX"),
+        Some("BASIC"),
+        Some("BASE64"),
+    ] {
+        let s = with_style(style);
+        let round = "hex(from_xml(to_xml(named_struct('b', X'00FF')), 'b binary').b)";
+        assert_eq!(cell(&s, round).as_deref(), Some("00FF"), "{style:?}");
+    }
+    let hex_of =
+        |style, t: &str| cell(&with_style(style), &format!("hex({}.b)", from_xml_b(t, "")));
+    assert_eq!(hex_of(None, "01 FF").as_deref(), Some("01FF"));
+    assert_eq!(hex_of(None, "[01 ff]").as_deref(), Some("01FF"));
+    assert_eq!(hex_of(None, "01FF"), None);
+    assert_eq!(hex_of(Some("HEX"), "CAF").as_deref(), Some("0CAF"));
+    assert_eq!(hex_of(Some("HEX"), "[01 FF]"), None);
+    assert_eq!(hex_of(Some("BASIC"), "[1, 2 ]").as_deref(), Some("0102"));
+    assert_eq!(hex_of(Some("BASIC"), "[+5]").as_deref(), Some("05"));
+    assert_eq!(hex_of(Some("BASIC"), "[]"), None);
+    assert_eq!(hex_of(Some("BASIC"), "[128]"), None);
+    assert_eq!(hex_of(Some("BASE64"), "AB").as_deref(), Some("00"));
+    assert_eq!(hex_of(Some("BASE64"), "AQ").as_deref(), Some("01"));
+    assert_eq!(hex_of(Some("BASE64"), "YQ="), None);
+    assert_eq!(
+        hex_of(Some("UTF-8"), "[01 FF]").as_deref(),
+        Some("5B30312046465D")
+    );
+}
+
+/// A miss is NULL under PERMISSIVE and
+/// `MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION` under FAILFAST (source-derived).
+#[test]
+fn from_xml_binary_miss_by_mode() {
+    let s = with_style(None);
+    let permissive =
+        "from_xml('<ROW><b>Eason</b><n>7</n></ROW>', 'b binary, n int, _corrupt_record string')";
+    assert_eq!(cell(&s, &format!("{permissive}.b")), None);
+    assert_eq!(cell(&s, &format!("{permissive}.n")).as_deref(), Some("7"));
+    let failfast = format!(
+        "SELECT {}",
+        from_xml_b("Eason", ", map('mode', 'FAILFAST')")
+    );
+    assert_eq!(
+        error_class_of(&s, &failfast),
+        krishiv_common::error::ErrorClass::MalformedRecordInParsingWithoutSuggestion
+    );
+    let drop = format!(
+        "SELECT {}",
+        from_xml_b("AQ==", ", map('mode', 'DROPMALFORMED')")
+    );
+    assert_eq!(
+        error_class_of(&s, &drop),
+        krishiv_common::error::ErrorClass::ParseModeUnsupported
+    );
+}
+
+/// An empty or blank element is NULL in every style and mode; no error.
+#[test]
+fn from_xml_empty_binary_element_is_null() {
+    for style in [
+        None,
+        Some("HEX"),
+        Some("BASIC"),
+        Some("BASE64"),
+        Some("UTF-8"),
+    ] {
+        let s = with_style(style);
+        for t in ["", "   "] {
+            let ff = from_xml_b(t, ", map('mode', 'FAILFAST')");
+            assert_eq!(cell(&s, &format!("{ff}.b")), None, "{style:?}");
+        }
+        assert_eq!(cell(&s, "from_xml('<ROW><b/></ROW>', 'b binary').b"), None);
     }
 }
 

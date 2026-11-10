@@ -364,6 +364,8 @@ struct Reading<'a> {
     today: i32,
     /// `spark.sql.binaryOutputStyle`: a `BINARY` field's text is read back as the style prints it.
     binary: krishiv_kernels::binary_style::BinaryStyle,
+    /// Spark 4.1+ reads a `BINARY` field back; 4.0.x has no such case (every text is a miss).
+    binary_readable: bool,
 }
 
 impl Reading<'_> {
@@ -412,11 +414,19 @@ impl Reading<'_> {
                 },
                 bad,
             ),
-            FieldKind::Bin => V::Leaf(Val::Bytes(
-                self.binary
-                    .parse(text)
-                    .unwrap_or_else(|| text.as_bytes().to_vec()),
-            )),
+            // Spark has no keep-the-text fallback: a decoder that throws is a miss (4.0.x has no
+            // BINARY read-back at all, so every non-empty text misses there).
+            FieldKind::Bin => match self
+                .binary_readable
+                .then(|| self.binary.parse(text))
+                .flatten()
+            {
+                Some(bytes) => V::Leaf(Val::Bytes(bytes)),
+                None => {
+                    *bad = true;
+                    V::Null
+                }
+            },
             _ => match self.conv.convert(&kind, Some(text)) {
                 Ok(Val::Null) => V::Null,
                 Ok(v) => V::Leaf(v),
@@ -769,6 +779,7 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
     let return_type = DataType::Struct(fields.clone());
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
     let binary = opts.binary_style;
+    let binary_readable = opts.kernel.spark_version() != krishiv_kernels::SparkVersion::V4_0;
     let today = krishiv_kernels::datetime::current_date(opts.query_start_micros, zone.as_ref())
         .map_err(KrishivError::from)?;
     Ok(Binding::new(return_type, move |x: &Inputs<'_>| {
@@ -787,6 +798,7 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
             zone: zone.as_ref(),
             today,
             binary,
+            binary_readable,
         };
         let mut rows: Vec<V> = Vec::with_capacity(docs.len());
         for i in 0..docs.len() {

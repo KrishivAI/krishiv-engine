@@ -94,6 +94,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `-0.0 == 0.0`). The module docs list which functions are bit-identical to Spark's JVM results and the share of inputs where
   `sin`/`cos`/`tan`/`ln`/`log10` differ in the last bit (the JVM's intrinsics are not fdlibm); `tests/math_differential.rs` in
   `krishiv-testkit` holds that bound.
+- `binary_style`: `spark.sql.binaryOutputStyle` printing (`write`/`render`) and Spark 4.1+'s `getBinaryParser` read-back (`parse`: lenient Java decoders, `None` is a miss; source-derived, no Spark run yet).
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 
 ## Key files

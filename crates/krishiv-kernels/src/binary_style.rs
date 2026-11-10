@@ -84,33 +84,30 @@ impl BinaryStyle {
         }
     }
 
-    /// The bytes a text printed in this style stands for (`from_xml` of a `BINARY` field reads
-    /// what `to_xml` wrote, Spark 4.2.0 `binary_*` goldens); `None` when the text is not in the
-    /// style's form.
+    /// The bytes `text` stands for when Spark reads a `BINARY` value back: `from_xml` runs
+    /// `ToStringBase.getBinaryParser` (Spark 4.1+) on the element text. `None` is the parser
+    /// throwing, a miss (the field is NULL under `PERMISSIVE`, an error under `FAILFAST`).
+    ///
+    /// The decoders are lenient where Java's are: optional brackets, `Byte.parseByte` signs,
+    /// `split(",")` with `trim`, odd-length hex, unpadded base64 and unchecked trailing bits.
+    /// Source-derived from Spark v4.2.0 / v4.1.1 (no Spark run yet; see the PR 670 brief).
     #[must_use]
     pub fn parse(self, text: &str) -> Option<Vec<u8>> {
-        let bracketed = || text.strip_prefix('[')?.strip_suffix(']');
+        // Scala `stripPrefix("[").stripSuffix("]")`: each removed independently, at most once.
+        let unbracketed = || {
+            let t = text.strip_prefix('[').unwrap_or(text);
+            t.strip_suffix(']').unwrap_or(t)
+        };
         match self {
             Self::Utf8 => Some(text.as_bytes().to_vec()),
-            Self::Basic => {
-                let inner = bracketed()?;
-                if inner.is_empty() {
-                    return Some(Vec::new());
-                }
-                inner
-                    .split(", ")
-                    .map(|n| {
-                        // `i8::parse` takes a leading `+`, which the printer never writes.
-                        (!n.starts_with('+'))
-                            .then(|| n.parse::<i8>().ok().map(i8::cast_unsigned))
-                            .flatten()
-                    })
-                    .collect()
-            }
+            Self::Basic => java_split_comma(unbracketed())
+                .into_iter()
+                .map(parse_java_byte)
+                .collect(),
             Self::Base64 => base64_decode(text),
             Self::Hex => hex_decode(text),
             Self::HexDiscrete => {
-                let inner = bracketed()?;
+                let inner = unbracketed();
                 if inner.is_empty() {
                     return Some(Vec::new());
                 }
@@ -128,15 +125,54 @@ impl BinaryStyle {
     }
 }
 
-/// Upper- or lower-case hex pairs.
-fn hex_decode(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) || !text.is_ascii() {
+/// Java's `String.split(",")`: no match gives the whole text (even empty), otherwise trailing
+/// empty strings are dropped.
+fn java_split_comma(text: &str) -> Vec<&str> {
+    let mut parts: Vec<&str> = text.split(',').collect();
+    if parts.len() > 1 {
+        while parts.last().is_some_and(|p| p.is_empty()) {
+            parts.pop();
+        }
+    }
+    parts
+}
+
+/// `s.trim.toByte`: Java `trim` strips chars up to U+0020; `Byte.parseByte` takes an optional
+/// sign and ASCII digits, range -128..=127 (Java also takes other Unicode decimal digits: not
+/// matched here, a miss).
+fn parse_java_byte(s: &str) -> Option<u8> {
+    let t = s.trim_matches(|c: char| c <= ' ');
+    let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    text.as_bytes()
-        .chunks(2)
-        .map(|pair| hex_pair(std::str::from_utf8(pair).ok()?))
-        .collect()
+    t.strip_prefix('+')
+        .unwrap_or(t)
+        .parse::<i8>()
+        .ok()
+        .map(i8::cast_unsigned)
+}
+
+/// `Hex.unhex`: hex digits of either case; an odd length reads the first digit as a byte alone.
+fn hex_decode(text: &str) -> Option<Vec<u8>> {
+    let b = text.as_bytes();
+    let digit = |c: u8| {
+        char::from(c)
+            .to_digit(16)
+            .and_then(|d| u8::try_from(d).ok())
+    };
+    let mut out = Vec::with_capacity(b.len().div_ceil(2));
+    let mut rest = b;
+    if !b.len().is_multiple_of(2) {
+        out.push(digit(*b.first()?)?);
+        rest = b.get(1..)?;
+    }
+    for pair in rest.chunks(2) {
+        let hi = digit(*pair.first()?)?;
+        let lo = digit(*pair.get(1)?)?;
+        out.push(hi.wrapping_shl(4) | lo);
+    }
+    Some(out)
 }
 
 /// One byte of exactly two hex digits (`from_str_radix` would take a leading `+` or one digit).
@@ -147,34 +183,64 @@ fn hex_pair(p: &str) -> Option<u8> {
     u8::from_str_radix(p, 16).ok()
 }
 
-/// Standard-alphabet base64, padded or not.
+/// The low byte of `v`.
+fn low(v: u32) -> Option<u8> {
+    u8::try_from(v & 0xff).ok()
+}
+
+/// `java.util.Base64.getDecoder().decode`: standard alphabet, padding optional, no whitespace,
+/// nothing after the padding, unused trailing bits not checked.
 fn base64_decode(text: &str) -> Option<Vec<u8>> {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let stripped = text.trim_end_matches('=');
-    let pad = text.len().saturating_sub(stripped.len());
-    // Unpadded, or padded to a multiple of four with at most two `=`.
-    if pad > 2 || (pad > 0 && !text.len().is_multiple_of(4)) {
-        return None;
-    }
-    let text = stripped;
-    if text.len().checked_rem(4) == Some(1) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(text.len());
-    let mut acc = 0_u32;
-    let mut bits = 0_u32;
-    for c in text.bytes() {
-        let v = u32::try_from(ALPHABET.iter().position(|a| *a == c)?).ok()?;
-        acc = (acc << 6) | v;
-        bits = bits.saturating_add(6);
-        if bits >= 8 {
-            bits = bits.saturating_sub(8);
-            out.push(u8::try_from((acc >> bits) & 0xff).ok()?);
+    let mut table = [255_u8; 256];
+    for (i, c) in ALPHABET.iter().enumerate() {
+        if let Some(slot) = table.get_mut(usize::from(*c)) {
+            *slot = u8::try_from(i).ok()?;
         }
     }
-    // The bits left over in the last character are zero in text the printer wrote.
-    if bits > 0 && acc & (1_u32.checked_shl(bits).unwrap_or(0).saturating_sub(1)) != 0 {
-        return None;
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len().div_ceil(4).saturating_mul(3));
+    let mut acc = 0_u32;
+    let mut n = 0_u32; // characters in the current group of four
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        i = i.saturating_add(1);
+        if c == b'=' {
+            match n {
+                // A lone `=`, or a dangling single character.
+                0 | 1 => return None,
+                // `xx=` needs a second `=`.
+                2 => {
+                    if b.get(i) != Some(&b'=') {
+                        return None;
+                    }
+                    i = i.saturating_add(1);
+                }
+                _ => {}
+            }
+            // Padding ends the input: anything after it is an error.
+            if i != b.len() {
+                return None;
+            }
+            break;
+        }
+        let v = u32::from(*table.get(usize::from(c))?);
+        if v == 255 {
+            return None;
+        }
+        acc = (acc << 6) | v;
+        n = n.saturating_add(1);
+        if n == 4 {
+            out.extend_from_slice(&[low(acc >> 16)?, low(acc >> 8)?, low(acc)?]);
+            acc = 0;
+            n = 0;
+        }
+    }
+    match n {
+        0 => {}
+        2 => out.push(low(acc >> 4)?),
+        3 => out.extend_from_slice(&[low(acc >> 10)?, low(acc >> 2)?]),
+        _ => return None,
     }
     Some(out)
 }
@@ -216,6 +282,11 @@ mod tests {
             BinaryStyle::HexDiscrete,
         ] {
             for bytes in [&b"Eason"[..], b"", b"a", b"ab"] {
+                // BASIC prints an empty value `[]`, which Spark reads as a miss.
+                if style == BinaryStyle::Basic && bytes.is_empty() {
+                    assert_eq!(style.parse(&style.render(bytes)), None);
+                    continue;
+                }
                 assert_eq!(
                     style.parse(&style.render(bytes)).as_deref(),
                     Some(bytes),
@@ -227,31 +298,79 @@ mod tests {
         assert_eq!(BinaryStyle::Base64.parse("A"), None);
     }
 
-    /// Text the printer never writes is not bytes: `from_xml` keeps it as its UTF-8 bytes.
+    proptest::proptest! {
+        /// `parse(render(b)) == b` for every style but BASIC with no bytes (`[]` is a miss).
+        #[test]
+        fn parse_inverts_render(bytes in proptest::collection::vec(0_u8..=255, 1..40)) {
+            for style in [BinaryStyle::Basic, BinaryStyle::Base64, BinaryStyle::Hex, BinaryStyle::HexDiscrete] {
+                proptest::prop_assert_eq!(style.parse(&style.render(&bytes)), Some(bytes.clone()));
+            }
+            // UTF-8 reads back only valid UTF-8 faithfully.
+            if let Ok(t) = std::str::from_utf8(&bytes) {
+                proptest::prop_assert_eq!(BinaryStyle::Utf8.parse(&BinaryStyle::Utf8.render(&bytes)), Some(t.as_bytes().to_vec()));
+            }
+        }
+    }
+
+    /// Spark 4.1+/4.2 `ToStringBase.getBinaryParser` per style, SOURCE-DERIVED from the
+    /// v4.2.0/v4.1.1 sources (brief pr670-binary-readback-semantics.md section 3); no Spark run yet.
+    /// `None` is a miss.
     #[test]
-    fn parse_refuses_text_the_printer_never_writes() {
-        let b = BinaryStyle::Basic;
-        assert_eq!(b.parse("[1, 2]"), Some(vec![1, 2]));
-        assert_eq!(b.parse("[-1]"), Some(vec![255]));
-        for bad in ["[1,2]", "[1, 2 ]", "[256]", "[+5]", "1, 2", "[a]"] {
-            assert_eq!(b.parse(bad), None, "{bad}");
-        }
-        let d = BinaryStyle::HexDiscrete;
-        assert_eq!(d.parse("[01 FF]"), Some(vec![1, 255]));
-        for bad in ["[4]", "[+F]", "[001]", "01 FF", "[G1]"] {
-            assert_eq!(d.parse(bad), None, "{bad}");
-        }
-        let h = BinaryStyle::Hex;
-        assert_eq!(h.parse("00FF"), Some(vec![0, 255]));
-        for bad in ["+1+2", "é", "0", "4é"] {
-            assert_eq!(h.parse(bad), None, "{bad}");
-        }
-        let a = BinaryStyle::Base64;
-        assert_eq!(a.parse("YQ"), Some(b"a".to_vec()));
-        assert_eq!(a.parse("YQ=="), Some(b"a".to_vec()));
-        assert_eq!(a.parse("YWI="), Some(b"ab".to_vec()));
-        for bad in ["YQ=====", "YQ=", "AB", "Y!", "YQ==="] {
-            assert_eq!(a.parse(bad), None, "{bad}");
+    fn parse_is_sparks_lenient_decoder_source_derived() {
+        use BinaryStyle::{Base64, Basic, Hex, HexDiscrete, Utf8};
+        let cases: &[(BinaryStyle, &str, Option<&[u8]>)] = &[
+            (HexDiscrete, "Eason", None),
+            (HexDiscrete, "[01 FF]", Some(&[1, 255])),
+            (HexDiscrete, "[01 ff]", Some(&[1, 255])),
+            (HexDiscrete, "01 FF", Some(&[1, 255])),
+            (HexDiscrete, "[]", Some(&[])),
+            (HexDiscrete, "01FF", None),
+            (HexDiscrete, "[4]", None),
+            (Hex, "Eason", None),
+            (Hex, "[01 FF]", None),
+            (Hex, "01 FF", None),
+            (Hex, "[]", None),
+            (Hex, "01FF", Some(&[1, 255])),
+            (Hex, "01ff", Some(&[1, 255])),
+            (Hex, "CAF", Some(&[0x0C, 0xAF])),
+            (Hex, "é", None),
+            (Basic, "Eason", None),
+            (Basic, "[01 FF]", None),
+            (Basic, "[]", None),
+            (Basic, "01FF", None),
+            (Basic, "[4]", Some(&[4])),
+            (Basic, "[1,2]", Some(&[1, 2])),
+            (Basic, "[1, 2 ]", Some(&[1, 2])),
+            (Basic, "1, 2", Some(&[1, 2])),
+            (Basic, "[+5]", Some(&[5])),
+            (Basic, "[-1]", Some(&[255])),
+            (Basic, "[128]", None),
+            (Basic, "[255]", None),
+            (Basic, "[-129]", None),
+            (Basic, "[1,]", Some(&[1])),
+            (Basic, "[,1]", None),
+            (Basic, "[1,,2]", None),
+            (Basic, "[+]", None),
+            (Base64, "Eason", None),
+            (Base64, "[01 FF]", None),
+            (Base64, "[]", None),
+            (Base64, "01FF", Some(&[0xD3, 0x51, 0x45])),
+            (Base64, "CAF", Some(&[0x08, 0x01])),
+            (Base64, "AQ==", Some(&[1])),
+            (Base64, "AQ", Some(&[1])),
+            (Base64, "AB", Some(&[0])),
+            (Base64, "A", None),
+            (Base64, "YQ=", None),
+            (Base64, "YQ=====", None),
+            (Base64, "Y!", None),
+            (Base64, "AQ==AQ==", None),
+            (Base64, "YQ==", Some(b"a")),
+            (Base64, "YWI=", Some(b"ab")),
+            (Utf8, "Eason", Some(b"Eason")),
+            (Utf8, "[01 FF]", Some(b"[01 FF]")),
+        ];
+        for (style, text, want) in cases {
+            assert_eq!(style.parse(text).as_deref(), *want, "{style:?} {text:?}");
         }
     }
 
