@@ -47,6 +47,7 @@
 
 #![forbid(unsafe_code)]
 
+mod compute_early;
 mod cse;
 mod dag;
 mod eager;
@@ -145,6 +146,10 @@ pub struct Options {
     /// statistics say it pays. Needs statistics; a session configuration,
     /// when given, can switch it off.
     pub eager_aggregation: bool,
+    /// Wide expressions run below the join that builds them
+    /// (`compute_early`). Needs statistics. Off by default: see the module
+    /// docs (the orderer reads the computed input as a leaf).
+    pub compute_below_join: bool,
 }
 
 impl Default for Options {
@@ -153,6 +158,7 @@ impl Default for Options {
             cse: true,
             stats_propagation: true,
             eager_aggregation: true,
+            compute_below_join: false,
         }
     }
 }
@@ -407,6 +413,21 @@ fn run(
                 t.notes("EagerAggregate", &after, notes);
                 // The moved aggregate changes what its join's inputs estimate,
                 // and so their canonical order.
+                if Arc::ptr_eq(&after, &root) {
+                    after
+                } else {
+                    order_and_restrict(after, stats, options.stats_propagation, joins, &mut t)?
+                }
+            }
+            _ => root,
+        };
+        let root = match stats {
+            Some(stats) if options.compute_below_join => {
+                let (after, notes) =
+                    compute_early::rewrite(Arc::clone(&root), stats, options.stats_propagation)?;
+                t.notes("ComputeBelowJoin", &after, notes);
+                // The computed column changes what its join's inputs
+                // estimate, and so their canonical order.
                 if Arc::ptr_eq(&after, &root) {
                     after
                 } else {

@@ -1181,3 +1181,24 @@ fn conjunct_order_does_not_change_the_join_order() {
         assert_eq!(plan(a, b), plan(b, a), "{a} AND {b}");
     }
 }
+
+/// S4' (`compute_early`, off by default): q09's `amount` is computed over
+/// the `lineitem` join that builds for `orders`, and the four decimal
+/// columns it read leave that input.
+#[test]
+fn compute_below_join_moves_q09_amount_under_the_build() {
+    let plan = support::resolve(&support::tpch_sql(9), &support::ctx());
+    let on = Options {
+        compute_below_join: true,
+        ..Options::default()
+    };
+    let text = optimize_with_options(&plan, &footers(1000), &on)
+        .unwrap()
+        .root()
+        .to_string();
+    assert!(text.contains("amount#54 AS amount#52"), "{text}");
+    assert!(
+        text.contains("AS amount#54]"),
+        "amount is computed in a projection below the join:\n{text}"
+    );
+}
