@@ -162,6 +162,25 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
         legacy_time_parser: env.legacy_time_parser.then_some(true),
         binary_output_style: env.binary_output_style.as_deref().map(str::to_owned),
+        sql_texts: env
+            .sql_texts
+            .iter()
+            .map(|t| pb::SourceText {
+                id: t.id,
+                text: t.text.as_str().to_owned(),
+                regions: t
+                    .text
+                    .regions()
+                    .iter()
+                    .map(|(old, new)| pb::RedactedRegion {
+                        old_start: u32::try_from(old.start).unwrap_or(u32::MAX),
+                        old_end: u32::try_from(old.end).unwrap_or(u32::MAX),
+                        new_start: u32::try_from(new.start).unwrap_or(u32::MAX),
+                        new_end: u32::try_from(new.end).unwrap_or(u32::MAX),
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 

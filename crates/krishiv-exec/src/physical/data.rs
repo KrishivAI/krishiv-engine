@@ -134,6 +134,7 @@ value_types!(
     krishiv_common::secret::SecretString,
     krishiv_common::secret::SecretUrl,
     krishiv_common::secret::UrlPart,
+    krishiv_common::redact::RedactedSql,
     // Operator options that are plain values.
     crate::operators::SortKey,
     crate::operators::RowStageSettings,

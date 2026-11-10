@@ -326,6 +326,25 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
         legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
         binary_output_style: env.binary_output_style.as_deref().map(std::sync::Arc::from),
+        sql_texts: env
+            .sql_texts
+            .iter()
+            .map(|t| {
+                let regions = t
+                    .regions
+                    .iter()
+                    .map(|r| {
+                        (
+                            r.old_start as usize..r.old_end as usize,
+                            r.new_start as usize..r.new_end as usize,
+                        )
+                    })
+                    .collect();
+                krishiv_common::redact::RedactedSql::from_redacted_parts(t.text.clone(), regions)
+                    .map(|text| krishiv_exec::physical::SourceText { id: t.id, text })
+                    .ok_or_else(|| corrupt("a SQL text with inconsistent redacted regions"))
+            })
+            .collect::<Result<Vec<_>>>()?,
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));

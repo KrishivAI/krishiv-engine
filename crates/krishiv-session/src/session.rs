@@ -1229,6 +1229,7 @@ impl Session {
             variables_version: variables.version,
             policy_version: self.state.policy.version().0,
             text: None,
+            statement: None,
             statement_class: None,
             row: Arc::default(),
             identifier_spans: Arc::default(),
@@ -1456,7 +1457,23 @@ impl Session {
                 Vec::new(),
             )
         };
+        // The texts expression origins index: the statement, and the bodies of the SQL functions
+        // it calls. A run-time error of a cast, arithmetic operation or function quotes its span.
+        let mut texts = Vec::new();
+        if let Some(t) = &env.statement {
+            texts.push(krishiv_exec::physical::SourceText {
+                id: 0,
+                text: t.clone(),
+            });
+        }
+        texts.extend(
+            env.sql_functions
+                .source_texts()
+                .into_iter()
+                .map(|(id, text)| krishiv_exec::physical::SourceText { id: id.0, text }),
+        );
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
+            .with_sql_texts(texts)
             .with_query_start(start)
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs));
@@ -2630,6 +2647,9 @@ pub(crate) struct QueryEnv {
     /// The statement as the session may show it (redacted), for
     /// `system.queries`; `None` for a query no SQL text started.
     pub(crate) text: Option<Arc<str>>,
+    /// The redacted statement `SourceId(0)` indexes, for the SQL context of run-time errors
+    /// (the physical plan carries it); `None` for a query no SQL text started.
+    pub(crate) statement: Option<RedactedSql>,
     /// The statement's class (`StatementClass::name`), for `system.queries`.
     pub(crate) statement_class: Option<&'static str>,
     /// The id of the `system.queries` row the statement's latest query began, if any: `sql`

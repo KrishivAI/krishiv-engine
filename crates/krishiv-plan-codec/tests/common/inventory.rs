@@ -45,6 +45,7 @@ pub(crate) fn env() -> ExprEnv {
         legacy_coding_error_action: false,
         legacy_time_parser: false,
         binary_output_style: None,
+        sql_texts: Vec::new(),
     }
 }
 
@@ -1910,6 +1911,7 @@ fn legacy_charset_switches() -> PhysicalPlan {
         legacy_coding_error_action: true,
         legacy_time_parser: false,
         binary_output_style: None,
+        sql_texts: Vec::new(),
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -1921,6 +1923,7 @@ fn legacy_time_parser() -> PhysicalPlan {
     let env = ExprEnv {
         legacy_time_parser: true,
         binary_output_style: None,
+        sql_texts: Vec::new(),
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);

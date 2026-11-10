@@ -2287,6 +2287,7 @@ mod tests {
             binary_style: krishiv_kernels::binary_style::BinaryStyle::default(),
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             partition_shift: 0,
+            sql_texts: Arc::from(Vec::new()),
         }
     }
 

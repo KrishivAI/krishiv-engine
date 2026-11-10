@@ -203,6 +203,16 @@ impl QueryFunctions {
         (reads.0.clone(), reads.1.clone())
     }
 
+    /// Every function body's source id with the text its spans index.
+    pub(crate) fn source_texts(&self) -> Vec<(SourceId, RedactedSql)> {
+        self.map
+            .entries
+            .values()
+            .chain(self.stored.iter().map(|f| &f.entry))
+            .map(|e| (e.def.source, e.text.clone()))
+            .collect()
+    }
+
     /// The text a function's body spans index, for the source `id`.
     pub(crate) fn source_text(&self, id: SourceId) -> Option<RedactedSql> {
         self.map

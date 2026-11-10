@@ -81,7 +81,7 @@ pub struct PlanHeader {
     #[prost(uint32, tag = "12")]
     pub epoch: u32,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExprEnv {
     #[prost(bool, tag = "1")]
     pub ansi: bool,
@@ -131,6 +131,43 @@ pub struct ExprEnv {
     /// feature: binary_output_style
     #[prost(string, optional, tag = "11")]
     pub binary_output_style: ::core::option::Option<::prost::alloc::string::String>,
+    /// The redacted SQL texts the plan's expression origins index, so a run-time error carries the
+    /// SQL context of the expression that raised it (Spark's `QueryContext`).
+    /// ignorable: a worker that skips them computes the same rows, and its errors carry no context.
+    #[prost(message, repeated, tag = "12")]
+    pub sql_texts: ::prost::alloc::vec::Vec<SourceText>,
+}
+/// A SQL text an expression origin's source id (`SqlSpan.source`) indexes.
+/// ignorable: only run-time error contexts read it.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SourceText {
+    /// ignorable: see the message.
+    #[prost(uint32, tag = "1")]
+    pub id: u32,
+    /// The redacted text: spans index the original, so the redacted regions follow.
+    /// ignorable: see the message.
+    #[prost(string, tag = "2")]
+    pub text: ::prost::alloc::string::String,
+    /// ignorable: see the message.
+    #[prost(message, repeated, tag = "3")]
+    pub regions: ::prost::alloc::vec::Vec<RedactedRegion>,
+}
+/// A region of the original SQL text that `SourceText.text` shows redacted.
+/// ignorable: only run-time error contexts read it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RedactedRegion {
+    /// ignorable: see the message.
+    #[prost(uint32, tag = "1")]
+    pub old_start: u32,
+    /// ignorable: see the message.
+    #[prost(uint32, tag = "2")]
+    pub old_end: u32,
+    /// ignorable: see the message.
+    #[prost(uint32, tag = "3")]
+    pub new_start: u32,
+    /// ignorable: see the message.
+    #[prost(uint32, tag = "4")]
+    pub new_end: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {

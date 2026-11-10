@@ -28,6 +28,7 @@ fn driver_orders(root: crate::physical::PhysNode) -> Vec<bool> {
             legacy_coding_error_action: false,
             legacy_time_parser: false,
             binary_output_style: None,
+            sql_texts: Vec::new(),
         },
     );
     let worker = super::WorkerContext::new(Arc::new(crate::planner::MemoryTables::new()));
@@ -94,6 +95,7 @@ fn an_exchange_planned_with_other_columns_fails_to_instantiate() {
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
                 binary_output_style: None,
+                sql_texts: Vec::new(),
             },
         )
     };

@@ -26,6 +26,7 @@ mod arith;
 mod between;
 mod cast;
 mod cond;
+mod context;
 mod field;
 mod func;
 mod hof;
@@ -62,7 +63,7 @@ use krishiv_udf_sdk::UdfLibrary;
 use super::build::{internal, unsupported};
 use crate::error::Result;
 use crate::operators::{Predicate, ScalarExpr};
-use crate::physical::ExprEnv;
+use crate::physical::{ExprEnv, SourceText};
 
 /// A value of an expression over one batch: a column, or one value for
 /// every row (a literal, or an expression of literals only).
@@ -226,6 +227,8 @@ pub(crate) struct EvalEnv {
     /// seeded random streams start at partition `k - 1` (`rand(7)` gives
     /// the seed's first value in round 1, `rand(8)`'s in round 2, ...).
     pub(crate) partition_shift: u32,
+    /// The SQL texts expression origins index, for run-time error contexts (plan data).
+    pub(crate) sql_texts: Arc<[SourceText]>,
 }
 
 impl EvalEnv {
@@ -301,7 +304,13 @@ impl EvalEnv {
             binary_style,
             seed_salt: Arc::new(AtomicU64::new(0)),
             partition_shift: 0,
+            sql_texts: Arc::from(Vec::new()),
         }
+    }
+
+    /// The SQL texts run-time error contexts quote (see `PlanningContext::sql_texts`).
+    pub(crate) fn set_sql_texts(&mut self, texts: Arc<[SourceText]>) {
+        self.sql_texts = texts;
     }
 
     /// Fixes the query start instant (see `PlanningContext::query_start_micros`).
@@ -334,6 +343,7 @@ impl EvalEnv {
                 .unwrap_or_default(),
             seed_salt: Arc::new(AtomicU64::new(0)),
             partition_shift: 0,
+            sql_texts: Arc::from(env.sql_texts.clone()),
         }
     }
 
@@ -355,6 +365,7 @@ impl EvalEnv {
             binary_output_style: (self.binary_style
                 != krishiv_kernels::binary_style::BinaryStyle::default())
             .then(|| Arc::from(self.binary_style.name())),
+            sql_texts: self.sql_texts.to_vec(),
         }
     }
 }
@@ -405,8 +416,19 @@ fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
     }))
 }
 
-/// Compiles `e` over `input`.
+/// Compiles `e` over `input`. A cast, arithmetic operation or function whose SQL text the plan
+/// carries reports its run-time errors with that span (see [`context`]).
 pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
+    let compiled = compile_node(e, input)?;
+    Ok(match &e.node {
+        ExprNode::Cast { .. } | ExprNode::Resolved(ResolvedExpr::Function(_)) => {
+            context::wrap(e, compiled, input.env)
+        }
+        _ => compiled,
+    })
+}
+
+fn compile_node(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     match &e.node {
         ExprNode::Literal(l) => Ok(Arc::new(Lit::new(l)?)),
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {
@@ -1164,6 +1186,7 @@ mod tests {
             binary_style: krishiv_kernels::binary_style::BinaryStyle::default(),
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             partition_shift: 0,
+            sql_texts: Arc::from(Vec::new()),
         }
     }
 

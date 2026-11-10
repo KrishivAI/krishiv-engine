@@ -150,6 +150,37 @@ impl RedactedSql {
         &self.text
     }
 
+    /// Each replaced region: (original byte range, redacted byte range), in order. Empty when
+    /// the text had no secret, so the redacted text indexes like the original.
+    #[must_use]
+    pub fn regions(&self) -> &[(Range<usize>, Range<usize>)] {
+        &self.regions
+    }
+
+    /// A value rebuilt from [`Self::as_str`] and [`Self::regions`] (a plan carries them to the
+    /// worker that quotes the text). It holds no secret the parts did not already hide, and `None`
+    /// when the parts are not what `regions` of a real value would be: ranges out of order,
+    /// empty, past the text, or off a character boundary.
+    #[must_use]
+    pub fn from_redacted_parts(
+        text: String,
+        regions: Vec<(Range<usize>, Range<usize>)>,
+    ) -> Option<Self> {
+        let (mut old_end, mut new_end) = (0_usize, 0_usize);
+        for (old, new) in &regions {
+            let ordered = old.start >= old_end && new.start >= new_end;
+            let non_empty = old.start < old.end && new.start <= new.end;
+            let inside = new.end <= text.len()
+                && text.is_char_boundary(new.start)
+                && text.is_char_boundary(new.end);
+            if !(ordered && non_empty && inside) {
+                return None;
+            }
+            (old_end, new_end) = (old.end, new.end);
+        }
+        Some(Self { text, regions })
+    }
+
     /// The redacted text of the original byte range `range` (a span of the
     /// query): a secret it touches shows as [`REDACTED`].
     #[must_use]

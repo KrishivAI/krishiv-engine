@@ -124,6 +124,35 @@ message ExprEnv {
   // would print `[45 61]`.
   // feature: binary_output_style
   optional string binary_output_style = 11;
+  // The redacted SQL texts the plan's expression origins index, so a run-time error carries the
+  // SQL context of the expression that raised it (Spark's `QueryContext`).
+  // ignorable: a worker that skips them computes the same rows, and its errors carry no context.
+  repeated SourceText sql_texts = 12;
+}
+
+// A SQL text an expression origin's source id (`SqlSpan.source`) indexes.
+// ignorable: only run-time error contexts read it.
+message SourceText {
+  // ignorable: see the message.
+  uint32 id = 1;
+  // The redacted text: spans index the original, so the redacted regions follow.
+  // ignorable: see the message.
+  string text = 2;
+  // ignorable: see the message.
+  repeated RedactedRegion regions = 3;
+}
+
+// A region of the original SQL text that `SourceText.text` shows redacted.
+// ignorable: only run-time error contexts read it.
+message RedactedRegion {
+  // ignorable: see the message.
+  uint32 old_start = 1;
+  // ignorable: see the message.
+  uint32 old_end = 2;
+  // ignorable: see the message.
+  uint32 new_start = 3;
+  // ignorable: see the message.
+  uint32 new_end = 4;
 }
 
 message ExplainNode {

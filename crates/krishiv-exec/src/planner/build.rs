@@ -330,6 +330,7 @@ impl<'a> Planner<'a> {
         // Planning validates UDF calls against the session's library; the
         // implementation a plan runs comes from its worker.
         env.udfs = cx.udfs.clone();
+        env.set_sql_texts(Arc::clone(&cx.sql_texts));
         let provided = super::ProviderStatistics(Arc::clone(&cx.tables));
         Self {
             stats: PlanStats::compute(root, &provided),

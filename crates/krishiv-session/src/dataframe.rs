@@ -1077,6 +1077,7 @@ impl DataFrame {
         let mut env = env;
         if let Some(t) = text {
             env.text = Some(Arc::from(t.as_str()));
+            env.statement = Some(t.clone());
         }
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),

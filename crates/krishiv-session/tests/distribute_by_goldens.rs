@@ -21,6 +21,14 @@ use serde_json::Value;
 
 /// Cases Krishiv does not match: the query, whether ANSI is off for it,
 /// and why. A fixed one fails the test until it is removed.
+/// Queries whose run-time error has no context in Spark with `spark.sql.adaptive.enabled=false`
+/// (the plan without the adaptive wrapper loses the origin of an expression inside a subquery it
+/// rewrote into a join); Krishiv keeps the span of the cast that raised it, as Spark does with
+/// adaptive execution on.
+const NO_CONTEXT_WITHOUT_ADAPTIVE: &[&str] = &[
+    "SELECT k FROM u WHERE EXISTS (SELECT 1 FROM t WHERE t.x = CAST(u.k AS STRING) DISTRIBUTE BY CAST(t.x AS INT))",
+];
+
 const DIFFERENT: &[(&str, bool, &str)] = &[
     // Spark's `ConstantFolding` evaluates a foldable expression when it
     // optimizes, so it raises with no row to evaluate; Krishiv's folding
@@ -172,18 +180,16 @@ fn distribute_by_evaluates_as_spark() {
         }
         let s = &sessions.iter().find(|(c, _)| c == &case["conf"]).unwrap().1;
         let got = outcome(s, sql);
-        let mut want = expected(case);
-        // Run-time errors carry no SQL context yet, a plain projection's
-        // included (`SELECT CAST(x AS INT) FROM t`): compare their class.
-        if got["error"].is_object() && got["error"]["fragment"].is_null() {
-            for k in ["fragment", "start", "stop"] {
-                want["error"][k] = Value::Null;
-            }
-        }
+        let want = expected(case);
         let ansi_off = conf.get("spark.sql.ansi.enabled").and_then(Value::as_str) == Some("false");
+        let adaptive_off = conf
+            .get("spark.sql.adaptive.enabled")
+            .and_then(Value::as_str)
+            == Some("false");
         let differs = DIFFERENT
             .iter()
-            .any(|(q, off, _)| *q == sql && *off == ansi_off);
+            .any(|(q, off, _)| *q == sql && *off == ansi_off)
+            || (adaptive_off && NO_CONTEXT_WITHOUT_ADAPTIVE.contains(&sql));
         if differs {
             if got == want {
                 report.push_str(&format!("now matches, remove from DIFFERENT: {sql}\n"));

@@ -113,7 +113,7 @@ impl Resolver<'_> {
         let call_kids: Vec<Bound> = kids
             .iter()
             .zip(casts)
-            .map(|(k, to)| self.implicit_cast_as(k, to, try_casts))
+            .map(|(k, to)| self.implicit_cast_under(k, to, try_casts, e.origin))
             .collect();
         let types: Vec<ArgType> = call_kids.iter().map(|k| k.ty.clone()).collect();
         let bound_sql = |i: usize| call_kids.get(i).map(|k| pretty(&k.expr, zone));

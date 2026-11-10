@@ -310,6 +310,17 @@ pub enum JoinDistribution {
     Partitioned,
 }
 
+/// A SQL text the expression origins of a plan index by `id` (`Origin::sql`'s `SourceId`):
+/// the redacted text a run-time error's query context quotes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceText {
+    /// The `SourceId` the origins carry.
+    pub id: u32,
+    /// The redacted SQL text, with the regions that were redacted (spans index the original).
+    pub text: krishiv_common::redact::RedactedSql,
+}
+plan_data!(struct SourceText { id, text });
+
 /// What every expression of a plan is evaluated with, fixed at planning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExprEnv {
@@ -349,6 +360,11 @@ pub struct ExprEnv {
     /// prints): `to_csv` and `to_xml` print binary fields in that style. A plan that sets it
     /// needs the `binary_output_style` codec feature.
     pub binary_output_style: Option<Arc<str>>,
+    /// The SQL texts the expressions' origins point into. A run-time error of a cast, an
+    /// arithmetic operation or a function carries the SQL span of the expression that raised
+    /// it (Spark's query context) when its text is here. Optional for a reader: a worker that
+    /// skips it computes the same rows, and its errors carry no context.
+    pub sql_texts: Vec<SourceText>,
 }
 
 impl ExprEnv {
@@ -934,7 +950,8 @@ plan_data!(struct ExprEnv {
     legacy_java_charsets,
     legacy_coding_error_action,
     legacy_time_parser,
-    binary_output_style
+    binary_output_style,
+    sql_texts
 });
 plan_data!(enum PhysNode {
     Scan(scan),

@@ -94,6 +94,10 @@ pub struct PlanningContext {
     /// caller fixes it (a query planned in several pieces reads one
     /// `current_timestamp()`); `None`: planning takes it.
     pub query_start_micros: Option<i64>,
+    /// The redacted SQL texts expression origins index (`Origin::sql`'s source id), so a
+    /// run-time error of a cast, an arithmetic operation or a function carries the SQL span of
+    /// the expression that raised it. Empty: errors carry no context.
+    pub sql_texts: Arc<[crate::physical::SourceText]>,
 }
 
 impl PlanningContext {
@@ -105,7 +109,15 @@ impl PlanningContext {
             user: Arc::from(krishiv_plan::analyzer::Principal::local_user().name),
             udfs: None,
             query_start_micros: None,
+            sql_texts: Arc::from(Vec::new()),
         }
+    }
+
+    /// The same context planning with the SQL texts `texts` for run-time error contexts.
+    #[must_use]
+    pub fn with_sql_texts(mut self, texts: Vec<crate::physical::SourceText>) -> Self {
+        self.sql_texts = Arc::from(texts);
+        self
     }
 
     /// The same context for the session user `user`.

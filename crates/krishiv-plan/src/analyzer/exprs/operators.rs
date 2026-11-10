@@ -279,7 +279,7 @@ impl Resolver<'_> {
         let cast: Vec<Bound> = kids
             .iter()
             .zip(typed.casts)
-            .map(|(k, to)| self.implicit_cast(k, to))
+            .map(|(k, to)| self.implicit_cast_under(k, to, false, origin))
             .collect();
         let expr = call(
             cast.iter().map(|k| Arc::clone(&k.expr)).collect(),
@@ -314,6 +314,19 @@ impl Resolver<'_> {
         to: Option<DataType>,
         try_cast: bool,
     ) -> Bound {
+        self.implicit_cast_under(b, to, try_cast, b.expr.origin)
+    }
+
+    /// [`Self::implicit_cast_as`] for an argument of the call at `parent`: the cast takes the
+    /// call's origin, as Spark's rule transform gives the casts it inserts the origin of the
+    /// expression being rewritten (a run-time `CAST_INVALID_INPUT` of `x + 'a'` quotes `x + 'a'`).
+    pub(in crate::analyzer) fn implicit_cast_under(
+        &self,
+        b: &Bound,
+        to: Option<DataType>,
+        try_cast: bool,
+        origin: Origin,
+    ) -> Bound {
         let Some(to) = to else {
             return b.clone();
         };
@@ -335,7 +348,7 @@ impl Resolver<'_> {
             mode,
         };
         Bound {
-            expr: Arc::new(Expr::new(cast).with_origin(b.expr.origin)),
+            expr: Arc::new(Expr::new(cast).with_origin(origin)),
             ty: ArgType {
                 nullable: b.ty.nullable || b.ty.data_type.as_ref().is_some_and(may_null),
                 data_type: Some(to.clone()),

@@ -144,6 +144,7 @@ fn query_results_are_written_committed_and_read_back() {
             legacy_coding_error_action: false,
             legacy_time_parser: false,
             binary_output_style: None,
+            sql_texts: Vec::new(),
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()));
@@ -190,6 +191,7 @@ fn query_results_are_written_committed_and_read_back() {
             legacy_coding_error_action: false,
             legacy_time_parser: false,
             binary_output_style: None,
+            sql_texts: Vec::new(),
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
@@ -361,6 +363,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
                 binary_output_style: None,
+                sql_texts: Vec::new(),
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -547,6 +550,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
                 binary_output_style: None,
+                sql_texts: Vec::new(),
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -750,6 +754,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
                 binary_output_style: None,
+                sql_texts: Vec::new(),
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -833,6 +838,7 @@ fn a_write_without_a_write_plan_is_refused() {
             legacy_coding_error_action: false,
             legacy_time_parser: false,
             binary_output_style: None,
+            sql_texts: Vec::new(),
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()));
@@ -887,6 +893,7 @@ fn a_write_without_a_configuration_is_refused() {
             legacy_coding_error_action: false,
             legacy_time_parser: false,
             binary_output_style: None,
+            sql_texts: Vec::new(),
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
@@ -999,6 +1006,7 @@ fn a_write_with_an_out_of_range_partition_column_is_refused() {
             legacy_coding_error_action: false,
             legacy_time_parser: false,
             binary_output_style: None,
+            sql_texts: Vec::new(),
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
