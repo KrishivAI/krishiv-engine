@@ -1206,6 +1206,22 @@ impl Resolver<'_> {
                     }
                     return self.cast_named_call(&entry, e, f, kids, to);
                 }
+                // `ExtractValue.applyOrNull`: an element or key of a `NULL` (`void`) base is `NULL`.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "__subscript"
+                    && n == 2
+                    && kids[0].ty.data_type.is_none()
+                {
+                    let ty = arg_type(DataType::Null, true);
+                    return Ok(Bound {
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(e.origin),
+                        ),
+                        shown: Some(Arc::clone(e)),
+                        ty: ty.clone(),
+                        ..keep(ty)
+                    });
+                }
                 // `s['a']` on a struct is the field `a` (Spark's
                 // `ExtractValue`): the extraction is a non-null string.
                 if is_builtin_entry(&entry)

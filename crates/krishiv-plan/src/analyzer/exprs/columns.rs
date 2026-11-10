@@ -1012,6 +1012,13 @@ impl Resolver<'_> {
         let mut base = Arc::new(Expr::new(node).with_origin(origin));
         let mut parent = parts[used - 1].clone();
         for (i, part) in parts.iter().enumerate().skip(used) {
+            // `ExtractValue.applyOrNull`: a field of a `NULL` (`void`) base is `NULL`, and stays so below it.
+            if ty.data_type.is_none() {
+                base =
+                    Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(origin));
+                parent.clone_from(&parts[parts.len() - 1]);
+                break;
+            }
             // A map below the path: the rest are lookups (`m.a.b` is `m['a']['b']`).
             if matches!(ty.data_type, Some(DataType::Map(_))) {
                 let mut chain = Expr::clone(&base);
