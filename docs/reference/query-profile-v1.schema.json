@@ -13,7 +13,7 @@
     "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
     "trace": {
       "type": "object",
-      "description": "The trace the query ran in (added in minor 4); absent when no trace was active. `span_id` is the OpenTelemetry span of the query and needs the `telemetry-otlp` feature.",
+      "description": "The trace the query ran in (added in minor 4); absent when no trace was active. `trace_id` is the caller's trace. `span_id` is the OpenTelemetry span current when the profile is written; it needs the `telemetry-otlp` feature and an active exporter, and is absent when the action runs outside a query span.",
       "additionalProperties": false,
       "properties": {
         "trace_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
