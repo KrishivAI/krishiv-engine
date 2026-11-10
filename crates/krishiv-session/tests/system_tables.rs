@@ -1050,3 +1050,40 @@ fn describe_lists_the_columns_of_a_system_table() {
     let e = run(&s, "DESCRIBE system.nosuch").unwrap_err();
     assert!(e.contains("TABLE_OR_VIEW_NOT_FOUND"), "{e}");
 }
+
+#[test]
+fn a_qualified_stored_view_is_not_read_through_the_system_catalog() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE VIEW v AS SELECT 'secret' AS value").unwrap();
+    assert_eq!(column_of(&s, "SELECT value FROM default.v", 0), ["secret"]);
+    run(&s, "USE system").unwrap();
+    let e = run(&s, "SELECT value FROM default.v").unwrap_err();
+    assert!(e.contains("TABLE_OR_VIEW_NOT_FOUND"), "{e}");
+    // The catalog-qualified name still reaches it.
+    assert_eq!(
+        column_of(&s, "SELECT value FROM spark_catalog.default.v", 0),
+        ["secret"]
+    );
+}
+
+#[test]
+fn temp_views_win_over_system_tables_in_describe_and_metadata() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TEMPORARY VIEW queries AS SELECT 1 AS only_col").unwrap();
+    run(&s, "CREATE TEMPORARY VIEW mine AS SELECT 2 AS other").unwrap();
+    run(&s, "USE system").unwrap();
+    assert_eq!(column_of(&s, "DESCRIBE queries", 0), ["only_col"]);
+    assert_eq!(column_of(&s, "DESCRIBE mine", 0), ["other"]);
+}
+
+#[test]
+fn a_system_only_query_has_a_start_time() {
+    let s = Session::new().unwrap();
+    run(&s, "SELECT * FROM system.memory").unwrap();
+    let started = column_of(
+        &s,
+        "SELECT CAST(started_at IS NOT NULL AS STRING) FROM system.queries WHERE query_text LIKE '%system.memory%' AND query_text NOT LIKE '%started_at%'",
+        0,
+    );
+    assert_eq!(started, ["true"]);
+}

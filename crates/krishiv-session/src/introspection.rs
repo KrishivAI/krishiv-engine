@@ -921,7 +921,7 @@ impl Session {
                 let parts = crate::access::ddl_parts(table, &env)?;
                 let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
                 let system_table = match parts.as_slice() {
-                    [t] if in_system => Some(t.clone()),
+                    [t] if in_system && !self.is_temp_name(t, &env) => Some(t.clone()),
                     [c, t] if crate::system::is_system(c) => Some(t.clone()),
                     _ => None,
                 }

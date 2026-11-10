@@ -1570,10 +1570,27 @@ impl Session {
         Ok(namespace)
     }
 
+    /// Whether `name` (bare, as written) is a temporary view or table of the session, which
+    /// resolves before any catalog.
+    pub(crate) fn is_temp_name(&self, name: &str, env: &crate::session::QueryEnv) -> bool {
+        !crate::catalog::is_global_key(name)
+            && self
+                .state
+                .catalog
+                .exists(name, env.analysis.conf.case_sensitive)
+    }
+
     /// The namespace `parts` (a table or view name as written) resolve in: the current one, and a
     /// bare name is `TABLE_OR_VIEW_NOT_FOUND` under `system`.
-    pub(crate) fn namespace_for(&self, parts: &[String]) -> Result<String, KrishivError> {
-        if parts.len() == 1 && is_system(&self.state.catalog.current_catalog()) {
+    pub(crate) fn namespace_for(
+        &self,
+        parts: &[String],
+        env: &crate::session::QueryEnv,
+    ) -> Result<String, KrishivError> {
+        if parts.len() == 1
+            && is_system(&self.state.catalog.current_catalog())
+            && !self.is_temp_name(&parts[0], env)
+        {
             return Err(krishiv_common::error::TableOrViewNotFound {
                 relation_name: format!("`{}`", parts[0]),
                 search_path: crate::catalog::search_path(),

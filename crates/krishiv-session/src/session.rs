@@ -1553,6 +1553,7 @@ impl Session {
     ) -> Result<crate::admission::Permit, KrishivError> {
         // A query that reads only `system.*` is never queued behind the load it inspects.
         if exempt {
+            self.state.queries.mark_started(log_id);
             return Ok(crate::admission::Permit::unlimited());
         }
         let request = QueryRequest {

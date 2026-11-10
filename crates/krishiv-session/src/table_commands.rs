@@ -235,7 +235,7 @@ impl Session {
         env: &QueryEnv,
     ) -> Result<TableName, KrishivError> {
         let parts = crate::access::ddl_parts(name, env)?;
-        TableName::resolve(&parts, &self.namespace_for(&parts)?, env)
+        TableName::resolve(&parts, &self.namespace_for(&parts, env)?, env)
     }
 
     /// Refuses a table, view or SQL function in a schema with a default collation (`spark.sql.collation.schemaLevel.enabled`):
