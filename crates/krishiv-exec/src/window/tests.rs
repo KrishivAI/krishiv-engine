@@ -3208,6 +3208,20 @@ fn a_refused_frame_is_asked_for_once_and_the_same_frame_refused_again_fails() {
     assert!(matches!(refusal(&mut asked, 5, other), Refusal::Fail(_)));
 }
 
+#[test]
+fn a_refused_frame_asks_for_at_least_the_base() {
+    use super::spill::need_memory;
+    use crate::operator::FlushOutput;
+    assert!(matches!(
+        need_memory(10, 4096),
+        FlushOutput::NeedMemory { bytes: 4096 }
+    ));
+    assert!(matches!(
+        need_memory(73_144, 4096),
+        FlushOutput::NeedMemory { bytes: 73_144 }
+    ));
+}
+
 fn internal_for_test() -> krishiv_common::error::KrishivError {
     crate::error::internal("a read failed".to_owned())
 }

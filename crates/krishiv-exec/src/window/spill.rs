@@ -134,6 +134,13 @@ pub(super) fn refusal(asked: &mut Option<u64>, progress: u64, e: KrishivError) -
     Refusal::Ask(refused_bytes(&e))
 }
 
+/// The step that asks the driver for a refused frame's `bytes`, at least the replay's `base`.
+pub(super) fn need_memory(bytes: usize, base: usize) -> FlushOutput {
+    FlushOutput::NeedMemory {
+        bytes: bytes.max(base),
+    }
+}
+
 /// The flush phase's state.
 pub(super) struct Replay {
     /// `None` while a blocking step holds it.
@@ -420,11 +427,7 @@ impl Window {
                 let progress = r.cursor.as_ref().map_or(0, |c| c.progress);
                 let next = match next {
                     Err(e) => match refusal(&mut r.read_asked, progress, e) {
-                        Refusal::Ask(bytes) => {
-                            return Ok(FlushOutput::NeedMemory {
-                                bytes: bytes.max(r.base),
-                            });
-                        }
+                        Refusal::Ask(bytes) => return Ok(need_memory(bytes, r.base)),
                         Refusal::Fail(e) => return Err(e),
                     },
                     ok => {
