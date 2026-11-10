@@ -504,7 +504,10 @@ fn start_group(
         let base = u32::try_from(next_partition)
             .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
         // The next member starts past every split of this one (a source can
-        // have more splits than drivers), so split ids never overlap.
+        // have more splits than drivers), so split ids never overlap. The
+        // 2^24 cap only bounds the id space: a range has at most `numSlices`
+        // splits and a file scan about four per driver, so no source reaches
+        // it; past it, members' split ids (and seeded draws) would overlap.
         let span = drivers.max(source.partitions(&source_global).min(1 << 24));
         // `span` fits `usize`; the end index must fit `u32` as well.
         u32::try_from(next_partition + span as u64)
