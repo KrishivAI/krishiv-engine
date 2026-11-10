@@ -389,14 +389,25 @@ async fn snapshot_if_exists_replays_from_a_checkpoint() {
                 .unwrap(),
         );
     }
+    // Exactly the 70 files committed, `f0` through `f69` (keys sort as text).
+    let expected: std::collections::BTreeSet<String> =
+        (0..70u64).map(|i| format!("f{i}")).collect();
+    let keys = |snap: &Snapshot| {
+        snap.files
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+    };
     let snap = l.snapshot_if_exists().await.unwrap().unwrap();
     assert_eq!(snap.version, Some(69));
-    assert_eq!(snap.files.len(), 70);
+    assert_eq!(keys(&snap), expected);
     assert_eq!(snap.files, l.snapshot().await.unwrap().files);
     // Only the checkpoint (version 63) and the entries after it remain: drop the earlier entries.
     for v in 0..=63u64 {
         s.inner.delete(&l.entry_path(v)).await.unwrap();
     }
     let snap = l.snapshot_if_exists().await.unwrap().unwrap();
-    assert_eq!((snap.version, snap.files.len()), (Some(69), 70));
+    assert_eq!(snap.version, Some(69));
+    assert_eq!(keys(&snap), expected);
+    assert_eq!(keys(&l.snapshot().await.unwrap()), expected);
 }
