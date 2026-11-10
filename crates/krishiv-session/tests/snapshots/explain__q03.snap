@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-session/tests/explain.rs
+assertion_line: 240
 expression: "logical_and_physical(&s, 3)"
 ---
 == Parsed Logical Plan ==
@@ -34,12 +35,12 @@ Limit 10
             :- Project [o_orderkey#8, o_orderdate#12, o_shippriority#15]
             :  +- Join Inner, (c_custkey#0 == o_custkey#9)
             :     :- Project [c_custkey#0]
-            :     :  +- Filter (c_mktsegment#6 == 'BUILDING')
+            :     :  +- Filter ((c_mktsegment#6 == 'BUILDING') and isnotnull(c_custkey#0))
             :     :     +- Scan spark_catalog.default.customer [c_custkey#0, c_mktsegment#6]
-            :     +- Filter (o_orderdate#12 < DATE '1995-03-15')
+            :     +- Filter (((o_orderdate#12 < DATE '1995-03-15') and isnotnull(o_custkey#9)) and isnotnull(o_orderkey#8))
             :        +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12, o_shippriority#15]
             +- Project [l_orderkey#17, l_extendedprice#22, l_discount#23]
-               +- Filter (l_shipdate#27 > DATE '1995-03-15')
+               +- Filter ((l_shipdate#27 > DATE '1995-03-15') and isnotnull(l_orderkey#17))
                   +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_shipdate#27]
 
 == Physical Plan ==
@@ -56,9 +57,9 @@ TopN 10, [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
                            :- Project [o_orderkey#8, o_orderdate#12, o_shippriority#15]
                            :  +- HashJoin Inner, [c_custkey#0] = [o_custkey#9], RuntimeFilter #1: c_custkey#0 -> spark_catalog.default.customer.c_custkey
                            :     :- Project [c_custkey#0]
-                           :     :  +- Scan spark_catalog.default.customer [c_custkey#0, c_mktsegment#6], PushedFilters: [(c_mktsegment#6 == 'BUILDING')]
+                           :     :  +- Scan spark_catalog.default.customer [c_custkey#0, c_mktsegment#6], PushedFilters: [((c_mktsegment#6 == 'BUILDING') and isnotnull(c_custkey#0))]
                            :     +- BroadcastExchange
-                           :        +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12, o_shippriority#15], PushedFilters: [(o_orderdate#12 < DATE '1995-03-15')]
+                           :        +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12, o_shippriority#15], PushedFilters: [(((o_orderdate#12 < DATE '1995-03-15') and isnotnull(o_custkey#9)) and isnotnull(o_orderkey#8))]
                            +- BroadcastExchange
                               +- Project [l_orderkey#17, l_extendedprice#22, l_discount#23]
-                                 +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_shipdate#27], PushedFilters: [(l_shipdate#27 > DATE '1995-03-15')]
+                                 +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_shipdate#27], PushedFilters: [((l_shipdate#27 > DATE '1995-03-15') and isnotnull(l_orderkey#17))]

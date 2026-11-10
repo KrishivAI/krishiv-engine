@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -10,34 +11,36 @@ Limit 100
          :  +- Project [hd_demo_sk#34]
          :     +- Join Inner, (ws_ship_hdemo_sk#10 == hd_demo_sk#34)
          :        :- Project [hd_demo_sk#34]
-         :        :  +- Filter (hd_dep_count#37 == 6)
+         :        :  +- Filter ((hd_dep_count#37 == 6) and isnotnull(hd_demo_sk#34))
          :        :     +- Scan spark_catalog.default.household_demographics [hd_demo_sk#34, hd_dep_count#37] (shared #1)
          :        +- Project [ws_ship_hdemo_sk#10]
          :           +- Join Inner, (ws_sold_time_sk#1 == t_time_sk#39)
          :              :- Project [ws_sold_time_sk#1, ws_ship_hdemo_sk#10]
          :              :  +- Join Inner, (ws_web_page_sk#12 == wp_web_page_sk#49)
-         :              :     :- Scan spark_catalog.default.web_sales [ws_sold_time_sk#1, ws_ship_hdemo_sk#10, ws_web_page_sk#12] (shared #2)
+         :              :     :- Filter ((isnotnull(ws_ship_hdemo_sk#10) and isnotnull(ws_sold_time_sk#1)) and isnotnull(ws_web_page_sk#12))
+         :              :     :  +- Scan spark_catalog.default.web_sales [ws_sold_time_sk#1, ws_ship_hdemo_sk#10, ws_web_page_sk#12] (shared #2)
          :              :     +- Project [wp_web_page_sk#49]
-         :              :        +- Filter ((wp_char_count#59 >= 5000) and (wp_char_count#59 <= 5200))
+         :              :        +- Filter (((wp_char_count#59 >= 5000) and (wp_char_count#59 <= 5200)) and isnotnull(wp_web_page_sk#49))
          :              :           +- Scan spark_catalog.default.web_page [wp_web_page_sk#49, wp_char_count#59] (shared #3)
          :              +- Project [t_time_sk#39]
-         :                 +- Filter ((t_hour#42 >= 8) and (t_hour#42 <= 9))
+         :                 +- Filter (((t_hour#42 >= 8) and (t_hour#42 <= 9)) and isnotnull(t_time_sk#39))
          :                    +- Scan spark_catalog.default.time_dim [t_time_sk#39, t_hour#42] (shared #4)
          +- Shift +65
             +- Aggregate [], [count(1) AS pmc#64]
                +- Project [hd_demo_sk#34]
                   +- Join Inner, (ws_ship_hdemo_sk#10 == hd_demo_sk#34)
                      :- Project [hd_demo_sk#34]
-                     :  +- Filter (hd_dep_count#37 == 6)
+                     :  +- Filter ((hd_dep_count#37 == 6) and isnotnull(hd_demo_sk#34))
                      :     +- Shared #1, printed above
                      +- Project [ws_ship_hdemo_sk#10]
                         +- Join Inner, (ws_sold_time_sk#1 == t_time_sk#39)
                            :- Project [ws_sold_time_sk#1, ws_ship_hdemo_sk#10]
                            :  +- Join Inner, (ws_web_page_sk#12 == wp_web_page_sk#49)
-                           :     :- Shared #2, printed above
+                           :     :- Filter ((isnotnull(ws_ship_hdemo_sk#10) and isnotnull(ws_sold_time_sk#1)) and isnotnull(ws_web_page_sk#12))
+                           :     :  +- Shared #2, printed above
                            :     +- Project [wp_web_page_sk#49]
-                           :        +- Filter ((wp_char_count#59 >= 5000) and (wp_char_count#59 <= 5200))
+                           :        +- Filter (((wp_char_count#59 >= 5000) and (wp_char_count#59 <= 5200)) and isnotnull(wp_web_page_sk#49))
                            :           +- Shared #3, printed above
                            +- Project [t_time_sk#39]
-                              +- Filter ((t_hour#42 >= 19) and (t_hour#42 <= 20))
+                              +- Filter (((t_hour#42 >= 19) and (t_hour#42 <= 20)) and isnotnull(t_time_sk#39))
                                  +- Shared #4, printed above
