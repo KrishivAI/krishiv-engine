@@ -667,3 +667,15 @@ fn a_table_function_body_names_its_columns() {
         missing
     );
 }
+
+#[test]
+fn identifier_in_a_generator_call_with_a_column_list_alias_still_resolves() {
+    let s = Session::new().unwrap();
+    for q in [
+        "SELECT posexplode(IDENTIFIER('arr')) AS (p, v) FROM VALUES (array(1, 2)) t(arr)",
+        "SELECT a, (a > 0) AND (IDENTIFIER('b') > 0) FROM VALUES (1, 2) t(a, b)",
+        "SELECT a, (b) IN (IDENTIFIER('a'), 5) FROM VALUES (1, 2) t(a, b)",
+    ] {
+        run(&s, q);
+    }
+}

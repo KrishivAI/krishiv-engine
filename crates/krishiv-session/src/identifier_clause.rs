@@ -399,14 +399,18 @@ fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usiz
     {
         return true;
     }
-    // A CTE's column list, `WITH t(<list>) AS (`: only a CTE is followed by `AS (` (a call
-    // is followed by an alias name).
+    // A CTE's column list, `WITH t(<list>) AS (` or `.., t(<list>) AS (`: only a CTE is in CTE
+    // position (after `WITH`/`RECURSIVE`, or after the previous CTE's `AS (..)` body). A call
+    // followed by a multi-column alias, `explode(..) AS (k, v)`, has the same tokens after it.
     if tokens
         .get(before)
         .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
         && is(close_of(tokens, open), Sym::RParen)
         && is_word(close_of(tokens, open) + 1, "AS")
         && is(close_of(tokens, open) + 2, Sym::LParen)
+        && before
+            .checked_sub(1)
+            .is_some_and(|b| in_cte_position(tokens, sql, b))
     {
         return true;
     }
@@ -440,6 +444,35 @@ fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usiz
     false
 }
 
+/// Whether the token at `b` (just before a CTE's name) puts the name in CTE position.
+fn in_cte_position(tokens: &[krishiv_sql::lexer::Token], sql: &str, b: usize) -> bool {
+    let word = |i: usize, w: &str| {
+        tokens.get(i).is_some_and(|t| {
+            t.kind == TokenKind::Word
+                && sql
+                    .get(t.span.start..t.span.end)
+                    .is_some_and(|x| x.eq_ignore_ascii_case(w))
+        })
+    };
+    if word(b, "WITH") || word(b, "RECURSIVE") {
+        return true;
+    }
+    // `, name(..) AS (` after a CTE: the comma follows the previous CTE's `AS (..)` body.
+    let is_comma = tokens
+        .get(b)
+        .is_some_and(|t| t.kind == TokenKind::Sym(Sym::Comma));
+    let Some(c) = b.checked_sub(1) else {
+        return false;
+    };
+    is_comma
+        && tokens
+            .get(c)
+            .is_some_and(|t| t.kind == TokenKind::Sym(Sym::RParen))
+        && open_of(tokens, c)
+            .and_then(|o| o.checked_sub(1))
+            .is_some_and(|a| word(a, "AS"))
+}
+
 /// The index of the `)` closing the `(` at `open` (the end of the tokens if none).
 fn close_of(tokens: &[krishiv_sql::lexer::Token], open: usize) -> usize {
     let mut depth = 0_usize;
@@ -458,8 +491,8 @@ fn close_of(tokens: &[krishiv_sql::lexer::Token], open: usize) -> usize {
     tokens.len()
 }
 
-/// Whether the `)` at `close` ends a `VALUES (..)` row list.
-fn opens_values_row(tokens: &[krishiv_sql::lexer::Token], sql: &str, close: usize) -> bool {
+/// The index of the `(` matching the `)` at `close`.
+fn open_of(tokens: &[krishiv_sql::lexer::Token], close: usize) -> Option<usize> {
     let mut depth = 0_usize;
     let mut k = close + 1;
     while let Some(j) = k.checked_sub(1) {
@@ -467,31 +500,50 @@ fn opens_values_row(tokens: &[krishiv_sql::lexer::Token], sql: &str, close: usiz
         match tokens.get(k).map(|t| t.kind) {
             Some(TokenKind::Sym(Sym::RParen)) => depth += 1,
             Some(TokenKind::Sym(Sym::LParen)) => {
-                depth -= 1;
+                depth = depth.checked_sub(1)?;
                 if depth == 0 {
-                    // Rows may be comma-separated: `VALUES (1), (2) t(..)`.
-                    return match k.checked_sub(1) {
-                        Some(b)
-                            if tokens
-                                .get(b)
-                                .is_some_and(|t| t.kind == TokenKind::Sym(Sym::Comma)) =>
-                        {
-                            true
-                        }
-                        Some(b) => tokens.get(b).is_some_and(|t| {
-                            t.kind == TokenKind::Word
-                                && sql
-                                    .get(t.span.start..t.span.end)
-                                    .is_some_and(|x| x.eq_ignore_ascii_case("VALUES"))
-                        }),
-                        None => false,
-                    };
+                    return Some(k);
                 }
             }
             _ => {}
         }
     }
-    false
+    None
+}
+
+/// Whether the `)` at `close` ends a `VALUES (..)` row list: `VALUES (1), (2)`, every row a
+/// parenthesised group joined by commas back to the `VALUES` keyword.
+fn opens_values_row(tokens: &[krishiv_sql::lexer::Token], sql: &str, close: usize) -> bool {
+    let mut close = close;
+    loop {
+        let Some(open) = open_of(tokens, close) else {
+            return false;
+        };
+        let Some(b) = open.checked_sub(1) else {
+            return false;
+        };
+        let Some(t) = tokens.get(b) else {
+            return false;
+        };
+        match t.kind {
+            TokenKind::Sym(Sym::Comma) => match b.checked_sub(1) {
+                Some(c)
+                    if tokens
+                        .get(c)
+                        .is_some_and(|t| t.kind == TokenKind::Sym(Sym::RParen)) =>
+                {
+                    close = c;
+                }
+                _ => return false,
+            },
+            TokenKind::Word => {
+                return sql
+                    .get(t.span.start..t.span.end)
+                    .is_some_and(|x| x.eq_ignore_ascii_case("VALUES"));
+            }
+            _ => return false,
+        }
+    }
 }
 
 /// Whether the expression is constant for `IDENTIFIER`: no column, subquery or non-deterministic
