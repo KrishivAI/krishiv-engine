@@ -259,3 +259,66 @@ fn a_plan_from_an_earlier_statement_is_never_quoted_against_the_wrong_text() {
     let e = block_on(joined.collect()).unwrap_err();
     assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
 }
+
+/// Implicit casts at the other coercion sites quote the expression that needed them (Spark 4.2.0).
+#[test]
+fn implicit_casts_at_other_coercion_sites_quote_their_expression() {
+    for (sql, fragment, start, stop) in [
+        (
+            "SELECT CASE WHEN x > 0 THEN x ELSE 'a' END FROM VALUES (-1) AS t(x)",
+            "CASE WHEN x > 0 THEN x ELSE 'a' END",
+            7,
+            41,
+        ),
+        (
+            "SELECT IF(x > 0, x, 'a') FROM VALUES (-1) AS t(x)",
+            "IF(x > 0, x, 'a')",
+            7,
+            23,
+        ),
+        (
+            "SELECT coalesce(CAST(NULL AS INT), 'a') FROM VALUES (-1) AS t(x)",
+            "coalesce(CAST(NULL AS INT), 'a')",
+            7,
+            38,
+        ),
+        ("SELECT x = 'a' FROM VALUES (1) AS t(x)", "x = 'a'", 7, 13),
+        ("SELECT x < 'a' FROM VALUES (1) AS t(x)", "x < 'a'", 7, 13),
+        (
+            "SELECT x IN ('a', 'b') FROM VALUES (1) AS t(x)",
+            "IN ('a', 'b')",
+            9,
+            21,
+        ),
+        (
+            "SELECT x BETWEEN 'a' AND 'b' FROM VALUES (1) AS t(x)",
+            "BETWEEN 'a' AND 'b'",
+            9,
+            27,
+        ),
+        (
+            "SELECT array(x, 'a') FROM VALUES (1) AS t(x)",
+            "array(x, 'a')",
+            7,
+            19,
+        ),
+        (
+            "SELECT x FROM VALUES (1) AS t(x) UNION ALL SELECT 'a'",
+            "SELECT x FROM VALUES (1) AS t(x) UNION ALL SELECT 'a'",
+            0,
+            52,
+        ),
+        ("SELECT abs('a') FROM VALUES (1) AS t(x)", "abs('a')", 7, 14),
+        ("SELECT -'a' FROM VALUES (1) AS t(x)", "-'a'", 7, 10),
+        (
+            "SELECT x + '1.5' FROM VALUES (1) AS t(x)",
+            "x + '1.5'",
+            7,
+            15,
+        ),
+    ] {
+        let (class, ctx) = context_of(sql);
+        assert_eq!(class, "CAST_INVALID_INPUT", "{sql}");
+        assert_eq!(ctx, Some((fragment.to_owned(), start, stop)), "{sql}");
+    }
+}

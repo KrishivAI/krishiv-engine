@@ -456,7 +456,9 @@ impl Resolver<'_> {
         // A column whose type differs only in field names or nullability is
         // cast too: the cast relabels it, so every input reaches the
         // operator with the same physical type.
-        kids.iter().map(|k| self.cast_columns(k, &types)).collect()
+        kids.iter()
+            .map(|k| self.cast_columns(k, &types, o))
+            .collect()
     }
 
     /// `unionByName`'s inputs, each projected to the first input's columns
@@ -747,8 +749,16 @@ impl Resolver<'_> {
         Ok(self.make(Origin::UNKNOWN, node, f.out.to_vec(), &[&f]))
     }
 
-    /// `k` with its columns cast to `types` where they differ (same names).
-    fn cast_columns(&mut self, k: &Rel, types: &[DataType]) -> Result<Rel, AnalysisError> {
+    /// `k` with its columns cast to `types` where they differ (same names). The casts take the
+    /// origin `o` of the set operation, as Spark's rule transform gives the casts it inserts the
+    /// origin of the operator being rewritten (a run-time `CAST_INVALID_INPUT` of `x UNION ALL 'a'`
+    /// quotes the whole statement).
+    fn cast_columns(
+        &mut self,
+        k: &Rel,
+        types: &[DataType],
+        o: Origin,
+    ) -> Result<Rel, AnalysisError> {
         if k.out.iter().zip(types).all(|(a, t)| a.col.data_type == *t) {
             return Ok(k.clone());
         }
@@ -772,7 +782,12 @@ impl Resolver<'_> {
                 lateral: Vec::new(),
                 shown: None,
             };
-            let cast = self.implicit_cast(&b, coerce::cast_to(Some(&a.col.data_type), Some(t)));
+            let cast = self.implicit_cast_under(
+                &b,
+                coerce::cast_to(Some(&a.col.data_type), Some(t)),
+                false,
+                o,
+            );
             let output = self.attr(&a.col.name, &cast.ty);
             exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
