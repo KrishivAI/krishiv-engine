@@ -621,7 +621,10 @@ impl Resolver<'_> {
             && matches!(name.as_str(), "trim" | "ltrim" | "rtrim" | "btrim")
             && matches!(
                 chosen.map(Collation::family),
-                Some(CollationFamily::Icu { ai: true, .. })
+                Some(CollationFamily::Icu {
+                    ci: false,
+                    ai: true
+                })
             )
         {
             let (src, chars) = if name == "btrim" { (0, 1) } else { (1, 0) };

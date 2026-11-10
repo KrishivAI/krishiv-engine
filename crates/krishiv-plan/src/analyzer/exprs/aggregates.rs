@@ -333,8 +333,9 @@ impl Resolver<'_> {
                 orders.len() == 1 && orders.first().is_some_and(|o| key(&o.expr) == key(value));
             if !same {
                 // The value reads as `STRING` (listagg's input type): when
-                // it is a cast written over that, the written cast is the
-                // one that counts.
+                // it is a cast the analyzer put over a written cast, the
+                // written cast is the one that counts (a cast to `STRING`
+                // the user wrote stays as it is).
                 let mut written = &call_kids[0].expr;
                 if let ExprNode::Cast {
                     expr,
@@ -342,6 +343,7 @@ impl Resolver<'_> {
                     ..
                 } = &written.node
                     && matches!(expr.node, ExprNode::Cast { .. })
+                    && key(&kids[0].expr) != key(&call_kids[0].expr)
                 {
                     written = expr;
                 }

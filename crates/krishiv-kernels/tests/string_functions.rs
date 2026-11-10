@@ -1477,6 +1477,8 @@ fn string_functions_over_lcase_follow_spark() {
     assert_eq!(tr("\u{130}i", "i", "1"), "\u{130}1");
     assert_eq!(tr("\u{130}i", "\u{130}", "1"), "1i");
     assert_eq!(tr("i\u{307}i", "\u{130}", "1"), "1i");
+    // A capital `I` before the dot is not the `İ` pair (checked against Spark 4.2.0).
+    assert_eq!(tr("I\u{307}x", "\u{130}", "z"), "I\u{307}x");
     assert_eq!(tr("i\u{307}i", "i\u{307}", "12"), "121");
     assert_eq!(tr("aAbB", "Aab", "xy"), "xx");
     assert_eq!(tr("aAbB", "ab", "xyz"), "xxyy");

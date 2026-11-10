@@ -234,6 +234,11 @@ pub fn translate_lcase<O: OffsetSizeTrait>(
                 let Some(window) = text.get(at..at.saturating_add(w)) else {
                     continue;
                 };
+                // Spark joins only a written lower-case `i` with the dot (a capital `I`
+                // followed by U+0307 stays two characters).
+                if w == 2 && window.first() != Some(&'i') {
+                    continue;
+                }
                 buf.clear();
                 for c in window {
                     lcase_points(*c, &mut buf);
