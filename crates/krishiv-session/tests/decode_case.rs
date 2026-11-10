@@ -250,18 +250,18 @@ fn nested_decode_time(depth: usize) -> std::time::Duration {
 /// Each level of nesting puts the inner `decode` in every search condition.
 /// The inner expression is shared, not copied, and compiled once per use, so
 /// depth with several searches must stay cheap. The bound is a ratio against
-/// a shallow run in the same process, so instrumented (llvm-cov) or loaded
-/// machines slow both sides alike: depth 2 to 8 grows about 4x today, a copy
-/// per search condition would be 4^6 (4096x). Depths above 8 are not run:
-/// planning there grows faster than linearly (10 levels about 1 s, 12 about
-/// 20 s in a debug build), which is a separate planner issue.
+/// a shallow run in the same process (best of two), so instrumented (llvm-cov)
+/// or loaded machines slow both sides alike. A copy per search condition (4
+/// per level) would cost 4^4 = 256x from depth 2 to depth 6. Planning above
+/// depth 8 already grows 3-4x per level (10 levels about 1 s, 12 about 20 s in
+/// a debug build), so deeper runs are not used here.
 #[test]
 fn nested_decode_stays_linear_to_plan() {
     let _warm = nested_decode_time(1);
-    let shallow = nested_decode_time(2);
-    let deep = nested_decode_time(8);
+    let shallow = nested_decode_time(2).min(nested_decode_time(2));
+    let deep = nested_decode_time(6).min(nested_decode_time(6));
     assert!(
-        deep < shallow * 100 + std::time::Duration::from_secs(1),
-        "depth 8 took {deep:?} against {shallow:?} at depth 2"
+        deep < shallow * 40 + std::time::Duration::from_millis(500),
+        "depth 6 took {deep:?} against {shallow:?} at depth 2"
     );
 }
