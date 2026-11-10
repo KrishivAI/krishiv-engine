@@ -38,6 +38,7 @@ mod case_table;
 mod chars;
 mod charsets;
 pub(crate) mod codec;
+mod lcase;
 mod like;
 mod mask_table;
 mod split;
@@ -59,6 +60,10 @@ pub use chars::{
 pub use codec::{
     CharsetOptions, base64, decode, decode_with, encode, encode_with, is_valid_utf8,
     make_valid_utf8, to_binary, unbase64, url_decode, url_encode, validate_utf8,
+};
+pub use lcase::{
+    replace_lcase, split_part_lcase, substring_index_lcase, translate_lcase, trim_collated,
+    trim_mode,
 };
 pub use like::{LikePattern, like};
 pub use split::{literal_delimiter, split_literal};

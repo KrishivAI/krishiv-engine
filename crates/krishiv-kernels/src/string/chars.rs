@@ -40,7 +40,7 @@ fn int_rows(
 
 /// A string result column: `fill` writes the row's value into the cleared
 /// scratch buffer for every row whose operands are all valid.
-fn str_rows<O: OffsetSizeTrait>(
+pub(super) fn str_rows<O: OffsetSizeTrait>(
     slots: &[&dyn Slot],
     mut fill: impl FnMut(usize, &mut String) -> Result<(), KernelError>,
 ) -> Result<GenericStringArray<O>, KernelError> {
@@ -61,7 +61,7 @@ fn str_rows<O: OffsetSizeTrait>(
 
 /// Reserves `need` bytes of scratch, reporting failure as
 /// `UNABLE_TO_ACQUIRE_MEMORY` instead of aborting.
-fn reserve_str(scratch: &mut String, need: usize) -> Result<(), KernelError> {
+pub(super) fn reserve_str(scratch: &mut String, need: usize) -> Result<(), KernelError> {
     scratch
         .try_reserve(need)
         .map_err(|_| KernelError::out_of_memory(need))
@@ -451,7 +451,7 @@ pub fn locate<O: OffsetSizeTrait>(
 
 /// The code points Spark's `UTF8_LCASE` compares for `c` (`lowerCaseCodePoint`): `İ` is `i` and
 /// U+0307, final sigma is `σ`, anything else its simple lower case.
-fn lcase_points(c: char, out: &mut Vec<char>) {
+pub(super) fn lcase_points(c: char, out: &mut Vec<char>) {
     match c {
         '\u{130}' => out.extend(['i', '\u{307}']),
         '\u{3c2}' => out.push('\u{3c3}'),
@@ -462,7 +462,7 @@ fn lcase_points(c: char, out: &mut Vec<char>) {
 /// How many characters of `text` from `from` the lower-cased `pattern` covers, as Spark's
 /// `lowercaseMatchLengthFrom`: a match may not start or end between the two code points `İ`
 /// lower-cases to.
-fn lcase_match_from(text: &[char], from: usize, pattern: &[char]) -> Option<usize> {
+pub(super) fn lcase_match_from(text: &[char], from: usize, pattern: &[char]) -> Option<usize> {
     let (mut p, mut t) = (0_usize, from);
     let mut buf = Vec::with_capacity(2);
     while p < pattern.len() {
