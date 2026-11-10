@@ -371,17 +371,16 @@ impl<'a> CommitLog<'a> {
                 return Err(self.corrupt(&format!("version {} is missing", next + i as u64)));
             }
         }
-        // At most 16 reads at once, in order: a failed checkpoint leaves the whole log since the
-        // last one to replay.
-        let mut read = Vec::with_capacity(wanted.len());
+        // At most 16 reads at once, and each chunk is applied in version order before the next is
+        // read: a failed checkpoint leaves the whole log since the last one to replay, and its
+        // entries (with their JSON bytes) must not all be held at once.
         for chunk in wanted.chunks(16) {
-            read.extend(
-                futures::future::try_join_all(chunk.iter().map(|v| self.read_entry(*v))).await?,
-            );
-        }
-        for (v, (entry, _)) in wanted.into_iter().zip(read) {
-            apply(&mut snap, &entry);
-            snap.version = Some(v);
+            let read =
+                futures::future::try_join_all(chunk.iter().map(|v| self.read_entry(*v))).await?;
+            for (v, (entry, _)) in chunk.iter().zip(read) {
+                apply(&mut snap, &entry);
+                snap.version = Some(*v);
+            }
         }
         Ok(snap)
     }
