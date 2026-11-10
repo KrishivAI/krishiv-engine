@@ -136,8 +136,8 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                         reserved_namespace_properties(properties, a.span)?;
                     }
                     // Schema-level collations are off in Spark 4.2
-                    // (`spark.sql.schemaLevelCollations.enabled`).
-                    AlterNamespaceAction::DefaultCollation(_) => {
+                    // (`spark.sql.collation.schemaLevel.enabled`).
+                    AlterNamespaceAction::DefaultCollation(_) if !opts.schema_level_collations => {
                         return Err(at(UnsupportedFeatureSchemaLevelCollations {}, a.span));
                     }
                     _ => {}
@@ -459,7 +459,7 @@ impl Checker<'_> {
             ));
         }
         self.property_list(&n.properties, true, n.span)?;
-        // Spark 4.2 then refuses `DEFAULT COLLATION` unless `spark.sql.schemaLevelCollations.enabled`;
+        // Spark 4.2 then refuses `DEFAULT COLLATION` unless `spark.sql.collation.schemaLevel.enabled`;
         // its golden suite runs with it on, and Krishiv accepts the clause (not checked here).
         reserved_namespace_properties(&n.properties, n.span)
     }

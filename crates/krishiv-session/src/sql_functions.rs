@@ -681,3 +681,152 @@ mod tests {
         assert!(r.source_text(SourceId(8)).is_none());
     }
 }
+
+/// Spark's `SQL_TABLE_UDF_MISSING_COLUMN_NAMES` (`CreateSQLFunctionCommand`, checked after the
+/// body analyzed): a table function without a column list (`RETURNS TABLE`) takes its columns'
+/// names from the body. Spark checks the parsed body only: a bare `SELECT` (a `Project`) may not
+/// hold an item it would name itself (`x + 1`, `IDENTIFIER('x')`, `m['k']`); any other shape
+/// (`ORDER BY`, `LIMIT`, `GROUP BY`, `DISTINCT`, `WITH`, `WINDOW`, `QUALIFY`, a hint, a set
+/// operation) is not checked and names its columns as a query does. A pipe is checked at its last
+/// operator: `|> SELECT` and `|> EXTEND` are `Project`s too. `name` is the function's name as
+/// written (Spark keeps its case there). `ids` are the spans of the names the
+/// session substituted for `IDENTIFIER(..)` clauses, which Spark reads as unnamed expressions.
+pub(crate) fn check_return_names(
+    f: &krishiv_sql::ast::CreateFunction,
+    name: &str,
+    ids: &[krishiv_sql::ast::Span],
+) -> Result<(), KrishivError> {
+    use krishiv_sql::ast::{FunctionBodyKind, FunctionReturnsKind};
+    let without_columns = matches!(
+        f.returns.as_ref().map(|r| &r.kind),
+        Some(FunctionReturnsKind::Table(None))
+    );
+    let query = match &f.body.kind {
+        FunctionBodyKind::Query(q) => Some(&**q),
+        other => bracketed_query(other),
+    };
+    match query {
+        Some(q) if without_columns && lacks_column_names(q, ids) => Err(
+            krishiv_common::error::UserDefinedFunctionsSqlTableUdfMissingColumnNames {
+                function_name: format!("`{}`", name.replace('`', "``")),
+            }
+            .into(),
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// Whether `q` parses to Spark's `Project` with an `UnresolvedAlias` item (see
+/// [`check_return_names`]).
+fn lacks_column_names(q: &krishiv_sql::ast::Query, ids: &[krishiv_sql::ast::Span]) -> bool {
+    use krishiv_sql::ast::{PipeOpKind, SetExprKind};
+    // Each of these wraps the `Project` in another node (`Sort`, `Limit`, `WithCTE`, ...).
+    let organized = q.with.is_some()
+        || !q.order_by.is_empty()
+        || !q.cluster_by.is_empty()
+        || !q.distribute_by.is_empty()
+        || !q.sort_by.is_empty()
+        || !q.windows.is_empty()
+        || q.limit.is_some()
+        || q.offset.is_some();
+    if organized {
+        return false;
+    }
+    match &q.body.kind {
+        SetExprKind::Select(s) => {
+            // A hint is an `UnresolvedHint` over the `Project`.
+            let projected = s.hints.is_empty()
+                && s.group_by.is_none()
+                && s.having.is_none()
+                && s.windows.is_empty()
+                && s.qualify.is_none()
+                && !matches!(
+                    s.quantifier,
+                    Some(krishiv_sql::ast::SetQuantifier::Distinct)
+                );
+            projected && unnamed_item(&s.projection, ids)
+        }
+        // `(query)` is the query; `FROM t SELECT ...` with one body is that body over `t`.
+        SetExprKind::Query(inner) => lacks_column_names(inner, ids),
+        SetExprKind::FromStatement(from) => match &from.bodies[..] {
+            [body] => lacks_column_names(body, ids),
+            _ => false,
+        },
+        SetExprKind::Pipe(pipe) => match pipe.ops.last().map(|op| &op.kind) {
+            Some(PipeOpKind::Select(s)) => {
+                s.hints.is_empty()
+                    && s.group_by.is_none()
+                    && s.windows.is_empty()
+                    && !matches!(
+                        s.quantifier,
+                        Some(krishiv_sql::ast::SetQuantifier::Distinct)
+                    )
+                    && unnamed_item(&s.projection, ids)
+            }
+            Some(PipeOpKind::Extend(items)) => unnamed_item(items, ids),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Whether an item of `items` has no alias and is not a named expression.
+fn unnamed_item(items: &[krishiv_sql::ast::SelectItem], ids: &[krishiv_sql::ast::Span]) -> bool {
+    items
+        .iter()
+        .any(|item| item.alias.is_none() && !named(&item.expr, ids))
+}
+
+/// Whether Spark's parser makes `e` a named expression (an attribute or a star), which a
+/// `Project` keeps as it is, rather than wrapping it in an `UnresolvedAlias`.
+fn named(e: &krishiv_sql::ast::Expr, ids: &[krishiv_sql::ast::Span]) -> bool {
+    use krishiv_sql::ast::ExprKind;
+    match &e.kind {
+        ExprKind::Wildcard { .. } => true,
+        _ => attribute(e, ids),
+    }
+}
+
+/// Whether `e` is an `UnresolvedAttribute`: a column, in brackets or with fields taken
+/// (`(c1).c2`), but not a name substituted for an `IDENTIFIER(..)` clause, which Spark parses as
+/// an expression (`IDENTIFIER('c1').c2` is a field of one).
+fn attribute(e: &krishiv_sql::ast::Expr, ids: &[krishiv_sql::ast::Span]) -> bool {
+    use krishiv_sql::ast::ExprKind;
+    match &e.kind {
+        // `Span`'s `==` ignores positions: compare the offsets (as `lower_identified` does).
+        ExprKind::Column(_) => !ids
+            .iter()
+            .any(|s| s.start == e.span.start && s.end <= e.span.end),
+        ExprKind::Nested(inner) | ExprKind::Field(inner, _) => attribute(inner, ids),
+        _ => false,
+    }
+}
+
+/// The query of a function body written `RETURN (query)`, which the parser reads as a scalar
+/// subquery expression; Spark's grammar reads it as the query (in brackets, as many as written).
+pub(crate) fn bracketed_query(
+    body: &krishiv_sql::ast::FunctionBodyKind,
+) -> Option<&krishiv_sql::ast::Query> {
+    use krishiv_sql::ast::{ExprKind, FunctionBodyKind};
+    let FunctionBodyKind::Expr(e) = body else {
+        return None;
+    };
+    let mut e: &krishiv_sql::ast::Expr = e;
+    loop {
+        match &e.kind {
+            ExprKind::Nested(inner) => e = inner,
+            ExprKind::Subquery(q) => return Some(q),
+            _ => return None,
+        }
+    }
+}
+
+/// What `CREATE FUNCTION`'s `declare` lowers a function's defaults and body with.
+#[derive(Clone, Copy)]
+pub(crate) struct Declared<'a> {
+    pub(crate) source: krishiv_plan::SourceId,
+    pub(crate) case_sensitive: bool,
+    pub(crate) ansi: bool,
+    /// The spans of the names substituted for `IDENTIFIER(..)` clauses in the statement.
+    pub(crate) ids: &'a [krishiv_sql::ast::Span],
+}
