@@ -262,19 +262,20 @@ fn search_and_indeterminate_rules_follow_spark() {
 
 /// Calls whose answer depends on the collation refuse a non-binary one instead of matching
 /// bytes (unit 5 brings the collation-aware kernels; `contains`, `startswith` and `endswith`
-/// over `UTF8_LCASE` are there, unit 5a); binary strings are untouched.
+/// over `UTF8_LCASE` are there, unit 5a, and so are the trim family, `replace`, `translate`,
+/// `split_part` and `substring_index`, unit 5c); binary strings are untouched.
 #[test]
 fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
     let l = "('Ab' COLLATE utf8_lcase)";
     for sql in [
-        format!("SELECT replace({l}, 'a', 'x')"),
-        format!("SELECT translate({l}, 'a', 'x')"),
-        format!("SELECT trim('a' FROM {l})"),
-        format!("SELECT split_part({l}, 'x', 1)"),
         format!("SELECT {l} LIKE 'a%'"),
         format!("SELECT {l} RLIKE '^a'"),
         format!("SELECT regexp_replace({l}, 'a', 'x')"),
         "SELECT replace('aAb' COLLATE unicode_ci, 'a', 'x')".to_owned(),
+        "SELECT translate('aAb' COLLATE unicode_ci, 'a', 'x')".to_owned(),
+        "SELECT trim('a' FROM 'aAb' COLLATE unicode_ci)".to_owned(),
+        "SELECT split_part('aAb' COLLATE unicode_ci, 'x', 1)".to_owned(),
+        "SELECT substring_index('aAb' COLLATE unicode_ci, 'x', 1)".to_owned(),
         "SELECT 'a ' COLLATE utf8_binary_rtrim LIKE 'a'".to_owned(),
         "SELECT upper('a' COLLATE unicode_ci)".to_owned(),
     ] {
@@ -442,13 +443,18 @@ fn class_of(s: &Session, sql: &str) -> ErrorClass {
 fn unusual_operands_and_array_functions_do_not_compare_bytes() {
     for sql in [
         "SELECT (SELECT 'Ab' COLLATE utf8_lcase) LIKE 'a%'",
-        "SELECT replace(CAST(array('aAb') AS ARRAY<STRING COLLATE utf8_lcase>)[0], 'a', 'x')",
+        "SELECT replace(CAST(array('aAb') AS ARRAY<STRING COLLATE unicode_ci>)[0], 'a', 'x')",
         "SELECT array_contains(array('a', 'b'), 'A' COLLATE utf8_lcase)",
         "SELECT array_position(array('a'), 'A' COLLATE unicode_ci)",
         "SELECT map_contains_key(map('a', 1), 'A' COLLATE utf8_lcase)",
     ] {
         assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
     }
+    // An element of a collated array is read by its collation (unit 5c).
+    assert_eq!(
+        one("SELECT replace(CAST(array('aAb') AS ARRAY<STRING COLLATE utf8_lcase>)[0], 'a', 'x')"),
+        "xxb"
+    );
     // A search over a subquery or a struct field of a collated type reads its key (unit 5a).
     for sql in [
         "SELECT CAST(contains((SELECT 'Ab' COLLATE utf8_lcase), 'a') AS STRING)",
@@ -961,4 +967,79 @@ fn equal_null_compares_lcase_keys() {
             "{call}"
         );
     }
+}
+
+/// `trim`, `replace`, `translate`, `split_part` and `substring_index` over `UTF8_LCASE` and the
+/// `_RTRIM` collations (unit 5c); values of a Spark 4.2.0 local run (2026-11-10).
+#[test]
+fn trim_replace_translate_split_substring_index_over_lcase_and_rtrim() {
+    for (sql, want) in [
+        ("TRIM('b' FROM 'ABab' COLLATE utf8_lcase)", "ABa"),
+        (
+            "BTRIM('\u{130}o' COLLATE utf8_lcase, 'i\u{307}o')",
+            "\u{130}",
+        ),
+        ("BTRIM('i\u{307}o' COLLATE utf8_lcase, '\u{130}o')", ""),
+        ("LTRIM('a', 'AAb' COLLATE utf8_lcase)", "b"),
+        ("RTRIM('B', 'aAbB' COLLATE utf8_lcase)", "aA"),
+        ("BTRIM('ab  ' COLLATE utf8_binary_rtrim, 'b')", "a  "),
+        ("BTRIM('ab  ' COLLATE utf8_binary_rtrim, 'b ')", "a"),
+        ("RTRIM('ab ', 'xab  ' COLLATE utf8_lcase_rtrim)", "x"),
+        ("RTRIM('  ab  ' COLLATE utf8_binary_rtrim)", "  ab"),
+        ("REPLACE('aAa' COLLATE utf8_lcase, 'A', 'x')", "xxx"),
+        (
+            "REPLACE('\u{130}o' COLLATE utf8_lcase, 'i', 'x')",
+            "\u{130}o",
+        ),
+        ("REPLACE('A  ' COLLATE utf8_lcase_rtrim, 'a ', 'x')", "x "),
+        ("REPLACE('a  ' COLLATE utf8_binary_rtrim, 'a ', 'x')", "x "),
+        ("TRANSLATE('aAbB' COLLATE utf8_lcase, 'Aab', 'xy')", "xx"),
+        (
+            "TRANSLATE('i\u{307}i' COLLATE utf8_lcase, '\u{130}', '1')",
+            "1i",
+        ),
+        (
+            "TRANSLATE('A b ' COLLATE utf8_lcase_rtrim, ' ', '1')",
+            "A1b1",
+        ),
+        ("SPLIT_PART('aAbAAc' COLLATE utf8_lcase, 'a', 3)", "b"),
+        ("SPLIT_PART('aAbAAc' COLLATE utf8_lcase, 'a', -1)", "c"),
+        (
+            "SPLIT_PART('a  b' COLLATE utf8_binary_rtrim, 'a ', 2)",
+            "  b",
+        ),
+        ("SPLIT_PART('Ab  ' COLLATE utf8_lcase_rtrim, 'B ', 1)", "A"),
+        (
+            "SUBSTRING_INDEX('aAbAAc' COLLATE utf8_lcase, 'a', 3)",
+            "aAb",
+        ),
+        (
+            "SUBSTRING_INDEX('aAbAAc' COLLATE utf8_lcase, 'a', -2)",
+            "Ac",
+        ),
+        (
+            "SUBSTRING_INDEX('a  b' COLLATE utf8_binary_rtrim, ' ', 1)",
+            "",
+        ),
+        (
+            "SUBSTRING_INDEX('Ab  ' COLLATE utf8_lcase_rtrim, 'B ', 1)",
+            "A",
+        ),
+    ] {
+        assert_eq!(one(&format!("SELECT {sql}")), want, "{sql}");
+    }
+    // The result keeps the collation.
+    assert_eq!(
+        one("SELECT typeof(replace('aAa' COLLATE utf8_lcase, 'A', 'x'))"),
+        "string collate UTF8_LCASE"
+    );
+    assert_eq!(
+        one("SELECT typeof(btrim('a ' COLLATE utf8_binary_rtrim, 'a'))"),
+        "string collate UTF8_BINARY_RTRIM"
+    );
+    // NULL stays NULL.
+    assert_eq!(
+        one("SELECT CAST(btrim(CAST(NULL AS STRING) COLLATE utf8_lcase, 'a') AS STRING)"),
+        "NULL"
+    );
 }

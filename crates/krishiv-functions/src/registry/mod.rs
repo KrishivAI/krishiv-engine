@@ -299,6 +299,11 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__startswith_lcase" => "__startswith_lcase",
         "__endswith_lcase" => "__endswith_lcase",
         "__find_in_set_lcase" => "__find_in_set_lcase",
+        "__trim_collated" => "__trim_collated",
+        "__replace_lcase" => "__replace_lcase",
+        "__translate_lcase" => "__translate_lcase",
+        "__split_part_lcase" => "__split_part_lcase",
+        "__substring_index_lcase" => "__substring_index_lcase",
         _ => return None,
     };
     let arity = if matches!(

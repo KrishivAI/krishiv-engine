@@ -404,6 +404,86 @@ fn safe_search_pattern(e: &Expr) -> bool {
     }
 }
 
+/// An argument of a [`Rewrite`]d call.
+#[derive(Clone, Copy, Debug)]
+enum RwArg {
+    /// The call's own argument, as a plain string when it is one.
+    Kid(usize),
+    /// The call's argument with its trailing spaces dropped (`_RTRIM` ignores them in a delimiter).
+    RtrimKid(usize),
+    /// An integer constant.
+    Int(i32),
+}
+
+/// The kernel call that answers a collation-dependent call over `UTF8_LCASE` or `_RTRIM`
+/// strings (unit 5c).
+#[derive(Debug)]
+struct Rewrite {
+    name: &'static str,
+    args: Vec<RwArg>,
+}
+
+/// How a collation-dependent call runs over the collation `c`: `None` when it is not supported
+/// (ICU collations, other arities), `Some(None)` when it runs as written on the plain strings,
+/// `Some(Some(rewrite))` when a collation-aware kernel answers it.
+///
+/// The `_RTRIM` collations change the trim family (trailing spaces of the source are kept and
+/// not trimmed unless the characters hold a space) and the delimiter of `split_part` and
+/// `substring_index` (its trailing spaces are dropped); `replace` and `translate` compare as
+/// the base collation does. Each rule was read off a Spark 4.2.0 run.
+fn collated_rewrite(name: &str, n: usize, c: Collation) -> Option<Option<Rewrite>> {
+    let family = c.family();
+    let lcase = matches!(family, CollationFamily::Utf8Lcase);
+    let rtrim = c.rtrim();
+    if !(lcase || (rtrim && matches!(family, CollationFamily::Utf8Binary))) {
+        return None;
+    }
+    let (kernel, args): (&'static str, Vec<RwArg>) = match (name, n) {
+        // The source and the characters, in the order the kernel takes them.
+        ("trim" | "ltrim" | "rtrim" | "btrim", 1) => return Some(None),
+        ("trim" | "ltrim" | "rtrim" | "btrim", 2) => {
+            // Bits of `krishiv_kernels::string::trim_mode`: side (0 both, 1 leading, 2
+            // trailing), 4 for lower-case matching, 8 for `_RTRIM`.
+            let side = match name {
+                "ltrim" => 1,
+                "rtrim" => 2,
+                _ => 0,
+            };
+            let mode = side | (i32::from(lcase) << 2) | (i32::from(rtrim) << 3);
+            let (src, chars) = if name == "btrim" { (0, 1) } else { (1, 0) };
+            (
+                "__trim_collated",
+                vec![RwArg::Int(mode), RwArg::Kid(src), RwArg::Kid(chars)],
+            )
+        }
+        ("replace" | "translate", 3) if !lcase => return Some(None),
+        ("replace", 3) => (
+            "__replace_lcase",
+            vec![RwArg::Kid(0), RwArg::Kid(1), RwArg::Kid(2)],
+        ),
+        ("translate", 3) => (
+            "__translate_lcase",
+            vec![RwArg::Kid(0), RwArg::Kid(1), RwArg::Kid(2)],
+        ),
+        ("split_part" | "substring_index", 3) => {
+            let delim = if rtrim {
+                RwArg::RtrimKid(1)
+            } else {
+                RwArg::Kid(1)
+            };
+            let kernel = match (name, lcase) {
+                ("split_part", true) => "__split_part_lcase",
+                ("split_part", false) => "split_part",
+                (_, true) => "__substring_index_lcase",
+                (_, false) => "substring_index",
+            };
+            (kernel, vec![RwArg::Kid(0), delim, RwArg::Kid(2)])
+        }
+        _ => return None,
+    };
+    Some(Some(Rewrite { name: kernel, args }))
+}
+
 impl Resolver<'_> {
     /// `expr_node_inner`, with the collation rule for a function call over collated strings.
     pub(super) fn expr_node(
@@ -513,16 +593,28 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        let mut rewrite = None;
         if let Some(c) = chosen
             && !c.is_utf8_binary()
-            && (DEPENDS.contains(&name.as_str())
-                || (ICU_CASE.contains(&name.as_str())
-                    && matches!(c.family(), CollationFamily::Icu { .. })))
         {
-            return Err(unsupported(
-                format!("{name} over a collated string"),
-                e.origin,
-            ));
+            if DEPENDS.contains(&name.as_str()) {
+                match collated_rewrite(&name, n, c) {
+                    Some(rw) => rewrite = rw,
+                    None => {
+                        return Err(unsupported(
+                            format!("{name} over a collated string"),
+                            e.origin,
+                        ));
+                    }
+                }
+            } else if ICU_CASE.contains(&name.as_str())
+                && matches!(c.family(), CollationFamily::Icu { .. })
+            {
+                return Err(unsupported(
+                    format!("{name} over a collated string"),
+                    e.origin,
+                ));
+            }
         }
         // The call runs on plain strings: the carrier is one.
         let plain: Vec<Bound> = kids
@@ -541,9 +633,12 @@ impl Resolver<'_> {
                     strength_of(&k.shown(), &mut memo),
                     Some((_, Strength::Default))
                 );
+                // `btrim` is Spark's runtime-replaceable call: its own arguments are shown as
+                // written, the replacement is the one that casts.
                 if let (Some(own), Some(want)) = (own, chosen)
                     && own != want
                     && literal
+                    && name != "btrim"
                     && !matches!(
                         name.as_str(),
                         "encode" | "decode" | "to_binary" | "try_to_binary"
@@ -579,12 +674,21 @@ impl Resolver<'_> {
                 Some(DataType::String) => Some(Collation::UTF8_BINARY),
                 _ => None,
             };
+            // `trim(chars, src)`, `ltrim` and `rtrim` take the type of the source, the second.
+            let skip = if matches!(name.as_str(), "trim" | "ltrim" | "rtrim") && n == 2 {
+                1
+            } else {
+                skip
+            };
             kids[skip..n]
                 .iter()
                 .find(|k| own(k).is_some())
                 .is_some_and(|head| is_marker(head.ty.data_type.as_ref()) || own(head) != chosen)
         };
-        let mut bound = self.expr_node_inner(e, &plain, in_agg, window_fn, cx)?;
+        let mut bound = match rewrite {
+            Some(rw) => self.rewritten_call(e, &kids[..n], &plain, &rw, in_agg, window_fn, cx)?,
+            None => self.expr_node_inner(e, &plain, in_agg, window_fn, cx)?,
+        };
         if let Some(t) = bound.ty.data_type.as_ref() {
             // A nested result would drop the collation of its strings; an indeterminate string
             // result has no type here (Spark carries an indeterminate type).
@@ -791,18 +895,10 @@ impl Resolver<'_> {
         }
         let (sub, text) = if name == "instr" { (1, 0) } else { (0, 1) };
         let find_in_set = name == "find_in_set";
-        let plain = |this: &mut Self, k: &Bound| -> Result<Bound, AnalysisError> {
-            let cast = Expr::new(ExprNode::Cast {
-                expr: Arc::clone(&k.expr),
-                to: DataType::String,
-                mode: CastMode::Ansi,
-            })
-            .with_origin(e.origin);
-            let mut b = this.expr(&Arc::new(cast), cx)?;
-            b.shown = Some(k.shown());
-            Ok(b)
-        };
-        let mut keyed = vec![plain(self, &kids[sub])?, plain(self, &kids[text])?];
+        let mut keyed = vec![
+            self.plain_string(&kids[sub], e.origin, cx)?,
+            self.plain_string(&kids[text], e.origin, cx)?,
+        ];
         if !find_in_set {
             keyed.push(if n == 3 && name != "instr" {
                 kids[2].clone()
@@ -823,6 +919,70 @@ impl Resolver<'_> {
         let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
         b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
         Ok(Some(b))
+    }
+
+    /// `k` as a plain string: the collation tag cast away.
+    fn plain_string(
+        &mut self,
+        k: &Bound,
+        origin: crate::Origin,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        let cast = Expr::new(ExprNode::Cast {
+            expr: Arc::clone(&k.expr),
+            to: DataType::String,
+            mode: CastMode::Ansi,
+        })
+        .with_origin(origin);
+        let mut b = self.expr(&Arc::new(cast), cx)?;
+        b.shown = Some(k.shown());
+        Ok(b)
+    }
+
+    /// The call `e` as the collation-aware kernel call `rw`, named and typed as `e` (its children
+    /// are shown as the plain path shows them: `plain`).
+    #[expect(clippy::too_many_arguments, reason = "the arguments of `expr_node`")]
+    fn rewritten_call(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        plain: &[Bound],
+        rw: &Rewrite,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        let mut args = Vec::with_capacity(rw.args.len());
+        for a in &rw.args {
+            args.push(match *a {
+                RwArg::Kid(i) | RwArg::RtrimKid(i) => {
+                    let k = &kids[i];
+                    let mut b = if is_string(k.ty.data_type.as_ref()) {
+                        self.plain_string(k, e.origin, cx)?
+                    } else {
+                        k.clone()
+                    };
+                    if matches!(a, RwArg::RtrimKid(_)) {
+                        let call =
+                            Expr::function("rtrim", vec![(*b.expr).clone()]).with_origin(e.origin);
+                        let shown = b.shown();
+                        b = self.expr(&Arc::new(call), cx)?;
+                        b.shown = Some(shown);
+                    }
+                    b
+                }
+                RwArg::Int(v) => {
+                    let lit =
+                        Expr::new(ExprNode::Literal(Literal::Integer(v))).with_origin(e.origin);
+                    self.expr(&Arc::new(lit), cx)?
+                }
+            });
+        }
+        let call = Expr::function(rw.name, args.iter().map(|k| (*k.expr).clone()).collect())
+            .with_origin(e.origin);
+        let mut b = self.expr_node_inner(&Arc::new(call), &args, in_agg, window_fn, cx)?;
+        b.shown = Some(with_children(e, plain.iter().map(Bound::shown).collect()));
+        Ok(b)
     }
 
     /// The one collation of the string operands of the call `e` (its first `n` arguments),

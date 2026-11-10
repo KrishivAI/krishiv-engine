@@ -96,6 +96,26 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "the analyzer's `find_in_set` over `UTF8_LCASE` strings",
     ),
     (
+        "__trim_collated",
+        "the analyzer's trim family over `UTF8_LCASE` and `_RTRIM` strings",
+    ),
+    (
+        "__replace_lcase",
+        "the analyzer's `replace` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__translate_lcase",
+        "the analyzer's `translate` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__split_part_lcase",
+        "the analyzer's `split_part` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__substring_index_lcase",
+        "the analyzer's `substring_index` over `UTF8_LCASE` strings",
+    ),
+    (
         "explode",
         "generator: a `Generate` node, not a DataFrame function yet",
     ),
