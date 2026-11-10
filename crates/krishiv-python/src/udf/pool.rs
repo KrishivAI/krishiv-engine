@@ -25,6 +25,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use pyo3::ffi;
+use pyo3::intern;
 use pyo3::prelude::*;
 
 /// One unit of work, run attached to Python on a pool thread.
@@ -172,9 +173,32 @@ impl Pool {
     }
 }
 
+/// What a `threading.Thread` does as it starts (`Thread._bootstrap_inner`):
+/// the trace and profile functions set with `threading.settrace` and
+/// `threading.setprofile` (coverage, a debugger, a profiler) are installed on
+/// this thread too, so UDF code is traced as code on any Python thread is.
+/// The pinned thread state keeps them for every later call. Nothing is set
+/// when none is; a failure leaves the thread untraced.
+fn inherit_thread_hooks(py: Python<'_>) {
+    let install = || -> PyResult<()> {
+        let threading = py.import(intern!(py, "threading"))?;
+        let sys = py.import(intern!(py, "sys"))?;
+        for (get, set) in [("gettrace", "settrace"), ("getprofile", "setprofile")] {
+            let hook = threading.call_method0(get)?;
+            if !hook.is_none() {
+                sys.call_method1(set, (hook,))?;
+            }
+        }
+        Ok(())
+    };
+    // A failure is the thread left untraced: never a failed pool.
+    let _ = install();
+}
+
 /// A pool thread: pins, runs jobs until told to stop, releases the pin.
 fn worker(queue: &Mutex<Receiver<Message>>, abandoned: &AtomicBool) {
     let pin = Pin::new();
+    Python::attach(inherit_thread_hooks);
     loop {
         let next = queue.lock().unwrap_or_else(PoisonError::into_inner).recv();
         match next {

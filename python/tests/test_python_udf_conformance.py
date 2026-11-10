@@ -288,6 +288,29 @@ print(json.dumps({"failed": failed, "count": n}))
 """
 
 
+THREAD_TRACE = """
+# A trace function set with `threading.settrace` reaches the pool's threads, as it reaches any
+# `threading.Thread` started after it (coverage and debuggers rely on it).
+seen = set()
+def global_trace(frame, event, arg):
+    if frame.f_code.co_name == "traced_udf" and threading.current_thread() is not threading.main_thread():
+        seen.add("udf")
+    return None
+threading.settrace(global_trace)
+spark = session(2)
+def traced_udf(x):
+    return plus_one(x)
+register(spark, "py_traced", traced_udf)
+n = spark.sql("SELECT count(py_traced(id)) FROM range(0, 100, 1, 2)").collect()[0][0]
+print(json.dumps({"count": n, "seen": sorted(seen)}))
+"""
+
+
+def test_a_threading_trace_function_reaches_the_pool_threads() -> None:
+    out = json.loads(ok(run_child(THREAD_TRACE, timeout=60)).strip().splitlines()[-1])
+    assert out == {"count": 100, "seen": ["udf"]}
+
+
 def test_an_interrupted_call_leaves_a_traced_interpreter_running() -> None:
     out = json.loads(ok(run_child(INTERRUPT_UNDER_TRACE, timeout=60)).strip().splitlines()[-1])
     assert out == {"failed": 3, "count": 1000}
