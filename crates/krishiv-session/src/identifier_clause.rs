@@ -399,6 +399,27 @@ fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usiz
     {
         return true;
     }
+    // A CTE's column list, `WITH t(<list>) AS (`: only a CTE is followed by `AS (` (a call
+    // is followed by an alias name).
+    if tokens
+        .get(before)
+        .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+        && is(close_of(tokens, open), Sym::RParen)
+        && is_word(close_of(tokens, open) + 1, "AS")
+        && is(close_of(tokens, open) + 2, Sym::LParen)
+    {
+        return true;
+    }
+    // An alias without `AS` after a row source: `VALUES (..) t(<list>)`, `range(3) t(<list>)`.
+    if tokens
+        .get(before)
+        .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+        && before
+            .checked_sub(1)
+            .is_some_and(|b| is(b, Sym::RParen) && opens_values_row(tokens, sql, b))
+    {
+        return true;
+    }
     // `AS IDENTIFIER(...) (`: back to the clause's `(`.
     if !is(before, Sym::RParen) {
         return false;
@@ -414,6 +435,60 @@ fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usiz
             if depth == 0 {
                 return k >= 2 && is_word(k - 1, "IDENTIFIER") && is_word(k - 2, "AS");
             }
+        }
+    }
+    false
+}
+
+/// The index of the `)` closing the `(` at `open` (the end of the tokens if none).
+fn close_of(tokens: &[krishiv_sql::lexer::Token], open: usize) -> usize {
+    let mut depth = 0_usize;
+    for (k, t) in tokens.iter().enumerate().skip(open) {
+        match t.kind {
+            TokenKind::Sym(Sym::LParen) => depth += 1,
+            TokenKind::Sym(Sym::RParen) => {
+                depth -= 1;
+                if depth == 0 {
+                    return k;
+                }
+            }
+            _ => {}
+        }
+    }
+    tokens.len()
+}
+
+/// Whether the `)` at `close` ends a `VALUES (..)` row list.
+fn opens_values_row(tokens: &[krishiv_sql::lexer::Token], sql: &str, close: usize) -> bool {
+    let mut depth = 0_usize;
+    let mut k = close + 1;
+    while let Some(j) = k.checked_sub(1) {
+        k = j;
+        match tokens.get(k).map(|t| t.kind) {
+            Some(TokenKind::Sym(Sym::RParen)) => depth += 1,
+            Some(TokenKind::Sym(Sym::LParen)) => {
+                depth -= 1;
+                if depth == 0 {
+                    // Rows may be comma-separated: `VALUES (1), (2) t(..)`.
+                    return match k.checked_sub(1) {
+                        Some(b)
+                            if tokens
+                                .get(b)
+                                .is_some_and(|t| t.kind == TokenKind::Sym(Sym::Comma)) =>
+                        {
+                            true
+                        }
+                        Some(b) => tokens.get(b).is_some_and(|t| {
+                            t.kind == TokenKind::Word
+                                && sql
+                                    .get(t.span.start..t.span.end)
+                                    .is_some_and(|x| x.eq_ignore_ascii_case("VALUES"))
+                        }),
+                        None => false,
+                    };
+                }
+            }
+            _ => {}
         }
     }
     false
