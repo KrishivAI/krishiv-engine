@@ -3171,3 +3171,57 @@ async fn rows_a_filter_drops_do_not_overflow_on_disk() {
         assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
     }
 }
+
+#[test]
+fn a_refused_frame_is_asked_for_once_and_the_same_frame_refused_again_fails() {
+    use super::spill::{Refusal, refusal};
+    let refused = |bytes: usize| -> krishiv_common::error::KrishivError {
+        (&krishiv_memory::MemoryError::Exhausted {
+            requested: bytes,
+            available: 0,
+        })
+            .into()
+    };
+    let mut asked = None;
+    // The first refusal of the frame after 3 consumed asks for the bytes it named.
+    assert!(matches!(
+        refusal(&mut asked, 3, refused(73_144)),
+        Refusal::Ask(73_144)
+    ));
+    // The same frame refused again fails.
+    assert!(matches!(
+        refusal(&mut asked, 3, refused(73_144)),
+        Refusal::Fail(_)
+    ));
+    // After a failure the state is clear: a refusal asks again.
+    assert!(matches!(
+        refusal(&mut asked, 3, refused(8)),
+        Refusal::Ask(8)
+    ));
+    // A footer passed (progress 4) and the next file's first frame refused: a different frame, so it asks.
+    assert!(matches!(
+        refusal(&mut asked, 4, refused(512)),
+        Refusal::Ask(512)
+    ));
+    // Any other error fails at once.
+    let other = internal_for_test();
+    assert!(matches!(refusal(&mut asked, 5, other), Refusal::Fail(_)));
+}
+
+#[test]
+fn a_refused_frame_asks_for_at_least_the_base() {
+    use super::spill::need_memory;
+    use crate::operator::FlushOutput;
+    assert!(matches!(
+        need_memory(10, 4096),
+        FlushOutput::NeedMemory { bytes: 4096 }
+    ));
+    assert!(matches!(
+        need_memory(73_144, 4096),
+        FlushOutput::NeedMemory { bytes: 73_144 }
+    ));
+}
+
+fn internal_for_test() -> krishiv_common::error::KrishivError {
+    crate::error::internal("a read failed".to_owned())
+}
