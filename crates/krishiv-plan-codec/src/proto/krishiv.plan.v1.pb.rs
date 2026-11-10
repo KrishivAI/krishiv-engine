@@ -1111,7 +1111,7 @@ pub struct BoundColumn {
 pub struct Expr {
     #[prost(message, optional, tag = "1")]
     pub origin: ::core::option::Option<Origin>,
-    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10")]
+    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11")]
     pub kind: ::core::option::Option<expr::Kind>,
 }
 /// Nested message and enum types in `Expr`.
@@ -1139,7 +1139,24 @@ pub mod expr {
         /// feature: lambda_functions
         #[prost(message, tag = "10")]
         LambdaVar(super::BoundColumn),
+        /// feature: captured_eval_mode
+        #[prost(message, tag = "11")]
+        EvalMode(super::EvalModeExpr),
     }
+}
+/// An expression evaluated in ANSI mode `ansi` whatever the query's mode is: the body
+/// of a SQL function created under the other mode (T184).
+/// feature: captured_eval_mode
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EvalModeExpr {
+    #[prost(uint32, tag = "1")]
+    pub expr: u32,
+    #[prost(bool, tag = "2")]
+    pub ansi: bool,
+    #[prost(message, optional, tag = "3")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(bool, tag = "4")]
+    pub nullable: bool,
 }
 /// A lambda (`x -> body`): the bound body of a higher-order function's
 /// argument, with its variables as `lambda_var` leaves.

@@ -419,6 +419,15 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         // higher-order call compiled around the body (see `hof`).
         ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => column(input, c),
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
+        // A SQL function body created under the other ANSI mode (T184): everything below
+        // reads the mode through the environment it is compiled with.
+        ExprNode::Resolved(ResolvedExpr::EvalMode { ansi, expr, .. }) => {
+            let env = EvalEnv {
+                ansi: *ansi,
+                ..input.env.clone()
+            };
+            compile(expr, Input { env: &env, ..input })
+        }
         ExprNode::Resolved(ResolvedExpr::Field {
             base,
             ordinal,

@@ -111,6 +111,7 @@
 //! | `ResolvedExpr::Alias` | R | - | - |
 //! | `ResolvedExpr::Field` | R | - | - |
 //! | `ResolvedExpr::StateInput` | R | - | - |
+//! | `ResolvedExpr::EvalMode` | R | - | - |
 //!
 //! Not in v1 (spec 13 §9; added with the features that need them):
 //! `Generate`, `Hint`, `Pivot`, `Command`,

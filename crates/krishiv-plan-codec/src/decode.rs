@@ -373,6 +373,7 @@ fn expr_children(m: &pb::Expr) -> impl Iterator<Item = u32> + '_ {
     let (one, many): (Option<u32>, &[u32]) = match &m.kind {
         Some(Kind::Cast(c)) => (Some(c.expr), &[]),
         Some(Kind::Alias(a)) => (Some(a.expr), &[]),
+        Some(Kind::EvalMode(m)) => (Some(m.expr), &[]),
         Some(Kind::Lambda(l)) => (Some(l.body), &[]),
         Some(Kind::Field(f)) => (Some(f.base), &[]),
         Some(Kind::Function(f)) => (f.filter, &f.args),
@@ -817,6 +818,12 @@ impl Decoder {
             Kind::Alias(a) => ExprNode::Resolved(ResolvedExpr::Alias {
                 expr: self.expr_ref(a.expr)?,
                 output: bound_column(required(&a.output, "an alias output")?)?,
+            }),
+            Kind::EvalMode(m) => ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi: m.ansi,
+                expr: self.expr_ref(m.expr)?,
+                data_type: spark_type(required(&m.data_type, "an eval mode type")?)?,
+                nullable: m.nullable,
             }),
             Kind::Function(f) => ExprNode::Resolved(ResolvedExpr::Function(self.function(f)?)),
             Kind::Field(f) => ExprNode::Resolved(ResolvedExpr::Field {

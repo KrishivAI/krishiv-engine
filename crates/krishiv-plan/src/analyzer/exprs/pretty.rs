@@ -127,7 +127,10 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
         ExprNode::MultiAlias { names, .. } => format!("{} AS ({})", k[0], names.join(", ")),
         // Spark names a pipe item by the item.
         // A stored field is metadata only: named as its value.
-        ExprNode::Pipe { .. } | ExprNode::StoredField { .. } => k[0].to_owned(),
+        // An eval mode is not part of the SQL text: the wrapped expression names itself.
+        ExprNode::Pipe { .. }
+        | ExprNode::StoredField { .. }
+        | ExprNode::Resolved(ResolvedExpr::EvalMode { .. }) => k[0].to_owned(),
         // Spark's `Alias.sql`: an alias inside an expression shows its name.
         ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
             format!(

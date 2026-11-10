@@ -577,6 +577,19 @@ pub enum ResolvedExpr {
         /// The attribute it produces.
         output: BoundColumn,
     },
+    /// `expr` evaluated in ANSI mode `ansi`, whatever the query's mode is: a SQL
+    /// function body runs in the mode it was created under (T184). The analyzer
+    /// wraps a body only when the captured mode differs from the query's.
+    EvalMode {
+        /// The ANSI mode `expr` evaluates in.
+        ansi: bool,
+        /// The wrapped expression.
+        expr: Arc<Expr>,
+        /// Its type (the type of `expr`).
+        data_type: DataType,
+        /// Whether it may be null.
+        nullable: bool,
+    },
     /// The only argument of an aggregate call that merges the states of a
     /// [`PlanNode::PartialAggregate`](crate::PlanNode) instead of reading
     /// raw values. It is not a value: only the aggregate planned around it
@@ -787,7 +800,9 @@ impl Expr {
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
-                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+                ResolvedExpr::Alias { expr, .. }
+                | ResolvedExpr::EvalMode { expr, .. }
+                | ResolvedExpr::Field { base: expr, .. },
             ) => f(expr),
             ExprNode::UpdateFields { .. } => self.update_fields_children(f),
             ExprNode::Subquery { kind, .. } => match kind {
@@ -852,7 +867,9 @@ impl Expr {
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
-                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+                ResolvedExpr::Alias { expr, .. }
+                | ResolvedExpr::EvalMode { expr, .. }
+                | ResolvedExpr::Field { base: expr, .. },
             ) => f(expr),
             ExprNode::UpdateFields { .. } => update_fields_children_mut(&mut self.node, f),
             ExprNode::Subquery { kind, .. } => match kind {

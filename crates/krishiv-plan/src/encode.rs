@@ -144,6 +144,7 @@ pub(crate) fn expr_tag(node: &ExprNode) -> u8 {
         ExprNode::Pipe { .. } => 34,
         ExprNode::Collate { .. } => 40,
         ExprNode::StoredField { .. } => 41,
+        ExprNode::Resolved(ResolvedExpr::EvalMode { .. }) => 42,
     }
 }
 
@@ -1334,6 +1335,17 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
                 self.bound(output);
+                self.expr(expr);
+            }
+            ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi,
+                expr,
+                data_type,
+                nullable,
+            }) => {
+                self.bool(*ansi);
+                self.data_type(data_type);
+                self.bool(*nullable);
                 self.expr(expr);
             }
             ExprNode::Lambda { params, body } => {

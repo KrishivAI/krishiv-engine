@@ -968,7 +968,19 @@ message Expr {
     Lambda lambda = 9;
     // feature: lambda_functions
     BoundColumn lambda_var = 10;
+    // feature: captured_eval_mode
+    EvalModeExpr eval_mode = 11;
   }
+}
+
+// An expression evaluated in ANSI mode `ansi` whatever the query's mode is: the body
+// of a SQL function created under the other mode (T184).
+// feature: captured_eval_mode
+message EvalModeExpr {
+  uint32 expr = 1;
+  bool ansi = 2;
+  DataType data_type = 3;
+  bool nullable = 4;
 }
 
 // A lambda (`x -> body`): the bound body of a higher-order function's

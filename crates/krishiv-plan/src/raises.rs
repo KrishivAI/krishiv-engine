@@ -94,6 +94,8 @@ fn never_raises(e: &Expr, ansi: bool) -> bool {
         | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => true,
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => never_raises(expr, ansi),
         ExprNode::Resolved(ResolvedExpr::Field { base, .. }) => never_raises(base, ansi),
+        // The pinned mode decides inside (T184).
+        ExprNode::Resolved(ResolvedExpr::EvalMode { ansi, expr, .. }) => never_raises(expr, *ansi),
         ExprNode::Cast { expr, to, mode } => {
             never_raises(expr, ansi)
                 && type_of(expr).is_some_and(|from| cast_never_raises(&from, to, *mode))
@@ -232,7 +234,9 @@ pub(crate) fn type_of(e: &Expr) -> Option<DataType> {
             | ResolvedExpr::LambdaVar(c)
             | ResolvedExpr::Alias { output: c, .. },
         ) => Some(c.data_type.clone()),
-        ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => Some(data_type.clone()),
+        ExprNode::Resolved(
+            ResolvedExpr::Field { data_type, .. } | ResolvedExpr::EvalMode { data_type, .. },
+        ) => Some(data_type.clone()),
         ExprNode::Resolved(ResolvedExpr::Function(f)) => Some(f.data_type.clone()),
         ExprNode::Cast { to, .. } => Some(to.clone()),
         ExprNode::Literal(l) => literal_type(l),

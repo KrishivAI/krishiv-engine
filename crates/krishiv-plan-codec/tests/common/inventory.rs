@@ -1688,6 +1688,31 @@ pub(crate) fn udaf_call_typed(arg_types: Vec<DataType>) -> PhysNode {
     }
 }
 
+/// An expression pinned to an ANSI mode: the body of a SQL function created under the other
+/// mode (`ResolvedExpr::EvalMode`, T184).
+pub(crate) fn captured_eval_mode() -> PhysNode {
+    let pinned = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::EvalMode {
+        ansi: false,
+        expr: call(
+            Builtin::Divide,
+            vec![lit(Literal::Integer(1)), col(1, "id", DataType::Integer)],
+            DataType::Double,
+        ),
+        data_type: DataType::Double,
+        nullable: true,
+    })));
+    PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "inverse".to_owned(),
+            expr: pinned,
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
 /// Lambda expressions and variables: a `transform` over an array column
 /// (`transform(xs, x -> x * 2)`). The array type needs `nested_types` too.
 pub(crate) fn lambda_functions() -> PhysNode {
@@ -1829,6 +1854,10 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         ),
     ));
     out.push(("nested_types".to_owned(), plan_of(nested_types())));
+    out.push((
+        "captured_eval_mode".to_owned(),
+        plan_of(captured_eval_mode()),
+    ));
     out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));
     out.push(("struct_field".to_owned(), plan_of(struct_field())));
     out.push(("map_key_dedup_policy".to_owned(), map_key_dedup_policy()));

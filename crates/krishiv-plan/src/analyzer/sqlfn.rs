@@ -345,12 +345,20 @@ impl Resolver<'_> {
         e: &Arc<Expr>,
         args: Vec<Bound>,
     ) -> Result<Bound, AnalysisError> {
+        // The body resolves under the ANSI mode captured at creation.
+        let flip = def.ansi.is_some_and(|a| a != self.ctx.conf.ansi);
+        let caller_ansi = self.ctx.conf.ansi;
+        // An argument is the caller's expression: inlined into a body of the other mode,
+        // it keeps evaluating in the caller's.
+        let args = if flip {
+            args.into_iter().map(|a| pin_mode(a, caller_ansi)).collect()
+        } else {
+            args
+        };
         let frame = Self::frame_of(def, args);
         // The body sees no lambda variable of the calling query.
         let outer_lambdas = std::mem::take(&mut self.lambdas);
         let outer = self.frame.replace(Arc::clone(&frame));
-        // The body resolves under the ANSI mode captured at creation.
-        let flip = def.ansi.is_some_and(|a| a != self.ctx.conf.ansi);
         if flip {
             std::mem::swap(&mut self.ctx, &mut self.flipped);
         }
@@ -360,7 +368,10 @@ impl Resolver<'_> {
         }
         self.frame = outer;
         self.lambdas = outer_lambdas;
-        let body = resolved?;
+        let mut body = resolved?;
+        if let Some(ansi) = def.ansi.filter(|_| flip) {
+            body = pin_mode(body, ansi);
+        }
         for (p, fp) in def.params.iter().zip(&frame.params) {
             if fp.reads.load(Ordering::Relaxed) > 1 && !is_deterministic(&fp.arg.expr) {
                 return Err(unsupported(
@@ -483,6 +494,18 @@ impl Resolver<'_> {
         };
         let e = Arc::new(Expr::new(ExprNode::Function(call.clone())).with_origin(o));
         let bound = self.arguments(def, &e, &call, &kids)?;
+        // The arguments are the caller's expressions: they keep the caller's ANSI mode in a
+        // body created under the other one (T184).
+        let caller_ansi = self.ctx.conf.ansi;
+        let table_flip = def.ansi.is_some_and(|a| a != caller_ansi);
+        let bound = if table_flip {
+            bound
+                .into_iter()
+                .map(|a| pin_mode(a, caller_ansi))
+                .collect()
+        } else {
+            bound
+        };
         let frame = Self::frame_of(def, bound);
         let Some(columns) = &def.returns_table else {
             return Err(unsupported("a scalar function as a table", o));
@@ -512,7 +535,10 @@ impl Resolver<'_> {
         self.frame = outer;
         self.lambdas = outer_lambdas;
         self.fn_path.pop();
-        let rel = resolved?;
+        let mut rel = resolved?;
+        if let Some(ansi) = def.ansi.filter(|_| flip) {
+            rel.plan = pin_plan(&rel.plan, ansi);
+        }
         // Spark evaluates an argument once per call. The body inlines it, so
         // a nondeterministic one is accepted only where that is the same:
         // read at most once, by a body that produces one row (a scan, a table
@@ -948,4 +974,92 @@ fn qualified(mut rel: super::resolve::Rel, name: &str) -> super::resolve::Rel {
         })
         .collect();
     rel
+}
+
+/// `b` evaluated in ANSI mode `ansi` whatever the query's mode is (T184): wrapped in
+/// [`ResolvedExpr::EvalMode`] unless it is a leaf that has no mode, computes an aggregate or a
+/// window (those read their operator's mode, a recorded divergence), or has no known type.
+fn pin_mode(b: Bound, ansi: bool) -> Bound {
+    let leaf = matches!(
+        &b.expr.node,
+        ExprNode::Literal(_)
+            | ExprNode::Resolved(
+                ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_)
+            )
+    );
+    let (Some(data_type), None, None, false) = (b.ty.data_type.clone(), b.agg, b.win, leaf) else {
+        return b;
+    };
+    let nullable = b.ty.nullable;
+    let origin = b.expr.origin;
+    Bound {
+        expr: Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi,
+                expr: Arc::clone(&b.expr),
+                data_type,
+                nullable,
+            }))
+            .with_origin(origin),
+        ),
+        ..b
+    }
+}
+
+/// The projections and filters of `plan` evaluate in ANSI mode `ansi` (T184): each projected
+/// expression (under its alias) and each filter predicate is wrapped in
+/// [`ResolvedExpr::EvalMode`]. Other operators (joins, aggregates, sorts) keep the query's mode,
+/// a recorded divergence.
+fn pin_plan(plan: &Arc<LogicalPlan>, ansi: bool) -> Arc<LogicalPlan> {
+    fn wrap(e: &Arc<Expr>, ansi: bool, data_type: DataType, nullable: bool) -> Arc<Expr> {
+        let leaf = matches!(
+            &e.node,
+            ExprNode::Literal(_)
+                | ExprNode::Resolved(
+                    ResolvedExpr::Column(_)
+                        | ResolvedExpr::OuterColumn(_)
+                        | ResolvedExpr::LambdaVar(_)
+                        | ResolvedExpr::EvalMode { .. }
+                )
+        );
+        if leaf {
+            return Arc::clone(e);
+        }
+        Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi,
+                expr: Arc::clone(e),
+                data_type,
+                nullable,
+            }))
+            .with_origin(e.origin),
+        )
+    }
+    let done: Result<Arc<LogicalPlan>, std::convert::Infallible> =
+        Arc::clone(plan).transform_up(&mut |n| match &n.node {
+            PlanNode::Project { .. } => n.map_expressions(|e| {
+                Ok(match &e.node {
+                    ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
+                        let inner = wrap(expr, ansi, output.data_type.clone(), output.nullable);
+                        if Arc::ptr_eq(&inner, expr) {
+                            e
+                        } else {
+                            Arc::new(
+                                Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                                    expr: inner,
+                                    output: output.clone(),
+                                }))
+                                .with_origin(e.origin),
+                            )
+                        }
+                    }
+                    _ => e,
+                })
+            }),
+            PlanNode::Filter { .. } => {
+                n.map_expressions(|e| Ok(wrap(&e, ansi, DataType::Boolean, true)))
+            }
+            _ => Ok(n),
+        });
+    done.unwrap_or_else(|never| match never {})
 }

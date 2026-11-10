@@ -122,6 +122,7 @@ registry! {
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
     (binary_output_style, BinaryOutputStyle, POST_MIGRATION_READER_VERSION, Semantic, "The `binary_output_style` expression environment setting (`spark.sql.binaryOutputStyle`): `to_csv` and `to_xml` print binary fields as UTF-8 text, signed bytes, base64 or hex instead of `[45 61]`."),
     (calendar_struct, CalendarStruct, POST_MIGRATION_READER_VERSION, Semantic, "CALENDAR INTERVAL columns on the struct carrier (months, days, microseconds, each child marked `krishiv.calendar`; ADR 0009 update 2026-11-06). A reader without it would read the column as a plain STRUCT."),
+    (captured_eval_mode, CapturedEvalMode, POST_MIGRATION_READER_VERSION, Semantic, "An expression evaluated in a fixed ANSI mode whatever the query's: the body of a SQL function created under the other mode (T184). A reader without it would evaluate the body in the query's mode."),
     (collated_strings, CollatedStrings, POST_MIGRATION_READER_VERSION, Semantic, "STRING types with a collation other than UTF8_BINARY, by canonical name."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
     (exchange_filters, ExchangeFilters, POST_MIGRATION_READER_VERSION, Optimization, "Runtime filters an exchange collects from the rows it writes, for scans of other stages (`ExchangePlan.filters`, distributed stages); without them the fragmenter drops the filters, which never changes rows."),
@@ -226,6 +227,8 @@ pub enum Construct<'a> {
     /// A lambda expression or variable: the bound body of a higher-order
     /// function's argument.
     Lambda,
+    /// An expression pinned to an ANSI mode (`ResolvedExpr::EvalMode`).
+    EvalMode,
     /// A `WritePlan` naming the Spark types of input columns.
     WriteColumnTypes,
     /// A `Generate` node's generator.
@@ -454,6 +457,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // A lambda is plan data behind its own feature: a reader without
         // it misreads the higher-order call's argument.
         Construct::Lambda => Some(Feature::LambdaFunctions),
+        Construct::EvalMode => Some(Feature::CapturedEvalMode),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
         Construct::Generator(kind) => match kind {
             krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
@@ -688,6 +692,9 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         ) {
             f(Construct::Lambda);
         }
+        if matches!(&e.node, ExprNode::Resolved(ResolvedExpr::EvalMode { .. })) {
+            f(Construct::EvalMode);
+        }
         f(Construct::Expr(e));
         // A UDF call hides in any expression of the node (`exprs_of`
         // already yields every descendant, so one node check is enough).
@@ -749,7 +756,9 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
             }
             ExprNode::Resolved(ResolvedExpr::Function(f)) => out.push(&f.data_type),
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => out.push(&output.data_type),
-            ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => out.push(data_type),
+            ExprNode::Resolved(
+                ResolvedExpr::Field { data_type, .. } | ResolvedExpr::EvalMode { data_type, .. },
+            ) => out.push(data_type),
             _ => {}
         }
     }
