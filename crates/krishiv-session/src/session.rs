@@ -1745,8 +1745,6 @@ impl Session {
     }
 }
 
-impl Session {}
-
 impl Session {
     /// What a query's plans are instantiated with in this process: the
     /// query's tables, its UDFs, and its spill scope under the session's

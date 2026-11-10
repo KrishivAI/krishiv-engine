@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! AST nodes of DDL and utility statements (names, tables, columns, partitions, options), the `Expr` helpers and the scripting statements.
+//! AST nodes of DDL and utility statements (names, tables, columns, partitions, options), SHOW, DESCRIBE, cache and DML nodes, and the `impl Expr` helpers.
 
 use super::*;
 

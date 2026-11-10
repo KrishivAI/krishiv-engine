@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! ORDER BY, LIMIT and OFFSET binding, and subquery aliases.
+//! ORDER BY, LIMIT and OFFSET binding.
 
 use super::*;
 

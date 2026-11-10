@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Join binding: USING and NATURAL, hidden columns and widening.
+//! Join binding (USING and NATURAL, hidden columns, widening) and subquery aliases.
 
 use super::*;
 

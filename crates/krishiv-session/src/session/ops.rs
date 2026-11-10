@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! More session statements: the write and query entry points that need no state of their own.
+//! Session methods of the write path: target paths, qualified paths and the helpers that read the session state.
 
 use super::*;
 

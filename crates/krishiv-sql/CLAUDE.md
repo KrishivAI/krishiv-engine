@@ -88,4 +88,4 @@ Paths are relative to this crate.
 
 ## Split modules (T193)
 Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
-- `ast/` `ddl_nodes.rs` (DDL and utility nodes, the `Expr` helpers, scripting nodes), `query_nodes.rs` (query and expression nodes), both re-exported from `ast.rs`; `parser/` `query.rs`, `create.rs`, `commands.rs`, `errors.rs` (`impl Parser` by topic), `ddl/data.rs` (INSERT, DELETE, UPDATE, MERGE); `lower/relations.rs` (select list, GROUP BY, FROM); `tests/partN.rs`.
+- `ast/` `ddl_nodes.rs` (DDL, SHOW/DESCRIBE, cache and DML nodes, the `impl Expr` helpers), `query_nodes.rs` (query and expression nodes; scripting nodes stay in `ast.rs`), both re-exported from `ast.rs`; `parser/` `query.rs`, `create.rs`, `commands.rs`, `errors.rs` (`impl Parser` by topic), `ddl/data.rs` (INSERT, DELETE, UPDATE, MERGE); `lower/relations.rs` (select list, GROUP BY, FROM); `tests/partN.rs`.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! AST nodes of queries and expressions: select, FROM, joins, windows and expression kinds.
+//! AST nodes of queries and expressions: select, FROM, joins, windows and expression kinds, plus the ANALYZE, REPAIR and resource utility nodes.
 
 use super::*;
 
