@@ -17,7 +17,11 @@ use krishiv_sql::{
 };
 
 const GOLDENS: &str = include_str!("fixtures/statement-classes.tsv");
-const AST: &str = include_str!("../src/ast.rs");
+const AST: &str = concat!(
+    include_str!("../src/ast.rs"),
+    include_str!("../src/ast/ddl_nodes.rs"),
+    include_str!("../src/ast/query_nodes.rs"),
+);
 
 /// The sub-enums the classifier (or the read listing) branches on, by the
 /// statement variant that holds them.
