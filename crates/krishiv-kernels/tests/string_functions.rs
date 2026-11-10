@@ -1393,3 +1393,29 @@ fn find_in_set_lcase_follows_spark_lowercase_matching() {
     assert_eq!(at("\u{3a3}", "\u{3c2},\u{3c3}"), 1);
     assert_eq!(at("z", "a,b"), 0);
 }
+
+/// `endswith` over `UTF8_LCASE` finds the one start that can end the text, so a long suffix
+/// match is linear (a row of 100,000 `a` against a pattern of 50,000), and keeps the `İ` rules.
+#[test]
+fn search_lcase_endswith_is_linear_and_exact() {
+    use s::LcaseSearch::End;
+    let at = |text: &str, pat: &str| {
+        s::search_lcase(End, lit(Some(text)), StrOperand::Array(&r1(pat)))
+            .unwrap()
+            .value(0)
+    };
+    // Miri interprets every step: a small size still exercises the same paths.
+    let (n, half) = if cfg!(miri) {
+        (400, 200)
+    } else {
+        (100_000, 50_000)
+    };
+    let text = "a".repeat(n);
+    assert!(at(&text, &"A".repeat(half)));
+    assert!(!at(&text, &"b".repeat(half)));
+    assert!(!at("ab", "abc"));
+    assert!(at("ab", ""));
+    assert!(at("x\u{130}", "i\u{307}"));
+    assert!(!at("x\u{130}", "\u{307}"));
+    assert!(at("x\u{130}", "x\u{130}"));
+}

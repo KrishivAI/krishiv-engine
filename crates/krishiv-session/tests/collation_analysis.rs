@@ -968,3 +968,46 @@ fn lcase_search_with_the_wrong_argument_count_is_an_error() {
         assert!(!e.contains("INTERNAL_ERROR"), "{sql}: {e}");
     }
 }
+
+#[test]
+fn lcase_search_over_an_aggregate_is_planned_as_an_aggregate() {
+    assert_eq!(
+        one(
+            "SELECT CAST(contains(max(x) COLLATE utf8_lcase, 'i') AS STRING) \
+             FROM VALUES ('Hi') AS t(x)"
+        ),
+        "true"
+    );
+    assert_eq!(
+        one(
+            "SELECT CAST(instr(max(x) COLLATE utf8_lcase, 'i') AS STRING) \
+             FROM VALUES ('Hi') AS t(x)"
+        ),
+        "2"
+    );
+}
+
+#[test]
+fn a_qualified_search_is_not_rewritten_to_the_builtin() {
+    assert_eq!(
+        class("SELECT missing_schema.instr('Ab' COLLATE utf8_lcase, 'a')"),
+        ErrorClass::from_name("UNRESOLVED_ROUTINE").unwrap()
+    );
+    assert_eq!(
+        one("SELECT CAST(builtin.instr('Ab' COLLATE utf8_lcase, 'b') AS STRING)"),
+        "2"
+    );
+}
+
+#[test]
+fn an_icu_rtrim_subquery_key_is_not_a_plain_string_comparison() {
+    // ICU keys are not implemented: the pair must not collapse to a comparison of 'a' and 'A'.
+    let r = run(
+        "SELECT CAST(1 AS STRING) WHERE 'a ' COLLATE UNICODE_CI_RTRIM \
+                 IN (SELECT 'A' COLLATE UNICODE_CI_RTRIM)",
+    );
+    assert!(
+        r.as_ref().map_or(true, |rows| !rows.is_empty()) || r.is_err(),
+        "{r:?}"
+    );
+}
