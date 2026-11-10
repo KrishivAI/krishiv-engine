@@ -191,6 +191,17 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
         );
         return 2;
     }
+    if args.share
+        && args
+            .explain_format
+            .is_some_and(|f| f != ExplainFormat::Json)
+    {
+        let _ = writeln!(
+            io::stderr(),
+            "error: '--share' writes JSON only: drop '--explain-format' or use 'json'\n\nFor more information, try '--help'."
+        );
+        return 2;
+    }
     if args.planning && explain_format(args) != ExplainFormat::Json {
         let _ = writeln!(
             io::stderr(),

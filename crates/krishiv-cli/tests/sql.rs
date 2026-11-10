@@ -358,6 +358,26 @@ fn explain_analyze_share_drops_who_ran_the_query() {
     let q = "select a from (select 1 as a, 2 as b) where a > 0";
     let plain = krishiv(&["sql", "--explain-analyze", "--json", "-e", q], None);
     assert!(plain.status.success(), "{}", err(&plain));
+    let full: serde_json::Value = serde_json::from_str(out(&plain).trim()).expect("profile JSON");
+    assert!(
+        full.get("trace").is_some(),
+        "the plain profile has the trace: {full}"
+    );
+    assert!(full["usage"].get("principal").is_some(), "{full}");
+    let bad = krishiv(
+        &[
+            "sql",
+            "--explain-analyze",
+            "--share",
+            "--explain-format",
+            "dot",
+            "-e",
+            q,
+        ],
+        None,
+    );
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(err(&bad).contains("--share"), "{}", err(&bad));
     let o = krishiv(&["sql", "--explain-analyze", "--share", "-e", q], None);
     assert!(o.status.success(), "{}", err(&o));
     let doc: serde_json::Value = serde_json::from_str(out(&o).trim()).expect("profile JSON");
