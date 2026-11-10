@@ -99,7 +99,12 @@ impl BinaryStyle {
                 }
                 inner
                     .split(", ")
-                    .map(|n| n.parse::<i8>().ok().map(i8::cast_unsigned))
+                    .map(|n| {
+                        // `i8::parse` takes a leading `+`, which the printer never writes.
+                        (!n.starts_with('+'))
+                            .then(|| n.parse::<i8>().ok().map(i8::cast_unsigned))
+                            .flatten()
+                    })
                     .collect()
             }
             Self::Base64 => base64_decode(text),
@@ -109,10 +114,7 @@ impl BinaryStyle {
                 if inner.is_empty() {
                     return Some(Vec::new());
                 }
-                inner
-                    .split(' ')
-                    .map(|p| u8::from_str_radix(p, 16).ok())
-                    .collect()
+                inner.split(' ').map(hex_pair).collect()
             }
         }
     }
@@ -133,14 +135,28 @@ fn hex_decode(text: &str) -> Option<Vec<u8>> {
     }
     text.as_bytes()
         .chunks(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .map(|pair| hex_pair(std::str::from_utf8(pair).ok()?))
         .collect()
+}
+
+/// One byte of exactly two hex digits (`from_str_radix` would take a leading `+` or one digit).
+fn hex_pair(p: &str) -> Option<u8> {
+    if p.len() != 2 || !p.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u8::from_str_radix(p, 16).ok()
 }
 
 /// Standard-alphabet base64, padded or not.
 fn base64_decode(text: &str) -> Option<Vec<u8>> {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let text = text.trim_end_matches('=');
+    let stripped = text.trim_end_matches('=');
+    let pad = text.len().saturating_sub(stripped.len());
+    // Unpadded, or padded to a multiple of four with at most two `=`.
+    if pad > 2 || (pad > 0 && !text.len().is_multiple_of(4)) {
+        return None;
+    }
+    let text = stripped;
     if text.len().checked_rem(4) == Some(1) {
         return None;
     }
@@ -155,6 +171,10 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
             bits = bits.saturating_sub(8);
             out.push(u8::try_from((acc >> bits) & 0xff).ok()?);
         }
+    }
+    // The bits left over in the last character are zero in text the printer wrote.
+    if bits > 0 && acc & (1_u32.checked_shl(bits).unwrap_or(0).saturating_sub(1)) != 0 {
+        return None;
     }
     Some(out)
 }
@@ -205,6 +225,52 @@ mod tests {
         }
         assert_eq!(BinaryStyle::Hex.parse("4G"), None);
         assert_eq!(BinaryStyle::Base64.parse("A"), None);
+    }
+
+    /// Text the printer never writes is not bytes: `from_xml` keeps it as its UTF-8 bytes.
+    #[test]
+    fn parse_refuses_text_the_printer_never_writes() {
+        let b = BinaryStyle::Basic;
+        assert_eq!(b.parse("[1, 2]"), Some(vec![1, 2]));
+        assert_eq!(b.parse("[-1]"), Some(vec![255]));
+        for bad in ["[1,2]", "[1, 2 ]", "[256]", "[+5]", "1, 2", "[a]"] {
+            assert_eq!(b.parse(bad), None, "{bad}");
+        }
+        let d = BinaryStyle::HexDiscrete;
+        assert_eq!(d.parse("[01 FF]"), Some(vec![1, 255]));
+        for bad in ["[4]", "[+F]", "[001]", "01 FF", "[G1]"] {
+            assert_eq!(d.parse(bad), None, "{bad}");
+        }
+        let h = BinaryStyle::Hex;
+        assert_eq!(h.parse("00FF"), Some(vec![0, 255]));
+        for bad in ["+1+2", "é", "0", "4é"] {
+            assert_eq!(h.parse(bad), None, "{bad}");
+        }
+        let a = BinaryStyle::Base64;
+        assert_eq!(a.parse("YQ"), Some(b"a".to_vec()));
+        assert_eq!(a.parse("YQ=="), Some(b"a".to_vec()));
+        assert_eq!(a.parse("YWI="), Some(b"ab".to_vec()));
+        for bad in ["YQ=====", "YQ=", "AB", "Y!", "YQ==="] {
+            assert_eq!(a.parse(bad), None, "{bad}");
+        }
+    }
+
+    /// A byte of 0x80 or more under each style, as Spark 4.2.0 prints `X'00FF'`.
+    #[test]
+    fn high_bytes_read_back() {
+        for style in [
+            BinaryStyle::Basic,
+            BinaryStyle::Base64,
+            BinaryStyle::Hex,
+            BinaryStyle::HexDiscrete,
+        ] {
+            let bytes = [0x00, 0x7F, 0x80, 0xFF];
+            assert_eq!(
+                style.parse(&style.render(&bytes)),
+                Some(bytes.to_vec()),
+                "{style:?}"
+            );
+        }
     }
 
     /// Spark 4.2.0 `to_csv(named_struct('info', X'4561736F6E'))` and `X'00FF'` under each style.

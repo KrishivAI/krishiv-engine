@@ -711,7 +711,7 @@ fn build(dt: &DataType, vals: &[V]) -> Result<ArrayRef, KrishivError> {
     })
 }
 
-/// A binary field's bytes: the element's text decoded as the output style prints it, else its UTF-8 bytes.
+/// A binary field's bytes (`Reading::leaf` decoded the element's text by the output style).
 fn bytes_of(x: &Val) -> Result<&[u8], KrishivError> {
     match x {
         Val::Bytes(b) => Ok(b),
