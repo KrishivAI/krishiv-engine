@@ -59,10 +59,10 @@ impl Expand {
 /// The next projection to emit for the current input batch, and the
 /// driver's partition: the projections evaluate row expressions, which draw
 /// the partition's stream.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct State {
     next: usize,
-    partition: u32,
+    partition: PartitionState,
 }
 
 impl Operator for Expand {
@@ -77,7 +77,7 @@ impl Operator for Expand {
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
         Ok(Box::new(State {
             next: 0,
-            partition: ctx.partition(),
+            partition: PartitionState::of(ctx),
         }))
     }
 
@@ -91,9 +91,7 @@ impl Operator for Expand {
             .projects
             .get(state.next)
             .ok_or_else(|| internal("an expansion past its last projection".to_owned()))?;
-        let mut partition: LocalState = Box::new(PartitionState {
-            partition: state.partition,
-        });
+        let mut partition: LocalState = Box::new(state.partition.clone());
         let OperatorOutput::NeedMoreInput(Some(out)) = project.execute(input, &mut partition)?
         else {
             return Err(internal("a projection did not output a batch".to_owned()));

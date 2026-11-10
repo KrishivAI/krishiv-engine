@@ -470,6 +470,8 @@ struct Driver {
     yields: u64,
     /// The source position last reported to the sink.
     position: Option<u64>,
+    /// The split cell the operators read (set from the source position).
+    split: crate::context::SplitCell,
     /// The driver's baton and member index in a deterministic fan-in, if it
     /// takes turns (its [`Turn`] guard is held by the driver's task).
     turn: Option<(Arc<Baton>, usize)>,
@@ -478,6 +480,7 @@ struct Driver {
 impl Driver {
     fn new(run: Arc<PipelineRun>, partition: u32) -> Result<Self> {
         let owner = SpillOwner::new();
+        let split = crate::context::SplitCell::new();
         let ctx = |id, name| {
             TaskContext::new(
                 Arc::clone(&run.query),
@@ -487,6 +490,7 @@ impl Driver {
                 name,
             )
             .with_partition(partition)
+            .with_split(split.clone())
         };
         let p = &run.pipeline;
         let (source_id, source) = &p.source;
@@ -529,6 +533,7 @@ impl Driver {
             batches: 0,
             yields: 0,
             position: None,
+            split,
             turn: run.turn.clone(),
             owner,
             run,
@@ -633,6 +638,7 @@ impl Driver {
         }
         self.position = position;
         if let Some(p) = position {
+            self.split.set(p);
             let k = run.pipeline.operators.len() + 1;
             let slots = self.slots.get_mut();
             let local = slots.slot(k)?.local.as_mut();

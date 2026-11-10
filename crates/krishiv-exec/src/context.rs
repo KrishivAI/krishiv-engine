@@ -516,6 +516,39 @@ pub struct TaskContext {
     /// driver computes): stateful functions own one value stream per
     /// partition. The first driver of a group reads partition 0.
     partition: u32,
+    /// The split the driver's source claimed last (see [`SplitCell`]).
+    split: SplitCell,
+}
+
+/// The source split (morsel claim ordinal) a driver is reading, shared by the
+/// driver and its operators. Seeded random functions draw their stream by the
+/// split a row belongs to, as Spark draws by the partition of the input, not by
+/// which driver happened to run it (drivers claim morsels dynamically).
+#[derive(Debug, Clone, Default)]
+pub struct SplitCell(Arc<std::sync::atomic::AtomicU64>);
+
+impl SplitCell {
+    const NONE: u64 = u64::MAX;
+
+    /// A cell with no split yet.
+    pub fn new() -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicU64::new(Self::NONE)))
+    }
+
+    /// Records the split the source claimed.
+    pub(crate) fn set(&self, split: u64) {
+        let split = u64::from(u32::try_from(split).unwrap_or(u32::MAX - 1));
+        self.0.store(split, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The split being read, or `fallback` (the driver's partition) when the
+    /// source reports none.
+    pub fn get(&self, fallback: u32) -> u32 {
+        match self.0.load(std::sync::atomic::Ordering::Relaxed) {
+            Self::NONE => fallback,
+            v => u32::try_from(v).unwrap_or(fallback),
+        }
+    }
 }
 
 impl fmt::Debug for TaskContext {
@@ -546,6 +579,7 @@ impl TaskContext {
             dependency: None,
             second_dependency: None,
             partition: 0,
+            split: SplitCell::new(),
         }
     }
 
@@ -561,6 +595,16 @@ impl TaskContext {
     /// spawned; the first driver of a group reads 0).
     pub fn partition(&self) -> u32 {
         self.partition
+    }
+
+    /// The driver's split cell: the source split it reads now.
+    pub fn split_cell(&self) -> SplitCell {
+        self.split.clone()
+    }
+
+    pub(crate) fn with_split(mut self, split: SplitCell) -> Self {
+        self.split = split;
+        self
     }
 
     pub(crate) fn with_dependency(mut self, state: GlobalState) -> Self {

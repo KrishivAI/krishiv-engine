@@ -96,10 +96,28 @@ pub(crate) fn no_state() -> LocalState {
 
 /// Per-driver local state of an operator evaluating row expressions: the
 /// driver's partition index (see [`TaskContext::partition`](crate::context::TaskContext::partition)).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct PartitionState {
     /// The driver's partition index.
     pub(crate) partition: u32,
+    /// The split the driver's source is reading (wins over `partition` once
+    /// the source reported one).
+    pub(crate) split: crate::context::SplitCell,
+}
+
+impl PartitionState {
+    /// The state of an operator of the driver `ctx` belongs to.
+    pub(crate) fn of(ctx: &crate::context::TaskContext) -> Self {
+        Self {
+            partition: ctx.partition(),
+            split: ctx.split_cell(),
+        }
+    }
+
+    /// The partition whose stream the next rows draw from.
+    pub(crate) fn current(&self) -> u32 {
+        self.split.get(self.partition)
+    }
 }
 
 #[cfg(all(test, not(loom)))]

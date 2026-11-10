@@ -139,9 +139,7 @@ impl Operator for Project {
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
-        Ok(Box::new(PartitionState {
-            partition: ctx.partition(),
-        }))
+        Ok(Box::new(PartitionState::of(ctx)))
     }
 
     fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
@@ -149,7 +147,7 @@ impl Operator for Project {
         if rows == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
-        let partition = local_mut::<PartitionState>(local, "Project")?.partition;
+        let partition = local_mut::<PartitionState>(local, "Project")?.current();
         let data = input.data();
         let columns = self
             .items

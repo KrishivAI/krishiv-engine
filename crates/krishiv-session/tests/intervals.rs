@@ -384,7 +384,7 @@ fn a_try_function_evaluates_a_nondeterministic_operand_once_per_row() -> R {
     assert_eq!(
         rows(
             &session,
-            "SELECT try_divide(INTERVAL '12' MONTH, monotonically_increasing_id()) FROM range(3)"
+            "SELECT try_divide(INTERVAL '12' MONTH, monotonically_increasing_id()) FROM range(0, 3, 1, 1)"
         )?,
         [
             "NULL",

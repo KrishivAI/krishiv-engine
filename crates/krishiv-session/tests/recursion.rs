@@ -859,3 +859,16 @@ fn a_nondeterministic_enclosing_cte_is_computed_per_run_from_one_seed() {
              SELECT count(DISTINCT u) FROM (SELECT u FROM t UNION ALL SELECT u FROM t)";
     assert_eq!(column(rows(&s, q)), vec!["1"]);
 }
+
+#[test]
+fn a_seeded_random_over_range_draws_by_split_not_by_driver() {
+    let s = Session::new().unwrap();
+    // `range(n)` splits are fixed; which driver claims which split is not.
+    // A row draws from its split's stream, so every run returns the same rows.
+    let q = "SELECT CAST(id AS STRING) || ':' || CAST(rand(7) AS STRING) \
+             FROM range(0, 6, 1, 3) ORDER BY id";
+    let first = column(rows(&s, q));
+    for _ in 0..40 {
+        assert_eq!(column(rows(&s, q)), first);
+    }
+}
