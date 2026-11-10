@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the query profile: node numbering, shared plans and subqueries, the JSON round trip and corrupt documents.
 #![expect(
     clippy::disallowed_methods,
     reason = "test-only fixture read; never runs on a compute worker"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the spill file: writing, reading back and the reservations a spill holds.
 #![expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,

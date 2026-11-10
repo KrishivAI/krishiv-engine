@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the stage planner: cutting a plan at exchanges, task counts per stage and refused plans.
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
