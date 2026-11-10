@@ -254,3 +254,68 @@ fn lanes_engage_one_driver_per_logical_partition() {
                  UNION ALL SELECT id AS x FROM range(0,40000,1,24))";
     assert_eq!(max_drivers(&s, mixed), 4, "{mixed}");
 }
+
+/// Every stateless operator, a hash join probe, a partial aggregate and a pushed LIMIT under the
+/// mode with lanes available: each query returns the same bytes on repeated runs and at two thread
+/// counts, which also exercises each operator's `lane_safe` answer and the scans' splits.
+#[test]
+fn lane_eligible_pipelines_over_every_operator_are_repeatable() {
+    use arrow_array::Int64Array;
+    use arrow_schema::{DataType, Field, Schema};
+    use krishiv_exec::{ExecutorConfig, TokioExecutor};
+    use std::sync::Arc;
+    let queries = [
+        // Expand (rollup), Generate (explode), ReplicateRows (intersect all), UnionAlign, probe.
+        "SELECT g, count(*), sum(v) FROM (SELECT id % 5 AS g, id AS v FROM range(0, 20000, 1, 24)) GROUP BY ROLLUP(g)",
+        "SELECT count(*), sum(e) FROM (SELECT explode(array(id, id + 1)) AS e FROM range(0, 20000, 1, 24))",
+        "SELECT count(*) FROM (SELECT id FROM range(0, 20000, 1, 24) INTERSECT ALL SELECT id FROM range(0, 20000, 1, 24))",
+        "SELECT count(*), sum(x) FROM (SELECT id AS x FROM range(0, 8000, 1, 24) UNION ALL SELECT id AS x FROM range(0, 8000, 1, 24))",
+        "SELECT count(*), sum(a.id) FROM range(0, 20000, 1, 24) a JOIN range(0, 500, 1, 3) b ON a.id % 500 = b.id",
+        // A pushed-down LIMIT on an in-memory table: that scan refuses to split.
+        "SELECT count(*), sum(k) FROM (SELECT k FROM t LIMIT 700)",
+        "SELECT k % 7, count(*), sum(k) FROM t GROUP BY k % 7",
+    ];
+    let mut shapes: Vec<Vec<String>> = Vec::new();
+    for threads in [2, 12] {
+        let executor = TokioExecutor::new(&ExecutorConfig {
+            compute_threads: threads,
+            ..ExecutorConfig::default()
+        })
+        .unwrap();
+        let s = Session::builder()
+            .config("krishiv.deterministicOrder", "true")
+            .config("krishiv.memory.limit", "16GB")
+            .executor(executor)
+            .build()
+            .unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let batches = (0..8)
+            .map(|b| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from(
+                        (0..500).map(|i| b * 500 + i).collect::<Vec<i64>>(),
+                    ))],
+                )
+                .unwrap()
+            })
+            .collect();
+        s.register_batches("t", schema, batches).unwrap();
+        shapes.push(
+            queries
+                .iter()
+                .map(|q| {
+                    let first = shape(&run(&s, q));
+                    assert_eq!(first, shape(&run(&s, q)), "two runs of `{q}` differ");
+                    first
+                })
+                .collect(),
+        );
+    }
+    for (i, q) in queries.iter().enumerate() {
+        assert_eq!(
+            shapes[0][i], shapes[1][i],
+            "`{q}` depends on the thread count"
+        );
+    }
+}
