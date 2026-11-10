@@ -945,3 +945,13 @@ fn analyze_table_in_system_is_reserved() {
         assert!(e.contains("KRISHIV_RESERVED_NAME"), "{sql}: {e}");
     }
 }
+
+#[test]
+fn namespace_listings_under_system_fail_closed() {
+    let s = Session::new().unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in ["SHOW VIEWS", "SHOW TABLE EXTENDED LIKE '*'"] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("SCHEMA_NOT_FOUND"), "{sql}: {e}");
+    }
+}

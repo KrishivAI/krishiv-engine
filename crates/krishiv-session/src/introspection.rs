@@ -396,7 +396,18 @@ impl Session {
         let env = self.query_env();
         let ns = match name {
             Some(n) => self.namespace_name(n, &env)?,
-            None => self.state.catalog.current_namespace(),
+            None => {
+                // The `system` catalog has no namespace: a bare listing has nothing to show
+                // (not the session catalog's `default`).
+                let catalog = self.state.catalog.current_catalog();
+                if crate::system::is_system(&catalog) {
+                    return Err(SchemaNotFound {
+                        schema_name: format!("`{catalog}`"),
+                    }
+                    .into());
+                }
+                self.state.catalog.current_namespace()
+            }
         };
         if !is_global_namespace(&ns) {
             self.require_namespace(&ns)?;
