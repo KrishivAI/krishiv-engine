@@ -177,8 +177,11 @@ impl Pool {
 /// the trace and profile functions set with `threading.settrace` and
 /// `threading.setprofile` (coverage, a debugger, a profiler) are installed on
 /// this thread too, so UDF code is traced as code on any Python thread is.
-/// The pinned thread state keeps them for every later call. Nothing is set
-/// when none is; a failure leaves the thread untraced.
+/// The pinned thread state keeps them for later calls, until a trace function
+/// raises (CPython then turns tracing off on that thread, which lives as long
+/// as the pool). Only hooks set before the pool starts reach it (on 3.12+
+/// `threading.settrace_all_threads` also reaches running threads). Nothing is
+/// set when none is; a failure leaves the thread untraced.
 fn inherit_thread_hooks(py: Python<'_>) {
     let install = || -> PyResult<()> {
         let threading = py.import(intern!(py, "threading"))?;

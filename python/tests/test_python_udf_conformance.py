@@ -311,8 +311,14 @@ def test_a_threading_trace_function_reaches_the_pool_threads() -> None:
     assert out == {"count": 100, "seen": ["udf"]}
 
 
-def test_an_interrupted_call_leaves_a_traced_interpreter_running() -> None:
-    out = json.loads(ok(run_child(INTERRUPT_UNDER_TRACE, timeout=60)).strip().splitlines()[-1])
+@pytest.mark.parametrize("pool_traced", [False, True], ids=["main_thread_traced", "pool_threads_traced_too"])
+def test_an_interrupted_call_leaves_a_traced_interpreter_running(pool_traced: bool) -> None:
+    # With `threading.settrace` the pool's threads are traced as well, so the interrupt lands on a traced thread.
+    script = INTERRUPT_UNDER_TRACE
+    if pool_traced:
+        script = script.replace("sys.settrace(trace)\n", "sys.settrace(trace)\nthreading.settrace(trace)\n")
+        assert "threading.settrace(trace)" in script
+    out = json.loads(ok(run_child(script, timeout=60)).strip().splitlines()[-1])
     assert out == {"failed": 3, "count": 1000}
 
 
