@@ -256,6 +256,43 @@ def test_one_failing_batch_among_those_in_flight_releases_every_reservation() ->
     assert out == {"failures": 20, "count": 200000}
 
 
+INTERRUPT_UNDER_TRACE = """
+# A trace function on (as coverage runs it), then a call interrupted when its query fails, then more queries.
+# On CPython 3.11, clearing a thread's asynchronous exception with `PyThreadState_SetAsyncExc(id, NULL)` leaves
+# the interpreter's signal for one set, and a traced thread then loops forever at its next function entry; the
+# pool must not clear an interrupt that way.
+def trace(frame, event, arg):
+    return trace
+sys.settrace(trace)
+spark = session(2)
+spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "1")
+def loop_or_boom(x):
+    if x[0].as_py() == 1:
+        time.sleep(0.3)
+        raise ValueError("boom")
+    end = time.monotonic() + 30
+    while time.monotonic() < end:
+        pass
+    return x
+register(spark, "py_loop", loop_or_boom)
+failed = 0
+for _ in range(3):
+    try:
+        spark.sql("SELECT py_loop(id) FROM range(0, 2, 1, 2)").collect()
+    except Exception as e:
+        assert "boom" in str(e), str(e)
+        failed += 1
+register(spark, "py_plus", plus_one)
+n = spark.sql("SELECT count(py_plus(id)) FROM range(0, 1000, 1, 4)").collect()[0][0]
+print(json.dumps({"failed": failed, "count": n}))
+"""
+
+
+def test_an_interrupted_call_leaves_a_traced_interpreter_running() -> None:
+    out = json.loads(ok(run_child(INTERRUPT_UNDER_TRACE, timeout=60)).strip().splitlines()[-1])
+    assert out == {"failed": 3, "count": 1000}
+
+
 CONSUMERS = """
 spark = session(4)
 register(spark, "py_plus", plus_one)

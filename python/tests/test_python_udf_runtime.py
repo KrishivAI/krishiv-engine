@@ -8,6 +8,7 @@ that is what makes the `thread_safe=False` test able to fail.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from typing import ClassVar
@@ -242,6 +243,57 @@ def test_a_running_call_of_a_failed_query_is_interrupted() -> None:
     for _ in range(20):
         rows = spark.sql("SELECT py_plus_after(id) FROM range(0, 8, 1, 4) ORDER BY 1").collect()
         assert _ids(rows) == list(range(1, 9))
+
+
+SLOW_MODULE = """
+import time
+_end = time.monotonic() + 1.5
+while time.monotonic() < _end:
+    pass
+"""
+
+
+def test_a_failed_query_interrupts_a_call_only_after_the_import_it_is_in(tmp_path, monkeypatch) -> None:
+    # An interrupt raised inside importlib can land just after `_imp.acquire_lock()` and before the `try` that
+    # releases it, which leaves the process's import lock held and every later import waiting (seen on CPython
+    # 3.11: the pool and the main thread all parked in `_get_module_lock`). So a call inside an import (here a
+    # module whose body runs 1.5 s) is interrupted only once the import is done, then as before.
+    (tmp_path / "krishiv_test_slow_module.py").write_text(SLOW_MODULE)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    seen: dict = {}
+
+    def import_or_boom(x: pa.Array) -> pa.Array:
+        if x[0].as_py() == 1:
+            time.sleep(0.3)
+            raise ValueError("boom")
+        sys.modules.pop("krishiv_test_slow_module", None)
+        try:
+            import krishiv_test_slow_module  # noqa: F401
+
+            seen["imported"] = True
+            started = time.monotonic()
+            while time.monotonic() - started < 60:
+                pass
+        except KeyboardInterrupt:
+            seen["interrupted"] = True
+            raise
+        return x
+
+    spark = _spark()
+    spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "1")
+    spark._native.register_python_udf("py_import_boom", ARROW_BATCHED, "bigint", True, True, import_or_boom)
+    with pytest.raises(Exception, match="ValueError: boom"):
+        spark.sql("SELECT py_import_boom(id) FROM range(0, 2, 1, 2)").collect()
+    deadline = time.monotonic() + 15
+    while "interrupted" not in seen and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert seen == {"imported": True, "interrupted": True}, seen
+    # Imports and later calls still work on every pool thread.
+    import json  # noqa: F401
+
+    spark._native.register_python_udf("py_plus_after_import", ARROW_BATCHED, "bigint", True, True, _plus_one)
+    rows = spark.sql("SELECT py_plus_after_import(id) FROM range(0, 8, 1, 4) ORDER BY 1").collect()
+    assert _ids(rows) == list(range(1, 9))
 
 
 class _Owned(bytearray):
