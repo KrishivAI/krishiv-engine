@@ -451,12 +451,19 @@ pub fn locate<O: OffsetSizeTrait>(
 
 /// The code points Spark's `UTF8_LCASE` compares for `c` (`lowerCaseCodePoint`): `İ` is `i` and
 /// U+0307, final sigma is `σ`, anything else its simple lower case.
-fn lcase_points(c: char, out: &mut Vec<char>) {
+fn lcase_pair(c: char) -> (char, Option<char>) {
     match c {
-        '\u{130}' => out.extend(['i', '\u{307}']),
-        '\u{3c2}' => out.push('\u{3c3}'),
-        _ => out.push(c.to_lowercase().next().unwrap_or(c)),
+        '\u{130}' => ('i', Some('\u{307}')),
+        '\u{3c2}' => ('\u{3c3}', None),
+        _ => (c.to_lowercase().next().unwrap_or(c), None),
     }
+}
+
+/// [`lcase_pair`] appended to `out`.
+fn lcase_points(c: char, out: &mut Vec<char>) {
+    let (a, b) = lcase_pair(c);
+    out.push(a);
+    out.extend(b);
 }
 
 /// How many characters of `text` from `from` the lower-cased `pattern` covers, as Spark's
@@ -464,13 +471,12 @@ fn lcase_points(c: char, out: &mut Vec<char>) {
 /// lower-cases to.
 fn lcase_match_from(text: &[char], from: usize, pattern: &[char]) -> Option<usize> {
     let (mut p, mut t) = (0_usize, from);
-    let mut buf = Vec::with_capacity(2);
     while p < pattern.len() {
         let c = *text.get(t)?;
-        buf.clear();
-        lcase_points(c, &mut buf);
-        for l in &buf {
-            if pattern.get(p) != Some(l) {
+        // At most two code points per character, so no buffer is needed.
+        let (first, second) = lcase_pair(c);
+        for l in std::iter::once(first).chain(second) {
+            if pattern.get(p) != Some(&l) {
                 return None;
             }
             p = p.saturating_add(1);
