@@ -1445,3 +1445,35 @@ fn a_loop_without_limits_is_corrupt() {
     }
     corrupt(&m, "a recursive loop without limits");
 }
+
+/// The encoder refuses the probe selections the decoder cannot read back:
+/// an empty column list (it decodes as no list) and one that selects
+/// nothing (corrupt to the decoder).
+#[test]
+fn a_probe_selection_that_cannot_round_trip_is_refused() {
+    let (_, fused) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "fused_probe")
+        .unwrap();
+    let PhysNode::HashJoin(join) = fused.root().clone() else {
+        panic!("fused_probe is a hash join");
+    };
+    let select = join.select.clone().unwrap();
+    let empty = krishiv_exec::physical::ProbeSelect {
+        columns: Some(Vec::new()),
+        ..select.clone()
+    };
+    let nothing = krishiv_exec::physical::ProbeSelect {
+        filter: None,
+        row_stage: None,
+        ..select
+    };
+    for s in [empty, nothing] {
+        let plan = plan_of(PhysNode::HashJoin(krishiv_exec::physical::HashJoinPlan {
+            select: Some(s.clone()),
+            ..join.clone()
+        }));
+        let err = encode(&plan).unwrap_err();
+        assert!(matches!(err, CodecError::Unsupported(_)), "{s:?}: {err:?}");
+    }
+}

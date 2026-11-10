@@ -503,10 +503,19 @@ impl Encoder {
     }
 
     fn probe_select(&mut self, select: &ProbeSelect) -> Result<pb::ProbeSelect> {
-        debug_assert!(
-            select.columns.as_ref().is_none_or(|c| !c.is_empty()),
-            "an empty column list would decode as no list; a probe has key columns"
-        );
+        // The decoder reads an empty column list as no list, and refuses a
+        // selection that selects nothing; the planner writes neither (a
+        // probe has key columns), so the encoder refuses both too.
+        if select.columns.as_ref().is_some_and(Vec::is_empty) {
+            return Err(CodecError::Unsupported(
+                "a probe selection with an empty column list".to_owned(),
+            ));
+        }
+        if select.filter.is_none() && select.row_stage.is_none() {
+            return Err(CodecError::Unsupported(
+                "a probe selection that selects nothing".to_owned(),
+            ));
+        }
         Ok(pb::ProbeSelect {
             filter: select
                 .filter

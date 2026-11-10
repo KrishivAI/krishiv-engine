@@ -1307,15 +1307,19 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             }),
         ),
         (
+            // The probe is `scan()` (`a`, `s`, attributes 1 and 2, scan 7,
+            // runtime filter 3 on `a`): its filter reads both, the
+            // projections fused with it rename `s` (as a planned plan
+            // would), and the scan hands it the row stage of filter 3.
             "fused_probe",
             PhysNode::HashJoin(HashJoinPlan {
                 select: Some(ProbeSelect {
                     filter: Some(ProbeFilter {
-                        layout: vec![AttrId(1), AttrId(2), AttrId(3)],
+                        layout: vec![AttrId(1), AttrId(2)],
                         predicate: predicate(),
                     }),
                     row_stage: Some(ProbeRowStage {
-                        scan: ScanId(0),
+                        scan: ScanId(7),
                         columns: vec![ProbeFilterColumn {
                             id: FilterId(3),
                             column: 0,
@@ -1327,8 +1331,8 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                             name: "a".to_owned(),
                         },
                         ProbeColumn {
-                            index: 2,
-                            name: "c".to_owned(),
+                            index: 1,
+                            name: "s2".to_owned(),
                         },
                     ]),
                 }),
