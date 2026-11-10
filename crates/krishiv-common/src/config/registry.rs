@@ -4,7 +4,10 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType, join_cost::JOIN_COST};
+use super::{
+    ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
+    build_projection::EXEC_JOIN_BUILD_PROJECTION, join_cost::JOIN_COST,
+};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -25,6 +28,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
+    &EXEC_JOIN_BUILD_PROJECTION,
     &EXEC_JOIN_RADIX_BITS,
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
@@ -226,6 +230,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.cteRecursionLevelLimit",
         &CTE_RECURSION_LEVEL_LIMIT,
+    ),
+    (
+        "krishiv.exec.join.buildProjection",
+        &EXEC_JOIN_BUILD_PROJECTION,
     ),
     (
         "krishiv.exec.join.smj.bufferBytes",
