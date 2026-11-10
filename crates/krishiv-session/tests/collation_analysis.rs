@@ -937,3 +937,45 @@ fn searches_over_lcase_split_the_dotted_capital_i_like_spark() {
         }
     }
 }
+
+/// USING joins, correlated subqueries and the special-casing letters (capital sharp s,
+/// final sigma) over `UTF8_LCASE`; every expected value is from a Spark 4.2.0 local run.
+#[test]
+fn using_having_correlated_and_special_letters_match_spark() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table u1(a string collate utf8_lcase, n int) using parquet",
+        "insert into u1 values('aaa', 1), ('AAA', 2), ('bbb', 3)",
+        "create table u2(a string collate utf8_lcase, m int) using parquet",
+        "insert into u2 values('AAA', 10), ('ccc', 11)",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let v = |sql: &str| value_of(&s, &format!("select cast(({sql}) as string)"));
+    // USING join: both `aaa` and `AAA` match `AAA` (Spark: 2 rows, m = 10 on each).
+    assert_eq!(v("select count(*) from u1 join u2 using (a)"), "2");
+    assert_eq!(v("select sum(m) from u1 join u2 using (a)"), "20");
+    // Grouping by the column (HAVING on the key) is collations 3b (#666), not here.
+    // Correlated EXISTS / scalar comparisons compare on keys (Spark: 2).
+    assert_eq!(
+        v("select count(*) from u1 where exists (select 1 from u2 where u2.a = u1.a)"),
+        "2"
+    );
+    // A correlated scalar subquery keyed on the column is still refused (Spark answers 2): a
+    // known gap, refused rather than answered on bytes.
+    assert_eq!(
+        class_of(
+            &s,
+            "select count(*) from u1 where n > (select min(m) - 10 from u2 where u2.a = u1.a)"
+        ),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // Capital sharp s, final and non-final sigma: all equal under UTF8_LCASE (Spark: true).
+    for (l, r) in [("ẞ", "ß"), ("ΑΣ", "ας"), ("ΑΣ", "ασ"), ("ΑΣ", "Ας")] {
+        assert_eq!(
+            v(&format!("select '{l}' collate utf8_lcase = '{r}'")),
+            "true",
+            "{l} {r}"
+        );
+    }
+}
