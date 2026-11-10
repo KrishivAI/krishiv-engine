@@ -78,7 +78,7 @@ fn utf8_style_prints_the_bytes_as_text() {
 
 #[test]
 fn from_xml_reads_a_binary_field_as_the_text_bytes() {
-    // The element's text as UTF-8 bytes, whatever the output style.
+    // The element's text as the output style prints it, decoded back (the text of the style, else its UTF-8 bytes).
     for style in [None, Some("HEX"), Some("UTF-8")] {
         let s = with_style(style);
         let batches = block_on(
