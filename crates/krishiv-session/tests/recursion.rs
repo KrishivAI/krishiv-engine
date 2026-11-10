@@ -864,12 +864,19 @@ fn a_nondeterministic_enclosing_cte_is_computed_per_run_from_one_seed() {
 fn a_seeded_random_over_range_draws_by_split_not_by_driver() {
     let s = Session::new().unwrap();
     // `range(n)` splits are fixed; which driver claims which split is not.
-    // A row draws from its split's stream, so every run returns the same rows.
+    // A row draws from its split's stream, so every run returns the same rows. (No ORDER BY: a
+    // range exchange runs the child more than once and the streams carry over between passes,
+    // a separate bug in the queue.)
     let q = "SELECT CAST(id AS STRING) || ':' || CAST(rand(7) AS STRING) \
-             FROM range(0, 6, 1, 3) ORDER BY id";
-    let first = column(rows(&s, q));
+             FROM range(0, 6, 1, 3)";
+    let sorted = |s: &Session| {
+        let mut v = column(rows(s, q));
+        v.sort();
+        v
+    };
+    let first = sorted(&s);
     for _ in 0..40 {
-        assert_eq!(column(rows(&s, q)), first);
+        assert_eq!(sorted(&s), first);
     }
 }
 

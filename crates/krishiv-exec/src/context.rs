@@ -524,8 +524,14 @@ pub struct TaskContext {
 /// driver and its operators. Seeded random functions draw their stream by the
 /// split a row belongs to, as Spark draws by the partition of the input, not by
 /// which driver happened to run it (drivers claim morsels dynamically).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SplitCell(Arc<std::sync::atomic::AtomicU64>);
+
+impl Default for SplitCell {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl SplitCell {
     const NONE: u64 = u64::MAX;
