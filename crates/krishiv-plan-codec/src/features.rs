@@ -149,6 +149,7 @@ registry! {
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
     (percentile_aggregates, PercentileAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The percentile family and `approx_count_distinct` aggregates (`percentile`, `percentile_approx`, `percentile_disc`, `approx_count_distinct` with their folded parameters)."),
+    (python_udf, PythonUdf, POST_MIGRATION_READER_VERSION, Semantic, "Python UDF calls (`PythonUdfFunction`, by name and registration version) and the `PythonEval` node evaluating them; a worker without a UDF runtime refuses the plan."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udaf, RustUdaf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust aggregate UDF (`UdafCall`, by name and version, with its argument and state columns)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
@@ -390,6 +391,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::UnionLoop { .. } | PhysNode::LoopRef { .. } => Some(Feature::UnionLoop),
             PhysNode::SortMergeJoin(_) => Some(Feature::SortMergeJoin),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
+            PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
             // ignored and the rows written flat).
@@ -578,6 +580,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // session UDF (by name and version) needs a reader with it.
         Construct::Function(id) => match id {
             FunctionId::Udf { .. } => Some(Feature::RustUdf),
+            FunctionId::PythonUdf { .. } => Some(Feature::PythonUdf),
             FunctionId::Builtin(b) if b.is_analyzer_internal() => Some(Feature::IntervalTypes),
             FunctionId::Builtin(_) => None,
             // A future identity is baseline until it is classified
@@ -668,6 +671,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
+        | PhysNode::PythonEval { .. }
         | PhysNode::Union { .. } => {}
         PhysNode::WriteFiles { write, .. } => {
             if write.as_ref().is_some_and(|w| !w.column_types.is_empty()) {
@@ -782,6 +786,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         }
         PhysNode::ReplicateRows { count, .. } => roots.push(count),
         PhysNode::Generate { arg, .. } => roots.push(arg),
+        PhysNode::PythonEval { calls, .. } => roots.extend(calls.iter().map(|c| &c.call)),
         PhysNode::HashJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
