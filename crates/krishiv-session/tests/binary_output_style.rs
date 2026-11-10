@@ -153,7 +153,7 @@ fn from_xml_reads_back_each_style_source_derived() {
     assert_eq!(hex_of(None, "01 FF").as_deref(), Some("01FF"));
     assert_eq!(hex_of(None, "[01 ff]").as_deref(), Some("01FF"));
     assert_eq!(hex_of(None, "01FF"), None);
-    assert_eq!(hex_of(Some("HEX"), "CAF").as_deref(), Some("0CAF"));
+    assert_eq!(hex_of(Some("HEX"), "BAF").as_deref(), Some("0BAF"));
     assert_eq!(hex_of(Some("HEX"), "[01 FF]"), None);
     assert_eq!(hex_of(Some("BASIC"), "[1, 2 ]").as_deref(), Some("0102"));
     assert_eq!(hex_of(Some("BASIC"), "[+5]").as_deref(), Some("05"));

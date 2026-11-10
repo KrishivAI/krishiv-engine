@@ -299,6 +299,12 @@ mod tests {
     }
 
     proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig {
+            cases: if cfg!(miri) { 2 } else { 256 },
+            failure_persistence: None,
+            ..proptest::prelude::ProptestConfig::default()
+        })]
+
         /// `parse(render(b)) == b` for every style but BASIC with no bytes (`[]` is a miss).
         #[test]
         fn parse_inverts_render(bytes in proptest::collection::vec(0_u8..=255, 1..40)) {
@@ -332,7 +338,7 @@ mod tests {
             (Hex, "[]", None),
             (Hex, "01FF", Some(&[1, 255])),
             (Hex, "01ff", Some(&[1, 255])),
-            (Hex, "CAF", Some(&[0x0C, 0xAF])),
+            (Hex, "BAF", Some(&[0x0B, 0xAF])),
             (Hex, "é", None),
             (Basic, "Eason", None),
             (Basic, "[01 FF]", None),
@@ -355,7 +361,7 @@ mod tests {
             (Base64, "[01 FF]", None),
             (Base64, "[]", None),
             (Base64, "01FF", Some(&[0xD3, 0x51, 0x45])),
-            (Base64, "CAF", Some(&[0x08, 0x01])),
+            (Base64, "BAF", Some(&[0x04, 0x01])),
             (Base64, "AQ==", Some(&[1])),
             (Base64, "AQ", Some(&[1])),
             (Base64, "AB", Some(&[0])),
