@@ -203,7 +203,10 @@ pub fn collation_key(t: &DataType, a: &ArrayRef) -> Result<ArrayRef, KernelError
                 a.len(),
             ))
         }
-        _ => Ok(Arc::clone(a)),
+        // A type without a string leaf is its own key; one with a string leaf that did not
+        // match the column above is a planner bug, never the raw bytes taken as a key.
+        _ if !t.any_type(&DataType::is_string_type) => Ok(Arc::clone(a)),
+        _ => Err(mismatch()),
     }
 }
 
@@ -412,5 +415,26 @@ mod tests {
         >(vec![Some(vec![Some(1)])]));
         // Not a list of strings: the mismatch is reported, not guessed at.
         assert!(collation_key(&t, &a).is_err());
+    }
+
+    /// A type with a string leaf that does not describe the column is a planner bug: it is
+    /// `INTERNAL_ERROR`, never the raw bytes passed through as if they were a key.
+    #[test]
+    fn a_type_that_does_not_describe_the_column_is_refused() {
+        let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("aB")]));
+        let map = DataType::Map(Arc::new(krishiv_types::MapType::new(
+            lcase(),
+            DataType::Integer,
+            true,
+        )));
+        assert!(collation_key(&map, &strings).is_err());
+        let st = DataType::Struct(krishiv_types::StructType::new([
+            krishiv_types::StructField::new("a", lcase(), true),
+        ]));
+        assert!(collation_key(&st, &strings).is_err());
+        // A leaf without a string is its own key.
+        let ints: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![Some(1)]));
+        let out = collation_key(&DataType::Integer, &ints).unwrap();
+        assert_eq!(out.data_type(), &ArrowType::Int32);
     }
 }
