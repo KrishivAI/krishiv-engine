@@ -19,7 +19,9 @@ use krishiv_common::error::{
 };
 use krishiv_types::DataType;
 
-use super::defs::{Spec, exact, first_type, int, is_binary, scalar, string, typed};
+use super::defs::{
+    Spec, exact, first_type, int, is_binary, match_inputs, matches, scalar, string, typed,
+};
 use crate::signature::{ArgType, CallTypes, Constant, InputBuilder, InputType, Inputs};
 
 fn nullable_string(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -182,6 +184,12 @@ pub(super) fn specs() -> Vec<Spec> {
     let one_text = Inputs::Expects(vec![text.clone()]);
     let int_arg = exact(DataType::Integer);
     let mut out = scalar(&["ascii"], &one_text, int);
+    // The UTF8_LCASE search kernels the analyzer swaps `contains`/`startswith`/`endswith` for.
+    out.extend(scalar(
+        &["__contains_lcase", "__startswith_lcase", "__endswith_lcase"],
+        &Inputs::Built(InputBuilder(match_inputs)),
+        matches,
+    ));
     out.extend(scalar(
         &["bit_length", "octet_length"],
         &Inputs::Expects(vec![text_or_bytes.clone()]),
