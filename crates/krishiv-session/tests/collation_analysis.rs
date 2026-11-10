@@ -376,10 +376,6 @@ fn unsupported_collation_defaults_and_switches_are_refused() {
             "SET spark.sql.collation.allowInMapKeys = true",
             ErrorClass::KrishivUnsupportedFeature,
         ),
-        (
-            "SET spark.sql.collation.schemaLevel.enabled = true",
-            ErrorClass::KrishivUnsupportedFeature,
-        ),
     ] {
         let e = block_on(s.sql(sql)).unwrap_err();
         assert_eq!(e.error_class(), class, "{sql}");

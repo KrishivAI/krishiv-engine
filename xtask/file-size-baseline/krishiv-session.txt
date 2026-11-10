@@ -5,9 +5,12 @@
 # +7 lines: a file table's registered partitions (`TempTable::Files::partitions`, reading partitioned tables)
 # +43 lines over main: system-only scan tracking and the admission estimate (QueryCatalog::reads_only_system, set_estimate; PR #525; +1 for the plan-leaf check of the exemption)
 # +4 lines: a stored view re-lowers its query with its IDENTIFIER(..) spans, so its columns keep their names (T179g follow-up, PR #576)
-3035 crates/krishiv-session/src/catalog.rs
+# +5 lines: a view made by CREATE TEMPORARY VIEW keeps its query text for SHOW TABLE EXTENDED (row 14 batch B-6)
+3029 crates/krishiv-session/src/catalog.rs
 # +43 lines over main: nested session and script variables (T196, PR #505)
-2294 crates/krishiv-session/src/command.rs
+# +48 lines: schema-level default collations (DEFAULT COLLATION on CREATE/ALTER SCHEMA, refused unless spark.sql.collation.schemaLevel.enabled) and IDENTIFIER(..) text for views and functions (row 14 batch B-6)
+# +5 lines: the temporary view creation takes the statement text and stores the query text (row 14 batch B-6)
+2347 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 # +20 lines: collect_engine (unstable-ir) reads results on the engine carriers for the golden harness (calendar carrier)
 # +1 line: the file view's `partitions` field (reading partitioned tables)
@@ -15,11 +18,15 @@
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
 # +5 lines over main: the admission exemption of system-only reads and the estimate gate (PR #525)
 # +33 lines: CTAS, views, CACHE TABLE, INSERT, EXPLAIN and DESCRIBE QUERY pass IDENTIFIER(..) spans to the query they run, which is boxed (T179g follow-up, PR #576)
-2819 crates/krishiv-session/src/session.rs
+# +11 lines: the schema-level collation parser key, the written IDENTIFIER(..) text passed to view and function commands, the repeated-name view renames (row 14 batch B-6)
+# +3 lines: the statement text reaches CREATE TEMPORARY VIEW (row 14 batch B-6)
+# +2 lines: a write's plan carries the session's conf fallbacks (row 36 batch B-8)
+2835 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
 # +4 lines over main: a view column list without a comment keeps the query column's comment (Spark's aliasPlan, PR #589)
 # +1 line: the temporary table's `partitions` field (reading partitioned tables)
 # +1 line over main: CREATE TABLE refuses a secret() call in its options (PR #525)
 # +17 lines: CTAS, CREATE VIEW, CACHE TABLE and INSERT name IDENTIFIER(..) items as the query does (T179g follow-up, PR #576)
-3398 crates/krishiv-session/src/table_commands.rs
+# +45 lines: tables, views and functions in a collated schema are refused (also before a saveAsTable overwrite drops the old table); views keep IDENTIFIER(..) text as written (row 14 batch B-6)
+3443 crates/krishiv-session/src/table_commands.rs

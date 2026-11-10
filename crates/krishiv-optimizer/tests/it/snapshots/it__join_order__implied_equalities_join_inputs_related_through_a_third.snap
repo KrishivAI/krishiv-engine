@@ -8,9 +8,13 @@ Project [b#1, b#4, b#7]
    :  +- Join Inner, (a#6 == a#0)
    :     :- Project [a#0, b#1]
    :     :  +- Join Inner, (a#0 == a#9)
-   :     :     :- Scan spark_catalog.default.t [a#0, b#1] (shared #1)
-   :     :     +- Scan spark_catalog.default.u [a#9]
+   :     :     :- Filter isnotnull(a#0)
+   :     :     :  +- Scan spark_catalog.default.t [a#0, b#1] (shared #1)
+   :     :     +- Filter isnotnull(a#9)
+   :     :        +- Scan spark_catalog.default.u [a#9]
    :     +- Shift +6
-   :        +- Shared #1, printed above
+   :        +- Filter isnotnull(a#0)
+   :           +- Shared #1, printed above
    +- Shift +3
-      +- Shared #1, printed above
+      +- Filter isnotnull(a#0)
+         +- Shared #1, printed above

@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -8,22 +9,24 @@ Limit 100
       +- Project [ws_ext_discount_amt#22]
          +- Join Inner, (i_item_sk#34 == ws_item_sk#3)
             :- Project [i_item_sk#34]
-            :  +- Filter (i_manufact_id#47 == 350)
+            :  +- Filter ((i_manufact_id#47 == 350) and isnotnull(i_item_sk#34))
             :     +- Scan spark_catalog.default.item [i_item_sk#34, i_manufact_id#47]
             +- Project [ws_item_sk#3, ws_ext_discount_amt#22]
                +- Join Inner, (d_date_sk#56 == ws_sold_date_sk#0)
                   :- Project [d_date_sk#56]
-                  :  +- Filter ((d_date#58 >= DATE '2000-01-27') and (d_date#58 <= DATE '2000-04-26'))
+                  :  +- Filter (((d_date#58 >= DATE '2000-01-27') and (d_date#58 <= DATE '2000-04-26')) and isnotnull(d_date_sk#56))
                   :     +- Scan spark_catalog.default.date_dim [d_date_sk#56, d_date#58] (shared #1)
                   +- Project [ws_sold_date_sk#0, ws_item_sk#3, ws_ext_discount_amt#22]
                      +- Join Inner, ((CAST(ws_ext_discount_amt#22 AS DECIMAL(14,7)) > (1.3 * avg(ws_ext_discount_amt))#146) and (ws_item_sk#3 == ws_item_sk#87))
-                        :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_ext_discount_amt#22] (shared #2)
+                        :- Filter (isnotnull(ws_item_sk#3) and isnotnull(ws_sold_date_sk#0))
+                        :  +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_ext_discount_amt#22] (shared #2)
                         +- Aggregate [ws_item_sk#87], [(1.3 * avg(ws_ext_discount_amt#106)) AS (1.3 * avg(ws_ext_discount_amt))#146, ws_item_sk#87]
                            +- Project [ws_item_sk#87, ws_ext_discount_amt#106]
                               +- Join Inner, (d_date_sk#118 == ws_sold_date_sk#84)
                                  :- Shift +84
-                                 :  +- Shared #2, printed above
+                                 :  +- Filter (isnotnull(ws_sold_date_sk#0) and isnotnull(ws_item_sk#3))
+                                 :     +- Shared #2, printed above
                                  +- Project [d_date_sk#118]
                                     +- Shift +62
-                                       +- Filter ((d_date#58 >= DATE '2000-01-27') and (d_date#58 <= DATE '2000-04-26'))
+                                       +- Filter (((d_date#58 >= DATE '2000-01-27') and (d_date#58 <= DATE '2000-04-26')) and isnotnull(d_date_sk#56))
                                           +- Shared #1, printed above
