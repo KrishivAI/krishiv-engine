@@ -1,5 +1,5 @@
 ---
-source: crates/krishiv-sql/src/tests.rs
+source: crates/krishiv-sql/src/tests/part1.rs
 expression: "snapshot(&[\"SELECT * FROM t VERSION AS OF 1, u FOR SYSTEM_TIME AS OF '2020-01-01' AS x\",\n\"SELECT * FROM t WITH ('k' = 'v', a.b 1, c = true, d) x\",\n\"SELECT a IN ((SELECT 1), 2), a IN ((SELECT 1) UNION (SELECT 2)), a IN ((SELECT 1) + 1)\",\n\"SELECT interval '1-2' year to month 1 day, interval 1 day 2 hours '3:4' hour to minute\",\n\"SELECT `date` '2020-01-01', geo 'x', dateadd(MICROSECOND, 1, t), extract(dow FROM d)\",\n\"SELECT sum(a) OVER (CLUSTER BY a), sum(a) OVER (DISTRIBUTE BY a SORT BY b)\",\n\"SELECT a LIKE ANY ('x') ESCAPE '/', ?, ?, CASE END\",\n\"FROM t SELECT 1 SELECT 2 ORDER BY 1\",\n\"WITH order AS (SELECT 1) SELECT * FROM order AS u\",])"
 ---
 -- SELECT * FROM t VERSION AS OF 1, u FOR SYSTEM_TIME AS OF '2020-01-01' AS x

@@ -1,5 +1,5 @@
 ---
-source: crates/krishiv-sql/src/tests.rs
+source: crates/krishiv-sql/src/tests/part1.rs
 expression: "snapshot(&[\"WITH RECURSIVE r (n) MAX RECURSION LEVEL 10 AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) SELECT * FROM r\",\n\"SELECT 1 UNION SELECT 2 INTERSECT DISTINCT SELECT 3 EXCEPT SELECT 4 MINUS SELECT 5\",\n\"VALUES (1, 'a'), (2, 'b') AS t(x, y)\", \"TABLE db.t\",\n\"(SELECT 1) ORDER BY 1 DESC NULLS LAST, 2 ASC NULLS FIRST LIMIT ALL OFFSET 3\",\n\"SELECT a FROM t CLUSTER BY a DISTRIBUTE BY b SORT BY c WINDOW w AS (ORDER BY a) LIMIT 1\",\n\"FROM t SELECT a WHERE a > 1 SELECT b ORDER BY b\",\n\"FROM t LATERAL VIEW explode(x) e AS c\",\n\"SELECT /*+ BROADCAST(t), REPARTITION(3, a) */ /*+ COALESCE(1) */ DISTINCT a b, c AS d, e AS (f, g), h (i) FROM t\",\n\"SELECT all, distinct FROM t\",\n\"SELECT a FROM t GROUP BY ALL HAVING count(*) > 1 QUALIFY row_number() OVER w = 1 WINDOW w AS (PARTITION BY a)\",\n\"SELECT a FROM t GROUP BY a, ROLLUP (b, (c, d)), CUBE (e), GROUPING SETS ((a), (), ROLLUP (b), GROUPING SETS (c))\",\n\"SELECT a FROM t GROUP BY a, b WITH ROLLUP\",\n\"SELECT a FROM t GROUP BY a WITH CUBE\",\n\"SELECT a FROM t GROUP BY a, b GROUPING SETS ((a), (a + b) * 2)\",\n\"SELECT a FROM t ORDER BY ALL\", \"SELECT a FROM, b AS, c NOT\",])"
 ---
 -- WITH RECURSIVE r (n) MAX RECURSION LEVEL 10 AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) SELECT * FROM r

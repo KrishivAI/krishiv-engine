@@ -7,4 +7,3 @@
 # +28 more (PR #572): CREATE NAMESPACE counts each clause in Spark's duplicate-check order (DUPLICATE_CLAUSES)
 5283 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
-3657 crates/krishiv-sql/src/tests.rs

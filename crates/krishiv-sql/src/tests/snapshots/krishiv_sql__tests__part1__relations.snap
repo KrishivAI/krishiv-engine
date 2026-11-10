@@ -1,5 +1,5 @@
 ---
-source: crates/krishiv-sql/src/tests.rs
+source: crates/krishiv-sql/src/tests/part1.rs
 expression: "snapshot(&[\"SELECT * FROM a JOIN b ON a.x = b.x INNER JOIN c USING (x) CROSS JOIN d LEFT OUTER JOIN e ON true RIGHT JOIN f FULL OUTER JOIN g\",\n\"SELECT * FROM a LEFT SEMI JOIN b SEMI JOIN c LEFT ANTI JOIN d ANTI JOIN e NATURAL JOIN f NATURAL LEFT JOIN g JOIN LATERAL (SELECT 1) h\",\n\"SELECT * FROM t, LATERAL (SELECT t.a) AS s (b), (a JOIN b) AS j, (VALUES 1) v\",\n\"SELECT * FROM range(1, end => 10) r, ((SELECT 1) UNION (SELECT 2)) u\",\n\"SELECT * FROM t PIVOT (sum(a) AS s, avg(b) FOR (c, d) IN ((1, 2) AS one, (3, 4) two)) p\",\n\"SELECT * FROM t PIVOT (sum(a) FOR c IN (1, 2))\",\n\"SELECT * FROM t UNPIVOT INCLUDE NULLS (v FOR n IN (a AS x, b)) AS u\",\n\"SELECT * FROM t UNPIVOT EXCLUDE NULLS ((v1, v2) FOR n IN ((a, b) AS ab, (c, d)))\",\n\"SELECT * FROM t LATERAL VIEW OUTER explode(m) e k, v LATERAL VIEW stack() s PIVOT (count(*) FOR k IN ('a')) UNPIVOT (x FOR y IN (z))\",\n\"SELECT * FROM from t, values, u AS, v WHERE\", \"FROM t\",\n\"SELECT * FROM t LATERAL VIEW explode(a) AS c\",])"
 ---
 -- SELECT * FROM a JOIN b ON a.x = b.x INNER JOIN c USING (x) CROSS JOIN d LEFT OUTER JOIN e ON true RIGHT JOIN f FULL OUTER JOIN g

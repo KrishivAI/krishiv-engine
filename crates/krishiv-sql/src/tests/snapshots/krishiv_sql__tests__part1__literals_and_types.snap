@@ -1,5 +1,5 @@
 ---
-source: crates/krishiv-sql/src/tests.rs
+source: crates/krishiv-sql/src/tests/part1.rs
 expression: "snapshot(&[\"SELECT 1, -1, 1L, 2S, 3Y, 1.5, .5, 1., 1e3, 1.5E-3, 2D, 3F, 4BD, -1.5BD, - 2\",\n\"SELECT 'a' 'b' \\\"c\\\", R'\\\\n', DATE '2020-01-01', TIMESTAMP_NTZ '2020-01-01', X'1F', TIME '10:00', geometry 'POINT'\",\n\"SELECT NULL, TRUE, FALSE, INTERVAL '1 day', INTERVAL 1 DAY 2 HOURS, INTERVAL -'1-2' YEAR TO MONTH, INTERVAL '1' 'x' SECOND\",\n\"SELECT INTERVAL + 1.5 MINUTES - 3 SECOND, interval, interval.a, INTERVAL 1 DAY TO\",\n\"SELECT CAST(a AS DECIMAL(10, 2)), TRY_CAST(b AS ARRAY<MAP<STRING, STRUCT<x: INT NOT NULL COMMENT 'c', `y z` ARRAY<INT>>>>), c::STRUCT<>, d::array\",\n\"SELECT CAST(a AS TIMESTAMP WITH LOCAL TIME ZONE), CAST(b AS TIMESTAMP WITHOUT TIME ZONE), CAST(c AS TIME(6) WITHOUT TIME ZONE)\",\n\"SELECT CAST(a AS INTERVAL YEAR TO MONTH), CAST(b AS INTERVAL DAY TO SECOND), CAST(c AS INTERVAL HOUR), CAST(d AS INTERVAL), CAST(e AS geometry(ANY)), CAST(f AS map), CAST(g AS struct)\",])"
 ---
 -- SELECT 1, -1, 1L, 2S, 3Y, 1.5, .5, 1., 1e3, 1.5E-3, 2D, 3F, 4BD, -1.5BD, - 2

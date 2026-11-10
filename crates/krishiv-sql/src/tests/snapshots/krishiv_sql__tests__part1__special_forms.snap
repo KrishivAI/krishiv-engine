@@ -1,5 +1,5 @@
 ---
-source: crates/krishiv-sql/src/tests.rs
+source: crates/krishiv-sql/src/tests/part1.rs
 expression: "snapshot(&[\"SELECT extract(YEAR FROM d), extract('year', d), substring(s FROM 2 FOR 3), substr(s, 2), substring(s, 1, 2)\",\n\"SELECT trim(BOTH 'x' FROM s), trim(LEADING FROM s), trim(TRAILING 'y' FROM s), trim(s), trim(s, 'z')\",\n\"SELECT position('a' IN s), position('a', s), overlay(s PLACING 'x' FROM 2 FOR 1), overlay(s PLACING 'y' FROM 1)\",\n\"SELECT timestampadd(DAY, 1, t), dateadd(HOUR, 2, t), date_add(d, 1), timestampdiff(MONTH, a, b), datediff(year, 1)\",])"
 ---
 -- SELECT extract(YEAR FROM d), extract('year', d), substring(s FROM 2 FOR 3), substr(s, 2), substring(s, 1, 2)

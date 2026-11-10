@@ -9,4 +9,3 @@
 4664 crates/krishiv-plan/src/analyzer/ops.rs
 # +37 lines: a DISTRIBUTE BY on a correlated subquery's path is kept through decorrelation (Spark's Category 2; DISTRIBUTE BY as a real exchange)
 3132 crates/krishiv-plan/src/analyzer/subquery.rs
-5384 crates/krishiv-plan/src/tests/analyzer.rs
