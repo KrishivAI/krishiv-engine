@@ -6,7 +6,9 @@
 # +43 lines over main: system-only scan tracking and the admission estimate (QueryCatalog::reads_only_system, set_estimate; PR #525; +1 for the plan-leaf check of the exemption)
 # +4 lines: a stored view re-lowers its query with its IDENTIFIER(..) spans, so its columns keep their names (T179g follow-up, PR #576)
 # +5 lines: a view made by CREATE TEMPORARY VIEW keeps its query text for SHOW TABLE EXTENDED (row 14 batch B-6)
-3078 crates/krishiv-session/src/catalog.rs
+# +1 line: the `PythonEval` arm of `streaming_leaves` (P2-T059); -36: the plan's scan walk moved to catalog/scans.rs (P2-T059)
+# +49 lines over main: system tables and USE system in the catalog (B-10)
+3043 crates/krishiv-session/src/catalog.rs
 # +43 lines over main: nested session and script variables (T196, PR #505)
 # +48 lines: schema-level default collations (DEFAULT COLLATION on CREATE/ALTER SCHEMA, refused unless spark.sql.collation.schemaLevel.enabled) and IDENTIFIER(..) text for views and functions (row 14 batch B-6)
 # +5 lines: the temporary view creation takes the statement text and stores the query text (row 14 batch B-6)
@@ -21,7 +23,9 @@
 # +11 lines: the schema-level collation parser key, the written IDENTIFIER(..) text passed to view and function commands, the repeated-name view renames (row 14 batch B-6)
 # +3 lines: the statement text reaches CREATE TEMPORARY VIEW (row 14 batch B-6)
 # +2 lines: a write's plan carries the session's conf fallbacks (row 36 batch B-8)
-2848 crates/krishiv-session/src/session.rs
+# +7 lines: the session's Python UDF library and runtime fields and the worker's runtime (P2-T059; the methods are in python_udfs.rs)
+# +13 lines over main: USE system, session context (B-10)
+2855 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
 # +4 lines over main: a view column list without a comment keeps the query column's comment (Spark's aliasPlan, PR #589)

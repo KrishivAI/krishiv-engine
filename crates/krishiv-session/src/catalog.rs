@@ -46,9 +46,11 @@ use crate::cache::{RelationCache, is_cache_name};
 
 mod file_tables;
 mod ndv_sampling;
+mod scans;
 mod script_results;
 
 use self::file_tables::{FileScanOf, reference_key};
+pub(crate) use self::scans::reads_stored_table;
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -856,44 +858,6 @@ async fn run_on<T: Send + 'static>(
     }
 }
 
-/// Whether the analyzed `plan` reads the permanent table `namespace.name` (directly, or through a view or a
-/// subquery): `INSERT OVERWRITE` of a table that is also read would delete what it reads.
-pub(crate) fn reads_stored_table(
-    plan: &LogicalPlan,
-    namespace: &str,
-    name: &str,
-    current: &str,
-) -> bool {
-    let mut scans = Vec::new();
-    collect_scans(plan, &mut scans);
-    scans.iter().any(|scan| {
-        let ReadSource::Table { name: parts, .. } = &scan.source else {
-            return false;
-        };
-        let (ns, table) = match parts.as_slice() {
-            [table] => (current, table),
-            [.., ns, table] => (ns.as_str(), table),
-            [] => return false,
-        };
-        ns.eq_ignore_ascii_case(namespace) && table.eq_ignore_ascii_case(name)
-    })
-}
-
-/// The scans of `plan` and of the subqueries in its expressions.
-fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
-    fn in_expr<'a>(e: &'a Arc<krishiv_plan::Expr>, out: &mut Vec<&'a Scan>) {
-        if let ExprNode::Subquery { plan, .. } = &e.node {
-            collect_scans(plan, out);
-        }
-        e.for_each_child(&mut |c| in_expr(c, out));
-    }
-    if let PlanNode::Scan(scan) = &plan.node {
-        out.push(scan);
-    }
-    plan.for_each_expr(&mut |e| in_expr(e, out));
-    plan.for_each_child(&mut |c| collect_scans(c, out));
-}
-
 /// The scans of the streaming pipeline of `root`: those a task splits.
 /// Joins contribute only their probe side and nodes only their streaming
 /// input; subquery plans and join builds read whole (no entry), so tasks
@@ -931,6 +895,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::Window { input, .. }
             | PhysNode::WindowGroupLimit { input, .. }
             | PhysNode::Aggregate { input, .. }
+            | PhysNode::PythonEval { input, .. }
             | PhysNode::WriteFiles { input, .. } => go(input, out),
             PhysNode::Exchange(e) => go(&e.input, out),
             PhysNode::HashJoin(join) => go(&join.probe, out),

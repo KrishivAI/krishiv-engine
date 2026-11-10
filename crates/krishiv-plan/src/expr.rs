@@ -640,6 +640,13 @@ impl Expr {
         (t.is_nested() && holds_interval(&t)).then_some(t)
     }
 
+    /// The Spark type of a resolved expression, when it is known from the
+    /// expression alone.
+    #[must_use]
+    pub fn resolved_type(&self) -> Option<DataType> {
+        crate::raises::type_of(self)
+    }
+
     /// An expression of unknown origin.
     #[must_use]
     pub const fn new(node: ExprNode) -> Self {

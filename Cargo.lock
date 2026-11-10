@@ -2395,6 +2395,8 @@ dependencies = [
  "arrow-schema",
  "futures",
  "krishiv-common",
+ "krishiv-exec",
+ "krishiv-plan",
  "krishiv-session",
  "krishiv-sql",
  "krishiv-types",
