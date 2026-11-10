@@ -164,6 +164,12 @@ fn outputs(input: &RelStats, exprs: &[Arc<Expr>], rows: f64, propagate: bool) ->
         rows,
         cols,
         from_statistics: input.from_statistics,
+        // A projection keeps the rows; an aggregate does not.
+        unfiltered_rows: if rows == input.rows {
+            input.unfiltered_rows
+        } else {
+            0.0
+        },
     }
     .with_rows(rows)
 }
@@ -207,6 +213,7 @@ fn filtered(est: &RelStats, pred: &Expr, propagate: bool) -> RelStats {
         rows,
         cols,
         from_statistics: est.from_statistics,
+        unfiltered_rows: est.base_rows(),
     }
 }
 
@@ -240,7 +247,8 @@ fn key_pairs(pred: &Arc<Expr>, l: &RelStats, r: &RelStats) -> Vec<(AttrId, AttrI
 /// the composite-key selectivity: several equalities between the same two
 /// sides are a foreign key into the side with fewer distinct key tuples, so
 /// the selectivity is `1 / min(prod ndv left, prod ndv right)` (each product
-/// over the distinct key columns, at most the side's rows), the rule the
+/// over the distinct key columns, at most the side's rows before its filters: a filtered key
+/// side keeps its fraction of the join), the rule the
 /// join orderer's `composite_keys` applies. Never below 1: the independent
 /// product is already the smaller estimate then.
 fn composite_factor(pairs: &[(AttrId, AttrId)], l: &RelStats, r: &RelStats) -> f64 {
@@ -257,7 +265,7 @@ fn composite_factor(pairs: &[(AttrId, AttrId)], l: &RelStats, r: &RelStats) -> f
             .filter_map(|i| s.cols.get(i))
             .map(|c| c.ndv.max(1.0))
             .product::<f64>()
-            .min(s.rows.max(1.0))
+            .min(s.base_rows().max(1.0))
     };
     let composite = 1.0 / tuples(&lc, l).min(tuples(&rc, r)).max(1.0);
     let independent: f64 = pairs
@@ -467,6 +475,7 @@ impl<'a> Estimator<'a> {
                         })
                         .collect(),
                     from_statistics: est.from_statistics,
+                    unfiltered_rows: est.unfiltered_rows,
                 }
             }
             PlanNode::Shift { input, offset } => {
@@ -479,6 +488,7 @@ impl<'a> Estimator<'a> {
                         .map(|(id, c)| (AttrId(id.0.saturating_add(*offset)), c.clone()))
                         .collect(),
                     from_statistics: est.from_statistics,
+                    unfiltered_rows: est.unfiltered_rows,
                 }
             }
             PlanNode::PartialAggregate {
@@ -527,7 +537,10 @@ impl<'a> Estimator<'a> {
         let mut v = View::new(&cols, self.propagate);
         let composite = pred
             .as_ref()
-            .filter(|_| self.propagate)
+            // Inner joins only: an outer or semi join's row rule (`max(l.rows)`, `min(inner,
+            // l.rows)`) and its unmatched fraction would read the larger inner estimate (TPC-DS
+            // q78's anti join collapsed to one row).
+            .filter(|_| self.propagate && matches!(kind, JoinKind::Inner))
             .map_or(1.0, |c| composite_factor(&key_pairs(c, l, r), l, r));
         let sel = pred.as_ref().map_or(1.0, |c| apply(c, &mut v)) * composite;
         // `inf * 0` is NaN: a zero selectivity is zero rows.
@@ -563,6 +576,7 @@ impl<'a> Estimator<'a> {
                 rows,
                 cols,
                 from_statistics: false,
+                unfiltered_rows: 0.0,
             }
             .with_rows(rows);
         }
@@ -646,6 +660,9 @@ impl<'a> Estimator<'a> {
             rows,
             cols,
             from_statistics: false,
+            unfiltered_rows: rows
+                * (l.base_rows() / l.rows.max(1.0))
+                * (r.base_rows() / r.rows.max(1.0)),
         }
     }
 
@@ -678,6 +695,7 @@ impl<'a> Estimator<'a> {
             rows,
             cols,
             from_statistics: true,
+            unfiltered_rows: 0.0,
         }
     }
 }
@@ -735,6 +753,7 @@ fn union(
         rows,
         cols,
         from_statistics: false,
+        unfiltered_rows: 0.0,
     }
 }
 
@@ -852,6 +871,7 @@ fn expand(est: RelStats, projections: &[Vec<Arc<Expr>>], output: &[BoundColumn])
         rows,
         cols,
         from_statistics: est.from_statistics,
+        unfiltered_rows: 0.0,
     }
 }
 

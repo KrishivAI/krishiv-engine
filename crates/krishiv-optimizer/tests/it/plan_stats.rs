@@ -470,6 +470,28 @@ fn a_composite_key_join_is_a_foreign_key_into_the_side_with_fewer_key_tuples() {
 }
 
 #[test]
+fn a_filtered_key_side_keeps_its_fraction_of_a_composite_join() {
+    let whole = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v").rows();
+    let filtered =
+        join("SELECT * FROM t JOIN (SELECT * FROM u WHERE v < 5) u ON t.a = u.k AND t.b = u.v")
+            .rows();
+    // The key tuples are those of the unfiltered side: the filter's fraction is not cancelled
+    // (it was when the cap was the filtered rows: the estimate stayed at every row of `t`).
+    assert!(
+        filtered < whole,
+        "filtered {filtered} must be below the whole {whole}"
+    );
+}
+
+#[test]
+fn a_composite_outer_join_keeps_the_unmatched_fraction() {
+    // Only inner joins take the composite rule: an outer join still finds rows of `t` without a
+    // match (TPC-DS q78's anti join collapsed to one row when it did not).
+    let e = join("SELECT * FROM t LEFT JOIN u ON t.a = u.k AND t.b = u.v");
+    assert!(e.col("v").null_frac > 0.0, "{}", e.col("v").null_frac);
+}
+
+#[test]
 fn outer_joins_give_the_null_supplying_side_the_unmatched_fraction_as_nulls() {
     // 200 of `t`'s 1,000 rows match.
     let e = join("SELECT * FROM t LEFT JOIN w ON t.a = w.wk");
