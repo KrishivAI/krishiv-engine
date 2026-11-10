@@ -509,6 +509,14 @@ impl Resolver<'_> {
         {
             return Ok(bound);
         }
+        // `nullif`, `greatest` and `least` over strings of one `UTF8_LCASE` / `_RTRIM` type pick
+        // among the operands by their keys (unit 3b).
+        if matches!(name.as_str(), "nullif" | "greatest" | "least")
+            && !f.distinct
+            && let Some(bound) = self.keyed_pick(e, kids, n, &name, in_agg, window_fn, cx)?
+        {
+            return Ok(bound);
+        }
         // `instr` / `locate` / `position` over `UTF8_LCASE` strings answer positions in the
         // original text: the kernel `__locate_lcase` matches the lower-cased code points (unit 5b).
         if matches!(
@@ -838,6 +846,97 @@ impl Resolver<'_> {
         }
         self.expr_node_inner(e, &keyed, in_agg, window_fn, cx)
             .map(Some)
+    }
+
+    /// `nullif(a, b)` is `a` unless the keys of `a` and `b` are equal; `least` and `greatest` keep the
+    /// operand with the smallest (largest) key, the earlier one on a tie and skipping NULLs, as
+    /// Spark's evaluation does. The call keeps its own name and result type; the operands are the
+    /// same collated type, so the keys are those of one collation. At most four operands: the
+    /// fold repeats the running value, and more stay with the execution guard.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments of `expr_node`, plus the call's"
+    )]
+    fn keyed_pick(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        n: usize,
+        name: &str,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        let first = kids.first().and_then(|k| k.ty.data_type.clone());
+        let ok_arity = if name == "nullif" {
+            n == 2
+        } else {
+            (2..=4).contains(&n)
+        };
+        if !ok_arity
+            || !is_collated(first.as_ref())
+            || !kids[..n].iter().all(|k| k.ty.data_type == first)
+        {
+            return Ok(None);
+        }
+        let (chosen, _) = self.choose_collation(e, kids, n, name)?;
+        let Some(c) = chosen else {
+            return Ok(None);
+        };
+        if !matches!(
+            c.family(),
+            CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
+        ) {
+            return Ok(None);
+        }
+        let original = self.expr_node_inner(e, kids, in_agg, window_fn, cx)?;
+        let o = e.origin;
+        let operand = |i: usize| (*kids[i].expr).clone();
+        let key = |x: &Expr| key_of(&Arc::new(x.clone()), c, o);
+        let call = |f: &str, args: Vec<Expr>| Expr::function(f, args).with_origin(o);
+        let built = if name == "nullif" {
+            let null = Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(o);
+            call(
+                "if",
+                vec![
+                    call("==", vec![key(&operand(0)), key(&operand(1))]),
+                    null,
+                    operand(0),
+                ],
+            )
+        } else {
+            let better = if name == "least" { "<" } else { ">" };
+            let mut acc = operand(0);
+            for i in 1..n {
+                let next = operand(i);
+                acc = call(
+                    "if",
+                    vec![
+                        call("isnull", vec![acc.clone()]),
+                        next.clone(),
+                        call(
+                            "if",
+                            vec![
+                                call("isnull", vec![next.clone()]),
+                                acc.clone(),
+                                call(
+                                    "if",
+                                    vec![
+                                        call(better, vec![key(&next), key(&acc)]),
+                                        next,
+                                        acc.clone(),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                );
+            }
+            acc
+        };
+        let mut b = self.expr(&Arc::new(built), cx)?;
+        b.shown.clone_from(&original.shown);
+        Ok(Some(b))
     }
 
     /// `contains` / `startswith` / `endswith` with a pattern the lower-cased key cannot answer

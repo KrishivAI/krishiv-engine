@@ -1043,3 +1043,72 @@ fn trim_replace_translate_split_substring_index_over_lcase_and_rtrim() {
         "NULL"
     );
 }
+
+/// `nullif`, `least` and `greatest` over strings of one `UTF8_LCASE` or `_RTRIM` type compare by
+/// the collation: the earlier operand wins a tie and NULLs are skipped (Spark 4.2.0 values).
+#[test]
+fn nullif_least_and_greatest_pick_by_the_collation() {
+    let l = "collate utf8_lcase";
+    for (sql, want) in [
+        (format!("select nullif('aaa' {l}, 'AAA' {l})"), "NULL"),
+        (format!("select nullif('aaa' {l}, 'bbb' {l})"), "aaa"),
+        (
+            format!("select nullif('aaa' {l}, cast(null as string {l}))"),
+            "aaa",
+        ),
+        (
+            format!("select nullif(cast(null as string {l}), 'aaa' {l})"),
+            "NULL",
+        ),
+        (format!("select least('b' {l}, 'B' {l})"), "b"),
+        (format!("select least('B' {l}, 'b' {l})"), "B"),
+        (format!("select greatest('a' {l}, 'A' {l})"), "a"),
+        (format!("select greatest('A' {l}, 'a' {l})"), "A"),
+        (format!("select least('aaa' {l}, 'AAA' {l}, 'a' {l})"), "a"),
+        (
+            format!("select greatest('aaa' {l}, 'AAA' {l}, 'B' {l})"),
+            "B",
+        ),
+        (
+            format!("select least(cast(null as string {l}), 'b' {l}, 'A' {l})"),
+            "A",
+        ),
+        (
+            format!("select greatest(cast(null as string {l}), cast(null as string {l}))"),
+            "NULL",
+        ),
+        (
+            format!("select typeof(least('a' {l}, 'b' {l}))"),
+            "string collate UTF8_LCASE",
+        ),
+        (
+            "select nullif('a ' collate utf8_binary_rtrim, 'a' collate utf8_binary_rtrim)".into(),
+            "NULL",
+        ),
+        (
+            "select least('b ' collate utf8_binary_rtrim, 'b' collate utf8_binary_rtrim)".into(),
+            "b ",
+        ),
+        (
+            "select greatest('b ' collate utf8_binary_rtrim, 'B' collate utf8_binary_rtrim)".into(),
+            "b ",
+        ),
+    ] {
+        assert_eq!(one(&sql), want, "{sql}");
+    }
+    // More than four operands stay refused, with a clean error rather than a wrong answer.
+    assert_eq!(
+        class(&format!(
+            "select least('a' {l}, 'b' {l}, 'C' {l}, 'd' {l}, 'E' {l})"
+        )),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // The call keeps its own name and result type.
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(&format!("select nullif('aaa' {l}, 'AAA' {l})"))).unwrap();
+    let name = block_on(df.schema()).unwrap().field(0).name().clone();
+    assert_eq!(
+        name,
+        "nullif(collate(aaa, utf8_lcase), collate(AAA, utf8_lcase))"
+    );
+}
