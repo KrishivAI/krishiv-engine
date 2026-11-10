@@ -212,3 +212,45 @@ fn the_result_does_not_depend_on_the_thread_count() {
         );
     }
 }
+
+/// The most drivers any pipeline of `sql` ran, from its profile.
+fn max_drivers(s: &Session, sql: &str) -> u64 {
+    let df = block_on(s.sql(sql)).unwrap();
+    let p = block_on(df.explain_analyze()).unwrap();
+    p.metrics
+        .pipelines
+        .values()
+        .map(|m| m.drivers)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Review M1: the lanes are engaged where they should be and only there. This fails if
+/// `lane_count` silently returns `None` (every result test would still pass: the old mode
+/// ran one driver at every thread count).
+#[test]
+fn lanes_engage_one_driver_per_logical_partition() {
+    use krishiv_exec::{ExecutorConfig, TokioExecutor};
+    let executor = TokioExecutor::new(&ExecutorConfig {
+        compute_threads: 12,
+        ..ExecutorConfig::default()
+    })
+    .unwrap();
+    let s = Session::builder()
+        .config("krishiv.deterministicOrder", "true")
+        .config("krishiv.memory.limit", "16GB")
+        .executor(executor)
+        .build()
+        .unwrap();
+    // 24 partitions: capped at 16 lanes.
+    let split = "SELECT id % 11 AS g, sum(CAST(id AS DOUBLE) / 7) FROM range(0, 400000, 1, 24) GROUP BY id % 11";
+    assert_eq!(max_drivers(&s, split), 16, "{split}");
+    // Fewer partitions than the cap: one lane each.
+    let few = "SELECT id % 11 AS g, sum(CAST(id AS DOUBLE) / 7) FROM range(0, 400000, 1, 5) GROUP BY id % 11";
+    assert_eq!(max_drivers(&s, few), 5, "{few}");
+    // A fan-in sharing a flush barrier keeps every member at one driver (B1): the 24-partition
+    // members would show 16; only the 4-partition join build, outside the group, uses lanes.
+    let mixed = "SELECT x FROM (SELECT a.id AS x FROM range(0,20000,1,24) a FULL JOIN range(0,1000,1,4) b ON a.id=b.id*3 \
+                 UNION ALL SELECT id AS x FROM range(0,40000,1,24))";
+    assert_eq!(max_drivers(&s, mixed), 4, "{mixed}");
+}
