@@ -138,7 +138,7 @@ fn since(executor: &dyn Executor, start: Instant) -> Duration {
 /// Spawns one driver of `run`: `partition` is the driver's
 /// scheduler-assigned globally unique partition id within its pipeline
 /// group (see [`TaskContext::with_partition`]).
-pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle {
+pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32, base: u32) -> TaskHandle {
     let pipeline = run.pipeline.index;
     let query = Arc::clone(&run.query);
     let executor = Arc::clone(&run.executor);
@@ -153,7 +153,7 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle 
     });
     let body = async move {
         let _turn = turn;
-        if let Err(e) = drive(run, partition).await {
+        if let Err(e) = drive(run, partition, base).await {
             q.fail(e);
         }
     };
@@ -173,8 +173,8 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle 
     crate::console::spawn_named(&executor, &query, query.class(), &name, Box::pin(timed))
 }
 
-async fn drive(run: Arc<PipelineRun>, partition: u32) -> Result<()> {
-    Driver::new(run, partition)?.run().await
+async fn drive(run: Arc<PipelineRun>, partition: u32, base: u32) -> Result<()> {
+    Driver::new(run, partition, base)?.run().await
 }
 
 /// Times every poll of a driver: the stall detector. A poll is a
@@ -476,7 +476,7 @@ struct Driver {
 }
 
 impl Driver {
-    fn new(run: Arc<PipelineRun>, partition: u32) -> Result<Self> {
+    fn new(run: Arc<PipelineRun>, partition: u32, base: u32) -> Result<Self> {
         let owner = SpillOwner::new();
         let ctx = |id, name| {
             TaskContext::new(
@@ -487,6 +487,7 @@ impl Driver {
                 name,
             )
             .with_partition(partition)
+            .with_partition_base(base)
         };
         let p = &run.pipeline;
         let (source_id, source) = &p.source;

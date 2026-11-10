@@ -63,6 +63,13 @@ pub trait Source: Send + Sync {
     /// count). The pipeline runs `min(worker slots, this)` drivers. No
     /// default, so a scan cannot run serially by omission.
     fn max_parallelism(&self, global: &GlobalState) -> usize;
+    /// How many partition ids the source's splits take in a `UNION ALL`
+    /// numbering (Spark's `UnionRDD` offsets the next child by this child's
+    /// partition count). Defaults to [`Self::max_parallelism`]: the slice or
+    /// morsel count, which can exceed the drivers that run them.
+    fn partitions(&self, global: &GlobalState) -> usize {
+        self.max_parallelism(global)
+    }
     /// One driver's state.
     ///
     /// # Errors

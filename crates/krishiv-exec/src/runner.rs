@@ -503,10 +503,13 @@ fn start_group(
         };
         let base = u32::try_from(next_partition)
             .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
-        // `drivers` fits `usize`; the end index must fit `u32` as well.
-        u32::try_from(next_partition + drivers as u64)
+        // The next member starts past every split of this one (a source can
+        // have more splits than drivers), so split ids never overlap.
+        let span = drivers.max(source.partitions(&source_global).min(1 << 24));
+        // `span` fits `usize`; the end index must fit `u32` as well.
+        u32::try_from(next_partition + span as u64)
             .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
-        next_partition += drivers as u64;
+        next_partition += span as u64;
         started.push(MemberStart {
             pipeline,
             operator_deps,
@@ -607,7 +610,7 @@ fn drivers(run: &Arc<PipelineRun>, base: u32, count: usize) -> Result<Vec<TaskHa
         let partition = base
             .checked_add(offset)
             .ok_or_else(|| internal("too many drivers for u32 partition ids".to_owned()))?;
-        out.push(spawn_driver(Arc::clone(run), partition));
+        out.push(spawn_driver(Arc::clone(run), partition, base));
     }
     Ok(out)
 }
