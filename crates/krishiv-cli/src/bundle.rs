@@ -339,7 +339,7 @@ fn run_statement(session: &krishiv::Session, stmt: &str, subs: &[PathSub]) -> (R
     };
     let profile = futures::executor::block_on(df.explain_analyze());
     let profile_text = match profile {
-        Ok(p) => scrub_json_value(&p.to_json(), subs),
+        Ok(p) => scrub_json_value(&p.shareable().to_json(), subs),
         Err(e) => error_json(&e, subs),
     };
     (
