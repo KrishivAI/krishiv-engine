@@ -92,10 +92,18 @@ enum Command {
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
 fn install_logs_from_env() {
     if std::env::var("KRISHIV_LOG").is_ok_and(|v| v.eq_ignore_ascii_case("json")) {
-        let rate = std::env::var("KRISHIV_LOG_RATE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(50);
+        let rate = match std::env::var("KRISHIV_LOG_RATE") {
+            Err(_) => 50,
+            Ok(v) => match v.trim().parse::<u32>() {
+                Ok(n) if n > 0 => n,
+                _ => {
+                    eprintln!(
+                        "krishiv: KRISHIV_LOG_RATE={v:?} is not a positive integer; using 50"
+                    );
+                    50
+                }
+            },
+        };
         if let Err(e) = krishiv_session::logging::install_json_logs(rate) {
             eprintln!("krishiv: JSON logs not enabled: {e}");
         }

@@ -119,11 +119,10 @@ where
 ///
 /// # Errors
 /// When a global subscriber is already set.
-pub fn install_json_logs(per_second: u32) -> Result<(), String> {
+pub fn install_json_logs(per_second: u32) -> Result<(), tracing_subscriber::util::TryInitError> {
     tracing_subscriber::registry()
         .with(json_layer(per_second, std::io::stderr))
         .try_init()
-        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
