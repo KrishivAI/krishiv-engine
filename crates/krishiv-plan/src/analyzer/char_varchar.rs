@@ -656,13 +656,10 @@ impl Resolver<'_> {
         // Spark's run (4.2.0): a `NULL` anywhere in the list leaves everything unpadded.
         let mut widths = Vec::with_capacity(list.len());
         for k in list {
-            if self.constant_string(k)?.is_none() {
+            let Some(s) = self.constant_string(k)? else {
                 return Ok(None);
-            }
-            widths.push(
-                self.constant_string(k)?
-                    .and_then(|s| i32::try_from(s.chars().count()).ok()),
-            );
+            };
+            widths.push(i32::try_from(s.chars().count()).ok());
         }
         let mut target = n;
         for w in &widths {
@@ -744,20 +741,21 @@ impl Resolver<'_> {
         if self.ctx.conf.char_varchar_as_string || self.declared.is_empty() {
             return Ok(());
         }
-        let nested = |b: &Bound| -> Option<Arc<str>> {
+        // The lengths are compared, not the catalog strings: struct field names do not change the padding.
+        let nested = |b: &Bound| -> Option<DeclaredType> {
             if b.shown.is_some() {
                 return None;
             }
             match &b.expr.node {
                 ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
                     let d = self.declared.get(&c.id)?;
-                    (char_length(d).is_none() && DeclaredType::parse(d).has_char())
-                        .then(|| Arc::clone(d))
+                    let parsed = DeclaredType::parse(d);
+                    (char_length(d).is_none() && parsed.has_char()).then_some(parsed)
                 }
                 _ => None,
             }
         };
-        let types: Vec<Arc<str>> = kids.iter().filter_map(nested).collect();
+        let types: Vec<DeclaredType> = kids.iter().filter_map(nested).collect();
         if types.len() == kids.len() && types.windows(2).any(|w| w[0] != w[1]) {
             return Err(super::bind::unsupported(
                 "comparisons of nested CHAR columns of different lengths",

@@ -460,9 +460,10 @@ pub fn run_file_with(
     file
 }
 
-/// Whether a parse failure is the error Spark's `AstBuilder` raises for `s`: an interval literal that overflows
-/// (`SparkArithmeticException`) or names an unknown unit (`SparkIllegalArgumentException`) fails while the statement
-/// is being parsed in Spark too, with no `ParseException`, so the statement counts as parsed.
+/// Whether a parse failure is an error Spark raises while building the AST rather than as a `ParseException`:
+/// the expected error of `s` is not a parse error and the engine's has its class and SQLSTATE, so the
+/// statement counts as parsed. Any such class qualifies; the cases that need it today are interval literals
+/// that overflow (`SparkArithmeticException`) or name an unknown unit (`SparkIllegalArgumentException`).
 fn raised_while_building_the_ast(s: &Statement, got: &EngineError) -> bool {
     matches!(&s.expected, Expected::Error(e) if !e.is_parse_error()
         && e.error_class.as_deref().is_some_and(|class| error_matches(e, class, got)))

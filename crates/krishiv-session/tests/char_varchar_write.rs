@@ -1049,3 +1049,26 @@ fn a_temporary_view_describes_its_char_varchar_columns() {
         ]
     );
 }
+
+/// The rows below are a real Spark 4.2.0 run's: struct fields whose names differ only in case compare, and the
+/// equal lengths need no padding.
+#[test]
+fn nested_char_comparison_ignores_field_name_case() {
+    let s = fresh();
+    run(&s, "drop table if exists nc").unwrap();
+    run(
+        &s,
+        "create table nc(i int, a struct<X:char(3)>, b struct<x:char(3)>) using parquet",
+    )
+    .unwrap();
+    run(
+        &s,
+        "insert into nc values (1, named_struct('X','a'), named_struct('x','a')), (2, named_struct('X','ab'), named_struct('x','b'))",
+    )
+    .unwrap();
+    assert_eq!(count(&s, "select i from nc where a = b"), 1);
+    assert_eq!(
+        first_text(&s, "select cast(i as string) from nc where a = b"),
+        "1"
+    );
+}

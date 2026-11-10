@@ -1713,7 +1713,16 @@ impl Session {
         &self,
         sql: &str,
     ) -> Result<Arc<crate::dataframe::Analysis>, KrishivError> {
-        let env = self.query_env();
+        self.analyze_variable_query_in(sql, self.query_env()).await
+    }
+
+    /// [`Self::analyze_variable_query`] in `env` (a query environment the caller adjusted, such as a cast mode
+    /// Spark fixes whatever the session says).
+    pub(crate) async fn analyze_variable_query_in(
+        &self,
+        sql: &str,
+        env: QueryEnv,
+    ) -> Result<Arc<crate::dataframe::Analysis>, KrishivError> {
         let redacted = krishiv_sql::redact_sql(sql);
         let query = krishiv_sql::parse_query(sql, &env.parser).map_err(|e| {
             crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
