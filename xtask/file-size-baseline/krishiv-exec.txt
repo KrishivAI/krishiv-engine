@@ -11,7 +11,7 @@
 3345 crates/krishiv-exec/src/aggregate/tests.rs
 2003 crates/krishiv-exec/src/operators/sort/sort.rs
 # +1 line: PlanNode::Repartition plans a hash exchange (DISTRIBUTE BY as a real exchange)
-2106 crates/krishiv-exec/src/planner/build.rs
+2103 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 # +70 lines over main: the external-partition headroom reproducer, batches of 20 and 300/1,500 rows from a full pool (window spill flake, PR #601)

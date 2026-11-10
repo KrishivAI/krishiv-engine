@@ -1145,6 +1145,22 @@ fn system_query_text_entries_parse_and_default() {
 }
 
 #[test]
+fn build_side_projection_defaults_on_and_parses_booleans() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_JOIN_BUILD_PROJECTION)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.join.buildProjection", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(
+        c.set("krishiv.exec.join.buildProjection", "sometimes")
+            .is_err()
+    );
+}
+
+#[test]
 fn join_idle_spill_after_parses_and_defaults() {
     let mut c = Config::new();
     let get = |c: &Config| {
