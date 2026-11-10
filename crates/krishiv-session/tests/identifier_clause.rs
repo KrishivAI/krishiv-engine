@@ -220,6 +220,7 @@ fn positions_that_take_no_clause_are_refused_as_spark_refuses_them() {
         "SELECT 1 AS IDENTIFIER('col1.col2')",
         "SELECT * FROM VALUES (1) t(IDENTIFIER('a.b'))",
         "WITH t(IDENTIFIER('a.b')) AS (SELECT 1) SELECT * FROM t",
+        "WITH a AS (SELECT 1 AS x), t(IDENTIFIER('a.b')) AS (SELECT 1) SELECT * FROM t",
     ] {
         assert_eq!(class(&s, q), "IDENTIFIER_TOO_MANY_NAME_PARTS", "{q}");
     }
@@ -672,9 +673,9 @@ fn a_table_function_body_names_its_columns() {
 fn identifier_in_a_generator_call_with_a_column_list_alias_still_resolves() {
     let s = Session::new().unwrap();
     for q in [
-        "SELECT posexplode(IDENTIFIER('arr')) AS (p, v) FROM VALUES (array(1, 2)) t(arr)",
-        "SELECT a, (a > 0) AND (IDENTIFIER('b') > 0) FROM VALUES (1, 2) t(a, b)",
-        "SELECT a, (b) IN (IDENTIFIER('a'), 5) FROM VALUES (1, 2) t(a, b)",
+        "SELECT posexplode(IDENTIFIER('t.arr')) AS (p, v) FROM VALUES (array(1, 2)) t(arr)",
+        "SELECT a, (a > 0) AND (IDENTIFIER('t.b') > 0) FROM VALUES (1, 2) t(a, b)",
+        "SELECT a, (b) IN (IDENTIFIER('t.a'), 5) FROM VALUES (1, 2) t(a, b)",
     ] {
         run(&s, q);
     }

@@ -414,7 +414,7 @@ fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usiz
     {
         return true;
     }
-    // An alias without `AS` after a row source: `VALUES (..) t(<list>)`, `range(3) t(<list>)`.
+    // An alias without `AS` after a row source: `VALUES (..) t(<list>)`.
     if tokens
         .get(before)
         .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
