@@ -796,7 +796,9 @@ fn a_minor_2_document_reads_pipeline_stalls_as_zero() {
 fn the_trace_member_round_trips_and_is_absent_without_one() {
     let mut p = QueryProfile::new(&plan(matching()), metrics(), true);
     assert!(p.to_json_value().get("trace").is_none());
-    p.trace = Some(serde_json::json!({"trace_id": "abc", "session_id": "s1"}));
+    p.trace = Some(
+        serde_json::json!({"trace_id": "sentinel-trace-7f3a", "session_id": "sentinel-session-9c1d"}),
+    );
     let back = QueryProfile::from_json(&p.to_json()).expect("reads its own document");
     assert_eq!(back.trace, p.trace);
 }
@@ -804,14 +806,16 @@ fn the_trace_member_round_trips_and_is_absent_without_one() {
 #[test]
 fn identity_round_trips_and_a_shared_profile_drops_it_with_the_trace() {
     let mut p = QueryProfile::new(&plan(matching()), metrics(), true);
-    p.trace = Some(serde_json::json!({"trace_id": "abc", "session_id": "s1"}));
+    p.trace = Some(
+        serde_json::json!({"trace_id": "sentinel-trace-7f3a", "session_id": "sentinel-session-9c1d"}),
+    );
     p.identity = Some(ProfileIdentity {
-        principal: "user:ada".into(),
-        tags: [("team".to_owned(), "data".to_owned())].into(),
+        principal: "sentinel-principal-ada".into(),
+        tags: [("team".to_owned(), "sentinel-tag-data".to_owned())].into(),
     });
     let v = p.to_json_value();
-    assert_eq!(v["usage"]["principal"], "user:ada");
-    assert_eq!(v["usage"]["tags"]["team"], "data");
+    assert_eq!(v["usage"]["principal"], "sentinel-principal-ada");
+    assert_eq!(v["usage"]["tags"]["team"], "sentinel-tag-data");
     assert_eq!(
         QueryProfile::from_json(&p.to_json())
             .expect("reads")
@@ -821,7 +825,13 @@ fn identity_round_trips_and_a_shared_profile_drops_it_with_the_trace() {
 
     let shared = p.shareable();
     let text = shared.to_json();
-    for secret in ["user:ada", "data", "abc", "s1", "\"trace\""] {
+    for secret in [
+        "sentinel-principal-ada",
+        "sentinel-tag-data",
+        "sentinel-trace-7f3a",
+        "sentinel-session-9c1d",
+        "\"trace\"",
+    ] {
         assert!(!text.contains(secret), "{secret} survived --share: {text}");
     }
     // Every number is kept.

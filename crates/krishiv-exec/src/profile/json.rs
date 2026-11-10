@@ -160,13 +160,11 @@ impl QueryProfile {
             Some(p) if p.is_object() => Some(p.clone()),
             Some(_) => return Err(ProfileError::new("planning is not an object")),
         };
-        let identity = match member(o, "usage")?
-            .as_object()
-            .and_then(|u| u.get("principal"))
-        {
+        let usage = member(o, "usage")?;
+        let identity = match usage.as_object().and_then(|u| u.get("principal")) {
             Some(Value::String(p)) => Some(super::ProfileIdentity {
                 principal: p.clone(),
-                tags: member(o, "usage")?
+                tags: usage
                     .get("tags")
                     .and_then(Value::as_object)
                     .map(|t| {
