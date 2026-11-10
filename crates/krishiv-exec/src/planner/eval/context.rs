@@ -14,27 +14,36 @@ use arrow_array::RecordBatch;
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::ErrorQueryContext;
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::{Expr, Origin};
+use krishiv_plan::{Builtin, Expr, FunctionId, Origin, ResolvedFunction};
 
 use super::{EvalEnv, PhysExpr, Value};
 use crate::error::Result;
 
-/// The error classes Spark raises with the query context of the failing expression
-/// (`QueryExecutionErrors` methods that take a `QueryContext`). Other run-time errors carry none.
+/// The error classes (before any sub-class) Spark raises with the query context of the failing
+/// expression, each checked on a Spark 4.2.0 run. Others carry none: `CAST_OVERFLOW`,
+/// `INVALID_INTERVAL_FORMAT.ARITHMETIC_EXCEPTION`, and `ARITHMETIC_OVERFLOW` of unary minus and `abs`
+/// (see [`has_context`]).
 const WITH_CONTEXT: &[&str] = &[
     "ARITHMETIC_OVERFLOW",
     "CAST_INVALID_INPUT",
-    "CAST_OVERFLOW",
-    "CAST_OVERFLOW_IN_TABLE_INSERT",
     "DIVIDE_BY_ZERO",
-    "INTERVAL_ARITHMETIC_OVERFLOW",
     "INTERVAL_DIVIDED_BY_ZERO",
     "INVALID_ARRAY_INDEX",
     "INVALID_ARRAY_INDEX_IN_ELEMENT_AT",
     "INVALID_INDEX_OF_ZERO",
-    "MAP_KEY_DOES_NOT_EXIST",
     "NUMERIC_VALUE_OUT_OF_RANGE",
+    "REMAINDER_BY_ZERO",
 ];
+
+/// Whether Spark gives the errors of the call `f` a query context: not unary minus and `abs`, whose
+/// overflow is raised without one.
+pub(super) fn has_context(f: &ResolvedFunction) -> bool {
+    match &f.id {
+        FunctionId::Builtin(Builtin::Negative) => false,
+        FunctionId::Registry { name, .. } => name != "abs",
+        _ => true,
+    }
+}
 
 /// An expression whose run-time errors carry its SQL span.
 #[derive(Debug)]
@@ -82,7 +91,9 @@ impl PhysExpr for Contextual {
 
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         self.inner.eval(batch, partition).map_err(|e| {
-            if e.query_contexts().is_empty() && WITH_CONTEXT.contains(&e.error_class().name()) {
+            let name = e.error_class().name();
+            let class = name.split('.').next().unwrap_or(name);
+            if e.query_contexts().is_empty() && WITH_CONTEXT.contains(&class) {
                 e.with_query_context(ErrorQueryContext::sql(
                     self.text.fragment(self.start..self.end),
                     self.start,

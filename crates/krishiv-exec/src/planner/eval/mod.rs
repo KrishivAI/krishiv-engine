@@ -421,7 +421,8 @@ fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
 pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     let compiled = compile_node(e, input)?;
     Ok(match &e.node {
-        ExprNode::Cast { .. } | ExprNode::Resolved(ResolvedExpr::Function(_)) => {
+        ExprNode::Cast { .. } => context::wrap(e, compiled, input.env),
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if context::has_context(f) => {
             context::wrap(e, compiled, input.env)
         }
         _ => compiled,

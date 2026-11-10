@@ -273,3 +273,46 @@ fn set_with_nested_comments_or_no_equals_redacts() {
         assert_eq!(redact_sql(sql).as_str(), expected, "{sql}");
     }
 }
+
+/// A plan carries a redacted text as its string and regions; the worker rebuilds it and quotes the
+/// same fragments for the same spans of the original (`RedactedSql::from_redacted_parts`).
+#[test]
+fn a_text_rebuilt_from_its_parts_quotes_the_same_fragments() {
+    let sql =
+        "SELECT a FROM t WITH ('password' = 'Canary7f3a9c', 'x' = 'y') WHERE CAST(b AS INT) > 0";
+    let r = redact_sql(sql);
+    assert!(!r.regions().is_empty());
+    let rebuilt = krishiv_common::redact::RedactedSql::from_redacted_parts(
+        r.as_str().to_owned(),
+        r.regions().to_vec(),
+    )
+    .unwrap();
+    for start in 0..sql.len() {
+        for end in start..=sql.len() {
+            assert_eq!(
+                rebuilt.fragment(start..end),
+                r.fragment(start..end),
+                "{start}..{end}"
+            );
+        }
+    }
+    let at = sql.find("CAST").unwrap();
+    assert_eq!(rebuilt.fragment(at..at + 14), "CAST(b AS INT)");
+}
+
+#[test]
+fn parts_that_no_redaction_could_make_are_refused() {
+    use krishiv_common::redact::RedactedSql;
+    let ok = vec![(2..4, 2..6), (8..9, 10..11)];
+    assert!(RedactedSql::from_redacted_parts("abcdefghijkl".to_owned(), ok).is_some());
+    for bad in [
+        vec![(2..4, 2..6), (3..5, 7..8)], // original ranges overlap
+        vec![(2..4, 4..6), (8..9, 3..5)], // redacted ranges out of order
+        vec![(4..4, 2..3)],               // an empty original range
+        vec![(0..2, 0..40)],              // past the redacted text
+    ] {
+        assert!(RedactedSql::from_redacted_parts("abcdefghijkl".to_owned(), bad).is_none());
+    }
+    // Not on a character boundary.
+    assert!(RedactedSql::from_redacted_parts("é".to_owned(), vec![(0..2, 1..2)]).is_none());
+}

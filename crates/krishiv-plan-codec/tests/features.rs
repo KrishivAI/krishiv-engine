@@ -40,6 +40,42 @@ fn an_unknown_binary_output_style_is_corrupt() {
     assert_eq!(plan.env().binary_output_style.as_deref(), Some("BASE64"));
 }
 
+/// SQL texts for run-time error contexts are ignorable: they add no feature, a plan carrying them
+/// round-trips, and regions no redaction could make are refused.
+#[test]
+fn sql_texts_add_no_feature_and_round_trip_with_their_regions() {
+    let mut m = message("limit");
+    assert!(m.features.is_empty());
+    m.env.as_mut().unwrap().sql_texts = vec![
+        pb::SourceText {
+            id: 0,
+            text: "SELECT 1/0".to_owned(),
+            regions: vec![],
+        },
+        pb::SourceText {
+            id: 7,
+            text: "SELECT *********(redacted) 1/0".to_owned(),
+            regions: vec![pb::RedactedRegion {
+                old_start: 7,
+                old_end: 14,
+                new_start: 7,
+                new_end: 26,
+            }],
+        },
+    ];
+    let plan = decode(&m.encode_to_vec()).unwrap();
+    let texts = &plan.env().sql_texts;
+    assert_eq!(texts.len(), 2);
+    assert_eq!((texts[0].id, texts[0].text.as_str()), (0, "SELECT 1/0"));
+    // The original's `1/0` starts at byte 15; in the redacted text it starts at 27.
+    assert_eq!(texts[1].text.fragment(15..18), "1/0");
+    assert_eq!(to_message(&plan).unwrap(), m);
+    assert!(plan_features(&plan).is_empty());
+
+    m.env.as_mut().unwrap().sql_texts[1].regions[0].new_end = 400;
+    corrupt(&m, "a SQL text with inconsistent redacted regions");
+}
+
 #[test]
 fn the_header_lists_exactly_the_features_in_use() {
     let m = message("window_ranking");
