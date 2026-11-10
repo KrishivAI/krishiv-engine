@@ -52,6 +52,8 @@
 //! they are tuned for clusters.
 
 use std::collections::HashMap;
+
+use crate::physical::ProjectItemPlan;
 use std::sync::Arc;
 
 use arrow_schema::DataType;
@@ -176,9 +178,68 @@ fn fuse_row_stages(roots: Vec<&mut PhysNode>) {
             *runtime = s.runtime_filters.clone();
             *row_stage = s.row_stage;
             s.row_stage_in_filter = true;
+        } else if let PhysNode::Filter {
+            input,
+            runtime,
+            row_stage,
+            ..
+        } = n
+            && runtime.is_empty()
+            && let PhysNode::Project {
+                input: below,
+                items,
+                ..
+            } = input.as_mut()
+            && let PhysNode::Scan(s) = below.as_mut()
+            && let Some(moved) = through_column_project(s, items)
+        {
+            *runtime = moved;
+            *row_stage = s.row_stage;
+            s.row_stage_in_filter = true;
         }
         stack.extend(n.children_mut());
     }
+}
+
+/// The scan's runtime filters renamed to the output names of the column-only `Project` between the scan and
+/// the `Filter` that takes over their row stage, or `None` when any item computes a value, a filter's column
+/// is not projected once under a unique name, or the scan does not qualify as for a `Filter` directly above it.
+fn through_column_project(
+    s: &crate::physical::ScanNode,
+    items: &[ProjectItemPlan],
+) -> Option<Vec<ScanRuntimeFilter>> {
+    if s.row_id || s.row_stage_in_filter || s.runtime_filters.is_empty() {
+        return None;
+    }
+    let mut named: Vec<(usize, String)> = Vec::with_capacity(items.len());
+    for item in items {
+        let ProjectItemPlan::Column { index, name } = item else {
+            return None;
+        };
+        let out = match name {
+            Some(n) => n.clone(),
+            None => s.projection.get(*index)?.0.first()?.clone(),
+        };
+        named.push((*index, out));
+    }
+    s.runtime_filters
+        .iter()
+        .map(|f| {
+            if f.column.0.len() != 1 {
+                return None;
+            }
+            let at = s.projection.iter().position(|c| *c == f.column)?;
+            let mut hits = named.iter().filter(|(i, _)| *i == at);
+            let (_, out) = hits.next()?;
+            if hits.next().is_some() || named.iter().filter(|(_, o)| o == out).count() != 1 {
+                return None;
+            }
+            Some(ScanRuntimeFilter {
+                column: ColumnPath::new(out.clone()),
+                ..f.clone()
+            })
+        })
+        .collect()
 }
 
 /// Hands each scan under `roots` the runtime filters joins publish to it, then moves the row stage of a scan

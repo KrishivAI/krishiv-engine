@@ -778,6 +778,55 @@ fn the_filter_above_a_scan_runs_its_row_stage() {
     assert_eq!(on, off, "{plan}");
 }
 
+fn fused_through_project(node: &krishiv_exec::physical::PhysNode) -> usize {
+    use krishiv_exec::physical::PhysNode;
+    let here = match node {
+        PhysNode::Filter { input, runtime, .. }
+            if !runtime.is_empty()
+                && matches!(input.as_ref(), PhysNode::Project { input: i, .. }
+                    if matches!(i.as_ref(), PhysNode::Scan(s) if s.row_stage_in_filter)) =>
+        {
+            1
+        }
+        _ => 0,
+    };
+    here + node
+        .children()
+        .into_iter()
+        .map(fused_through_project)
+        .sum::<usize>()
+}
+
+/// A column-only `Project` between the `Filter` and the scan does not stop the move: the filter's column
+/// is found under the project's output name, and the rows are those of a plan without runtime filters.
+#[test]
+fn the_row_stage_moves_through_a_column_only_project() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 31;
+    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 4000, 5));
+    write(dir.path(), "small.parquet", &table(&mut rng, 300, 4000, 5));
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let q = "SELECT x.kk, x.vv, s.v FROM (SELECT k64 AS kk, v AS vv FROM big) x \
+             JOIN small s ON x.kk = s.k64 WHERE x.vv > (SELECT max(v) FROM small) - 1000000";
+    configured(&mut t, MODES[0].1);
+    let mut off = rows(&run(&t.plan_sql(q).unwrap()).0);
+    off.sort();
+    configured(&mut t, MODES[1].1);
+    let plan = t.plan_sql(q).unwrap();
+    assert!(fused_through_project(plan.plan.root()) > 0, "{plan}");
+    let mut on = rows(&run(&plan).0);
+    on.sort();
+    assert_eq!(on, off, "{plan}");
+}
+
 /// `ORDER BY ... LIMIT` queries whose rows have one right answer: `v` breaks
 /// every tie. The first key is what a top-N bounds: NULLs on either side,
 /// NaN and signed zeros, decimals, strings, an `OFFSET`, a filter, and more
