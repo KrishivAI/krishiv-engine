@@ -136,5 +136,5 @@ fn copies(input: &Batch, indices: &UInt32Array) -> Result<Batch> {
                 .clone(),
         ),
     };
-    Batch::with_weights(data, weights)
+    Ok(Batch::with_weights(data, weights)?.with_split(input.split()))
 }

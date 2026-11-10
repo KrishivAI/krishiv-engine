@@ -883,3 +883,15 @@ fn union_all_children_number_their_splits_without_overlap() {
              SELECT id FROM range(0, 1000, 1, 64)))";
     assert_eq!(rows(&s, q), vec![vec!["2000".to_owned(), "128".to_owned()]]);
 }
+
+/// A seeded random above a generator draws by the split too (Generate keeps the batch's split).
+#[test]
+fn a_seeded_random_above_a_generator_draws_by_split_not_by_driver() {
+    let s = Session::new().unwrap();
+    let q = "SELECT md5(CAST(sort_array(collect_list(x)) AS STRING)) FROM \
+             (SELECT rand(7) AS x FROM (SELECT explode(array(1, 2)) AS e FROM range(50000)))";
+    let first = column(rows(&s, q));
+    for run in 0..5 {
+        assert_eq!(column(rows(&s, q)), first, "run {run}");
+    }
+}

@@ -390,7 +390,7 @@ impl Operator for Generate {
                     .clone(),
             ),
         };
-        let out = Batch::with_weights(data, weights)?;
+        let out = Batch::with_weights(data, weights)?.with_split(input.split());
         if more {
             // A full batch with rows of this input left: same input again.
             cur.pending = Some(pending);
