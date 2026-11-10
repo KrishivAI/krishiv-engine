@@ -526,3 +526,23 @@ async fn several_open_tabs_share_one_read_of_the_live_queries_a_period() {
         "6 tabs caused {reads} reads of the live queries; they should share one a period"
     );
 }
+
+/// The policy the Playwright page check serves (`ui/tests/fixture_server.py`) is the one the server sends: a
+/// page that passes the check must not need more than the real policy allows.
+#[tokio::test]
+async fn the_page_check_fixture_serves_the_servers_content_security_policy() {
+    let py = include_str!("../../../ui/tests/fixture_server.py");
+    let from = py.find("CSP = (").expect("CSP in fixture_server.py") + "CSP = (".len();
+    let to = from + py[from..].find("\n)").expect("end of CSP");
+    let fixture: String = py[from..to]
+        .lines()
+        .map(|l| l.trim().trim_matches('"'))
+        .collect();
+    let (addr, _) = start(false).await;
+    let (_, head, _) = request(addr, "GET", "/", true).await;
+    let sent = head
+        .lines()
+        .find_map(|l| l.strip_prefix("content-security-policy: "))
+        .expect("the server sends a content-security-policy");
+    assert_eq!(sent.trim(), fixture);
+}
