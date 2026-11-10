@@ -1030,3 +1030,23 @@ fn a_replayed_query_masks_literals_by_the_session_policy() {
     let texts = column_of(&s, "SELECT query_text FROM system.queries", 0);
     assert!(texts.iter().all(|t| !t.contains("12345")), "{texts:?}");
 }
+
+#[test]
+fn describe_lists_the_columns_of_a_system_table() {
+    let s = Session::new().unwrap();
+    let qualified = column_of(&s, "DESCRIBE TABLE system.memory", 0);
+    assert!(!qualified.is_empty());
+    assert_eq!(column_of(&s, "DESC system.memory", 0), qualified);
+    assert_eq!(column_of(&s, "DESCRIBE system.MEMORY", 0), qualified);
+    let types = column_of(&s, "DESCRIBE system.queries", 1);
+    assert!(types.iter().any(|t| t == "string"), "{types:?}");
+    run(&s, "USE system").unwrap();
+    assert_eq!(column_of(&s, "DESCRIBE memory", 0), qualified);
+    let e = run(&s, "DESCRIBE EXTENDED system.memory").unwrap_err();
+    assert!(
+        e.contains("UNSUPPORTED") || e.contains("not supported"),
+        "{e}"
+    );
+    let e = run(&s, "DESCRIBE system.nosuch").unwrap_err();
+    assert!(e.contains("TABLE_OR_VIEW_NOT_FOUND"), "{e}");
+}

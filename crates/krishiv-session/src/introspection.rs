@@ -869,6 +869,37 @@ impl Session {
             .collect())
     }
 
+    /// `DESCRIBE system.<table>`: the table's columns (name, type, no comment). The variants that
+    /// describe stored metadata (`EXTENDED`, `PARTITION`, `AS JSON`, one column) are refused: the
+    /// catalog is generated, so it has none.
+    async fn describe_system_table(
+        &self,
+        table: &str,
+        extended: bool,
+        partition: bool,
+        as_json: bool,
+        column: bool,
+        env: &crate::session::QueryEnv,
+    ) -> Result<DataFrame, KrishivError> {
+        if extended || partition || as_json || column {
+            return Err(unsupported(
+                "DESCRIBE variants other than the plain form of a system table",
+            ));
+        }
+        let plan = Arc::new(krishiv_plan::LogicalPlan::table(["system", table]));
+        let analysis = DataFrame::new(self.clone(), plan)
+            .analyzed_in(env.clone())
+            .await?;
+        let rows: Vec<Vec<Cell>> = analysis
+            .analyzed
+            .output
+            .iter()
+            .map(|c| vec![s(&c.name), s(c.data_type.catalog_string()), s("")])
+            .collect();
+        self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
+            .await
+    }
+
     /// `DESCRIBE ...`.
     pub(crate) async fn exec_describe(
         &self,
@@ -886,6 +917,29 @@ impl Session {
                 as_json,
                 ..
             } => {
+                // A table of the read-only `system` catalog: its columns, nothing stored.
+                let parts = crate::access::ddl_parts(table, &env)?;
+                let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
+                let system_table = match parts.as_slice() {
+                    [t] if in_system => Some(t.clone()),
+                    [c, t] if crate::system::is_system(c) => Some(t.clone()),
+                    _ => None,
+                }
+                .filter(|t| {
+                    crate::system::is_system_table(&["system".to_owned(), t.to_lowercase()])
+                });
+                if let Some(table) = system_table {
+                    return self
+                        .describe_system_table(
+                            &table.to_lowercase(),
+                            mode.is_some(),
+                            partition.is_some(),
+                            *as_json,
+                            !column.is_empty(),
+                            &env,
+                        )
+                        .await;
+                }
                 let name = self.table_name(table, &env)?;
                 let columns = self.columns_of_relation(&name).await?;
                 let temp = self.temp_entry_of(&name, &env)
