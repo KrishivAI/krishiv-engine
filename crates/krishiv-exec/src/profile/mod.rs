@@ -34,7 +34,7 @@ pub const PROFILE_VERSION: u64 = 1;
 /// costs, `query.scan_reads_in_flight_mean` and the `scan_read*` operator
 /// extras; 3: each pipeline's `max_slice_ns` and `stalls`). A reader ignores
 /// members it does not know, so a later minor still loads.
-pub const PROFILE_MINOR: u64 = 3;
+pub const PROFILE_MINOR: u64 = 4;
 
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -219,6 +219,9 @@ pub struct QueryProfile {
     /// `optimized` and `physical` the session fills; `None` when not asked
     /// for. Kept as data: this crate does not plan.
     pub planning: Option<serde_json::Value>,
+    /// The trace the query ran in (added in minor 4): an object of optional `trace_id` (32 hex digits)
+    /// and `span_id` (16 hex digits), set by the session; `None` when no trace was active.
+    pub trace: Option<serde_json::Value>,
 }
 
 impl QueryProfile {
@@ -230,6 +233,7 @@ impl QueryProfile {
             metrics,
             detailed,
             planning: None,
+            trace: None,
         }
     }
 

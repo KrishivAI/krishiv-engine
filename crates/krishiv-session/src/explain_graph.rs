@@ -760,6 +760,7 @@ mod tests {
             metrics,
             detailed: false,
             planning: None,
+            trace: None,
         };
         let text = mermaid_of_profile(&profile);
         assert!(text.contains("Scan t"), "{text}");
@@ -807,6 +808,7 @@ mod tests {
             metrics: sink_metrics,
             detailed: false,
             planning: None,
+            trace: None,
         };
         let text = dot_of_profile(&with_sink);
         assert!(text.contains("Result:"), "{text}");
@@ -834,6 +836,7 @@ mod tests {
             metrics: QueryMetrics::default(),
             detailed: true,
             planning: None,
+            trace: None,
         };
         assert_eq!(
             mermaid_of_profile(&profile),
@@ -850,6 +853,7 @@ mod tests {
             metrics: QueryMetrics::default(),
             detailed: true,
             planning: None,
+            trace: None,
         };
         assert_eq!(
             mermaid_of_profile(&profile),

@@ -79,6 +79,9 @@ impl QueryProfile {
         if let (Some(p), Some(o)) = (&self.planning, doc.as_object_mut()) {
             o.insert("planning".to_owned(), p.clone());
         }
+        if let (Some(t), Some(o)) = (&self.trace, doc.as_object_mut()) {
+            o.insert("trace".to_owned(), t.clone());
+        }
         doc
     }
 
@@ -157,11 +160,17 @@ impl QueryProfile {
             Some(p) if p.is_object() => Some(p.clone()),
             Some(_) => return Err(ProfileError::new("planning is not an object")),
         };
+        let trace = match o.get("trace") {
+            None | Some(Value::Null) => None,
+            Some(t) if t.is_object() => Some(t.clone()),
+            Some(_) => return Err(ProfileError::new("trace is not an object")),
+        };
         Ok(Self {
             plan,
             metrics,
             detailed,
             planning,
+            trace,
         })
     }
 }

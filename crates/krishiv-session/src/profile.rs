@@ -351,7 +351,9 @@ impl DataFrame {
         drop(stream);
         // Every driver has merged its counters once the query finished.
         query.finished().await;
-        Ok((out, QueryProfile::new(physical, query.metrics(), true)))
+        let mut profile = QueryProfile::new(physical, query.metrics(), true);
+        profile.trace = crate::telemetry::profile_trace(&self.session.state);
+        Ok((out, profile))
     }
 
     /// The plan at every stage (`EXPLAIN VERBOSE`): parsed, analyzed, after
