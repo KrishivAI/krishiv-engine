@@ -570,8 +570,10 @@ impl ProbeOp {
 }
 
 impl Operator for ProbeOp {
+    // A hash probe always needs a flush barrier (`needs_flush`), which already keeps its
+    // pipeline at one driver; the grace join's state is not lane-ordered, so it says no.
     fn lane_safe(&self) -> bool {
-        true
+        false
     }
 
     fn name(&self) -> &'static str {
