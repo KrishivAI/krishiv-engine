@@ -153,7 +153,7 @@ pub(crate) struct SqlArgs {
     #[arg(long, requires = "explain_analyze")]
     planning: bool,
     /// With --explain-analyze: print the profile as JSON for sharing outside the deployment,
-    /// without the principal, tags, session and trace ids. Every number and the plan are kept.
+    /// without the principal, tags, session and trace ids. Every number and the plan are kept, including the plan's literals and paths: review before sharing.
     #[arg(long, requires = "explain_analyze")]
     share: bool,
 }

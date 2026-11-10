@@ -254,7 +254,7 @@ impl QueryProfile {
 
     /// The profile for sharing outside the deployment (`--share`, a viewer download): without
     /// the principal and tags, and without the session and trace ids, which name who ran the
-    /// query. Every number and the plan are kept.
+    /// query. Every number and the plan are kept, including its literals and paths (not scrubbed).
     #[must_use]
     pub fn shareable(&self) -> Self {
         Self {
