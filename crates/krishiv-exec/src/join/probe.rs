@@ -662,6 +662,23 @@ impl Operator for ProbeOp {
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
+        // The scan below built this driver's row stage before this
+        // operator's state (the driver builds its source's first); a stage
+        // it cannot find is a broken contract, not a probe without one.
+        let select = match self.0.select.as_ref() {
+            None => None,
+            Some(spec) => {
+                let stage = match spec.row_stage.as_ref() {
+                    None => None,
+                    Some(r) => Some(r.consumer_stage(ctx.partition()).ok_or_else(|| {
+                        internal(
+                            "a scan handed its row stage to a probe that cannot find it".to_owned(),
+                        )
+                    })?),
+                };
+                Some(RowSelect::new(spec.predicate.clone(), stage))
+            }
+        };
         let dep = ctx
             .dependency()
             .ok_or_else(|| internal("hash join probe without its build".to_owned()))?;
@@ -679,19 +696,7 @@ impl Operator for ProbeOp {
             flush: Flush::default(),
             batch_size: ctx.query().config().batch_size.max(1),
             partition: ctx.partition(),
-            // The scan below built this driver's row stage before this
-            // operator's state (the driver builds its source's first).
-            select: self.0.select.as_ref().map(|spec| {
-                let stage = spec
-                    .row_stage
-                    .as_ref()
-                    .and_then(|r| r.consumer_stage(ctx.partition()));
-                debug_assert!(
-                    spec.row_stage.is_none() || stage.is_some(),
-                    "a scan handed its row stage to a probe that cannot find it"
-                );
-                RowSelect::new(spec.predicate.clone(), stage)
-            }),
+            select,
             selected: None,
         }))
     }

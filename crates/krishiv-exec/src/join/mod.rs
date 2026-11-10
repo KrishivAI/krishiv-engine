@@ -1302,4 +1302,31 @@ mod tests {
             &DataType::LargeBinary
         );
     }
+
+    /// A probe handed a row stage its scan never built fails in every
+    /// build (it once only `debug_assert!`ed, and ran without the stage).
+    #[test]
+    fn a_probe_without_its_handed_row_stage_fails() {
+        use krishiv_memory::{MemoryConfig, MemoryPool, SpillOwner, TreePool};
+
+        let root = TreePool::new(&MemoryConfig::default());
+        let query = crate::QueryContext::new(
+            crate::QueryId(1),
+            crate::WorkloadClass::Interactive,
+            crate::ExecConfig::default(),
+            root.child("q", None),
+        );
+        let exec = crate::TokioExecutor::new(&crate::ExecutorConfig::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let ctx =
+            crate::TaskContext::new(query, exec, SpillOwner::new(), crate::OperatorId(1), "p");
+        let join = HashJoin::try_new(spec(JoinType::Inner, 1, false))
+            .and_then(|j| j.with_row_stage(crate::operators::RuntimeFilters::new(Vec::new())))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let e = join.probe().local_state(&ctx).err().map(|e| e.to_string());
+        assert!(
+            e.as_deref().is_some_and(|m| m.contains("row stage")),
+            "{e:?}"
+        );
+    }
 }

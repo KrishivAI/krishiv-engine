@@ -170,13 +170,15 @@ fn explained_as(explain: &ExplainNode, depth: usize) -> bool {
 
 /// Replaces `node` (`depth` column-only projections over a `Filter`) with
 /// the filter's input, and `explain` (the same shape, [`explained_as`])
-/// with its input's line; returns the filter's line's detail.
+/// with its input's line; returns the filter's line's detail. `None` (and
+/// both unchanged) when either is not that shape: the fallible steps all run
+/// before the first change.
 fn take_filter_input(
     node: &mut PhysNode,
     explain: &mut ExplainNode,
     depth: usize,
 ) -> Option<String> {
-    let input = {
+    let slot = {
         let mut n = &mut *node;
         for _ in 0..depth {
             let PhysNode::Project { input, .. } = n else {
@@ -187,16 +189,22 @@ fn take_filter_input(
         let PhysNode::Filter { input, .. } = n else {
             return None;
         };
-        std::mem::replace(&mut **input, PhysNode::OneRow)
+        &mut **input
     };
-    *node = input;
-    let (child, detail) = {
+    let line = {
         let mut e = &mut *explain;
         for _ in 0..depth {
             e = e.children.first_mut()?;
         }
-        (e.children.pop()?, std::mem::take(&mut e.detail))
+        match e.children.as_slice() {
+            [_] => e,
+            _ => return None,
+        }
     };
+    let detail = std::mem::take(&mut line.detail);
+    let child = line.children.pop()?;
+    let input = std::mem::replace(slot, PhysNode::OneRow);
+    *node = input;
     *explain = child;
     Some(detail)
 }
@@ -281,5 +289,46 @@ fn probe_width(n: &PhysNode) -> Option<usize> {
         PhysNode::Project { items, .. } => column_only(n).map(|_| items.len()),
         PhysNode::Scan(s) => Some(s.projection.len()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use krishiv_plan::{Expr, Literal};
+
+    use super::*;
+
+    fn filter_over_one_row() -> PhysNode {
+        PhysNode::Filter {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            predicate: Arc::new(Expr::literal(Literal::Boolean(true))),
+            subqueries: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_misshapen_explain_leaves_the_node_unchanged() {
+        let mut node = filter_over_one_row();
+        let mut explain = ExplainNode::leaf("Filter", "true");
+        assert_eq!(take_filter_input(&mut node, &mut explain, 0), None);
+        assert_eq!(node, filter_over_one_row());
+        assert_eq!(explain.detail, "true");
+    }
+
+    #[test]
+    fn a_filter_and_its_line_give_way_to_their_input() {
+        let mut node = filter_over_one_row();
+        let mut explain = ExplainNode {
+            name: "Filter".to_owned(),
+            detail: "true".to_owned(),
+            children: vec![ExplainNode::leaf("OneRow", "")],
+        };
+        assert_eq!(
+            take_filter_input(&mut node, &mut explain, 0).as_deref(),
+            Some("true")
+        );
+        assert_eq!(node, PhysNode::OneRow);
+        assert_eq!(explain.name, "OneRow");
     }
 }
