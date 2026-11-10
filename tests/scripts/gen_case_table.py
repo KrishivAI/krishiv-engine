@@ -55,9 +55,7 @@ def lcase_runs(mapped: dict[int, int]) -> list[tuple[int, int, int, int]]:
         best_end, best_step = i, 1
         for step in (1, 2):
             j = i
-            while (
-                j + 1 < len(cps) and cps[j + 1] - cps[j] == step and mapped[cps[j + 1]] - cps[j + 1] == delta
-            ):
+            while j + 1 < len(cps) and cps[j + 1] - cps[j] == step and mapped[cps[j + 1]] - cps[j + 1] == delta:
                 j += 1
             if j > best_end:
                 best_end, best_step = j, step
