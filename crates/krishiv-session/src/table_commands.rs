@@ -47,6 +47,7 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
+use crate::access::refuse_secret_options;
 use crate::dataframe::DataFrame;
 use crate::functions::{col, expr, lit_null};
 use crate::query_fold::Admitted;
@@ -240,6 +241,24 @@ impl Session {
         )
     }
 
+    /// Refuses a table, view or SQL function in a schema with a default collation (`spark.sql.collation.schemaLevel.enabled`):
+    /// Krishiv does not apply the default to the new columns yet, and would type them `UTF8_BINARY`.
+    pub(crate) fn refuse_collated_namespace(&self, name: &TableName) -> Result<(), KrishivError> {
+        let collated = self
+            .state
+            .catalog
+            .store
+            .namespaces()
+            .into_iter()
+            .any(|(n, m)| n.eq_ignore_ascii_case(&name.namespace) && m.collation.is_some());
+        if collated {
+            return Err(unsupported(
+                "a table or view in a schema with a DEFAULT COLLATION",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn warehouse_dir(&self) -> Result<PathBuf, KrishivError> {
         let configured = crate::conf::get(&self.state.conf.snapshot(), "spark.sql.warehouse.dir");
         self.state
@@ -307,7 +326,15 @@ impl Session {
             }
             .into());
         }
+        let collation = match &n.collation {
+            Some(c) => {
+                let parts: Vec<&str> = c.parts.iter().map(|p| p.value.as_str()).collect();
+                Some(krishiv_types::Collation::parse(&parts.join("."))?.name())
+            }
+            None => None,
+        };
         let meta = NamespaceMeta {
+            collation,
             comment: n.comment.clone(),
             location: n.location.clone(),
             properties: options_of(&n.properties, original),
@@ -341,6 +368,13 @@ impl Session {
             AlterNamespaceAction::SetComment(c) => {
                 let c = c.clone();
                 Box::new(move |m| m.comment.clone_from(&c))
+            }
+            // Reaches here only with `spark.sql.collation.schemaLevel.enabled` (the parser refuses it
+            // otherwise).
+            AlterNamespaceAction::DefaultCollation(c) => {
+                let parts: Vec<&str> = c.parts.iter().map(|p| p.value.as_str()).collect();
+                let c = krishiv_types::Collation::parse(&parts.join("."))?.name();
+                Box::new(move |m| m.collation = Some(c.clone()))
             }
             _ => return Err(unsupported("this ALTER SCHEMA action")),
         };
@@ -435,7 +469,7 @@ impl Session {
         &self,
         v: &CreatePermanentView,
         original: &str,
-        ids: &[krishiv_sql::ast::Span],
+        (ids, written): (&[krishiv_sql::ast::Span], &[String]),
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         if v.global && v.using.is_none() {
@@ -463,6 +497,7 @@ impl Session {
             &env.config,
         );
         let name = self.table_name(&v.name, &env)?;
+        self.refuse_collated_namespace(&name)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
@@ -596,6 +631,9 @@ impl Session {
                 query_columns,
                 schema_mode,
                 identifier_spans: crate::identifier_clause::spans_within(ids, query.span),
+                written: crate::identifier_clause::written_within(
+                    original, ids, written, query.span,
+                ),
             }),
             layout: TableLayout::default(),
             column_stats_requested: false,
@@ -657,7 +695,7 @@ impl Session {
             query: query.clone(),
             span: v.span,
         };
-        self.create_temp_view(&view, true, ids).await
+        self.create_temp_view(&view, true, ids, None).await
     }
 
     /// `CREATE TEMPORARY VIEW name (col type, ...) USING format [OPTIONS (...)]`: a read of the
@@ -708,7 +746,7 @@ impl Session {
                 "datasource views without declared column types",
             ));
         }
-        let mut options = options_of(&v.options, original);
+        let mut options = options_of(refuse_secret_options(&v.options, original)?, original);
         let path_key = options
             .keys()
             .find(|k| k.eq_ignore_ascii_case("path"))
@@ -851,7 +889,7 @@ impl Session {
         &self,
         a: &AlterView,
         original: &str,
-        ids: &[krishiv_sql::ast::Span],
+        (ids, written): (&[krishiv_sql::ast::Span], &[String]),
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let frozen_path = env.catalog.sql_path_snapshot();
@@ -928,6 +966,9 @@ impl Session {
                     query_columns,
                     schema_mode,
                     identifier_spans: crate::identifier_clause::spans_within(ids, query.span),
+                    written: crate::identifier_clause::written_within(
+                        original, ids, written, query.span,
+                    ),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {
@@ -1296,6 +1337,7 @@ impl Session {
         let provider_written = self.written_provider(using.clone());
         let provider = self.provider_of(using)?;
         let name = self.table_name(&t.name, &env)?;
+        self.refuse_collated_namespace(&name)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
@@ -1335,8 +1377,7 @@ impl Session {
             }
             .into());
         }
-        crate::access::refuse_secret_options(&t.options, original)?;
-        let mut options = options_of(&t.options, original);
+        let mut options = options_of(refuse_secret_options(&t.options, original)?, original);
         let properties = options_of(&t.tblproperties, original);
         // A `path` option is the table's location, as in Spark.
         let path_key = options
@@ -1678,6 +1719,7 @@ impl Session {
             written: String::new(),
             bare: false,
         };
+        self.refuse_collated_namespace(&name)?;
         table.layout = crate::partitions::table_layout(
             &name,
             &mut table.columns,
@@ -1762,6 +1804,7 @@ impl Session {
             .into());
         }
         let name = self.table_name(&t.name, &env)?;
+        self.refuse_collated_namespace(&name)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
@@ -2437,6 +2480,8 @@ impl Session {
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
         self.check_namespace(name)?;
+        // Before an overwrite drops the old table: the create below would refuse a collated schema too.
+        self.refuse_collated_namespace(name)?;
         if spec.options.values().any(|v| v.as_plain().is_none()) {
             return Err(unsupported("secret table options"));
         }

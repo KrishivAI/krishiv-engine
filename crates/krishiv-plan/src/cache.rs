@@ -388,6 +388,11 @@ impl Encoder {
                 self.debug(to);
                 self.debug(mode);
             }
+            ExprNode::StoredField { expr, comment } => {
+                self.tag("stored_field");
+                self.expr(expr, bias);
+                self.debug(comment);
+            }
             ExprNode::Collate {
                 expr,
                 collation,
