@@ -1535,15 +1535,7 @@ impl Expander<'_> {
                     (None, None) => return Ok(plan),
                 }
             }
-            // A two-part name is a namespace of the CURRENT catalog; `system` has none, so it is not a
-            // stored view (and is authorized as `system.<ns>.<table>`, never as the session catalog's).
-            [_, _]
-                if self.view_namespace.is_none()
-                    && crate::system::is_system(&self.catalog.current_catalog()) =>
-            {
-                return Ok(plan);
-            }
-            [namespace, table] => (namespace.clone(), table),
+            [namespace, table] if self.names_a_stored_namespace() => (namespace.clone(), table),
             [catalog, namespace, table] if catalog.eq_ignore_ascii_case(CATALOG) => {
                 (namespace.clone(), table)
             }

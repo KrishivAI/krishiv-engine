@@ -56,3 +56,13 @@ fn collect_scans_in<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>, seen: &m
     plan.for_each_expr(&mut |e| in_expr(e, out, seen));
     plan.for_each_child(&mut |c| collect_scans_in(c, out, seen));
 }
+
+impl super::Expander<'_> {
+    /// Whether a two-part name is `namespace.table` of the session catalog's store: inside a
+    /// stored view always, outside one only while the current catalog is the session catalog. A
+    /// two-part name is a namespace of the CURRENT catalog, and `system` has none, so there it is
+    /// no stored view (and it is authorized as `system.<ns>.<table>`, never as the store's).
+    pub(super) fn names_a_stored_namespace(&self) -> bool {
+        self.view_namespace.is_some() || !crate::system::is_system(&self.catalog.current_catalog())
+    }
+}

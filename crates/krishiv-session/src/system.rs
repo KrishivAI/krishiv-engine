@@ -1570,6 +1570,13 @@ impl Session {
         Ok(namespace)
     }
 
+    /// The permit of a query that reads only `system.*` (never queued behind the load it
+    /// inspects): it starts at once, so its row has a start time.
+    pub(crate) fn exempt_permit(&self, log_id: &str) -> crate::admission::Permit {
+        self.state.queries.mark_started(log_id);
+        crate::admission::Permit::unlimited()
+    }
+
     /// Whether `name` (bare, as written) is a temporary view or table of the session, which
     /// resolves before any catalog.
     pub(crate) fn is_temp_name(&self, name: &str, env: &crate::session::QueryEnv) -> bool {
