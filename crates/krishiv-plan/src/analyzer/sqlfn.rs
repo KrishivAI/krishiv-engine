@@ -63,8 +63,8 @@ use super::exprs::{
 use super::resolve::{Attr, Rel, Resolver};
 use crate::walk::{Node, visit_distinct};
 use crate::{
-    AttrId, BoundColumn, CastMode, Expr, ExprNode, FunctionCall, LogicalPlan, Origin, PlanNode,
-    ResolvedExpr, ResolvedFunction, SourceId,
+    AttrId, BoundColumn, CastMode, Expr, ExprNode, FunctionCall, FunctionKind, LogicalPlan, Origin,
+    PlanNode, ResolvedExpr, ResolvedFunction, SourceId,
 };
 
 /// A parameter of a [`SqlFunction`].
@@ -980,14 +980,20 @@ fn qualified(mut rel: super::resolve::Rel, name: &str) -> super::resolve::Rel {
 /// [`ResolvedExpr::EvalMode`] unless it is a leaf that has no mode, computes an aggregate or a
 /// window (those read their operator's mode, a recorded divergence), or has no known type.
 fn pin_mode(b: Bound, ansi: bool) -> Bound {
+    // An aggregate or window call itself reads its operator's mode; an expression computed
+    // over one is wrapped like any other.
     let leaf = matches!(
         &b.expr.node,
         ExprNode::Literal(_)
+            | ExprNode::Window(_)
             | ExprNode::Resolved(
                 ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_)
             )
+    ) || matches!(
+        &b.expr.node,
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind != FunctionKind::Scalar
     );
-    let (Some(data_type), None, None, false) = (b.ty.data_type.clone(), b.agg, b.win, leaf) else {
+    let (Some(data_type), false) = (b.ty.data_type.clone(), leaf) else {
         return b;
     };
     let nullable = b.ty.nullable;

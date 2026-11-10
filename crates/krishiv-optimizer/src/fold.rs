@@ -486,12 +486,29 @@ pub(crate) fn fold_plan(p: Arc<LogicalPlan>, ctx: &UdfFoldCtx<'_>) -> Arc<Logica
         return p;
     }
     let out = p.map_expressions(|e| {
+        // A UDF under a pinned `EvalMode` of another ANSI mode would fold with the query's:
+        // such an expression is left for execution (T184).
+        if pins_other_mode(&e, ctx.ansi) {
+            return Ok(e);
+        }
         e.transform_up(&mut |x| Ok::<_, std::convert::Infallible>(fold_udf(&x, ctx)))
     });
     match out {
         Ok(v) => v,
         Err(never) => match never {},
     }
+}
+
+/// Whether `e` holds an `EvalMode` pinned to an ANSI mode other than `ansi`.
+fn pins_other_mode(e: &Expr, ansi: bool) -> bool {
+    if let ExprNode::Resolved(ResolvedExpr::EvalMode { ansi: pinned, .. }) = &e.node
+        && *pinned != ansi
+    {
+        return true;
+    }
+    let mut found = false;
+    e.for_each_child(&mut |c| found = found || pins_other_mode(c, ansi));
+    found
 }
 
 /// One UDF folding step: a deterministic scalar session-UDF call whose

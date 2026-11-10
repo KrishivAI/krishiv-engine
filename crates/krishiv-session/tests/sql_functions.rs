@@ -1376,3 +1376,47 @@ fn a_body_evaluates_in_the_ansi_mode_it_was_created_under() {
     ok(&s, "SET spark.sql.ansi.enabled=true");
     assert_eq!(ok(&s, "SELECT * FROM off_tab(0)"), vec!["NULL".to_owned()]);
 }
+
+/// T184 review B1-B3: a pinned body is not mixed with the query's mode by common
+/// subexpression elimination, grouping by a flipped call works, and an expression computed over
+/// an aggregate argument keeps the caller's mode.
+#[test]
+fn pinned_bodies_survive_the_optimizer_and_grouping() {
+    let s = session();
+    ok(&s, "SET spark.sql.ansi.enabled=true");
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION on_add(x INT) RETURNS INT RETURN x + 1",
+    );
+    ok(&s, "SET spark.sql.ansi.enabled=false");
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION off_add(x INT) RETURNS INT RETURN x + 1",
+    );
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION off_div2(x INT) RETURNS DOUBLE RETURN 1 / x",
+    );
+    // B1, lenient caller: the strict body raises although the caller's own `big + 1` wraps.
+    let e = fails(
+        &s,
+        "SELECT on_add(0 * id + 2147483647), 0 * id + 2147483647 + 1 FROM people",
+    );
+    assert_eq!(class_and_params(&e).0, "ARITHMETIC_OVERFLOW");
+    // B1, strict caller: two equal calls of a lenient body wrap, they do not raise.
+    ok(&s, "SET spark.sql.ansi.enabled=true");
+    let rows = ok(
+        &s,
+        "SELECT off_add(0 * id + 2147483647), off_add(0 * id + 2147483647) FROM people",
+    );
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    // B2: grouping by a call whose body runs in the other mode.
+    let rows = ok(&s, "SELECT off_div2(id) FROM people GROUP BY off_div2(id)");
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    // B3: an expression over an aggregate in the argument keeps the caller's (strict) mode.
+    let e = fails(
+        &s,
+        "SELECT off_add(cast(max(0 * id + 2147483647) AS INT) + 1) FROM people",
+    );
+    assert_eq!(class_and_params(&e).0, "ARITHMETIC_OVERFLOW");
+}
