@@ -1679,24 +1679,199 @@ fn msck_repair_drop_forgets_vanished_partitions_in_one_log_entry() {
     assert_eq!(rows(&s, "select cast(a as string) from pv"), ["3"]);
 }
 
-/// Spark's `AlterTableDropPartitionCommand` drops the column statistics (`updateTableStats`); the engine refuses
-/// `DROP PARTITION`, so the statistics a refused drop leaves are still the table's.
+/// `ALTER TABLE .. DROP PARTITION` (Spark 4.2.0, krishiv-internal `research/spark/partition-followups/probe.{py,out}`):
+/// values are cast to the column types, every spec must match a partition exactly (a partial one is not found),
+/// all specs are checked before any is dropped, `IF EXISTS` skips the missing ones, a managed table's
+/// directories go, and the column statistics are dropped (`updateTableStats`).
 #[test]
-fn drop_partition_is_refused_and_keeps_the_column_statistics() {
+fn drop_partition_drops_exact_partitions_of_a_managed_table() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     run(
         &s,
-        "create table ds(a int, p int) using parquet partitioned by (p)",
+        "create table c(x int, p int, s string) using parquet partitioned by (p, s)",
     );
-    run(&s, "insert into ds values (1,1),(2,2)");
-    run(&s, "analyze table ds compute statistics for columns a");
-    let stats = rows(&s, "describe extended ds a");
-    assert!(stats.iter().any(|r| r == "min\t1"), "{stats:?}");
+    run(
+        &s,
+        "insert into c values (1,1,'a'),(2,1,'b'),(3,2,'a'),(4,3,'c')",
+    );
+    run(&s, "analyze table c compute statistics for columns x");
+    let root = dir.path().join("c");
+    run(&s, "alter table c drop partition (p='01', s='a')");
     assert_eq!(
-        class(&s, "alter table ds drop partition (p=1)"),
+        rows(&s, "show partitions c"),
+        ["p=1/s=b", "p=2/s=a", "p=3/s=c"]
+    );
+    assert!(!root.join("p=1/s=a").exists());
+    assert!(root.join("p=1/s=b").is_dir());
+    assert_eq!(
+        rows(&s, "select concat_ws('|', x, p, s) from c order by x"),
+        ["2|1|b", "3|2|a", "4|3|c"]
+    );
+    assert!(
+        rows(&s, "describe extended c x")
+            .iter()
+            .any(|r| r == "min\tNULL"),
+        "{:?}",
+        rows(&s, "describe extended c x")
+    );
+    assert_eq!(
+        params(&s, "alter table c drop partition (p=9, s='z')"),
+        [
+            "partitionList=PARTITION (`p` = 9, `s` = z)",
+            "tableName=`default`.`c`"
+        ]
+    );
+    run(&s, "alter table c drop if exists partition (p=9, s='z')");
+    assert_eq!(
+        params(&s, "alter table c drop partition (p=1)"),
+        [
+            "partitionList=PARTITION (`p` = 1)",
+            "tableName=`default`.`c`"
+        ]
+    );
+    // One missing spec drops nothing; with IF EXISTS the others go.
+    assert_eq!(
+        class(
+            &s,
+            "alter table c drop partition (p=2, s='a'), partition (p=9, s='z')"
+        ),
+        "PARTITIONS_NOT_FOUND"
+    );
+    assert_eq!(
+        rows(&s, "show partitions c"),
+        ["p=1/s=b", "p=2/s=a", "p=3/s=c"]
+    );
+    run(
+        &s,
+        "alter table c drop if exists partition (p=2, s='a'), partition (p=9, s='z')",
+    );
+    assert_eq!(rows(&s, "show partitions c"), ["p=1/s=b", "p=3/s=c"]);
+    assert_eq!(
+        class(&s, "alter table c drop partition (q=1)"),
+        "PARTITIONS_NOT_FOUND"
+    );
+    assert_eq!(
+        class(&s, "alter table c drop partition (p='abc')"),
+        "CAST_INVALID_INPUT"
+    );
+    run(&s, "alter table c drop partition (p=3, s='c') purge");
+    assert_eq!(rows(&s, "show partitions c"), ["p=1/s=b"]);
+    assert!(!root.join("p=3/s=c").exists());
+    assert_eq!(rows(&s, "select cast(x as string) from c"), ["2"]);
+    run(&s, "create table n(x int) using parquet");
+    assert_eq!(
+        class(&s, "alter table n drop partition (p=1)"),
+        "_LEGACY_ERROR_TEMP_1251"
+    );
+}
+
+/// Spark keeps an external table's files of a dropped partition and stops reading them; the engine's reads refuse
+/// a directory the catalog does not know, so the drop is refused and changes nothing.
+#[test]
+fn drop_partition_of_an_external_table_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let ext = tempfile::tempdir().unwrap();
+    run(
+        &s,
+        &format!(
+            "create table e(x int, p int) using parquet partitioned by (p) location '{}'",
+            ext.path().display()
+        ),
+    );
+    run(&s, "insert into e values (1,1),(2,2)");
+    assert_eq!(
+        class(&s, "alter table e drop partition (p=1)"),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
-    assert_eq!(rows(&s, "describe extended ds a"), stats);
-    assert_eq!(rows(&s, "show partitions ds"), ["p=1", "p=2"]);
+    assert_eq!(rows(&s, "show partitions e"), ["p=1", "p=2"]);
+    // A missing spec is still reported first, and IF EXISTS over nothing changes nothing.
+    assert_eq!(
+        class(&s, "alter table e drop partition (p=9)"),
+        "PARTITIONS_NOT_FOUND"
+    );
+    run(&s, "alter table e drop if exists partition (p=9)");
+}
+
+/// The commit log forgets a dropped partition's files in one entry, so a read of the table does not list them.
+#[test]
+fn drop_partition_removes_the_files_from_the_log_in_one_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table dl(a int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into dl values (1,1),(2,2),(3,3)");
+    let root = dir.path().join("dl");
+    let before = log_entries(&root);
+    run(&s, "alter table dl drop partition (p=1), partition (p=2)");
+    assert_eq!(log_entries(&root), before + 1);
+    assert_eq!(rows(&s, "select cast(a as string) from dl"), ["3"]);
+    // A cached read sees the drop.
+    run(&s, "cache table dl");
+    run(&s, "alter table dl drop partition (p=3)");
+    assert_eq!(
+        rows(&s, "select cast(a as string) from dl"),
+        Vec::<String>::new()
+    );
+}
+
+/// `ADD PARTITION` and the static values of `INSERT .. PARTITION` are cast to the partition column types
+/// (`castPartitionSpec`, Spark 4.2.0): `'007'` is `7`, `'2024-1-5'` is `2024-01-05`, `'abc'` and `3.7` for an INT
+/// are `CAST_INVALID_INPUT`; under `storeAssignmentPolicy=LEGACY` a value the cast makes NULL is the default
+/// partition.
+#[test]
+fn added_and_inserted_partition_values_are_cast_to_their_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table a(x int, p int, d date) using parquet partitioned by (p, d)",
+    );
+    run(&s, "alter table a add partition (p='007', d='2024-01-05')");
+    assert_eq!(
+        class(&s, "alter table a add partition (p='abc', d='2024-01-05')"),
+        "CAST_INVALID_INPUT"
+    );
+    run(&s, "alter table a add partition (p=8, d='2024-1-5')");
+    assert_eq!(
+        class(&s, "alter table a add partition (p='7', d='2024-01-05')"),
+        "PARTITIONS_ALREADY_EXIST"
+    );
+    run(
+        &s,
+        "alter table a add if not exists partition (p='7', d='2024-01-05')",
+    );
+    assert_eq!(
+        rows(&s, "show partitions a"),
+        ["p=7/d=2024-01-05", "p=8/d=2024-01-05"]
+    );
+    assert!(dir.path().join("a/p=7/d=2024-01-05").is_dir());
+    run(&s, "set spark.sql.storeAssignmentPolicy=LEGACY");
+    run(&s, "alter table a add partition (p='abc', d='2024-01-06')");
+    assert_eq!(
+        rows(&s, "show partitions a"),
+        [
+            "p=7/d=2024-01-05",
+            "p=8/d=2024-01-05",
+            "p=__HIVE_DEFAULT_PARTITION__/d=2024-01-06"
+        ]
+    );
+    run(&s, "set spark.sql.storeAssignmentPolicy=ANSI");
+    run(
+        &s,
+        "create table b(x int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into b partition (p='007') select 1");
+    for v in ["'abc'", "3.7"] {
+        assert_eq!(
+            class(&s, &format!("insert into b partition (p={v}) select 2")),
+            "CAST_INVALID_INPUT"
+        );
+    }
+    assert_eq!(rows(&s, "show partitions b"), ["p=7"]);
+    assert_eq!(rows(&s, "select concat_ws('|', x, p) from b"), ["1|7"]);
+    assert!(dir.path().join("b/p=7").is_dir());
 }

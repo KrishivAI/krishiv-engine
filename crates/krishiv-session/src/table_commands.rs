@@ -1110,26 +1110,11 @@ impl Session {
                 }
                 return Err(table_operation(&name, "DROP COLUMN"));
             }
-            AlterTableAction::AddPartition {
-                if_not_exists,
-                parts,
-                ..
-            } => {
-                changed = self
-                    .add_partitions(&table, parts, *if_not_exists, original)
-                    .await?;
-            }
-            AlterTableAction::SetPartitionLocation {
-                partition,
-                location,
-                ..
-            } => {
-                changed = self
-                    .set_partition_location(&table, partition, location, original)
-                    .await?;
-            }
-            AlterTableAction::RenamePartition { from, to, .. } => {
-                changed = self.rename_partition(&table, [from, to], original).await?;
+            AlterTableAction::AddPartition { .. }
+            | AlterTableAction::SetPartitionLocation { .. }
+            | AlterTableAction::RenamePartition { .. }
+            | AlterTableAction::DropPartition { .. } => {
+                changed = self.alter_partitions(&table, &a.action, original).await?;
             }
             AlterTableAction::SetTblProperties(props) => {
                 // The `comment` property is the table comment (`AlterTableSetPropertiesCommand`); the
@@ -1167,6 +1152,10 @@ impl Session {
         if !self.state.catalog.store.replace_table(&table, changed) {
             return Err(concurrent_change(&name));
         }
+        // A change alters what a read of the table returns: its cached relations and results go.
+        self.state
+            .cache
+            .invalidate_table(&format!("{}.{}", name.namespace, name.name));
         self.empty_frame().await
     }
 

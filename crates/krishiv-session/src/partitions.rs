@@ -34,7 +34,7 @@ use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::Literal;
 use krishiv_plan::analyzer::{Privilege, Securable, authorize};
 use krishiv_sql::StatementClass;
-use krishiv_sql::ast::{BucketSpec, Expr, PartitionSpec, PartitionWithLocation};
+use krishiv_sql::ast::{AlterTableAction, BucketSpec, Expr, PartitionSpec, PartitionWithLocation};
 use krishiv_types::DataType;
 
 use crate::dataframe::DataFrame;
@@ -605,10 +605,13 @@ impl Session {
             }
             .into());
         }
-        Ok(normalized
+        let statics: Vec<(String, String)> = normalized
             .into_iter()
             .filter_map(|(k, v)| v.map(|v| (k, v)))
-            .collect())
+            .collect();
+        // The static values are cast to their columns' types as an ADD PARTITION's are (Spark 4.2.0:
+        // `PARTITION (p='007')` writes `p=7`, `'abc'` is `CAST_INVALID_INPUT`).
+        self.typed_partition_spec(table, &statics).await
     }
 
     /// `MSCK REPAIR TABLE name [ADD | DROP | SYNC PARTITIONS]` (`RepairTableCommand`): `DROP` (and `SYNC`, first)
@@ -964,6 +967,131 @@ impl Session {
         Ok(changed)
     }
 
+    /// The partition actions of `ALTER TABLE`: the catalog entry to swap in.
+    pub(crate) async fn alter_partitions(
+        &self,
+        table: &Arc<CatalogTable>,
+        action: &AlterTableAction,
+        original: &str,
+    ) -> Result<CatalogTable, KrishivError> {
+        match action {
+            AlterTableAction::AddPartition {
+                if_not_exists,
+                parts,
+                ..
+            } => {
+                self.add_partitions(table, parts, *if_not_exists, original)
+                    .await
+            }
+            AlterTableAction::SetPartitionLocation {
+                partition,
+                location,
+                ..
+            } => {
+                self.set_partition_location(table, partition, location, original)
+                    .await
+            }
+            AlterTableAction::RenamePartition { from, to, .. } => {
+                self.rename_partition(table, [from, to], original).await
+            }
+            AlterTableAction::DropPartition {
+                if_exists, specs, ..
+            } => {
+                self.drop_partitions(table, specs, *if_exists, original)
+                    .await
+            }
+            _ => Err(internal("not a partition action".to_owned())),
+        }
+    }
+
+    /// `ALTER TABLE name DROP [IF EXISTS] PARTITION (...), ... [PURGE]` (`AlterTableDropPartitionCommand` over
+    /// `InMemoryCatalog.dropPartitions`, Spark 4.2.0): every spec names every partition column with a value cast to
+    /// its type; a spec the catalog lacks (a partial one too) is `PARTITIONS_NOT_FOUND` unless `IF EXISTS`, and
+    /// is checked before anything is dropped. A managed table's partition directories are deleted (`PURGE` changes
+    /// nothing without a trash). Spark keeps an external table's files and stops reading them; reads here refuse a
+    /// directory the catalog does not know rather than skip it, so an external table's drop is refused. Column
+    /// statistics are dropped. The caller swaps the catalog entry returned here.
+    pub(crate) async fn drop_partitions(
+        &self,
+        table: &Arc<CatalogTable>,
+        specs: &[PartitionSpec],
+        if_exists: bool,
+        original: &str,
+    ) -> Result<CatalogTable, KrishivError> {
+        require_partition_provider(table, "ALTER TABLE DROP PARTITION")?;
+        let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+        let mut drop: Vec<Vec<(String, String)>> = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let written = self.written_spec(spec, original).await?;
+            let normalized = normalize_spec(table, &written, case_sensitive)?;
+            let values: Vec<(String, String)> = normalized
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        v.clone()
+                            .unwrap_or_else(|| krishiv_io::partition::DEFAULT_PARTITION.to_owned()),
+                    )
+                })
+                .collect();
+            let typed = self.typed_partition_spec(table, &values).await?;
+            let exact = typed.len() == table.layout.partition_columns.len()
+                && find_partition(table, &typed).is_some();
+            if !exact {
+                if if_exists {
+                    continue;
+                }
+                return Err(PartitionsNotFound {
+                    partition_list: spec_text(&typed),
+                    table_name: db_table(table),
+                }
+                .into());
+            }
+            if !drop.contains(&typed) {
+                drop.push(typed);
+            }
+        }
+        let mut changed = (**table).clone();
+        let mut gone: Vec<CatalogPartition> = Vec::with_capacity(drop.len());
+        changed.layout.partitions.retain(|p| {
+            let hit = drop.iter().any(|s| s.iter().all(|kv| p.spec.contains(kv)));
+            if hit {
+                gone.push(p.clone());
+            }
+            !hit
+        });
+        if gone.is_empty() {
+            return Ok(changed);
+        }
+        if !table.managed {
+            return Err(unsupported(
+                "ALTER TABLE ... DROP PARTITION of an external table",
+            ));
+        }
+        changed.column_stats.clear();
+        {
+            // The log forgets the files first, then the directories go: a lost race or a failed commit changes
+            // nothing, and a crash in between leaves directories no read lists (reads follow the log and the
+            // registered partitions), which a rerun of the statement reports as not found.
+            let moves: Vec<(PathBuf, Option<PathBuf>)> =
+                gone.iter().map(|p| (p.location.clone(), None)).collect();
+            self.relog_partitions(&table.location, &moves).await?;
+            for p in &gone {
+                match std::fs::remove_dir_all(&p.location) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(internal(format!(
+                            "cannot delete {}: {e}",
+                            p.location.display()
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(changed)
+    }
+
     /// `ALTER TABLE name ADD [IF NOT EXISTS] PARTITION (...) [LOCATION '...'] ...`.
     pub(crate) async fn add_partitions(
         &self,
@@ -980,6 +1108,7 @@ impl Session {
         for part in parts {
             let written = self.written_spec(&part.spec, original).await?;
             let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
+            let spec = self.typed_partition_spec(table, &spec).await?;
             let location = match &part.location {
                 Some(l) => qualified(self, l)?,
                 None => partition_path(&table.location, &ordered(table, &spec)),
