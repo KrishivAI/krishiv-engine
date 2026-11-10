@@ -1,5 +1,0 @@
-# Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
-# (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
-# +25 lines over 2000: the spark.sql.collation.schemaLevel.enabled switch and its lookup entry (row 14 batch B-6; the registry is a flat list of keys)
-# +8 lines over 2025: the krishiv.exec.join.buildProjection registry and lookup entries (the entry itself lives in config/build_projection.rs; the registry is a flat list of keys)
-2033 crates/krishiv-common/src/config/registry.rs

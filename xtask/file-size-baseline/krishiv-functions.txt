@@ -1,4 +1,0 @@
-# Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
-# (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
-# +14: nth_value refuses an interval or timestamp offset as UNEXPECTED_INPUT_TYPE before its value check (T025 rest)
-2099 crates/krishiv-functions/src/registry/defs.rs
