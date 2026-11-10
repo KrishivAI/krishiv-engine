@@ -330,12 +330,18 @@ impl Resolver<'_> {
             let mut key = |e: &Arc<Expr>| semantic_key(e, &mut memo);
             let value = &call_kids[0].expr;
             // A collated value reads through the carrier cast of the signature: the written value
-            // is what `DISTINCT` and the ordering compare.
+            // is what `DISTINCT` and the ordering compare. Only a collated one: a `DOUBLE`,
+            // `FLOAT` or `TIMESTAMP` value is still an unsafe cast of its ordering.
             let written = &kids[0].expr;
+            let collated = kids[0]
+                .ty
+                .data_type
+                .as_ref()
+                .is_some_and(DataType::contains_collation);
             let same = orders.len() == 1
-                && orders
-                    .first()
-                    .is_some_and(|o| key(&o.expr) == key(value) || key(&o.expr) == key(written));
+                && orders.first().is_some_and(|o| {
+                    key(&o.expr) == key(value) || (collated && key(&o.expr) == key(written))
+                });
             if !same {
                 let cast_of = match &call_kids[0].expr.node {
                     ExprNode::Cast { expr, to, .. }
