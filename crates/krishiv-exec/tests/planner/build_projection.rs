@@ -10,9 +10,11 @@ use super::tpch::{Order, TABLES, Tpch, parquet_files_with, sql};
 
 const OFF: (&str, &str) = ("krishiv.exec.join.buildProjection", "false");
 
-/// 240 rows over keys 0 to 11, with NULLs in every other column.
+/// 240 rows over keys 0 to 11, with NULLs in every other column, and one row
+/// of key 99 (`w` holds none) whose `i` overflows `i + i`: a build row that
+/// matches no probe row, which the join never emits.
 fn many() -> Vec<Row> {
-    (0..240_i64)
+    let mut rows: Vec<Row> = (0..240_i64)
         .map(|n| {
             (
                 n % 12,
@@ -21,7 +23,9 @@ fn many() -> Vec<Row> {
                 (n % 3 != 0).then(|| u8::try_from(n % 9).unwrap()),
             )
         })
-        .collect()
+        .collect();
+    rows.push((99, Some(i32::MAX), Some(1), Some(0)));
+    rows
 }
 
 /// Every key once, and two keys `f` does not hold.
@@ -41,7 +45,10 @@ const FIRES: [&str; 4] = [
 ];
 
 /// Each stays above the join, for the reason in its comment.
-const STAYS: [&str; 4] = [
+const STAYS: [&str; 5] = [
+    // Integer addition can overflow under ANSI: computed on the unmatched
+    // build row (key 99) it would raise where the join returns no row.
+    "SELECT w.wk, f.i + f.i FROM w JOIN f ON w.wk = f.k",
     // `d` is still read above: the sum would free only `i` (4 bytes for 8).
     "SELECT w.wk, f.d + f.i, f.d FROM w JOIN f ON w.wk = f.k",
     // A `decimal(21,2)` product (16 bytes) frees only 12.
