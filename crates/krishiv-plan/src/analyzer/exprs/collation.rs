@@ -615,6 +615,34 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        // The two-argument trim family rejects an accent-insensitive ICU collation: Spark names
+        // the source as the first parameter and prints the call as `TRIM(side chars FROM src)`.
+        if n == 2
+            && matches!(name.as_str(), "trim" | "ltrim" | "rtrim" | "btrim")
+            && matches!(
+                chosen.map(Collation::family),
+                Some(CollationFamily::Icu { ai: true, .. })
+            )
+        {
+            let (src, chars) = if name == "btrim" { (0, 1) } else { (1, 0) };
+            let side = match name.as_str() {
+                "ltrim" => "LEADING",
+                "rtrim" => "TRAILING",
+                _ => "BOTH",
+            };
+            let zone = self.ctx.conf.session_zone;
+            let shown = |i: usize| pretty(&kids[i].shown(), zone);
+            return Err(AnalysisError::new(
+                DatatypeMismatchUnexpectedInputType {
+                    sql_expr: format!("\"TRIM({side} {} FROM {})\"", shown(chars), shown(src)),
+                    param_index: coerce::ordinal(0),
+                    required_type: "\"STRING\"".to_owned(),
+                    input_sql: format!("\"{}\"", shown(src)),
+                    input_type: coerce::quoted_type(kids[src].ty.data_type.as_ref()),
+                },
+                e.origin,
+            ));
+        }
         let mut rewrite = None;
         if let Some(c) = chosen
             && !c.is_utf8_binary()

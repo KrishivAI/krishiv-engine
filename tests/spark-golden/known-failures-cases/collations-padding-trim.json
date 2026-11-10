@@ -3,12 +3,6 @@
     "depends-on-command": [
       16,
       24
-    ],
-    "parser-pipe-collate": [
-      37,
-      46,
-      55,
-      64
     ]
   },
   "file": "collations-padding-trim",
