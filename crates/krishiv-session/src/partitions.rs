@@ -434,6 +434,15 @@ fn find_partition<'a>(
 }
 
 /// `_LEGACY_ERROR_TEMP_1251` unless the table's partitions are in the catalog (`DDLUtils
+/// What a catalog swap of a dropped partition did.
+enum Swap {
+    Done,
+    /// The entry kept changing under it.
+    Lost,
+    /// The table was dropped, replaced or is no longer partitioned.
+    Gone,
+}
+
 /// .verifyPartitionProviderIsHive`): only partitioned tables track them.
 fn require_partition_provider(table: &CatalogTable, action: &str) -> Result<(), KrishivError> {
     if table.is_partitioned() {
@@ -1164,9 +1173,15 @@ impl Session {
             .join(krishiv_io::commit_log::LOG_DIR)
             .is_dir();
         let removed = self.relog_partitions(&table.location, &moves).await?;
-        if let Err(e) = self.swap_without(name, &hit) {
-            self.unremove_files(&table.location, removed).await?;
-            return Err(e);
+        match self.swap_without(table, name, &hit) {
+            Swap::Done => {}
+            // The table is still this one: its log gets the files back. Dropped or replaced: its root (and any new
+            // table's log there) is left alone.
+            Swap::Lost => {
+                self.unremove_files(&table.location, removed).await?;
+                return Err(crate::table_commands::concurrent_change(name));
+            }
+            Swap::Gone => return Err(crate::table_commands::concurrent_change(name)),
         }
         let unable = |path: &Path| -> KrishivError {
             LegacyErrorTemp2036 {
@@ -1190,45 +1205,43 @@ impl Session {
                 Err(_) => return Err(unable(&f)),
             }
         }
-        // The directories left empty go, up to (not including) the table root; one still holding files stays.
+        // A partition directory left empty goes; one still holding files stays, and so do its parents (Spark 4.2.0
+        // keeps `p=1` after dropping `p=1/s=a`).
         for p in &gone {
-            let mut dir = p.location.clone();
-            while dir.starts_with(&table.location) && dir != table.location {
-                if std::fs::remove_dir(&dir).is_err() {
-                    break;
-                }
-                if !dir.pop() {
-                    break;
-                }
-            }
+            let _ = std::fs::remove_dir(&p.location);
         }
         Ok(())
     }
 
     /// Swaps `name`'s catalog entry for one without the partitions `hit` matches and without column statistics,
-    /// against a fresh entry each try (a concurrent change of another part of the entry is kept).
+    /// against a fresh entry each try (a concurrent change of another part of the entry is kept), as long as the
+    /// entry is still `table`'s (same creation time and location, still partitioned).
     fn swap_without(
         &self,
+        table: &CatalogTable,
         name: &crate::table_commands::TableName,
         hit: &dyn Fn(&CatalogPartition) -> bool,
-    ) -> Result<(), KrishivError> {
+    ) -> Swap {
         const RACES: u32 = 32;
         let store = &self.state.catalog.store;
         for _ in 0..RACES {
             let Some(current) = store.table(&name.namespace, &name.name) else {
-                return Err(crate::table_commands::concurrent_change(name));
+                return Swap::Gone;
             };
-            if !current.is_partitioned() {
-                return Err(crate::table_commands::concurrent_change(name));
+            if current.created_ms != table.created_ms
+                || current.location != table.location
+                || !current.is_partitioned()
+            {
+                return Swap::Gone;
             }
             let mut changed = (*current).clone();
             changed.layout.partitions.retain(|p| !hit(p));
             changed.column_stats.clear();
             if store.replace_table(&current, changed) {
-                return Ok(());
+                return Swap::Done;
             }
         }
-        Err(crate::table_commands::concurrent_change(name))
+        Swap::Lost
     }
 
     /// `ALTER TABLE name ADD [IF NOT EXISTS] PARTITION (...) [LOCATION '...'] ...`.

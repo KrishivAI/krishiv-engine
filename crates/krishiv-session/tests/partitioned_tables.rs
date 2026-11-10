@@ -1801,6 +1801,15 @@ fn drop_partition_checks_every_spec_as_spark() {
         );
         assert_eq!(params(&s, sql), [format!("partKey={key}")], "{sql}");
     }
+    // A repeated key comes first (probe3).
+    for (sql, key) in [
+        ("alter table c drop partition (p, p)", "`p`"),
+        ("alter table c drop partition (p=1, p)", "`p`"),
+        ("alter table c add partition (s, p, s)", "`s`"),
+    ] {
+        assert_eq!(class(&s, sql), "DUPLICATE_KEY", "{sql}");
+        assert_eq!(params(&s, sql), [format!("keyColumn={key}")], "{sql}");
+    }
     assert_eq!(
         params(
             &s,
@@ -1834,6 +1843,10 @@ fn drop_partition_checks_every_spec_as_spark() {
     );
     run(&s, "alter table c drop partition (p=NULL, s='c')");
     assert_eq!(rows(&s, "show partitions c"), ["p=2/s=b"]);
+    // The emptied parent `p=1` stays, as Spark leaves it.
+    let root = dir.path().join("c");
+    assert!(root.join("p=1").is_dir());
+    assert!(!root.join("p=1/s=a").exists());
     assert_eq!(rows(&s, "select cast(x as string) from c"), ["2"]);
 }
 

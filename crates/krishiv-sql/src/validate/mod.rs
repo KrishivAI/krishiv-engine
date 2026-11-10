@@ -732,26 +732,26 @@ impl Checker<'_> {
                 self.option_values(keys)
             }
             AlterTableAction::AddPartition { parts, .. } => {
-                parts.iter().try_for_each(|p| non_optional(&p.spec))?;
                 parts
                     .iter()
-                    .try_for_each(|p| self.partition_values(Some(&p.spec)))
+                    .try_for_each(|p| self.partition_values(Some(&p.spec)))?;
+                parts.iter().try_for_each(|p| non_optional(&p.spec))
             }
             AlterTableAction::DropPartition { specs, .. } => {
-                specs.iter().try_for_each(non_optional)?;
                 specs
                     .iter()
-                    .try_for_each(|s| self.partition_values(Some(s)))
+                    .try_for_each(|s| self.partition_values(Some(s)))?;
+                specs.iter().try_for_each(non_optional)
             }
             AlterTableAction::RenamePartition { from, to, .. } => {
-                non_optional(from)?;
-                non_optional(to)?;
                 self.partition_values(Some(from))?;
-                self.partition_values(Some(to))
+                non_optional(from)?;
+                self.partition_values(Some(to))?;
+                non_optional(to)
             }
             AlterTableAction::SetPartitionLocation { partition, .. } => {
-                non_optional(partition)?;
-                self.partition_values(Some(partition))
+                self.partition_values(Some(partition))?;
+                non_optional(partition)
             }
             AlterTableAction::SetLocation(_)
             | AlterTableAction::SetComment(_)
