@@ -153,40 +153,62 @@ fn distinct_aggregates_count_keys() {
 }
 
 /// `DISTINCT` over a collated value dedupes the whole argument tuple, so `max_by`/`min_by` keep
-/// their ordering argument (Spark 4.2.0, krishiv-internal `research/spark/seed-by-split/maxby.out`).
+/// their ordering argument and the row each tuple's representative comes from (Spark 4.2.0,
+/// krishiv-internal `research/spark/collated-distinct-tuple/`).
 #[test]
 fn distinct_max_by_over_a_collated_value_keeps_its_ordering() {
-    assert_eq!(
-        rows("SELECT max_by(DISTINCT c COLLATE utf8_lcase, x) FROM VALUES ('a',1),('b',2) t(c,x)"),
-        ["b"]
-    );
-    assert_eq!(
-        rows(
-            "SELECT min_by(DISTINCT c COLLATE utf8_lcase, x) FROM VALUES ('a',1),('b',2),('B',2) t(c,x)"
+    for (q, want) in [
+        // (key a, 1) and (key a, 5) are different tuples: the max keeps the row with 5.
+        (
+            "SELECT max_by(DISTINCT c COLLATE utf8_lcase, x) FROM VALUES ('a',1),('A',5) t(c,x)",
+            ["A"].as_slice(),
         ),
-        ["a"]
-    );
-    assert_eq!(
-        rows(
-            "SELECT max_by(DISTINCT x, c COLLATE utf8_lcase) FROM VALUES (1,'a'),(2,'B'),(3,'b') t(x,c)"
+        (
+            "SELECT max_by(DISTINCT c COLLATE utf8_lcase, x) FROM VALUES ('A',5),('a',1) t(c,x)",
+            &["A"],
         ),
-        ["3"]
-    );
-    assert_eq!(
-        rows(
+        // The plain column orders by bytes and is part of the tuple: 'a' > 'A' either way.
+        (
+            "SELECT max_by(DISTINCT c COLLATE utf8_lcase, c) FROM VALUES ('A'),('a') t(c)",
+            &["a"],
+        ),
+        (
+            "SELECT max_by(DISTINCT c COLLATE utf8_lcase, c) FROM VALUES ('a'),('A') t(c)",
+            &["a"],
+        ),
+        (
+            "SELECT min_by(DISTINCT c COLLATE utf8_lcase, x) FROM VALUES ('a',1),('b',2),('B',2) t(c,x)",
+            &["a"],
+        ),
+        // An argument over a grouping key.
+        (
+            "SELECT k, max_by(DISTINCT c COLLATE utf8_lcase, x + k) FROM VALUES (1,'a',1),(1,'b',2) \
+             t(k,c,x) GROUP BY k",
+            &["1|b"],
+        ),
+        (
+            "SELECT max_by(DISTINCT c COLLATE utf8_lcase, x) FROM VALUES ('a',NULL),('A',NULL),('b',1) t(c,x)",
+            &["b"],
+        ),
+        (
+            "SELECT max_by(DISTINCT c COLLATE utf8_lcase, d COLLATE utf8_lcase) FROM \
+             VALUES ('a','x'),('A','X'),('b','Y') t(c,d)",
+            &["b"],
+        ),
+        // The grouping column keeps its attribute through the rewrite, so an ORDER BY over it resolves.
+        (
             "SELECT k, max_by(DISTINCT c COLLATE utf8_lcase, x) FROM VALUES (1,'a',1),(1,'b',2),(2,'c',5) \
-             t(k,c,x) GROUP BY k ORDER BY k"
+             t(k,c,x) GROUP BY k ORDER BY k",
+            &["1|b", "2|c"],
         ),
-        ["1|b", "2|c"]
-    );
-    // The grouping column keeps its attribute through the rewrite, so an ORDER BY over it resolves.
-    assert_eq!(
-        rows(
+        (
             "SELECT k, lower(listagg(DISTINCT c COLLATE utf8_lcase)) FROM VALUES (1,'a'),(1,'A'),(2,'c') \
-             t(k,c) GROUP BY k ORDER BY k"
+             t(k,c) GROUP BY k ORDER BY k",
+            &["1|a", "2|c"],
         ),
-        ["1|a", "2|c"]
-    );
+    ] {
+        assert_eq!(rows(q), want, "{q}");
+    }
 }
 
 #[test]

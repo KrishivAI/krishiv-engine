@@ -302,15 +302,15 @@ fn distinct_over_keys(
             nullable: true,
         })
     };
-    let mut items = Vec::with_capacity(keys.len() + 1);
+    let mut items = Vec::with_capacity(keys.len() + call.args.len());
     let mut outer_keys = Vec::with_capacity(keys.len());
-    let mut pairs = Vec::with_capacity(keys.len() + 1);
+    let mut key_pairs = Vec::with_capacity(keys.len());
     for k in keys {
         let col = fresh("k", k)?;
         items.push(alias(first(k, col.data_type.clone())?, col.clone()));
         let read = column(&col);
         outer_keys.push(Arc::clone(&read));
-        pairs.push((Arc::clone(k), read));
+        key_pairs.push((Arc::clone(k), read));
     }
     // The representative is the collated child when the value is its cast: an ordering that
     // reads the child keeps its collation, so the outer call still orders by key.
@@ -318,31 +318,53 @@ fn distinct_over_keys(
     let val = fresh("v", bare)?;
     items.push(alias(first(bare, val.data_type.clone())?, val.clone()));
     let rep = column(&val);
-    pairs.push((Arc::clone(&value), substitute(&value, bare, &rep)?));
-    if !same(bare, &value) {
-        pairs.push((Arc::clone(bare), rep));
-    }
+    let value_read = substitute(&value, bare, &rep)?;
     let mut grouping = keys.iter().map(key_if_collated).collect::<Res<Vec<_>>>()?;
-    grouping.push(key(peeled(&value))?);
+    grouping.push(key(bare)?);
     // `DISTINCT` dedupes the whole argument tuple (`max_by(DISTINCT c, x)` keeps one row per
     // key of `c` and `x`), so every other argument is a grouping key too, read by the outer
-    // call from its own column. Literals (a `listagg` delimiter) and the value's own ordering
-    // are left as written.
-    let mut carried: Vec<&Arc<Expr>> = Vec::new();
-    for arg in call.args.iter().skip(1) {
-        if same(arg, &value)
-            || same(arg, bare)
-            || matches!(arg.node, ExprNode::Literal(_))
-            || carried.iter().any(|c| same(c, arg))
-        {
-            continue;
+    // call from a column of its own. The call's arguments are rewritten by position, never by
+    // substituting expressions one after another (an argument may contain a grouping key or
+    // the value's column). Left as they are: literals (a `listagg` delimiter); read as the
+    // value: the value again, and a `listagg` ordering over its collated child.
+    let listagg = call.id.name() == "listagg";
+    let mut carried: Vec<(&Arc<Expr>, Arc<Expr>)> = Vec::new();
+    let mut args = Vec::with_capacity(call.args.len());
+    args.push(Arc::clone(&value_read));
+    for (i, arg) in call.args.iter().enumerate().skip(1) {
+        if same(arg, &value) {
+            args.push(Arc::clone(&value_read));
+        } else if listagg && i >= 2 && same(arg, bare) {
+            args.push(Arc::clone(&rep));
+        } else if matches!(arg.node, ExprNode::Literal(_)) {
+            args.push(Arc::clone(arg));
+        } else if let Some((_, read)) = carried.iter().find(|(c, _)| same(c, arg)) {
+            args.push(Arc::clone(read));
+        } else {
+            // The inner aggregate groups by the argument and keeps `first` of it: a
+            // nondeterministic one would be drawn twice.
+            if !krishiv_plan::is_deterministic(arg) {
+                return Err(unsupported(
+                    "a DISTINCT aggregate of a collated string with a nondeterministic argument",
+                    p.origin,
+                ));
+            }
+            let col = fresh("a", arg)?;
+            items.push(alias(first(arg, col.data_type.clone())?, col.clone()));
+            grouping.push(key_if_collated(arg)?);
+            let read = column(&col);
+            args.push(Arc::clone(&read));
+            carried.push((arg, read));
         }
-        let col = fresh("a", arg)?;
-        items.push(alias(first(arg, col.data_type.clone())?, col.clone()));
-        grouping.push(key_if_collated(arg)?);
-        pairs.push((Arc::clone(arg), column(&col)));
-        carried.push(arg);
     }
+    let outer_call = resolved(
+        ResolvedFunction {
+            args,
+            distinct: false,
+            ..(*call).clone()
+        },
+        p.origin,
+    );
     let mut inner = LogicalPlan::new(PlanNode::Aggregate {
         input: Arc::clone(input),
         grouping: Grouping::GroupBy(grouping),
@@ -351,10 +373,7 @@ fn distinct_over_keys(
     inner.origin = p.origin;
     let mut rewritten = Vec::with_capacity(aggregates.len());
     for a in aggregates {
-        let mut e = plain_call(a);
-        for (from, to) in &pairs {
-            e = substitute(&e, from, to)?;
-        }
+        let mut e = outer_item(a, call, &outer_call, &key_pairs)?;
         // A bare grouping column now reads the inner aggregate's column: keep the attribute the
         // plan above reads (a `Sort` or projection over `k`).
         if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &a.node
@@ -373,23 +392,24 @@ fn distinct_over_keys(
     aggregate(&Arc::new(outer), next).map(Some)
 }
 
-/// `e` with the `DISTINCT` of its aggregate call removed.
-fn plain_call(e: &Arc<Expr>) -> Arc<Expr> {
+/// An outer aggregate item: the `DISTINCT` call (the very node `call`) becomes `outer_call`, and
+/// a grouping key outside it reads its inner column. Top-down, so a key inside the call's
+/// arguments is never rewritten (they read the inner aggregate's columns already).
+fn outer_item(
+    e: &Arc<Expr>,
+    call: &ResolvedFunction,
+    outer_call: &Arc<Expr>,
+    key_pairs: &[(Arc<Expr>, Arc<Expr>)],
+) -> Res<Arc<Expr>> {
     if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
-        && f.kind == FunctionKind::Aggregate
+        && std::ptr::eq(f, call)
     {
-        return resolved(
-            ResolvedFunction {
-                distinct: false,
-                ..f.clone()
-            },
-            e.origin,
-        );
+        return Ok(Arc::new(Expr::clone(outer_call).with_origin(e.origin)));
     }
-    match Arc::clone(e).map_children(|c| Ok::<_, KrishivError>(plain_call(&c))) {
-        Ok(out) => out,
-        Err(_) => Arc::clone(e),
+    if let Some((_, read)) = key_pairs.iter().find(|(k, _)| same(k, e)) {
+        return Ok(Arc::clone(read));
     }
+    Arc::clone(e).map_children(|c| outer_item(&c, call, outer_call, key_pairs))
 }
 
 fn aggregate(p: &Arc<LogicalPlan>, next: &mut u64) -> Res<Arc<LogicalPlan>> {
