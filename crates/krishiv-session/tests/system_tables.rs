@@ -955,3 +955,19 @@ fn namespace_listings_under_system_fail_closed() {
         assert!(e.contains("SCHEMA_NOT_FOUND"), "{sql}: {e}");
     }
 }
+
+#[test]
+fn creating_under_system_is_refused_but_a_temp_view_survives_the_switch_back() {
+    let s = Session::new().unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in [
+        "CREATE VIEW v1 AS SELECT 1 AS n",
+        "CREATE TABLE tt1 (a INT)",
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("KRISHIV_RESERVED_NAME"), "{sql}: {e}");
+    }
+    run(&s, "CREATE TEMPORARY VIEW t1 AS SELECT 2 AS n").unwrap();
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(column_of(&s, "SELECT CAST(n AS STRING) FROM t1", 0), ["2"]);
+}
