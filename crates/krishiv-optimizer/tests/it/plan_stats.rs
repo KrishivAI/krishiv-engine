@@ -461,6 +461,15 @@ fn an_inner_join_narrows_its_keys_and_scales_the_other_columns() {
 }
 
 #[test]
+fn a_composite_key_join_is_a_foreign_key_into_the_side_with_fewer_key_tuples() {
+    let e = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v");
+    // Independent keys would give 200,000 / (100 * 20) = 100 rows. The key
+    // tuples are min(100 * 10 capped at 1,000, 40 * 20 capped at 200) = 200:
+    // 200,000 / 200 = 1,000 rows.
+    close(e.rows(), 1000.0, "rows");
+}
+
+#[test]
 fn outer_joins_give_the_null_supplying_side_the_unmatched_fraction_as_nulls() {
     // 200 of `t`'s 1,000 rows match.
     let e = join("SELECT * FROM t LEFT JOIN w ON t.a = w.wk");

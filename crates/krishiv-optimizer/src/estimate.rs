@@ -235,6 +235,42 @@ fn key_pairs(pred: &Arc<Expr>, l: &RelStats, r: &RelStats) -> Vec<(AttrId, AttrI
         .collect()
 }
 
+/// The factor that turns the product of independent key selectivities
+/// (`prod 1 / max(ndv)` over the equalities, what `narrow::apply` gives) into
+/// the composite-key selectivity: several equalities between the same two
+/// sides are a foreign key into the side with fewer distinct key tuples, so
+/// the selectivity is `1 / min(prod ndv left, prod ndv right)` (each product
+/// over the distinct key columns, at most the side's rows), the rule the
+/// join orderer's `composite_keys` applies. Never below 1: the independent
+/// product is already the smaller estimate then.
+fn composite_factor(pairs: &[(AttrId, AttrId)], l: &RelStats, r: &RelStats) -> f64 {
+    let (mut lc, mut rc): (Vec<AttrId>, Vec<AttrId>) = pairs.iter().copied().unzip();
+    lc.sort_unstable();
+    lc.dedup();
+    rc.sort_unstable();
+    rc.dedup();
+    if lc.len().min(rc.len()) < 2 {
+        return 1.0;
+    }
+    let tuples = |ids: &[AttrId], s: &RelStats| {
+        ids.iter()
+            .filter_map(|i| s.cols.get(i))
+            .map(|c| c.ndv.max(1.0))
+            .product::<f64>()
+            .min(s.rows.max(1.0))
+    };
+    let composite = 1.0 / tuples(&lc, l).min(tuples(&rc, r)).max(1.0);
+    let independent: f64 = pairs
+        .iter()
+        .filter_map(|(a, b)| Some(1.0 / l.cols.get(a)?.ndv.max(r.cols.get(b)?.ndv).max(1.0)))
+        .product();
+    if independent > 0.0 && composite > independent {
+        composite / independent
+    } else {
+        1.0
+    }
+}
+
 /// Estimates relations, memoised per relation.
 pub(crate) struct Estimator<'a> {
     stats: &'a dyn Statistics,
@@ -489,7 +525,11 @@ impl<'a> Estimator<'a> {
             _ => None,
         };
         let mut v = View::new(&cols, self.propagate);
-        let sel = pred.as_ref().map_or(1.0, |c| apply(c, &mut v));
+        let composite = pred
+            .as_ref()
+            .filter(|_| self.propagate)
+            .map_or(1.0, |c| composite_factor(&key_pairs(c, l, r), l, r));
+        let sel = pred.as_ref().map_or(1.0, |c| apply(c, &mut v)) * composite;
         // `inf * 0` is NaN: a zero selectivity is zero rows.
         let inner = if v.empty || sel <= 0.0 {
             0.0
