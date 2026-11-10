@@ -920,3 +920,28 @@ fn use_system_shows_no_default_database() {
         ]
     );
 }
+
+#[test]
+fn use_namespace_under_system_finds_no_namespace() {
+    let s = Session::new().unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in ["USE NAMESPACE x", "USE NAMESPACE system"] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("SCHEMA_NOT_FOUND"), "{sql}: {e}");
+    }
+    // The failed USE leaves the current catalog alone.
+    assert_eq!(column_of(&s, "SELECT current_catalog()", 0), ["system"]);
+}
+
+#[test]
+fn analyze_table_in_system_is_reserved() {
+    let s = Session::new().unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in [
+        "ANALYZE TABLE queries COMPUTE STATISTICS",
+        "ANALYZE TABLE system.queries COMPUTE STATISTICS FOR ALL COLUMNS",
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("KRISHIV_RESERVED_NAME"), "{sql}: {e}");
+    }
+}
