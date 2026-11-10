@@ -85,6 +85,7 @@ fn expr_kind(expr: &Expr) -> &'static str {
         ExprNode::UpdateFields { .. } => "ExprNode::UpdateFields",
         ExprNode::Cast { .. } => "ExprNode::Cast",
         ExprNode::Collate { .. } => "ExprNode::Collate",
+        ExprNode::StoredField { .. } => "ExprNode::StoredField",
         ExprNode::Alias { .. } => "ExprNode::Alias",
         ExprNode::MultiAlias { .. } => "ExprNode::MultiAlias",
         ExprNode::Pipe { .. } => "ExprNode::Pipe",
@@ -98,6 +99,7 @@ fn expr_kind(expr: &Expr) -> &'static str {
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => "ResolvedExpr::Alias",
         ExprNode::Resolved(ResolvedExpr::Field { .. }) => "ResolvedExpr::Field",
         ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => "ResolvedExpr::StateInput",
+        ExprNode::Resolved(ResolvedExpr::EvalMode { .. }) => "ResolvedExpr::EvalMode",
     }
 }
 

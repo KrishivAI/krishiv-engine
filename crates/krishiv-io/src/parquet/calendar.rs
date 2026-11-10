@@ -110,6 +110,119 @@ fn action(calendar: Calendar, mode: &str, int96: bool) -> Action {
     }
 }
 
+/// The top-level columns of a file whose dates or `INT64` timestamps Spark
+/// rebases on read (the file is in the legacy calendar, or is not Spark's
+/// and is read in `LEGACY` mode). For them Spark rebases a pushed literal
+/// to the stored calendar before it is compared with statistics
+/// (`ParquetFilters` with a `LEGACY` rebase spec, Spark 4.2.0); Krishiv does
+/// not rebase, so no pushed conjunct on them may prune: the read then reaches
+/// the [`Guard`], which refuses the values that would change. In `EXCEPTION`
+/// and `CORRECTED` mode Spark pushes the literal as written and prunes before
+/// it decodes, as Krishiv does. `INT96` has no pushed filter in Spark (nor
+/// statistics here). `mode` is the `datetimeRebaseMode` read option (statistics
+/// pruning takes the mode the metadata was read with: it is part of its cache key).
+pub(crate) fn rebased_datetime_roots(
+    calendars: Calendars,
+    descr: &SchemaDescriptor,
+    mode: Option<&str>,
+) -> Vec<String> {
+    let rebased = match calendars.datetime {
+        Calendar::Legacy => true,
+        Calendar::Unknown => mode.is_some_and(|m| m.eq_ignore_ascii_case("LEGACY")),
+        Calendar::Proleptic => false,
+    };
+    if !rebased {
+        return Vec::new();
+    }
+    let mut roots: Vec<String> = descr
+        .columns()
+        .iter()
+        .filter(|c| {
+            c.physical_type() != PhysicalType::INT96
+                && (matches!(
+                    c.logical_type_ref(),
+                    Some(
+                        parquet::basic::LogicalType::Date
+                            | parquet::basic::LogicalType::Timestamp { .. }
+                    )
+                ) || matches!(
+                    c.converted_type(),
+                    parquet::basic::ConvertedType::DATE
+                        | parquet::basic::ConvertedType::TIMESTAMP_MILLIS
+                        | parquet::basic::ConvertedType::TIMESTAMP_MICROS
+                ))
+        })
+        .filter_map(|c| c.path().parts().first().cloned())
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// Whether `e` compares against a value a rebase would change: a date
+/// before 1582-10-15 or a timestamp before 1900, or a value only known at
+/// run time (a runtime filter's set). Above the switch points the two
+/// calendars agree and rebasing keeps the order of values, so a comparison
+/// with a later literal prunes the same row groups in either calendar.
+fn ancient_literal(e: &crate::request::PushdownExpr) -> bool {
+    use crate::request::{PushdownExpr as E, ScalarValue as V};
+    let ancient = |v: &V| match v {
+        V::Date32(d) => *d < SWITCH_DAY,
+        V::TimestampMicros(m) => *m < SWITCH_MICROS,
+        _ => false,
+    };
+    match e {
+        E::Cmp { value, .. } => ancient(value),
+        E::In { values, .. } => values.iter().any(ancient),
+        E::And(xs) | E::Or(xs) => xs.iter().any(ancient_literal),
+        E::Not(x) => ancient_literal(x),
+        E::Membership { .. } => true,
+        E::IsNull(_)
+        | E::IsNotNull(_)
+        | E::StartsWith { .. }
+        | E::Contains { .. }
+        | E::Constant(_) => false,
+    }
+}
+
+/// `predicate` without the top-level conjuncts that read any of `roots` and
+/// compare it with a value a rebase would change ([`ancient_literal`]);
+/// `None` when nothing is left. A superset of the rows, so still a sound
+/// pushed filter.
+pub(crate) fn without_columns(
+    predicate: Option<&crate::request::PushdownExpr>,
+    roots: &[String],
+) -> Option<crate::request::PushdownExpr> {
+    use crate::request::PushdownExpr;
+    let p = predicate?;
+    if roots.is_empty() {
+        return Some(p.clone());
+    }
+    let drops = |e: &PushdownExpr| {
+        ancient_literal(e)
+            && e.columns()
+                .iter()
+                .any(|c| c.0.first().is_some_and(|r| roots.contains(r)))
+    };
+    let kept: Vec<PushdownExpr> = match p.to_nnf() {
+        PushdownExpr::And(xs) => xs.into_iter().filter(|x| !drops(x)).collect(),
+        other if drops(&other) => Vec::new(),
+        other => vec![other],
+    };
+    match kept.len() {
+        0 => None,
+        1 => kept.into_iter().next(),
+        _ => Some(PushdownExpr::And(kept)),
+    }
+}
+
+/// Whether the runtime filter `d` is on one of `roots` (its values are only
+/// known at run time, so it may hold a value a rebase would change).
+pub(crate) fn reads_root(d: &crate::ScanFilter, roots: &[String]) -> bool {
+    d.column()
+        .is_some_and(|(c, _)| c.0.first().is_some_and(|r| roots.contains(r)))
+}
+
 /// The checks of one scan: per output column, what ancient values mean.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Guard {
@@ -437,5 +550,99 @@ mod tests {
             Some(arrow_buffer::NullBuffer::from(vec![false, true])),
         ));
         assert!(!ancient(&under_null));
+    }
+
+    #[test]
+    fn rebased_roots_follow_the_calendar_and_the_mode() {
+        use parquet::basic::{LogicalType, Repetition, Type};
+        use parquet::schema::types::Type as T;
+        use std::sync::Arc;
+        let leaf = |n: &str, ty, lt: Option<LogicalType>| {
+            Arc::new(
+                T::primitive_type_builder(n, ty)
+                    .with_repetition(Repetition::OPTIONAL)
+                    .with_logical_type(lt)
+                    .build()
+                    .unwrap(),
+            )
+        };
+        let ts = LogicalType::Timestamp(parquet::basic::TimestampType {
+            is_adjusted_to_u_t_c: true,
+            unit: parquet::basic::TimeUnit::MICROS,
+        });
+        let group = T::group_type_builder("m")
+            .with_fields(vec![
+                leaf("d", Type::INT32, Some(LogicalType::Date)),
+                leaf("t", Type::INT64, Some(ts)),
+                leaf("i", Type::INT32, None),
+                leaf("old", Type::INT96, None),
+            ])
+            .build()
+            .unwrap();
+        let descr = SchemaDescriptor::new(Arc::new(group));
+        let cal = |c| Calendars {
+            datetime: c,
+            int96: c,
+        };
+        // Date and timestamp columns count; INT96 and
+        // plain integers never count.
+        let roots = |c, mode| rebased_datetime_roots(cal(c), &descr, mode);
+        assert_eq!(
+            roots(Calendar::Legacy, None),
+            vec!["d".to_owned(), "t".to_owned()]
+        );
+        assert!(roots(Calendar::Proleptic, Some("LEGACY")).is_empty());
+        assert!(roots(Calendar::Unknown, None).is_empty());
+        assert!(roots(Calendar::Unknown, Some("CORRECTED")).is_empty());
+        assert_eq!(
+            roots(Calendar::Unknown, Some("legacy")),
+            vec!["d".to_owned(), "t".to_owned()]
+        );
+    }
+
+    #[test]
+    fn only_conjuncts_with_an_ancient_literal_on_a_rebased_root_are_dropped() {
+        use crate::request::{CmpOp, ColumnPath, PushdownExpr as E, ScalarValue as V};
+        let cmp = |c: &str, v: V| E::cmp(ColumnPath::new(c), CmpOp::Eq, v);
+        let old = |c: &str| cmp(c, V::Date32(-300_000));
+        let old_ts = |c: &str| cmp(c, V::TimestampMicros(SWITCH_MICROS - 1));
+        let modern = |c: &str| cmp(c, V::Date32(20_000));
+        let roots = vec!["d".to_owned()];
+        let strip = |e: E| without_columns(Some(&e), &roots);
+        // No predicate, no roots: unchanged.
+        assert_eq!(without_columns(None, &roots), None);
+        assert_eq!(without_columns(Some(&old("d")), &[]), Some(old("d")));
+        // A lone ancient conjunct goes; a modern one, another column, and
+        // non-comparison shapes stay.
+        assert_eq!(strip(old("d")), None);
+        assert_eq!(strip(old_ts("d")), None);
+        assert_eq!(strip(modern("d")), Some(modern("d")));
+        assert_eq!(strip(old("other")), Some(old("other")));
+        assert_eq!(
+            strip(E::IsNull(ColumnPath::new("d"))),
+            Some(E::IsNull(ColumnPath::new("d")))
+        );
+        // One survivor of an AND comes back unwrapped, several stay an AND.
+        assert_eq!(
+            strip(E::And(vec![old("d"), modern("d")])),
+            Some(modern("d"))
+        );
+        assert_eq!(
+            strip(E::And(vec![modern("d"), old("other"), old("d")])),
+            Some(E::And(vec![modern("d"), old("other")]))
+        );
+        // An ancient literal below OR / NOT / IN drops the conjunct as a whole.
+        assert_eq!(strip(E::Or(vec![old("d"), modern("d")])), None);
+        assert_eq!(strip(E::Not(Box::new(old("d")))), None);
+        let inn = |vs| E::In {
+            column: ColumnPath::new("d"),
+            values: vs,
+            collation: Default::default(),
+        };
+        assert_eq!(strip(inn(vec![V::Date32(1), V::Date32(-300_000)])), None);
+        let keep = inn(vec![V::Date32(1)]);
+        assert_eq!(strip(keep.clone()), Some(keep));
+        // The values of other scalar types never count as ancient.
+        assert_eq!(strip(cmp("d", V::Int64(-1))), Some(cmp("d", V::Int64(-1))));
     }
 }
