@@ -273,7 +273,11 @@ pub fn builtins() -> &'static Registry {
 /// a definition but no row in Spark's function catalog, and the lowering
 /// reaches it through the keyword-unit forms. The analyzer refuses a call
 /// spelled as an ordinary function (`timestampadd(col, 1, ts)`: a unit that
-/// is not a string literal) with `UNRESOLVED_ROUTINE`, as Spark does.
+/// is not a string literal) with `UNRESOLVED_ROUTINE`, as Spark does. Known divergence: the lowered
+/// keyword form is told from a user call by its string-literal unit, so a quoted or qualified
+/// spelling with a string unit (`` `timestampadd`('YEAR', 1, d) ``, `system.builtin.timestampadd(..)`)
+/// still resolves where Spark gives `UNRESOLVED_ROUTINE` / `REQUIRES_SINGLE_PART_NAMESPACE`
+/// (Spark 4.2.0, 2026-11-10).
 #[must_use]
 pub fn is_grammar_only(name: &str) -> bool {
     grammar_row(name).is_some()

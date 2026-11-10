@@ -372,6 +372,59 @@ fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usiz
     {
         return true;
     }
+    // `name (` after a relation or without `AS` (Spark's `tableAlias` is `AS? strictIdentifier
+    // identifierList?`): `VALUES (1) t(..)`, `FROM tbl t(..)`, `JOIN a.b t(..)`.
+    if tokens
+        .get(before)
+        .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+        && before.checked_sub(1).is_some_and(|b| {
+            if is(b, Sym::RParen) {
+                return true;
+            }
+            // A relation name (possibly qualified) after FROM or JOIN.
+            if !tokens
+                .get(b)
+                .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+            {
+                return false;
+            }
+            let mut k = b;
+            while k >= 2
+                && is(k - 1, Sym::Dot)
+                && tokens
+                    .get(k - 2)
+                    .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+            {
+                k -= 2;
+            }
+            k >= 1 && (is_word(k - 1, "FROM") || is_word(k - 1, "JOIN"))
+        })
+    {
+        return true;
+    }
+    // A CTE's column list: `WITH name (..) AS (` (the list's `)` is followed by `AS (`).
+    let mut depth = 0_usize;
+    let mut close = None;
+    for (k, _) in tokens.iter().enumerate().skip(open) {
+        if is(k, Sym::LParen) {
+            depth += 1;
+        } else if is(k, Sym::RParen) {
+            depth -= 1;
+            if depth == 0 {
+                close = Some(k);
+                break;
+            }
+        }
+    }
+    if let Some(close) = close
+        && is_word(close + 1, "AS")
+        && is(close + 2, Sym::LParen)
+        && tokens
+            .get(before)
+            .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+    {
+        return true;
+    }
     // `AS IDENTIFIER(...) (`: back to the clause's `(`.
     if !is(before, Sym::RParen) {
         return false;

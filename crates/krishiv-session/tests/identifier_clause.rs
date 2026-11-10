@@ -218,6 +218,11 @@ fn positions_that_take_no_clause_are_refused_as_spark_refuses_them() {
         "SELECT row_number() OVER IDENTIFIER('x.win') FROM VALUES (1) AS T(c1) WINDOW win AS (ORDER BY c1)",
         "SELECT * FROM VALUES (1, 2) AS IDENTIFIER('schema.table')(c1, c2)",
         "SELECT 1 AS IDENTIFIER('col1.col2')",
+        // `tableAlias` is `AS? strictIdentifier identifierList?`: no `AS`, and a CTE's column list
+        // (Spark 4.2.0: IDENTIFIER_TOO_MANY_NAME_PARTS for each).
+        "SELECT * FROM VALUES (1) t(IDENTIFIER('a.b'))",
+        "WITH t(IDENTIFIER('a.b')) AS (SELECT 1) SELECT * FROM t",
+        "SELECT * FROM VALUES (1) AS t(IDENTIFIER('a.b'))",
     ] {
         assert_eq!(class(&s, q), "IDENTIFIER_TOO_MANY_NAME_PARTS", "{q}");
     }
