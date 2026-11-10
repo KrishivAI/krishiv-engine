@@ -189,6 +189,19 @@ pub(crate) fn classify(word: &str) -> u8 {
         .map_or(0, |(_, bits)| *bits)
 }
 
+/// Whether `word` can never be an alias or relation name written without `AS` in front of a
+/// parenthesis: it starts a clause, is a strict-non-reserved word or never names a function
+/// (`WHERE (`, `AND (`, `IN (`, `OVER (`, `LATERAL tf(`, ...).
+#[must_use]
+pub fn blocks_alias(word: &str) -> bool {
+    // Non-reserved words that still introduce a parenthesis of their own.
+    const OPENERS: [&str; 7] = [
+        "OVER", "FILTER", "WITHIN", "VALUES", "LATERAL", "TABLE", "EXISTS",
+    ];
+    classify(word) & (CLAUSE_WORD | STRICT_WORD | NOT_FUNCTION_WORD) != 0
+        || OPENERS.iter().any(|k| is_kw(word, k))
+}
+
 /// Every Spark 4.2 keyword (`tests/fixtures/spark-4.2.0/sql-keywords.json`,
 /// generated from `SqlBaseLexer.g4` / `SqlBaseParser.g4`) with whether it
 /// is reserved in ANSI mode with enforced keywords. Sorted for binary

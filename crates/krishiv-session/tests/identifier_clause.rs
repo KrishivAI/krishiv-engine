@@ -209,6 +209,37 @@ fn text_that_is_not_a_clause_is_left_to_the_parser() {
     );
 }
 
+/// A keyword before a parenthesis is not an alias: an `IDENTIFIER` with a qualified name there is
+/// an ordinary column reference (Spark 4.2.0 accepts each of these), and `JOIN .. USING (..)` takes
+/// one-part names.
+#[test]
+fn a_keyword_before_a_parenthesis_is_not_an_alias_column_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TEMPORARY VIEW t AS SELECT * FROM VALUES (1), (2) AS t(c)",
+    );
+    run(
+        &s,
+        "CREATE TEMPORARY VIEW u AS SELECT * FROM VALUES (1), (3) AS u(c)",
+    );
+    for q in [
+        "SELECT count(IDENTIFIER('t.c')) FROM t",
+        "SELECT c FROM t WHERE abs(c) IN (IDENTIFIER('t.c'))",
+        "SELECT sum(c) OVER (PARTITION BY IDENTIFIER('t.c')) FROM t",
+        "SELECT c FROM t WHERE (IDENTIFIER('t.c') > 0)",
+        "SELECT t.c FROM t JOIN u ON (IDENTIFIER('t.c') = IDENTIFIER('u.c'))",
+        "SELECT c FROM t UNION (SELECT IDENTIFIER('u.c') FROM u)",
+    ] {
+        run(&s, q);
+    }
+    assert_eq!(
+        class(&s, "SELECT * FROM t JOIN u USING (IDENTIFIER('a.b'))"),
+        "IDENTIFIER_TOO_MANY_NAME_PARTS"
+    );
+}
+
 #[test]
 fn positions_that_take_no_clause_are_refused_as_spark_refuses_them() {
     let dir = tempfile::tempdir().unwrap();

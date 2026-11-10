@@ -373,33 +373,37 @@ fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usiz
         return true;
     }
     // `name (` after a relation or without `AS` (Spark's `tableAlias` is `AS? strictIdentifier
-    // identifierList?`): `VALUES (1) t(..)`, `FROM tbl t(..)`, `JOIN a.b t(..)`.
-    if tokens
-        .get(before)
-        .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+    // identifierList?`): `VALUES (1) t(..)`, `FROM tbl t(..)`, `JOIN a.b t(..)`. The name is an
+    // identifier, never a keyword (`WHERE (`, `AND (`, `IN (`, `OVER (`, `LATERAL tf(`).
+    let name_at = |k: usize| {
+        tokens.get(k).is_some_and(|t| match t.kind {
+            TokenKind::QuotedIdent => true,
+            TokenKind::Word => sql
+                .get(t.span.start..t.span.end)
+                .is_some_and(|w| !krishiv_sql::blocks_alias(w)),
+            _ => false,
+        })
+    };
+    if name_at(before)
         && before.checked_sub(1).is_some_and(|b| {
             if is(b, Sym::RParen) {
                 return true;
             }
             // A relation name (possibly qualified) after FROM or JOIN.
-            if !tokens
-                .get(b)
-                .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
-            {
+            if !name_at(b) {
                 return false;
             }
             let mut k = b;
-            while k >= 2
-                && is(k - 1, Sym::Dot)
-                && tokens
-                    .get(k - 2)
-                    .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
-            {
+            while k >= 2 && is(k - 1, Sym::Dot) && name_at(k - 2) {
                 k -= 2;
             }
             k >= 1 && (is_word(k - 1, "FROM") || is_word(k - 1, "JOIN"))
         })
     {
+        return true;
+    }
+    // `JOIN .. USING (IDENTIFIER(..))`: a column list of one-part names.
+    if is_word(before, "USING") {
         return true;
     }
     // A CTE's column list: `WITH name (..) AS (` (the list's `)` is followed by `AS (`).
@@ -419,9 +423,7 @@ fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usiz
     if let Some(close) = close
         && is_word(close + 1, "AS")
         && is(close + 2, Sym::LParen)
-        && tokens
-            .get(before)
-            .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+        && name_at(before)
     {
         return true;
     }
