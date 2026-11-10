@@ -9,11 +9,13 @@ Aggregate [], [count(1) AS count(1)#10]
       :  +- Join Inner, (d#2 == d_date_sk#4)
       :     :- Union
       :     :  :- Project [cs_sold_date_sk#0 AS d#2, cs_bill_cdemo_sk#1 AS c#3]
-      :     :  :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_bill_cdemo_sk#1] (shared #1)
-      :     :  +- Shared #1, printed above
+      :     :  :  +- Filter (isnotnull(cs_sold_date_sk#0) and isnotnull(cs_bill_cdemo_sk#1))
+      :     :  :     +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_bill_cdemo_sk#1] (shared #1)
+      :     :  +- Filter (isnotnull(cs_sold_date_sk#0) and isnotnull(cs_bill_cdemo_sk#1))
+      :     :     +- Shared #1, printed above
       :     +- Project [d_date_sk#4]
-      :        +- Filter (d_year#5 == 2000L)
+      :        +- Filter ((d_year#5 == 2000L) and isnotnull(d_date_sk#4))
       :           +- Scan spark_catalog.default.date_dim [d_date_sk#4, d_year#5]
       +- Project [cd_demo_sk#6]
-         +- Filter (cd_gender#7 == 'F')
+         +- Filter ((cd_gender#7 == 'F') and isnotnull(cd_demo_sk#6))
             +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#6, cd_gender#7]

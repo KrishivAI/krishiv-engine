@@ -95,6 +95,18 @@ fn pre_push_hook_refuses_main_and_force_pushes() {
 }
 
 #[test]
+fn commit_msg_hook_adds_the_sign_off_and_still_refuses_ai_attribution() {
+    let script = root().join(".githooks/test-commit-msg.sh");
+    let out = Command::new("sh").arg(&script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn deny_toml_guards_object_store_coupling() {
     let deny = read("deny.toml");
     assert!(deny.contains("[[bans.features]]"));
