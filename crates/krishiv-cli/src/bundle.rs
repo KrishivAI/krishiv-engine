@@ -515,6 +515,7 @@ pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
         ("wasm-udf", cfg!(feature = "wasm-udf")),
         ("celeborn", cfg!(feature = "celeborn")),
         ("tokio-console", cfg!(feature = "tokio-console")),
+        ("telemetry-logs", cfg!(feature = "telemetry-logs")),
         ("full", cfg!(feature = "full")),
     ]
 }
@@ -559,6 +560,9 @@ fn enabled_features() -> Vec<&'static str> {
     }
     if cfg!(feature = "tokio-console") {
         out.push("tokio-console");
+    }
+    if cfg!(feature = "telemetry-logs") {
+        out.push("telemetry-logs");
     }
     if cfg!(feature = "full") {
         out.push("full");
