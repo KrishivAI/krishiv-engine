@@ -50,6 +50,7 @@
 #![forbid(unsafe_code)]
 
 mod collation_keys;
+mod constraints;
 mod cse;
 mod dag;
 mod eager;
@@ -74,8 +75,8 @@ mod sum_rewrite;
 use std::sync::Arc;
 
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
-    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+    ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, JOIN_COST, JOIN_DP_LIMIT,
+    JOIN_ENUMERATOR, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -382,6 +383,11 @@ fn run(
         } else {
             root = batch(root, "Rewrite", &mut t)?;
         }
+        // After the rewrite batch, which moves `WHERE` equalities into the
+        // joins (comma joins are cross joins before it); the batch runs
+        // again to push what the rule added, only when it added something.
+        let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
+        let root = inferred;
         let root = t.once("AlgebraicSum", &root, |r| {
             sum_rewrite::rewrite(Arc::clone(r))
         })?;
@@ -421,6 +427,14 @@ fn run(
                 }
             }
             _ => root,
+        };
+        // Without join ordering, once more after restriction (its semi
+        // joins); with it, `order_and_restrict` already ran the rule on the
+        // final joins. Tidying pushes what it adds.
+        let root = if stats.is_none() {
+            t.once("InferJoinFilters", &root, infer_join_filters)?
+        } else {
+            root
         };
         let pruned = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
         let mut root = batch(Arc::clone(&pruned), "Tidy", &mut t)?;
@@ -496,6 +510,14 @@ fn run(
     }
 }
 
+/// [`constraints::infer_join_filters`] at every join, bottom up.
+fn infer_join_filters(root: &Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
+    let mut memo = constraints::Memo::default();
+    dag::rewrite_up(Arc::clone(root), &mut |p| {
+        Ok(constraints::infer_join_filters(p, &mut memo))
+    })
+}
+
 /// The join-ordering settings of a session configuration (defaults
 /// without one), describing each tree when `trace`.
 fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
@@ -507,6 +529,9 @@ fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
         if let Some(name) = config.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str) {
             s.enumerator = join_order::Enumerator::parse(name);
         }
+        if let Some(name) = config.get(&JOIN_COST).and_then(ConfigValue::as_str) {
+            s.cost = join_order::JoinCost::parse(name);
+        }
         if let Some(limit) = config.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int) {
             s.dp_limit = usize::try_from(limit)
                 .unwrap_or(join_order::MAX_DP_LIMIT)
@@ -516,9 +541,9 @@ fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
     s
 }
 
-/// Join ordering alternating with restriction, until neither changes the
-/// plan. The trees of the last ordering, the plan's own, are described in
-/// the trace.
+/// Join ordering alternating with restriction and inferred join filters,
+/// until neither changes the plan. The trees of the last ordering, the
+/// plan's own, are described in the trace.
 fn order_and_restrict(
     mut root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
@@ -528,6 +553,7 @@ fn order_and_restrict(
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut notes = Vec::new();
     for round in 1..=MAX_ITERATIONS {
+        let input = Arc::clone(&root);
         let (ordered, trees) = join_order::reorder(&root, stats, propagate, joins);
         notes = trees;
         t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
@@ -554,14 +580,48 @@ fn order_and_restrict(
             );
             batch(narrowed, "Rewrite", t)?
         };
-        let done = Arc::ptr_eq(&rewritten, &ordered);
-        root = rewritten;
+        // The filters of the joins ordering and restriction formed: ordering
+        // keys its canonical input order on them, so they are part of the
+        // loop.
+        let inferred = infer_join_filters(&rewritten)?;
+        t.step(
+            "JoinOrder",
+            round,
+            "InferJoinFilters",
+            &rewritten,
+            &inferred,
+        );
+        let mut done = Arc::ptr_eq(&inferred, &ordered);
+        // Pushed down and merged before ordering reads them again, so the
+        // next round sees the inputs a second `optimize` would see.
+        root = if Arc::ptr_eq(&inferred, &rewritten) {
+            inferred
+        } else {
+            let tidied = batch(inferred, "Tidy", t)?;
+            // Tidying can return the round's input (what the rule added was
+            // already there, spelled another way): nothing to do again.
+            if same_plan(&tidied, &input) {
+                done = true;
+                input
+            } else {
+                tidied
+            }
+        };
         if done {
             break;
         }
     }
     t.notes("JoinOrder", &root, notes);
     Ok(root)
+}
+
+/// Whether two relations are structurally equal (their canonical encodings).
+fn same_plan(a: &Arc<LogicalPlan>, b: &Arc<LogicalPlan>) -> bool {
+    Arc::ptr_eq(a, b)
+        || matches!(
+            (Plan::try_new(LogicalPlan::clone(a)), Plan::try_new(LogicalPlan::clone(b))),
+            (Ok(x), Ok(y)) if x.structurally_eq(&y)
+        )
 }
 
 /// Whether a `Filter` whose predicate is the literal `false` is anywhere in

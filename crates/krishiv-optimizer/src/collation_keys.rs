@@ -504,9 +504,8 @@ pub(crate) fn rewrite(root: Arc<LogicalPlan>) -> Res<Arc<LogicalPlan>> {
     let mut next = None;
     let top = Arc::clone(&root);
     dag::rewrite_up(root, &mut |p| {
-        let free = next.get_or_insert_with(|| {
-            max_id(&top, &mut std::collections::HashMap::new()).saturating_add(1)
-        });
+        let free =
+            next.get_or_insert_with(|| max_id(&top, &mut Default::default()).saturating_add(1));
         step(p, free)
     })
 }
