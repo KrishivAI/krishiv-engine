@@ -269,17 +269,6 @@ impl Planner<'_> {
         self.filter(input, predicate)
     }
 
-    /// A projection, its Python UDF calls (if any) evaluated below it.
-    pub(super) fn project_extracting(
-        &mut self,
-        input: &Arc<LogicalPlan>,
-        exprs: &[Arc<Expr>],
-    ) -> Result<Planned> {
-        let input = self.plan(input)?;
-        let (input, exprs) = self.extract_python(input, exprs)?;
-        self.project(input, &exprs)
-    }
-
     fn outer_join_with_python_udfs(
         &mut self,
         left: &Arc<LogicalPlan>,
@@ -327,7 +316,8 @@ impl Planner<'_> {
                 "a Python UDF call in a join condition reads no side",
             ));
         }
-        self.join_planned((left, right), (lp, rp), hints, kind, Some(on))
+        // A condition with Python UDF calls takes no build projection (S4').
+        self.join_planned((left, right), (lp, rp), hints, kind, Some(on), None)
     }
 }
 

@@ -831,8 +831,14 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             );
         }
         ExprNode::Cast { expr, to, mode } => {
+            // The shown text is Spark's; an identity tells the modes apart
+            // (an ANSI cast raises where a legacy one gives NULL), so a
+            // match on identity never swaps one for the other.
+            let identity = IDENTITY.with(std::cell::Cell::get);
             out.push(Piece::Str(match mode {
                 CastMode::Try => "TRY_CAST(",
+                CastMode::Legacy if identity => "CAST_LEGACY(",
+                CastMode::Ansi if identity => "CAST_ANSI(",
                 CastMode::Default | CastMode::Legacy | CastMode::Ansi => "CAST(",
             }));
             out.push(Piece::Expr(expr));

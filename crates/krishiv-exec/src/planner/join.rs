@@ -33,6 +33,7 @@ use krishiv_plan::{
 };
 
 use super::build::{Planned, Planner, internal, unsupported};
+use super::build_project::Request;
 use super::eval::canonical_carrier;
 use super::explain::ExplainNode;
 use super::orient::{InputStats, StatsSource, builds_left, orient};
@@ -53,6 +54,8 @@ impl Planner<'_> {
         kind: JoinKind,
         condition: &JoinCondition,
     ) -> Result<Planned> {
+        // Taken first: every path below either uses it or drops it.
+        let request = self.take_request(left, right);
         let on = match condition {
             JoinCondition::On(e) => Some(e),
             JoinCondition::None => None,
@@ -65,13 +68,15 @@ impl Planner<'_> {
         }
         let hints = (self.side_hint(left), self.side_hint(right));
         let planned = (self.plan(left)?, self.plan(right)?);
-        self.join_planned((left, right), planned, hints, kind, on)
+        self.join_planned((left, right), planned, hints, kind, on, request)
     }
 
     /// [`Self::join`] over inputs already planned: `logical` are the inputs
     /// as written (their statistics decide the build side), `planned` what
     /// they were planned to (a side may hold more columns than its logical
-    /// input, such as a `PythonEval`'s), `hints` their join hints.
+    /// input, such as a `PythonEval`'s), `hints` their join hints, `request`
+    /// what the consumer above may compute on the build side (S4'; `None`
+    /// drops it, which is always safe).
     pub(super) fn join_planned(
         &mut self,
         logical: (&Arc<LogicalPlan>, &Arc<LogicalPlan>),
@@ -79,6 +84,7 @@ impl Planner<'_> {
         hints: (Option<JoinStrategy>, Option<JoinStrategy>),
         kind: JoinKind,
         on: Option<&Arc<Expr>>,
+        request: Option<Request>,
     ) -> Result<Planned> {
         let logical = (Arc::clone(logical.0), Arc::clone(logical.1));
         let (left, right) = planned;
@@ -169,6 +175,18 @@ impl Planner<'_> {
         }
         let probe_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.0)).collect();
         let build_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.1)).collect();
+        // What the consumer above may compute on the build side (S4').
+        let (build, computed) = if kind == JoinKind::Inner {
+            let built = if build_left { &logical.0 } else { &logical.1 };
+            let fixed: Vec<&Expr> = build_exprs
+                .iter()
+                .map(AsRef::as_ref)
+                .chain(residual.iter().copied())
+                .collect();
+            self.project_build(request, built, build, &fixed)?
+        } else {
+            (build, None)
+        };
         let (probe, probe_keys) = self.with_columns(probe, &probe_exprs)?;
         let (build, build_keys) = self.with_columns(build, &build_exprs)?;
         // Keys of one Spark `STRING`/`BINARY` in different Arrow encodings
@@ -354,6 +372,9 @@ impl Planner<'_> {
         }
         for p in published {
             detail.push_str(&format!(", {p}"));
+        }
+        if let Some(c) = &computed {
+            detail.push_str(&format!(", {c}"));
         }
         if let Some((_, probe_stats, build_stats)) = preferred {
             // The statistics that chose to build the left input, labelled
@@ -665,7 +686,7 @@ pub(crate) fn estimated_bytes(rows: f64, schema: &arrow_schema::Schema) -> f64 {
 
 /// Spark's `DataType.defaultSize` (Spark 4.0 source) for the Arrow
 /// carriers of Spark's types.
-fn default_size(t: &arrow_schema::DataType) -> u64 {
+pub(super) fn default_size(t: &arrow_schema::DataType) -> u64 {
     use arrow_schema::DataType as T;
     match t {
         T::Null | T::Boolean | T::Int8 => 1,
