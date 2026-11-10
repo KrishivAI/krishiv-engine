@@ -475,6 +475,9 @@ fn start_group(
     // stream per partition). An index past `u32` is rejected rather than
     // wrapped to `u32::MAX`, which would collide.
     let mut next_partition: u64 = 0;
+    // The splits the earlier members of the fan-in read: a later member's splits come after
+    // them in Spark's partition numbering (UNION ALL).
+    let mut next_split: u64 = 0;
     for pipeline in members {
         let (source_id, source) = &pipeline.source;
         let mut source_ctx = ctx((*source_id, source.name()));
@@ -507,12 +510,15 @@ fn start_group(
         u32::try_from(next_partition + drivers as u64)
             .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
         next_partition += drivers as u64;
+        let split_base = next_split;
+        next_split += source.max_parallelism(&source_global) as u64;
         started.push(MemberStart {
             pipeline,
             operator_deps,
             source_global,
             drivers,
             base_partition: base,
+            split_base,
         });
     }
     // The members whose rows have a source order (an ordered source, and
@@ -557,6 +563,8 @@ struct MemberStart {
     drivers: usize,
     /// The first scheduler-assigned partition id of its drivers.
     base_partition: u32,
+    /// The splits the fan-in's earlier members read (added to this member's split numbers).
+    split_base: u64,
 }
 
 /// A pipeline group planned but not yet running: the state its members
@@ -646,6 +654,7 @@ fn spawn_group(
             turn: baton.as_ref().map(|b| (Arc::clone(b), member)),
             query: Arc::clone(query),
             executor: Arc::clone(executor),
+            split_base: m.split_base,
         });
         handles.extend(drivers(&run, m.base_partition, m.drivers)?);
         runs.push(run);
@@ -681,6 +690,7 @@ async fn run_group_sequential(
             turn: None,
             query: Arc::clone(query),
             executor: Arc::clone(executor),
+            split_base: m.split_base,
         });
         let mut handles = Drivers(FuturesUnordered::new());
         handles

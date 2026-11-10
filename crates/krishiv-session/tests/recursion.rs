@@ -886,3 +886,15 @@ fn a_seeded_random_enclosing_cte_is_the_same_set_on_every_run() {
         assert_eq!(column(rows(&s, q)), first);
     }
 }
+
+#[test]
+fn a_seeded_random_after_union_all_continues_the_partition_numbering() {
+    let s = Session::new().unwrap();
+    // Spark numbers the partitions of `a UNION ALL b` a's first, then b's: b's split 0 is
+    // partition 2 and draws seed 9, not seed 7 again.
+    let r = rows(
+        &s,
+        "SELECT count(DISTINCT x) FROM (SELECT rand(7) AS x FROM (SELECT id FROM range(0, 4, 1, 2) UNION ALL SELECT id FROM range(0, 4, 1, 2)))",
+    );
+    assert_eq!(r, vec![vec!["8".to_owned()]]);
+}

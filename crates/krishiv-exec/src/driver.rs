@@ -49,6 +49,8 @@ pub(crate) struct PipelineRun {
     pub(crate) turn: Option<(Arc<Baton>, usize)>,
     pub(crate) query: Arc<QueryContext>,
     pub(crate) executor: Arc<dyn Executor>,
+    /// The splits the fan-in's earlier members read: added to the source's split numbers.
+    pub(crate) split_base: u64,
 }
 
 /// A driver's place in its fan-in's [`Baton`]: it leaves when dropped, so
@@ -638,7 +640,7 @@ impl Driver {
         }
         self.position = position;
         if let Some(p) = position {
-            self.split.set(p);
+            self.split.set(p + run.split_base);
             let k = run.pipeline.operators.len() + 1;
             let slots = self.slots.get_mut();
             let local = slots.slot(k)?.local.as_mut();
