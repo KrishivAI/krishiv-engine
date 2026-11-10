@@ -470,7 +470,19 @@ impl Resolver<'_> {
         }
         // Spark's `CreateArray` / `CreateNamedStruct` / `CreateMap`: a constructor over operands of
         // one collation keeps it in the result type, which comparisons and keys then read.
-        if CONSTRUCTORS.contains(&name.as_str()) && one_collation(&kids[..n], &name) {
+        // A `map` of two or more collated keys stays refused: its duplicate-key check still compares
+        // bytes, where Spark's compares keys (`DUPLICATED_MAP_KEY` for 'a' and 'A' under UTF8_LCASE).
+        let keyed_map_dedupe = name == "map"
+            && n > 2
+            && kids[..n].iter().step_by(2).any(|k| {
+                k.ty.data_type
+                    .as_ref()
+                    .is_some_and(DataType::contains_collation)
+            });
+        if CONSTRUCTORS.contains(&name.as_str())
+            && !keyed_map_dedupe
+            && one_collation(&kids[..n], &name)
+        {
             return self.expr_node_inner(e, kids, in_agg, window_fn, cx);
         }
         if f.distinct

@@ -171,6 +171,13 @@ fn listagg_orders_and_deduplicates_by_key() {
         ),
         ["aabb"]
     );
+    // The DISTINCT form orders by key too (Spark 4.2.0: `aB`, bytes would give `Ba`).
+    assert_eq!(
+        rows(
+            "SELECT listagg(DISTINCT c) WITHIN GROUP (ORDER BY c) FROM (SELECT c COLLATE utf8_lcase c FROM VALUES ('a'),('B') t(c))"
+        ),
+        ["aB"]
+    );
 }
 
 #[test]
@@ -425,6 +432,9 @@ fn what_has_no_ordering_key_yet_is_refused() {
         "SELECT array('a' COLLATE utf8_lcase) x ORDER BY x",
         "SELECT max(array('a' COLLATE utf8_lcase))",
         "SELECT mode(c) FROM (SELECT 'a' COLLATE utf8_lcase c)",
+        // Two collated map keys: the duplicate check still compares bytes, where Spark 4.2.0
+        // raises `DUPLICATED_MAP_KEY` (and keeps `{'a': 2}` under `LAST_WIN`).
+        "SELECT map('a' COLLATE utf8_lcase, 1, 'A' COLLATE utf8_lcase, 2)",
     ] {
         assert_eq!(
             rows_in(&s, sql).unwrap_err().error_class(),

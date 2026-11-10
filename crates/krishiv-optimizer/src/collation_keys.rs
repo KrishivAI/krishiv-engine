@@ -152,6 +152,10 @@ fn keyed_call(f: &ResolvedFunction, origin: krishiv_plan::Origin) -> Res<Option<
         return Ok(None);
     }
     let with = |args: Vec<Arc<Expr>>| resolved(ResolvedFunction { args, ..f.clone() }, origin);
+    // A session UDAF named like a built-in takes its own arguments, never these rewrites.
+    if matches!(f.id, FunctionId::Udf { .. }) {
+        return Ok(None);
+    }
     let name = f.id.name();
     Ok(match name {
         "min" | "max" if f.args.len() == 1 && collated_string(&f.args[0]) => {
@@ -308,13 +312,15 @@ fn distinct_over_keys(
         outer_keys.push(Arc::clone(&read));
         pairs.push((Arc::clone(k), read));
     }
-    let val = fresh("v", &value)?;
-    items.push(alias(first(&value, val.data_type.clone())?, val.clone()));
-    // The ordering keys read the bare child when the value is its cast.
+    // The representative is the collated child when the value is its cast: an ordering that
+    // reads the child keeps its collation, so the outer call still orders by key.
+    let bare = peeled(&value);
+    let val = fresh("v", bare)?;
+    items.push(alias(first(bare, val.data_type.clone())?, val.clone()));
     let rep = column(&val);
-    pairs.push((Arc::clone(&value), Arc::clone(&rep)));
-    if !same(peeled(&value), &value) {
-        pairs.push((Arc::clone(peeled(&value)), rep));
+    pairs.push((Arc::clone(&value), substitute(&value, bare, &rep)?));
+    if !same(bare, &value) {
+        pairs.push((Arc::clone(bare), rep));
     }
     let mut grouping = keys.iter().map(key_if_collated).collect::<Res<Vec<_>>>()?;
     grouping.push(key(peeled(&value))?);
