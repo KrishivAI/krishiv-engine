@@ -259,6 +259,29 @@ impl Drop for CancelOnDrop {
     }
 }
 
+/// The bytes of `ranges` of the file at `path`, each read into a buffer that is never zeroed
+/// first. `None` when any range cannot be read in full, so the caller can take the slow path
+/// that reports why.
+fn read_ranges_uninit(path: &FsPath, ranges: &[Range<u64>]) -> Option<Vec<bytes::Bytes>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut out = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        let len = usize::try_from(r.end.checked_sub(r.start)?).ok()?;
+        file.seek(SeekFrom::Start(r.start)).ok()?;
+        let mut buf = Vec::with_capacity(len);
+        (&mut file)
+            .take(r.end - r.start)
+            .read_to_end(&mut buf)
+            .ok()?;
+        if buf.len() != len {
+            return None;
+        }
+        out.push(bytes::Bytes::from(buf));
+    }
+    Some(out)
+}
+
 #[async_trait]
 impl ObjectStore for SettledLocalFileSystem {
     async fn put_opts(
@@ -287,6 +310,18 @@ impl ObjectStore for SettledLocalFileSystem {
         location: &Path,
         ranges: &[Range<u64>],
     ) -> StoreResult<Vec<bytes::Bytes>> {
+        // `LocalFileSystem` zero-fills a buffer for every range it reads (a memset of every byte
+        // fetched, on the blocking pool). Read into spare capacity instead; any surprise (a
+        // missing file, a range past the end, an I/O error) goes to the inner store, which
+        // names it the way every caller already expects.
+        if let Ok(path) = self.inner.path_to_filesystem(location) {
+            let wanted = ranges.to_vec();
+            if let Ok(Some(read)) =
+                tokio::task::spawn_blocking(move || read_ranges_uninit(&path, &wanted)).await
+            {
+                return Ok(read);
+            }
+        }
         self.inner.get_ranges(location, ranges).await
     }
 
@@ -677,5 +712,36 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(listed.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod range_read_tests {
+    use super::read_ranges_uninit;
+
+    #[test]
+    fn ranges_read_in_full_match_the_file_and_overlap_freely() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("f");
+        let data: Vec<u8> = (0..=255).collect();
+        std::fs::write(&p, &data).unwrap();
+        let got = read_ranges_uninit(&p, &[10..20, 0..0, 250..256, 15..30]).unwrap();
+        assert_eq!(&got[0][..], &data[10..20]);
+        assert!(got[1].is_empty());
+        assert_eq!(&got[2][..], &data[250..256]);
+        assert_eq!(&got[3][..], &data[15..30]);
+    }
+
+    #[test]
+    fn a_range_past_the_end_or_a_missing_file_is_left_to_the_inner_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("f");
+        std::fs::write(&p, b"abcdef").unwrap();
+        assert!(read_ranges_uninit(&p, std::slice::from_ref(&(2..10))).is_none());
+        let backwards = std::ops::Range { start: 5, end: 2 };
+        assert!(read_ranges_uninit(&p, &[backwards]).is_none());
+        assert!(
+            read_ranges_uninit(&tmp.path().join("nope"), std::slice::from_ref(&(0..1))).is_none()
+        );
     }
 }
