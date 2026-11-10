@@ -161,6 +161,7 @@ impl RedactedSql {
     /// worker that quotes the text). It holds no secret the parts did not already hide, and `None`
     /// when the parts are not what `regions` of a real value would be: ranges out of order,
     /// empty, past the text, or off a character boundary.
+    #[doc(hidden)]
     #[must_use]
     pub fn from_redacted_parts(
         text: String,

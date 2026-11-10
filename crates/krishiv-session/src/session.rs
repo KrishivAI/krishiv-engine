@@ -1229,6 +1229,7 @@ impl Session {
             variables_version: variables.version,
             policy_version: self.state.policy.version().0,
             text: None,
+            source: SourceId(self.state.sql_sources.fetch_add(1, Ordering::Relaxed)),
             statement: None,
             statement_class: None,
             row: Arc::default(),
@@ -1462,15 +1463,18 @@ impl Session {
         let mut texts = Vec::new();
         if let Some(t) = &env.statement {
             texts.push(krishiv_exec::physical::SourceText {
-                id: 0,
-                text: t.clone(),
+                id: env.source.0,
+                text: Arc::new(t.clone()),
             });
         }
         texts.extend(
             env.sql_functions
                 .source_texts()
                 .into_iter()
-                .map(|(id, text)| krishiv_exec::physical::SourceText { id: id.0, text }),
+                .map(|(id, text)| krishiv_exec::physical::SourceText {
+                    id: id.0,
+                    text: Arc::new(text),
+                }),
         );
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
             .with_sql_texts(texts)
@@ -2647,8 +2651,13 @@ pub(crate) struct QueryEnv {
     /// The statement as the session may show it (redacted), for
     /// `system.queries`; `None` for a query no SQL text started.
     pub(crate) text: Option<Arc<str>>,
-    /// The redacted statement `SourceId(0)` indexes, for the SQL context of run-time errors
-    /// (the physical plan carries it); `None` for a query no SQL text started.
+    /// The source id the statement of this query is lowered with, fresh for each query env: a plan
+    /// kept from an earlier statement (a temporary view, a DataFrame built from another `sql`) points
+    /// into that statement's text, which this query's plan does not carry, so its expressions get no
+    /// SQL context for a run-time error rather than the wrong fragment.
+    pub(crate) source: SourceId,
+    /// The redacted statement `source` indexes, for the SQL context of run-time errors (the
+    /// physical plan carries it); `None` for a query no SQL text started.
     pub(crate) statement: Option<RedactedSql>,
     /// The statement's class (`StatementClass::name`), for `system.queries`.
     pub(crate) statement_class: Option<&'static str>,

@@ -317,7 +317,7 @@ pub struct SourceText {
     /// The `SourceId` the origins carry.
     pub id: u32,
     /// The redacted SQL text, with the regions that were redacted (spans index the original).
-    pub text: krishiv_common::redact::RedactedSql,
+    pub text: Arc<krishiv_common::redact::RedactedSql>,
 }
 plan_data!(struct SourceText { id, text });
 

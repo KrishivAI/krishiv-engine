@@ -13,7 +13,7 @@ use krishiv_common::error::{
     IdentifierTooManyNameParts, KrishivError, NotAConstantStringNotConstant,
     NotAConstantStringNull, NotAConstantStringWrongType,
 };
-use krishiv_plan::{Literal, SourceId};
+use krishiv_plan::Literal;
 use krishiv_sql::ast::{Expr, ExprKind, Span};
 use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
 use krishiv_sql::{ParserOptions, parse_multipart_identifier, parse_named_expression};
@@ -125,7 +125,7 @@ impl Session {
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<krishiv_plan::Plan, KrishivError> {
         let cs = env.parser.case_sensitive;
-        krishiv_sql::lower_identified(query, SourceId(0), cs, &env.identifier_spans)
+        krishiv_sql::lower_identified(query, env.source, cs, &env.identifier_spans)
             .map_err(|e| crate::session::sql_context(e.error, redacted, e.span.start, e.span.end))
     }
 

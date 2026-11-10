@@ -49,7 +49,7 @@ pub(super) fn has_context(f: &ResolvedFunction) -> bool {
 #[derive(Debug)]
 pub(super) struct Contextual {
     inner: Arc<dyn PhysExpr>,
-    text: RedactedSql,
+    text: Arc<RedactedSql>,
     start: usize,
     end: usize,
 }
@@ -72,9 +72,13 @@ pub(super) fn wrap(e: &Expr, inner: Arc<dyn PhysExpr>, env: &EvalEnv) -> Arc<dyn
     if start >= end {
         return inner;
     }
+    env.used_texts
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(source.0);
     Arc::new(Contextual {
         inner,
-        text: text.text.clone(),
+        text: Arc::clone(&text.text),
         start,
         end,
     })

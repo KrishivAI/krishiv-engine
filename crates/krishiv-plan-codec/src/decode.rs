@@ -341,7 +341,10 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
                     })
                     .collect();
                 krishiv_common::redact::RedactedSql::from_redacted_parts(t.text.clone(), regions)
-                    .map(|text| krishiv_exec::physical::SourceText { id: t.id, text })
+                    .map(|text| krishiv_exec::physical::SourceText {
+                        id: t.id,
+                        text: std::sync::Arc::new(text),
+                    })
                     .ok_or_else(|| corrupt("a SQL text with inconsistent redacted regions"))
             })
             .collect::<Result<Vec<_>>>()?,

@@ -229,6 +229,9 @@ pub(crate) struct EvalEnv {
     pub(crate) partition_shift: u32,
     /// The SQL texts expression origins index, for run-time error contexts (plan data).
     pub(crate) sql_texts: Arc<[SourceText]>,
+    /// The ids of the texts an expression compiled with this environment quoted: the plan keeps
+    /// only those (`to_plan`), not every function body of the session.
+    pub(crate) used_texts: Arc<std::sync::Mutex<std::collections::BTreeSet<u32>>>,
 }
 
 impl EvalEnv {
@@ -305,6 +308,7 @@ impl EvalEnv {
             seed_salt: Arc::new(AtomicU64::new(0)),
             partition_shift: 0,
             sql_texts: Arc::from(Vec::new()),
+            used_texts: Arc::default(),
         }
     }
 
@@ -344,6 +348,7 @@ impl EvalEnv {
             seed_salt: Arc::new(AtomicU64::new(0)),
             partition_shift: 0,
             sql_texts: Arc::from(env.sql_texts.clone()),
+            used_texts: Arc::default(),
         }
     }
 
@@ -365,7 +370,18 @@ impl EvalEnv {
             binary_output_style: (self.binary_style
                 != krishiv_kernels::binary_style::BinaryStyle::default())
             .then(|| Arc::from(self.binary_style.name())),
-            sql_texts: self.sql_texts.to_vec(),
+            sql_texts: {
+                // Only the texts the planning-time compile of this plan's expressions quoted.
+                let used = self
+                    .used_texts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                self.sql_texts
+                    .iter()
+                    .filter(|t| used.contains(&t.id))
+                    .cloned()
+                    .collect()
+            },
         }
     }
 }
@@ -1188,6 +1204,7 @@ mod tests {
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             partition_shift: 0,
             sql_texts: Arc::from(Vec::new()),
+            used_texts: Arc::default(),
         }
     }
 

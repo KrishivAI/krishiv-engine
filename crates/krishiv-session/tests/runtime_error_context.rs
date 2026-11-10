@@ -233,3 +233,29 @@ fn no_error_no_context() {
         1
     );
 }
+
+/// A plan kept from an earlier statement points into that statement's text, which a later plan
+/// does not carry: its expressions get no context, never another statement's fragment.
+#[test]
+fn a_plan_from_an_earlier_statement_is_never_quoted_against_the_wrong_text() {
+    let s = Session::new().unwrap();
+    // The view's cast is the first statement's text; the second statement is shorter and different.
+    let first = block_on(s.sql("SELECT CAST(x AS INT) AS y FROM VALUES ('a') AS t(x)")).unwrap();
+    block_on(first.create_or_replace_temp_view("v")).unwrap();
+    let e = match block_on(async { s.sql("SELECT 1, y FROM v").await?.collect().await }) {
+        Ok(b) => panic!("ran: {b:?}"),
+        Err(e) => e,
+    };
+    assert_eq!(e.error_class().name(), "CAST_INVALID_INPUT");
+    assert!(
+        e.query_contexts().is_empty(),
+        "quoted the wrong text: {:?}",
+        e.query_contexts()
+    );
+    // The same holds for a DataFrame built from another statement and joined into this one.
+    let a = block_on(s.sql("SELECT CAST(x AS INT) AS y FROM VALUES ('a') AS t(x)")).unwrap();
+    let b = block_on(s.sql("SELECT 1 AS k")).unwrap();
+    let joined = a.cross_join(&b);
+    let e = block_on(joined.collect()).unwrap_err();
+    assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+}

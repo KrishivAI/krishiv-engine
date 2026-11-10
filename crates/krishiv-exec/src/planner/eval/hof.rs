@@ -2288,6 +2288,7 @@ mod tests {
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             partition_shift: 0,
             sql_texts: Arc::from(Vec::new()),
+            used_texts: Arc::default(),
         }
     }
 
