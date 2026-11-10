@@ -1,10 +1,11 @@
 ---
 source: crates/krishiv-exec/tests/planner/tpch.rs
+assertion_line: 630
 expression: tpch.plan(q).to_string()
 ---
 Sort [cntrycode#26 ASC NULLS FIRST]
 +- Exchange rangepartitioning(cntrycode#26 ASC NULLS FIRST)
-   +- Project [cntrycode#26, count(1)#4611686018427387912 AS numcust#27, sum(c_acctbal#5)#4611686018427387913 AS totacctbal#28]
+   +- Project [cntrycode#26, count(1)#4611686018427387920 AS numcust#27, sum(c_acctbal#5)#4611686018427387921 AS totacctbal#28]
       +- HashAggregate keys=[cntrycode#26], functions=[count(1), sum(c_acctbal#5)]
          +- Exchange hashpartitioning(cntrycode#26)
             +- PartialHashAggregate keys=[cntrycode#26], functions=[count(1), sum(c_acctbal#5)]
@@ -21,4 +22,5 @@ Sort [cntrycode#26 ASC NULLS FIRST]
                      :                    +- Filter ((c_acctbal#5 > 0.00) and (substring(c_phone#4, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17'))) (ids +8)
                      :                       +- Scan spark_catalog.default.customer [c_custkey#0, c_phone#4, c_acctbal#5], PushedFilters: [((c_acctbal#5 > 0.00) and (substring(c_phone#4, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17')))]
                      +- BroadcastExchange
-                        +- Scan spark_catalog.default.orders [o_custkey#18]
+                        +- Filter isnotnull(o_custkey#18)
+                           +- Scan spark_catalog.default.orders [o_custkey#18], PushedFilters: [isnotnull(o_custkey#18)]

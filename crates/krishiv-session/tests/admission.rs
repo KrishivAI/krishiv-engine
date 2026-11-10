@@ -533,4 +533,27 @@ async fn the_request_carries_the_estimate_for_a_controller_that_wants_it() {
     assert_eq!(seen, vec![Some(Some(0))]);
     assert!(!krishiv_session::Unlimited.uses_estimate());
     assert!(gate.uses_estimate());
+    // A scan of a table with statistics: the request carries the same estimate as
+    // `estimate_sql` of that query, not a trivial or stale one.
+    let dir = tempfile::tempdir().unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE t (a INT, b STRING) USING parquet",
+        "INSERT INTO t VALUES (1, 'x'), (2, 'y'), (3, 'z')",
+        "ANALYZE TABLE t COMPUTE STATISTICS",
+    ] {
+        s.sql(sql).await.unwrap().collect().await.unwrap();
+    }
+    let query = "SELECT a FROM t WHERE a > 1";
+    let expected = s
+        .estimate_sql(query)
+        .await
+        .unwrap()
+        .and_then(|e| e.scan_bytes);
+    assert!(expected.is_some_and(|b| b > 0), "{expected:?}");
+    gate.estimates.lock().unwrap().clear();
+    s.sql(query).await.unwrap().collect().await.unwrap();
+    assert_eq!(*gate.estimates.lock().unwrap(), vec![Some(expected)]);
 }

@@ -1,6 +1,6 @@
 {
   "cases": {
-    "depends-on-command": [
+    "explain-plan-text": [
       6,
       7,
       8,
@@ -12,19 +12,13 @@
       14,
       15,
       16,
-      19,
-      21,
-      29
-    ],
-    "nested-interval-types": [
-      20
-    ],
-    "query-features": [
-      17
-    ],
-    "sql-commands": [
+      17,
       18,
-      22
+      19,
+      20,
+      21,
+      22,
+      29
     ]
   },
   "file": "explain",
