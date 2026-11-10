@@ -11,6 +11,7 @@
 )]
 
 mod broadcast_reuse;
+mod build_projection;
 mod conditionals;
 mod correlated_or;
 mod cse;

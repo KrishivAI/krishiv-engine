@@ -305,6 +305,8 @@ pub(crate) struct Planner<'a> {
     pub(crate) stats: PlanStats,
     /// The schema of each loop being planned, by id, for its `LoopRef`s.
     loops: HashMap<u32, SchemaRef>,
+    /// Build-side projections requested and applied (`build_project`).
+    pub(crate) moves: super::build_project::Moves,
 }
 
 impl<'a> Planner<'a> {
@@ -338,6 +340,7 @@ impl<'a> Planner<'a> {
             next_exchange: 0,
             scan_filters: HashMap::new(),
             loops: HashMap::new(),
+            moves: super::build_project::Moves::default(),
         }
     }
 
@@ -409,18 +412,12 @@ impl<'a> Planner<'a> {
                 }
                 self.filter(input, predicate)
             }
-            PlanNode::Project { input, exprs } => {
-                let input = self.plan(input)?;
-                self.project(input, exprs)
-            }
+            PlanNode::Project { input, exprs } => self.plan_project(p, input, exprs),
             PlanNode::Aggregate {
                 input,
                 grouping,
                 aggregates,
-            } => {
-                let input = self.plan(input)?;
-                self.aggregate(input, grouping, aggregates)
-            }
+            } => self.plan_aggregate(p, input, grouping, aggregates),
             PlanNode::PartialAggregate {
                 input,
                 keys,

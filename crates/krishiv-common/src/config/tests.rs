@@ -487,6 +487,30 @@ fn spark_aliases_map_to_krishiv_keys() {
         lookup("krishiv.sql.ansi.enabled").map(|e| e.key),
         Some(ANSI_ENABLED.key)
     );
+    assert_eq!(
+        lookup("spark.sql.collation.schemaLevel.enabled").map(|e| e.key),
+        Some(SCHEMA_LEVEL_COLLATIONS_ENABLED.key)
+    );
+}
+
+/// Schema-level collations: off by default (Spark 4.2), a boolean.
+#[test]
+fn schema_level_collations_default_off_and_parse() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&SCHEMA_LEVEL_COLLATIONS_ENABLED),
+        Some(&ConfigValue::Bool(false))
+    );
+    c.set("spark.sql.collation.schemaLevel.enabled", "true")
+        .unwrap();
+    assert_eq!(
+        c.get(&SCHEMA_LEVEL_COLLATIONS_ENABLED),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert!(
+        c.set("krishiv.sql.collation.schemaLevel.enabled", "maybe")
+            .is_err()
+    );
 }
 
 #[test]
@@ -1093,6 +1117,22 @@ fn ui_enabled_defaults_on_and_parses() {
     );
     assert!(c.set("krishiv.ui.enabled", "maybe").is_err());
     assert_eq!(UI_ENABLED.scope, Scope::Cluster);
+}
+
+#[test]
+fn build_side_projection_defaults_on_and_parses_booleans() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_JOIN_BUILD_PROJECTION)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.join.buildProjection", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(
+        c.set("krishiv.exec.join.buildProjection", "sometimes")
+            .is_err()
+    );
 }
 
 #[test]
