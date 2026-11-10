@@ -117,8 +117,11 @@ impl Call {
         };
         // Checked before the state's lock is taken: reading the frames calls
         // into Python, and the pool thread takes that lock attached
-        // (`finish`). No bytecode runs between the check and the raise, so
-        // on a build with a GIL the thread cannot move meanwhile.
+        // (`finish`). The interrupter runs no bytecode of its own between the
+        // check and the raise, so on a build with a GIL the thread cannot move
+        // meanwhile, except on 3.11/3.12 when an allocation of the walk starts
+        // a garbage collection whose finalizers run bytecode and hand the GIL
+        // over (rare; the outcome is then the one before this check existed).
         if importing(py, id) {
             return true;
         }
@@ -163,6 +166,8 @@ fn drain(py: Python<'_>) {
         // Its error is the interrupt being dropped.
         let _ = noop.call0(py);
     }
+    // An `Err` of the first `get_or_try_init` is the same case: the interrupt
+    // was raised inside `eval`, and the next drain builds the function.
 }
 
 /// Whether thread `id` is inside importlib's bootstrap (a frame of it
@@ -175,17 +180,28 @@ fn drain(py: Python<'_>) {
 /// forever. Outside importlib the exception is raised at the thread's next
 /// check, at the latest when it enters a Python function, so an import begun
 /// after this check fails at its first frame, before it takes a lock. On a
-/// free-threaded build the thread runs meanwhile, which leaves a window of
-/// the few instructions between this read and the raise.
+/// free-threaded build the thread runs meanwhile, which leaves a window from
+/// the frames' snapshot to the raise (microseconds: the walk and the state's
+/// lock).
 ///
-/// Frames that cannot be read count as not importing (the interrupt is raised
-/// as before).
+/// `<frozen importlib` also matches `importlib.util` and `importlib.machinery`
+/// (frozen too): a call inside those waits as well, at most until it leaves
+/// them. A frame whose file name cannot be read counts as not importlib; a
+/// stack that cannot be read at all counts as not importing (the interrupt is
+/// raised as before).
 fn importing(py: Python<'_>, id: c_ulong) -> bool {
     /// Frames walked at most: deeper stacks are taken as not importing.
     const MAX_DEPTH: usize = 2048;
+    // `sys._current_frames`, looked up once: not through `__import__`, which a
+    // user hook may replace with Python code.
+    static CURRENT_FRAMES: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
     let frames = || -> PyResult<bool> {
-        let sys = py.import(intern!(py, "sys"))?;
-        let all = sys.call_method0(intern!(py, "_current_frames"))?;
+        let current = CURRENT_FRAMES.get_or_try_init(py, || {
+            py.import(intern!(py, "sys"))?
+                .getattr(intern!(py, "_current_frames"))
+                .map(Bound::unbind)
+        })?;
+        let all = current.bind(py).call0()?;
         let Ok(mut frame) = all.get_item(id) else {
             return Ok(false);
         };
@@ -193,10 +209,12 @@ fn importing(py: Python<'_>, id: c_ulong) -> bool {
             if frame.is_none() {
                 break;
             }
-            let file = frame
-                .getattr(intern!(py, "f_code"))?
-                .getattr(intern!(py, "co_filename"))?;
-            if file.extract::<&str>()?.starts_with("<frozen importlib") {
+            let in_importlib = frame
+                .getattr(intern!(py, "f_code"))
+                .and_then(|code| code.getattr(intern!(py, "co_filename")))
+                .and_then(|file| file.extract::<String>())
+                .is_ok_and(|file| file.starts_with("<frozen importlib"));
+            if in_importlib {
                 return Ok(true);
             }
             frame = frame.getattr(intern!(py, "f_back"))?;

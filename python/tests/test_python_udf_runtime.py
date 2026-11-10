@@ -289,8 +289,11 @@ def test_a_failed_query_interrupts_a_call_only_after_the_import_it_is_in(tmp_pat
     while "interrupted" not in seen and time.monotonic() < deadline:
         time.sleep(0.05)
     assert seen == {"imported": True, "interrupted": True}, seen
-    # Imports and later calls still work on every pool thread.
-    import json  # noqa: F401
+    # The import lock is free: a module not imported yet loads on this thread (through importlib's locks), and
+    # later calls run on every pool thread (pyarrow imports in each `pc.call_function`).
+    (tmp_path / "krishiv_test_fresh_module.py").write_text("VALUE = 1\n")
+    sys.modules.pop("krishiv_test_fresh_module", None)
+    assert importlib.import_module("krishiv_test_fresh_module").VALUE == 1
 
     spark._native.register_python_udf("py_plus_after_import", ARROW_BATCHED, "bigint", True, True, _plus_one)
     rows = spark.sql("SELECT py_plus_after_import(id) FROM range(0, 8, 1, 4) ORDER BY 1").collect()
