@@ -1,0 +1,545 @@
+## __init__.py
+__all__
+def build_info() -> dict[str, str]
+def metrics() -> list[dict[str, Any]]
+def session() -> SparkSession
+## _native.pyi
+ArrowStream.def check_error(self) -> None
+ArrowStream.def consumed(self) -> bool
+ArrowStream.def from_arrow(data: object) -> ArrowStream
+Column.def add(self, other: Column) -> Column
+Column.def alias(self, name: str) -> Column
+Column.def and_(self, other: Column) -> Column
+Column.def between(self, low: Column, high: Column) -> Column
+Column.def cast(self, to: str) -> Column
+Column.def div(self, other: Column) -> Column
+Column.def drop_fields(self, names: list[str]) -> Column
+Column.def eq(self, other: Column) -> Column
+Column.def eq_null_safe(self, other: Column) -> Column
+Column.def ge(self, other: Column) -> Column
+Column.def get_field(self, name: str) -> Column
+Column.def gt(self, other: Column) -> Column
+Column.def invert(self) -> Column
+Column.def is_not_null(self) -> Column
+Column.def is_null(self) -> Column
+Column.def isin(self, values: list[Column]) -> Column
+Column.def le(self, other: Column) -> Column
+Column.def like(self, pattern: str) -> Column
+Column.def lt(self, other: Column) -> Column
+Column.def mul(self, other: Column) -> Column
+Column.def ne(self, other: Column) -> Column
+Column.def neg(self) -> Column
+Column.def or_(self, other: Column) -> Column
+Column.def over(self, window: WindowSpec) -> Column
+Column.def rem(self, other: Column) -> Column
+Column.def sort_order(self, ascending: bool, nulls_first: bool) -> Column
+Column.def sub(self, other: Column) -> Column
+Column.def try_cast(self, to: str) -> Column
+Column.def with_field(self, name: str, value: Column) -> Column
+DataFrame.def agg(self, cols: list[Column]) -> DataFrame
+DataFrame.def alias(self, alias: str) -> DataFrame
+DataFrame.def cache(self) -> DataFrame
+DataFrame.def col(self, name: str) -> Column
+DataFrame.def count(self) -> int
+DataFrame.def create_or_replace_temp_view(self, name: str) -> None
+DataFrame.def distinct(self) -> DataFrame
+DataFrame.def except_all(self, other: DataFrame) -> DataFrame
+DataFrame.def execute(self) -> ArrowStream
+DataFrame.def explain(self, mode: str, json: bool=...) -> str
+DataFrame.def filter(self, condition: Column) -> DataFrame
+DataFrame.def filter_expr(self, condition: str) -> DataFrame
+DataFrame.def group_by(self, cols: list[Column]) -> GroupedData
+DataFrame.def hint(self, name: str, params: list[Column]) -> DataFrame
+DataFrame.def intersect(self, other: DataFrame) -> DataFrame
+DataFrame.def intersect_all(self, other: DataFrame) -> DataFrame
+DataFrame.def is_cached(self) -> bool
+DataFrame.def join(self, other: DataFrame, on: Column | None=..., using: list[str] | None=..., how: str=...) -> DataFrame
+DataFrame.def limit(self, n: int) -> DataFrame
+DataFrame.def offset(self, n: int) -> DataFrame
+DataFrame.def order_by(self, cols: list[Column]) -> DataFrame
+DataFrame.def persist(self, use_disk: bool, use_memory: bool, use_offheap: bool, deserialized: bool, replication: int) -> DataFrame
+DataFrame.def sample(self, with_replacement: bool, fraction: float, seed: int) -> DataFrame
+DataFrame.def schema(self) -> list[tuple[str, str, bool]]
+DataFrame.def select(self, cols: list[Column]) -> DataFrame
+DataFrame.def select_expr(self, exprs: list[str]) -> DataFrame
+DataFrame.def subtract(self, other: DataFrame) -> DataFrame
+DataFrame.def to_df(self, names: list[str]) -> DataFrame
+DataFrame.def union(self, other: DataFrame) -> DataFrame
+DataFrame.def union_by_name(self, other: DataFrame, allow_missing_columns: bool) -> DataFrame
+DataFrame.def unpersist(self, blocking: bool=...) -> DataFrame
+DataFrame.def unpivot(self, ids: list[Column], values: list[tuple[str, Column]], variable: str, value: str) -> DataFrame
+DataFrame.def with_column(self, name: str, value: Column) -> DataFrame
+DataFrame.def write(self, format: str, mode: str, path: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
+DataFrame.def write_table(self, insert_into: bool, table: str, format: str | None, mode: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
+DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
+GroupedData.def agg(self, cols: list[Column]) -> DataFrame
+Session.def cache_reserved(self) -> int
+Session.def clear_cache(self) -> None
+Session.def conf_get(self, key: str) -> str | None
+Session.def conf_is_modifiable(self, key: str) -> bool
+Session.def conf_set(self, key: str, value: str) -> None
+Session.def conf_unset(self, key: str) -> None
+Session.def create_dataframe(self, data: object) -> DataFrame
+Session.def drop_temp_view(self, name: str) -> bool
+Session.def is_dataframe_table(name: str) -> bool
+Session.def metrics(self) -> list[dict[str, object]]
+Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=...) -> DataFrame
+Session.def refresh_files(self) -> None
+Session.def refresh_table(self, name: str) -> None
+Session.def sql(self, query: str) -> DataFrame
+Session.def table(self, name: str) -> DataFrame
+Session.def temp_table_names(self) -> list[str]
+Session.def uncache_table(self, name: str) -> None
+WindowSpec.def order_by(self, cols: list[Column]) -> WindowSpec
+WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
+WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
+WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
+__all__
+class ArrowStream()
+class Column()
+class DataFrame()
+class GroupedData()
+class Session()
+class WindowSpec()
+def call_function(name: str, args: list[Column]) -> Column
+def col(name: str) -> Column
+def count_distinct(cols: list[Column]) -> Column
+def count_star() -> Column
+def expr(text: str) -> Column
+def lit(value: object) -> Column
+def map_literal(pairs: list[tuple[str, str]]) -> Column
+## errors.py
+DataFrameQueryContext.def __init__(self, callSite: str='', summary: str='') -> None
+DataFrameQueryContext.def callSite(self) -> str
+DataFrameQueryContext.def contextType(self) -> QueryContextType
+DataFrameQueryContext.def fragment(self) -> str
+DataFrameQueryContext.def objectName(self) -> str
+DataFrameQueryContext.def objectType(self) -> str
+DataFrameQueryContext.def startIndex(self) -> int
+DataFrameQueryContext.def stopIndex(self) -> int
+DataFrameQueryContext.def summary(self) -> str
+KrishivException
+PySparkAssertionError.def __init__(self, message: str | None=None, errorClass: str | None=None, messageParameters: dict[str, Any] | None=None, data: Iterable[Any] | None=None) -> None
+PySparkException.def __init__(self, message: str | None=None, errorClass: str | None=None, messageParameters: dict[str, Any] | None=None, contexts: list[QueryContext] | list[tuple[Any, ...]] | None=None, sqlState: str | None=None, rendered: str | None=None) -> None
+PySparkException.def getCondition(self) -> str | None
+PySparkException.def getErrorClass(self) -> str | None
+PySparkException.def getMessage(self) -> str
+PySparkException.def getMessageParameters(self) -> dict[str, Any] | None
+PySparkException.def getQueryContext(self) -> list[QueryContext]
+PySparkException.def getSqlState(self) -> str | None
+QueryContext.def callSite(self) -> str
+QueryContext.def contextType(self) -> QueryContextType
+QueryContext.def fragment(self) -> str
+QueryContext.def objectName(self) -> str
+QueryContext.def objectType(self) -> str
+QueryContext.def startIndex(self) -> int
+QueryContext.def stopIndex(self) -> int
+QueryContext.def summary(self) -> str
+SqlQueryContext.def __init__(self, fragment: str='', start: int=0, stop: int=0, objectType: str='', objectName: str='', callSite: str='', summary: str='') -> None
+SqlQueryContext.def callSite(self) -> str
+SqlQueryContext.def contextType(self) -> QueryContextType
+SqlQueryContext.def fragment(self) -> str
+SqlQueryContext.def objectName(self) -> str
+SqlQueryContext.def objectType(self) -> str
+SqlQueryContext.def startIndex(self) -> int
+SqlQueryContext.def stopIndex(self) -> int
+SqlQueryContext.def summary(self) -> str
+class AnalysisException(PySparkException)
+class ArithmeticException(PySparkException)
+class ArrayIndexOutOfBoundsException(PySparkException)
+class DataFrameQueryContext(QueryContext)
+class DateTimeException(PySparkException)
+class IllegalArgumentException(PySparkException)
+class NumberFormatException(IllegalArgumentException)
+class ParseException(AnalysisException)
+class PySparkAssertionError(PySparkException, AssertionError)
+class PySparkAttributeError(PySparkException, AttributeError)
+class PySparkException(Exception)
+class PySparkImportError(PySparkException, ImportError)
+class PySparkIndexError(PySparkException, IndexError)
+class PySparkKeyError(PySparkException, KeyError)
+class PySparkNotImplementedError(PySparkException, NotImplementedError)
+class PySparkRuntimeError(PySparkException, RuntimeError)
+class PySparkTypeError(PySparkException, TypeError)
+class PySparkValueError(PySparkException, ValueError)
+class QueryContext(ABC)
+class QueryContextType(Enum)
+class QueryExecutionException(PySparkException)
+class SparkNoSuchElementException(PySparkException)
+class SparkRuntimeException(PySparkException)
+class SparkUpgradeException(PySparkException)
+class SqlQueryContext(QueryContext)
+class UnknownException(PySparkException)
+class UnsupportedOperationException(PySparkException)
+def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTypeError
+def not_implemented(feature: str) -> PySparkNotImplementedError
+def unsupported_feature(feature: str) -> UnsupportedOperationException
+## sql/__init__.py
+__all__
+## sql/column.py
+Column.def __init__(self, native: _native.Column) -> None
+Column.def alias(self, *alias: str, **kwargs: Any) -> Column
+Column.def asc(self) -> Column
+Column.def asc_nulls_first(self) -> Column
+Column.def asc_nulls_last(self) -> Column
+Column.def between(self, lowerBound: Any, upperBound: Any) -> Column
+Column.def bitwiseAND(self, other: Any) -> Column
+Column.def bitwiseOR(self, other: Any) -> Column
+Column.def bitwiseXOR(self, other: Any) -> Column
+Column.def cast(self, dataType: DataType | str) -> Column
+Column.def contains(self, other: Any) -> Column
+Column.def desc(self) -> Column
+Column.def desc_nulls_first(self) -> Column
+Column.def desc_nulls_last(self) -> Column
+Column.def dropFields(self, *fieldNames: str) -> Column
+Column.def endswith(self, other: Any) -> Column
+Column.def eqNullSafe(self, other: Any) -> Column
+Column.def getField(self, name: Any) -> Column
+Column.def getItem(self, key: Any) -> Column
+Column.def ilike(self, other: str) -> Column
+Column.def isNaN(self) -> Column
+Column.def isNotNull(self) -> Column
+Column.def isNull(self) -> Column
+Column.def isin(self, *cols: Any) -> Column
+Column.def like(self, other: str) -> Column
+Column.def otherwise(self, value: Any) -> Column
+Column.def over(self, window: WindowSpec) -> Column
+Column.def rlike(self, other: str) -> Column
+Column.def startswith(self, other: Any) -> Column
+Column.def substr(self, startPos: Any, length: Any) -> Column
+Column.def try_cast(self, dataType: DataType | str) -> Column
+Column.def when(self, condition: Column, value: Any) -> Column
+Column.def withField(self, fieldName: str, col: Column) -> Column
+class Column()
+## sql/conf.py
+RuntimeConfig.def __init__(self, session: _native.Session) -> None
+RuntimeConfig.def get(self, key: str, default: object=_UNSET) -> str | None
+RuntimeConfig.def set(self, key: str, value: str | int | bool) -> None
+RuntimeConfig.def unset(self, key: str) -> None
+class RuntimeConfig()
+## sql/dataframe.py
+ColumnOrName
+ColumnsOrNames
+DataFrame.def __init__(self, native: _native.DataFrame, session: SparkSession) -> None
+DataFrame.def agg(self, *exprs: Column) -> DataFrame
+DataFrame.def alias(self, alias: str) -> DataFrame
+DataFrame.def approxQuantile(self, col: str | list[str] | tuple[str, ...], probabilities: list[float] | tuple[float, ...], relativeError: float) -> list[Any]
+DataFrame.def cache(self) -> DataFrame
+DataFrame.def coalesce(self, numPartitions: int) -> DataFrame
+DataFrame.def collect(self) -> list[Row]
+DataFrame.def columns(self) -> list[str]
+DataFrame.def corr(self, col1: str, col2: str, method: str | None=None) -> float
+DataFrame.def count(self) -> int
+DataFrame.def cov(self, col1: str, col2: str) -> float
+DataFrame.def createOrReplaceTempView(self, name: str) -> None
+DataFrame.def crossJoin(self, other: DataFrame) -> DataFrame
+DataFrame.def crosstab(self, col1: str, col2: str) -> DataFrame
+DataFrame.def describe(self, *cols: str | list[str]) -> DataFrame
+DataFrame.def distinct(self) -> DataFrame
+DataFrame.def drop(self, *cols: ColumnOrName) -> DataFrame
+DataFrame.def dropDuplicates(self, subset: list[str] | tuple[str, ...] | None=None) -> DataFrame
+DataFrame.def dropna(self, how: str | None='any', thresh: int | None=None, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
+DataFrame.def dtypes(self) -> list[tuple[str, str]]
+DataFrame.def exceptAll(self, other: DataFrame) -> DataFrame
+DataFrame.def explain(self, extended: bool | str | None=None, mode: str | None=None, *, analyze: bool=False, verbose: bool=False) -> None
+DataFrame.def explainString(self, extended: bool | str | None=None, mode: str | None=None, *, analyze: bool=False, verbose: bool=False, json: bool=False) -> str
+DataFrame.def fillna(self, value: float | str | bool | dict[str, Any], subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
+DataFrame.def filter(self, condition: Column | str) -> DataFrame
+DataFrame.def first(self) -> Row | None
+DataFrame.def freqItems(self, cols: list[str] | tuple[str, ...], support: float | None=None) -> DataFrame
+DataFrame.def groupBy(self, *cols: ColumnsOrNames) -> GroupedData
+DataFrame.def head(self, n: int | None=None) -> Row | list[Row] | None
+DataFrame.def hint(self, name: str, *parameters: Any) -> DataFrame
+DataFrame.def intersect(self, other: DataFrame) -> DataFrame
+DataFrame.def intersectAll(self, other: DataFrame) -> DataFrame
+DataFrame.def is_cached(self) -> bool
+DataFrame.def join(self, other: DataFrame, on: str | list[str] | Column | list[Column] | None=None, how: str | None=None) -> DataFrame
+DataFrame.def limit(self, num: int) -> DataFrame
+DataFrame.def melt(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
+DataFrame.def na(self) -> DataFrameNaFunctions
+DataFrame.def offset(self, num: int) -> DataFrame
+DataFrame.def orderBy(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=True) -> DataFrame
+DataFrame.def persist(self, storageLevel: StorageLevel=StorageLevel.MEMORY_AND_DISK) -> DataFrame
+DataFrame.def printSchema(self) -> None
+DataFrame.def profile(self) -> ProfileView
+DataFrame.def repartition(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
+DataFrame.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
+DataFrame.def sample(self, withReplacement: bool | float | None=None, fraction: float | None=None, seed: int | None=None) -> DataFrame
+DataFrame.def sampleBy(self, col: ColumnOrName, fractions: dict[Any, float], seed: int | None=None) -> DataFrame
+DataFrame.def schema(self) -> StructType
+DataFrame.def select(self, *cols: ColumnsOrNames) -> DataFrame
+DataFrame.def selectExpr(self, *expr: str | list[str]) -> DataFrame
+DataFrame.def show(self, n: int=20, truncate: bool | int=True, vertical: bool=False) -> None
+DataFrame.def sparkSession(self) -> SparkSession
+DataFrame.def stat(self) -> DataFrameStatFunctions
+DataFrame.def storageLevel(self) -> StorageLevel
+DataFrame.def subtract(self, other: DataFrame) -> DataFrame
+DataFrame.def summary(self, *statistics: str | list[str]) -> DataFrame
+DataFrame.def tail(self, num: int) -> list[Row]
+DataFrame.def take(self, num: int) -> list[Row]
+DataFrame.def toArrow(self) -> Any
+DataFrame.def toDF(self, *cols: str) -> DataFrame
+DataFrame.def toJSON(self, use_unicode: bool=True) -> DataFrame
+DataFrame.def toLocalIterator(self, prefetchPartitions: bool=False) -> Iterator[Row]
+DataFrame.def toPandas(self) -> Any
+DataFrame.def transform(self, func: Any, *args: Any, **kwargs: Any) -> DataFrame
+DataFrame.def union(self, other: DataFrame) -> DataFrame
+DataFrame.def unionAll(self, other: DataFrame) -> DataFrame
+DataFrame.def unionByName(self, other: DataFrame, allowMissingColumns: bool=False) -> DataFrame
+DataFrame.def unpersist(self, blocking: bool=False) -> DataFrame
+DataFrame.def unpivot(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
+DataFrame.def withColumn(self, colName: str, col: Column) -> DataFrame
+DataFrame.def withColumnRenamed(self, existing: str, new: str) -> DataFrame
+DataFrame.def withColumnsRenamed(self, colsMap: dict[str, str]) -> DataFrame
+DataFrame.def write(self) -> DataFrameWriter
+DataFrame.def writeTo(self, table: str) -> DataFrameWriterV2
+EAGER_DEFAULT_MAX_ROWS
+EAGER_MAX_ROWS_KEY
+class DataFrame()
+## sql/functions.py
+__all__
+column
+countDistinct
+def asc(col: ColumnOrName) -> Column
+def call_function(funcName: str, *cols: Any) -> Column
+def col(col: str) -> Column
+def concat(*cols: ColumnOrName) -> Column
+def convert_timezone(sourceTz: Column | None, targetTz: Column, sourceTs: ColumnOrName) -> Column
+def count(col: ColumnOrName) -> Column
+def count_distinct(col: ColumnOrName, *cols: ColumnOrName) -> Column
+def desc(col: ColumnOrName) -> Column
+def expr(str: str) -> Column
+def lit(col: Any) -> Column
+def log(arg1: ColumnOrName | float, arg2: ColumnOrName | None=None) -> Column
+def make_dt_interval(days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
+def make_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None, weeks: ColumnOrName | None=None, days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
+def make_ym_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None) -> Column
+def try_make_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None, weeks: ColumnOrName | None=None, days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
+def unix_timestamp(timestamp: ColumnOrName | None=None, format: str='yyyy-MM-dd HH:mm:ss') -> Column
+def when(condition: Column, value: Any) -> Column
+## sql/group.py
+GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame) -> None
+GroupedData.def agg(self, *exprs: Column | dict[str, str]) -> DataFrame
+GroupedData.def avg(self, *cols: str) -> DataFrame
+GroupedData.def count(self) -> DataFrame
+GroupedData.def max(self, *cols: str) -> DataFrame
+GroupedData.def min(self, *cols: str) -> DataFrame
+GroupedData.def pivot(self, pivot_col: str, values: list[Any] | None=None) -> GroupedData
+GroupedData.def sum(self, *cols: str) -> DataFrame
+class GroupedData()
+## sql/na.py
+DataFrameNaFunctions.def __init__(self, df: DataFrame) -> None
+DataFrameNaFunctions.def drop(self, how: str | None='any', thresh: int | None=None, subset: Any=None) -> DataFrame
+DataFrameNaFunctions.def fill(self, value: Any, subset: Any=None) -> DataFrame
+DataFrameNaFunctions.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: Any=None) -> DataFrame
+class DataFrameNaFunctions()
+## sql/profile_view.py
+ProfileView.def __init__(self, document: dict[str, Any] | str) -> None
+ProfileView.def save(self, path: str | Path, title: str='Krishiv query profile') -> Path
+ProfileView.def to_html(self, title: str='Krishiv query profile') -> str
+__all__
+class ProfileView()
+def ui(source: Any, *, path: str | Path | None=None) -> ProfileView
+## sql/readwriter.py
+DataFrameReader.def __init__(self, session: SparkSession) -> None
+DataFrameReader.def csv(self, path: str | list[str], **options: object) -> DataFrame
+DataFrameReader.def format(self, source: str) -> DataFrameReader
+DataFrameReader.def json(self, path: str | list[str], **options: object) -> DataFrame
+DataFrameReader.def load(self, path: str | list[str] | None=None, format: str | None=None, **options: object) -> DataFrame
+DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
+DataFrameReader.def options(self, **options: object) -> DataFrameReader
+DataFrameReader.def parquet(self, *paths: str) -> DataFrame
+DataFrameWriter.def __init__(self, df: DataFrame) -> None
+DataFrameWriter.def bucketBy(self, numBuckets: int, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
+DataFrameWriter.def csv(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
+DataFrameWriter.def format(self, source: str) -> DataFrameWriter
+DataFrameWriter.def insertInto(self, tableName: str, overwrite: bool | None=None) -> None
+DataFrameWriter.def json(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
+DataFrameWriter.def mode(self, saveMode: str) -> DataFrameWriter
+DataFrameWriter.def option(self, key: str, value: object) -> DataFrameWriter
+DataFrameWriter.def options(self, **options: object) -> DataFrameWriter
+DataFrameWriter.def parquet(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
+DataFrameWriter.def partitionBy(self, *cols: str | list[str] | tuple[str, ...]) -> DataFrameWriter
+DataFrameWriter.def save(self, path: str | None=None, format: str | None=None, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
+DataFrameWriter.def saveAsTable(self, name: str, format: str | None=None, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
+DataFrameWriter.def sortBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
+DataFrameWriter.def text(self, path: str, compression: str | None=None, lineSep: str | None=None) -> None
+DataFrameWriterV2.def __init__(self, df: DataFrame, table: str) -> None
+DataFrameWriterV2.def append(self) -> None
+DataFrameWriterV2.def clusterBy(self, col: str, *cols: str) -> DataFrameWriterV2
+DataFrameWriterV2.def create(self) -> None
+DataFrameWriterV2.def createOrReplace(self) -> None
+DataFrameWriterV2.def option(self, key: str, value: object) -> DataFrameWriterV2
+DataFrameWriterV2.def options(self, **options: object) -> DataFrameWriterV2
+DataFrameWriterV2.def overwrite(self, condition: Column | str) -> None
+DataFrameWriterV2.def overwritePartitions(self) -> None
+DataFrameWriterV2.def partitionedBy(self, col: str, *cols: str) -> DataFrameWriterV2
+DataFrameWriterV2.def replace(self) -> None
+DataFrameWriterV2.def tableProperty(self, property: str, value: str) -> DataFrameWriterV2
+DataFrameWriterV2.def using(self, provider: str) -> DataFrameWriterV2
+class DataFrameReader()
+class DataFrameWriter()
+class DataFrameWriterV2()
+## sql/row.py
+Row.def asDict(self) -> dict[str, Any]
+class Row(tuple[Any, ...])
+## sql/session.py
+Catalog.def __init__(self, session: SparkSession) -> None
+Catalog.def cacheTable(self, tableName: str, storageLevel: StorageLevel | None=None) -> None
+Catalog.def clearCache(self) -> None
+Catalog.def currentDatabase(self) -> str
+Catalog.def dropTempView(self, viewName: str) -> bool
+Catalog.def isCached(self, tableName: str) -> bool
+Catalog.def listDatabases(self) -> DataFrame
+Catalog.def listTables(self, dbName: str | None=None) -> DataFrame
+Catalog.def refreshByPath(self, path: str) -> None
+Catalog.def refreshTable(self, tableName: str) -> DataFrame
+Catalog.def tableExists(self, tableName: str, dbName: str | None=None) -> bool
+Catalog.def uncacheTable(self, tableName: str) -> None
+SPARK_VERSION
+SparkSession.Builder.def __init__(self) -> None
+SparkSession.Builder.def appName(self, name: str) -> SparkSession.Builder
+SparkSession.Builder.def config(self, key: str | None=None, value: Any=None, *, conf: None=None, map: dict[str, Any] | None=None) -> SparkSession.Builder
+SparkSession.Builder.def create(self) -> SparkSession
+SparkSession.Builder.def getOrCreate(self) -> SparkSession
+SparkSession.Builder.def master(self, master: str) -> SparkSession.Builder
+SparkSession.Builder.def remote(self, url: str) -> SparkSession.Builder
+SparkSession.builder: Builder
+SparkSession.class Builder()
+SparkSession.def __init__(self, native: _native.Session, config: list[tuple[str, str]] | None=None) -> None
+SparkSession.def catalog(self) -> Catalog
+SparkSession.def conf(self) -> RuntimeConfig
+SparkSession.def createDataFrame(self, data: Any, schema: Any=None, samplingRatio: float | None=None, verifySchema: bool=True) -> DataFrame
+SparkSession.def emptyDataFrame(self, schema: StructType | str) -> DataFrame
+SparkSession.def newSession(self) -> SparkSession
+SparkSession.def range(self, start: int, end: int | None=None, step: int=1, numPartitions: int | None=None) -> DataFrame
+SparkSession.def read(self) -> DataFrameReader
+SparkSession.def sql(self, sqlQuery: str, args: Any=None, **kwargs: Any) -> DataFrame
+SparkSession.def stop(self) -> None
+SparkSession.def table(self, tableName: str) -> DataFrame
+SparkSession.def version(self) -> str
+class Catalog()
+class SparkSession()
+## sql/stat.py
+DataFrameStatFunctions.def __init__(self, df: DataFrame) -> None
+DataFrameStatFunctions.def approxQuantile(self, col: Any, probabilities: Any, relativeError: Any) -> list[Any]
+DataFrameStatFunctions.def corr(self, col1: str, col2: str, method: str | None=None) -> float
+DataFrameStatFunctions.def cov(self, col1: str, col2: str) -> float
+DataFrameStatFunctions.def crosstab(self, col1: str, col2: str) -> DataFrame
+DataFrameStatFunctions.def freqItems(self, cols: Any, support: float | None=None) -> DataFrame
+DataFrameStatFunctions.def sampleBy(self, col: Column | str, fractions: dict[Any, float], seed: int | None=None) -> DataFrame
+PIVOT_MAX_VALUES_DEFAULT
+PIVOT_MAX_VALUES_KEY
+class DataFrameStatFunctions()
+## sql/types.py
+ArrayType.def __init__(self, elementType: DataType, containsNull: bool=True) -> None
+ArrayType.def fromJson(cls, json: dict[str, Any]) -> ArrayType
+ArrayType.def jsonValue(self) -> dict[str, Any]
+ArrayType.def simpleString(self) -> str
+ByteType.def simpleString(self) -> str
+ByteType.def typeName(cls) -> str
+CalendarIntervalType.def typeName(cls) -> str
+CharType.def __init__(self, length: int) -> None
+CharType.def jsonValue(self) -> str
+CharType.def simpleString(self) -> str
+DataType.def fromDDL(cls, ddl: str) -> DataType
+DataType.def json(self) -> str
+DataType.def jsonValue(self) -> str | dict[str, Any]
+DataType.def simpleString(self) -> str
+DataType.def typeName(cls) -> str
+DayTimeIntervalType.def __init__(self, startField: int | None=None, endField: int | None=None) -> None
+DecimalType.def __init__(self, precision: int=10, scale: int=0) -> None
+DecimalType.def jsonValue(self) -> str
+DecimalType.def simpleString(self) -> str
+IntegerType.def simpleString(self) -> str
+IntegerType.def typeName(cls) -> str
+LongType.def simpleString(self) -> str
+LongType.def typeName(cls) -> str
+MapType.def __init__(self, keyType: DataType, valueType: DataType, valueContainsNull: bool=True) -> None
+MapType.def fromJson(cls, json: dict[str, Any]) -> MapType
+MapType.def jsonValue(self) -> dict[str, Any]
+MapType.def simpleString(self) -> str
+NullType.def typeName(cls) -> str
+ShortType.def simpleString(self) -> str
+ShortType.def typeName(cls) -> str
+StringType.def __init__(self, collation: str='UTF8_BINARY') -> None
+StringType.def jsonValue(self) -> str
+StringType.def simpleString(self) -> str
+StructField.def __init__(self, name: str, dataType: DataType, nullable: bool=True, metadata: dict[str, Any] | None=None) -> None
+StructField.def fromJson(cls, json: dict[str, Any]) -> StructField
+StructField.def jsonValue(self) -> dict[str, Any]
+StructField.def simpleString(self) -> str
+StructField.def typeName(self) -> str
+StructType.def __init__(self, fields: Iterable[StructField] | None=None) -> None
+StructType.def add(self, field: str | StructField, data_type: str | DataType | None=None, nullable: bool=True, metadata: dict[str, Any] | None=None) -> StructType
+StructType.def fieldNames(self) -> list[str]
+StructType.def fromJson(cls, json: dict[str, Any]) -> StructType
+StructType.def jsonValue(self) -> dict[str, Any]
+StructType.def simpleString(self) -> str
+StructType.def typeName(cls) -> str
+TimestampNTZType.def typeName(cls) -> str
+VarcharType.def __init__(self, length: int) -> None
+VarcharType.def jsonValue(self) -> str
+VarcharType.def simpleString(self) -> str
+YearMonthIntervalType.def __init__(self, startField: int | None=None, endField: int | None=None) -> None
+class ArrayType(DataType)
+class AtomicType(DataType)
+class BinaryType(AtomicType)
+class BooleanType(AtomicType)
+class ByteType(IntegralType)
+class CalendarIntervalType(AtomicType)
+class CharType(AtomicType)
+class DataType()
+class DateType(AtomicType)
+class DayTimeIntervalType(AtomicType)
+class DecimalType(FractionalType)
+class DoubleType(FractionalType)
+class FloatType(FractionalType)
+class FractionalType(NumericType)
+class IntegerType(IntegralType)
+class IntegralType(NumericType)
+class LongType(IntegralType)
+class MapType(DataType)
+class NullType(DataType)
+class NumericType(AtomicType)
+class ShortType(IntegralType)
+class StringType(AtomicType)
+class StructField(DataType)
+class StructType(DataType)
+class TimestampNTZType(AtomicType)
+class TimestampType(AtomicType)
+class VarcharType(AtomicType)
+class VariantType(AtomicType)
+class YearMonthIntervalType(AtomicType)
+## sql/variant.py
+VariantVal.def __init__(self, value: bytes, metadata: bytes) -> None
+VariantVal.def toJson(self, zone_id: str='UTC') -> str
+VariantVal.def toPython(self) -> Any
+class VariantVal()
+def is_variant_struct(arrow_type: Any) -> bool
+## sql/window.py
+Window.currentRow: int
+Window.def orderBy(*cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
+Window.def partitionBy(*cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
+Window.def rangeBetween(start: int, end: int) -> WindowSpec
+Window.def rowsBetween(start: int, end: int) -> WindowSpec
+Window.unboundedFollowing: int
+Window.unboundedPreceding: int
+WindowSpec.def __init__(self, native: _native.WindowSpec) -> None
+WindowSpec.def orderBy(self, *cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
+WindowSpec.def partitionBy(self, *cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
+WindowSpec.def rangeBetween(self, start: int, end: int) -> WindowSpec
+WindowSpec.def rowsBetween(self, start: int, end: int) -> WindowSpec
+class Window()
+class WindowSpec()
+## storagelevel.py
+StorageLevel.DISK_ONLY: StorageLevel
+StorageLevel.DISK_ONLY_2: StorageLevel
+StorageLevel.MEMORY_AND_DISK: StorageLevel
+StorageLevel.MEMORY_AND_DISK_2: StorageLevel
+StorageLevel.MEMORY_ONLY: StorageLevel
+StorageLevel.MEMORY_ONLY_2: StorageLevel
+StorageLevel.OFF_HEAP: StorageLevel
+StorageLevel.def __init__(self, useDisk: bool, useMemory: bool, useOffHeap: bool, deserialized: bool, replication: int=1) -> None
+__all__
+class StorageLevel()
