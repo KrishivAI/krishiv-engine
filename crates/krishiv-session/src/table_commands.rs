@@ -234,11 +234,17 @@ impl Session {
         name: &DdlName,
         env: &QueryEnv,
     ) -> Result<TableName, KrishivError> {
-        TableName::resolve(
+        let resolved = TableName::resolve(
             &crate::access::ddl_parts(name, env)?,
             &self.state.catalog.current_namespace(),
             env,
-        )
+        )?;
+        // After `USE system` a bare name belongs to the `system` catalog, which has no stored tables:
+        // it must not fall through to `spark_catalog.default`, which authorization did not check.
+        if resolved.bare && crate::system::is_system(&self.state.catalog.current_catalog()) {
+            return Err(resolved.not_found());
+        }
+        Ok(resolved)
     }
 
     /// Refuses a table, view or SQL function in a schema with a default collation (`spark.sql.collation.schemaLevel.enabled`):

@@ -1377,14 +1377,14 @@ impl QueryLog {
         });
     }
 
-    /// Records the message of `error` on the row `id`, cut and masked by the text policy (a
-    /// cancellation has none).
+    /// Records the message of `error` on the row `id`: the client form (operator-only parameters
+    /// redacted, no cause), cut and masked by the text policy (a cancellation has none).
     pub(crate) fn note_error(&self, id: &str, error: &KrishivError) {
         if outcome_state(error.error_class().name()) == "cancelled" {
             return;
         }
         let policy = *self.text.lock().unwrap_or_else(PoisonError::into_inner);
-        let shown = policy.apply_message(&error.to_string());
+        let shown = policy.apply_message(&error.for_client().error().to_string());
         self.history
             .update(&self.session_id, id, |row| row.error_message = Some(shown));
     }

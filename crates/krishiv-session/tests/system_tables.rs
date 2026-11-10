@@ -971,3 +971,35 @@ fn creating_under_system_is_refused_but_a_temp_view_survives_the_switch_back() {
     run(&s, "USE spark_catalog").unwrap();
     assert_eq!(column_of(&s, "SELECT CAST(n AS STRING) FROM t1", 0), ["2"]);
 }
+
+#[test]
+fn metadata_commands_on_a_bare_name_do_not_read_the_session_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a INT)").unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in [
+        "DESCRIBE TABLE t",
+        "SHOW COLUMNS IN t",
+        "SHOW CREATE TABLE t",
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("TABLE_OR_VIEW_NOT_FOUND"), "{sql}: {e}");
+    }
+    // The qualified name still reaches the session catalog's table.
+    assert!(run(&s, "DESCRIBE TABLE spark_catalog.default.t").is_ok());
+}
+
+#[test]
+fn a_failure_message_in_the_history_is_the_client_form() {
+    let s = Session::new().unwrap();
+    assert!(run(&s, "SELECT * FROM nosuch_table_here").is_err());
+    let m = column_of(
+        &s,
+        "SELECT error_message FROM system.queries WHERE error_class IS NOT NULL",
+        0,
+    );
+    assert!(
+        !m.is_empty() && m.iter().all(|x| !x.contains("Caused by")),
+        "{m:?}"
+    );
+}

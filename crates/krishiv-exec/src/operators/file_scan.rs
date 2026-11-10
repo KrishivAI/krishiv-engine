@@ -504,7 +504,8 @@ fn record_split(metrics: &Mutex<FileScanMetrics>, current: &Current) {
     let mut metrics = metrics.lock().unwrap_or_else(PoisonError::into_inner);
     metrics.add(&current.stream.metrics(), current.stream.overcommitted());
     metrics.add_reads(&current.stream.read_stats());
-    metrics.files += u64::from(current.split.start == 0);
+    // The piece that starts the file counts it, once however many morsels the split was cut into.
+    metrics.files += u64::from(current.range.start == 0);
 }
 
 /// The piece being read.
@@ -513,6 +514,8 @@ struct Current {
     file: usize,
     /// The planned split the piece belongs to (for `_metadata`).
     split: ByteRange,
+    /// The bytes this piece reads.
+    range: ByteRange,
     /// The file's partition values, one row each, as the partition fields
     /// type them.
     partition_values: Vec<ArrayRef>,
@@ -1097,6 +1100,7 @@ impl FileScanSource {
             stream,
             file,
             split,
+            range,
             partition_values,
             row_file,
         });
