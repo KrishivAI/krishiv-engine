@@ -79,6 +79,49 @@ fn nested_order(t: Option<&DataType>) -> bool {
     t.is_some_and(|t| t.contains_collation() && !t.is_collated_string())
 }
 
+/// Every aggregate call under `e` (not those inside another call's arguments).
+fn aggregate_calls<'a>(e: &'a crate::Expr, out: &mut Vec<&'a crate::ResolvedFunction>) {
+    if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
+        && f.kind == crate::FunctionKind::Aggregate
+    {
+        out.push(f);
+        return;
+    }
+    e.for_each_child(&mut |c| aggregate_calls(c, out));
+}
+
+/// Whether `f` is a `DISTINCT` aggregate whose collated values must survive (`listagg`,
+/// `collect_list`): the optimizer dedupes them by key in an aggregate of their own
+/// (`krishiv_optimizer::collation_keys`), so the analyzer's distinct rewrite leaves it alone.
+pub(super) fn keeps_collated(f: &crate::ResolvedFunction) -> bool {
+    // `listagg` casts its value to a plain string: the collation is the child's.
+    let value_collated = |a: &crate::Expr| match &a.node {
+        ExprNode::Cast {
+            expr,
+            to: DataType::String,
+            ..
+        } if is_collated(expr_type(expr)) => true,
+        _ => is_collated(expr_type(a)),
+    };
+    f.kind == crate::FunctionKind::Aggregate
+        && f.distinct
+        && !matches!(f.id.name(), "count" | "approx_count_distinct")
+        && f.args.first().is_some_and(|a| value_collated(a))
+}
+
+/// A [`keeps_collated`] call beside another aggregate call or with a filter: the optimizer's
+/// plan for it does not take either yet.
+fn distinct_kept_beside(aggregates: &[std::sync::Arc<crate::Expr>]) -> bool {
+    let mut calls = Vec::new();
+    aggregates
+        .iter()
+        .for_each(|a| aggregate_calls(a, &mut calls));
+    match calls.as_slice() {
+        [one] => keeps_collated(one) && one.filter.is_some(),
+        many => many.iter().any(|f| keeps_collated(f)),
+    }
+}
+
 /// The execution guard of the collation units (ADR 0043, design `P2-collations.md` section 3.2),
 /// the one table of what still has no key. Everything else runs on keys
 /// (`krishiv_optimizer::collation_keys`, and `exprs/collation.rs` for scalars):
@@ -89,17 +132,23 @@ fn nested_order(t: Option<&DataType>) -> bool {
 /// | sort, window order, `min`/`max`/`min_by`/`max_by` ordering | a leaf without a key, nested | 6, later |
 /// | `DISTINCT`, `listagg`, `approx_count_distinct` | a leaf without a key | 6 |
 /// | `mode` | any collated string | 5 |
+/// | `DISTINCT` `listagg`/`collect_list` beside another call or with a filter | any collated string | later |
 /// | a comparison the analyzer did not key | any collated string | 6 |
 fn collated_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
     const KEY: &str = "a collated string as a grouping, distinct, sort, window or join key, a set \
                        operation, or a min/max/count(DISTINCT)/collect_set/listagg/mode argument";
     const COMPARISON: &str = "a comparison of collated strings";
+    const DISTINCT: &str =
+        "a DISTINCT aggregate of a collated string beside another aggregate or with a filter";
     let order_refused = |t: Option<&DataType>| no_key(t) || nested_order(t);
     match node {
         Node::Plan(p) => {
             let bad = match &p.node {
                 PlanNode::Sort { order, .. } => {
                     order.iter().any(|o| order_refused(expr_type(&o.expr)))
+                }
+                PlanNode::Aggregate { aggregates, .. } if distinct_kept_beside(aggregates) => {
+                    return Some((DISTINCT, p.origin));
                 }
                 PlanNode::Aggregate { grouping, .. } => match grouping {
                     crate::Grouping::GroupBy(e)

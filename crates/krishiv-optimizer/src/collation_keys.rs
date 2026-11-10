@@ -68,14 +68,13 @@ fn resolved(f: ResolvedFunction, origin: krishiv_plan::Origin) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))).with_origin(origin))
 }
 
-/// `__collation_key(e, 'type of e')`.
+/// `__collation_key(e, 'type of e')`, the type as Spark's `DataType.sql` (field names quoted).
 fn key(e: &Arc<Expr>) -> Res<Arc<Expr>> {
     let Some(t) = data_type(e) else {
         return Ok(Arc::clone(e));
     };
-    let name = Arc::new(
-        Expr::new(ExprNode::Literal(Literal::String(t.catalog_string()))).with_origin(e.origin),
-    );
+    let name =
+        Arc::new(Expr::new(ExprNode::Literal(Literal::String(t.sql()))).with_origin(e.origin));
     Ok(resolved(
         ResolvedFunction {
             id: registry("__collation_key")?,

@@ -433,3 +433,75 @@ fn what_has_no_ordering_key_yet_is_refused() {
         );
     }
 }
+
+/// A `DISTINCT` aggregate that keeps its collated values beside another aggregate, or with a
+/// filter, has no plan yet: the analyzer refuses it, so the schema fails as the run does (the
+/// distinct rewrite would otherwise dedupe the value cast to a plain string, `AaB` for `AB`).
+#[test]
+fn a_distinct_listagg_beside_another_aggregate_is_refused_at_analysis() {
+    let s = Session::new().unwrap();
+    for sql in [
+        format!("SELECT listagg(DISTINCT c), count(*) FROM {T}"),
+        format!("SELECT collect_list(DISTINCT c), max(x) FROM {T}"),
+        format!("SELECT listagg(DISTINCT c) FILTER (WHERE x > 1) FROM {T}"),
+        format!("SELECT listagg(DISTINCT c), count(DISTINCT x) FROM {T}"),
+    ] {
+        let schema = block_on(async { s.sql(&sql).await?.schema().await });
+        assert_eq!(
+            schema.unwrap_err().error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
+    // Alone it runs.
+    assert_eq!(
+        rows(&format!("SELECT listagg(DISTINCT c, ',') FROM {T}")).len(),
+        1
+    );
+}
+
+/// A nested collated field whose name needs quoting keys too: the key's type literal is
+/// `DataType.sql`, which quotes it, so it parses back.
+#[test]
+fn a_nested_key_with_a_quoted_field_name_parses() {
+    assert_eq!(
+        rows(
+            "SELECT named_struct('my col', c) = named_struct('my col', 'A') FROM (SELECT 'a' COLLATE utf8_lcase c)"
+        ),
+        ["true"]
+    );
+}
+
+/// Spark merges nested collations leaf by leaf, by strength, which is not built: an operand that
+/// could win a leaf is refused, never keyed with the other operand's collation.
+#[test]
+fn nested_operands_that_could_win_a_leaf_are_refused() {
+    let s = Session::new().unwrap();
+    for sql in [
+        // Spark: `COLLATION_MISMATCH.EXPLICIT`.
+        "SELECT array('a ' COLLATE utf8_lcase) = array('A' COLLATE utf8_binary_rtrim)",
+        // Spark: the explicit `UTF8_BINARY` wins, `false`.
+        "SELECT array(c) = array('A' COLLATE utf8_binary) FROM (SELECT 'a' COLLATE utf8_lcase c)",
+        // Spark: two implicit collations, `COLLATION_MISMATCH.IMPLICIT`.
+        "SELECT array(c) = array(d) FROM (SELECT 'a' COLLATE utf8_lcase c, 'A' d)",
+    ] {
+        assert_eq!(
+            rows_in(&s, sql).map_err(|e| e.error_class()),
+            Err(ErrorClass::KrishivUnsupportedFeature),
+            "{sql}"
+        );
+    }
+}
+
+/// An explicit `UTF8_BINARY` operand makes `greatest`/`least` compare bytes: `a` (0x61) is
+/// greater than `B` (0x42).
+#[test]
+fn greatest_and_least_under_an_explicit_binary_collation_compare_bytes() {
+    let q = |f: &str| {
+        format!(
+            "SELECT {f}(c, 'a' COLLATE UTF8_BINARY) FROM (SELECT 'B' COLLATE UTF8_LCASE AS c) t"
+        )
+    };
+    assert_eq!(rows(&q("greatest")), ["a"]);
+    assert_eq!(rows(&q("least")), ["B"]);
+}

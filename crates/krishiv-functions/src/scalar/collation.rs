@@ -83,8 +83,11 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             }))
         }
         ("__collation_greatest" | "__collation_least", [t, _, _]) => {
-            let krishiv_types::DataType::CollatedString(c) = spark_type(t)? else {
-                return Err(bad_types(listed, args));
+            // A plain `STRING` is the binary collation an explicit `UTF8_BINARY` operand chose.
+            let c = match spark_type(t)? {
+                krishiv_types::DataType::CollatedString(c) => c,
+                krishiv_types::DataType::String => Collation::UTF8_BINARY,
+                _ => return Err(bad_types(listed, args)),
             };
             let greatest = listed == "__collation_greatest";
             Ok(Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {

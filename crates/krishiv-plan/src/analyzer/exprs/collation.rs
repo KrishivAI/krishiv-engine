@@ -215,7 +215,7 @@ fn one_collation(kids: &[Bound], name: &str) -> bool {
 
 /// A call of `name` over `args` and the literal Spark type `t`.
 fn typed_call(name: &str, x: &Arc<Expr>, t: &DataType, origin: crate::Origin) -> Arc<Expr> {
-    let lit = Expr::new(ExprNode::Literal(Literal::String(t.catalog_string()))).with_origin(origin);
+    let lit = Expr::new(ExprNode::Literal(Literal::String(t.sql()))).with_origin(origin);
     Arc::new(Expr::function(name, vec![Expr::clone(x), lit]).with_origin(origin))
 }
 
@@ -252,6 +252,30 @@ fn has_key(t: &DataType) -> bool {
             CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
         ) || c.is_indeterminate())
     })
+}
+
+/// The collations `e` names explicitly (`COLLATE`, a written cast to a collated string), or
+/// `None` when it carries no collation at all: no column (implicit) and nothing explicit.
+fn carried_collations(e: &Expr) -> Option<Vec<Collation>> {
+    let (mut named, mut column) = (Vec::new(), false);
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        if let crate::walk::Node::Expr(x) = n {
+            match &x.node {
+                ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {
+                    column = true;
+                }
+                ExprNode::Collate { collation, .. } => named.push(*collation),
+                ExprNode::Cast {
+                    to: DataType::CollatedString(c),
+                    mode,
+                    ..
+                } if *mode != CastMode::Default => named.push(*c),
+                _ => {}
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    (column || !named.is_empty()).then_some(named)
 }
 
 /// How many leading arguments of `name` only select (a null test) and so take no part in the
@@ -671,14 +695,39 @@ impl Resolver<'_> {
                 .filter(|t| t.contains_collation() && !t.is_string_type())
         });
         if let Some(t) = nested {
+            // Spark merges the collations leaf by leaf, by strength (`CollationTypeCoercion.
+            // mergeStructurally`); that merge is not built here, so the operands are keyed with
+            // `t` only where it is the one collation: an operand carrying none (no column, no
+            // `COLLATE`) defers to it, any other must be of type `t` as written (not coerced to
+            // it) and name only collations of `t`.
+            let agrees = |k: &Bound| {
+                let shown = k.shown();
+                let carried = carried_collations(&shown);
+                carried.is_none()
+                    || (k.ty.data_type.as_ref() == Some(t)
+                        && !matches!(
+                            k.expr.node,
+                            ExprNode::Cast {
+                                mode: CastMode::Default,
+                                ..
+                            }
+                        )
+                        && carried.is_some_and(|named| {
+                            named.iter().all(|c| {
+                                t.any_type(&|x| {
+                                    x == &DataType::collated_string(*c)
+                                        || (c.is_utf8_binary() && x == &DataType::String)
+                                })
+                            })
+                        }))
+            };
             if !matches!(name, "==" | "<=>")
                 || !has_key(t)
                 || !kids[..n].iter().all(|k| {
-                    k.ty.data_type.is_none()
-                        || k.ty
-                            .data_type
-                            .as_ref()
-                            .is_some_and(|u| u.collation_key_type() == t.collation_key_type())
+                    k.ty.data_type
+                        .as_ref()
+                        .is_none_or(|u| u.collation_key_type() == t.collation_key_type())
+                        && agrees(k)
                 })
             {
                 return Ok(None);
@@ -861,10 +910,8 @@ impl Resolver<'_> {
                 } else {
                     "__collation_least"
                 };
-                let t = Expr::new(ExprNode::Literal(Literal::String(
-                    string_of(c).catalog_string(),
-                )))
-                .with_origin(e.origin);
+                let t = Expr::new(ExprNode::Literal(Literal::String(string_of(c).sql())))
+                    .with_origin(e.origin);
                 let plain = |k: &Bound| {
                     Expr::new(ExprNode::Cast {
                         expr: Arc::clone(&k.expr),
