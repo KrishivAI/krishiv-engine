@@ -38,8 +38,9 @@ use futures::stream::{BoxStream, StreamExt};
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result as StoreResult,
+    CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    Result as StoreResult,
 };
 
 use rustix::io::Errno;
@@ -282,6 +283,67 @@ fn read_ranges_uninit(path: &FsPath, ranges: &[Range<u64>]) -> Option<Vec<bytes:
     Some(out)
 }
 
+/// `work` on the blocking pool, or inline when there is no Tokio runtime (as `list` does).
+async fn run_blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Option<T> + Send + 'static,
+) -> Option<T> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => runtime.spawn_blocking(work).await.ok().flatten(),
+        Err(_) => work(),
+    }
+}
+
+impl SettledLocalFileSystem {
+    /// The answer to a `get_opts` that asks for one bounded range with at most a modified-since
+    /// condition that holds, or `None` when the inner store should answer.
+    async fn bounded_range_fast_path(
+        &self,
+        location: &Path,
+        options: &GetOptions,
+    ) -> Option<GetResult> {
+        use object_store::GetRange;
+        let Some(GetRange::Bounded(range)) = options.range.clone() else {
+            return None;
+        };
+        if options.head
+            || options.version.is_some()
+            || options.if_match.is_some()
+            || options.if_none_match.is_some()
+            || options.if_modified_since.is_some_and(|t| t >= Utc::now())
+        {
+            return None;
+        }
+        let path = self.inner.path_to_filesystem(location).ok()?;
+        let meta = object_store::ObjectStoreExt::head(&self.inner, location)
+            .await
+            .ok()?;
+        if options
+            .if_unmodified_since
+            .is_some_and(|t| meta.last_modified > t)
+            || options
+                .if_modified_since
+                .is_some_and(|t| meta.last_modified <= t)
+            || range.end > meta.size
+            || range.start > range.end
+        {
+            return None;
+        }
+        let wanted = vec![range.clone()];
+        let bytes = run_blocking(move || read_ranges_uninit(&path, &wanted))
+            .await?
+            .pop()?;
+        Some(GetResult {
+            payload: GetResultPayload::Stream(
+                futures::stream::once(std::future::ready(Ok(bytes))).boxed(),
+            ),
+            meta,
+            range,
+            attributes: object_store::Attributes::default(),
+            extensions: object_store::Extensions::default(),
+        })
+    }
+}
+
 #[async_trait]
 impl ObjectStore for SettledLocalFileSystem {
     async fn put_opts(
@@ -302,6 +364,13 @@ impl ObjectStore for SettledLocalFileSystem {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> StoreResult<GetResult> {
+        // A scan reads its bytes through here (`IoContext::get_one`, the block cache), not
+        // through `get_ranges`: serve a plain bounded range from a buffer that is never zeroed.
+        // Anything else (a precondition on the tag, a suffix or open range, a head, a version, a
+        // range past the end, an I/O error) goes to the inner store, which answers it as always.
+        if let Some(r) = self.bounded_range_fast_path(location, &options).await {
+            return Ok(r);
+        }
         self.inner.get_opts(location, options).await
     }
 
@@ -316,9 +385,7 @@ impl ObjectStore for SettledLocalFileSystem {
         // names it the way every caller already expects.
         if let Ok(path) = self.inner.path_to_filesystem(location) {
             let wanted = ranges.to_vec();
-            if let Ok(Some(read)) =
-                tokio::task::spawn_blocking(move || read_ranges_uninit(&path, &wanted)).await
-            {
+            if let Some(read) = run_blocking(move || read_ranges_uninit(&path, &wanted)).await {
                 return Ok(read);
             }
         }
@@ -717,7 +784,10 @@ mod tests {
 
 #[cfg(test)]
 mod range_read_tests {
+    use futures::FutureExt;
+
     use super::read_ranges_uninit;
+    use super::*;
 
     #[test]
     fn ranges_read_in_full_match_the_file_and_overlap_freely() {
@@ -743,5 +813,90 @@ mod range_read_tests {
         assert!(
             read_ranges_uninit(&tmp.path().join("nope"), std::slice::from_ref(&(0..1))).is_none()
         );
+    }
+
+    fn range_file() -> (tempfile::TempDir, Path, Vec<u8>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("f");
+        let data: Vec<u8> = (0..=255).collect();
+        std::fs::write(&p, &data).unwrap();
+        (tmp, Path::from_absolute_path(&p).unwrap(), data)
+    }
+
+    async fn get_range(
+        store: &SettledLocalFileSystem,
+        loc: &Path,
+        mut opts: GetOptions,
+        r: std::ops::Range<u64>,
+    ) -> object_store::Result<(bytes::Bytes, std::ops::Range<u64>, u64)> {
+        opts.range = Some(r.into());
+        let got = store.get_opts(loc, opts).await?;
+        let (range, size) = (got.range.clone(), got.meta.size);
+        Ok((got.bytes().await?, range, size))
+    }
+
+    #[tokio::test]
+    async fn a_bounded_get_opts_is_served_by_the_fast_path_and_matches_the_inner_store() {
+        let (_tmp, loc, data) = range_file();
+        let store = SettledLocalFileSystem::new();
+        // The fast path answers exactly this shape, so it is the one a scan takes.
+        let opts = GetOptions::default();
+        assert!(
+            store
+                .bounded_range_fast_path(
+                    &loc,
+                    &GetOptions {
+                        range: Some((5..9).into()),
+                        ..opts.clone()
+                    }
+                )
+                .await
+                .is_some()
+        );
+        let (b, range, size) = get_range(&store, &loc, opts, 10..20).await.unwrap();
+        assert_eq!((&b[..], range, size), (&data[10..20], 10..20, 256));
+        // A condition that holds is served; one that fails is the inner store's error.
+        let ok = GetOptions {
+            if_unmodified_since: Some(Utc::now() + chrono::Duration::hours(1)),
+            ..Default::default()
+        };
+        assert_eq!(
+            &get_range(&store, &loc, ok, 0..4).await.unwrap().0[..],
+            &data[0..4]
+        );
+        let stale = GetOptions {
+            if_unmodified_since: Some(DateTime::<Utc>::UNIX_EPOCH),
+            ..Default::default()
+        };
+        assert!(matches!(
+            get_range(&store, &loc, stale, 0..4).await,
+            Err(object_store::Error::Precondition { .. })
+        ));
+        // A range past the end is the inner store's answer, whatever that is.
+        let past = GetOptions {
+            range: Some((250..300).into()),
+            ..Default::default()
+        };
+        let ours = store.get_opts(&loc, past.clone()).await.unwrap();
+        let theirs = LocalFileSystem::new().get_opts(&loc, past).await.unwrap();
+        assert_eq!(ours.range, theirs.range);
+        assert_eq!(ours.bytes().await.unwrap(), theirs.bytes().await.unwrap());
+    }
+
+    #[test]
+    fn a_bounded_get_opts_works_without_a_tokio_runtime() {
+        let (_tmp, loc, data) = range_file();
+        let store = SettledLocalFileSystem::new();
+        let (b, _, _) = get_range(&store, &loc, GetOptions::default(), 3..9)
+            .now_or_never()
+            .expect("no runtime, so every step runs inline")
+            .unwrap();
+        assert_eq!(&b[..], &data[3..9]);
+        let got = store
+            .get_ranges(&loc, &[0..2, 4..8])
+            .now_or_never()
+            .expect("inline")
+            .unwrap();
+        assert_eq!(&got[1][..], &data[4..8]);
     }
 }
