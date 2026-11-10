@@ -324,6 +324,25 @@ fn distinct_over_keys(
     }
     let mut grouping = keys.iter().map(key_if_collated).collect::<Res<Vec<_>>>()?;
     grouping.push(key(peeled(&value))?);
+    // `DISTINCT` dedupes the whole argument tuple (`max_by(DISTINCT c, x)` keeps one row per
+    // key of `c` and `x`), so every other argument is a grouping key too, read by the outer
+    // call from its own column. Literals (a `listagg` delimiter) and the value's own ordering
+    // are left as written.
+    let mut carried: Vec<&Arc<Expr>> = Vec::new();
+    for arg in call.args.iter().skip(1) {
+        if same(arg, &value)
+            || same(arg, bare)
+            || matches!(arg.node, ExprNode::Literal(_))
+            || carried.iter().any(|c| same(c, arg))
+        {
+            continue;
+        }
+        let col = fresh("a", arg)?;
+        items.push(alias(first(arg, col.data_type.clone())?, col.clone()));
+        grouping.push(key_if_collated(arg)?);
+        pairs.push((Arc::clone(arg), column(&col)));
+        carried.push(arg);
+    }
     let mut inner = LogicalPlan::new(PlanNode::Aggregate {
         input: Arc::clone(input),
         grouping: Grouping::GroupBy(grouping),
@@ -335,6 +354,13 @@ fn distinct_over_keys(
         let mut e = plain_call(a);
         for (from, to) in &pairs {
             e = substitute(&e, from, to)?;
+        }
+        // A bare grouping column now reads the inner aggregate's column: keep the attribute the
+        // plan above reads (a `Sort` or projection over `k`).
+        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &a.node
+            && !same(&e, a)
+        {
+            e = alias(e, c.clone());
         }
         rewritten.push(e);
     }

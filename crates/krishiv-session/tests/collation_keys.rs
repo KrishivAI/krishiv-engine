@@ -152,6 +152,43 @@ fn distinct_aggregates_count_keys() {
     );
 }
 
+/// `DISTINCT` over a collated value dedupes the whole argument tuple, so `max_by`/`min_by` keep
+/// their ordering argument (Spark 4.2.0, krishiv-internal `research/spark/seed-by-split/maxby.out`).
+#[test]
+fn distinct_max_by_over_a_collated_value_keeps_its_ordering() {
+    assert_eq!(
+        rows("SELECT max_by(DISTINCT c COLLATE utf8_lcase, x) FROM VALUES ('a',1),('b',2) t(c,x)"),
+        ["b"]
+    );
+    assert_eq!(
+        rows(
+            "SELECT min_by(DISTINCT c COLLATE utf8_lcase, x) FROM VALUES ('a',1),('b',2),('B',2) t(c,x)"
+        ),
+        ["a"]
+    );
+    assert_eq!(
+        rows(
+            "SELECT max_by(DISTINCT x, c COLLATE utf8_lcase) FROM VALUES (1,'a'),(2,'B'),(3,'b') t(x,c)"
+        ),
+        ["3"]
+    );
+    assert_eq!(
+        rows(
+            "SELECT k, max_by(DISTINCT c COLLATE utf8_lcase, x) FROM VALUES (1,'a',1),(1,'b',2),(2,'c',5) \
+             t(k,c,x) GROUP BY k ORDER BY k"
+        ),
+        ["1|b", "2|c"]
+    );
+    // The grouping column keeps its attribute through the rewrite, so an ORDER BY over it resolves.
+    assert_eq!(
+        rows(
+            "SELECT k, lower(listagg(DISTINCT c COLLATE utf8_lcase)) FROM VALUES (1,'a'),(1,'A'),(2,'c') \
+             t(k,c) GROUP BY k ORDER BY k"
+        ),
+        ["1|a", "2|c"]
+    );
+}
+
 #[test]
 fn listagg_orders_and_deduplicates_by_key() {
     assert_eq!(
