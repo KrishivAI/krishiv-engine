@@ -120,7 +120,7 @@ impl Operator for UnionAlign {
             &options,
         )
         .map_err(|e| internal(format!("union branch does not fit the union schema: {e}")))?;
-        let out = Batch::with_weights(data, input.weights().clone())?;
+        let out = Batch::with_weights(data, input.weights().clone())?.with_split(input.split());
         Ok(OperatorOutput::NeedMoreInput(Some(out)))
     }
 }

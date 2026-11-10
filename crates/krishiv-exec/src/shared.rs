@@ -387,7 +387,9 @@ impl Sink for SharedSink {
         let l = local_mut::<SinkLocal>(local, "SharedSink")?;
         // A scan's morsel can be a slice of a much larger batch: kept as is,
         // every segment would hold and be charged the whole buffers.
-        let input = owned_rows(input)?;
+        // The split tag belongs to the pipeline that produced the batch: every reader numbers the
+        // batches it reads itself, so a stored batch carries none.
+        let input = owned_rows(input)?.with_split(None);
         let bytes = input.data().get_array_memory_size();
         if l.reservation.try_grow(bytes).is_err() {
             return Ok(SinkStatus::NeedMemory { bytes });

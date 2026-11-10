@@ -521,6 +521,9 @@ pub struct TaskContext {
     partition: u32,
     /// `(lane, lanes)` of a logical-partition driver (T094 G1), else `None`.
     lane: Option<(usize, usize)>,
+    /// The first partition id of the driver's pipeline-group member (the
+    /// offset of a `UNION ALL` child).
+    partition_base: u32,
 }
 
 impl fmt::Debug for TaskContext {
@@ -552,6 +555,7 @@ impl TaskContext {
             second_dependency: None,
             partition: 0,
             lane: None,
+            partition_base: 0,
         }
     }
 
@@ -575,6 +579,18 @@ impl TaskContext {
     pub(crate) fn with_partition(mut self, partition: u32) -> Self {
         self.partition = partition;
         self
+    }
+
+    #[must_use]
+    pub(crate) fn with_partition_base(mut self, base: u32) -> Self {
+        self.partition_base = base;
+        self
+    }
+
+    /// The first partition id of this driver's pipeline-group member: the
+    /// partition a split-numbered source adds its split index to.
+    pub fn partition_base(&self) -> u32 {
+        self.partition_base
     }
 
     /// The driver's scheduler-assigned partition id (set when the driver is

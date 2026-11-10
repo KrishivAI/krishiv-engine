@@ -289,7 +289,9 @@ impl Operator for Generate {
                 if input.num_rows() == 0 {
                     return Ok(OperatorOutput::NeedMoreInput(None));
                 }
-                let arg = self.arg.evaluate_in(input.data(), cur.partition)?;
+                let arg = self
+                    .arg
+                    .evaluate_in(input.data(), input.split().unwrap_or(cur.partition))?;
                 Pending {
                     elements: Elements::of(self.kind, &arg)?,
                     row: 0,
@@ -392,7 +394,7 @@ impl Operator for Generate {
                     .clone(),
             ),
         };
-        let out = Batch::with_weights(data, weights)?;
+        let out = Batch::with_weights(data, weights)?.with_split(input.split());
         if more {
             // A full batch with rows of this input left: same input again.
             cur.pending = Some(pending);

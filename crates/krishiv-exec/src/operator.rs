@@ -73,6 +73,13 @@ pub trait Source: Send + Sync {
         let _ = global;
         None
     }
+    /// How many partition ids the source's splits take in a `UNION ALL`
+    /// numbering (Spark's `UnionRDD` offsets the next child by this child's
+    /// partition count). Defaults to [`Self::max_parallelism`]: the slice or
+    /// morsel count, which can exceed the drivers that run them.
+    fn partitions(&self, global: &GlobalState) -> usize {
+        self.max_parallelism(global)
+    }
     /// One driver's state.
     ///
     /// # Errors
