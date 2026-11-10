@@ -174,7 +174,11 @@ pub fn optimize(plan: &Plan) -> Result<Plan, KrishivError> {
 /// # Errors
 /// `INTERNAL_ERROR` when `plan` is not resolved or no optimizer thread can
 /// be started. A rewrite nesting deeper than [`krishiv_plan::MAX_DEPTH`] is
-/// not an error: the input plan is returned unoptimised.
+/// not an error: the input plan is returned unoptimised, with only its
+/// collation keys; `FAILED_TO_PARSE_TOO_COMPLEX` when those keys alone nest
+/// past the cap. `KRISHIV_UNSUPPORTED_FEATURE` for a collated value the
+/// engine has no key form for yet, in a plan that did not come through the
+/// analyzer (whose guard refuses it first).
 pub fn optimize_with(plan: &Plan, stats: &dyn Statistics) -> Result<Plan, KrishivError> {
     optimize_with_options(plan, stats, &Options::default())
 }
@@ -332,6 +336,10 @@ impl Trace {
     }
 }
 
+/// What one optimizer run gives: the plan with only its collation keys, the optimized plan and
+/// the rule steps.
+type Ran = (Arc<LogicalPlan>, Arc<LogicalPlan>, Vec<RuleStep>);
+
 fn run(
     plan: &Plan,
     stats: Option<&dyn Statistics>,
@@ -346,7 +354,7 @@ fn run(
         .into());
     }
     let root = Arc::clone(plan.root());
-    let run = move || -> Result<(Arc<LogicalPlan>, Vec<RuleStep>), KrishivError> {
+    let run = move || -> Result<Ran, KrishivError> {
         let mut t = Trace {
             on: tracing,
             steps: Vec::new(),
@@ -355,6 +363,7 @@ fn run(
         let root = t.once("CollationKeys", &root, |r| {
             collation_keys::rewrite(Arc::clone(r))
         })?;
+        let keyed = Arc::clone(&root);
         let root = t.once("InlineCTE", &root, |r| inline_cte::inline(Arc::clone(r)))?;
         let root = t.once("ImpliedJoinFilters", &root, |r| {
             dag::rewrite_up(Arc::clone(r), &mut |p| {
@@ -495,19 +504,31 @@ fn run(
         } else {
             root
         };
-        Ok((root, t.steps))
+        Ok((keyed, root, t.steps))
     };
     // Passes recurse once per level and nest; rewrites may deepen the plan.
-    let (root, steps) =
+    let (keyed, root, steps) =
         krishiv_common::stack::on_big_stack(run).ok_or_else(|| InternalError {
             message: "cannot start an optimizer thread".to_owned(),
         })??;
-    // A plan the rewrites made deeper than the IR allows runs unoptimised:
-    // the input was valid, and the optimizer never makes a query fail.
     match Plan::try_new(root) {
         Ok(p) => Ok((p, steps)),
-        Err(_) => Ok((plan.clone(), Vec::new())),
+        Err(_) => Ok((unoptimised(plan, keyed)?, Vec::new())),
     }
+}
+
+/// The plan to run when the rewrites made `plan` deeper than the IR allows: the input with only
+/// its collation keys (`keyed`, the first rule's output), so a collated value still compares by
+/// its key. Without collations that is the input itself, which was valid.
+///
+/// # Errors
+/// `FAILED_TO_PARSE_TOO_COMPLEX` when the keys alone nest past the cap: running the unkeyed
+/// input would compare collated values as bytes.
+fn unoptimised(plan: &Plan, keyed: Arc<LogicalPlan>) -> Result<Plan, KrishivError> {
+    if Arc::ptr_eq(&keyed, plan.root()) {
+        return Ok(plan.clone());
+    }
+    Plan::try_new(keyed)
 }
 
 /// [`constraints::infer_join_filters`] at every join, bottom up.
@@ -763,4 +784,35 @@ pub(crate) fn groups_by_columns(g: &Grouping) -> bool {
 #[must_use]
 pub fn plan_is_deterministic(plan: &Arc<LogicalPlan>) -> bool {
     inline_cte::deterministic(plan)
+}
+
+#[cfg(test)]
+mod tests {
+    use krishiv_common::error::ErrorClass;
+    use krishiv_plan::{Expr, MAX_DEPTH};
+
+    use super::*;
+
+    fn filters(n: usize) -> Arc<LogicalPlan> {
+        Arc::new((0..n).fold(LogicalPlan::table(["t"]), |p, _| {
+            p.filter(Expr::column(["a"]))
+        }))
+    }
+
+    /// Past the depth cap the plan runs with its keys, or fails: never as the unkeyed input,
+    /// which would compare collated values as bytes.
+    #[test]
+    fn an_unoptimised_plan_keeps_its_collation_keys() {
+        let input = Plan::try_new(filters(3)).unwrap();
+        // No collations: the keyed plan is the input.
+        let same = unoptimised(&input, Arc::clone(input.root())).unwrap();
+        assert!(Arc::ptr_eq(same.root(), input.root()));
+        // Keys added: the keyed plan, not the input.
+        let keyed = filters(4);
+        let out = unoptimised(&input, Arc::clone(&keyed)).unwrap();
+        assert!(Arc::ptr_eq(out.root(), &keyed));
+        // Keys that nest past the cap: the error.
+        let err = unoptimised(&input, filters(MAX_DEPTH + 1)).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::FailedToParseTooComplex);
+    }
 }
