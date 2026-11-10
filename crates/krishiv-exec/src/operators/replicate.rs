@@ -49,6 +49,10 @@ struct Cursor {
 }
 
 impl Operator for ReplicateRows {
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "ReplicateRows"
     }

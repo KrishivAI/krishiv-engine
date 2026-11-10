@@ -214,6 +214,14 @@ pub trait Operator: Send + Sync {
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         Vec::new()
     }
+    /// Whether the operator's output for a batch depends only on that batch and its own
+    /// driver's state, never on what other drivers did or when (no shared counter, no
+    /// arrival-order effect). Under `krishiv.deterministicOrder` a pipeline splits into lanes
+    /// only if every operator says so (T094 G1, review M2). Default `false`: one driver, so
+    /// no operator is wrong by omission.
+    fn lane_safe(&self) -> bool {
+        false
+    }
     /// Whether the operator has work left that needs **every** driver's
     /// input first (a hash join's spilled partitions). If so, after
     /// [`finish`](Self::finish) a driver calls [`end_input`](Self::end_input),

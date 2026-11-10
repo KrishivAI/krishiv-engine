@@ -599,7 +599,10 @@ fn lane_count(
     }
     if !source.reports_positions()
         || !pipeline.sink.1.lane_safe()
-        || pipeline.operators.iter().any(|(_, op)| op.needs_flush())
+        || pipeline
+            .operators
+            .iter()
+            .any(|(_, op)| op.needs_flush() || !op.lane_safe())
     {
         return None;
     }

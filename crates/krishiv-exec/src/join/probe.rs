@@ -570,6 +570,10 @@ impl ProbeOp {
 }
 
 impl Operator for ProbeOp {
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "HashJoinProbe"
     }

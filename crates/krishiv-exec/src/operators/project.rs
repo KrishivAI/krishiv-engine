@@ -130,6 +130,10 @@ impl Project {
 }
 
 impl Operator for Project {
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "Project"
     }
