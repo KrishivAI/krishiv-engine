@@ -1,19 +1,13 @@
 # Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
 # (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
 # +31 lines over main: the decimal sum/avg unit-weight fast loops (E2 step 1)
-4190 crates/krishiv-exec/src/aggregate/accumulator.rs
-2067 crates/krishiv-exec/src/aggregate/hll.rs
 # +104 lines over main: the batch-local key map of a low-cardinality batch (RowTable::probe_local, E2 step 2)
-3260 crates/krishiv-exec/src/aggregate/rowtable.rs
 # +1 line (and in physical/instantiate.rs, window/tests.rs): the `udafs` spec field and the `Udf` aggregate variant (ADR 0045, T060a)
 # +37 lines over main: rows of batches that take the batch-local key map equal the columnar tables' (E2 step 2)
 # +68: an aggregate spill write holds the spilling guard, and the combined tables are the writer's during it (spill-guard tests, #627)
 2003 crates/krishiv-exec/src/operators/sort/sort.rs
 # +1 line: PlanNode::Repartition plans a hash exchange (DISTRIBUTE BY as a real exchange)
 # +1 line: the Python UDF evaluation node (P2-T059)
-2107 crates/krishiv-exec/src/planner/build.rs
-2396 crates/krishiv-exec/src/planner/eval/cond.rs
-2626 crates/krishiv-exec/src/planner/eval/hof.rs
 # +70 lines over main: the external-partition headroom reproducer, batches of 20 and 300/1,500 rows from a full pool (window spill flake, PR #601)
 # +10 lines: offsets and nth_value read back from a full pool (window fold charges)
 # +29: a window spill write holds the spilling guard (spill-guard tests, #627)
