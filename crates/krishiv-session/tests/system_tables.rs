@@ -898,3 +898,25 @@ fn a_scan_records_the_files_it_opened() {
     );
     assert_eq!(r.len(), 1, "{r:?}");
 }
+
+#[test]
+fn use_system_shows_no_default_database() {
+    let s = Session::new().unwrap();
+    block_on(async { s.sql("USE system").await.unwrap().collect().await.unwrap() });
+    let cur = column_of(&s, "SHOW CURRENT NAMESPACE", 0);
+    assert_eq!(cur, ["system"]);
+    assert_eq!(column_of(&s, "SHOW CURRENT NAMESPACE", 1), [""]);
+    let mut names = column_of(&s, "SHOW TABLES", 1);
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "caches",
+            "capabilities",
+            "memory",
+            "metrics",
+            "operators",
+            "queries"
+        ]
+    );
+}

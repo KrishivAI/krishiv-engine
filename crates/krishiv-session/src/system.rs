@@ -828,6 +828,25 @@ impl TextPolicy {
         } else {
             text
         };
+        self.cut(text)
+    }
+
+    /// An error message as the table shows it: English, not SQL, so the
+    /// SQL tokenizer never reads it (an apostrophe or `--` in prose would
+    /// hide the rest). Credentials are redacted; under `mask` every closed
+    /// `'...'` or backquoted run (where Spark quotes values) becomes `?`.
+    fn apply_message(self, message: &str) -> String {
+        let redacted = krishiv_common::redact::redact(message);
+        let shown = if self.mask {
+            mask_quoted(&redacted)
+        } else {
+            redacted.into_owned()
+        };
+        self.cut(&shown).0
+    }
+
+    /// `text` cut to `max_bytes` on a character boundary.
+    fn cut(self, text: &str) -> (String, bool) {
         if text.len() <= self.max_bytes {
             return (text.to_owned(), false);
         }
@@ -837,6 +856,34 @@ impl TextPolicy {
         }
         (text[..end].to_owned(), true)
     }
+}
+
+/// `message` with each quoted `'...'` run replaced by `'?'`. A quote opens
+/// only after a non-word character and closes only before one, so the
+/// apostrophe of `can't` is prose; an unclosed quote is left as it is.
+fn mask_quoted(message: &str) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let chars: Vec<(usize, char)> = message.char_indices().collect();
+    let mut out = String::with_capacity(message.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        let (at, c) = chars[i];
+        let opens = c == '\'' && (i == 0 || !word(chars[i - 1].1));
+        if opens
+            && let Some(j) = (i + 1..chars.len())
+                .find(|&j| chars[j].1 == '\'' && chars.get(j + 1).is_none_or(|n| !word(n.1)))
+        {
+            out.push_str(&message[copied..at]);
+            out.push_str("'?'");
+            copied = chars.get(j + 1).map_or(message.len(), |n| n.0);
+            i = j + 1;
+            continue;
+        }
+        i += 1;
+    }
+    out.push_str(&message[copied..]);
+    out
 }
 
 /// One query of `system.queries`.
@@ -1337,7 +1384,7 @@ impl QueryLog {
             return;
         }
         let policy = *self.text.lock().unwrap_or_else(PoisonError::into_inner);
-        let (shown, _) = policy.apply(&error.to_string());
+        let shown = policy.apply_message(&error.to_string());
         self.history
             .update(&self.session_id, id, |row| row.error_message = Some(shown));
     }
@@ -1510,6 +1557,26 @@ impl QueryRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_error_message_is_masked_by_quotes_not_by_sql_tokens() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let keep = TextPolicy {
+            max_bytes: 4096,
+            mask: false,
+        };
+        let m = "The value 'abc' of the type \"STRING\" can't be cast -- see 'x'";
+        assert_eq!(
+            mask.apply_message(m),
+            "The value '?' of the type \"STRING\" can't be cast -- see '?'"
+        );
+        assert_eq!(keep.apply_message(m), m);
+        // An unclosed quote hides nothing after it.
+        assert_eq!(mask.apply_message("it's fine"), "it's fine");
+    }
 
     #[test]
     fn capabilities_has_one_row_per_fact() {

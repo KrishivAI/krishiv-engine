@@ -417,10 +417,14 @@ impl Session {
             } => {
                 // `SHOW TABLES IN system`: the tables of the reserved read-only catalog (it has no
                 // namespace, so the namespace column is empty).
-                if let Some(n) = namespace
-                    && let Ok(name) = self.namespace_name(n, &self.query_env())
-                    && crate::system::is_system(&name)
-                {
+                let in_system = match namespace {
+                    Some(n) => self
+                        .namespace_name(n, &self.query_env())
+                        .is_ok_and(|name| crate::system::is_system(&name)),
+                    // After `USE system` a bare `SHOW TABLES` lists the system tables.
+                    None => crate::system::is_system(&self.state.catalog.current_catalog()),
+                };
+                if in_system {
                     let rows = crate::system::table_names()
                         .iter()
                         .filter(|t| keep(pattern.as_ref(), t))
