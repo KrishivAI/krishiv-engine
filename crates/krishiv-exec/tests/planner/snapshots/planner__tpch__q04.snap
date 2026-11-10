@@ -9,9 +9,9 @@ Sort [o_orderpriority#5 ASC NULLS FIRST]
          +- Exchange hashpartitioning(o_orderpriority#5)
             +- PartialHashAggregate keys=[o_orderpriority#5], functions=[count(1)]
                +- Project [o_orderpriority#5]
-                  +- HashJoin LeftSemi, [o_orderkey#0] = [l_orderkey#9], RuntimeFilter #1: o_orderkey#0 -> spark_catalog.default.orders.o_orderkey, probe filter: ((o_orderdate#4 >= DATE '1993-07-01') and (o_orderdate#4 < DATE '1993-10-01'))
-                     :- Scan spark_catalog.default.orders [o_orderkey#0, o_orderdate#4, o_orderpriority#5], PushedFilters: [((o_orderdate#4 >= DATE '1993-07-01') and (o_orderdate#4 < DATE '1993-10-01'))]
+                  +- HashJoin LeftSemi, [o_orderkey#0] = [l_orderkey#9], RuntimeFilter #1: o_orderkey#0 -> spark_catalog.default.orders.o_orderkey, probe filter: (((o_orderdate#4 >= DATE '1993-07-01') and (o_orderdate#4 < DATE '1993-10-01')) and isnotnull(o_orderkey#0))
+                     :- Scan spark_catalog.default.orders [o_orderkey#0, o_orderdate#4, o_orderpriority#5], PushedFilters: [(((o_orderdate#4 >= DATE '1993-07-01') and (o_orderdate#4 < DATE '1993-10-01')) and isnotnull(o_orderkey#0))]
                      +- BroadcastExchange
                         +- Project [l_orderkey#9]
-                           +- Filter (l_commitdate#20 < l_receiptdate#21)
-                              +- Scan spark_catalog.default.lineitem [l_orderkey#9, l_commitdate#20, l_receiptdate#21], PushedFilters: [(l_commitdate#20 < l_receiptdate#21)]
+                           +- Filter ((l_commitdate#20 < l_receiptdate#21) and isnotnull(l_orderkey#9))
+                              +- Scan spark_catalog.default.lineitem [l_orderkey#9, l_commitdate#20, l_receiptdate#21], PushedFilters: [((l_commitdate#20 < l_receiptdate#21) and isnotnull(l_orderkey#9))]
