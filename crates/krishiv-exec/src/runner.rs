@@ -474,7 +474,7 @@ fn start_group(
     // never compute the same partition (stateful functions own one value
     // stream per partition). An index past `u32` is rejected rather than
     // wrapped to `u32::MAX`, which would collide.
-    let mut next_partition: u64 = 0;
+    let mut prepared = Vec::with_capacity(members.len());
     for pipeline in members {
         let (source_id, source) = &pipeline.source;
         let mut source_ctx = ctx((*source_id, source.name()));
@@ -490,10 +490,19 @@ fn start_group(
             .map(|i| i.as_ref().map(read).transpose())
             .collect::<Result<Vec<_>>>()?;
         let source_global = source.global_state(&source_ctx)?;
+        let lane_count = lane_count(query, &pipeline, source, &source_global);
+        prepared.push((pipeline, operator_deps, source_global, lane_count));
+    }
+    // A fan-in whose members do not all split keeps one driver per member (the baton
+    // needs it, and a flush barrier is shared: design §6.5), so no member runs in lanes.
+    let mixed = prepared.len() > 1 && prepared.iter().any(|p| p.3.is_none());
+    let mut next_partition: u64 = 0;
+    for (pipeline, operator_deps, source_global, lane_count) in prepared {
+        let (_, source) = &pipeline.source;
+        let lane_count = if mixed { None } else { lane_count };
         // One driver when the pipeline must keep order, and for every pipeline under
         // `krishiv.deterministicOrder`: no interleaving of drivers, no run-to-run
         // difference in the order of merges or output rows.
-        let lane_count = lane_count(query, &pipeline, source, &source_global);
         let drivers = if let Some(n) = lane_count {
             n
         } else if pipeline.preserve_order || query.config().deterministic_order {

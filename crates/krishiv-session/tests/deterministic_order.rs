@@ -177,6 +177,10 @@ fn the_result_does_not_depend_on_the_thread_count() {
         "SELECT id, id % 7 AS k FROM range(0, 400000, 1, 24) ORDER BY k LIMIT 50",
         "SELECT id, id % 7 AS k, CAST(id AS DOUBLE) / 3 AS x FROM range(0, 300000, 1, 24) ORDER BY k",
         "SELECT a.id, b.id FROM range(0, 20000, 1, 24) a JOIN (SELECT id, id % 100 AS k FROM range(0, 20000, 1, 24)) b ON a.id % 100 = b.k WHERE a.id < 300 LIMIT 500",
+        // A fan-in mixing a branch that splits into lanes with one holding a flush barrier
+        // (review B1): every member keeps one driver.
+        "SELECT x FROM (SELECT a.id AS x FROM range(0,20000,1,24) a FULL JOIN range(0,1000,1,4) b ON a.id=b.id*3 \
+         UNION ALL SELECT id AS x FROM range(0,40000,1,24))",
     ];
     let mut shapes: Vec<Vec<String>> = Vec::new();
     for threads in [1, 4, 12] {
