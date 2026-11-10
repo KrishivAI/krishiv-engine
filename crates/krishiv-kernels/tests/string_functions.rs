@@ -1362,9 +1362,15 @@ fn search_lcase_endswith_is_linear_and_exact() {
             .unwrap()
             .value(0)
     };
-    let text = "a".repeat(100_000);
-    assert!(at(&text, &"A".repeat(50_000)));
-    assert!(!at(&text, &"b".repeat(50_000)));
+    // Miri interprets every step: a small size still exercises the same paths.
+    let (n, half) = if cfg!(miri) {
+        (400, 200)
+    } else {
+        (100_000, 50_000)
+    };
+    let text = "a".repeat(n);
+    assert!(at(&text, &"A".repeat(half)));
+    assert!(!at(&text, &"b".repeat(half)));
     assert!(!at("ab", "abc"));
     assert!(at("ab", ""));
     assert!(at("x\u{130}", "i\u{307}"));
