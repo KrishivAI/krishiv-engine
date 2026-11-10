@@ -100,7 +100,7 @@ pub(super) fn string_target<'a>(
 /// More constant list elements than this make an `IN` a hash-set lookup
 /// (Spark's `spark.sql.optimizer.inSetConversionThreshold` default, above
 /// which its optimizer rewrites `In` to `InSet`).
-const IN_SET_THRESHOLD: usize = 10;
+pub(super) const IN_SET_THRESHOLD: usize = 10;
 
 /// `v IN (constants)` as a set lookup (Spark's `InSet`): one hash probe
 /// per row instead of one comparison per element. The same answers as

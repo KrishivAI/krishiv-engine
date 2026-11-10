@@ -12,7 +12,7 @@
 /// only normalised, which is not checked against a real Spark run with that file system.
 pub(super) fn qualified_namespace_location(
     location: &str,
-    warehouse: &std::path::Path,
+    warehouse: impl FnOnce() -> Result<std::path::PathBuf, krishiv_common::error::KrishivError>,
 ) -> Result<String, krishiv_common::error::KrishivError> {
     if location.is_empty() {
         return Err(krishiv_common::error::InvalidEmptyLocation {
@@ -37,9 +37,11 @@ pub(super) fn qualified_namespace_location(
             }
             None => (format!("{s}:"), rest.to_owned()),
         },
+        // Only a relative location needs the warehouse (and may create its directory).
+        None if location.starts_with('/') => ("file:".to_owned(), location.to_owned()),
         None => (
             "file:".to_owned(),
-            warehouse.join(location).display().to_string(),
+            warehouse()?.join(location).display().to_string(),
         ),
     };
     let mut parts: Vec<&str> = Vec::new();

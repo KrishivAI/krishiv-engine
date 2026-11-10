@@ -536,6 +536,38 @@ fn the_seeded_xxh64_entry_points_agree_with_the_xxhash64_kernel() {
             .values()
             .to_vec()
     };
+    // Spark 4.2.0 `xxhash64(cast(v as int))`, `(.. as bigint)` and `(cast('..' as binary))`.
+    let spark_ints = [
+        3_614_696_996_920_510_707_i64,
+        -6_698_625_589_789_238_999,
+        2_017_008_487_422_258_757,
+        8_591_465_006_815_244_696,
+        2_073_849_959_933_241_805,
+        1_508_894_993_788_531_228,
+    ];
+    let spark_longs = [
+        -5_252_525_462_095_825_812_i64,
+        -7_001_672_635_703_045_582,
+        3_858_142_552_250_413_010,
+        1_821_704_621_099_523_357,
+        -8_619_748_838_626_508_300,
+        -3_246_596_055_638_297_850,
+    ];
+    let spark_bins = [
+        -7_444_071_767_201_028_348_i64,
+        -8_582_455_328_737_087_284,
+        -6_810_745_876_291_105_281,
+        4_412_266_579_188_277_622,
+    ];
+    for (v, want) in ints.values().iter().zip(spark_ints) {
+        assert_eq!(xxh64_seed_int(*v, 42), want, "spark int {v}");
+    }
+    for (v, want) in longs.values().iter().zip(spark_longs) {
+        assert_eq!(xxh64_seed_long(*v, 42), want, "spark long {v}");
+    }
+    for (i, want) in spark_bins.into_iter().enumerate() {
+        assert_eq!(xxh64_seed(binaries.value(i), 42), want, "spark binary {i}");
+    }
     let ia: ArrayRef = Arc::new(ints.clone());
     for (got, want) in ints.values().iter().zip(by_kernel(&ia)) {
         assert_eq!(xxh64_seed_int(*got, 42), want, "int {got}");

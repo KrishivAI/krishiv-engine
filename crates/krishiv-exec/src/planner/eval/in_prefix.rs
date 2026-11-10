@@ -157,9 +157,104 @@ pub(super) fn in_prefix(
     let Some((column, n)) = leading_substring(first) else {
         return Ok(None);
     };
-    if !items.iter().all(|e| e.is_constant()) {
+    // A long list keeps the hash-set `IN` (one lookup per row); this scans the list per row.
+    if items.len() > super::cond::IN_SET_THRESHOLD || !items.iter().all(|e| e.is_constant()) {
         return Ok(None);
     }
     let c = super::compile(column, input)?;
     Ok(InPrefixViews::try_new(c, n, items).map(|e| Arc::new(e) as Arc<dyn PhysExpr>))
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::StringViewArray;
+    use arrow_schema::{Field, Schema};
+    use krishiv_plan::Literal;
+
+    use super::*;
+    use crate::planner::eval::Column;
+
+    fn text(t: &str) -> Arc<dyn PhysExpr> {
+        Arc::new(crate::planner::eval::Lit::new(&Literal::String(t.to_owned())).unwrap())
+    }
+
+    fn column(data_type: ArrowType) -> Arc<dyn PhysExpr> {
+        Arc::new(Column {
+            index: 0,
+            data_type,
+            nullable: true,
+        })
+    }
+
+    fn batch(values: Vec<Option<&str>>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c",
+            ArrowType::Utf8View,
+            true,
+        )]));
+        RecordBatch::try_new(schema, vec![Arc::new(StringViewArray::from(values))]).unwrap()
+    }
+
+    fn run(n: usize, items: &[&str], values: Vec<Option<&str>>) -> Vec<Option<bool>> {
+        let items: Vec<_> = items.iter().map(|t| text(t)).collect();
+        let e = InPrefixViews::try_new(column(ArrowType::Utf8View), n, &items).unwrap();
+        let out = e.eval(&batch(values), 0).unwrap();
+        let a = out.array().as_boolean();
+        (0..a.len())
+            .map(|i| a.is_valid(i).then(|| a.value(i)))
+            .collect()
+    }
+
+    /// An n-character literal is a prefix test, a shorter one an equality, a longer one never
+    /// matches; multi-byte characters count once and a value longer than 12 bytes reads its buffer.
+    #[test]
+    fn prefix_equality_and_never() {
+        let long = "13 and then some longer value than twelve bytes";
+        let got = run(
+            2,
+            &["13", "\u{e9}1", "1", "zzz"],
+            vec![
+                Some("13-x"),
+                Some("1"),
+                Some("\u{e9}1x"),
+                Some("\u{e9}\u{e9}"),
+                Some(""),
+                Some(long),
+                Some("zzzz"),
+                None,
+            ],
+        );
+        let t = Some(true);
+        let f = Some(false);
+        assert_eq!(got, [t, t, t, f, f, t, f, None]);
+    }
+
+    /// A NULL element turns every miss into NULL and leaves a hit true.
+    #[test]
+    fn a_null_element_makes_misses_null() {
+        let items: Vec<Arc<dyn PhysExpr>> = vec![
+            text("ab"),
+            Arc::new(crate::planner::eval::Lit::new(&Literal::Null(None)).unwrap()),
+        ];
+        let e = InPrefixViews::try_new(column(ArrowType::Utf8View), 2, &items).unwrap();
+        let out = e
+            .eval(&batch(vec![Some("abc"), Some("xy"), None]), 0)
+            .unwrap();
+        let a = out.array().as_boolean();
+        assert_eq!((a.value(0), a.is_valid(0)), (true, true));
+        assert!(a.is_null(1) && a.is_null(2));
+        assert!(e.nullable());
+    }
+
+    /// Anything but string views, or a non-string element, is not rewritten.
+    #[test]
+    fn other_carriers_fall_through() {
+        let items = vec![text("ab")];
+        assert!(InPrefixViews::try_new(column(ArrowType::Utf8), 2, &items).is_none());
+        assert!(InPrefixViews::try_new(column(ArrowType::Int32), 2, &items).is_none());
+        let int_item: Vec<Arc<dyn PhysExpr>> = vec![Arc::new(
+            crate::planner::eval::Lit::new(&Literal::Integer(1)).unwrap(),
+        )];
+        assert!(InPrefixViews::try_new(column(ArrowType::Utf8View), 2, &int_item).is_none());
+    }
 }

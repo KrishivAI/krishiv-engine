@@ -373,3 +373,30 @@ async fn initialization_creates_version_zero_only() {
     assert_eq!(snap.version, Some(0));
     assert_eq!(names(&snap), ["f1"]);
 }
+
+/// A log that crosses `CHECKPOINT_EVERY` replays from the checkpoint: `snapshot_if_exists` and the
+/// full replay agree, the version is the newest, and a checkpoint-only listing still reads.
+#[tokio::test]
+async fn snapshot_if_exists_replays_from_a_checkpoint() {
+    let s = setup();
+    let l = log(&s);
+    let mut base = None;
+    for i in 0..70u64 {
+        let name = format!("f{i}");
+        base = Some(
+            l.commit(base, &entry("w", CommitMode::Append, &[&name], &[]))
+                .await
+                .unwrap(),
+        );
+    }
+    let snap = l.snapshot_if_exists().await.unwrap().unwrap();
+    assert_eq!(snap.version, Some(69));
+    assert_eq!(snap.files.len(), 70);
+    assert_eq!(snap.files, l.snapshot().await.unwrap().files);
+    // Only the checkpoint (version 63) and the entries after it remain: drop the earlier entries.
+    for v in 0..=63u64 {
+        s.inner.delete(&l.entry_path(v)).await.unwrap();
+    }
+    let snap = l.snapshot_if_exists().await.unwrap().unwrap();
+    assert_eq!((snap.version, snap.files.len()), (Some(69), 70));
+}

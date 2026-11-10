@@ -5,7 +5,7 @@ use super::*;
 use krishiv_types::{ArrayType, DecimalType};
 
 fn q(location: &str, wh: &std::path::Path) -> String {
-    qualified_namespace_location(location, wh).unwrap()
+    qualified_namespace_location(location, || Ok(wh.to_path_buf())).unwrap()
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn a_namespace_location_keeps_a_dotdot_above_the_root_and_refuses_an_empty_one()
     // Spark 4.2.0: `CREATE NAMESPACE n LOCATION '/../x'` is `file:/../x`; `''` is INVALID_EMPTY_LOCATION.
     assert_eq!(q("/../x", wh), "file:/../x");
     assert_eq!(q("/a/../../x", wh), "file:/../x");
-    let err = qualified_namespace_location("", wh).unwrap_err();
+    let err = qualified_namespace_location("", || Ok(wh.to_path_buf())).unwrap_err();
     assert!(err.to_string().contains("INVALID_EMPTY_LOCATION"), "{err}");
     // `new Path(..)` normalises every scheme (Spark 4.2.0 run through `org.apache.hadoop.fs.Path`).
     assert_eq!(q("s3a://b/x//y/", wh), "s3a://b/x/y");
@@ -102,4 +102,20 @@ fn literal_text_strips_one_pair_of_quotes() {
     assert_eq!(literal_text("\"x\""), "x");
     assert_eq!(literal_text(" true "), "true");
     assert_eq!(literal_text("'"), "'");
+}
+
+/// A location with a scheme or an absolute path never asks for the warehouse directory, so a
+/// warehouse that cannot be created does not fail it.
+#[test]
+fn only_a_relative_location_needs_the_warehouse() {
+    let no_warehouse = || Err(internal("cannot create the warehouse directory".to_owned()));
+    assert_eq!(
+        qualified_namespace_location("s3a://b/x", no_warehouse).unwrap(),
+        "s3a://b/x"
+    );
+    assert_eq!(
+        qualified_namespace_location("/abs/y", no_warehouse).unwrap(),
+        "file:/abs/y"
+    );
+    assert!(qualified_namespace_location("rel", no_warehouse).is_err());
 }
