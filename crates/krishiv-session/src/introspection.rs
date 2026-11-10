@@ -697,12 +697,20 @@ impl Session {
             let Some(entry) = self.state.catalog.get(&name, case_sensitive) else {
                 continue;
             };
-            // A data source view: its columns are all it has. A query view would print its text, which
-            // the session does not keep.
-            let crate::catalog::TempTable::Files { columns, .. } = &*entry else {
-                return Err(unsupported(
-                    "SHOW TABLE EXTENDED of a temporary view over a query or DataFrame",
-                ));
+            // A data source view: its columns are all it has. A view over a query prints its text (a
+            // DataFrame view has none, and is refused).
+            let (columns, text) = match &*entry {
+                crate::catalog::TempTable::Files { columns, .. } => (columns, None),
+                crate::catalog::TempTable::View {
+                    columns,
+                    text: Some(text),
+                    ..
+                } => (columns, Some(text)),
+                _ => {
+                    return Err(unsupported(
+                        "SHOW TABLE EXTENDED of a temporary view over a DataFrame",
+                    ));
+                }
             };
             let mut entries = vec![
                 ("Table".to_owned(), name.clone()),
@@ -711,7 +719,33 @@ impl Session {
                 ("Created By".to_owned(), "Spark 4.2.0".to_owned()),
                 ("Type".to_owned(), "VIEW".to_owned()),
             ];
-            if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
+            if let Some(text) = text {
+                // Spark prints no original text for a temporary view; its schema mode (when the feature is on)
+                // sits between the text and the catalog.
+                entries.push(("View Text".to_owned(), text.clone()));
+                if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
+                    entries.push(("View Schema Mode".to_owned(), "BINDING".to_owned()));
+                }
+                entries.push((
+                    "View Catalog and Namespace".to_owned(),
+                    format!(
+                        "{}.{}",
+                        crate::catalog::CATALOG,
+                        self.state.catalog.current_namespace()
+                    ),
+                ));
+                entries.push((
+                    "View Query Output Columns".to_owned(),
+                    format!(
+                        "[{}]",
+                        columns
+                            .iter()
+                            .map(|c| format!("`{}`", c.name.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            } else if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
                 entries.push(("View Schema Mode".to_owned(), "BINDING".to_owned()));
             }
             let fields: Vec<(&str, &DataType, bool)> = columns
@@ -966,13 +1000,20 @@ impl Session {
                     })?;
                 let mut rows = self.namespace_rows(&ns, &meta)?;
                 if *extended {
+                    // Spark 4.2.0 (`research/spark/schema-collation/probe1.out`): the sorted pairs as Scala
+                    // tuples, `((a,1), (b,2))`; nothing for none.
                     let props = meta
                         .properties
                         .iter()
-                        .map(|(k, v)| format!("{k}={}", redact(k, v)))
+                        .map(|(k, v)| format!("({k},{})", redact(k, v)))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    rows.push(vec![s("Properties"), s(format!("({props})"))]);
+                    let shown = if props.is_empty() {
+                        String::new()
+                    } else {
+                        format!("({props})")
+                    };
+                    rows.push(vec![s("Properties"), s(shown)]);
                 }
                 self.ordered_frame(&["info_name", "info_value"], &[], rows)
                     .await
@@ -998,13 +1039,19 @@ impl Session {
                 format!("file:{}", dir.display())
             }
         };
-        Ok(vec![
+        let mut rows = vec![
             vec![s("Catalog Name"), s(crate::catalog::CATALOG)],
             vec![s("Namespace Name"), s(ns)],
             vec![s("Comment"), s(meta.comment.clone().unwrap_or_default())],
-            vec![s("Location"), s(location)],
-            vec![s("Owner"), s("spark")],
-        ])
+        ];
+        // The schema's default collation, after the comment (Spark 4.2.0,
+        // `research/spark/schema-collation/probe2.out`).
+        if let Some(c) = &meta.collation {
+            rows.push(vec![s("Collation"), s(c.clone())]);
+        }
+        rows.push(vec![s("Location"), s(location)]);
+        rows.push(vec![s("Owner"), s("spark")]);
+        Ok(rows)
     }
 
     /// One column's `info_name`/`info_value` rows.
@@ -1120,8 +1167,8 @@ impl Session {
             if let Some(c) = &t.comment {
                 rows.push(("Comment".to_owned(), c.clone()));
             }
-            rows.push(("View Text".to_owned(), view.sql.clone()));
-            rows.push(("View Original Text".to_owned(), view.sql.clone()));
+            rows.push(("View Text".to_owned(), view.written.clone()));
+            rows.push(("View Original Text".to_owned(), view.written.clone()));
             let enabled = crate::view_schema::binding_enabled(&self.state.conf.snapshot());
             let mode = crate::view_schema::effective_mode(view.schema_mode, enabled);
             if let Some(mode) = mode {
@@ -1515,7 +1562,7 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
             out.push_str(&format!("WITH SCHEMA {}\n", mode.as_str()));
         }
         out.push_str("AS ");
-        out.push_str(&view.sql);
+        out.push_str(&view.written);
         out.push('\n');
         return Ok(out);
     }

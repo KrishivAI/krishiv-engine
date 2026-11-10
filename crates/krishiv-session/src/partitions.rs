@@ -1320,6 +1320,26 @@ pub(crate) fn stats_text(s: PartitionStats) -> String {
     }
 }
 
+impl crate::Session {
+    /// [`Self::analyze_variable_query`] in `env` (a query environment the caller adjusted, such as a cast mode
+    /// Spark fixes whatever the session says).
+    pub(crate) async fn analyze_variable_query_in(
+        &self,
+        sql: &str,
+        env: crate::session::QueryEnv,
+    ) -> Result<Arc<crate::dataframe::Analysis>, KrishivError> {
+        let redacted = krishiv_sql::redact_sql(sql);
+        let query = krishiv_sql::parse_query(sql, &env.parser).map_err(|e| {
+            crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
+        })?;
+        let plan = krishiv_sql::lower(&query, krishiv_plan::SourceId(0)).map_err(|e| {
+            crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
+        })?;
+        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        df.analyzed_in_with_text(env, Some(&redacted)).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -924,3 +924,59 @@ async fn last_resort_victims_are_asked_before_an_abort() {
     assert_eq!(root.stats().aborts, 0);
     assert!(qa.check_aborted().is_ok() && qb.check_aborted().is_ok());
 }
+
+/// Consumers sharing one `SpillStats` (the drivers of one operator) report the
+/// most they held together, not the sum of their own peaks.
+#[test]
+fn shared_stats_peak_is_the_concurrent_peak_not_the_sum() {
+    use krishiv_memory::{ConsumerHandle, SpillStats};
+    let root = new_root(64 * MIB);
+    let stats = Arc::new(SpillStats::default());
+    let pool: Arc<dyn MemoryPool> = root;
+    let a = ConsumerHandle::register_counted(Arc::clone(&pool), "a", None, Arc::clone(&stats));
+    let b = ConsumerHandle::register_counted(pool, "b", None, Arc::clone(&stats));
+    let mut ra = a.reservation();
+    let mut rb = b.reservation();
+    ra.try_grow(8 * MIB).unwrap();
+    ra.shrink(8 * MIB);
+    rb.try_grow(8 * MIB).unwrap();
+    assert_eq!((a.peak(), b.peak()), (8 * MIB, 8 * MIB));
+    assert_eq!(stats.peak_held(), 8 * MIB);
+    ra.try_grow(4 * MIB).unwrap();
+    assert_eq!(stats.peak_held(), 12 * MIB);
+}
+
+/// A release is counted before the pool hands the bytes to another consumer,
+/// so two consumers passing one pool's whole budget back and forth never
+/// record a shared peak above the pool limit.
+#[test]
+fn shared_peak_never_exceeds_the_pool_when_consumers_hand_bytes_over() {
+    use krishiv_memory::{ConsumerHandle, SpillStats};
+    let limit = 8 * MIB;
+    let root = new_root(limit);
+    let stats = Arc::new(SpillStats::default());
+    let pool: Arc<dyn MemoryPool> = root;
+    let workers: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|name| {
+            let h =
+                ConsumerHandle::register_counted(Arc::clone(&pool), name, None, Arc::clone(&stats));
+            std::thread::spawn(move || {
+                let mut r = h.reservation();
+                for _ in 0..20_000 {
+                    if r.try_grow(limit).is_ok() {
+                        r.shrink(limit);
+                    }
+                }
+            })
+        })
+        .collect();
+    for w in workers {
+        w.join().unwrap();
+    }
+    assert!(
+        stats.peak_held() <= limit,
+        "peak {} > {limit}",
+        stats.peak_held()
+    );
+}

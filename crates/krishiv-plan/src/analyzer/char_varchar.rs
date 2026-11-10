@@ -304,7 +304,27 @@ fn read_padded_column(e: &Expr) -> Option<(&BoundColumn, i32)> {
 /// `x AS name` where `x` is a cast the engine built in ANSI mode before analysis.
 fn is_internal_cast_alias(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Alias { expr, .. }
-        if matches!(expr.node, ExprNode::Cast { mode: crate::CastMode::Ansi, .. }))
+        if matches!(&unstored(expr).node, ExprNode::Cast { mode: crate::CastMode::Ansi, .. }))
+}
+
+/// `e` without the [`ExprNode::StoredField`] of a view's read projection.
+fn unstored(e: &Expr) -> &Expr {
+    match &e.node {
+        ExprNode::StoredField { expr, .. } => expr,
+        _ => e,
+    }
+}
+
+/// The comment a view stored for the column `written` aliases (`Some(None)`: it stored none), if `written` is an
+/// item of a view's read projection.
+fn stored_comment(written: Option<&Expr>) -> Option<Option<&str>> {
+    match &written?.node {
+        ExprNode::Alias { expr, .. } => match &expr.node {
+            ExprNode::StoredField { comment, .. } => Some(comment.as_deref()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The declared length `n` of a bare `char(n)` attribute operand; `None` for any other operand (an expression,
@@ -589,9 +609,22 @@ impl Resolver<'_> {
         // An item already resolved comes from a stored analyzed plan (a DataFrame's temporary view): its
         // read-side padding call stands for the padded column.
         let stored = written.is_some_and(|w| matches!(w.node, ExprNode::Resolved(_)));
+        // A view's read projection gives each column the metadata the view stored (Spark's `explicitMetadata`):
+        // its comment, or none, whatever the column under it has.
+        if let (Some(stored), ExprNode::Resolved(ResolvedExpr::Alias { output, .. })) =
+            (stored_comment(written), &b.expr.node)
+        {
+            match stored {
+                Some(t) => {
+                    self.comments.insert(output.id, Arc::from(t));
+                }
+                None => {
+                    self.comments.remove(&output.id);
+                }
+            }
         // A column comment follows the same alias of a bare column (Spark's `Alias` keeps a named child's
         // metadata; any other expression starts without it), and a stored plan's padded `CHAR` column.
-        if !self.comments.is_empty()
+        } else if !self.comments.is_empty()
             && let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
             && let Some(c) = commented_column(expr, internal_cast)
                 .or_else(|| read_padded_column(expr).filter(|_| stored).map(|(c, _)| c))

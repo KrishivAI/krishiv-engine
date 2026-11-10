@@ -62,7 +62,7 @@ pub(crate) fn inline(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, Krishiv
     if inline.is_empty() {
         return Ok(root);
     }
-    let next = max_id(&root, &mut HashMap::new()).saturating_add(1);
+    let next = max_id(&root, &mut Default::default()).saturating_add(1);
     let mut inliner = Inliner {
         defs,
         inline,
@@ -259,7 +259,7 @@ impl Inliner {
                 b
             }
         };
-        let span = max_id(&body, &mut HashMap::new());
+        let span = max_id(&body, &mut Default::default());
         let offset = self.next;
         let Some(top) = offset.checked_add(span).filter(|top| *top <= MAX_ID) else {
             return Ok(None);

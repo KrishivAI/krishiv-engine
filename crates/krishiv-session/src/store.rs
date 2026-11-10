@@ -125,6 +125,9 @@ pub(crate) struct ViewDef {
     /// the view was created: a read marks their columns as the creating query did, so the view's
     /// output names stay the ones Spark gives (`c1.c2` for `IDENTIFIER('c1.c2')`).
     pub(crate) identifier_spans: Vec<krishiv_sql::ast::Span>,
+    /// The query as written, its `IDENTIFIER(..)` clauses kept (`sql` has the names they
+    /// evaluated to): Spark's `View Text`, `View Original Text` and `SHOW CREATE TABLE` print it.
+    pub(crate) written: String,
     /// `WITH SCHEMA ...` as stored; `None` for a view created while `spark.sql.legacy.viewSchemaBindingMode` was
     /// off (Spark then stores no mode, and the view reads as `BINDING` once the feature is on).
     pub(crate) schema_mode: Option<ViewSchemaMode>,
@@ -268,6 +271,8 @@ pub(crate) struct PartitionStats {
 /// A namespace's metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct NamespaceMeta {
+    /// The schema's `DEFAULT COLLATION` (its canonical name), when schema-level collations are on.
+    pub(crate) collation: Option<String>,
     pub(crate) comment: Option<String>,
     pub(crate) location: Option<String>,
     pub(crate) properties: BTreeMap<String, String>,

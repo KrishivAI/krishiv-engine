@@ -1,14 +1,7 @@
 {
   "cases": {
     "files": [
-      2,
-      7,
-      9,
-      12,
-      17
-    ],
-    "object-stores": [
-      22
+      9
     ],
     "sql-commands": [
       6,

@@ -1599,6 +1599,9 @@ impl Resolver<'_> {
                     _ => kids[0].clone(),
                 }
             }
+            // Metadata only: the comment is taken from the written form by the alias above it
+            // (`carry_declared_item`).
+            ExprNode::StoredField { .. } => kids[0].clone(),
             ExprNode::Collate {
                 collation, name, ..
             } => {
