@@ -82,6 +82,15 @@ fn from_xml_treats_text_in_a_binary_field_as_a_malformed_record() {
     // (PERMISSIVE) and FAILFAST raises; the style does not matter. `from_csv` does read bytes.
     for style in [None, Some("HEX"), Some("UTF-8")] {
         let s = with_style(style);
+        // The struct is not NULL (Spark's PERMISSIVE mode keeps the row); its field is.
+        assert_eq!(
+            text(
+                &s,
+                "SELECT CAST(from_xml('<ROW><name>Eason</name></ROW>', 'name binary') IS NOT NULL AS STRING)"
+            ),
+            "true",
+            "{style:?}"
+        );
         assert_eq!(
             text(
                 &s,
@@ -90,12 +99,17 @@ fn from_xml_treats_text_in_a_binary_field_as_a_malformed_record() {
             "true",
             "{style:?}"
         );
-        assert!(
-            rows(
-                &s,
-                "SELECT from_xml('<ROW><name>Eason</name></ROW>', 'name binary', map('mode','FAILFAST'))"
+        assert_eq!(
+            block_on(
+                block_on(s.sql(
+                    "SELECT from_xml('<ROW><name>Eason</name></ROW>', 'name binary', map('mode','FAILFAST'))"
+                ))
+                .unwrap()
+                .collect()
             )
-            .is_err(),
+            .unwrap_err()
+            .error_class(),
+            krishiv_common::error::ErrorClass::MalformedRecordInParsingWithoutSuggestion,
             "{style:?}"
         );
         assert_eq!(
