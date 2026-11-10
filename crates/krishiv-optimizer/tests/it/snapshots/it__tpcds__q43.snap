@@ -9,10 +9,11 @@ Limit 100
          +- Join Inner, (s_store_sk#51 == ss_store_sk#35)
             :- Project [ss_store_sk#35, ss_sales_price#41, d_day_name#14]
             :  +- Join Inner, (d_date_sk#0 == ss_sold_date_sk#28)
-            :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#28, ss_store_sk#35, ss_sales_price#41]
+            :     :- Filter (isnotnull(ss_sold_date_sk#28) and isnotnull(ss_store_sk#35))
+            :     :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#28, ss_store_sk#35, ss_sales_price#41]
             :     +- Project [d_date_sk#0, d_day_name#14]
-            :        +- Filter (d_year#6 == 2000)
+            :        +- Filter ((d_year#6 == 2000) and isnotnull(d_date_sk#0))
             :           +- Scan spark_catalog.default.date_dim [d_date_sk#0, d_year#6, d_day_name#14]
             +- Project [s_store_sk#51, s_store_id#52, s_store_name#56]
-               +- Filter (s_gmt_offset#78 == -5.00)
+               +- Filter ((s_gmt_offset#78 == -5.00) and isnotnull(s_store_sk#51))
                   +- Scan spark_catalog.default.store [s_store_sk#51, s_store_id#52, s_store_name#56, s_gmt_offset#78]
