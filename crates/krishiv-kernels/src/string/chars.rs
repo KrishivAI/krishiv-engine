@@ -688,6 +688,22 @@ pub enum LcaseSearch {
     End,
 }
 
+/// The one start whose lower-cased suffix of `chars` has exactly `points` code points (every
+/// character has one or two, so at most one start qualifies): a match that ends the text can
+/// begin nowhere else, which keeps `endswith` linear.
+fn suffix_start(chars: &[char], points: usize) -> Option<usize> {
+    let mut seen = 0_usize;
+    let mut buf = Vec::with_capacity(2);
+    let mut at = chars.len();
+    while seen < points {
+        at = at.checked_sub(1)?;
+        buf.clear();
+        lcase_points(chars[at], &mut buf);
+        seen = seen.saturating_add(buf.len());
+    }
+    (seen == points).then_some(at)
+}
+
 /// `contains` / `startswith` / `endswith` over `UTF8_LCASE` operands: the pattern's lower-cased
 /// code points must match the text's, and a match may not start or end between the two code
 /// points `İ` lower-cases to (Spark's `lowercaseMatchLengthFrom` / `lowercaseMatchUntil`).
@@ -716,7 +732,9 @@ pub fn search_lcase<O: OffsetSizeTrait>(
             Some(match kind {
                 LcaseSearch::Start => hit(0).is_some(),
                 LcaseSearch::Anywhere => (0..=chars.len()).any(|at| hit(at).is_some()),
-                LcaseSearch::End => (0..=chars.len()).any(|at| hit(at) == Some(chars.len())),
+                LcaseSearch::End => {
+                    suffix_start(&chars, pat.len()).is_some_and(|at| hit(at) == Some(chars.len()))
+                }
             })
         })
         .collect())

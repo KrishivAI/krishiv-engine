@@ -967,3 +967,16 @@ fn a_qualified_search_is_not_rewritten_to_the_builtin() {
         "2"
     );
 }
+
+#[test]
+fn an_icu_rtrim_subquery_key_is_not_a_plain_string_comparison() {
+    // ICU keys are not implemented: the pair must not collapse to a comparison of 'a' and 'A'.
+    let r = run(
+        "SELECT CAST(1 AS STRING) WHERE 'a ' COLLATE UNICODE_CI_RTRIM \
+                 IN (SELECT 'A' COLLATE UNICODE_CI_RTRIM)",
+    );
+    assert!(
+        r.as_ref().map_or(true, |rows| !rows.is_empty()) || r.is_err(),
+        "{r:?}"
+    );
+}

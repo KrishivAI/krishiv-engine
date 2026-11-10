@@ -232,7 +232,12 @@ pub(super) fn subquery_key_collation(
     // `COLLATE` winning), which keying one side would answer wrongly.
     match (left, right) {
         (Some(DataType::CollatedString(l)), DataType::CollatedString(r))
-            if l == r && (l.rtrim() || matches!(l.family(), CollationFamily::Utf8Lcase)) =>
+            if l == r
+                && matches!(
+                    l.family(),
+                    CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
+                )
+                && (l.rtrim() || matches!(l.family(), CollationFamily::Utf8Lcase)) =>
         {
             Some(*l)
         }

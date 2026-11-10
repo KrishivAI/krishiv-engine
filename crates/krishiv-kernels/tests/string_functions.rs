@@ -1351,3 +1351,23 @@ fn search_lcase_follows_spark_lowercase_matching() {
         [true; 3]
     );
 }
+
+/// `endswith` over `UTF8_LCASE` finds the one start that can end the text, so a long suffix
+/// match is linear (a row of 100,000 `a` against a pattern of 50,000), and keeps the `İ` rules.
+#[test]
+fn search_lcase_endswith_is_linear_and_exact() {
+    use s::LcaseSearch::End;
+    let at = |text: &str, pat: &str| {
+        s::search_lcase(End, lit(Some(text)), StrOperand::Array(&r1(pat)))
+            .unwrap()
+            .value(0)
+    };
+    let text = "a".repeat(100_000);
+    assert!(at(&text, &"A".repeat(50_000)));
+    assert!(!at(&text, &"b".repeat(50_000)));
+    assert!(!at("ab", "abc"));
+    assert!(at("ab", ""));
+    assert!(at("x\u{130}", "i\u{307}"));
+    assert!(!at("x\u{130}", "\u{307}"));
+    assert!(at("x\u{130}", "x\u{130}"));
+}
