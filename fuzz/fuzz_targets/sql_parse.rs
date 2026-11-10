@@ -42,6 +42,7 @@ fuzz_target!(|data: &[u8]| {
         view_schema_binding: rest.first().is_some_and(|b| b & 4 != 0),
         quoted_regex_column_names: rest.first().is_some_and(|b| b & 8 != 0),
         having_without_group_by_as_where: rest.first().is_some_and(|b| b & 16 != 0),
+        schema_level_collations: rest.first().is_some_and(|b| b & 32 != 0),
     };
     match parse_query(&sql, &options) {
         Ok(q) => {
