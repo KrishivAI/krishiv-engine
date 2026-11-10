@@ -253,6 +253,20 @@ fn selector_args(name: &str) -> usize {
     usize::from(name.eq_ignore_ascii_case("nvl2"))
 }
 
+/// How many leading arguments of `name` give the collation of the result: the others are numbers
+/// (`left(str, len)` takes its collation from `str` alone, even when `len` is written
+/// `collate(2, utf8_lcase)`, which Spark casts to an integer).
+fn collation_args(name: &str, n: usize) -> usize {
+    if ["left", "right", "repeat", "substring", "substr"]
+        .iter()
+        .any(|f| name.eq_ignore_ascii_case(f))
+    {
+        1.min(n)
+    } else {
+        n
+    }
+}
+
 /// Whether a lookup in a map compares keys of a collated type (`m[k]`, `element_at`): the
 /// key compare is bytes until unit 3b, so only array indexing and plain-key maps are exempt.
 fn map_lookup_compares_collation(kids: &[Bound]) -> bool {
@@ -1098,7 +1112,8 @@ impl Resolver<'_> {
         name: &str,
     ) -> Result<(Option<Collation>, bool), AnalysisError> {
         let mut memo = Memo::new();
-        let items: Vec<(Collation, Strength)> = kids[selector_args(name).min(n)..n]
+        let items: Vec<(Collation, Strength)> = kids
+            [selector_args(name).min(n)..collation_args(name, n).max(selector_args(name).min(n))]
             .iter()
             .filter(|k| is_string(k.ty.data_type.as_ref()))
             .filter_map(|k| {
