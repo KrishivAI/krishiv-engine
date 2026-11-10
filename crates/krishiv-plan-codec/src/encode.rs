@@ -653,6 +653,17 @@ impl Encoder {
                     output: Some(bound_column(output, &self.nested)?),
                 })
             }
+            ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi,
+                expr,
+                data_type,
+                nullable,
+            }) => Kind::EvalMode(pb::EvalModeExpr {
+                expr: self.child(expr),
+                ansi: *ansi,
+                data_type: Some(spark_type(data_type, &self.nested)?),
+                nullable: *nullable,
+            }),
             ExprNode::Resolved(ResolvedExpr::Field {
                 base,
                 ordinal,

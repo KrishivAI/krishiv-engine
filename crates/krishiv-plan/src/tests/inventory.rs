@@ -99,6 +99,7 @@ fn expr_kind(expr: &Expr) -> &'static str {
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => "ResolvedExpr::Alias",
         ExprNode::Resolved(ResolvedExpr::Field { .. }) => "ResolvedExpr::Field",
         ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => "ResolvedExpr::StateInput",
+        ExprNode::Resolved(ResolvedExpr::EvalMode { .. }) => "ResolvedExpr::EvalMode",
     }
 }
 

@@ -47,6 +47,10 @@ fn the_header_lists_exactly_the_features_in_use() {
     assert_eq!(m.epoch, EPOCH);
     assert_eq!(message("limit_offset").features, ["limit_offset"]);
     assert!(message("limit").features.is_empty());
+    assert_eq!(
+        message("captured_eval_mode").features,
+        ["captured_eval_mode"]
+    );
     // A lambda over arrays needs both features.
     assert_eq!(
         message("lambda_functions").features,
@@ -307,6 +311,11 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         Some(Feature::LambdaFunctions)
     );
     assert_eq!(Feature::LambdaFunctions.kind(), FeatureKind::Semantic);
+    assert_eq!(
+        feature_of(Construct::EvalMode),
+        Some(Feature::CapturedEvalMode)
+    );
+    assert_eq!(Feature::CapturedEvalMode.kind(), FeatureKind::Semantic);
     assert_eq!(feature_of(Construct::Node(&PhysNode::OneRow)), None);
     let null_of = krishiv_exec::physical::ProjectItemPlan::NullOf {
         index: 0,
