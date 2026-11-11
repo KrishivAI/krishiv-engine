@@ -1599,4 +1599,25 @@ fn deep_nested_nulls_round_trip() {
             "column {c}"
         );
     }
+    // The same rows in row groups of one row keep their nulls too.
+    let split = env.put(
+        "deep_split.parquet",
+        write(
+            std::slice::from_ref(&batch),
+            WriterProperties::builder()
+                .set_max_row_group_row_count(Some(1))
+                .build(),
+        ),
+    );
+    let out = env
+        .scan(&split, &ScanRequest::all(meta.schema()), &o)
+        .unwrap();
+    let out = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+    for c in 0..3 {
+        assert_eq!(
+            out.column(c).to_data(),
+            batch.column(c).to_data(),
+            "split column {c}"
+        );
+    }
 }
