@@ -1280,3 +1280,33 @@ fn listagg_distinct_casts_follow_spark() {
     .unwrap_err();
     assert!(e.to_string().contains("UNSAFE_CAST"), "{e}");
 }
+
+/// `IN (subquery)` over two different collations is a conflict, not a comparison in the left one.
+#[test]
+fn in_subquery_over_different_collations_is_refused() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table sl(a string collate utf8_lcase) using parquet",
+        "create table sr(b string collate utf8_binary_rtrim) using parquet",
+        "insert into sl values('X')",
+        "insert into sr values('x ')",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    assert_eq!(
+        class_of(&s, "select a from sl where a in (select b from sr)"),
+        ErrorClass::DatatypeMismatchInSubqueryDataTypeMismatch
+    );
+}
+
+/// An array set operation over collated strings reads each operand twice (values, keys), so a
+/// nondeterministic operand is refused rather than keyed by a different draw.
+#[test]
+fn array_set_over_a_nondeterministic_collated_operand_is_refused() {
+    assert_eq!(
+        class(
+            "select array_distinct(array((case when rand() < 0.5 then 'a' else 'b' end) collate utf8_lcase, 'a' collate utf8_lcase))"
+        ),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+}

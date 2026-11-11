@@ -91,8 +91,8 @@ pub(crate) fn output_columns(a: &AnalyzedPlan, nullable: Option<bool>) -> Vec<St
 /// (`INDETERMINATE_COLLATION_IN_SCHEMA`).
 ///
 /// # Errors
-/// The class above, naming the columns.
-pub(crate) fn refuse_indeterminate_schema(a: &AnalyzedPlan) -> Result<(), KrishivError> {
+/// The class above, naming the columns. `a` itself when the schema is fine.
+pub(crate) fn refuse_indeterminate_schema(a: &AnalyzedPlan) -> Result<&AnalyzedPlan, KrishivError> {
     // A map key of the indeterminate type is the map-key error, not the schema one (Spark's order).
     if a.output.iter().any(|c| {
         c.data_type.any_type(&|x| {
@@ -113,7 +113,7 @@ pub(crate) fn refuse_indeterminate_schema(a: &AnalyzedPlan) -> Result<(), Krishi
         .map(|c| format!("`{}`", c.name))
         .collect();
     if bad.is_empty() {
-        return Ok(());
+        return Ok(a);
     }
     Err(krishiv_common::error::IndeterminateCollationInSchema {
         column_paths: bad.join(", "),

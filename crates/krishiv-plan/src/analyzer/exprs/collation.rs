@@ -308,6 +308,13 @@ pub(super) fn subquery_key_collation(
     if !is_string(left) || !is_string(Some(right)) {
         return None;
     }
+    // Two different collations are a conflict, not a choice: the pair goes to the common-type
+    // check, which refuses it.
+    if let (Some(DataType::CollatedString(a)), DataType::CollatedString(b)) = (left, right)
+        && a != b
+    {
+        return None;
+    }
     [left, Some(right)].into_iter().find_map(|t| match t {
         Some(DataType::CollatedString(c))
             if c.rtrim() || matches!(c.family(), CollationFamily::Utf8Lcase) =>
@@ -1276,6 +1283,17 @@ impl Resolver<'_> {
             && has_key(a.element_type())
             && matches!(&kids[n - 1].ty.data_type, Some(DataType::Array(b)) if b.element_type() == a.element_type())
         {
+            // The values and their keys are two evaluations of each operand: a nondeterministic
+            // operand would give keys that describe other elements.
+            if kids[..n]
+                .iter()
+                .any(|k| !crate::raises::is_deterministic(&k.expr))
+            {
+                return Err(unsupported(
+                    "a nondeterministic array operand over a collated string",
+                    e.origin,
+                ));
+            }
             let arr_t = DataType::Array(Arc::clone(&a));
             let op = name.trim_start_matches("array_");
             let second = &kids[n - 1];
