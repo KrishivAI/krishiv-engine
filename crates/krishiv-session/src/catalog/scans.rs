@@ -66,10 +66,21 @@ impl super::Expander<'_> {
         self.view_namespace.is_some() || !crate::system::is_system(&self.catalog.current_catalog())
     }
 
-    /// `plan`, a read of `namespace.table` inside a stored view, as `spark_catalog.namespace.table`: a
-    /// view's table belongs to the catalog that defines it, whatever the current catalog is.
+    /// The name of a table a stored view reads from `namespace`: `spark_catalog.namespace.table` while `system` is
+    /// current (the view's tables belong to the catalog that defines it), else `namespace.table` as ever.
+    pub(super) fn view_read_name(&self, namespace: String, table: String) -> Vec<String> {
+        if crate::system::is_system(&self.catalog.current_catalog()) {
+            vec![super::CATALOG.to_owned(), namespace, table]
+        } else {
+            vec![namespace, table]
+        }
+    }
+
+    /// `plan`, a read of `namespace.table` inside a stored view, as `spark_catalog.namespace.table` while `system`
+    /// is current: a view's table belongs to the catalog that defines it.
     pub(super) fn anchored(&self, plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         if self.view_namespace.is_some()
+            && crate::system::is_system(&self.catalog.current_catalog())
             && let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
             && let [namespace, table] = name.as_slice()
             && !crate::system::is_system(namespace)

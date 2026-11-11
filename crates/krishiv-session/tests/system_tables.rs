@@ -1019,7 +1019,7 @@ fn a_bare_drop_of_a_function_or_view_does_not_reach_the_session_catalog_under_sy
     run(&s, "CREATE FUNCTION f() RETURNS INT RETURN 1").unwrap();
     run(&s, "USE system").unwrap();
     for sql in ["DROP VIEW v", "DROP FUNCTION f"] {
-        assert!(run(&s, sql).is_err(), "{sql}");
+        assert!(run(&s, sql).unwrap_err().contains("NOT_FOUND"), "{sql}");
     }
     run(&s, "USE spark_catalog").unwrap();
     assert_eq!(column_of(&s, "SELECT CAST(n AS STRING) FROM v", 0), ["1"]);
@@ -1131,7 +1131,7 @@ fn namespace_qualified_names_do_not_reach_the_session_catalog_under_system() {
         "SHOW CREATE TABLE default.t",
         "DROP FUNCTION default.f",
     ] {
-        assert!(run(&s, sql).is_err(), "{sql}");
+        assert!(run(&s, sql).unwrap_err().contains("NOT_FOUND"), "{sql}");
     }
     run(&s, "USE spark_catalog").unwrap();
     assert_eq!(column_of(&s, "SELECT CAST(f() AS STRING)", 0), ["1"]);
@@ -1168,7 +1168,11 @@ fn a_stored_view_over_a_stored_table_reads_under_system_when_qualified() {
         ),
         ["5"]
     );
-    assert!(run(&s, "SELECT a FROM default.v").is_err());
+    assert!(
+        run(&s, "SELECT a FROM default.v")
+            .unwrap_err()
+            .contains("TABLE_OR_VIEW_NOT_FOUND")
+    );
 }
 
 #[test]
@@ -1205,7 +1209,7 @@ fn cache_and_refresh_of_a_stored_table_do_not_reach_the_session_catalog_under_sy
         "UNCACHE TABLE t",
         "REFRESH TABLE default.t",
     ] {
-        assert!(run(&s, sql).is_err(), "{sql}");
+        assert!(run(&s, sql).unwrap_err().contains("NOT_FOUND"), "{sql}");
     }
 }
 
@@ -1271,7 +1275,11 @@ fn show_databases_lists_nothing_under_system_and_use_namespace_can_name_the_sess
     run(&s, "USE system").unwrap();
     assert!(column_of(&s, "SHOW DATABASES", 0).is_empty());
     assert!(column_of(&s, "SHOW SCHEMAS", 0).is_empty());
-    assert!(run(&s, "USE NAMESPACE x").is_err());
+    assert!(
+        run(&s, "USE NAMESPACE x")
+            .unwrap_err()
+            .contains("SCHEMA_NOT_FOUND")
+    );
     run(&s, "USE NAMESPACE spark_catalog.other_db").unwrap();
     assert_eq!(
         column_of(&s, "SELECT current_catalog()", 0),
@@ -1294,7 +1302,11 @@ fn global_temp_views_can_be_created_and_dropped_under_system_and_stored_function
     );
     run(&s, "DROP VIEW global_temp.gv2").unwrap();
     // A two-part call is a namespace of the current catalog, and system has none.
-    assert!(run(&s, "SELECT default.f()").is_err());
+    assert!(
+        run(&s, "SELECT default.f()")
+            .unwrap_err()
+            .contains("ROUTINE")
+    );
     run(&s, "USE spark_catalog").unwrap();
     assert_eq!(
         column_of(&s, "SELECT CAST(default.f() AS STRING)", 0),
@@ -1328,7 +1340,11 @@ fn qualified_views_functions_and_global_temp_listings_follow_their_defining_cata
     // A path with only function schemas finds no system table by its bare name.
     run(&s, "SET spark.sql.path.enabled=true").unwrap();
     run(&s, "SET PATH = system.session, system.builtin").unwrap();
-    assert!(run(&s, "SELECT * FROM capabilities").is_err());
+    assert!(
+        run(&s, "SELECT * FROM capabilities")
+            .unwrap_err()
+            .contains("TABLE_OR_VIEW_NOT_FOUND")
+    );
     assert!(!column_of(&s, "SELECT name FROM system.capabilities LIMIT 1", 0).is_empty());
 }
 
@@ -1361,4 +1377,31 @@ fn listing_global_temp_is_authorized_in_the_session_catalog() {
     run(&s, "CREATE GLOBAL TEMP VIEW gv4 AS SELECT 1 AS x").unwrap();
     run(&s, "USE system").unwrap();
     assert!(column_of(&s, "SHOW VIEWS IN global_temp", 1).contains(&"gv4".to_owned()));
+}
+
+#[test]
+fn builtin_qualified_calls_in_a_view_resolve_with_or_without_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE VIEW vq AS SELECT builtin.upper('a') AS u").unwrap();
+    assert_eq!(column_of(&s, "SELECT u FROM vq", 0), ["A"]);
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT u FROM spark_catalog.default.vq", 0),
+        ["A"]
+    );
+}
+
+#[test]
+fn a_missing_table_inside_a_view_is_named_as_written_unless_system_is_current() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE gone (a INT)").unwrap();
+    run(&s, "CREATE VIEW vm AS SELECT a FROM default.gone").unwrap();
+    run(&s, "DROP TABLE gone").unwrap();
+    let e = run(&s, "SELECT * FROM vm").unwrap_err();
+    assert!(
+        e.contains("TABLE_OR_VIEW_NOT_FOUND")
+            && e.contains("`default`.`gone`")
+            && !e.contains("`spark_catalog`.`default`.`gone`"),
+        "{e}"
+    );
 }

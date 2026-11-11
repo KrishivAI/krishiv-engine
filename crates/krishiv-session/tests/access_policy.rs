@@ -1837,3 +1837,46 @@ fn bare_ddl_under_system_is_a_reserved_name() {
         assert_eq!(class(rows(&s, sql)), "KRISHIV_RESERVED_NAME", "{sql}");
     }
 }
+
+/// Denies a table or view read that names the `system` catalog but a stored table (`t_stored`, `v_stored`).
+fn no_system_stored(securable: &Securable, _: Privilege) -> AccessDecision {
+    match securable {
+        Securable::Table(t) | Securable::View(t)
+            if t.catalog.eq_ignore_ascii_case("system")
+                && (t.name == "t_stored" || t.name == "v_stored") =>
+        {
+            deny()
+        }
+        _ => AccessDecision::Allow,
+    }
+}
+
+/// After `USE system`, a stored view's own tables and the view are authorized in `spark_catalog`, where they
+/// live, never as `system.*` names that do not exist.
+#[test]
+fn a_stored_view_and_its_tables_are_authorized_in_their_defining_catalog_under_system() {
+    let s = session(Policy::new(no_system_stored));
+    block_on(async {
+        s.sql("CREATE TABLE t_stored (a INT)")
+            .await?
+            .collect()
+            .await?;
+        s.sql("INSERT INTO t_stored VALUES (1)")
+            .await?
+            .collect()
+            .await?;
+        s.sql("CREATE VIEW v_stored AS SELECT a FROM default.t_stored")
+            .await?
+            .collect()
+            .await?;
+        s.sql("USE system").await?.collect().await
+    })
+    .unwrap();
+    // Read through the catalog-qualified view: its body's table is checked as spark_catalog.default.t_stored.
+    assert_eq!(
+        rows(&s, "SELECT * FROM spark_catalog.default.v_stored").unwrap(),
+        1
+    );
+    // Reading the stored table by a name that would be system.* is refused, as before.
+    assert!(rows(&s, "SELECT * FROM default.t_stored").is_err());
+}

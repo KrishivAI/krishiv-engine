@@ -345,9 +345,11 @@ impl QueryFunctions {
                     };
                     // A call written `ns.f()` inside a stored body is the defining catalog's, whatever
                     // catalog is current when the body is expanded.
-                    if let [q] = call.qualifier.as_slice()
+                    if self.in_system
+                        && let [q] = call.qualifier.as_slice()
                         && !q.eq_ignore_ascii_case("session")
                         && !q.eq_ignore_ascii_case("system")
+                        && !q.eq_ignore_ascii_case("builtin")
                     {
                         let mut call = call.clone();
                         call.qualifier = vec![crate::catalog::CATALOG.to_owned(), q.clone()];
@@ -427,7 +429,10 @@ impl QueryFunctions {
                         // A view whose path holds no catalog schema keeps the
                         // call bare, unresolved, not the view's namespace.
                         None if temporary_visible => return Ok(e),
-                        None => vec![crate::catalog::CATALOG.to_owned(), namespace.to_owned()],
+                        None if self.in_system => {
+                            vec![crate::catalog::CATALOG.to_owned(), namespace.to_owned()]
+                        }
+                        None => vec![namespace.to_owned()],
                     };
                     let mut next = (*e).clone();
                     next.node = ExprNode::Function(call);

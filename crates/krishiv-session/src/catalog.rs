@@ -1402,7 +1402,7 @@ impl Expander<'_> {
                 })
                 .unwrap_or_else(|| namespace.clone());
             let qualified = ReadSource::Table {
-                name: vec![CATALOG.to_owned(), namespace, bare.clone()],
+                name: self.view_read_name(namespace, bare.clone()),
                 options: options.clone(),
             };
             let plan =
@@ -1503,6 +1503,7 @@ impl Expander<'_> {
         let Some(stored) = self.stored else {
             return Ok(plan);
         };
+        let plan = self.anchored(plan);
         let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node else {
             return Ok(plan);
         };
@@ -1557,13 +1558,10 @@ impl Expander<'_> {
         if !self.reads.contains(&candidate) {
             self.reads.push(candidate);
         }
-        let Some(entry) = entry else {
-            return Ok(self.anchored(plan));
+        let Some((entry, view)) = entry.as_ref().and_then(|e| Some((e, e.view.as_ref()?))) else {
+            return Ok(plan);
         };
-        let Some(view) = &entry.view else {
-            return Ok(self.anchored(plan));
-        };
-        match self.inline_stored(&plan, &entry, view, &namespace, &table_key, scope) {
+        match self.inline_stored(&plan, entry, view, &namespace, &table_key, scope) {
             Ok(done) => Ok(done),
             Err(e) => {
                 // Keep the read as it is; the failure is raised once the reads are authorized.
