@@ -162,7 +162,7 @@ impl Default for Options {
             cse: true,
             stats_propagation: true,
             eager_aggregation: true,
-            compute_below_join: false,
+            compute_below_join: true,
         }
     }
 }
@@ -445,16 +445,30 @@ fn run(
         };
         let root = match stats {
             Some(stats) if options.compute_below_join => {
-                let (after, notes) =
-                    compute_early::rewrite(Arc::clone(&root), stats, options.stats_propagation)?;
-                t.notes("ComputeBelowJoin", &after, notes);
-                // The computed column changes what its join's inputs
-                // estimate, and so their canonical order.
-                if Arc::ptr_eq(&after, &root) {
-                    after
-                } else {
-                    order_and_restrict(after, stats, options.stats_propagation, joins, &mut t)?
+                // One level per rewrite (re-ordering may put the computed
+                // input under a new join), so repeat until it stops moving:
+                // a second `optimize` must not move it further.
+                let mut cur = root;
+                for _ in 0..8 {
+                    // Pruned first: the rule weighs the columns only the
+                    // expression reads, which an unpruned input still carries.
+                    let pruned = batch(prune::prune(&cur), "Tidy", &mut t)?;
+                    let (after, notes) = compute_early::rewrite(
+                        Arc::clone(&pruned),
+                        stats,
+                        options.stats_propagation,
+                    )?;
+
+                    t.notes("ComputeBelowJoin", &after, notes);
+                    if Arc::ptr_eq(&after, &pruned) {
+                        break;
+                    }
+                    // The computed column changes what its join's inputs
+                    // estimate, and so their canonical order.
+                    cur =
+                        order_and_restrict(after, stats, options.stats_propagation, joins, &mut t)?;
                 }
+                cur
             }
             _ => root,
         };
