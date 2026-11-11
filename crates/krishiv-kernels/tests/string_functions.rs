@@ -10,9 +10,11 @@ use arrow_array::{
     Array, BinaryArray, BooleanArray, Int32Array, Int64Array, LargeStringArray, StringArray,
 };
 use krishiv_common::error::ErrorClass;
-use krishiv_kernels::Operand;
 use krishiv_kernels::string::{self as s, StrOperand};
+use krishiv_kernels::{Operand, SparkVersion};
 use proptest::prelude::*;
+
+const V: SparkVersion = SparkVersion::V4_2;
 
 type S<'a> = StrOperand<'a, i32>;
 type I<'a> = Operand<'a, Int32Type>;
@@ -1286,7 +1288,7 @@ fn single_byte_tables_round_trip() {
 #[test]
 fn locate_lcase_follows_spark_lowercase_matching() {
     let at = |sub: &str, text: &str, start: i32| {
-        s::locate_lcase(StrOperand::Array(&r1(sub)), lit(Some(text)), int(start))
+        s::locate_lcase(StrOperand::Array(&r1(sub)), lit(Some(text)), int(start), V)
             .unwrap()
             .value(0)
     };
@@ -1309,7 +1311,7 @@ fn locate_lcase_follows_spark_lowercase_matching() {
 fn search_lcase_follows_spark_lowercase_matching() {
     use s::LcaseSearch::{Anywhere, End, Start};
     let at = |kind, text: &str, pat: &str| {
-        s::search_lcase(kind, lit(Some(text)), StrOperand::Array(&r1(pat)))
+        s::search_lcase(kind, lit(Some(text)), StrOperand::Array(&r1(pat)), V)
             .unwrap()
             .value(0)
     };
@@ -1382,7 +1384,7 @@ fn search_lcase_follows_spark_lowercase_matching() {
 fn search_lcase_contains_is_linear_and_exact() {
     use s::LcaseSearch::Anywhere;
     let has = |text: &str, pat: &str| {
-        s::search_lcase(Anywhere, lit(Some(text)), StrOperand::Array(&r1(pat)))
+        s::search_lcase(Anywhere, lit(Some(text)), StrOperand::Array(&r1(pat)), V)
             .unwrap()
             .value(0)
     };
@@ -1407,7 +1409,7 @@ fn search_lcase_contains_is_linear_and_exact() {
 fn search_lcase_endswith_is_linear_and_exact() {
     use s::LcaseSearch::End;
     let at = |text: &str, pat: &str| {
-        s::search_lcase(End, lit(Some(text)), StrOperand::Array(&r1(pat)))
+        s::search_lcase(End, lit(Some(text)), StrOperand::Array(&r1(pat)), V)
             .unwrap()
             .value(0)
     };
@@ -1425,4 +1427,22 @@ fn search_lcase_endswith_is_linear_and_exact() {
     assert!(at("x\u{130}", "i\u{307}"));
     assert!(!at("x\u{130}", "\u{307}"));
     assert!(at("x\u{130}", "x\u{130}"));
+}
+
+#[test]
+fn search_lcase_uses_the_version_gated_case_mapping() {
+    use s::LcaseSearch::Anywhere;
+    let has = |v: SparkVersion| {
+        s::search_lcase(
+            Anywhere,
+            lit(Some("\u{a7ce}")),
+            StrOperand::Array(&r1("\u{a7cf}")),
+            v,
+        )
+        .unwrap()
+        .value(0)
+    };
+    // U+A7CE is a Unicode 17 letter: Spark 4.0 and 4.1 leave it as it is, as `lower` does.
+    assert!(!has(SparkVersion::V4_1));
+    assert!(has(SparkVersion::V4_2));
 }
