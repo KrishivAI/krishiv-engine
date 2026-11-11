@@ -104,7 +104,7 @@ impl Resolver<'_> {
         for ((k, t), key) in kids.iter().zip(&targets).zip(&keys) {
             values.push(if let Some(c) = key {
                 let mut b = self.expr(
-                    &super::collation::key_of_collation(&k.expr, *c, e.origin),
+                    &super::collation::key_of(&k.expr, &super::collation::string_of(*c), e.origin),
                     cx,
                 )?;
                 b.shown = Some(k.shown());
@@ -136,7 +136,11 @@ impl Resolver<'_> {
             };
             if let Some(c) = key {
                 let keyed = self.expr(
-                    &super::collation::key_of_collation(&column.expr, c, Origin::UNKNOWN),
+                    &super::collation::key_of(
+                        &column.expr,
+                        &super::collation::string_of(c),
+                        Origin::UNKNOWN,
+                    ),
                     cx,
                 )?;
                 let output = self.attr(&a.col.name, &keyed.ty);

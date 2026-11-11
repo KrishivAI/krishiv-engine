@@ -1286,6 +1286,10 @@ fn single_byte_tables_round_trip() {
 /// `locate` over `UTF8_LCASE` operands: values of a Spark 4.2.0 local run (2026-11-08) for the
 /// ASCII and U+0130 cases.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
 fn locate_lcase_follows_spark_lowercase_matching() {
     let at = |sub: &str, text: &str, start: i32| {
         s::locate_lcase(StrOperand::Array(&r1(sub)), lit(Some(text)), int(start), V)
@@ -1308,6 +1312,10 @@ fn locate_lcase_follows_spark_lowercase_matching() {
 /// `contains` / `startswith` / `endswith` over `UTF8_LCASE` with per-row patterns: values of a
 /// Spark 4.2.0 local run (2026-11-08).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
 fn search_lcase_follows_spark_lowercase_matching() {
     use s::LcaseSearch::{Anywhere, End, Start};
     let at = |kind, text: &str, pat: &str| {
@@ -1445,4 +1453,205 @@ fn search_lcase_uses_the_version_gated_case_mapping() {
     // U+A7CE is a Unicode 17 letter: Spark 4.0 and 4.1 leave it as it is, as `lower` does.
     assert!(!has(SparkVersion::V4_1));
     assert!(has(SparkVersion::V4_2));
+}
+
+/// `find_in_set` over `UTF8_LCASE` operands: values of a Spark 4.2.0 local run (2026-11-08).
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
+fn find_in_set_lcase_follows_spark_lowercase_matching() {
+    let at = |w: &str, set: &str| {
+        s::find_in_set_lcase(StrOperand::Array(&r1(w)), lit(Some(set)))
+            .unwrap()
+            .value(0)
+    };
+    assert_eq!(at("B", "a,b,c"), 2);
+    assert_eq!(at("b", "A,B,C"), 2);
+    assert_eq!(at("\u{130}", "x,i\u{307},y"), 2);
+    assert_eq!(at("i\u{307}", "x,\u{130}"), 2);
+    assert_eq!(at("a,b", "a,b"), 0);
+    assert_eq!(at("", "a,,b"), 2);
+    assert_eq!(at("\u{3a3}", "\u{3c2},\u{3c3}"), 1);
+    assert_eq!(at("z", "a,b"), 0);
+}
+
+/// The trim family over `UTF8_LCASE` / `_RTRIM`: values of a Spark 4.2.0 local run (2026-11-10).
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
+fn trim_collated_follows_spark() {
+    use s::TrimSide::{Both, Leading, Trailing};
+    let t = |side, lcase, rtrim, src: &str, chars: &str| {
+        s::trim_collated(
+            int(s::trim_mode(side, lcase, rtrim)),
+            StrOperand::Array(&r1(src)),
+            lit(Some(chars)),
+        )
+        .unwrap()
+        .value(0)
+        .to_owned()
+    };
+    // Lower-cased characters; `İ` is the pair `i` U+0307, trimmed as the pair only.
+    assert_eq!(t(Both, true, false, "\u{130}o", "i\u{307}o"), "\u{130}");
+    assert_eq!(t(Both, true, false, "i\u{307}o", "\u{130}o"), "");
+    assert_eq!(t(Both, true, false, "\u{130}o", "i"), "\u{130}o");
+    assert_eq!(t(Both, true, false, "i\u{307}io", "\u{130}"), "io");
+    assert_eq!(t(Both, true, false, "i\u{307}", "\u{130}i"), "");
+    assert_eq!(t(Both, true, false, "x\u{130}o", "xi\u{307}"), "\u{130}o");
+    assert_eq!(t(Trailing, true, false, "xi\u{307}", "\u{130}"), "x");
+    assert_eq!(t(Trailing, true, false, "x\u{130}", "i"), "x\u{130}");
+    assert_eq!(t(Both, true, false, "Spark", "SQL"), "park");
+    assert_eq!(t(Both, true, false, "abcdcba", "ABCD"), "");
+    assert_eq!(t(Leading, true, false, "aBcDCbA", "abcd"), "");
+    assert_eq!(
+        t(Both, true, false, "\u{3a3}\u{391}\u{3a3}", "\u{3c2}"),
+        "\u{391}"
+    );
+    assert_eq!(t(Both, true, false, "abc", ""), "abc");
+    // `_RTRIM`: trailing spaces are kept and not trimmed unless the characters hold a space.
+    assert_eq!(t(Both, false, true, "ab  ", "b"), "a  ");
+    assert_eq!(t(Both, false, true, "ab  ", "b "), "a");
+    assert_eq!(t(Both, false, true, "ab  ", "ab"), "  ");
+    assert_eq!(t(Both, false, true, "  ", "a"), "  ");
+    assert_eq!(t(Both, false, true, " a  b  ", "ab"), " a    ");
+    assert_eq!(t(Leading, false, true, "  a ", "a"), "  a ");
+    assert_eq!(t(Trailing, false, true, " b  ", "b"), "   ");
+    assert_eq!(t(Both, true, true, "AB  ", "ab"), "  ");
+    assert_eq!(t(Both, true, true, "xAb  ", "B "), "xA");
+    assert_eq!(t(Both, false, false, "ab  ", "b"), "ab  ");
+    // NULLs.
+    let n = s::trim_collated(int(0), StrOperand::Array(&strs(&[None])), lit(Some("a"))).unwrap();
+    assert!(n.is_null(0));
+    let n = s::trim_collated(int(0), StrOperand::Array(&r1("a")), lit(None)).unwrap();
+    assert!(n.is_null(0));
+}
+
+/// `replace`, `translate`, `split_part` and `substring_index` over `UTF8_LCASE`: values of a
+/// Spark 4.2.0 local run (2026-11-10).
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
+fn string_functions_over_lcase_follow_spark() {
+    let rep = |s0: &str, a: &str, b: &str| {
+        s::replace_lcase(StrOperand::Array(&r1(s0)), lit(Some(a)), lit(Some(b)))
+            .unwrap()
+            .value(0)
+            .to_owned()
+    };
+    assert_eq!(rep("\u{130}o", "i", "x"), "\u{130}o");
+    assert_eq!(rep("\u{130}o", "i\u{307}", "x"), "xo");
+    assert_eq!(rep("i\u{307}o", "\u{130}", "x"), "xo");
+    assert_eq!(rep("aAa", "A", "x"), "xxx");
+    assert_eq!(rep("ab", "", "x"), "ab");
+    assert_eq!(rep("aaaa", "AA", "x"), "xx");
+    assert_eq!(
+        rep("\u{3a3}\u{3c2}\u{3c3}\u{391}", "\u{3c3}", "y"),
+        "yyy\u{391}"
+    );
+    assert_eq!(rep("aba", "A", ""), "b");
+
+    let tr = |s0: &str, a: &str, b: &str| {
+        s::translate_lcase(StrOperand::Array(&r1(s0)), lit(Some(a)), lit(Some(b)))
+            .unwrap()
+            .value(0)
+            .to_owned()
+    };
+    assert_eq!(tr("Aa", "a", "1"), "11");
+    assert_eq!(tr("aA", "aA", "12"), "11");
+    assert_eq!(tr("abc", "AB", "1"), "1c");
+    assert_eq!(tr("\u{130}i", "i", "1"), "\u{130}1");
+    assert_eq!(tr("\u{130}i", "\u{130}", "1"), "1i");
+    assert_eq!(tr("i\u{307}i", "\u{130}", "1"), "1i");
+    // A capital `I` before the dot is not the `İ` pair (checked against Spark 4.2.0).
+    assert_eq!(tr("I\u{307}x", "\u{130}", "z"), "I\u{307}x");
+    assert_eq!(tr("i\u{307}i", "i\u{307}", "12"), "121");
+    assert_eq!(tr("aAbB", "Aab", "xy"), "xx");
+    assert_eq!(tr("aAbB", "ab", "xyz"), "xxyy");
+    assert_eq!(tr("abc", "", "y"), "abc");
+    assert_eq!(tr("abc", "a", ""), "bc");
+
+    let sp = |s0: &str, d: &str, n: i32| {
+        s::split_part_lcase(StrOperand::Array(&r1(s0)), lit(Some(d)), int(n))
+            .unwrap()
+            .value(0)
+            .to_owned()
+    };
+    let parts: Vec<String> = [1, 2, 3, 4, 5, 6, -1, -3, -7]
+        .iter()
+        .map(|n| sp("aAbAAc", "a", *n))
+        .collect();
+    assert_eq!(parts, ["", "", "b", "", "c", "", "c", "b", ""]);
+    assert_eq!(sp("\u{130}o", "i", 1), "\u{130}o");
+    assert_eq!(sp("\u{130}o", "i\u{307}", 2), "o");
+    assert_eq!(sp("xi\u{307}o", "\u{130}", 2), "o");
+    assert_eq!(sp("x\u{3a3}y\u{3c2}z", "\u{3c3}", 2), "y");
+    assert_eq!(sp("aAbAAc", "", 1), "aAbAAc");
+    assert_eq!(sp("aAbAAc", "", 2), "");
+    assert_eq!(sp("", "a", 1), "");
+    assert_eq!(sp("aAbAAc", "aa", 2), "b");
+    let err = s::split_part_lcase(StrOperand::Array(&r1("a")), lit(Some("a")), int(0)).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidIndexOfZero);
+
+    let si = |s0: &str, d: &str, n: i32| {
+        s::substring_index_lcase(StrOperand::Array(&r1(s0)), lit(Some(d)), int(n))
+            .unwrap()
+            .value(0)
+            .to_owned()
+    };
+    let got: Vec<String> = [1, 2, 3, 4, 5, 0, -1, -2, -3, -4, -5]
+        .iter()
+        .map(|n| si("aAbAAc", "a", *n))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            "", "a", "aAb", "aAbA", "aAbAAc", "", "c", "Ac", "bAAc", "AbAAc", "aAbAAc"
+        ]
+    );
+    let got: Vec<String> = [1, 2, -1, -2, 3, 4, -3, -4, -5]
+        .iter()
+        .map(|n| si("aaaaa", "AA", *n))
+        .collect();
+    assert_eq!(got, ["", "a", "", "a", "aa", "aaa", "aa", "aaa", "aaaaa"]);
+    assert_eq!(si("\u{130}o", "i", 1), "\u{130}o");
+    assert_eq!(si("\u{130}o", "i\u{307}", 1), "");
+    assert_eq!(si("x\u{130}o\u{130}y", "\u{130}", -1), "y");
+    assert_eq!(si("x\u{130}oi\u{307}y", "\u{130}", 2), "x\u{130}o");
+    assert_eq!(si("x\u{130}oi\u{307}y", "i\u{307}", -1), "y");
+    assert_eq!(si("x\u{130}oi\u{307}y", "i\u{307}", -2), "oi\u{307}y");
+    assert_eq!(si("x", "", 1), "");
+    assert_eq!(si("aba", "A", i32::MAX), "aba");
+    assert_eq!(si("aba", "A", i32::MIN), "");
+}
+
+/// `endswith` over `UTF8_LCASE` looks at one start only (the lower-cased point count of the
+/// suffix), so a long text with a long non-matching pattern is linear, and the İ pair, an empty
+/// pattern and a longer pattern keep their answers.
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
+fn search_lcase_end_scans_back_from_the_end() {
+    use s::LcaseSearch::End;
+    let at = |text: &str, pat: &str| {
+        s::search_lcase(End, lit(Some(text)), StrOperand::Array(&r1(pat)), V)
+            .unwrap()
+            .value(0)
+    };
+    let text = "a".repeat(200_000);
+    let pat = format!("{}b", "a".repeat(100_000));
+    assert!(!at(&text, &pat));
+    assert!(at(&text, &"A".repeat(100_000)));
+    assert!(at("abc", ""));
+    assert!(!at("c", "abc"));
+    // `İ` lower-cases to two points: a match may not start between them.
+    assert!(at("xİ", "i\u{307}"));
+    assert!(!at("xİ", "\u{307}"));
 }

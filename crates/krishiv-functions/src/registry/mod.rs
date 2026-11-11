@@ -294,6 +294,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__collation_map_keys" => "__collation_map_keys",
         "__collation_greatest" => "__collation_greatest",
         "__collation_least" => "__collation_least",
+        "__collation_array_set" => "__collation_array_set",
         // `time + interval` and `time - time`: Spark's `TimeAddInterval` and `SubtractTimes`, which the analyzer
         // builds for the operators (the third argument of `__time_add_interval` is the interval's end field).
         "__time_add_interval" => "__time_add_interval",
@@ -303,9 +304,21 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__contains_lcase" => "__contains_lcase",
         "__startswith_lcase" => "__startswith_lcase",
         "__endswith_lcase" => "__endswith_lcase",
+        "__find_in_set_lcase" => "__find_in_set_lcase",
+        "__trim_collated" => "__trim_collated",
+        "__replace_lcase" => "__replace_lcase",
+        "__translate_lcase" => "__translate_lcase",
+        "__split_part_lcase" => "__split_part_lcase",
+        "__substring_index_lcase" => "__substring_index_lcase",
+        // The run-time `INDETERMINATE_COLLATION` of a call whose operands have no one collation (`str_to_map`, `split_part`).
+        "__indeterminate_collation" => "__indeterminate_collation",
         _ => return None,
     };
-    let arity = if matches!(
+    let arity = if name == "__indeterminate_collation" {
+        Arity::new([false, false, false, true, false, false, false], "3")
+    } else if name == "__collation_array_set" {
+        Arity::new([false, false, false, false, false, true, false], "5")
+    } else if matches!(
         name,
         "__subscript"
             | "__subtract_times"
@@ -314,6 +327,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
             | "__contains_lcase"
             | "__startswith_lcase"
             | "__endswith_lcase"
+            | "__find_in_set_lcase"
     ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {
