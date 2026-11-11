@@ -7,6 +7,7 @@
 //! [`crate::repl`] reads it).
 
 use std::borrow::Cow;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use reedline::{
     ColumnarMenu, Completer, CompletionResult, Emacs, FileBackedHistory, HistoryItem, KeyCode,
@@ -25,11 +26,15 @@ pub(crate) enum Read {
     Interrupt,
     /// Ctrl-D, or the terminal went away.
     Eof,
+    /// The terminal could not be driven (the editor failed to start or read): not an end of input.
+    Error(String),
 }
 
 /// A terminal line editor with the REPL's completion, history and prompts.
 pub(crate) struct Editor {
     line: Reedline,
+    /// What Tab completes from; replaced as the session's catalog changes.
+    ctx: Arc<Mutex<CompletionContext>>,
 }
 
 struct SqlPrompt;
@@ -52,13 +57,14 @@ impl Prompt for SqlPrompt {
     }
 }
 
-struct SqlCompleter(CompletionContext);
+struct SqlCompleter(Arc<Mutex<CompletionContext>>);
 
 impl Completer for SqlCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> CompletionResult {
         let start = completion_start(line, pos);
         let end = line.floor_char_boundary(pos.min(line.len()));
-        let suggestions: Vec<Suggestion> = complete(line, pos, &self.0)
+        let ctx = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let suggestions: Vec<Suggestion> = complete(line, pos, &ctx)
             .into_iter()
             .map(|value| Suggestion {
                 value,
@@ -81,7 +87,11 @@ struct StatementValidator;
 
 impl Validator for StatementValidator {
     fn validate(&self, line: &str) -> ValidationResult {
-        if line.trim().is_empty() || crate::repl::statement_complete(line) {
+        // Pasted dot-commands are whole lines; what follows them must be whole statements.
+        let (_, sql) = crate::repl::leading_dot_lines(line);
+        if sql.trim().is_empty()
+            || (crate::repl::statement_complete(sql) && !crate::repl::has_unfinished_tail(sql))
+        {
             ValidationResult::Complete
         } else {
             ValidationResult::Incomplete
@@ -107,22 +117,29 @@ impl Editor {
             reedline::History::save(&mut store, HistoryItem::from_command_line(entry.clone()))
                 .ok()?;
         }
+        let ctx = Arc::new(Mutex::new(ctx));
         let line = Reedline::create()
             .with_history(Box::new(store))
-            .with_completer(Box::new(SqlCompleter(ctx)))
+            .with_completer(Box::new(SqlCompleter(Arc::clone(&ctx))))
             .with_validator(Box::new(StatementValidator))
             .with_menu(ReedlineMenu::EngineCompleter(Box::new(
                 ColumnarMenu::default().with_name("completion_menu"),
             )))
             .with_edit_mode(Box::new(Emacs::new(keys)));
-        Some(Self { line })
+        Some(Self { line, ctx })
+    }
+
+    /// Completes from `ctx` from now on (after statements changed the catalog).
+    pub(crate) fn refresh(&mut self, ctx: CompletionContext) {
+        *self.ctx.lock().unwrap_or_else(PoisonError::into_inner) = ctx;
     }
 
     /// Reads until Enter on a whole statement.
     pub(crate) fn read(&mut self) -> Read {
         match self.line.read_line(&SqlPrompt) {
             Ok(Signal::Success(text)) => Read::Text(text),
-            Ok(Signal::CtrlD) | Err(_) => Read::Eof,
+            Ok(Signal::CtrlD) => Read::Eof,
+            Err(e) => Read::Error(e.to_string()),
             Ok(_) => Read::Interrupt,
         }
     }
@@ -161,7 +178,7 @@ mod tests {
             tables: vec!["lineitem".to_owned()],
             ..CompletionContext::default()
         };
-        let mut c = SqlCompleter(ctx);
+        let mut c = SqlCompleter(Arc::new(Mutex::new(ctx)));
         let line = "select * from line";
         let got = c.complete(line, line.len());
         let found = got.suggestions();
@@ -174,9 +191,35 @@ mod tests {
     }
 
     #[test]
+    fn the_validator_waits_for_an_unfinished_trailing_statement() {
+        let v = StatementValidator;
+        assert!(matches!(
+            v.validate("SELECT 1;\nINSERT INTO dst SELECT * FROM src"),
+            ValidationResult::Incomplete
+        ));
+        assert!(matches!(
+            v.validate("SELECT 1;\nSELECT 2;"),
+            ValidationResult::Complete
+        ));
+    }
+
+    #[test]
+    fn a_refreshed_context_completes_new_names() {
+        let mut ed = Editor::new(CompletionContext::default(), &[]).unwrap();
+        ed.refresh(CompletionContext {
+            tables: vec!["fresh_view".to_owned()],
+            ..CompletionContext::default()
+        });
+        let mut c = SqlCompleter(Arc::clone(&ed.ctx));
+        let line = "select * from fresh_";
+        let found = c.complete(line, line.len());
+        assert!(found.suggestions().iter().any(|s| s.value == "fresh_view"));
+    }
+
+    #[test]
     fn a_set_key_is_replaced_whole() {
         let ctx = CompletionContext::default();
-        let mut c = SqlCompleter(ctx);
+        let mut c = SqlCompleter(Arc::new(Mutex::new(ctx)));
         let line = "set krishiv.sys";
         let got = c.complete(line, line.len());
         assert!(got.suggestions().iter().all(|s| s.span.start == 4));
