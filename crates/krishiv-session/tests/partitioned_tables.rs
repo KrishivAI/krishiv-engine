@@ -2034,7 +2034,8 @@ fn drop_partition_refuses_a_partition_outside_its_default_directory() {
 }
 
 /// A partition whose default directory resolves outside the table through a symbolic link in a parent directory
-/// (`t/p=1` linked elsewhere, partition `p=1/q=1`) is not dropped: deleting it would delete files outside the table.
+/// (`t/p=1` linked elsewhere, partition `p=1/q=1`), or to another partition's directory, is not dropped: deleting it
+/// would delete files that are not the partition's.
 /// Refused before the log, the catalog or any file changes.
 #[cfg(unix)]
 #[test]
@@ -2057,10 +2058,24 @@ fn drop_partition_refuses_a_directory_resolved_outside_the_table() {
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     assert!(outside.path().join("q=1").join("keep.txt").is_file());
-    assert_eq!(rows(&s, "show partitions l"), ["p=1/q=1", "p=2/q=2"]);
+    // A link to another partition of the table (`p=4` -> `p=2`): dropping `p=4/q=2` would delete `p=2/q=2`'s files.
+    std::os::unix::fs::symlink(root.join("p=2"), root.join("p=4")).unwrap();
+    run(&s, "alter table l add partition (p=4, q=2)");
+    assert_eq!(
+        class(&s, "alter table l drop partition (p=4, q=2)"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(
+        rows(&s, "select cast(x as string) from l where p = 2"),
+        ["1"]
+    );
+    assert_eq!(
+        rows(&s, "show partitions l"),
+        ["p=1/q=1", "p=2/q=2", "p=4/q=2"]
+    );
     // A partition inside the table still drops.
     run(&s, "alter table l drop partition (p=2, q=2)");
-    assert_eq!(rows(&s, "show partitions l"), ["p=1/q=1"]);
+    assert_eq!(rows(&s, "show partitions l"), ["p=1/q=1", "p=4/q=2"]);
 }
 
 /// A partition registered away from its default directory is not renamed: Spark 4.2.0 moves that directory, which

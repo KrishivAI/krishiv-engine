@@ -1281,14 +1281,20 @@ impl Session {
         // A default directory that resolves outside the table (a symbolic link on its way, `p=1` linked elsewhere
         // under partition `p=1/q=1`) is not deleted: the files there are not the table's. Checked before the log,
         // the catalog or any file changes; the authorized path below is then inside the table.
+        // The resolved directory must be the partition's own path under the resolved root: a link to another
+        // partition of the table (`p=4` -> `p=2`) would delete that partition's files.
         let root = std::fs::canonicalize(&table.location).ok();
         for p in &gone {
+            let own = root.as_ref().and_then(|r| {
+                let rel = p.location.strip_prefix(&table.location).ok()?;
+                Some(r.join(rel))
+            });
             match std::fs::canonicalize(&p.location) {
-                Ok(real) if root.as_ref().is_some_and(|r| real.starts_with(r)) => {}
+                Ok(real) if own.as_ref() == Some(&real) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Ok(_) | Err(_) => {
                     return Err(unsupported(&format!(
-                        "ALTER TABLE ... DROP PARTITION of a partition whose directory {} resolves outside the table",
+                        "ALTER TABLE ... DROP PARTITION of a partition whose directory {} does not resolve to its own path in the table",
                         p.location.display()
                     )));
                 }

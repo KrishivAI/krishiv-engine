@@ -360,16 +360,22 @@ fn registry_call<'e>(e: &'e Expr, name: &str, arity: usize) -> Option<&'e [Arc<E
         .then_some(f.args.as_slice())
 }
 
-/// The first column `e` reads (in argument order, through fields and lambda bodies).
+/// The column under the read-side padding `e` (`Resolver::read_pad`'s shape): followed down the one path that
+/// padding builds (a call's value argument, a field's base), so the walk is linear in the depth.
 fn first_column(e: &Expr) -> Option<&BoundColumn> {
-    match &e.node {
-        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
-        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
-            f.args.iter().find_map(|a| first_column(a))
-        }
-        ExprNode::Resolved(ResolvedExpr::Field { base, .. }) => first_column(base),
-        ExprNode::Lambda { body, .. } => first_column(body),
-        _ => None,
+    let mut e = e;
+    loop {
+        e = match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => return Some(c),
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+                let named_struct = matches!(f.id, crate::FunctionId::Registry { .. })
+                    && f.id.name() == "named_struct";
+                // `named_struct(name, value, ..)`: the first value; any other call: its first argument.
+                f.args.get(usize::from(named_struct))?
+            }
+            ExprNode::Resolved(ResolvedExpr::Field { base, .. }) => base,
+            _ => return None,
+        };
     }
 }
 
