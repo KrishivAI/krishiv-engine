@@ -234,6 +234,6 @@ fn a_dataframe_expression_span_is_not_rendered_against_another_statement() {
         Ok(df) => block_on(df.collect()).expect_err("the query fails"),
     };
     assert_eq!(e.error_class(), ErrorClass::DivideByZero);
-    // No statement's text holds `a / b`, so the error has no context (not `SELEC`).
+    // No statement's text holds `a / b`, so the error has no context (a wrong span would cut the reading statement).
     assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
 }
