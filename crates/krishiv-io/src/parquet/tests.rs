@@ -1736,3 +1736,85 @@ fn nested_path_predicates_keep_every_matching_row() {
         }
     }
 }
+
+/// Nested leaves that the writer dictionary-encodes (few distinct strings
+/// under lists and structs, with nulls at each level) read back as
+/// written, whole and under a row selection.
+#[test]
+fn dictionary_encoded_nested_leaves_round_trip() {
+    use arrow_array::builder::{ListBuilder, StringViewBuilder};
+    let env = Env::new();
+    let mut lst = ListBuilder::new(StringViewBuilder::new());
+    let rows: [Option<&[Option<&str>]>; 6] = [
+        Some(&[Some("a"), Some("b"), None]),
+        None,
+        Some(&[]),
+        Some(&[Some("b"), Some("a"), Some("a")]),
+        Some(&[None]),
+        Some(&[Some("a")]),
+    ];
+    for r in rows {
+        match r {
+            None => lst.append(false),
+            Some(vs) => {
+                for v in vs {
+                    lst.values().append_option(*v);
+                }
+                lst.append(true);
+            }
+        }
+    }
+    let lst = lst.finish();
+    let leaf = arrow_schema::Fields::from(vec![Field::new("s", DataType::Utf8View, true)]);
+    let st = arrow_array::StructArray::new(
+        leaf,
+        vec![Arc::new(arrow_array::StringViewArray::from(vec![
+            Some("x"),
+            None,
+            Some("y"),
+            Some("x"),
+            Some("y"),
+            Some("x"),
+        ])) as ArrayRef],
+        Some(vec![true, false, true, true, true, true].into()),
+    );
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l", lst.data_type().clone(), true),
+        Field::new("st", st.data_type().clone(), true),
+    ]));
+    let batch =
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(lst), Arc::new(st)]).unwrap();
+    let file = env.put(
+        "dict_nested.parquet",
+        write(
+            std::slice::from_ref(&batch),
+            WriterProperties::builder()
+                .set_dictionary_enabled(true)
+                .build(),
+        ),
+    );
+    let o = env.options(&[]);
+    let meta = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+        )
+        .unwrap();
+    for ranges in [&[(0, 6)][..], &[(1, 3)], &[(0, 1), (4, 6)], &[(3, 5)]] {
+        let mut req = ScanRequest::all(meta.schema());
+        req.selection = Some(RowSelection::from_ranges(ranges.iter().map(|&(a, b)| a..b)));
+        let out = env.scan(&file, &req, &o).unwrap();
+        let out = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+        let idx =
+            arrow_array::UInt64Array::from_iter_values(ranges.iter().flat_map(|&(a, b)| a..b));
+        for c in 0..2 {
+            let want = arrow_select::take::take(batch.column(c), &idx, None).unwrap();
+            assert_eq!(
+                out.column(c).to_data(),
+                want.to_data(),
+                "{ranges:?} column {c}"
+            );
+        }
+    }
+}
