@@ -136,7 +136,8 @@ pub(crate) struct QueryFunctions {
     reads: Mutex<(Vec<ReadCandidate>, Option<KrishivError>)>,
     /// Bodies expanded ahead of the analysis with their views' schema binding checked
     /// ([`Self::prepare_bodies`]); one moves to `expanded` (with its reads and failure to `reads`)
-    /// when the analyzer first asks for the function, so an uncalled function costs the query nothing.
+    /// when the analyzer first asks for the function, so an uncalled function's failure stays hidden (its
+    /// preparation still costs each query one analysis per view it reads; follow-up: prepare only reachable calls).
     prepared: Mutex<HashMap<String, Prepared>>,
     /// The evolved view entries (as found, as changed) of the prepared bodies the analyzer asked for.
     evolved: Mutex<Vec<EvolvedView>>,
@@ -386,7 +387,7 @@ impl QueryFunctions {
         binding: bool,
         profile: SparkProfile,
     ) -> Vec<(String, Vec<crate::view_schema::StoredRead>)> {
-        if self.views.is_none() || !binding {
+        if self.views.is_none() {
             return Vec::new();
         }
         let defs: Vec<Arc<SqlFunction>> = self

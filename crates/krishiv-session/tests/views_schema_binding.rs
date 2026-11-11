@@ -680,7 +680,26 @@ fn a_view_in_a_function_body_gets_the_schema_binding_checks() {
     );
     assert_eq!(rows(&s, "SELECT tf()"), ["11"]);
     assert_eq!(rows(&s, "SELECT max(q) FROM v"), ["11"]);
-    // A function the query does not call costs it nothing.
+    // With the legacy binding mode off the body reads by name and ordinal too, like the query.
+    run(&s, "SET spark.sql.legacy.viewSchemaBindingMode = false");
+    run(&s, "DROP TABLE t1");
+    run(&s, "CREATE TABLE t1 (id INT, x INT) USING parquet");
+    run(&s, "INSERT INTO t1 VALUES (1, 10)");
+    run(
+        &s,
+        "CREATE OR REPLACE VIEW lv (p, q, r, s) AS SELECT * FROM t1 CROSS JOIN t2",
+    );
+    run(&s, "DROP TABLE t1");
+    run(&s, "CREATE TABLE t1 (x INT, id INT) USING parquet");
+    run(&s, "INSERT INTO t1 VALUES (13, 1)");
+    run(
+        &s,
+        "CREATE TEMPORARY FUNCTION lf() RETURNS INT RETURN SELECT max(q) FROM lv",
+    );
+    assert_eq!(rows(&s, "SELECT lf()"), ["13"]);
+    assert_eq!(rows(&s, "SELECT max(q) FROM lv"), ["13"]);
+    run(&s, "SET spark.sql.legacy.viewSchemaBindingMode = true");
+    // A function the query does not call does not fail it.
     run(&s, "DROP TABLE t2");
     assert_eq!(rows(&s, "SELECT 1"), ["1"]);
 }
