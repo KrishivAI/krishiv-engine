@@ -52,6 +52,16 @@ impl<K: Hash + Eq> Windows<K> {
     }
 }
 
+/// Events every [`EventRateLimit`] in the process has dropped.
+static DROPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Events the rate limits of this process have dropped so far, for a binary to report at exit
+/// or a metrics endpoint to export (the layer has no handle once it is installed).
+#[must_use]
+pub fn dropped_events() -> u64 {
+    DROPPED_TOTAL.load(Ordering::Relaxed)
+}
+
 /// A per-layer filter that lets each event callsite write `per_second` events per second.
 #[derive(Debug)]
 pub struct EventRateLimit {
@@ -95,6 +105,7 @@ impl<S: Subscriber> Filter<S> for EventRateLimit {
             .admit(event.metadata().callsite(), Instant::now());
         if !pass {
             self.dropped.fetch_add(1, Ordering::Relaxed);
+            DROPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
         pass
     }
@@ -148,5 +159,41 @@ mod tests {
         assert!(w.admit("a", later) && w.admit("a", later));
         assert!(!w.admit("a", later));
         assert!(!w.admit("a", later + Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn events_over_the_limit_are_counted_in_the_process_total() {
+        #[derive(Clone)]
+        struct Sink(std::sync::Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Sink(std::sync::Arc::default());
+        let subscriber = tracing_subscriber::registry().with(json_layer(2, {
+            let sink = sink.clone();
+            move || sink.clone()
+        }));
+        let before = dropped_events();
+        tracing::subscriber::with_default(subscriber, || {
+            for _ in 0..5 {
+                tracing::info!("one callsite, five events");
+            }
+        });
+        let written = sink
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        assert_eq!(written.iter().filter(|b| **b == b'\n').count(), 2);
+        assert!(dropped_events() - before >= 3);
     }
 }
