@@ -1466,3 +1466,137 @@ fn demand_reads_run_on_the_io_runtime() {
         .unwrap();
     assert_eq!(rows(&batches), 5000);
 }
+
+/// Nulls at every level of deep nesting (null vs empty lists, null structs
+/// inside lists, null elements, a struct in a struct, a map of lists) come
+/// back as written. The interop fixtures only nest one level.
+#[test]
+fn deep_nested_nulls_round_trip() {
+    use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StructBuilder};
+    let env = Env::new();
+    let inner_list = || {
+        Field::new(
+            "b",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        )
+    };
+    let elem_fields =
+        arrow_schema::Fields::from(vec![Field::new("a", DataType::Int32, true), inner_list()]);
+    let sb = StructBuilder::new(
+        elem_fields.clone(),
+        vec![
+            Box::new(Int32Builder::new()),
+            Box::new(ListBuilder::new(Int32Builder::new())),
+        ],
+    );
+    let mut lst = ListBuilder::new(sb).with_field(Arc::new(Field::new(
+        "item",
+        DataType::Struct(elem_fields),
+        true,
+    )));
+    // row 0: null list; row 1: empty; row 2: [null struct, {a:null,b:null}, {a:1,b:[]}, {a:2,b:[null,3]}]
+    lst.append(false);
+    lst.append(true);
+    for (kind, a) in [(0, 0), (1, 0), (2, 1), (3, 2)] {
+        let s = lst.values();
+        match kind {
+            0 => {
+                s.field_builder::<Int32Builder>(0).unwrap().append_null();
+                s.field_builder::<ListBuilder<Int32Builder>>(1)
+                    .unwrap()
+                    .append(false);
+                s.append(false);
+            }
+            1 => {
+                s.field_builder::<Int32Builder>(0).unwrap().append_null();
+                s.field_builder::<ListBuilder<Int32Builder>>(1)
+                    .unwrap()
+                    .append(false);
+                s.append(true);
+            }
+            2 => {
+                s.field_builder::<Int32Builder>(0).unwrap().append_value(a);
+                s.field_builder::<ListBuilder<Int32Builder>>(1)
+                    .unwrap()
+                    .append(true);
+                s.append(true);
+            }
+            _ => {
+                s.field_builder::<Int32Builder>(0).unwrap().append_value(a);
+                let l = s.field_builder::<ListBuilder<Int32Builder>>(1).unwrap();
+                l.values().append_null();
+                l.values().append_value(3);
+                l.append(true);
+                s.append(true);
+            }
+        }
+    }
+    lst.append(true);
+    lst.append(true);
+    let lst = lst.finish();
+    // struct<s: struct<i: int32>>: rows: outer null; outer ok inner null; inner ok leaf null; leaf 5.
+    let leaf = arrow_schema::Fields::from(vec![Field::new("i", DataType::Int32, true)]);
+    let mid = Arc::new(arrow_array::StructArray::new(
+        leaf.clone(),
+        vec![Arc::new(Int32Array::from(vec![None, None, None, Some(5)])) as ArrayRef],
+        Some(vec![false, false, true, true].into()),
+    ));
+    let outer_f = arrow_schema::Fields::from(vec![Field::new("s", DataType::Struct(leaf), true)]);
+    let outer = arrow_array::StructArray::new(
+        outer_f,
+        vec![mid as ArrayRef],
+        Some(vec![false, true, true, true].into()),
+    );
+    let mut m = MapBuilder::new(
+        None,
+        Int32Builder::new(),
+        ListBuilder::new(Int32Builder::new()),
+    );
+    m.append(false).unwrap();
+    m.append(true).unwrap();
+    m.keys().append_value(1);
+    m.values().append(false);
+    m.keys().append_value(2);
+    m.values().values().append_null();
+    m.values().values().append_value(9);
+    m.values().append(true);
+    m.append(true).unwrap();
+    m.append(true).unwrap();
+    let m = m.finish();
+    // Rows: lst has 4 rows (null, empty, 4 elems, empty-after) ; pad others to 4.
+    assert_eq!((lst.len(), outer.len(), m.len()), (4, 4, 4));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l", lst.data_type().clone(), true),
+        Field::new("o", outer.data_type().clone(), true),
+        Field::new("m", m.data_type().clone(), true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(lst), Arc::new(outer), Arc::new(m)],
+    )
+    .unwrap();
+    let file = env.put(
+        "deep.parquet",
+        write(std::slice::from_ref(&batch), WriterProperties::default()),
+    );
+    let o = env.options(&[]);
+    let meta = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+        )
+        .unwrap();
+    let out = env
+        .scan(&file, &ScanRequest::all(meta.schema()), &o)
+        .unwrap();
+    let out = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+    for c in 0..3 {
+        assert_eq!(
+            out.column(c).to_data(),
+            batch.column(c).to_data(),
+            "column {c}"
+        );
+    }
+}
