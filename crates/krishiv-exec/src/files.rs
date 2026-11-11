@@ -36,7 +36,7 @@
 //! schemas (`mergeSchema`). A name Spark does not know at all fails with
 //! Spark's `DATA_SOURCE_NOT_FOUND`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -372,8 +372,9 @@ impl FileReads {
     /// Spark's `CatalogFileIndex` lists only their locations: a file under a
     /// directory the catalog does not know (before `MSCK REPAIR`), or under
     /// any directory that is not a partition of the declared columns, is not
-    /// one of the table's files. Values are read as the columns' declared
-    /// types. Nothing is inferred and nothing is cached, so every query lists
+    /// one of the table's files (`spark.sql.hive.manageFilesourcePartitions`
+    /// is not modelled: Spark's default, true). Values are read as the
+    /// columns' declared types. Nothing is inferred and nothing is cached, so every query lists
     /// the table afresh.
     ///
     /// # Errors
@@ -424,7 +425,19 @@ impl FileReads {
         options: &BTreeMap<String, OptionValue>,
         known: Option<(SchemaRef, &KnownPartitions)>,
     ) -> Result<FileListing> {
-        let mode = self.list_mode(options)?;
+        let mut mode = self.list_mode(options)?;
+        // A partitioned catalog table reads its registered partitions only
+        // (Spark's `CatalogFileIndex`, which lists only their locations).
+        let partitioned = known.as_ref().is_some_and(|(_, d)| !d.columns.is_empty());
+        if partitioned && mode.recursive {
+            return Err(unsupported(
+                "recursiveFileLookup on a partitioned table".to_owned(),
+            ));
+        }
+        // Any catalog table skips a directory that is not `name=value`
+        // (Spark 4.2.0 reads an unpartitioned table's root files only, and a
+        // partitioned one's registered locations only).
+        mode.skip_foreign_dirs = known.is_some() && mode.base.is_none();
         // Spark checks the paths before the format.
         let mut listed: Vec<(FileRef, Vec<Segment>)> = Vec::new();
         for p in paths {
@@ -460,9 +473,11 @@ impl FileReads {
         // external table's `p=1` directory left on disk after `DROP PARTITION`
         // is not read).
         if let Some((_, declared)) = &known
-            && !declared.columns.is_empty()
+            && partitioned
         {
-            listed.retain(|(_, segs)| is_registered(declared, segs));
+            let registered: HashSet<&[Option<String>]> =
+                declared.registered.iter().map(Vec::as_slice).collect();
+            listed.retain(|(_, segs)| is_registered(&declared.columns, &registered, segs));
         }
         let format = match self.formats.get(format) {
             Ok(format) => format,
@@ -682,6 +697,7 @@ impl FileReads {
             recursive: mode.recursive,
             base: mode.base.clone(),
             logged: outer,
+            skip_foreign_dirs: mode.skip_foreign_dirs,
         };
         for (names, path) in matched {
             let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
@@ -719,6 +735,7 @@ impl FileReads {
             recursive,
             base,
             logged: None,
+            skip_foreign_dirs: false,
         })
     }
 
@@ -937,15 +954,14 @@ impl FileReads {
                 .iter()
                 .map(|p| p.as_ref().to_owned())
                 .collect();
-            let segments = match Self::base_segments(at, mode, &names) {
-                Ok(segments) => segments,
-                // A catalog table's listing (`missing_is_empty`): a directory
-                // that is not a `name=value` partition directory is none of its
-                // registered locations, so its files are not the table's
-                // (Spark's `CatalogFileIndex` never lists it).
-                Err(_) if missing_is_empty => continue,
-                Err(e) => return Err(e),
-            };
+            // A catalog table: a directory that is not a `name=value`
+            // partition directory holds none of its files (Spark 4.2.0 reads
+            // neither an unpartitioned table's subdirectories nor a partitioned
+            // one's unregistered locations). Any other read refuses it.
+            if mode.skip_foreign_dirs && names.iter().any(|d| parse_segment(d).is_none()) {
+                continue;
+            }
+            let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
         }
         if committed.is_none() && inherited.is_none() && self.log_appeared(at, mode).await? {
@@ -1075,6 +1091,9 @@ struct ListMode {
         usize,
         Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
     )>,
+    /// A catalog table's listing: files under a directory that is not a
+    /// `name=value` partition directory are skipped, not refused.
+    skip_foreign_dirs: bool,
 }
 
 /// The partition columns of a permanent table and the partitions its
@@ -1091,11 +1110,12 @@ pub struct KnownPartitions {
 
 /// The partition columns of a known table: its `declared` columns, the
 /// last of `schema`, typed as declared, when the partition columns
-/// `discovered` from its files name exactly those (in order, names compared
-/// case-insensitively); none when there are no partition directories (an
-/// empty or unpartitioned table). The listing has kept the registered partitions' files only
-/// (`is_registered`, as Spark's `CatalogFileIndex` reads only the
-/// registered locations). A partition column of a type whose directory
+/// `discovered` from its files name exactly those (in order); none when there
+/// are no partition directories (an empty or unpartitioned table). The
+/// listing has kept the registered partitions' files only (`is_registered`,
+/// as Spark's `CatalogFileIndex` reads only the registered locations), so a
+/// mismatch is left only for an unpartitioned table with partition
+/// directories. A partition column of a type whose directory
 /// value the scan does not read yet is refused (only strings, integers and
 /// dates are: a timestamp is local time in the session zone, which the scan
 /// does not have).
@@ -1139,18 +1159,25 @@ fn declared_partitions(
     Ok(out)
 }
 
-/// Whether a file's partition directories (`segs`) are one of `declared`'s
-/// registered partitions: exactly the declared columns, in order (names
-/// compared case-insensitively), with registered values.
-fn is_registered(declared: &KnownPartitions, segs: &[Segment]) -> bool {
-    segs.len() == declared.columns.len()
-        && segs
+/// Whether a file's partition directories (`segs`) are one of the
+/// `registered` partitions: exactly the declared `columns`, in order and as
+/// written (Spark reads the exact location `<root>/p=1`, never `P=1`), with
+/// registered values.
+fn is_registered(
+    columns: &[String],
+    registered: &HashSet<&[Option<String>]>,
+    segs: &[Segment],
+) -> bool {
+    if segs.len() != columns.len()
+        || !segs
             .iter()
-            .zip(&declared.columns)
-            .all(|((name, _), column)| name.eq_ignore_ascii_case(column))
-        && declared.registered.iter().any(|values| {
-            values.len() == segs.len() && values.iter().zip(segs).all(|(v, (_, s))| v == s)
-        })
+            .zip(columns)
+            .all(|((name, _), column)| name == column)
+    {
+        return false;
+    }
+    let values: Vec<Option<String>> = segs.iter().map(|(_, v)| v.clone()).collect();
+    registered.contains(values.as_slice())
 }
 
 /// `schema` followed by `partitions`.
