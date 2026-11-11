@@ -722,3 +722,36 @@ fn binding_fails_a_view_in_a_function_body_at_the_call_only() {
     let e = err(&s, "SELECT tf()");
     assert_eq!(e.error_class().name(), "CANNOT_UP_CAST_DATATYPE", "{e}");
 }
+
+/// Spark 4.2.0 (probe_fn): creating a function over a view that no longer up-casts fails at the
+/// `CREATE`, and a persistent function over a repeated-name view reads it by name and ordinal.
+#[test]
+fn creating_a_function_over_a_broken_view_fails_and_a_persistent_one_reads_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t(c1 INT NOT NULL) USING PARQUET");
+    run(&s, "CREATE VIEW v WITH SCHEMA BINDING AS SELECT * FROM t");
+    run(&s, "DROP TABLE t");
+    run(&s, "CREATE TABLE t(c1 BIGINT NOT NULL) USING PARQUET");
+    let e = err(
+        &s,
+        "CREATE TEMPORARY FUNCTION tf() RETURNS INT RETURN SELECT max(c1) FROM v",
+    );
+    assert_eq!(e.error_class().name(), "CANNOT_UP_CAST_DATATYPE", "{e}");
+
+    run(&s, "CREATE TABLE a (id INT, x INT) USING parquet");
+    run(&s, "CREATE TABLE b (id INT, y INT) USING parquet");
+    run(&s, "INSERT INTO b VALUES (2, 20)");
+    run(
+        &s,
+        "CREATE VIEW rv (p, q, r, s) AS SELECT * FROM a CROSS JOIN b",
+    );
+    run(&s, "DROP TABLE a");
+    run(&s, "CREATE TABLE a (x INT, id INT) USING parquet");
+    run(&s, "INSERT INTO a VALUES (11, 1)");
+    run(
+        &s,
+        "CREATE FUNCTION pf() RETURNS INT RETURN SELECT max(q) FROM rv",
+    );
+    assert_eq!(rows(&s, "SELECT pf()"), ["11"]);
+}
