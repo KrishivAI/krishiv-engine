@@ -1110,3 +1110,37 @@ fn query_text_is_cut_at_a_character_boundary() {
         "{texts:?}"
     );
 }
+
+#[test]
+fn namespace_qualified_names_do_not_reach_the_session_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a INT)").unwrap();
+    run(&s, "CREATE FUNCTION f() RETURNS INT RETURN 1").unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in [
+        "DESCRIBE TABLE default.t",
+        "SHOW COLUMNS IN default.t",
+        "SHOW CREATE TABLE default.t",
+        "DROP FUNCTION default.f",
+    ] {
+        assert!(run(&s, sql).is_err(), "{sql}");
+    }
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(column_of(&s, "SELECT CAST(f() AS STRING)", 0), ["1"]);
+    assert!(run(&s, "DESCRIBE TABLE default.t").is_ok());
+}
+
+#[test]
+fn a_masked_error_message_carries_no_value_of_the_failed_statement() {
+    let s = Session::new().unwrap();
+    run(&s, "SET krishiv.system.queryText.literals=mask").unwrap();
+    run(&s, "SET spark.sql.ansi.enabled=true").unwrap();
+    assert!(run(&s, "SELECT CAST(123456789 AS TINYINT)").is_err());
+    let m = column_of(
+        &s,
+        "SELECT error_message FROM system.queries WHERE error_class IS NOT NULL",
+        0,
+    );
+    assert!(!m.is_empty());
+    assert!(m.iter().all(|x| !x.contains("123456789")), "{m:?}");
+}

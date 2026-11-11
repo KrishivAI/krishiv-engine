@@ -839,7 +839,7 @@ impl TextPolicy {
     fn apply_message(self, message: &str) -> String {
         let redacted = krishiv_common::redact::redact(message);
         let shown = if self.mask {
-            mask_quoted(&redacted)
+            mask_numbers(&mask_quoted(&redacted))
         } else {
             redacted.into_owned()
         };
@@ -884,6 +884,41 @@ fn mask_quoted(message: &str) -> String {
         i += 1;
     }
     out.push_str(&message[copied..]);
+    out
+}
+
+/// `message` with each bare number (`123456789`, `1.5`) replaced by `?`: a cast overflow and its like print
+/// the offending value unquoted. A number inside a word (`42P01`, `v2`) and the SQLSTATE at the end stay.
+fn mask_numbers(message: &str) -> String {
+    let (body, tail) = match message.rfind("SQLSTATE:") {
+        Some(at) => message.split_at(at),
+        None => (message, ""),
+    };
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let chars: Vec<char> = body.chars().collect();
+    let mut out = String::with_capacity(message.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_ascii_digit() && (i == 0 || !word(chars[i - 1])) {
+            let mut j = i;
+            while j < chars.len() && (chars[j].is_ascii_digit() || chars[j] == '.') {
+                j += 1;
+            }
+            // A trailing dot is the sentence's.
+            while j > i && chars[j - 1] == '.' {
+                j -= 1;
+            }
+            if chars.get(j).is_none_or(|n| !word(*n)) {
+                out.push('?');
+                i = j;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out.push_str(tail);
     out
 }
 
@@ -1577,6 +1612,17 @@ impl Session {
         crate::admission::Permit::unlimited()
     }
 
+    /// The namespace `ns` of a two-part stored-function name: refused under `system`, which has none.
+    pub(crate) fn function_namespace(&self, ns: &str) -> Result<String, KrishivError> {
+        if is_system(&self.state.catalog.current_catalog()) {
+            return Err(krishiv_common::error::SchemaNotFound {
+                schema_name: format!("`system`.`{ns}`"),
+            }
+            .into());
+        }
+        Ok(ns.to_owned())
+    }
+
     /// Whether `name` (bare, as written) is a temporary view or table of the session, which
     /// resolves before any catalog.
     pub(crate) fn is_temp_name(&self, name: &str, env: &crate::session::QueryEnv) -> bool {
@@ -1594,12 +1640,13 @@ impl Session {
         parts: &[String],
         env: &crate::session::QueryEnv,
     ) -> Result<String, KrishivError> {
-        if parts.len() == 1
+        // A bare name is the session's temporary view or nothing; a two-part name is a namespace of the
+        // CURRENT catalog, and `system` has none.
+        if (parts.len() == 2 || (parts.len() == 1 && !self.is_temp_name(&parts[0], env)))
             && is_system(&self.state.catalog.current_catalog())
-            && !self.is_temp_name(&parts[0], env)
         {
             return Err(krishiv_common::error::TableOrViewNotFound {
-                relation_name: format!("`{}`", parts[0]),
+                relation_name: format!("`{}`", parts.join("`.`")),
                 search_path: crate::catalog::search_path(),
             }
             .into());

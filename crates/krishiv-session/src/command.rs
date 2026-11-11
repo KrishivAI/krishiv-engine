@@ -1244,7 +1244,7 @@ impl Session {
     ) -> Result<(String, &'a Ident), KrishivError> {
         let (namespace, part) = match parts {
             [part] => (self.stored_namespace()?, part),
-            [ns, part] => (ns.value.clone(), part),
+            [ns, part] => (self.function_namespace(&ns.value)?, part),
             [catalog, ns, part] if catalog.value.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
                 (ns.value.clone(), part)
             }
