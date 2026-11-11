@@ -241,3 +241,17 @@ fn a_dataframe_expression_span_is_not_rendered_against_another_statement() {
         );
     }
 }
+
+/// Element access: Spark 4.2.0 `array.sql.out` (golden indexes are one higher).
+#[test]
+fn element_access_errors_carry_the_call_span() {
+    let e = fails("select element_at(array(1, 2, 3), 5)");
+    assert_eq!(e.error_class(), ErrorClass::InvalidArrayIndexInElementAt);
+    assert_eq!(span(&e), (7, 35, "element_at(array(1, 2, 3), 5)"));
+    let e = fails("select elt(4, '123', '456')");
+    assert_eq!(e.error_class(), ErrorClass::InvalidArrayIndex);
+    assert_eq!(span(&e), (7, 26, "elt(4, '123', '456')"));
+    let e = fails("select array(1, 2, 3)[5]");
+    assert_eq!(e.error_class(), ErrorClass::InvalidArrayIndex);
+    assert_eq!(span(&e), (7, 23, "array(1, 2, 3)[5]"));
+}
