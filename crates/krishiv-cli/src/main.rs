@@ -86,24 +86,30 @@ enum Command {
     },
 }
 
+/// The `KRISHIV_LOG_RATE` value: unset is 50; a positive integer is itself; anything else is
+/// returned as the error so the caller can say so.
+#[cfg(feature = "telemetry-logs")]
+fn parse_log_rate(var: Option<&str>) -> Result<u32, &str> {
+    match var {
+        None => Ok(50),
+        Some(v) => match v.trim().parse::<u32>() {
+            Ok(n) if n > 0 => Ok(n),
+            _ => Err(v),
+        },
+    }
+}
+
 /// `KRISHIV_LOG=json` turns on JSON log records on stderr (query, session and trace ids on each;
 /// at most `KRISHIV_LOG_RATE` events per callsite per second, default 50). Anything else: off.
 #[cfg(feature = "telemetry-logs")]
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
 fn install_logs_from_env() {
     if std::env::var("KRISHIV_LOG").is_ok_and(|v| v.eq_ignore_ascii_case("json")) {
-        let rate = match std::env::var("KRISHIV_LOG_RATE") {
-            Err(_) => 50,
-            Ok(v) => match v.trim().parse::<u32>() {
-                Ok(n) if n > 0 => n,
-                _ => {
-                    eprintln!(
-                        "krishiv: KRISHIV_LOG_RATE={v:?} is not a positive integer; using 50"
-                    );
-                    50
-                }
-            },
-        };
+        let var = std::env::var("KRISHIV_LOG_RATE").ok();
+        let rate = parse_log_rate(var.as_deref()).unwrap_or_else(|bad| {
+            eprintln!("krishiv: KRISHIV_LOG_RATE={bad:?} is not a positive integer; using 50");
+            50
+        });
         if let Err(e) = krishiv_session::logging::install_json_logs(rate) {
             eprintln!("krishiv: JSON logs not enabled: {e}");
         }
@@ -242,5 +248,21 @@ mod tests {
         assert!(in_mimalloc, "global allocations must come from mimalloc");
         // SAFETY: `mi_version` takes no arguments and only returns a constant.
         assert!(unsafe { libmimalloc_sys::mi_version() } > 0);
+    }
+}
+
+#[cfg(all(test, feature = "telemetry-logs"))]
+mod log_rate_tests {
+    use super::parse_log_rate;
+
+    #[test]
+    fn the_log_rate_is_a_positive_integer_or_the_default() {
+        assert_eq!(parse_log_rate(None), Ok(50));
+        assert_eq!(parse_log_rate(Some("7")), Ok(7));
+        assert_eq!(parse_log_rate(Some(" 7 ")), Ok(7));
+        assert_eq!(parse_log_rate(Some("0")), Err("0"));
+        assert_eq!(parse_log_rate(Some("-3")), Err("-3"));
+        assert_eq!(parse_log_rate(Some("fast")), Err("fast"));
+        assert_eq!(parse_log_rate(Some("")), Err(""));
     }
 }
