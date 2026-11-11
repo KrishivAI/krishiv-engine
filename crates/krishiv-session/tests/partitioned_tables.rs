@@ -1504,6 +1504,24 @@ fn msck_repair_drop_and_sync_forget_partitions_whose_directory_is_gone() {
     dropped(&root, "p=9");
     run(&s, "msck repair table pt add partitions");
     assert_eq!(rows(&s, "show partitions pt"), ["p=1/q=x", "p=9/q=w"]);
+    // Column statistics survive DROP and SYNC: Spark 4.2.0 keeps min 10 and distinct_count 2 after the partition
+    // holding 10 is forgotten.
+    run(
+        &s,
+        "create table ps(a int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into ps values (10,1),(20,2),(30,3)");
+    run(&s, "analyze table ps compute statistics for columns a");
+    let ps = dir.path().join("ps");
+    dropped(&ps, "p=1");
+    run(&s, "msck repair table ps drop partitions");
+    dropped(&ps, "p=2");
+    run(&s, "msck repair table ps sync partitions");
+    assert_eq!(rows(&s, "select cast(a as string) from ps"), ["30"]);
+    let described = rows(&s, "describe extended ps a");
+    for kept in ["min\t10", "max\t30", "distinct_count\t3"] {
+        assert!(described.iter().any(|r| r == kept), "{described:?}");
+    }
     run(&s, "create table pu(a int) using parquet");
     assert_eq!(
         class(&s, "msck repair table pu drop partitions"),

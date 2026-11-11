@@ -978,7 +978,7 @@ impl Session {
             .into());
         };
         found.location = path;
-        changed.column_stats.clear();
+        changed.data_changed();
         Ok(changed)
     }
 
@@ -1355,7 +1355,7 @@ impl Session {
             }
             let mut changed = (*current).clone();
             changed.layout.partitions.retain(|p| !hit(p));
-            changed.column_stats.clear();
+            changed.data_changed();
             if store.replace_table(&current, changed) {
                 return Swap::Done;
             }
@@ -1432,7 +1432,7 @@ impl Session {
             created.push(&p.location);
         }
         changed.layout.partitions.extend(added);
-        changed.column_stats.clear();
+        changed.data_changed();
         Ok(changed)
     }
 

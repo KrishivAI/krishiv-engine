@@ -178,11 +178,11 @@ impl Session {
         let store = &self.state.catalog.store;
         loop {
             // A table dropped meanwhile, or dropped and created again under its name, gets none of them: they
-            // describe the analyzed table's rows.
-            let Some(current) = store
-                .table(&name.namespace, &name.name)
-                .filter(|t| t.incarnation == table.incarnation)
-            else {
+            // describe the analyzed table's rows. Nor does one whose data changed since it was read (a write,
+            // TRUNCATE, a partition added or dropped): the aggregate may not have seen the new rows.
+            let Some(current) = store.table(&name.namespace, &name.name).filter(|t| {
+                t.incarnation == table.incarnation && t.data_version == table.data_version
+            }) else {
                 return Ok(());
             };
             let mut changed = (*current).clone();
@@ -200,11 +200,9 @@ impl Session {
             let Some(current) = store.table(&name.namespace, &name.name) else {
                 return;
             };
-            if current.column_stats.is_empty() {
-                return;
-            }
+            // The version moves even with no statistics stored, so an ANALYZE running now does not publish.
             let mut changed = (*current).clone();
-            changed.column_stats.clear();
+            changed.data_changed();
             if store.replace_table(&current, changed) {
                 return;
             }
@@ -223,6 +221,49 @@ mod tests {
 
     fn run(s: &Session, sql: &str) {
         block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+
+    /// Statistics an `ANALYZE` computed are discarded when the table's data changed after it was read (an `INSERT`,
+    /// `TRUNCATE` or `DROP PARTITION` that finished between the read and the catalog update): that write cleared
+    /// the statistics, and the aggregate may describe rows that are gone.
+    #[test]
+    fn statistics_read_before_a_data_change_are_discarded() {
+        let s = Session::new().unwrap();
+        run(
+            &s,
+            "create table cd(a int, p int) using parquet partitioned by (p)",
+        );
+        run(&s, "insert into cd values (1, 1), (2, 2)");
+        let store = &s.state.catalog.store;
+        let name = TableName {
+            namespace: "default".to_owned(),
+            name: "cd".to_owned(),
+            written: "`cd`".to_owned(),
+            bare: true,
+        };
+        for change in [
+            "insert into cd values (3, 3)",
+            "alter table cd drop partition (p=1)",
+            "truncate table cd",
+        ] {
+            let analyzed = store.table("default", "cd").unwrap();
+            run(&s, change);
+            let columns: Vec<_> = analyzed.columns.iter().take(1).collect();
+            block_on(s.store_column_stats(&name, &analyzed, &columns)).unwrap();
+            let stats = &store.table("default", "cd").unwrap().column_stats;
+            assert!(stats.is_empty(), "{change}: {stats:?}");
+        }
+        // Read after the last change, they are kept.
+        let analyzed = store.table("default", "cd").unwrap();
+        let columns: Vec<_> = analyzed.columns.iter().take(1).collect();
+        block_on(s.store_column_stats(&name, &analyzed, &columns)).unwrap();
+        assert!(
+            store
+                .table("default", "cd")
+                .unwrap()
+                .column_stats
+                .contains_key("a")
+        );
     }
 
     /// Statistics an `ANALYZE` computed land only on the table it read: a table dropped and created again under

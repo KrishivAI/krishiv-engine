@@ -626,6 +626,7 @@ impl Session {
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
             incarnation: 0,
+            data_version: 0,
         };
         self.state.catalog.store.create_table(view, mode)?;
         self.empty_frame().await
@@ -1403,6 +1404,7 @@ impl Session {
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
             incarnation: 0,
+            data_version: 0,
         };
         let layout = LayoutRequest {
             partition_by: &partition_names,
@@ -1807,6 +1809,7 @@ impl Session {
             layout,
             column_stats: BTreeMap::new(),
             incarnation: 0,
+            data_version: 0,
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -2725,6 +2728,7 @@ impl Session {
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
             incarnation: 0,
+            data_version: 0,
         };
         let layout = LayoutRequest {
             partition_by: &[],

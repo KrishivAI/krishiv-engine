@@ -193,9 +193,19 @@ pub(crate) struct CatalogTable {
     /// command that read the table and publishes later checks it, so a result never lands on a new table of the
     /// same name. Built entries carry 0 until the store sets it.
     pub(crate) incarnation: u64,
+    /// Moves on every change of the table's data ([`CatalogTable::data_changed`]) and is never lowered by
+    /// [`CatalogStore::replace_table`]. `ANALYZE` reads it with the table and publishes its statistics only if it
+    /// has not moved, so statistics of rows a concurrent write replaced are never stored.
+    pub(crate) data_version: u64,
 }
 
 impl CatalogTable {
+    /// Records that the table's data changed: its column statistics no longer describe it (`updateTableStats`).
+    pub(crate) fn data_changed(&mut self) {
+        self.column_stats.clear();
+        self.data_version += 1;
+    }
+
     /// Whether the table has partition columns.
     pub(crate) fn is_partitioned(&self) -> bool {
         !self.layout.partition_columns.is_empty()
@@ -629,6 +639,7 @@ impl CatalogStore for InMemoryCatalogStore {
         // The same table, changed: it keeps its incarnation.
         let mut table = table;
         table.incarnation = expected.incarnation;
+        table.data_version = table.data_version.max(expected.data_version);
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
         self.hub.invalidate_table(&changed);
@@ -763,6 +774,7 @@ mod tests {
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
             incarnation: 0,
+            data_version: 0,
         }
     }
 
