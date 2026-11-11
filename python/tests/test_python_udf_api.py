@@ -203,8 +203,26 @@ def test_udfs_over_typed_literal_columns(spark: SparkSession) -> None:
     for use_arrow in (False, True):
         u = F.udf(lambda v: str(type(v).__name__), useArrow=use_arrow)
         row = df.select(u("ts"), u("d"), u("i"), u("b")).collect()[0]
-        assert list(row)[:3] == ["datetime", "date", "timedelta"], use_arrow
-        assert row[3] in ("bytes", "bytearray"), use_arrow
+        # `spark.sql.execution.pyspark.binaryAsBytes` defaults to true: `bytes` on both paths.
+        assert list(row) == ["datetime", "date", "timedelta", "bytes"], use_arrow
+
+
+def test_the_legacy_arrow_conversion_applies_to_arrow_udfs_only(spark: SparkSession) -> None:
+    # PySpark 4.2.0 `worker.py:3093-3180`: with the legacy conf an Arrow UDF (eval type 101) converts through
+    # pandas, so a binary argument is `bytes` whatever `binaryAsBytes` says; a `useArrow=False` UDF (eval type
+    # 100, run on the Arrow path) keeps the non-legacy conversion, which honours `binaryAsBytes`.
+    pytest.importorskip("pandas")
+    df = spark.sql("SELECT X'0102' AS b")
+    arrow = F.udf(lambda v: type(v).__name__, useArrow=True)
+    plain = F.udf(lambda v: type(v).__name__, useArrow=False)
+    spark.conf.set("spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled", "true")
+    spark.conf.set("spark.sql.execution.pyspark.binaryAsBytes", "false")
+    try:
+        assert list(df.select(arrow("b"), plain("b")).collect()[0]) == ["bytes", "bytearray"]
+    finally:
+        spark.conf.unset("spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled")
+        spark.conf.unset("spark.sql.execution.pyspark.binaryAsBytes")
+    assert list(df.select(arrow("b"), plain("b")).collect()[0]) == ["bytes", "bytes"]
 
 
 def test_register_a_udf_keeps_its_type_and_determinism(spark: SparkSession) -> None:

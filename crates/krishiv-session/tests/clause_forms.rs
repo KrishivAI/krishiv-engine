@@ -1541,3 +1541,52 @@ fn an_aliased_dataframe_grouping_key_groups_by_its_expression() -> R {
     assert_eq!(n, vec![3, 2]);
     Ok(())
 }
+
+/// A nested alias in a DataFrame grouping key is trimmed too (Spark's
+/// `trimAliases` works at every depth): `groupBy(((id AS x) % 2) AS k)`.
+#[test]
+fn a_grouping_key_with_a_nested_alias_groups_by_its_expression() -> R {
+    let s = Session::new()?;
+    let df = block_on(s.sql("SELECT id FROM range(5)"))?;
+    let inner = col("id").alias("x");
+    let key = krishiv_session::functions::call_function(
+        "pmod",
+        [inner, krishiv_session::functions::lit(2_i64)],
+    )
+    .alias("k");
+    let out = df
+        .group_by([key])
+        .agg([krishiv_session::functions::count_star().alias("n")])
+        .sort([col("k")]);
+    let batches = block_on(out.collect())?;
+    assert_eq!(batches[0].schema().field(0).name(), "k");
+    let n: Vec<i64> = batches
+        .iter()
+        .flat_map(|b| b.column(1).as_primitive::<Int64Type>().values().to_vec())
+        .collect();
+    assert_eq!(n, vec![3, 2]);
+    Ok(())
+}
+
+/// `ROLLUP` over an aliased key (the Rust and Connect APIs can build one):
+/// the alias is trimmed for grouping as well, and the grand-total row
+/// has a NULL key.
+#[test]
+fn a_rollup_over_an_aliased_key_groups_by_its_expression() -> R {
+    let s = Session::new()?;
+    let df = block_on(s.sql("SELECT id FROM range(5)"))?;
+    let key = krishiv_session::functions::expr("id % 2")?.alias("k");
+    let out = df
+        .rollup([key])
+        .agg([krishiv_session::functions::count_star().alias("n")])
+        .sort([col("k")]);
+    let batches = block_on(out.collect())?;
+    assert_eq!(batches[0].schema().field(0).name(), "k");
+    let mut n: Vec<i64> = batches
+        .iter()
+        .flat_map(|b| b.column(1).as_primitive::<Int64Type>().values().to_vec())
+        .collect();
+    n.sort_unstable();
+    assert_eq!(n, vec![2, 3, 5]);
+    Ok(())
+}

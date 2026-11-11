@@ -356,8 +356,8 @@ def _arrow_batched_legacy(udf_func: Callable[..., Any], return_type: DataType) -
         input_batch = pa.RecordBatch.from_arrays(
             [_to_spark(a) for a in arrays], names=[f"_{i}" for i in range(len(arrays))]
         )
-        # --- Input: Arrow -> pandas columns --- (the engine sends no input schema: the types come from the
-        # arrays, as `to_pandas` reads them without one)
+        # --- Input: Arrow -> pandas columns --- (the engine sends no input schema, Spark's `eval_conf.input_type`:
+        # the types come from the arrays, so only UDT arguments convert differently, as on the non-legacy path)
         pandas_columns = ArrowBatchTransformer.to_pandas(
             input_batch,
             timezone=conf.timezone,  # ty: ignore[invalid-argument-type]  # Optional, as Spark passes it

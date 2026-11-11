@@ -409,6 +409,7 @@ impl Resolver<'_> {
         });
         let keys: Vec<Attr> = gid.iter().cloned().collect();
         let items = self.select_items_in(&c, aggregates, env, "Aggregate", Some(&keys))?;
+        let items = super::ops::trim_inner_aliases(items);
         if items.iter().any(|b| has_generator(&b.expr)) {
             return Err(unsupported(
                 "a generator in an aggregate SELECT list",

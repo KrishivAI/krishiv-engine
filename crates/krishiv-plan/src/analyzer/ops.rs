@@ -2019,6 +2019,7 @@ impl Resolver<'_> {
         // list, unless a column or a select-list alias named `all` takes it
         // (Spark resolves names first). A DataFrame `groupBy("all")` has no
         // SQL span and never expands (`UNRESOLVED_COLUMN`, as in Spark).
+        let items = trim_inner_aliases(items);
         let group = if p.origin.sql.is_some() && is_bare_all(keys) && !self.names_all(&c, &items) {
             self.group_by_all(&items, keys[0].origin)?
         } else {
@@ -2122,14 +2123,15 @@ impl Resolver<'_> {
                 *slot = Some(self.bind(k, &cx)?);
             }
         }
-        // Spark's `CleanupAliases` trims the aliases of grouping
-        // expressions: `df.groupBy((col("id") + 1).alias("k"))` groups by
-        // `id + 1`, and the select list's `k` names that key's output.
+        // Spark's `CleanupAliases` trims every alias of a grouping
+        // expression (`trimAliases`, at any depth):
+        // `df.groupBy((col("id") + 1).alias("k"))` groups by `id + 1`, and
+        // the select list's `k` names that key's output.
         let group: Vec<Bound> = group
             .into_iter()
             .flatten()
             .map(|mut b| {
-                b.expr = Arc::clone(trim_alias(&b.expr));
+                b.expr = trim_all_aliases(&b.expr);
                 b
             })
             .collect();
@@ -4286,9 +4288,50 @@ pub(super) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
     }
 }
 
+/// `e` without any alias, at any depth (Spark's `AliasHelper.trimAliases`,
+/// which `CleanupAliases` applies to grouping expressions). Subquery plans
+/// are not entered.
+fn trim_all_aliases(e: &Arc<Expr>) -> Arc<Expr> {
+    let out: Result<Arc<Expr>, std::convert::Infallible> = Arc::clone(e).transform_up(&mut |n| {
+        Ok(match &n.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
+            _ => n,
+        })
+    });
+    match out {
+        Ok(e) => e,
+        Err(never) => match never {},
+    }
+}
+
+/// The aggregate items with the aliases below their top-level one removed
+/// (Spark's `CleanupAliases.trimNonTopLevelAliases` on
+/// `Aggregate.aggregateExpressions`), so an item matches a grouping key
+/// whose aliases [`trim_all_aliases`] removed. Every item is named by a
+/// top-level alias here, so output names do not change.
+pub(super) fn trim_inner_aliases(items: Vec<Bound>) -> Vec<Bound> {
+    items
+        .into_iter()
+        .map(|mut b| {
+            if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node {
+                let inner = trim_all_aliases(expr);
+                if !Arc::ptr_eq(&inner, expr) {
+                    b.expr = Arc::new(
+                        Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                            expr: inner,
+                            output: output.clone(),
+                        }))
+                        .with_origin(b.expr.origin),
+                    );
+                }
+            }
+            b
+        })
+        .collect()
+}
+
 /// A select-list item with its top-level alias removed (Spark's
-/// `CleanupAliases.trimNonTopLevelAliases` for one level: the analyzer
-/// never nests aliases).
+/// `CleanupAliases.trimNonTopLevelAliases` for one level).
 fn trim_alias(e: &Arc<Expr>) -> &Arc<Expr> {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
