@@ -516,8 +516,11 @@ pub struct TaskContext {
     second_dependency: Option<GlobalState>,
     /// The driver's scheduler-assigned globally unique partition id within
     /// its pipeline group (Spark's partition index for the partition the
-    /// driver computes): stateful functions own one value stream per
-    /// partition. The first driver of a group reads partition 0.
+    /// driver computes). Stateful functions own one value stream per
+    /// partition: a batch's split tag (`Batch::split`, a scan split such as
+    /// a range slice) takes precedence, so a row draws from its split's
+    /// stream whichever driver read it; this id is the fallback for untagged
+    /// batches. The first driver of a group reads partition 0.
     partition: u32,
     /// The first partition id of the driver's pipeline-group member (the
     /// offset of a `UNION ALL` child).
