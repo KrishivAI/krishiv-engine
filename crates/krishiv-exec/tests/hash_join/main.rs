@@ -8,6 +8,7 @@
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
 mod existence;
+mod fused_probe;
 mod idle;
 mod merge;
 mod payload_rows;

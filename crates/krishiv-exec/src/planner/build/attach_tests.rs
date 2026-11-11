@@ -46,7 +46,7 @@ fn filters_reach_the_scans_of_every_root() {
     };
     let mut filters = HashMap::from([(ScanId(0), vec![filter(10)]), (ScanId(1), vec![filter(11)])]);
     let (mut a, mut b) = (scan(0), scan(1));
-    attach_runtime_filters(&mut filters, [&mut a, &mut b]);
+    attach_runtime_filters(&mut filters, true, [&mut a, &mut b]);
     assert_eq!(filter_of(&a), [FilterId(10)]);
     assert_eq!(filter_of(&b), [FilterId(11)]);
     assert!(filters.is_empty());

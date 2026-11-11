@@ -344,6 +344,7 @@ fn only_streaming_scans_are_dealt() {
         distinct_build: false,
         runtime_filters: Vec::new(),
         distribution: JoinDistribution::Broadcast,
+        select: None,
     });
     let stages = fragment(&plan(exchange(1, join, hash())), &schemas(&[1])).unwrap();
     let map = &stages[0];

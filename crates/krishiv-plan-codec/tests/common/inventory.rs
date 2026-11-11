@@ -14,9 +14,10 @@ use krishiv_exec::aggregate::{
 };
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
-    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
-    SubqueryPlan, SubqueryValueKind, WritePlan,
+    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProbeColumn, ProbeFilter,
+    ProbeFilterColumn, ProbeRowStage, ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanId,
+    ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId, SubqueryPlan, SubqueryValueKind,
+    WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
@@ -719,6 +720,7 @@ pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
             },
         }],
         distribution: JoinDistribution::Broadcast,
+        select: None,
     }
 }
 
@@ -738,6 +740,7 @@ fn subquery_join(join_type: JoinType) -> HashJoinPlan {
         distinct_build: false,
         runtime_filters: Vec::new(),
         distribution: JoinDistribution::Broadcast,
+        select: None,
     }
 }
 
@@ -1301,6 +1304,39 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::HashJoin(HashJoinPlan {
                 distinct_build: true,
                 ..subquery_join(JoinType::Existence)
+            }),
+        ),
+        (
+            // The probe is `scan()` (`a`, `s`, attributes 1 and 2, scan 7,
+            // runtime filter 3 on `a`): its filter reads both, the
+            // projections fused with it rename `s` (as a planned plan
+            // would), and the scan hands it the row stage of filter 3.
+            "fused_probe",
+            PhysNode::HashJoin(HashJoinPlan {
+                select: Some(ProbeSelect {
+                    filter: Some(ProbeFilter {
+                        layout: vec![AttrId(1), AttrId(2)],
+                        predicate: predicate(),
+                    }),
+                    row_stage: Some(ProbeRowStage {
+                        scan: ScanId(7),
+                        columns: vec![ProbeFilterColumn {
+                            id: FilterId(3),
+                            column: 0,
+                        }],
+                    }),
+                    columns: Some(vec![
+                        ProbeColumn {
+                            index: 0,
+                            name: "a".to_owned(),
+                        },
+                        ProbeColumn {
+                            index: 1,
+                            name: "s2".to_owned(),
+                        },
+                    ]),
+                }),
+                ..join_plan(JoinType::Inner)
             }),
         ),
         (

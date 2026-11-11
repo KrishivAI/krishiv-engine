@@ -39,7 +39,8 @@
     cn(
       "rounded-md px-3 text-sm font-medium text-text-2 no-underline hover:bg-accent",
       wide ? "py-2.5" : "flex min-h-12 items-center",
-      page === id && "bg-accent text-foreground",
+      // The active link: the surface fill, plus the gold accent as an inset underline (no layout change).
+      page === id && "bg-accent text-foreground shadow-[inset_0_-2px_0_var(--k-accent)]",
     );
 </script>
 
