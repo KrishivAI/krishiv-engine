@@ -316,10 +316,10 @@ fn lcase_search_answers_a_pattern_that_could_split_the_dotted_capital_i() {
     );
 }
 
-/// A collated string inside an array, map or struct would lose its collation (or be compared
-/// Indeterminate input gives no string result here; a non-string result is still produced.
+/// Indeterminate input gives Spark's `string collate null` result (`collations-padding-trim`
+/// `rpad`, `collations-basic` `elt`); the calls Spark fails on still fail.
 #[test]
-fn indeterminate_string_results_are_refused() {
+fn indeterminate_string_results_carry_the_null_collation() {
     let s = Session::new().unwrap();
     for sql in [
         "create table t1(a string collate utf8_binary, b string collate utf8_lcase) using parquet",
@@ -327,10 +327,13 @@ fn indeterminate_string_results_are_refused() {
     ] {
         block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
     }
-    let e = block_on(s.sql("select concat(a, b) from t1")).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(value_of(&s, "select rpad(a, 8, b) from t1"), "abcabcda");
     assert_eq!(
-        class_of(&s, "select length(concat(a, b)) from t1"),
+        value_of(&s, "select typeof(rpad(a, 8, b)) from t1"),
+        "string collate null"
+    );
+    assert_eq!(
+        class_of(&s, "select upper(concat(a, b)) from t1"),
         ErrorClass::KrishivUnsupportedFeature
     );
     // `levenshtein` is not on Spark's indeterminate list: it just runs ('abc' to 'abcd').

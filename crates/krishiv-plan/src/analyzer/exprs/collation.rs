@@ -328,9 +328,17 @@ fn selector_args(name: &str) -> usize {
 /// (`left(str, len)` takes its collation from `str` alone, even when `len` is written
 /// `collate(2, utf8_lcase)`, which Spark casts to an integer).
 fn collation_args(name: &str, n: usize) -> usize {
-    if ["left", "right", "repeat", "substring", "substr"]
-        .iter()
-        .any(|f| name.eq_ignore_ascii_case(f))
+    if [
+        "left",
+        "right",
+        "repeat",
+        "substring",
+        "substr",
+        "format_string",
+        "printf",
+    ]
+    .iter()
+    .any(|f| name.eq_ignore_ascii_case(f))
     {
         1.min(n)
     } else {
@@ -595,6 +603,16 @@ impl Resolver<'_> {
         };
         let n = f.args.len().min(kids.len());
         let name = f.name.to_ascii_lowercase();
+        // A value of Spark's indeterminate string type is only inspected here: what the other
+        // calls do with it (Spark fails most) is not modelled.
+        if !INTERNAL.contains(&name.as_str())
+            && !INSPECTS.contains(&name.as_str())
+            && kids[..n].iter().any(|k| {
+                matches!(&k.ty.data_type, Some(DataType::CollatedString(c)) if c.is_indeterminate())
+            })
+        {
+            return Err(unsupported("an indeterminate string operand", e.origin));
+        }
         if INTERNAL.contains(&name.as_str()) {
             return self.expr_node_inner(e, kids, in_agg, window_fn, cx);
         }
@@ -870,7 +888,7 @@ impl Resolver<'_> {
             let nested = chosen.is_some_and(|c| !c.is_utf8_binary())
                 && !matches!(t, DataType::String)
                 && t.any_type(&|x| matches!(x, DataType::String));
-            if nested || (indeterminate && *t == DataType::String) {
+            if nested {
                 return Err(unsupported(
                     "a collated or indeterminate string inside a result",
                     e.origin,
@@ -892,7 +910,8 @@ impl Resolver<'_> {
         // The result is re-tagged with the chosen collation. For `UTF8_BINARY` that is the
         // display-only marker (Spark prints `upper(c)` of a `STRING COLLATE UTF8_BINARY` column
         // that way), kept only when `marked` and outside windows and the inspecting functions.
-        if let Some(c) = chosen
+        // Operands with no one collation give Spark's indeterminate string type (`string collate null`).
+        if let Some(c) = chosen.or(indeterminate.then_some(Collation::INDETERMINATE))
             && bound.ty.data_type == Some(DataType::String)
             && !BINARY_RESULT.contains(&name.as_str())
             && if c.is_utf8_binary() {
