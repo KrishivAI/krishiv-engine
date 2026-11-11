@@ -15,6 +15,25 @@
       "rows": 300,
       "sha256": "735b86b6b8958cf8c55958d1ead270e8306f7f0f02161df12a69c1b7c01c6fd3"
     },
+    "nested": {
+      "rows": 300,
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
+    },
+    "nested_millis": {
+      "rows": 300,
+      "sha256": "2247be6d387fc50bea32a4522816cecbd4c404188ef40acadde8e42d1402f5ce"
+    },
+    "nested_nodict": {
+      "rows": 300,
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
+    },
+    "nested_small_groups": {
+      "rows": 300,
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
+    },
+    "nested_v2": {
+      "unsupported": "no DELTA_BYTE_ARRAY for fixed-length decimals (the decimal(38,10) list), as for v2"
+    },
     "none": {
       "rows": 300,
       "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
@@ -37,49 +56,102 @@
   },
   "pyarrow": {
     "gzip": {
+      "bad_statistics": [],
       "page_index": true,
       "rows": 300,
-      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3",
+      "statistics_compared": 17
     },
     "lz4": {
+      "bad_statistics": [],
       "page_index": true,
       "rows": 300,
-      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3",
+      "statistics_compared": 17
     },
     "lz4_raw": {
+      "bad_statistics": [],
       "page_index": true,
       "rows": 300,
-      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3",
+      "statistics_compared": 17
     },
     "millis": {
+      "bad_statistics": [],
       "page_index": true,
       "rows": 300,
-      "sha256": "735b86b6b8958cf8c55958d1ead270e8306f7f0f02161df12a69c1b7c01c6fd3"
+      "sha256": "735b86b6b8958cf8c55958d1ead270e8306f7f0f02161df12a69c1b7c01c6fd3",
+      "statistics_compared": 17
+    },
+    "nested": {
+      "bad_statistics": [],
+      "page_index": true,
+      "rows": 300,
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982",
+      "statistics_compared": 21
+    },
+    "nested_millis": {
+      "bad_statistics": [],
+      "page_index": true,
+      "rows": 300,
+      "sha256": "2247be6d387fc50bea32a4522816cecbd4c404188ef40acadde8e42d1402f5ce",
+      "statistics_compared": 21
+    },
+    "nested_nodict": {
+      "bad_statistics": [],
+      "page_index": true,
+      "rows": 300,
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982",
+      "statistics_compared": 21
+    },
+    "nested_small_groups": {
+      "bad_statistics": [],
+      "page_index": true,
+      "rows": 300,
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982",
+      "statistics_compared": 294
+    },
+    "nested_v2": {
+      "bad_statistics": [],
+      "page_index": true,
+      "rows": 300,
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982",
+      "statistics_compared": 21
     },
     "none": {
+      "bad_statistics": [],
       "page_index": true,
       "rows": 300,
-      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3",
+      "statistics_compared": 17
     },
     "small_groups": {
+      "bad_statistics": [],
       "page_index": true,
       "rows": 300,
-      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3",
+      "statistics_compared": 153
     },
     "snappy": {
+      "bad_statistics": [],
       "page_index": true,
       "rows": 300,
-      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3",
+      "statistics_compared": 17
     },
     "v2": {
+      "bad_statistics": [],
       "page_index": true,
       "rows": 300,
-      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3",
+      "statistics_compared": 17
     },
     "zstd": {
+      "bad_statistics": [],
       "page_index": true,
       "rows": 300,
-      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3",
+      "statistics_compared": 17
     }
   },
   "spark": {
@@ -102,6 +174,31 @@
       "rows": 300,
       "schema": "struct<id:int,bool:boolean,byte:tinyint,short:smallint,long:bigint,float:float,double:double,dec9:decimal(9,2),dec18:decimal(18,4),dec38:decimal(38,10),s:string,bin:binary,d:date,ts:timestamp,ntz:timestamp_ntz,st:struct<x:int,y:string,t:timestamp>,arr:array<bigint>,m:map<string,int>>",
       "sha256": "735b86b6b8958cf8c55958d1ead270e8306f7f0f02161df12a69c1b7c01c6fd3"
+    },
+    "nested": {
+      "rows": 300,
+      "schema": "struct<id:int,li:array<int>,ls:array<struct<a:int,b:string>>,ll:array<array<bigint>>,sn:struct<s:struct<v:int>,l:array<int>,m:map<string,int>>,ms:map<string,struct<p:int,q:string>>,ma:map<string,array<int>>,mm:map<int,map<string,bigint>>,ts_l:array<timestamp>,ntz_l:array<timestamp_ntz>,dec_l:array<decimal(38,10)>,d_m:map<date,decimal(18,4)>>",
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
+    },
+    "nested_millis": {
+      "rows": 300,
+      "schema": "struct<id:int,li:array<int>,ls:array<struct<a:int,b:string>>,ll:array<array<bigint>>,sn:struct<s:struct<v:int>,l:array<int>,m:map<string,int>>,ms:map<string,struct<p:int,q:string>>,ma:map<string,array<int>>,mm:map<int,map<string,bigint>>,ts_l:array<timestamp>,ntz_l:array<timestamp_ntz>,dec_l:array<decimal(38,10)>,d_m:map<date,decimal(18,4)>>",
+      "sha256": "2247be6d387fc50bea32a4522816cecbd4c404188ef40acadde8e42d1402f5ce"
+    },
+    "nested_nodict": {
+      "rows": 300,
+      "schema": "struct<id:int,li:array<int>,ls:array<struct<a:int,b:string>>,ll:array<array<bigint>>,sn:struct<s:struct<v:int>,l:array<int>,m:map<string,int>>,ms:map<string,struct<p:int,q:string>>,ma:map<string,array<int>>,mm:map<int,map<string,bigint>>,ts_l:array<timestamp>,ntz_l:array<timestamp_ntz>,dec_l:array<decimal(38,10)>,d_m:map<date,decimal(18,4)>>",
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
+    },
+    "nested_small_groups": {
+      "rows": 300,
+      "schema": "struct<id:int,li:array<int>,ls:array<struct<a:int,b:string>>,ll:array<array<bigint>>,sn:struct<s:struct<v:int>,l:array<int>,m:map<string,int>>,ms:map<string,struct<p:int,q:string>>,ma:map<string,array<int>>,mm:map<int,map<string,bigint>>,ts_l:array<timestamp>,ntz_l:array<timestamp_ntz>,dec_l:array<decimal(38,10)>,d_m:map<date,decimal(18,4)>>",
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
+    },
+    "nested_v2": {
+      "rows": 300,
+      "schema": "struct<id:int,li:array<int>,ls:array<struct<a:int,b:string>>,ll:array<array<bigint>>,sn:struct<s:struct<v:int>,l:array<int>,m:map<string,int>>,ms:map<string,struct<p:int,q:string>>,ma:map<string,array<int>>,mm:map<int,map<string,bigint>>,ts_l:array<timestamp>,ntz_l:array<timestamp_ntz>,dec_l:array<decimal(38,10)>,d_m:map<date,decimal(18,4)>>",
+      "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
     },
     "none": {
       "rows": 300,
