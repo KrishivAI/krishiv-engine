@@ -732,7 +732,9 @@ impl Resolver<'_> {
             // The operands as the call sees them (the type of its result stays Spark's), padded
             // to three: a NULL in any of them makes the row NULL.
             let mut keyed = Vec::with_capacity(3);
-            for k in &kids[..n.min(3)] {
+            // `split_part` raises on its first two operands only (its index may be NULL).
+            let real = if name == "split_part" { 2 } else { n.min(3) };
+            for k in &kids[..real] {
                 keyed.push(if is_string(k.ty.data_type.as_ref()) {
                     self.plain_string(k, e.origin, cx)?
                 } else {
@@ -744,6 +746,8 @@ impl Resolver<'_> {
                     .with_origin(e.origin);
                 keyed.push(self.expr(&Arc::new(pad), cx)?);
             }
+            // Spark keeps the indeterminate collation in the result type: the call is typed over
+            // plain operands, then every string in the result is re-tagged `collate null`.
             let mut plain = Vec::with_capacity(n);
             for k in &kids[..n] {
                 plain.push(if is_string(k.ty.data_type.as_ref()) {
@@ -753,9 +757,10 @@ impl Resolver<'_> {
                 });
             }
             let result_type = self
-                .expr_node_inner(e, &plain, in_agg, window_fn, cx)
-                .ok()
-                .and_then(|b| b.ty.data_type);
+                .expr_node_inner(e, &plain, in_agg, window_fn, cx)?
+                .ty
+                .data_type
+                .map(|t| indeterminate_strings(&t));
             let call = Expr::function(
                 "__indeterminate_collation",
                 keyed.iter().map(|k| (*k.expr).clone()).collect(),
@@ -1689,6 +1694,19 @@ impl Resolver<'_> {
             }
         };
         Ok((chosen, indeterminate))
+    }
+}
+
+/// `t` with every plain `STRING` in it (map keys and values included) made `string collate null`.
+fn indeterminate_strings(t: &DataType) -> DataType {
+    match t {
+        DataType::String => DataType::collated_string(Collation::INDETERMINATE),
+        DataType::Map(m) => DataType::Map(Arc::new(krishiv_types::MapType::new(
+            indeterminate_strings(m.key_type()),
+            indeterminate_strings(m.value_type()),
+            m.value_contains_null(),
+        ))),
+        other => other.clone(),
     }
 }
 

@@ -349,7 +349,7 @@ fn indeterminate_string_results_carry_the_null_collation() {
     // The run-time failure keeps the call's own result type.
     assert_eq!(
         value_of(&s, "select typeof(str_to_map(a, ',', b)) from t1 limit 1"),
-        "map<string,string>"
+        "map<string collate null,string collate null>"
     );
     // `format_string` takes its collation from the format alone.
     assert_eq!(
@@ -366,6 +366,8 @@ fn indeterminate_string_results_carry_the_null_collation() {
         "create table ct using parquet as select rpad(a, 8, b) r from t1",
         "create view cv as select concat(a, b) c from t1",
         "create temporary view tv as select concat(a, b) c from t1",
+        "create table ct2 using parquet as select split_part(a, b, 1) x from t1",
+        "create temporary view tv2 as select split_part(a, b, 1) x from t1",
     ] {
         assert_eq!(
             class_of(&s, sql),
@@ -373,6 +375,14 @@ fn indeterminate_string_results_carry_the_null_collation() {
             "{sql}"
         );
     }
+    // Map keys may not be collated, and the indeterminate collation is no exception.
+    assert_eq!(
+        class_of(
+            &s,
+            "create table ct3 using parquet as select str_to_map(a, ',', b) x from t1"
+        ),
+        ErrorClass::UnsupportedFeatureCollationsInMapKeys
+    );
     // The run-time error fires only for a row with both operands (Spark's string functions ignore NULLs).
     block_on(
         block_on(s.sql("insert into t1 values(NULL, 'x'), ('y', NULL)"))
@@ -383,17 +393,21 @@ fn indeterminate_string_results_carry_the_null_collation() {
     assert_eq!(
         value_of(
             &s,
-            "select cast(count(split_part(a, b, 1)) as string) from t1 where a is null or b is null"
+            "select cast(count(*) as string) from (select split_part(a, b, 1) x from t1 where a is null or b is null)"
         ),
-        "0"
+        "2"
     );
     assert_eq!(
         value_of(
             &s,
-            "select cast(count(str_to_map(a, ',', b)) as string) from t1 where a is null or b is null"
+            "select cast(count(*) as string) from (select str_to_map(a, ',', b) x from t1 where a is null or b is null)"
         ),
-        "0"
+        "2"
     );
+    // `split_part` raises on its first two operands alone: a NULL index does not skip the row.
+    let df = block_on(s.sql("select split_part(a, b, cast(null as int)) from t1")).unwrap();
+    let e = block_on(df.collect()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::IndeterminateCollation);
     let df = block_on(s.sql("select split_part(a, b, 1) from t1")).unwrap();
     let e = block_on(df.collect()).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::IndeterminateCollation);

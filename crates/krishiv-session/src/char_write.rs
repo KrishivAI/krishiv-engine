@@ -93,6 +93,15 @@ pub(crate) fn output_columns(a: &AnalyzedPlan, nullable: Option<bool>) -> Vec<St
 /// # Errors
 /// The class above, naming the columns.
 pub(crate) fn refuse_indeterminate_schema(a: &AnalyzedPlan) -> Result<(), KrishivError> {
+    // A map key of the indeterminate type is the map-key error, not the schema one (Spark's order).
+    if a.output.iter().any(|c| {
+        c.data_type.any_type(&|x| {
+            matches!(x, krishiv_types::DataType::Map(m)
+                if matches!(m.key_type(), krishiv_types::DataType::CollatedString(k) if k.is_indeterminate()))
+        })
+    }) {
+        return Err(krishiv_common::error::UnsupportedFeatureCollationsInMapKeys {}.into());
+    }
     let bad: Vec<String> = a
         .output
         .iter()
