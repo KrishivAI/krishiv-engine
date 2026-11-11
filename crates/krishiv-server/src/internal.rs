@@ -269,6 +269,14 @@ pub fn mask_literals(text: &str) -> String {
         && head[..3].eq_ignore_ascii_case("set")
         && head[3..].starts_with(char::is_whitespace);
     if is_set && let Some(eq) = masked.find('=') {
+        // `SET key = value`: more than SET and a key before the `=` is not a key (`SET k hunter2 = x`): keep
+        // the first word only (`SET TIME ZONE` is the one SET with a longer name).
+        let mut words = masked[..eq].split_whitespace();
+        if let (Some(set), Some(key), Some(third)) = (words.next(), words.next(), words.next())
+            && !(key.eq_ignore_ascii_case("time") && third.eq_ignore_ascii_case("zone"))
+        {
+            return format!("{set} {key} ?");
+        }
         return format!("{}=?", &masked[..eq]);
     }
     // `SET key value` (no `=`): Spark rejects it (INVALID_SET_SYNTAX) but the failed statement's text is
@@ -329,8 +337,13 @@ fn mask_pass(text: &str) -> String {
             }
             // Comments can hold anything: drop them.
             '-' if chars.get(i + 1) == Some(&'-') => {
+                // A backslash before the line break continues the comment (Spark's `SIMPLE_COMMENT`).
                 while i < chars.len() && chars[i] != '\n' {
-                    i += 1;
+                    i += if chars[i] == '\\' && chars.get(i + 1) == Some(&'\n') {
+                        2
+                    } else {
+                        1
+                    };
                 }
                 out.push(' ');
             }
@@ -884,6 +897,10 @@ mod tests {
             ("select /* secret */ 1", "select   ?"),
             ("select /* a /* b */ hunter2 */ 1", "select   ?"),
             ("select /* a /* b */ hunter2", "select  "),
+            (
+                "select 1 -- note \\\nhunter2 here\nfrom t",
+                "select ?  \nfrom t",
+            ),
             ("select a from `unclosed", "select a from ?"),
             ("select 'é', 'ü'", "select ?, ?"),
             ("select 'ends in a backslash\\", "select ?"),
@@ -922,6 +939,9 @@ mod tests {
             ("SET k hunter2; SELECT 1", "SET k ?"),
             ("SET time hunter2", "SET time ?"),
             ("SET k ?", "SET k ?"),
+            ("SET k hunter2 = x", "SET k ?"),
+            ("SET k = x", "SET k =?"),
+            ("SET TIME ZONE = 'UTC'", "SET TIME ZONE =?"),
         ] {
             let got = mask_literals(input);
             assert_eq!(got, want, "{input:?}");
