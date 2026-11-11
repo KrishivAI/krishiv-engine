@@ -55,6 +55,10 @@ struct RangeLocal {
     claimed: u64,
     /// The claim ordinal of the current slice.
     position: Option<u64>,
+    /// The first partition id of the range's group member.
+    base: u32,
+    /// The current slice's split (`base` + the slice index).
+    split: u32,
 }
 
 fn range_schema() -> SchemaRef {
@@ -100,12 +104,14 @@ impl crate::operator::Source for Range {
         global_ref::<RangeGlobal>(global, "Range").map_or(1, |g| (g.partitions as usize).max(1))
     }
 
-    fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+    fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
         Ok(Box::new(RangeLocal {
             current: None,
             step: self.step,
             claimed: 0,
             position: None,
+            base: ctx.partition_base(),
+            split: ctx.partition(),
         }))
     }
 
@@ -144,6 +150,11 @@ impl Range {
                     };
                     local.claimed += 1;
                     local.position = Some(ordinal);
+                    // Seeded random functions draw from the slice's split,
+                    // not from the driver that claimed it.
+                    local.split = local
+                        .base
+                        .saturating_add(u32::try_from(index).unwrap_or(u32::MAX));
                     match krishiv_plan::analyzer::table_functions::range_slice(
                         g.start,
                         g.end,
@@ -181,7 +192,7 @@ impl Range {
                     let array = Int64Array::from(values);
                     let batch = RecordBatch::try_new(range_schema(), vec![Arc::new(array) as _])
                         .map_err(|e| internal(e.to_string()))?;
-                    return Ok(Some(Batch::new(batch)));
+                    return Ok(Some(Batch::new(batch).with_split(Some(local.split))));
                 }
             }
         }

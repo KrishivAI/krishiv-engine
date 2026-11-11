@@ -735,4 +735,66 @@ mod tests {
         assert_eq!(std("Europe/Dublin", 2024, 7, 1), 0);
         assert_eq!(std("Europe/Dublin", 2024, 1, 15), 0);
     }
+
+    /// Every accepted and refused shape of `offset_seconds`, with the
+    /// boundaries of each field (mutation gaps from the kernels shard).
+    #[test]
+    fn offset_seconds_shapes_and_bounds() {
+        for (text, secs) in [
+            ("+5", Some(18_000)),
+            ("-5", Some(-18_000)),
+            ("+05", Some(18_000)),
+            ("+0530", Some(19_800)),
+            ("-0530", Some(-19_800)),
+            ("+053015", Some(19_815)),
+            ("+05:30", Some(19_800)),
+            ("+05:30:15", Some(19_815)),
+            ("+00:59", Some(3_540)),
+            ("+00:00:59", Some(59)),
+            ("+18:00", Some(64_800)),
+            ("+18:00:00", Some(64_800)),
+            ("+00:60", None),
+            ("+00:00:60", None),
+            ("+18:00:01", None),
+            ("+18:01", None),
+            ("+05:3", None),
+            ("+05:300", None),
+            ("+05:30:1", None),
+            ("+05:3:15", None),
+            ("+05:30:150", None),
+            ("+0:530", None),
+            ("+0530:15", None),
+            ("+05::3015", None),
+            ("+05:3015", None),
+            ("+05:3x:15", None),
+            ("+05:30x15", None),
+            ("+123", None),
+            ("+12345", None),
+            ("05:30", None),
+            ("", None),
+        ] {
+            assert_eq!(offset_seconds(text), secs, "{text}");
+        }
+    }
+
+    /// `Etc/GMT` offsets resolve fixed, including hour 0 and two digits;
+    /// a zero-padded hour is not one.
+    #[test]
+    fn etc_gmt_offsets_resolve_fixed() {
+        for (text, secs) in [
+            ("Etc/GMT+0", 0),
+            ("Etc/GMT-0", 0),
+            ("Etc/GMT+5", -18_000),
+            ("Etc/GMT-5", 18_000),
+            ("Etc/GMT+10", -36_000),
+            ("Etc/GMT-12", 43_200),
+        ] {
+            assert!(
+                matches!(resolve_zone(text), Ok(ZoneRef::Fixed(FixedOffset(s))) if s == secs),
+                "{text}"
+            );
+        }
+        assert!(resolve_zone("Etc/GMT+05").is_err());
+        assert!(resolve_zone("Etc/GMT+13").is_err());
+    }
 }

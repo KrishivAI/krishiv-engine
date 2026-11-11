@@ -148,3 +148,11 @@ The interpreter follows Spark 4.2.0 (`tests/spark-golden/v4.2.0/scripting`) exce
 - An unaliased output column over a local variable is named from the expression as written, not with Spark's random scope id.
 - `KRISHIV_*` errors, `OPERATION_CANCELED` and internal errors are never caught by a handler. Cancelling or timing out a script (`krishiv.query.maxExecutionTime`) ends the whole script, between statements too.
 - Locals, labels and `FOR` columns are lower-cased whatever `spark.sql.caseSensitive` says.
+
+## SQL function bodies and the ANSI mode they were created under
+
+A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode of its `CREATE`, as Spark does: the body's arithmetic, casts and functions follow the creation mode, while the arguments keep the caller's. Where Krishiv differs:
+
+- A table function's body is pinned in its projections and filters only. Joins, grouping and aggregate arguments, and sort keys inside the body follow the caller's mode (`SELECT max(1 / x)` as a body raises or not by the caller's setting).
+- An aggregate or window call in a scalar function argument reads its operator's mode.
+- Only `spark.sql.ansi.enabled` is captured; Spark captures every SQL configuration.

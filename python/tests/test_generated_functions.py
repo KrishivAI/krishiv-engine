@@ -50,8 +50,12 @@ CHECKED_VALUES = {("sha2", "numBits"): 256}
 
 def _params(fn: Any) -> str:
     out = []
+    starred = False
     for p in inspect.signature(fn).parameters.values():
-        assert p.kind in (p.POSITIONAL_OR_KEYWORD, p.VAR_POSITIONAL), f"{fn.__name__}.{p.name}"
+        assert p.kind in (p.POSITIONAL_OR_KEYWORD, p.VAR_POSITIONAL, p.KEYWORD_ONLY), f"{fn.__name__}.{p.name}"
+        if p.kind is p.KEYWORD_ONLY and not starred:
+            out.append("*")
+        starred = starred or p.kind in (p.VAR_POSITIONAL, p.KEYWORD_ONLY)
         out.append(
             f"*{p.name}"
             if p.kind is p.VAR_POSITIONAL
@@ -79,7 +83,8 @@ def test_the_export_list_has_one_source() -> None:
     assert len(set(F.__all__)) == len(F.__all__)
     assert set(F._HAND_WRITTEN).isdisjoint(G.__all__)
     for name in F._HAND_WRITTEN:
-        assert getattr(F, name).__module__ == F.__name__, name
+        # The vectorized UDFs live where PySpark defines them (`pyspark.sql.pandas.functions`).
+        assert getattr(F, name).__module__ in (F.__name__, "krishiv.sql.pandas.functions"), name
     for name in G.__all__:
         assert getattr(F, name) is getattr(G, name), name
     # PySpark's side: a name Krishiv exports and PySpark lacks, or the reverse, is a failure.

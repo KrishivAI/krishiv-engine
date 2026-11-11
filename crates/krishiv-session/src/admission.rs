@@ -37,7 +37,8 @@ pub struct QueryRequest {
     /// Computed only when the installed controller's [`AdmissionController::uses_estimate`] is
     /// `true` (the default controller does not), and `None` means unknown: no estimate was
     /// computed or the plan could not be estimated, so a controller must treat `None` as "no
-    /// information", never as "free".
+    /// information", never as "free". `DataFrameWriter::save_as_table` in `overwrite` mode is
+    /// admitted before its query is planned, so its request always carries `None`.
     pub estimate: Option<Estimate>,
 }
 

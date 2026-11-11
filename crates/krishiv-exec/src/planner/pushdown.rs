@@ -204,8 +204,11 @@ fn column(e: &Expr, scan: &[BoundColumn]) -> Option<ColumnPath> {
     let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node else {
         return None;
     };
+    // A collated column's bytes do not order as its values compare: statistics, dictionaries
+    // and Bloom filters would drop matching rows. The analyzer keys these comparisons, so a
+    // bare collated column never arrives here; this keeps it that way.
     scan.iter()
-        .find(|s| s.id == c.id)
+        .find(|s| s.id == c.id && !s.data_type.contains_collation())
         .map(|s| ColumnPath::new(s.name.clone()))
 }
 

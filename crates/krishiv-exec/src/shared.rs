@@ -358,6 +358,29 @@ impl SharedSink {
     pub(crate) fn new(schema: SchemaRef, scope: Option<SpillScope>) -> Arc<Self> {
         Arc::new(Self { schema, scope })
     }
+
+    /// Adds `batches`, charged to `reservation`, after the parts combined so
+    /// far: what a `PythonEval` finishes once its drivers have combined.
+    /// Call before `finalize`.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a state of another sink.
+    pub(crate) fn add_part(
+        &self,
+        global: &GlobalState,
+        batches: Vec<Batch>,
+        reservation: Reservation,
+    ) -> Result<()> {
+        if batches.is_empty() {
+            return Ok(());
+        }
+        let g = global_ref::<SinkGlobal>(global, "SharedSink")?;
+        lock(&g.parts).push(Segment::Memory {
+            batches,
+            reservation,
+        });
+        Ok(())
+    }
 }
 
 impl Sink for SharedSink {
@@ -387,7 +410,9 @@ impl Sink for SharedSink {
         let l = local_mut::<SinkLocal>(local, "SharedSink")?;
         // A scan's morsel can be a slice of a much larger batch: kept as is,
         // every segment would hold and be charged the whole buffers.
-        let input = owned_rows(input)?;
+        // The split tag belongs to the pipeline that produced the batch: every reader numbers the
+        // batches it reads itself, so a stored batch carries none.
+        let input = owned_rows(input)?.with_split(None);
         let bytes = input.data().get_array_memory_size();
         if l.reservation.try_grow(bytes).is_err() {
             return Ok(SinkStatus::NeedMemory { bytes });
@@ -594,9 +619,13 @@ impl Source for SharedSource {
             if let Some(fixed) = &self.fixed {
                 Arc::clone(fixed)
             } else {
-                let state = ctx.dependency().cloned().ok_or_else(|| {
+                let mut state = ctx.dependency().cloned().ok_or_else(|| {
                     internal("a shared plan was read before it was built".to_owned())
                 })?;
+                if !state.is::<SinkGlobal>() {
+                    // A `PythonEval` keeps its rows in a shared plan's list.
+                    state = crate::python_eval::store_state(&state)?;
+                }
                 let sink = global_ref::<SinkGlobal>(&state, "SharedSource")?;
                 sink.done.get().cloned().ok_or_else(|| {
                     internal("a shared plan was read before it finalized".to_owned())

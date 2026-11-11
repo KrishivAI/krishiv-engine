@@ -765,11 +765,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             filter,
             within_group,
         }) => {
-            let qualified = if qualifier.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{name}", Name(qualifier))
-            };
+            let qualified = crate::function::shown_call_name(&Name(qualifier).to_string(), name);
             call(
                 &qualified,
                 Builtin::from_name(name),
@@ -812,7 +808,9 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             }
             let op = match id {
                 FunctionId::Builtin(b) => Some(*b),
-                FunctionId::Registry { .. } | FunctionId::Udf { .. } => None,
+                FunctionId::Registry { .. }
+                | FunctionId::Udf { .. }
+                | FunctionId::PythonUdf { .. } => None,
             };
             // A session UDF may share a built-in's name: its identity
             // says which (the shown name stays Spark's).
@@ -833,8 +831,14 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             );
         }
         ExprNode::Cast { expr, to, mode } => {
+            // The shown text is Spark's; an identity tells the modes apart
+            // (an ANSI cast raises where a legacy one gives NULL), so a
+            // match on identity never swaps one for the other.
+            let identity = IDENTITY.with(std::cell::Cell::get);
             out.push(Piece::Str(match mode {
                 CastMode::Try => "TRY_CAST(",
+                CastMode::Legacy if identity => "CAST_LEGACY(",
+                CastMode::Ansi if identity => "CAST_ANSI(",
                 CastMode::Default | CastMode::Legacy | CastMode::Ansi => "CAST(",
             }));
             out.push(Piece::Expr(expr));
@@ -852,7 +856,9 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             )));
         }
         // Spark prints the item only.
-        ExprNode::Pipe { expr, .. } => out.push(Piece::Expr(expr)),
+        ExprNode::Pipe { expr, .. } | ExprNode::StoredField { expr, .. } => {
+            out.push(Piece::Expr(expr));
+        }
         ExprNode::MultiAlias { expr, names } => {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS ({})", names.join(", "))));
@@ -928,6 +934,11 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
         ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS {}#{}", output.name, output.id.0)));
+        }
+        ExprNode::Resolved(ResolvedExpr::EvalMode { ansi, expr, .. }) => {
+            out.push(Piece::Owned(format!("eval_mode(ansi={ansi}, ")));
+            out.push(Piece::Expr(expr));
+            out.push(Piece::Owned(")".to_owned()));
         }
         ExprNode::Window(w) => {
             out.push(Piece::Expr(&w.function));

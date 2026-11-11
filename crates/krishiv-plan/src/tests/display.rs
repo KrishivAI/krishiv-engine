@@ -230,3 +230,22 @@ fn literal_debug_shows_every_kind_and_hides_url_credentials() {
         assert!(shown.contains(kind), "{kind}: {shown}");
     }
 }
+
+#[test]
+fn an_identity_tells_the_cast_modes_apart_the_shown_text_does_not() {
+    use crate::{CastMode, identity_string};
+    let cast = |mode| {
+        Expr::new(ExprNode::Cast {
+            expr: Arc::new(Expr::from(Literal::Integer(1))),
+            to: krishiv_types::DataType::Long,
+            mode,
+        })
+    };
+    let (legacy, ansi) = (cast(CastMode::Legacy), cast(CastMode::Ansi));
+    assert_eq!(legacy.to_string(), ansi.to_string());
+    assert_ne!(identity_string(&legacy), identity_string(&ansi));
+    assert_eq!(
+        identity_string(&legacy),
+        identity_string(&cast(CastMode::Legacy))
+    );
+}

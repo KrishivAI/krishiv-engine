@@ -118,6 +118,39 @@ async fn an_append_that_loses_the_race_takes_the_next_version() {
     assert_eq!(names(&l.snapshot().await.unwrap()), ["f1", "f2", "f3"]);
 }
 
+/// An append overtaken by more commits than `MAX_RACES` still lands, on the version after the
+/// newest, and `snapshot_if_exists` agrees with `exists` + `snapshot`.
+#[tokio::test]
+async fn an_append_overtaken_by_many_commits_takes_the_newest_version() {
+    let s = setup();
+    let l = log(&s);
+    assert!(l.snapshot_if_exists().await.unwrap().is_none());
+    let first = l
+        .commit(None, &entry("a", CommitMode::Append, &["f0"], &[]))
+        .await
+        .unwrap();
+    assert_eq!(first, 0);
+    let mut last = 0;
+    for i in 1..=40u64 {
+        let name = format!("g{i}");
+        last = l
+            .commit(Some(last), &entry("w", CommitMode::Append, &[&name], &[]))
+            .await
+            .unwrap();
+    }
+    assert_eq!(last, 40);
+    // Read at version 0, written after 40 other commits.
+    let v = l
+        .commit(Some(0), &entry("late", CommitMode::Append, &["late"], &[]))
+        .await
+        .unwrap();
+    assert_eq!(v, 41);
+    let snap = l.snapshot_if_exists().await.unwrap().unwrap();
+    assert_eq!(snap.version, Some(41));
+    assert_eq!(snap.files.len(), 42);
+    assert_eq!(snap.files, l.snapshot().await.unwrap().files);
+}
+
 #[tokio::test]
 async fn an_overwrite_conflicts_with_a_later_commit() {
     let s = setup();
@@ -339,4 +372,42 @@ async fn initialization_creates_version_zero_only() {
     let snap = l.snapshot().await.unwrap();
     assert_eq!(snap.version, Some(0));
     assert_eq!(names(&snap), ["f1"]);
+}
+
+/// A log that crosses `CHECKPOINT_EVERY` replays from the checkpoint: `snapshot_if_exists` and the
+/// full replay agree, the version is the newest, and a checkpoint-only listing still reads.
+#[tokio::test]
+async fn snapshot_if_exists_replays_from_a_checkpoint() {
+    let s = setup();
+    let l = log(&s);
+    let mut base = None;
+    for i in 0..70u64 {
+        let name = format!("f{i}");
+        base = Some(
+            l.commit(base, &entry("w", CommitMode::Append, &[&name], &[]))
+                .await
+                .unwrap(),
+        );
+    }
+    // Exactly the 70 files committed, `f0` through `f69` (keys sort as text).
+    let expected: std::collections::BTreeSet<String> =
+        (0..70u64).map(|i| format!("f{i}")).collect();
+    let keys = |snap: &Snapshot| {
+        snap.files
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let snap = l.snapshot_if_exists().await.unwrap().unwrap();
+    assert_eq!(snap.version, Some(69));
+    assert_eq!(keys(&snap), expected);
+    assert_eq!(snap.files, l.snapshot().await.unwrap().files);
+    // Only the checkpoint (version 63) and the entries after it remain: drop the earlier entries.
+    for v in 0..=63u64 {
+        s.inner.delete(&l.entry_path(v)).await.unwrap();
+    }
+    let snap = l.snapshot_if_exists().await.unwrap().unwrap();
+    assert_eq!(snap.version, Some(69));
+    assert_eq!(keys(&snap), expected);
+    assert_eq!(keys(&l.snapshot().await.unwrap()), expected);
 }
