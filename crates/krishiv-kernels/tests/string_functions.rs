@@ -1284,6 +1284,10 @@ fn single_byte_tables_round_trip() {
 /// `locate` over `UTF8_LCASE` operands: values of a Spark 4.2.0 local run (2026-11-08) for the
 /// ASCII and U+0130 cases.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
 fn locate_lcase_follows_spark_lowercase_matching() {
     let at = |sub: &str, text: &str, start: i32| {
         s::locate_lcase(StrOperand::Array(&r1(sub)), lit(Some(text)), int(start))
@@ -1306,6 +1310,10 @@ fn locate_lcase_follows_spark_lowercase_matching() {
 /// `contains` / `startswith` / `endswith` over `UTF8_LCASE` with per-row patterns: values of a
 /// Spark 4.2.0 local run (2026-11-08).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
 fn search_lcase_follows_spark_lowercase_matching() {
     use s::LcaseSearch::{Anywhere, End, Start};
     let at = |kind, text: &str, pat: &str| {
@@ -1378,6 +1386,10 @@ fn search_lcase_follows_spark_lowercase_matching() {
 
 /// `find_in_set` over `UTF8_LCASE` operands: values of a Spark 4.2.0 local run (2026-11-08).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
 fn find_in_set_lcase_follows_spark_lowercase_matching() {
     let at = |w: &str, set: &str| {
         s::find_in_set_lcase(StrOperand::Array(&r1(w)), lit(Some(set)))
@@ -1396,6 +1408,10 @@ fn find_in_set_lcase_follows_spark_lowercase_matching() {
 
 /// The trim family over `UTF8_LCASE` / `_RTRIM`: values of a Spark 4.2.0 local run (2026-11-10).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
 fn trim_collated_follows_spark() {
     use s::TrimSide::{Both, Leading, Trailing};
     let t = |side, lcase, rtrim, src: &str, chars: &str| {
@@ -1446,6 +1462,10 @@ fn trim_collated_follows_spark() {
 /// `replace`, `translate`, `split_part` and `substring_index` over `UTF8_LCASE`: values of a
 /// Spark 4.2.0 local run (2026-11-10).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
 fn string_functions_over_lcase_follow_spark() {
     let rep = |s0: &str, a: &str, b: &str| {
         s::replace_lcase(StrOperand::Array(&r1(s0)), lit(Some(a)), lit(Some(b)))
@@ -1543,6 +1563,10 @@ fn string_functions_over_lcase_follow_spark() {
 /// suffix), so a long text with a long non-matching pattern is linear, and the İ pair, an empty
 /// pattern and a longer pattern keep their answers.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "table of Spark values over safe code; too slow under Miri (CI job limit)"
+)]
 fn search_lcase_end_scans_back_from_the_end() {
     use s::LcaseSearch::End;
     let at = |text: &str, pat: &str| {
