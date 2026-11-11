@@ -9,6 +9,7 @@ use std::sync::Arc;
 use futures::StreamExt as _;
 use krishiv_common::error::{ErrorQueryContext, KrishivError};
 use krishiv_common::redact::RedactedSql;
+use krishiv_plan::{Expr, LogicalPlan};
 
 use crate::session::{QueryEnv, RecordBatchStream};
 
@@ -68,3 +69,24 @@ pub(crate) fn sql_context(
 /// The source of an expression written as DataFrame text (`select_expr`, `filter_expr`): no
 /// statement's text, so no span of it renders as a context. A SQL statement's own source is 0.
 pub(crate) const DF_SOURCE: krishiv_plan::SourceId = krishiv_plan::SourceId(u32::MAX);
+
+/// `plan` with the SQL spans of source 0 dropped from its expressions: a stored view's plan was
+/// lowered from another text than the statements that will read it, so a run-time error in it
+/// has no span of theirs to render. Subquery plans are not entered.
+pub(crate) fn detach_sources(plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    let strip = |e: Arc<Expr>| -> Result<Arc<Expr>, std::convert::Infallible> {
+        e.transform_up(&mut |e| {
+            Ok(if e.origin.sql.is_some_and(|(s, _)| s.0 == 0) {
+                let mut own = Expr::clone(&e);
+                own.origin.sql = None;
+                Arc::new(own)
+            } else {
+                e
+            })
+        })
+    };
+    match plan.transform_up(&mut |n| n.map_expressions(strip)) {
+        Ok(p) => p,
+        Err(never) => match never {},
+    }
+}

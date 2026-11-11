@@ -237,3 +237,49 @@ fn a_dataframe_expression_span_is_not_rendered_against_another_statement() {
     // No statement's text holds `a / b`, so the error has no context (a wrong span would cut the reading statement).
     assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
 }
+
+/// A view made from a SQL DataFrame was lowered from another text than the statement reading it.
+#[test]
+fn a_sql_view_expression_span_is_not_rendered_against_the_reading_statement() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT a / b AS q FROM VALUES (1, 0) t(a, b)")).unwrap();
+    block_on(df.create_or_replace_temp_view("v_sql_ctx")).unwrap();
+    let e = match block_on(s.sql("SELECT q FROM v_sql_ctx")) {
+        Err(e) => e,
+        Ok(df) => block_on(df.collect()).expect_err("the query fails"),
+    };
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+}
+
+/// Element access: Spark 4.2.0 `array.sql.out` (golden indexes are one higher).
+#[test]
+fn element_access_errors_carry_the_call_span() {
+    let e = fails("select element_at(array(1, 2, 3), 5)");
+    assert_eq!(e.error_class(), ErrorClass::InvalidArrayIndexInElementAt);
+    assert_eq!(span(&e), (7, 35, "element_at(array(1, 2, 3), 5)"));
+    let e = fails("select elt(4, '123', '456')");
+    assert_eq!(e.error_class(), ErrorClass::InvalidArrayIndex);
+    assert_eq!(span(&e), (7, 26, "elt(4, '123', '456')"));
+    let e = fails("select array(1, 2, 3)[5]");
+    assert_eq!(e.error_class(), ErrorClass::InvalidArrayIndex);
+    assert_eq!(span(&e), (7, 23, "array(1, 2, 3)[5]"));
+}
+
+/// Spark 4.2.0 gives these errors no context (`try_element_at.sql.out`,
+/// `string-functions.sql.out`, `interval.sql.out`).
+#[test]
+fn context_free_errors_stay_context_free() {
+    for sql in [
+        "SELECT try_element_at(array(1, 2, 3), 0)",
+        "SELECT split_part('11.12.13', '.', 0)",
+        "select b + interval '1 month' from values (interval '-2147483648 months', interval '2147483647 months') t(a, b)",
+    ] {
+        let e = fails(sql);
+        assert!(
+            e.query_contexts().is_empty(),
+            "{sql}: {:?}",
+            e.query_contexts()
+        );
+    }
+}
