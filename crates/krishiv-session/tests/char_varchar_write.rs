@@ -1131,7 +1131,7 @@ fn a_struct_field_comment_with_brackets_and_commas_keeps_the_fields() {
 }
 
 /// A `CHAR`/`VARCHAR` with an explicit collation keeps its limit on write and its padding on read, and the
-/// collation (Spark 4.2.0, krishiv-internal `research/spark/partition-followups/probe8.py`).
+/// collation (Spark 4.2.0, krishiv-internal `research/spark/partition-followups/probe8.py`, `probe10.py`).
 #[test]
 fn a_collated_char_or_varchar_keeps_its_limit_and_collation() {
     let s = fresh();
@@ -1195,6 +1195,12 @@ fn a_collated_char_or_varchar_keeps_its_limit_and_collation() {
             "named_struct('x', 'abc')",
             "KRISHIV_UNSUPPORTED_FEATURE",
         ),
+        // Spark stores this one (probe10.py); the engine refuses it and leaves the table as it was.
+        (
+            "a struct<x: varchar(2) collate UTF8_LCASE>",
+            "named_struct('x', 'a')",
+            "KRISHIV_UNSUPPORTED_FEATURE",
+        ),
     ] {
         run(&s, "drop table if exists k5").unwrap();
         run(&s, &format!("create table k5({ddl}) using parquet")).unwrap();
@@ -1211,7 +1217,10 @@ fn a_collated_char_or_varchar_keeps_its_limit_and_collation() {
                     "[a ]"
                 );
             }
-            Err(e) => assert_eq!(e.error_class().name(), class, "{ddl} {value}: {e}"),
+            Err(e) => {
+                assert_eq!(e.error_class().name(), class, "{ddl} {value}: {e}");
+                assert_eq!(count(&s, "select 1 from k5"), 0, "{ddl} {value}");
+            }
         }
     }
 }
