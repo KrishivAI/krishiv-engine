@@ -13,7 +13,8 @@
 # +1 line: PlanNode::Repartition plans a hash exchange (DISTRIBUTE BY as a real exchange)
 # +1 line: the Python UDF evaluation node (P2-T059)
 2107 crates/krishiv-exec/src/planner/build.rs
-2396 crates/krishiv-exec/src/planner/eval/cond.rs
+# +112 lines over main: InViews compares 64 rows per word (code +40) and its tests: word and slice boundaries, a timing (study 12 §5, E4 kernel b)
+2508 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 # +70 lines over main: the external-partition headroom reproducer, batches of 20 and 300/1,500 rows from a full pool (window spill flake, PR #601)
 # +10 lines: offsets and nth_value read back from a full pool (window fold charges)
