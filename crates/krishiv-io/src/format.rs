@@ -204,6 +204,12 @@ pub trait FileMetadata: Any + Send + Sync + fmt::Debug {
     fn unit_count(&self) -> Option<u64> {
         None
     }
+    /// Statistics of unit `index` (a [`ScanUnit::index`]), when the footer
+    /// has them. Default: none.
+    fn unit_statistics(&self, index: usize) -> Option<&FileStatistics> {
+        let _ = index;
+        None
+    }
 }
 
 /// Whether files of a format can be read in byte ranges.

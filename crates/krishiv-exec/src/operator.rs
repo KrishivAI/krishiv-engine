@@ -103,6 +103,22 @@ pub trait Source: Send + Sync {
         let _ = local;
         None
     }
+    /// C1a step 0 (study 32): a global state whose morsels each hold one
+    /// unit, if the statistics prove every unit's values of output column
+    /// `column` non-null and in a range disjoint from every other unit's,
+    /// so all rows of one value come from one morsel. Default: `None`.
+    ///
+    /// # Errors
+    /// Any error fails the query.
+    fn disjoint_units(
+        &self,
+        ctx: &TaskContext,
+        global: &GlobalState,
+        column: usize,
+    ) -> Result<Option<GlobalState>> {
+        let _ = (ctx, global, column);
+        Ok(None)
+    }
     /// The runtime filters this source applies: the pipeline starts after
     /// the pipelines that publish them, where the dependencies allow it.
     /// Default: none.
@@ -210,6 +226,13 @@ pub trait Operator: Send + Sync {
     /// once when the query ends. Default: none.
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         Vec::new()
+    }
+    /// C1a step 0: the input column output column `output` copies, row for
+    /// row, if this operator keeps or drops rows without reordering or
+    /// buffering them. Default: `None`.
+    fn input_column(&self, output: usize) -> Option<usize> {
+        let _ = output;
+        None
     }
     /// Whether the operator has work left that needs **every** driver's
     /// input first (a hash join's spilled partitions). If so, after
@@ -320,6 +343,18 @@ pub trait Sink: Send + Sync {
     /// # Errors
     /// Any error fails the query.
     fn combine(&self, local: LocalState, global: &GlobalState) -> Result<()>;
+    /// C1a step 0: input columns whose values, if each comes from one
+    /// morsel only, let the sink finish its groups morsel by morsel.
+    /// Default: none.
+    fn unit_key_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+    /// C1a step 0: before any driver starts, every value of one of
+    /// [`unit_key_columns`](Self::unit_key_columns) comes from one morsel
+    /// of the source. Default: ignored.
+    fn units_complete(&self, global: &GlobalState) {
+        let _ = global;
+    }
     /// Before any driver starts: the drivers `partitions` of fan-in member
     /// `member` (0 without a fan-in) read an ordered source
     /// ([`Source::reports_positions`]) and will report each new

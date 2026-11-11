@@ -42,6 +42,10 @@ impl Operator for Filter {
         "Filter"
     }
 
+    fn input_column(&self, output: usize) -> Option<usize> {
+        Some(output)
+    }
+
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

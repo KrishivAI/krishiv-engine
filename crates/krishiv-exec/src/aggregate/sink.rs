@@ -411,6 +411,23 @@ impl HashAggregate {
         })
     }
 
+    /// C1a step 0: moves the finished groups of the driver's table (one
+    /// unit's: no other morsel holds their keys) to its output and starts
+    /// an empty table.
+    fn drain_unit(&self, l: &mut Local) -> Result<()> {
+        if l.table.len() == 0 || self.core.spec.group_by.is_empty() {
+            return Ok(());
+        }
+        let fresh = self.new_table(global(&l.global)?, true)?;
+        let unit = std::mem::replace(&mut l.table, fresh);
+        l.done_held
+            .try_grow(unit.memory_size())
+            .map_err(|_| internal("C1a step 0: no memory for a drained unit".to_owned()))?;
+        l.done.push(unit);
+        shrink_to(&mut l.reservation, l.table.memory_size() + self.headroom());
+        Ok(())
+    }
+
     fn headroom(&self) -> usize {
         if self.core.spec.spill.is_some() {
             HEADROOM
@@ -707,6 +724,13 @@ struct Local {
     /// Rows applied at once since a whole batch's memory was refused
     /// (doubled after each slice that fit, `None` again at a whole batch).
     slice: Option<usize>,
+    /// C1a step 0: the source moved to another morsel since the last batch;
+    /// with [`Global::units`], `table`'s groups are complete and are drained
+    /// to `done` before the next batch is applied.
+    drain: bool,
+    /// C1a step 0: the finished tables of drained units, held by `done_held`.
+    done: Vec<Table>,
+    done_held: Reservation,
 }
 
 #[derive(Default)]
@@ -737,6 +761,9 @@ struct Inner {
     /// The disk phase's parallel tasks run: `spill_global` asks them
     /// through `spill_asked`.
     disk_merge: bool,
+    /// C1a step 0: drivers' drained units (finished tables) and their memory.
+    done: Vec<Table>,
+    done_held: Vec<Reservation>,
 }
 
 /// Whether the row tables' parallel merge is running (tests time spill
@@ -1070,6 +1097,8 @@ struct Global {
     combined: AtomicUsize,
     inner: Mutex<Inner>,
     done: OnceLock<Final>,
+    /// C1a step 0: every value of a group key comes from one morsel.
+    units: AtomicBool,
 }
 
 fn downcast<T: 'static>(state: &mut LocalState) -> Result<&mut T> {
@@ -1226,7 +1255,8 @@ impl HashAggregate {
     /// the tables (in-memory phase; the disk phase frees its own).
     fn free_job(&self, inner: &mut Inner, ctx: &TaskContext) -> Option<Job> {
         let s = self.spiller(ctx)?;
-        if inner.disk {
+        // C1a step 0: drained units have no disk phase (scratch).
+        if inner.disk || !inner.done.is_empty() {
             return None;
         }
         inner.busy = true;
@@ -1309,7 +1339,15 @@ impl HashAggregate {
             bump(&self.counters.hash_buckets, table.buckets() as u64);
             let mut held = std::mem::take(&mut inner.granted);
             held.push(reservation);
-            self.finish_memory(g, ctx, vec![table], held)?;
+            // C1a step 0: the drained units' tables hold complete groups, no
+            // key in two of them or in `table`: published beside it, unmerged.
+            let mut out = vec![table];
+            for unit in std::mem::take(&mut inner.done) {
+                bump(&self.counters.groups, unit.len() as u64);
+                out.push(unit);
+            }
+            held.append(&mut inner.done_held);
+            self.finish_memory(g, ctx, out, held)?;
             return Ok(Step::Done);
         }
         let (dst, rest) = tables.split_at_mut(1);
@@ -1461,6 +1499,7 @@ impl Sink for HashAggregate {
             combined: AtomicUsize::new(0),
             inner: Mutex::new(Inner::default()),
             done: OnceLock::new(),
+            units: AtomicBool::new(false),
         }))
     }
 
@@ -1476,7 +1515,28 @@ impl Sink for HashAggregate {
             exchange: self.exchange.as_ref().map(|_| ExchangeStats::new(PARTS)),
             applied: None,
             slice: None,
+            drain: false,
+            done: Vec::new(),
+            done_held: memory.reservation(),
         }))
+    }
+
+    fn unit_key_columns(&self) -> Vec<usize> {
+        self.core.spec.group_by.clone()
+    }
+
+    fn units_complete(&self, g: &GlobalState) {
+        if let Ok(g) = global(g) {
+            g.units.store(true, AtomicOrdering::Relaxed);
+        }
+    }
+
+    fn position(&self, l: &mut LocalState, g: &GlobalState, _position: u64) {
+        if let (Ok(l), Ok(g)) = (downcast::<Local>(l), global(g))
+            && g.units.load(AtomicOrdering::Relaxed)
+        {
+            l.drain = true;
+        }
     }
 
     fn sink(&self, input: Batch, l: &mut LocalState, _g: &GlobalState) -> Result<SinkStatus> {
@@ -1486,6 +1546,10 @@ impl Sink for HashAggregate {
                 "DISTINCT over rows with weights other than 1 (needs incremental view maintenance)"
                     .to_owned(),
             ));
+        }
+        if l.drain && l.applied.is_none() {
+            l.drain = false;
+            self.drain_unit(l)?;
         }
         let rows = input.num_rows();
         // A mismatch keeps the state: `combine` refuses the abandoned batch.
@@ -1556,6 +1620,8 @@ impl Sink for HashAggregate {
             consumer,
             partition,
             exchange,
+            done,
+            done_held,
             ..
         } = *l;
         // A large row table still narrow widens to its radix partitions
@@ -1582,6 +1648,11 @@ impl Sink for HashAggregate {
         for (_, _, r) in &mut inner.tables {
             r.transfer_to(&consumer).map_err(KrishivError::from)?;
         }
+        for r in &mut inner.done_held {
+            r.transfer_to(&consumer).map_err(KrishivError::from)?;
+        }
+        inner.done.extend(done);
+        inner.done_held.push(done_held);
         // Tables merge in driver-partition order (see [`Run::partition`]),
         // not in the order drivers combine.
         let at = inner.tables.partition_point(|(p, _, _)| *p < partition);
@@ -1610,7 +1681,10 @@ impl Sink for HashAggregate {
             }
             // Row tables hold partial duplicates: they merge partition by
             // partition, in parallel, unless they spilled.
-            if g.rows.is_some() && self.finalize_rows(g, ctx).await? {
+            // C1a step 0: with drained units, the drivers' last tables (one
+            // unit each) merge in `memory_step`, which publishes the units.
+            let units_drained = !lock(&g.inner).done.is_empty();
+            if g.rows.is_some() && !units_drained && self.finalize_rows(g, ctx).await? {
                 return Ok(());
             }
             loop {

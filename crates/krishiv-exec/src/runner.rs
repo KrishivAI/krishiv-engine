@@ -39,7 +39,7 @@ use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::OperatorEntry;
 use crate::morsel::{Barrier, Baton, Countdown};
-use crate::operator::GlobalState;
+use crate::operator::{GlobalState, Sink};
 use crate::physical::{PhysicalPlan, WorkerContext, instantiate};
 use crate::pipeline::{ExecNode, Pipeline, PipelineBuilder};
 use crate::sync::{Mutex, lock};
@@ -475,6 +475,7 @@ fn start_group(
     // stream per partition). An index past `u32` is rejected rather than
     // wrapped to `u32::MAX`, which would collide.
     let mut next_partition: u64 = 0;
+    let single = members.len() == 1;
     for pipeline in members {
         let (source_id, source) = &pipeline.source;
         let mut source_ctx = ctx((*source_id, source.name()));
@@ -489,7 +490,14 @@ fn start_group(
             .iter()
             .map(|i| i.as_ref().map(read).transpose())
             .collect::<Result<Vec<_>>>()?;
-        let source_global = source.global_state(&source_ctx)?;
+        let mut source_global = source.global_state(&source_ctx)?;
+        if single
+            && units_enabled()
+            && let Some(g) =
+                unit_source(&pipeline, &source_ctx, &source_global, &sink, &sink_global)?
+        {
+            source_global = g;
+        }
         // One driver when the pipeline must keep order, and for every pipeline under
         // `krishiv.deterministicOrder`: no interleaving of drivers, no run-to-run
         // difference in the order of merges or output rows.
@@ -550,6 +558,36 @@ fn start_group(
         barriers,
         members: started,
     })
+}
+
+/// C1a step 0 (study 32): scratch switch, `KRISHIV_C1A_UNITS` set.
+fn units_enabled() -> bool {
+    std::env::var_os("KRISHIV_C1A_UNITS").is_some()
+}
+
+/// C1a step 0: a source state of one unit per morsel when one of the sink's
+/// unit key columns is a source column (through operators that copy it row
+/// for row) whose units the statistics prove disjoint; the sink is told.
+fn unit_source(
+    pipeline: &Pipeline,
+    ctx: &TaskContext,
+    global: &GlobalState,
+    sink: &Arc<dyn Sink>,
+    sink_global: &GlobalState,
+) -> Result<Option<GlobalState>> {
+    for key in sink.unit_key_columns() {
+        let column = pipeline
+            .operators
+            .iter()
+            .rev()
+            .try_fold(key, |c, (_, op)| op.input_column(c));
+        let Some(column) = column else { continue };
+        if let Some(g) = pipeline.source.1.disjoint_units(ctx, global, column)? {
+            sink.units_complete(sink_global);
+            return Ok(Some(g));
+        }
+    }
+    Ok(None)
 }
 
 /// One pipeline of a group: its breaker inputs resolved, its drivers counted.

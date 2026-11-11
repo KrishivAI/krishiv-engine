@@ -59,8 +59,8 @@ use krishiv_io::split::{
 };
 use krishiv_io::{
     ByteRange, ColumnPath, FileFormat, FileMetadata, FileRef, FormatOptions, IoContext,
-    MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions, ScanRequest,
-    ScanStream, ScanUnitMetrics, SchemaMapper, TakeRequest, TakeStream,
+    MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScalarValue, ScanOptions,
+    ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, TakeRequest, TakeStream,
 };
 use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
@@ -997,6 +997,87 @@ impl FileScanSource {
         ))
     }
 
+    /// C1a step 0 (study 32): one morsel per unit, if every unit the scan
+    /// may read has exact, non-null statistics of output column `column`
+    /// (an integer or date read from the file) and the units' `[min, max]`
+    /// ranges are pairwise disjoint (strictly: no value in two units). The
+    /// units are planned with the table-level predicate only: the readers
+    /// prune again (runtime filters too), so they read a subset of them.
+    fn disjoint_unit_morsels(
+        &self,
+        g: &FileScanGlobal,
+        column: usize,
+    ) -> Option<Vec<Vec<MorselSplit>>> {
+        if !g.request.row_level.runtime_filters() {
+            return None;
+        }
+        let field = self.output.fields().get(column)?;
+        if !matches!(
+            field.data_type(),
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 | DataType::Date32
+        ) {
+            return None;
+        }
+        let caps = self.format.capabilities(&self.format_options);
+        let mut req = g.request.clone();
+        req.dynamic = Vec::new();
+        let mut ranges: Vec<(i64, i64)> = Vec::new();
+        let mut kept = Vec::with_capacity(self.partitions.len());
+        for p in self.partitions.iter() {
+            let mut splits = Vec::with_capacity(p.splits.len());
+            for s in &p.splits {
+                let file = self.files.get(s.file)?;
+                if !caps.is_splittable(file.path.as_ref()) {
+                    return None;
+                }
+                let dropped = !g.partition_filters.is_empty()
+                    && self
+                        .partition_values(file)
+                        .is_ok_and(|v| dropping_filter(&g.partition_filters, &v).is_some());
+                if dropped {
+                    splits.push(Vec::new());
+                    continue;
+                }
+                let meta = self.io.cached_metadata(
+                    self.format.as_ref(),
+                    file,
+                    self.scan_options.needs,
+                    &self.format_options,
+                )?;
+                let plan = self.format.plan_units(meta.as_ref(), &s.range, &req).ok()?;
+                let mut units = Vec::with_capacity(plan.units.len());
+                for u in &plan.units {
+                    let stats = meta.unit_statistics(u.index)?;
+                    let c = stats.columns.iter().find(|c| {
+                        c.path.0.len() == 1 && c.path.0[0].eq_ignore_ascii_case(field.name())
+                    })?;
+                    if c.null_count.exact() != Some(&0) {
+                        return None;
+                    }
+                    ranges.push((int_bound(c.min.exact()?)?, int_bound(c.max.exact()?)?));
+                    units.push(KeptUnit {
+                        start: u.bytes.start,
+                        rows: u.rows,
+                    });
+                }
+                splits.push(units);
+            }
+            kept.push(splits);
+        }
+        if ranges.len() < 2 {
+            return None;
+        }
+        ranges.sort_unstable();
+        if ranges.windows(2).any(|w| w[0].1 >= w[1].0) {
+            return None;
+        }
+        Some(krishiv_io::split::pruned_morsels(
+            &self.partitions,
+            &kept,
+            1,
+        ))
+    }
+
     /// Starts reading the footer of the file after piece `next` of
     /// `morsel` if it is another file and none is in flight for it.
     fn read_ahead(
@@ -1540,6 +1621,25 @@ impl Source for FileScanSource {
             .and_then(|l| l.position)
     }
 
+    fn disjoint_units(
+        &self,
+        ctx: &TaskContext,
+        global: &GlobalState,
+        column: usize,
+    ) -> Result<Option<GlobalState>> {
+        let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
+        let Some(morsels) = self.disjoint_unit_morsels(g, column) else {
+            return Ok(None);
+        };
+        Ok(Some(Arc::new(FileScanGlobal {
+            request: g.request.clone(),
+            partition_filters: g.partition_filters.clone(),
+            cursor: MorselCursor::new(morsels.len(), ctx.query().config().seed),
+            morsels,
+            returned: AtomicU64::new(0),
+        })))
+    }
+
     fn runtime_filters(&self) -> Vec<krishiv_io::FilterId> {
         if !self.request.row_level.runtime_filters() {
             return Vec::new();
@@ -1556,6 +1656,17 @@ impl Source for FileScanSource {
                 .extra(),
         );
         m
+    }
+}
+
+/// An integer statistics bound (C1a step 0).
+fn int_bound(v: &ScalarValue) -> Option<i64> {
+    match v {
+        ScalarValue::Int8(x) => Some(i64::from(*x)),
+        ScalarValue::Int16(x) => Some(i64::from(*x)),
+        ScalarValue::Int32(x) | ScalarValue::Date32(x) => Some(i64::from(*x)),
+        ScalarValue::Int64(x) => Some(*x),
+        _ => None,
     }
 }
 

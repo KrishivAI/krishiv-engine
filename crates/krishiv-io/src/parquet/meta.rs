@@ -112,6 +112,10 @@ impl FileMetadata for ParquetMetadata {
     fn unit_count(&self) -> Option<u64> {
         Some(self.row_groups.len() as u64)
     }
+
+    fn unit_statistics(&self, index: usize) -> Option<&FileStatistics> {
+        self.row_groups.get(index).map(|g| &g.statistics)
+    }
 }
 
 fn footer_error(e: impl std::fmt::Display) -> FormatError {

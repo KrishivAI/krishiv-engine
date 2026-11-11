@@ -134,6 +134,13 @@ impl Operator for Project {
         "Project"
     }
 
+    fn input_column(&self, output: usize) -> Option<usize> {
+        match self.items.get(output)? {
+            ProjectItem::Column { index, .. } => Some(*index),
+            ProjectItem::Expr { .. } => None,
+        }
+    }
+
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
