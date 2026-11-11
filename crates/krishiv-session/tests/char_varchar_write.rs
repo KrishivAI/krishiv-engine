@@ -1129,3 +1129,89 @@ fn a_struct_field_comment_with_brackets_and_commas_keeps_the_fields() {
         "a |2|2"
     );
 }
+
+/// A `CHAR`/`VARCHAR` with an explicit collation keeps its limit on write and its padding on read, and the
+/// collation (Spark 4.2.0, krishiv-internal `research/spark/partition-followups/probe8.py`).
+#[test]
+fn a_collated_char_or_varchar_keeps_its_limit_and_collation() {
+    let s = fresh();
+    for (table, ddl, value, read) in [
+        (
+            "k1",
+            "c char(2) collate UTF8_BINARY",
+            "'a'",
+            "[a ]|2|SYSTEM.BUILTIN.UTF8_BINARY",
+        ),
+        (
+            "k2",
+            "c varchar(2) collate UTF8_LCASE",
+            "'a'",
+            "[a]|1|SYSTEM.BUILTIN.UTF8_LCASE",
+        ),
+        (
+            "k3",
+            "c char(2) collate UTF8_BINARY",
+            "'ab  '",
+            "[ab]|2|SYSTEM.BUILTIN.UTF8_BINARY",
+        ),
+        (
+            "k4",
+            "c varchar(2) collate UTF8_LCASE",
+            "'ab  '",
+            "[ab]|2|SYSTEM.BUILTIN.UTF8_LCASE",
+        ),
+    ] {
+        run(&s, &format!("drop table if exists {table}")).unwrap();
+        run(&s, &format!("create table {table}({ddl}) using parquet")).unwrap();
+        let e = run(&s, &format!("insert into {table} values ('abc')")).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "EXCEED_LIMIT_LENGTH",
+            "{table}: {e}"
+        );
+        run(&s, &format!("insert into {table} values ({value})")).unwrap();
+        assert_eq!(
+            first_text(
+                &s,
+                &format!(
+                    "select concat('[', c collate UTF8_BINARY, ']', '|', cast(length(c) as string), '|', collation(c)) from {table}"
+                )
+            ),
+            read,
+            "{table}"
+        );
+    }
+    // Inside a nested value: a binary collation is checked as Spark does; any other collation inside a nested
+    // value is not supported by the engine yet, so its writes stay refused, never stored unchecked.
+    for (ddl, value, class) in [
+        (
+            "a array<char(2) collate UTF8_BINARY>",
+            "array('abc')",
+            "EXCEED_LIMIT_LENGTH",
+        ),
+        ("a array<char(2) collate UTF8_BINARY>", "array('a')", ""),
+        (
+            "a struct<x: varchar(2) collate UTF8_LCASE>",
+            "named_struct('x', 'abc')",
+            "KRISHIV_UNSUPPORTED_FEATURE",
+        ),
+    ] {
+        run(&s, "drop table if exists k5").unwrap();
+        run(&s, &format!("create table k5({ddl}) using parquet")).unwrap();
+        let got = run(&s, &format!("insert into k5 select {value}"));
+        match got {
+            Ok(()) => {
+                assert_eq!(class, "", "{ddl} {value}");
+                // The element reads back padded to its length.
+                assert_eq!(
+                    first_text(
+                        &s,
+                        "select concat('[', a[0] collate UTF8_BINARY, ']') from k5"
+                    ),
+                    "[a ]"
+                );
+            }
+            Err(e) => assert_eq!(e.error_class().name(), class, "{ddl} {value}: {e}"),
+        }
+    }
+}

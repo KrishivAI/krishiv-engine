@@ -22,14 +22,28 @@ use krishiv_types::DataType;
 /// The most spaces a comparison literal is padded with during analysis; a wider pad is an `rpad` call.
 const MAX_LITERAL_PADDING: i32 = 1 << 16;
 
-/// `n` of a declared `char(n)`; `None` for `varchar(n)`, nested types and other strings.
+/// `n` of a declared `char(n)` (a collation may follow: `char(2) collate UTF8_LCASE`); `None` for `varchar(n)`,
+/// nested types and other strings.
 pub(super) fn char_length(declared: &str) -> Option<i32> {
-    declared
-        .strip_prefix("char(")?
-        .strip_suffix(')')?
-        .trim()
-        .parse()
-        .ok()
+    leaf_length(&declared.trim().to_ascii_lowercase(), "char(")
+}
+
+/// `n` of a lowercased leaf `<prefix>n)`, alone or followed by ` collate <name>` (Spark's catalog string of a
+/// collated `CHAR`/`VARCHAR`, `char(2) collate UTF8_BINARY`); `None` for anything else.
+fn leaf_length(lower: &str, prefix: &str) -> Option<i32> {
+    let (inner, rest) = lower.strip_prefix(prefix)?.split_once(')')?;
+    let rest = rest.trim();
+    if !rest.is_empty() {
+        let name = rest.strip_prefix("collate")?;
+        // One collation name (possibly qualified or quoted) and nothing after it.
+        if !name.starts_with(char::is_whitespace)
+            || name.trim().is_empty()
+            || top_level(name.trim()).any(|(_, c)| c.is_whitespace())
+        {
+            return None;
+        }
+    }
+    inner.trim().parse::<i32>().ok().filter(|n| *n >= 0)
 }
 
 /// A column's declared type as far as `CHAR` / `VARCHAR` matter, read from its catalog string
@@ -56,19 +70,10 @@ impl DeclaredType {
     pub fn parse(declared: &str) -> Self {
         let d = declared.trim();
         let lower = d.to_ascii_lowercase();
-        let number = |inner: &str| inner.trim().parse::<i32>().ok().filter(|n| *n >= 0);
-        if let Some(n) = lower
-            .strip_prefix("char(")
-            .and_then(|r| r.strip_suffix(')'))
-            .and_then(number)
-        {
+        if let Some(n) = leaf_length(&lower, "char(") {
             return Self::Char(n);
         }
-        if let Some(n) = lower
-            .strip_prefix("varchar(")
-            .and_then(|r| r.strip_suffix(')'))
-            .and_then(number)
-        {
+        if let Some(n) = leaf_length(&lower, "varchar(") {
             return Self::Varchar(n);
         }
         let inner = |prefix: &str| {
@@ -437,8 +442,19 @@ impl Resolver<'_> {
 
     /// `rpad(arg, len, ' ')`.
     fn rpad_to(&self, arg: Arc<Expr>, len: Arc<Expr>, nullable: bool) -> Option<Arc<Expr>> {
+        self.rpad_typed(arg, len, DataType::String, nullable)
+    }
+
+    /// `rpad(arg, len, ' ')` of type `ty`, the type of `arg` (a collated string keeps its collation).
+    fn rpad_typed(
+        &self,
+        arg: Arc<Expr>,
+        len: Arc<Expr>,
+        ty: DataType,
+        nullable: bool,
+    ) -> Option<Arc<Expr>> {
         let blank = Arc::new(Expr::literal(Literal::String(" ".to_owned())));
-        self.named_call("rpad", vec![arg, len, blank], DataType::String, nullable)
+        self.named_call("rpad", vec![arg, len, blank], ty, nullable)
     }
 
     /// `rpad(arg, n, ' ')` (it cuts a longer value to `n`, as Spark's comparison padding does).
@@ -447,7 +463,13 @@ impl Resolver<'_> {
     }
 
     /// The read-side form: `rpad(arg, greatest(char_length(arg), n), ' ')` pads and never cuts.
-    fn read_pad_call(&self, arg: Arc<Expr>, n: i32, nullable: bool) -> Option<Arc<Expr>> {
+    fn read_pad_call(
+        &self,
+        arg: Arc<Expr>,
+        n: i32,
+        ty: &DataType,
+        nullable: bool,
+    ) -> Option<Arc<Expr>> {
         let chars = self.named_call(
             "char_length",
             vec![Arc::clone(&arg)],
@@ -460,7 +482,7 @@ impl Resolver<'_> {
             DataType::Integer,
             false,
         )?;
-        self.rpad_to(arg, len, nullable)
+        self.rpad_typed(arg, len, ty.clone(), nullable)
     }
 
     /// `if(cond, a, b)`: the resolved form is the `When` operator, not a registry call.
@@ -491,7 +513,9 @@ impl Resolver<'_> {
         nullable: bool,
     ) -> Result<Option<Arc<Expr>>, ()> {
         Ok(match (declared, ty) {
-            (DeclaredType::Char(n), DataType::String) => self.read_pad_call(arg, *n, nullable),
+            (DeclaredType::Char(n), t) if t.is_string_type() => {
+                self.read_pad_call(arg, *n, t, nullable)
+            }
             (DeclaredType::Struct(fields), DataType::Struct(st))
                 if fields.len() == st.fields().len() =>
             {
@@ -894,6 +918,52 @@ mod declared_tests {
         assert!(matches!(f[2], DeclaredType::Other), "{f:?}");
         let n = DeclaredType::parse("array<struct<a: struct<`b``c`: char(1) comment ')'>>>");
         assert!(n.is_limited(), "{n:?}");
+        assert!(matches!(
+            DeclaredType::parse("struct<i: interval day to second>"),
+            DeclaredType::Struct(ref f) if matches!(f.as_slice(), [DeclaredType::Other])
+        ));
+    }
+
+    /// A collation after the length keeps the limit (Spark 4.2 catalog strings, `char(2) collate UTF8_BINARY`).
+    #[test]
+    fn a_collated_char_or_varchar_keeps_its_limit() {
+        assert_eq!(
+            DeclaredType::parse("char(2) collate UTF8_BINARY"),
+            DeclaredType::Char(2)
+        );
+        assert_eq!(
+            DeclaredType::parse("VARCHAR(3) COLLATE UTF8_LCASE"),
+            DeclaredType::Varchar(3)
+        );
+        assert_eq!(super::char_length("char(4) collate UNICODE_CI"), Some(4));
+        assert_eq!(super::char_length("varchar(4) collate UNICODE_CI"), None);
+        assert_eq!(
+            DeclaredType::parse("array<char(2) collate UTF8_BINARY>"),
+            DeclaredType::Array(Box::new(DeclaredType::Char(2)))
+        );
+        assert_eq!(
+            DeclaredType::parse("map<varchar(1) collate UTF8_LCASE,char(2) collate UNICODE>"),
+            DeclaredType::Map(
+                Box::new(DeclaredType::Varchar(1)),
+                Box::new(DeclaredType::Char(2))
+            )
+        );
+        assert_eq!(
+            DeclaredType::parse("struct<x:varchar(2) collate UTF8_LCASE>"),
+            DeclaredType::Struct(vec![DeclaredType::Varchar(2)])
+        );
+        for not_a_leaf in [
+            "char(2) collate",
+            "char(2) collated x",
+            "char(2) collate a b",
+            "char(2)x",
+        ] {
+            assert_eq!(
+                DeclaredType::parse(not_a_leaf),
+                DeclaredType::Other,
+                "{not_a_leaf}"
+            );
+        }
         assert!(matches!(
             DeclaredType::parse("struct<i: interval day to second>"),
             DeclaredType::Struct(ref f) if matches!(f.as_slice(), [DeclaredType::Other])

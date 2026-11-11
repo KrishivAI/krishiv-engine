@@ -9,9 +9,11 @@
 use krishiv_common::error::{
     ErrorClass, ExceedLimitLength, KrishivError, KrishivUnsupportedFeature,
 };
-use krishiv_plan::Expr;
+use std::sync::Arc;
+
 use krishiv_plan::analyzer::{AnalyzedPlan, DeclaredType, ResolutionConf};
-use krishiv_types::DataType;
+use krishiv_plan::{Expr, ExprNode};
+use krishiv_types::{Collation, DataType};
 
 use crate::column::Column;
 use crate::functions::{call_function, col, lit};
@@ -56,11 +58,18 @@ fn leaf(value: Column, n: i32, pad: bool) -> Column {
     let Some(past) = n.checked_add(1) else {
         return value;
     };
-    let tail = || call_function("substring", [value.clone(), lit(past)]);
+    // The test runs on the value in `UTF8_BINARY` (an explicit collation, free at run time): only spaces may be cut,
+    // whatever the column's collation, and the cut value below keeps the column's own.
+    let binary = Column::new(Expr::new(ExprNode::Collate {
+        expr: Arc::new(value.expr.clone()),
+        collation: Collation::UTF8_BINARY,
+        name: "UTF8_BINARY".to_owned(),
+    }));
+    let tail = || call_function("substring", [binary.clone(), lit(past)]);
     let over = call_function("length", [tail()])
         .gt(lit(0))
         .and(call_function("trim", [tail()]).not_eq(lit("")));
-    let cut = call_function("substring", [value.clone(), lit(1), lit(n)]);
+    let cut = call_function("substring", [value, lit(1), lit(n)]);
     let stored = if pad {
         call_function("rpad", [cut, lit(n), lit(" ")])
     } else {
@@ -88,8 +97,8 @@ fn nested_check(
         return Some(value);
     }
     match (declared, ty) {
-        (DeclaredType::Char(n), DataType::String) => Some(leaf(value, *n, true)),
-        (DeclaredType::Varchar(n), DataType::String) => Some(leaf(value, *n, false)),
+        (DeclaredType::Char(n), t) if t.is_string_type() => Some(leaf(value, *n, true)),
+        (DeclaredType::Varchar(n), t) if t.is_string_type() => Some(leaf(value, *n, false)),
         (DeclaredType::Struct(fields), DataType::Struct(st))
             if fields.len() == st.fields().len() =>
         {
