@@ -1331,3 +1331,34 @@ fn qualified_views_functions_and_global_temp_listings_follow_their_defining_cata
     assert!(run(&s, "SELECT * FROM capabilities").is_err());
     assert!(!column_of(&s, "SELECT name FROM system.capabilities LIMIT 1", 0).is_empty());
 }
+
+#[test]
+fn a_view_created_under_system_over_a_system_table_stays_readable_and_scripts_have_a_start_time() {
+    let s = Session::new().unwrap();
+    run(&s, "USE system").unwrap();
+    run(
+        &s,
+        "CREATE VIEW spark_catalog.default.sv AS SELECT name FROM capabilities",
+    )
+    .unwrap();
+    assert!(!column_of(&s, "SELECT * FROM spark_catalog.default.sv", 0).is_empty());
+    run(&s, "USE spark_catalog").unwrap();
+    run(&s, "BEGIN SELECT 1; END").unwrap();
+    let started = column_of(
+        &s,
+        "SELECT CAST(started_at IS NOT NULL AS STRING) FROM system.queries WHERE query_text LIKE 'BEGIN%'",
+        0,
+    );
+    assert!(
+        !started.is_empty() && started.iter().all(|v| v == "true"),
+        "{started:?}"
+    );
+}
+
+#[test]
+fn listing_global_temp_is_authorized_in_the_session_catalog() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv4 AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    assert!(column_of(&s, "SHOW VIEWS IN global_temp", 1).contains(&"gv4".to_owned()));
+}

@@ -123,3 +123,35 @@ impl super::SessionCatalog {
         entries.iter().map(|e| e.parts(&current)).collect()
     }
 }
+
+impl super::Expander<'_> {
+    /// `plan`, a bare read inside a view created while `system` was current (its frozen path holds
+    /// `[system]`), as `system.<table>` when no schema of the path holds a stored table of that name and
+    /// the name is a system table.
+    pub(super) fn system_table_in_path(&self, plan: &Arc<LogicalPlan>) -> Option<Arc<LogicalPlan>> {
+        let path = self.view_path.as_deref()?;
+        let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node else {
+            return None;
+        };
+        let [bare] = name.as_slice() else {
+            return None;
+        };
+        let system = path
+            .iter()
+            .any(|e| matches!(e.as_slice(), [c] if crate::system::is_system(c)));
+        let qualified = vec![crate::system::SYSTEM.to_owned(), bare.to_lowercase()];
+        if !(system
+            && crate::system::is_system_table(&qualified)
+            && self.path_schema_of(path, bare).is_none())
+        {
+            return None;
+        }
+        let read = ReadSource::Table {
+            name: qualified,
+            options: options.clone(),
+        };
+        Some(Arc::new(
+            LogicalPlan::new(PlanNode::Read(read)).with_origin(plan.origin),
+        ))
+    }
+}

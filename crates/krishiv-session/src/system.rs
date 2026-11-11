@@ -1583,6 +1583,19 @@ mod tests {
     }
 
     #[test]
+    fn a_backquoted_value_is_masked_but_a_backquoted_name_stays() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let got = mask.apply_message(
+            "The variant value `\"secret_canary\"` cannot be cast; table `db`.`t_1` is missing.",
+        );
+        assert!(!got.contains("secret_canary"), "{got}");
+        assert!(got.contains("`db`.`t_1`"), "{got}");
+    }
+
+    #[test]
     fn scientific_notation_and_other_bare_numbers_are_masked_in_a_message() {
         let mask = TextPolicy {
             max_bytes: 4096,

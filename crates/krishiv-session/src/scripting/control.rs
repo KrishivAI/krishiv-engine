@@ -78,6 +78,7 @@ impl Session {
         };
         // A failed attach drops `run`, which closes the row.
         self.attach(&ctx, &row, &env.config)?;
+        self.state.queries.mark_started(&row);
         Ok(run)
     }
 }

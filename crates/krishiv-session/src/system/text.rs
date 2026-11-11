@@ -62,7 +62,7 @@ impl TextPolicy {
     pub(super) fn apply_message(self, message: &str) -> String {
         let redacted = krishiv_common::redact::redact(message);
         let shown = if self.mask {
-            mask_numbers(&mask_quoted(&redacted))
+            mask_numbers(&mask_backquoted(&mask_quoted(&redacted)))
         } else {
             redacted.into_owned()
         };
@@ -122,6 +122,34 @@ pub(super) fn mask_quoted(message: &str) -> String {
         i += 1;
     }
     out.push_str(&message[copied..]);
+    out
+}
+
+/// `message` with each backquoted run that is not a plain name replaced by `` `?` ``: some messages print an
+/// offending value (a variant rendered as JSON, say) between backquotes, while names (`db`.`t`) stay.
+pub(super) fn mask_backquoted(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(open) = rest.find('`') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('`') else {
+            break;
+        };
+        let inner = &after[..close];
+        out.push_str(&rest[..open]);
+        let plain = inner
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '-'));
+        if plain {
+            out.push('`');
+            out.push_str(inner);
+            out.push('`');
+        } else {
+            out.push_str("`?`");
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
     out
 }
 

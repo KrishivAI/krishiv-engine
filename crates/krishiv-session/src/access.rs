@@ -430,7 +430,14 @@ impl Session {
                     GLOBAL_TEMP.to_owned(),
                 ])
             }
-            TargetObject::Namespace(name) => namespaces(namespace_parts(catalogs, &parts(name)?)),
+            TargetObject::Namespace(name) => {
+                let mut p = namespace_parts(catalogs, &parts(name)?);
+                // The `global_temp` registry belongs to the session catalog, whatever catalog is current.
+                if p.len() == 2 && p[1].eq_ignore_ascii_case(GLOBAL_TEMP) {
+                    p[0] = crate::catalog::CATALOG.to_owned();
+                }
+                namespaces(p)
+            }
             TargetObject::ParentOfNamespace(name) => {
                 let mut p = namespace_parts(catalogs, &parts(name)?);
                 if p.len() > 1 {

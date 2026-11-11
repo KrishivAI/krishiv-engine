@@ -1385,10 +1385,10 @@ impl Expander<'_> {
                 .iter()
                 .any(|c| same_name(c, bare, self.case_sensitive))
         {
-            // The first schema of the view's frozen path holding the name. A name no schema of a
-            // non-empty frozen path holds stays missing (the first schema reports it), never
-            // read from a namespace the path left out; a view without a catalog schema in its
-            // path reads its own namespace.
+            if let Some(system) = self.system_table_in_path(&plan) {
+                return Ok(system);
+            }
+            // First schema of the frozen path holding the name (none held: the first reports it).
             let namespace = self
                 .view_path
                 .as_deref()
