@@ -290,21 +290,12 @@ impl Srid {
         }
     }
 
-    /// The coordinate reference system Spark names a fixed SRID with in
-    /// its JSON schemas and file metadata, if Spark supports the SRID:
-    /// `SRID:0`, `EPSG:3857` and `OGC:CRS84` (4326). `geographic` limits
-    /// the answer to geographic reference systems (4326 only).
+    /// The coordinate reference system Spark names a fixed SRID with in its JSON schemas and
+    /// file metadata, if Spark supports the SRID: `SRID:0`, `OGC:CRS84` (4326), `EPSG:3857`
+    /// and the rest of Spark's registry of 10,714 systems (`srs.rs`). `geographic` limits the
+    /// answer to the 1,406 geographic ones.
     pub fn crs(srid: i32, geographic: bool) -> Option<&'static str> {
-        // Spark 4.2's supported reference systems: (SRID, CRS, geographic).
-        const SYSTEMS: [(i32, &str, bool); 3] = [
-            (0, "SRID:0", false),
-            (3857, "EPSG:3857", false),
-            (4326, "OGC:CRS84", true),
-        ];
-        SYSTEMS
-            .iter()
-            .find(|(s, _, g)| *s == srid && (*g || !geographic))
-            .map(|(_, crs, _)| *crs)
+        crate::srs::name_of(srid, geographic)
     }
 }
 
@@ -466,6 +457,28 @@ impl DataType {
         matches!(self, Self::CollatedString(c) if c.is_utf8_binary())
     }
 
+    /// The type of the collation key of a value of this type: every string leaf is `BINARY`,
+    /// the shape is unchanged.
+    #[must_use]
+    pub fn collation_key_type(&self) -> Self {
+        match self {
+            Self::String | Self::CollatedString(_) => Self::Binary,
+            Self::Array(a) => Self::Array(Arc::new(ArrayType::new(
+                a.element_type().collation_key_type(),
+                a.contains_null(),
+            ))),
+            Self::Map(m) => Self::Map(Arc::new(MapType::new(
+                m.key_type().collation_key_type(),
+                m.value_type().collation_key_type(),
+                m.value_contains_null(),
+            ))),
+            Self::Struct(s) => Self::Struct(StructType::new(s.fields().iter().map(|f| {
+                StructField::new(f.name(), f.data_type().collation_key_type(), f.nullable())
+            }))),
+            other => other.clone(),
+        }
+    }
+
     /// Whether this is a collated string that is more than the display-only
     /// `UTF8_BINARY` marker.
     #[must_use]
@@ -496,7 +509,7 @@ impl DataType {
     /// `GEOGRAPHY(srid)`.
     ///
     /// # Errors
-    /// `ST_INVALID_SRID_VALUE` for any SRID other than 4326.
+    /// `ST_INVALID_SRID_VALUE` for an SRID that is not a geographic system of the registry.
     pub fn geography(srid: Srid) -> Result<Self> {
         check_srid(srid, true).map(|srid| Self::Geography { srid })
     }

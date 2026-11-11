@@ -817,6 +817,9 @@ impl Resolver<'_> {
                 nullable: a.col.nullable,
             };
             let output = self.attr(&a.col.name, &ty);
+            // A repeated column keeps its comment and declared `CHAR`/`VARCHAR` type (Spark 4.2.0:
+            // `column-comments/probe5.out`).
+            self.carry_column_meta(a.col.id, output.id);
             exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
                     expr: column,

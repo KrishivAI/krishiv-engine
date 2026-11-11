@@ -52,6 +52,9 @@ pub(crate) struct SchemaOptions {
     pub(crate) binary_as_string: bool,
     /// `int96AsTimestamp`: `INT96` columns are timestamps.
     pub(crate) int96_as_timestamp: bool,
+    /// `datetimeRebaseMode` is `LEGACY`: a file not written by Spark is read
+    /// as if in the legacy calendar (`calendar::rebased_datetime_roots`).
+    pub(crate) legacy_rebase: bool,
 }
 
 /// One row group as planned and pruned.
@@ -69,6 +72,8 @@ pub(crate) struct RowGroup {
 pub struct ParquetMetadata {
     /// The calendars its dates and timestamps are in.
     pub(crate) calendars: super::calendar::Calendars,
+    /// It was read with `datetimeRebaseMode` `LEGACY` (part of the cache key).
+    pub(crate) legacy_rebase: bool,
     /// The footer with the arrow-rs schema the decoders read with.
     pub(crate) reader: ArrowReaderMetadata,
     /// Options the reader schema was built with (a decoder needing virtual
@@ -85,6 +90,8 @@ pub struct ParquetMetadata {
     /// The top-level columns that are variants (see [`super::variant`]):
     /// the decoder turns their physical groups into the in-memory form.
     pub(crate) variants: super::variant::Variants,
+    /// The top-level columns that are geometries or geographies (see [`super::geo`]).
+    pub(crate) geos: super::geo::Geos,
     statistics: FileStatistics,
     heap: usize,
 }
@@ -274,6 +281,8 @@ fn describe_checked(
         meta.file_metadata().key_value_metadata(),
         &typed,
     );
+    let (fields, geos) =
+        super::geo::Geos::engine_fields(descr, meta.file_metadata().key_value_metadata(), fields)?;
     let schema = Arc::new(Schema::new_with_metadata(
         fields,
         reader.schema().metadata().clone(),
@@ -320,6 +329,7 @@ fn describe_checked(
     let calendars = super::calendar::calendars(meta.file_metadata().key_value_metadata());
     Ok(ParquetMetadata {
         calendars,
+        legacy_rebase: options.legacy_rebase,
         reader,
         reader_options,
         schema,
@@ -327,6 +337,7 @@ fn describe_checked(
         size,
         legacy_writer,
         variants,
+        geos,
         statistics,
         heap,
     })
@@ -399,7 +410,17 @@ fn hint_field(
     let dt = match field.data_type() {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8View,
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-            if o.binary_as_string {
+            if o.binary_as_string
+                && !leaf().is_some_and(|c| {
+                    matches!(
+                        c.logical_type_ref(),
+                        Some(
+                            parquet::basic::LogicalType::Geometry { .. }
+                                | parquet::basic::LogicalType::Geography { .. }
+                        )
+                    )
+                })
+            {
                 DataType::Utf8View
             } else {
                 DataType::BinaryView

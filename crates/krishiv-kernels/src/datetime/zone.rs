@@ -469,6 +469,124 @@ mod tests {
         assert_eq!(pst.offset_at_utc(1_715_000_000), -25_200);
     }
 
+    /// The legacy offset switches to the raw (modern standard) offset only
+    /// strictly before 1900-01-01 UTC; at that instant it is the database's.
+    #[test]
+    fn legacy_offset_switches_strictly_before_1900() {
+        let kolkata = resolve_zone("Asia/Kolkata").expect("Asia/Kolkata");
+        assert_eq!(
+            kolkata.legacy_offset_at_utc(UTC_1900),
+            kolkata.offset_at_utc(UTC_1900)
+        );
+        assert_ne!(kolkata.offset_at_utc(UTC_1900), 19_800);
+        assert_eq!(kolkata.legacy_offset_at_utc(UTC_1900 - 1), 19_800);
+    }
+
+    /// Seconds inside `jiff`'s range, the range ends included, are untouched;
+    /// one past either end folds by whole 400-year cycles back into range.
+    #[test]
+    fn fold_seconds_leaves_the_range_ends_alone() {
+        const CYCLE: i64 = 146_097 * 86_400;
+        let (lo, hi) = (Timestamp::MIN.as_second(), Timestamp::MAX.as_second());
+        assert_eq!(fold_seconds(hi), hi);
+        assert_eq!(fold_seconds(lo), lo);
+        assert_eq!(fold_seconds(hi + 1), hi + 1 - CYCLE);
+        assert_eq!(fold_seconds(lo - 1), lo - 1 + CYCLE);
+        assert_eq!(fold_seconds(hi + CYCLE - 1), hi - 1);
+        assert_eq!(fold_seconds(hi + CYCLE), hi - CYCLE);
+        assert_eq!(fold_seconds(lo - CYCLE + 1), lo + 1);
+        assert_eq!(fold_seconds(lo - CYCLE), lo + CYCLE);
+    }
+
+    /// The per-thread cache clears when full and keeps resolving correctly.
+    #[test]
+    fn resolve_zone_survives_more_names_than_the_cache_holds() {
+        for h in 0..300 {
+            let text = format!("+{:02}:{:02}", h / 60, h % 60);
+            let secs = (h / 60) * 3600 + (h % 60) * 60;
+            assert_eq!(resolve_zone(&text).expect(&text).offset_at_utc(0), secs);
+            assert_eq!(resolve_zone(&text).expect(&text).offset_at_utc(0), secs);
+        }
+    }
+
+    /// Standard time also reads the raw offset only strictly before 1900.
+    #[test]
+    fn standard_offset_switches_strictly_before_1900() {
+        let kolkata = resolve_zone("Asia/Kolkata").expect("Asia/Kolkata");
+        assert_eq!(kolkata.standard_offset_at_utc(UTC_1900 - 1), 19_800);
+        assert_ne!(kolkata.standard_offset_at_utc(UTC_1900), 19_800);
+        assert_ne!(kolkata.standard_offset_at_utc(UTC_1900 + 1), 19_800);
+    }
+
+    /// `Etc/GMT+h` is h hours behind UTC (POSIX signs), a single or double
+    /// digit hour up to 12 (the database answers 13 and 14 east) with no zero padding.
+    #[test]
+    fn etc_gmt_offsets_flip_the_sign_and_refuse_padding() {
+        for (text, secs) in [
+            ("Etc/GMT+5", -5 * 3600),
+            ("Etc/GMT-5", 5 * 3600),
+            ("Etc/GMT+0", 0),
+            ("Etc/GMT+10", -10 * 3600),
+            ("Etc/GMT-10", 10 * 3600),
+            ("Etc/GMT+12", -12 * 3600),
+            ("Etc/GMT-12", 12 * 3600),
+            ("Etc/GMT-14", 14 * 3600),
+        ] {
+            let zone = resolve_zone(text).expect(text);
+            assert_eq!(zone.offset_at_utc(0), secs, "{text}");
+        }
+        for text in [
+            "Etc/GMT+05",
+            "Etc/GMT-05",
+            "Etc/GMT+00",
+            "Etc/GMT+13",
+            "Etc/GMT+1a",
+        ] {
+            assert!(resolve_zone(text).is_err(), "{text}");
+        }
+    }
+
+    /// Spark pads the first single-digit hour before a colon, then a
+    /// single-digit minute ending the text.
+    #[test]
+    fn pad_hour_pads_the_first_hour_and_a_final_minute() {
+        for (text, padded) in [
+            ("+5:30", "+05:30"),
+            ("-5:30", "-05:30"),
+            ("+5:", "+05:"),
+            ("+10:7", "+10:07"),
+            ("+10:07", "+10:07"),
+            ("+5:7", "+05:07"),
+            ("UTC+10:7", "UTC+10:07"),
+            ("UTC+5:30", "UTC+05:30"),
+            ("+5:30:15", "+05:30:15"),
+            ("A-5:30-6:30", "A-05:30-6:30"),
+            ("+05:30:1", "+05:30:1"),
+            ("+10:7x", "+10:7x"),
+            ("++5:3", "++05:03"),
+            ("x5:30", "x5:30"),
+            ("5:30", "5:30"),
+            ("+5", "+5"),
+            ("+:5", "+:5"),
+            ("", ""),
+        ] {
+            assert_eq!(pad_hour(text), padded, "{text}");
+        }
+    }
+
+    #[test]
+    fn offset_seconds_takes_both_signs() {
+        assert_eq!(offset_seconds("+05:30"), Some(19_800));
+        assert_eq!(offset_seconds("-05:30"), Some(-19_800));
+        assert_eq!(offset_seconds("+5"), Some(18_000));
+        assert_eq!(offset_seconds("+0530"), Some(19_800));
+        assert_eq!(offset_seconds("05:30"), None);
+        assert_eq!(
+            resolve_zone("+5:30").expect("+5:30").offset_at_utc(0),
+            19_800
+        );
+    }
+
     #[test]
     fn unknown_ids_are_invalid_timezones() {
         for text in [
@@ -616,5 +734,67 @@ mod tests {
         // Winter marked as daylight time with a negative saving.
         assert_eq!(std("Europe/Dublin", 2024, 7, 1), 0);
         assert_eq!(std("Europe/Dublin", 2024, 1, 15), 0);
+    }
+
+    /// Every accepted and refused shape of `offset_seconds`, with the
+    /// boundaries of each field (mutation gaps from the kernels shard).
+    #[test]
+    fn offset_seconds_shapes_and_bounds() {
+        for (text, secs) in [
+            ("+5", Some(18_000)),
+            ("-5", Some(-18_000)),
+            ("+05", Some(18_000)),
+            ("+0530", Some(19_800)),
+            ("-0530", Some(-19_800)),
+            ("+053015", Some(19_815)),
+            ("+05:30", Some(19_800)),
+            ("+05:30:15", Some(19_815)),
+            ("+00:59", Some(3_540)),
+            ("+00:00:59", Some(59)),
+            ("+18:00", Some(64_800)),
+            ("+18:00:00", Some(64_800)),
+            ("+00:60", None),
+            ("+00:00:60", None),
+            ("+18:00:01", None),
+            ("+18:01", None),
+            ("+05:3", None),
+            ("+05:300", None),
+            ("+05:30:1", None),
+            ("+05:3:15", None),
+            ("+05:30:150", None),
+            ("+0:530", None),
+            ("+0530:15", None),
+            ("+05::3015", None),
+            ("+05:3015", None),
+            ("+05:3x:15", None),
+            ("+05:30x15", None),
+            ("+123", None),
+            ("+12345", None),
+            ("05:30", None),
+            ("", None),
+        ] {
+            assert_eq!(offset_seconds(text), secs, "{text}");
+        }
+    }
+
+    /// `Etc/GMT` offsets resolve fixed, including hour 0 and two digits;
+    /// a zero-padded hour is not one.
+    #[test]
+    fn etc_gmt_offsets_resolve_fixed() {
+        for (text, secs) in [
+            ("Etc/GMT+0", 0),
+            ("Etc/GMT-0", 0),
+            ("Etc/GMT+5", -18_000),
+            ("Etc/GMT-5", 18_000),
+            ("Etc/GMT+10", -36_000),
+            ("Etc/GMT-12", 43_200),
+        ] {
+            assert!(
+                matches!(resolve_zone(text), Ok(ZoneRef::Fixed(FixedOffset(s))) if s == secs),
+                "{text}"
+            );
+        }
+        assert!(resolve_zone("Etc/GMT+05").is_err());
+        assert!(resolve_zone("Etc/GMT+13").is_err());
     }
 }

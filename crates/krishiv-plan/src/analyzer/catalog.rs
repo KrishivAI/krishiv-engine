@@ -134,6 +134,8 @@ pub struct TableMeta {
     pub kind: TableKind,
     /// The hidden `_metadata` column a read of it can add.
     pub file_metadata: FileMetadata,
+    /// Column comments by column name (Spark's `comment` field metadata); a column without one is absent.
+    pub column_comments: BTreeMap<String, String>,
 }
 
 /// The metadata half of a catalog (spec 13 §7); scans and writes are an
@@ -660,6 +662,7 @@ impl MemoryCatalog {
             version,
             kind: TableKind::Table,
             file_metadata: FileMetadata::None,
+            column_comments: BTreeMap::new(),
         };
         self.tables.insert((namespace, ident.name), meta);
         self.epoch += 1;

@@ -30,6 +30,7 @@ fn env() -> ExprEnv {
         legacy_java_charsets: false,
         legacy_coding_error_action: false,
         legacy_time_parser: false,
+        binary_output_style: None,
     }
 }
 
@@ -124,6 +125,8 @@ fn metrics() -> QueryMetrics {
             threads: 1,
             started: Duration::from_millis(1),
             ended: Duration::from_millis(3),
+            max_slice: Duration::from_micros(1_500),
+            stalls: 2,
         },
     );
     m
@@ -766,4 +769,20 @@ fn profile_errors_carry_their_class() {
         krishiv_common::error::ErrorClass::KrishivInvalidProfileDocument
     );
     assert!(k.to_string().contains("profile is not an object"), "{k}");
+}
+
+#[test]
+fn a_minor_2_document_reads_pipeline_stalls_as_zero() {
+    let p = QueryProfile::new(&plan(matching()), metrics(), true);
+    let mut v = p.to_json_value();
+    assert_eq!(v["pipelines"][0]["max_slice_ns"], 1_500_000);
+    assert_eq!(v["pipelines"][0]["stalls"], 2);
+    v["minor"] = 2.into();
+    let pipe = v["pipelines"][0].as_object_mut().unwrap();
+    pipe.remove("max_slice_ns");
+    pipe.remove("stalls");
+    let back = QueryProfile::from_json(&v.to_string()).unwrap();
+    let read = &back.metrics.pipelines[&0];
+    assert_eq!((read.max_slice, read.stalls), (Duration::ZERO, 0));
+    assert_eq!(read.ended, Duration::from_millis(3));
 }

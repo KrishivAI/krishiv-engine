@@ -119,6 +119,11 @@ message ExprEnv {
   // would read the patterns as DateTimeFormatter ones.
   // feature: legacy_time_parser
   optional bool legacy_time_parser = 10;
+  // `spark.sql.binaryOutputStyle` when it is not HEX_DISCRETE (what an unset config prints):
+  // `to_csv` and `to_xml` print binary fields in that style; a worker without the feature
+  // would print `[45 61]`.
+  // feature: binary_output_style
+  optional string binary_output_style = 11;
 }
 
 message ExplainNode {
@@ -165,7 +170,25 @@ message Node {
     LateFetchNode late_fetch = 24;
     // feature: exchange_source
     ExchangeSourceNode exchange_source = 25;
+    // feature: python_udf
+    PythonEvalNode python_eval = 26;
   }
+}
+
+// feature: python_udf
+// The rows of `input`, then one column per Python UDF call over every row.
+message PythonEvalNode {
+  uint32 input = 1;
+  repeated uint64 layout = 2;
+  repeated PythonCall calls = 3;
+}
+
+// feature: python_udf
+// One call of a `PythonEvalNode`: the call expression and the attribute of
+// its output column.
+message PythonCall {
+  uint32 call = 1;
+  uint64 output = 2;
 }
 
 // feature: exchange_source
@@ -721,6 +744,48 @@ message HashJoinNode {
   // existence join without a residual.
   // ignorable: a reader without it builds every row, with the same result.
   bool distinct_build = 11;
+  // The rows of each probe batch the probe joins: a filter and a scan's
+  // runtime-filter row stage fused into it (design P2-E3 U2).
+  // feature: fused_probe
+  optional ProbeSelect select = 12;
+}
+
+// feature: fused_probe
+// What a hash probe keeps of each input batch before it joins it.
+message ProbeSelect {
+  optional ProbeFilter filter = 1;
+  optional ProbeRowStage row_stage = 2;
+  // The probe input's columns of each batch received (a fused column-only
+  // projection); empty: the batch as it is.
+  repeated ProbeColumn columns = 3;
+}
+
+// feature: fused_probe
+message ProbeColumn {
+  uint64 index = 1;
+  string name = 2;
+}
+
+// feature: fused_probe
+// A filter fused into a hash probe: `predicate` over the probe input, whose
+// columns it knows as the attributes `layout`.
+message ProbeFilter {
+  repeated uint64 layout = 1;
+  uint32 predicate = 2;
+}
+
+// feature: fused_probe
+// The scan whose runtime-filter row stage the probe runs, with each
+// filter's column in the probe input.
+message ProbeRowStage {
+  uint64 scan = 1;
+  repeated ProbeFilterColumn columns = 2;
+}
+
+// feature: fused_probe
+message ProbeFilterColumn {
+  uint64 id = 1;
+  uint64 column = 2;
 }
 
 // feature: sort_merge_join
@@ -963,7 +1028,19 @@ message Expr {
     Lambda lambda = 9;
     // feature: lambda_functions
     BoundColumn lambda_var = 10;
+    // feature: captured_eval_mode
+    EvalModeExpr eval_mode = 11;
   }
+}
+
+// An expression evaluated in ANSI mode `ansi` whatever the query's mode is: the body
+// of a SQL function created under the other mode (T184).
+// feature: captured_eval_mode
+message EvalModeExpr {
+  uint32 expr = 1;
+  bool ansi = 2;
+  DataType data_type = 3;
+  bool nullable = 4;
 }
 
 // A lambda (`x -> body`): the bound body of a higher-order function's
@@ -1018,6 +1095,8 @@ message Function {
     RegistryFunction registry = 2;
     // feature: rust_udf
     UdfFunction udf = 10;
+    // feature: python_udf
+    PythonUdfFunction python_udf = 11;
   }
   FunctionKind kind = 3;
   repeated uint32 args = 4;
@@ -1041,6 +1120,17 @@ message RegistryFunction {
 message UdfFunction {
   string name = 1;
   uint64 version = 2;
+}
+
+// A session-registered Python UDF, by name and registration version; the
+// worker resolves the callable through its UDF runtime.
+// feature: python_udf
+message PythonUdfFunction {
+  string name = 1;
+  uint64 version = 2;
+  // Spark's `PythonEvalType` code.
+  int32 eval_type = 3;
+  bool thread_safe = 4;
 }
 
 // A Spark type.

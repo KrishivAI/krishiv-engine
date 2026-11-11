@@ -534,3 +534,27 @@ fn an_invalid_codec_does_not_destroy_the_table_it_would_replace() {
     assert!(block_on(w.save_as_table("t")).is_err());
     assert_eq!(count(&s, "t"), 3, "the table survived");
 }
+
+/// A `saveAsTable` overwrite whose new table a collated schema refuses (schema-level collations, row 14) is
+/// refused before the old table is dropped: the table and its rows survive.
+#[test]
+fn an_overwrite_a_collated_schema_refuses_keeps_the_old_table() {
+    let s = session();
+    block_on(s.sql("CREATE SCHEMA c")).unwrap();
+    block_on(s.table("people").write().save_as_table("c.t")).unwrap();
+    assert_eq!(count(&s, "c.t"), 3);
+    block_on(s.sql("SET spark.sql.collation.schemaLevel.enabled = true")).unwrap();
+    block_on(s.sql("ALTER SCHEMA c DEFAULT COLLATION UTF8_LCASE")).unwrap();
+    let refused = block_on(
+        s.table("people")
+            .filter(col("id").gt(lit(1)))
+            .write()
+            .mode("overwrite")
+            .save_as_table("c.t"),
+    );
+    assert!(
+        refused.is_err(),
+        "the create in a collated schema is refused"
+    );
+    assert_eq!(count(&s, "c.t"), 3, "the old table survives");
+}

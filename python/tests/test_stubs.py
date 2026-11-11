@@ -79,7 +79,15 @@ def test_native_stub_matches_runtime() -> None:
     krishiv_native = pytest.importorskip("krishiv._native")
     tree = ast.parse((_installed_package_dir() / "_native.pyi").read_text())
     classes = _stub_methods(tree)
-    assert set(classes) == {"Session", "DataFrame", "GroupedData", "Column", "WindowSpec", "ArrowStream"}
+    assert set(classes) == {
+        "Session",
+        "DataFrame",
+        "GroupedData",
+        "Column",
+        "WindowSpec",
+        "ArrowStream",
+        "AnonymousPythonUdf",
+    }
     for cls_name, methods in classes.items():
         runtime = getattr(krishiv_native, cls_name)
         for name, fn in methods.items():
@@ -108,6 +116,8 @@ def test_native_stub_matches_runtime() -> None:
         "call_function",
         "count_star",
         "count_distinct",
+        "_udf_pool_shutdown",
+        "_udf_runner_conf",
     }
     for name, fn in stub_fns.items():
         assert callable(getattr(krishiv_native, name)), f"{name} is in the stub but missing at runtime"

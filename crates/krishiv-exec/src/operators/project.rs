@@ -161,14 +161,16 @@ impl Operator for Project {
                         .get(*index)
                         .map(Arc::clone)
                         .ok_or_else(|| internal(format!("project index {index} out of range"))),
-                    ProjectItem::Expr { expr, .. } => expr.evaluate_in(data, partition),
+                    ProjectItem::Expr { expr, .. } => {
+                        expr.evaluate_in(data, input.split().unwrap_or(partition))
+                    }
                 }
             })
             .collect::<Result<Vec<_>>>()?;
         let options = RecordBatchOptions::new().with_row_count(Some(rows));
         let out = RecordBatch::try_new_with_options(Arc::clone(&self.schema), columns, &options)
             .map_err(|e| internal(format!("project produced an invalid batch: {e}")))?;
-        let out = Batch::with_weights(out, input.weights().clone())?;
+        let out = Batch::with_weights(out, input.weights().clone())?.with_split(input.split());
         Ok(OperatorOutput::NeedMoreInput(Some(out)))
     }
 }

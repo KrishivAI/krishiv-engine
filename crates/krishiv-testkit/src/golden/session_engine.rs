@@ -42,6 +42,11 @@ use super::run::{Engine, EngineError, QueryOutput};
 use super::setup::SessionSetup;
 use super::sorted::is_semantically_sorted;
 
+/// Settings of Spark's `SQLQueryTestSuite` that its goldens depend on, applied to every file's session (and its
+/// parser) before the file's own: `spark.sql.collation.schemaLevel.enabled` (off by default in Spark 4.2 and in
+/// Krishiv; `describe.sql` creates a schema with a default collation; owner decision 2026-11-07).
+const SUITE_CONF: &[(&str, &str)] = &[("spark.sql.collation.schemaLevel.enabled", "true")];
+
 pub use super::run::TIMEOUT_CLASS;
 
 /// The default per-statement time limit: high enough that only a stuck query
@@ -163,6 +168,12 @@ impl SessionEngine {
             .rev()
             .find(|(k, _)| k.eq_ignore_ascii_case(key))
             .map(|(_, v)| v.as_str())
+            .or_else(|| {
+                SUITE_CONF
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                    .map(|(_, v)| *v)
+            })
     }
 
     fn options(&self) -> ParserOptions {
@@ -322,6 +333,9 @@ impl Engine for SessionEngine {
         if self.plan_round_trip {
             builder = builder.config("krishiv.exec.debug.planRoundTrip", "true");
         }
+        for (k, v) in SUITE_CONF {
+            builder = builder.config(*k, *v);
+        }
         for (k, v) in &setup.configs {
             if k == "spark.sql.warehouse.dir" {
                 v.clone_into(&mut self.warehouse_text);
@@ -370,7 +384,47 @@ impl Engine for SessionEngine {
         let (analyzed, batches) = self.block_on(async {
             let df = session.sql(sql).await?;
             let analyzed = df.analyzed().await?;
-            let batches = df.collect().await?;
+            // The engine's own carriers: Spark's SQL tests render rows without Arrow, so a calendar interval past
+            // `Interval(MonthDayNano)` is a value here as it is there.
+            let batches = df.collect_engine().await?;
+            // Decimals as a client reads them (`Decimal128`); a calendar interval stays the engine's struct.
+            let batches = batches
+                .iter()
+                .map(|b| {
+                    let columns = b
+                        .columns()
+                        .iter()
+                        .map(|c| {
+                            krishiv_exec::carrier::recarried_array(
+                                c,
+                                &krishiv_types::arrow::client_arrow_type(c.data_type()),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let fields: Vec<arrow_schema::Field> = b
+                        .schema()
+                        .fields()
+                        .iter()
+                        .zip(&columns)
+                        .map(|(f, c)| f.as_ref().clone().with_data_type(c.data_type().clone()))
+                        .collect();
+                    // A batch of no columns keeps its row count.
+                    let options =
+                        arrow_array::RecordBatchOptions::new().with_row_count(Some(b.num_rows()));
+                    RecordBatch::try_new_with_options(
+                        Arc::new(Schema::new(fields)),
+                        columns,
+                        &options,
+                    )
+                    .map_err(|e| {
+                        krishiv_common::error::KrishivError::from(
+                            krishiv_common::error::InternalError {
+                                message: e.to_string(),
+                            },
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             Ok((analyzed, batches))
         })?;
         let format = format?;
@@ -531,6 +585,17 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
                 months: v.months,
                 days: v.days,
                 micros: v.nanoseconds / 1000,
+            }
+        }
+        // The engine's own carrier (`collect_engine`): Spark's months, days and microseconds.
+        (DataType::CalendarInterval, t) if krishiv_types::arrow::is_calendar_struct(t) => {
+            let v = krishiv_types::calendar::Calendars::of(col.as_ref())
+                .ok_or_else(|| harness_error("a calendar interval that is not one"))?
+                .value(row);
+            Cell::Calendar {
+                months: v.months,
+                days: v.days,
+                micros: v.micros,
             }
         }
         (DataType::Geometry { .. } | DataType::Geography { .. }, ArrowType::Struct(_)) => {
@@ -763,6 +828,17 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
                 months: v.months,
                 days: v.days,
                 micros: v.nanoseconds / 1000,
+            }
+        }
+        // The engine's own carrier (`collect_engine`): Spark's months, days and microseconds.
+        (DataType::CalendarInterval, t) if krishiv_types::arrow::is_calendar_struct(t) => {
+            let v = krishiv_types::calendar::Calendars::of(col.as_ref())
+                .ok_or_else(|| harness_error("a calendar interval that is not one"))?
+                .value(row);
+            Cell::Calendar {
+                months: v.months,
+                days: v.days,
+                micros: v.micros,
             }
         }
         (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {

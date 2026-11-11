@@ -81,6 +81,9 @@ impl Planner<'_> {
                 at
             }));
         }
+        // Python UDFs in keys and arguments run below (Spark's
+        // `ExtractGroupingPythonUDFFromAggregate`).
+        let (input, wanted) = self.extract_python(input, &wanted)?;
         let (input, columns) = self.with_columns(input, &wanted)?;
         let k = keys.len();
         let mut aggregates = Vec::with_capacity(calls.len());
@@ -240,6 +243,8 @@ impl Planner<'_> {
             .iter()
             .map(|e| replace(e, &key_ids, &call_ids))
             .collect::<Result<Vec<_>>>()?;
+        // Python UDFs over keys and results run above the aggregate.
+        let (agg, rewritten) = self.extract_python(agg, &rewritten)?;
         self.project(agg, &rewritten)
     }
 
@@ -474,6 +479,9 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "try_sum" if f.args.len() == 1 => (AggregateFunction::TrySum, f.args.clone()),
         "avg" | "mean" => (AggregateFunction::Avg, f.args.clone()),
         "try_avg" if f.args.len() == 1 => (AggregateFunction::TryAvg, f.args.clone()),
+        // The collation rewrite adds the key of a collated value.
+        "max" if f.args.len() == 2 => (AggregateFunction::MaxByKeyFirst, f.args.clone()),
+        "min" if f.args.len() == 2 => (AggregateFunction::MinByKeyFirst, f.args.clone()),
         "min" | "bool_and" | "every" => (AggregateFunction::Min, f.args.clone()),
         "max" | "bool_or" | "some" | "any" => (AggregateFunction::Max, f.args.clone()),
         "first" | "first_value" => (AggregateFunction::First { ignore_nulls }, value),
@@ -863,7 +871,10 @@ pub(super) fn aggregate_expr(
     }
     if matches!(
         function,
-        AggregateFunction::MaxBy | AggregateFunction::MinBy
+        AggregateFunction::MaxBy
+            | AggregateFunction::MinBy
+            | AggregateFunction::MaxByKeyFirst
+            | AggregateFunction::MinByKeyFirst
     ) {
         let [value, key] = args[..] else {
             return Err(internal("max_by without a value and a key"));

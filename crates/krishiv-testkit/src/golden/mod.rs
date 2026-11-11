@@ -222,11 +222,11 @@ mod tests {
         assert_eq!((parse.passed, negative.passed, result.passed), (0, 0, 0));
         assert_eq!(
             (parse.total, negative.total, result.total),
-            (18_827, 3_857, 15_363)
+            (18_815, 3_852, 15_356)
         );
         let statements: u64 = run.files.iter().map(|f| f.statements).sum();
         let unclassified: u64 = run.files.iter().map(|f| f.unclassified_errors).sum();
-        assert_eq!((statements, unclassified), (19_284, 64));
+        assert_eq!((statements, unclassified), (19_272, 64));
         for f in &run.files {
             assert_eq!(
                 f.result.total + f.negative.total + f.unclassified_errors,

@@ -14,9 +14,10 @@ use krishiv_exec::aggregate::{
 };
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
-    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
-    SubqueryPlan, SubqueryValueKind, WritePlan,
+    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProbeColumn, ProbeFilter,
+    ProbeFilterColumn, ProbeRowStage, ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanId,
+    ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId, SubqueryPlan, SubqueryValueKind,
+    WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
@@ -44,6 +45,7 @@ pub(crate) fn env() -> ExprEnv {
         legacy_java_charsets: false,
         legacy_coding_error_action: false,
         legacy_time_parser: false,
+        binary_output_style: None,
     }
 }
 
@@ -718,6 +720,7 @@ pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
             },
         }],
         distribution: JoinDistribution::Broadcast,
+        select: None,
     }
 }
 
@@ -737,6 +740,7 @@ fn subquery_join(join_type: JoinType) -> HashJoinPlan {
         distinct_build: false,
         runtime_filters: Vec::new(),
         distribution: JoinDistribution::Broadcast,
+        select: None,
     }
 }
 
@@ -1303,6 +1307,39 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             }),
         ),
         (
+            // The probe is `scan()` (`a`, `s`, attributes 1 and 2, scan 7,
+            // runtime filter 3 on `a`): its filter reads both, the
+            // projections fused with it rename `s` (as a planned plan
+            // would), and the scan hands it the row stage of filter 3.
+            "fused_probe",
+            PhysNode::HashJoin(HashJoinPlan {
+                select: Some(ProbeSelect {
+                    filter: Some(ProbeFilter {
+                        layout: vec![AttrId(1), AttrId(2)],
+                        predicate: predicate(),
+                    }),
+                    row_stage: Some(ProbeRowStage {
+                        scan: ScanId(7),
+                        columns: vec![ProbeFilterColumn {
+                            id: FilterId(3),
+                            column: 0,
+                        }],
+                    }),
+                    columns: Some(vec![
+                        ProbeColumn {
+                            index: 0,
+                            name: "a".to_owned(),
+                        },
+                        ProbeColumn {
+                            index: 1,
+                            name: "s2".to_owned(),
+                        },
+                    ]),
+                }),
+                ..join_plan(JoinType::Inner)
+            }),
+        ),
+        (
             "hash_join_single_match",
             PhysNode::HashJoin(HashJoinPlan {
                 single_match: true,
@@ -1639,6 +1676,47 @@ pub(crate) fn udf_call() -> PhysNode {
     }
 }
 
+/// A Python UDF call (`python_udf`): a `PythonEval` appending the call's
+/// column, read by the projection above it. The call references the UDF by
+/// name and registration version only.
+pub(crate) fn python_eval() -> PhysNode {
+    let call = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            within_group: Vec::new(),
+            id: FunctionId::PythonUdf {
+                name: "py_udf".to_owned(),
+                version: 3,
+                eval_type: krishiv_plan::PythonEvalType::ScalarPandas,
+                thread_safe: false,
+            },
+            kind: FunctionKind::Scalar,
+            args: vec![col(1, "a", DataType::Integer)],
+            distinct: false,
+            filter: None,
+            data_type: DataType::Long,
+            nullable: true,
+            deterministic: false,
+        },
+    ))));
+    PhysNode::Project {
+        input: boxed(PhysNode::PythonEval {
+            input: boxed(scan()),
+            layout: vec![AttrId(1), AttrId(2)],
+            calls: vec![krishiv_exec::physical::PythonCallPlan {
+                call,
+                output: AttrId(9),
+            }],
+        }),
+        layout: vec![AttrId(1), AttrId(2), AttrId(9)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "p".to_owned(),
+            expr: col(9, "pythonUDF0", DataType::Long),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
 /// A call of a session-registered native Rust aggregate UDF
 /// (`rust_udaf`): by name and version, with the argument and state
 /// columns the planner fixed, in a final aggregate and the merge of its
@@ -1684,6 +1762,31 @@ pub(crate) fn udaf_call_typed(arg_types: Vec<DataType>) -> PhysNode {
             aggregates: vec![merged],
             output: AggregateOutput::Final,
         },
+    }
+}
+
+/// An expression pinned to an ANSI mode: the body of a SQL function created under the other
+/// mode (`ResolvedExpr::EvalMode`, T184).
+pub(crate) fn captured_eval_mode() -> PhysNode {
+    let pinned = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::EvalMode {
+        ansi: false,
+        expr: call(
+            Builtin::Divide,
+            vec![lit(Literal::Integer(1)), col(1, "id", DataType::Integer)],
+            DataType::Double,
+        ),
+        data_type: DataType::Double,
+        nullable: true,
+    })));
+    PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "inverse".to_owned(),
+            expr: pinned,
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
     }
 }
 
@@ -1795,6 +1898,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("rust_udf".to_owned(), plan_of(udf_call())));
+    out.push(("python_udf".to_owned(), plan_of(python_eval())));
     out.push(("rust_udaf".to_owned(), plan_of(udaf_call())));
     // The expression environment flag the `legacy_statistical_aggregate`
     // feature is about: the same root as `one_row`, under a session with
@@ -1828,6 +1932,10 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         ),
     ));
     out.push(("nested_types".to_owned(), plan_of(nested_types())));
+    out.push((
+        "captured_eval_mode".to_owned(),
+        plan_of(captured_eval_mode()),
+    ));
     out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));
     out.push(("struct_field".to_owned(), plan_of(struct_field())));
     out.push(("map_key_dedup_policy".to_owned(), map_key_dedup_policy()));
@@ -1836,6 +1944,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         legacy_charset_switches(),
     ));
     out.push(("legacy_time_parser".to_owned(), legacy_time_parser()));
+    out.push(("binary_output_style".to_owned(), binary_output_style()));
     out.push(("session_zone_name".to_owned(), session_zone_name()));
     out.push(("shared_subplan".to_owned(), shared_subplan()));
     out.extend(
@@ -1907,6 +2016,7 @@ fn legacy_charset_switches() -> PhysicalPlan {
         legacy_java_charsets: true,
         legacy_coding_error_action: true,
         legacy_time_parser: false,
+        binary_output_style: None,
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -1917,6 +2027,17 @@ fn legacy_charset_switches() -> PhysicalPlan {
 fn legacy_time_parser() -> PhysicalPlan {
     let env = ExprEnv {
         legacy_time_parser: true,
+        binary_output_style: None,
+        ..env()
+    };
+    let explain = ExplainNode::new("Root", "details", vec![]);
+    PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// A plan whose environment prints binary values as hex digits.
+fn binary_output_style() -> PhysicalPlan {
+    let env = ExprEnv {
+        binary_output_style: Some(Arc::from("HEX")),
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -2162,6 +2283,28 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
                 aggregate: AggregatePlan {
                     group_by: vec![0],
                     aggregates: vec![interval_percentiles()],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            // A calendar interval column on the struct carrier (ADR 0009
+            // update 2026-11-06): the argument type of a count.
+            "calendar_struct_aggregate",
+            PhysNode::Aggregate {
+                input: Box::new(PhysNode::Scan(file_scan())),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: vec![AggregateExpr {
+                        function: AggregateFunction::Count,
+                        args: vec![1],
+                        input: AggInput::Raw,
+                        arg_type: krishiv_types::arrow::calendar_struct(),
+                        name: "cal".to_owned(),
+                        mask: None,
+                        element: None,
+                    }],
                     distinct: vec![false],
                     output: AggregateOutput::Final,
                 },

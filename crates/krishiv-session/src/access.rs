@@ -21,7 +21,7 @@ use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
     SecurableUse, TableIdent, authorize, insufficient_permissions, namespace_parts, table_ident,
 };
-use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement};
+use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement, TableOption};
 use krishiv_sql::{
     ExplainKind, StatementClass, Target, TargetObject, parse_multipart_identifier,
     statement_targets,
@@ -755,4 +755,69 @@ fn reject_system_namespace(statement: &Statement) -> Result<(), KrishivError> {
         }
         _ => Ok(()),
     }
+}
+
+/// Table options are stored as text and never resolved, so a `secret('scope', 'key')` value would
+/// be kept as that literal text; it is refused as it is for `writeTo` (use a read or write option). The
+/// options are returned when none is a secret.
+pub(crate) fn refuse_secret_options<'a>(
+    options: &'a [TableOption],
+    original: &str,
+) -> Result<&'a [TableOption], KrishivError> {
+    let is_secret = |o: &TableOption| {
+        o.value.as_ref().is_some_and(|v| {
+            original
+                .get(v.span.start..v.span.end)
+                .is_some_and(calls_secret)
+        })
+    };
+    if options.iter().any(is_secret) {
+        return Err(KrishivUnsupportedFeature {
+            feature: "secret table options".to_owned(),
+        }
+        .into());
+    }
+    Ok(options)
+}
+
+/// Whether expression text `t` calls `secret` anywhere: the name bare, back-quoted or double-quoted, in any case
+/// (`IDENTIFIER('secret')` was already replaced by a back-quoted name, `Session::sql`), followed by `(`, inside parentheses, casts or other calls too. It reads the
+/// parser's own tokens, so string literals are skipped and comments between the name and `(` are trivia, as in the
+/// parser; anything else that looks like a call counts (the check fails closed: a double-quoted `"secret"` counts
+/// whether or not `spark.sql.ansi.doubleQuotedIdentifiers` makes it a name).
+fn calls_secret(t: &str) -> bool {
+    use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
+    let tokens: Vec<_> = tokenize(t)
+        .into_iter()
+        .filter(|k| !k.kind.is_trivia())
+        .collect();
+    let text = |i: usize| {
+        t.get(tokens[i].span.start..tokens[i].span.end)
+            .unwrap_or("")
+    };
+    // The text between the quotes of a quoted token, with doubled quotes read as one.
+    let unquoted = |i: usize, quote: char| -> Option<String> {
+        let raw = text(i);
+        let inner = raw.strip_prefix(quote)?.strip_suffix(quote)?;
+        Some(inner.replace(&format!("{quote}{quote}"), &quote.to_string()))
+    };
+    let names_secret = |i: usize| -> bool {
+        let Some(k) = tokens.get(i) else { return false };
+        match k.kind {
+            TokenKind::Word => text(i).eq_ignore_ascii_case("secret"),
+            TokenKind::QuotedIdent => {
+                unquoted(i, '`').is_some_and(|n| n.eq_ignore_ascii_case("secret"))
+            }
+            TokenKind::DoubleQuoted => {
+                unquoted(i, '"').is_some_and(|n| n.eq_ignore_ascii_case("secret"))
+            }
+            _ => false,
+        }
+    };
+    (0..tokens.len()).any(|i| {
+        names_secret(i)
+            && tokens
+                .get(i + 1)
+                .is_some_and(|k| k.kind == TokenKind::Sym(Sym::LParen))
+    })
 }

@@ -87,6 +87,20 @@ Other operator-specific counters (an aggregate's `groups` and spill runs,
 a join's `build_rows`, grace partitions and recursion depth) are printed
 by name. A name ending in `_bytes` is a size.
 
+### A filter fused into a hash probe
+
+A filter directly below a hash join's probe side, and a scan's runtime filters
+there, can run inside the probe (`krishiv.exec.join.fuseProbeSelect`, on by
+default). The plan and the counters then read differently:
+
+- The filter prints on the join as `probe filter: ...`, not as a `Filter` node.
+  A column-only projection above it is absorbed too, so the scan can list
+  columns only the predicate reads.
+- A scan whose runtime filters moved to the probe reports `out` before they
+  run. The probe's `in` is the rows it received and `probe_rows` the rows it
+  selected. `runtime_filter_rows_tested` and `runtime_filter_rows_dropped` stay
+  on the scan.
+
 ## The JSON document
 
 **Experimental: the JSON documents may change before 1.0.**

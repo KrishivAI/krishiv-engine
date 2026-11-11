@@ -2002,11 +2002,13 @@ dependencies = [
  "krishiv-alloc",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-io",
  "krishiv-memory",
  "krishiv-session",
  "mimalloc",
  "parquet",
  "proptest",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]
@@ -2310,6 +2312,8 @@ dependencies = [
  "arrow-schema",
  "futures",
  "krishiv-common",
+ "krishiv-exec",
+ "krishiv-plan",
  "krishiv-session",
  "krishiv-sql",
  "krishiv-types",
@@ -2511,6 +2515,7 @@ name = "krishiv-types"
 version = "0.2.0"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
  "arrow-schema",
  "arrow-select",
  "codspeed-criterion-compat",
@@ -3595,9 +3600,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.8.0"
+version = "3.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8be15815186873ea063bf005011d16c356804973489e40c39116ae3a2878d1f"
+checksum = "d24a7e92f4bcaa36b97fa93c4fa7ca8f3e669eced949345b3462dba333c7f909"
 dependencies = [
  "chrono",
  "futures",
@@ -3608,6 +3613,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -3667,9 +3673,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",
@@ -4975,6 +4981,8 @@ version = "0.2.0"
 dependencies = [
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-functions",
+ "krishiv-plan",
  "serde",
  "serde_json",
  "tempfile",

@@ -59,11 +59,18 @@ impl Session {
             .and_then(|d| d.to_str().map(str::to_owned))
             .unwrap_or_else(|| "/".to_owned());
         let udfs = Arc::new(UdfLibrary::new());
+        // Per session, as Spark's `spark.udf.register`: a new session does
+        // not see another's Python UDFs.
+        let python_udfs = Arc::new(crate::python_udfs::PythonUdfLibrary::new());
         let base_functions = parts.functions;
         let functions = match base_functions.clone() {
-            Some(f) => Arc::new(SessionFunctions::with_registry(f, Arc::clone(&udfs)))
-                as Arc<dyn FunctionRegistry>,
-            None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
+            Some(f) => Arc::new(
+                SessionFunctions::with_registry(f, Arc::clone(&udfs))
+                    .with_python(Arc::clone(&python_udfs)),
+            ) as Arc<dyn FunctionRegistry>,
+            None => Arc::new(
+                SessionFunctions::new(Arc::clone(&udfs)).with_python(Arc::clone(&python_udfs)),
+            ) as Arc<dyn FunctionRegistry>,
         };
         Session {
             locals: Arc::from([]),
@@ -83,6 +90,8 @@ impl Session {
                 functions,
                 base_functions,
                 udfs,
+                python_udfs,
+                python_runtime: Mutex::new(None),
                 sql_functions: SqlFunctions::default(),
                 commit_log_probes: Mutex::new(HashMap::new()),
                 number: runtime.next_session(),
@@ -275,7 +284,8 @@ impl Session {
     }
 
     /// Cancels the running query `id` of this session (Spark Connect's
-    /// `Interrupt` by operation id): its stream ends with
+    /// `Interrupt` by operation id; a SQL script is one such query, ended between its statements
+    /// too): its stream ends with
     /// `OPERATION_CANCELED` at its next batch boundary (a query whose
     /// execution has not begun fails as it begins), and
     /// `system.queries.cancel_reason` shows `user`. Whether a running query

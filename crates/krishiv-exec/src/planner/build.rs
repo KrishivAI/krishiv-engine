@@ -33,7 +33,9 @@ use krishiv_plan::{
 
 use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
+use super::probe_select::attach_runtime_filters;
 use super::properties::{Distribution, Placement, range_keys};
+use super::python_udf::has_python_udf;
 use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
 pub(crate) use super::subquery::has_subquery;
 use super::subquery::{ByPlan, SubqueryValue, subqueries, with_subquery_columns};
@@ -111,8 +113,10 @@ fn plan_once(
         .map(|(key, _)| key.clone())
         .collect();
     let mut shared = std::mem::take(&mut planner.shared);
+    let fuse = planner.fuse_probe_select();
     attach_runtime_filters(
         &mut planner.scan_filters,
+        fuse,
         shared
             .iter_mut()
             .map(|s| &mut s.plan)
@@ -127,22 +131,6 @@ fn plan_once(
     .with_shared(shared)?
     .with_warnings(planner.warnings);
     Ok((plan, shareable))
-}
-
-/// Hands each scan under `roots` the runtime filters joins publish to it.
-fn attach_runtime_filters<'a>(
-    filters: &mut HashMap<ScanId, Vec<ScanRuntimeFilter>>,
-    roots: impl IntoIterator<Item = &'a mut PhysNode>,
-) {
-    let mut stack: Vec<&mut PhysNode> = roots.into_iter().collect();
-    while let Some(n) = stack.pop() {
-        if let PhysNode::Scan(s) = n
-            && let Some(f) = filters.remove(&s.id)
-        {
-            s.runtime_filters = f;
-        }
-        stack.extend(n.children_mut());
-    }
 }
 
 /// Whether `n` produces its rows in an order a reader must keep: a sort or top-N, possibly under row-wise
@@ -318,6 +306,8 @@ pub(crate) struct Planner<'a> {
     pub(crate) stats: PlanStats,
     /// The schema of each loop being planned, by id, for its `LoopRef`s.
     loops: HashMap<u32, SchemaRef>,
+    /// Build-side projections requested and applied (`build_project`).
+    pub(crate) moves: super::build_project::Moves,
 }
 
 impl<'a> Planner<'a> {
@@ -351,6 +341,7 @@ impl<'a> Planner<'a> {
             next_exchange: 0,
             scan_filters: HashMap::new(),
             loops: HashMap::new(),
+            moves: super::build_project::Moves::default(),
         }
     }
 
@@ -391,6 +382,9 @@ impl<'a> Planner<'a> {
     pub(crate) fn plan(&mut self, p: &Arc<LogicalPlan>) -> Result<Planned> {
         match &p.node {
             PlanNode::Scan(scan) => self.scan(p, scan, None),
+            PlanNode::Filter { input, predicate } if has_python_udf(predicate) => {
+                self.python_filter(input, predicate)
+            }
             PlanNode::Filter { input, predicate } => {
                 if let PlanNode::Scan(scan) = &input.node
                     && !has_subquery(predicate)
@@ -422,18 +416,12 @@ impl<'a> Planner<'a> {
                 }
                 self.filter(input, predicate)
             }
-            PlanNode::Project { input, exprs } => {
-                let input = self.plan(input)?;
-                self.project(input, exprs)
-            }
+            PlanNode::Project { input, exprs } => self.plan_project(p, input, exprs),
             PlanNode::Aggregate {
                 input,
                 grouping,
                 aggregates,
-            } => {
-                let input = self.plan(input)?;
-                self.aggregate(input, grouping, aggregates)
-            }
+            } => self.plan_aggregate(p, input, grouping, aggregates),
             PlanNode::PartialAggregate {
                 input,
                 keys,
@@ -450,6 +438,7 @@ impl<'a> Planner<'a> {
                 condition,
             } => self.join(left, right, *kind, condition),
             PlanNode::SubqueryAlias { input, .. } => self.plan(input),
+            PlanNode::Repartition { input, exprs } => self.repartition(input, exprs),
             PlanNode::Shift { input, offset } => {
                 let mut planned = self.plan(input)?;
                 for id in &mut planned.layout {
@@ -1213,7 +1202,7 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn filter(&mut self, input: Planned, predicate: &Expr) -> Result<Planned> {
+    pub(crate) fn filter(&mut self, input: Planned, predicate: &Expr) -> Result<Planned> {
         let prepared = self.prepare(&[predicate])?;
         let e = prepared
             .exprs
@@ -2097,7 +2086,7 @@ mod attach_tests {
         let mut filters =
             HashMap::from([(ScanId(0), vec![filter(10)]), (ScanId(1), vec![filter(11)])]);
         let (mut a, mut b) = (scan(0), scan(1));
-        attach_runtime_filters(&mut filters, [&mut a, &mut b]);
+        attach_runtime_filters(&mut filters, true, [&mut a, &mut b]);
         assert_eq!(filter_of(&a), [FilterId(10)]);
         assert_eq!(filter_of(&b), [FilterId(11)]);
         assert!(filters.is_empty());
