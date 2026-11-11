@@ -461,12 +461,34 @@ fn an_inner_join_narrows_its_keys_and_scales_the_other_columns() {
 }
 
 #[test]
-fn equalities_on_two_column_pairs_are_one_composite_key() {
-    // Independent, `1 / 100 * 1 / 20` of the 200,000 pairs would leave 100
-    // rows; as one key, `1 / min(min(100 * 10, 1000), min(40 * 20, 200))`
-    // leaves 1,000 (every `t` row finds its `u` row).
+fn a_composite_key_join_is_a_foreign_key_into_the_side_with_fewer_key_tuples() {
     let e = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v");
+    // Independent keys would give 200,000 / (100 * 20) = 100 rows. The key
+    // tuples are min(100 * 10 capped at 1,000, 40 * 20 capped at 200) = 200:
+    // 200,000 / 200 = 1,000 rows.
     close(e.rows(), 1000.0, "rows");
+}
+
+#[test]
+fn a_filtered_key_side_keeps_its_fraction_of_a_composite_join() {
+    let whole = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v").rows();
+    let filtered =
+        join("SELECT * FROM t JOIN (SELECT * FROM u WHERE v < 5) u ON t.a = u.k AND t.b = u.v")
+            .rows();
+    // The key tuples are those of the unfiltered side: the filter's fraction is not cancelled
+    // (it was when the cap was the filtered rows: the estimate stayed at every row of `t`).
+    assert!(
+        filtered < whole,
+        "filtered {filtered} must be below the whole {whole}"
+    );
+}
+
+#[test]
+fn a_composite_outer_join_keeps_the_unmatched_fraction() {
+    // Only inner joins take the composite rule: an outer join still finds rows of `t` without a
+    // match (TPC-DS q78's anti join collapsed to one row when it did not).
+    let e = join("SELECT * FROM t LEFT JOIN u ON t.a = u.k AND t.b = u.v");
+    assert!(e.col("v").null_frac > 0.0, "{}", e.col("v").null_frac);
 }
 
 #[test]

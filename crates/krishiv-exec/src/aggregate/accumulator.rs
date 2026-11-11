@@ -139,26 +139,6 @@ impl Values {
         }
     }
 
-    /// Whether row `i` of `src` replaces group `g`'s value: Spark's
-    /// `MaxBy`/`MinBy` keep the held row only while it orders strictly after
-    /// (`max`) or before the new one, so a tie takes the new row (the last
-    /// of equal keys; `-0.0` equals `0.0`, NaN equals NaN).
-    fn beats(&self, g: usize, src: &Col<'_>, i: usize, max: bool) -> Result<bool> {
-        let takes = |o: std::cmp::Ordering| if max { o.is_ge() } else { o.is_le() };
-        Ok(match (self, src) {
-            (Self::Int(v), Col::Int(c)) => takes(c[i].cmp(&v[g])),
-            (Self::Float(v), Col::Float(c)) => {
-                !float_lt(if max { c[i] } else { v[g] }, if max { v[g] } else { c[i] })
-            }
-            (Self::Bytes(v), Col::Bytes(c)) => takes(c[i].cmp(&v[g][..])),
-            _ => {
-                return Err(internal(
-                    "an ordering key of another kind than its state".to_owned(),
-                ));
-            }
-        })
-    }
-
     /// Stores row `i` of `src` as group `g`'s value, keeping `heap` (the
     /// bytes of `Bytes` values) current.
     fn put(&mut self, g: usize, src: &Col<'_>, i: usize, heap: &mut usize) -> Result<()> {
@@ -285,6 +265,8 @@ enum Kind {
     /// the bytes of both `Bytes` vectors.
     By {
         max: bool,
+        /// A tie keeps the held row (`min`/`max` of a collated string) instead of taking the new.
+        first_wins: bool,
         values: Values,
         keys: Values,
         set: Vec<bool>,
@@ -507,15 +489,7 @@ impl DecFold<'_> {
         let fast = self.proven(v);
         if fast && self.dense_unit() {
             debug_assert_eq!(v.len(), self.groups.len(), "one value per group id");
-            // Raw rows, all valid, unit weights, no overflow possible in this
-            // batch: a plain add per row (an overflowed group stays NULL).
-            for (&g, x) in self.groups.iter().zip(v) {
-                let g = g as usize;
-                if st[g] != 2 {
-                    sum[g] = sum[g].wrapping_add(x.wide());
-                    st[g] = 1;
-                }
-            }
+            small_fold::dense_sum(self.groups, v, sum, st);
             return;
         }
         for (i, &g) in self.groups.iter().enumerate() {
@@ -572,11 +546,7 @@ impl DecFold<'_> {
         if fast && counts.is_none() && self.dense_unit() {
             debug_assert_eq!(v.len(), self.groups.len(), "one value per group id");
             // As in `sum`: raw rows, all valid, unit weights, proven.
-            for (&g, x) in self.groups.iter().zip(v) {
-                let g = g as usize;
-                sum[g] = sum[g].wrapping_add(x.wide());
-                count[g] = count[g].wrapping_add(1);
-            }
+            small_fold::dense_avg(self.groups, v, sum, count);
             return;
         }
         for (i, &g) in self.groups.iter().enumerate() {
@@ -1111,12 +1081,13 @@ impl Accumulator {
                 set: Vec::new(),
                 heap: 0,
             },
-            (F::MaxBy | F::MinBy, _) => {
+            (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => {
                 let (v, k) = expr
                     .by_types()
                     .ok_or_else(|| internal("max_by without value and key types".to_owned()))?;
                 Kind::By {
-                    max: expr.function == F::MaxBy,
+                    max: matches!(expr.function, F::MaxBy | F::MaxByKeyFirst),
+                    first_wins: matches!(expr.function, F::MaxByKeyFirst | F::MinByKeyFirst),
                     values: Values::empty(v),
                     keys: Values::empty(k),
                     set: Vec::new(),
@@ -2552,6 +2523,7 @@ impl Accumulator {
             (
                 Kind::By {
                     max,
+                    first_wins,
                     values,
                     keys,
                     set,
@@ -2572,7 +2544,10 @@ impl Accumulator {
                 let key_valid = |i: usize| nulls[1].as_ref().is_none_or(|n| n.is_valid(i));
                 for (i, &g) in groups.iter().enumerate() {
                     let g = g as usize;
-                    if active(i) && key_valid(i) && (!set[g] || keys.beats(g, &y, i, *max)?) {
+                    if active(i)
+                        && key_valid(i)
+                        && (!set[g] || keys.beats(g, &y, i, *max, *first_wins)?)
+                    {
                         keys.put(g, &y, i, heap)?;
                         if valid(i) {
                             values.put(g, &x, i, heap)?;
@@ -3426,6 +3401,9 @@ fn struct_extremum_batch(
     }
     Ok(())
 }
+
+mod by_key;
+mod small_fold;
 
 #[cfg(test)]
 #[cfg(not(loom))]

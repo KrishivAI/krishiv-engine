@@ -9,11 +9,11 @@ use krishiv_common::error::KrishivError;
 
 use crate::cast::TimeZoneRules;
 use crate::cast::datetime::{local_to_utc, utc_to_local};
-use crate::cast::text::{BigDec, java_digit, java_float_string, parse_date, parse_decimal};
+use crate::cast::text::{BigDec, java_float_string, parse_date, parse_decimal, utf16_digit};
 use crate::cast::timestamp::{Parsed, Zone, parse};
 
-/// Java's `Long.parseLong`: an optional sign, then decimal digits (any
-/// Unicode `Nd` digit, as `Character.digit`); no whitespace.
+/// Java's `Long.parseLong`: an optional sign, then decimal digits (any BMP
+/// Unicode `Nd` digit, as `Character.digit(char)` on UTF-16 units: a supplementary-plane digit is none); no whitespace.
 #[must_use]
 pub fn java_parse_long(s: &str) -> Option<i64> {
     let (negative, digits) = match s.as_bytes().first()? {
@@ -26,7 +26,9 @@ pub fn java_parse_long(s: &str) -> Option<i64> {
     }
     let mut v: i128 = 0;
     for c in digits.chars() {
-        v = v.checked_mul(10)?.checked_add(i128::from(java_digit(c)?))?;
+        v = v
+            .checked_mul(10)?
+            .checked_add(i128::from(utf16_digit(c)?))?;
         if v > i128::from(i64::MAX).saturating_add(1) {
             return None;
         }

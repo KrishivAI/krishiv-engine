@@ -859,3 +859,50 @@ fn a_nondeterministic_enclosing_cte_is_computed_per_run_from_one_seed() {
              SELECT count(DISTINCT u) FROM (SELECT u FROM t UNION ALL SELECT u FROM t)";
     assert_eq!(column(rows(&s, q)), vec!["1"]);
 }
+
+/// A seeded random function draws from the split a row is read from, not from the driver that ran it: the multiset
+/// of values over a multi-morsel `range` is the same on every run, however the morsels fall to the drivers.
+#[test]
+fn a_seeded_random_draws_by_split_not_by_driver() {
+    let s = Session::new().unwrap();
+    let q = "SELECT md5(CAST(sort_array(collect_list(x)) AS STRING)) \
+             FROM (SELECT rand(7) AS x FROM range(100000))";
+    let first = column(rows(&s, q));
+    for run in 0..5 {
+        assert_eq!(column(rows(&s, q)), first, "run {run}");
+    }
+}
+
+/// Two `UNION ALL` children number their splits one after the other, so a split id (and the ids and seeded draws
+/// keyed by it) is unique across the children even when a child has more slices than drivers.
+#[test]
+fn union_all_children_number_their_splits_without_overlap() {
+    let s = Session::new().unwrap();
+    let q = "SELECT count(DISTINCT m), count(DISTINCT p) FROM (SELECT monotonically_increasing_id() AS m, \
+             spark_partition_id() AS p FROM (SELECT id FROM range(0, 1000, 1, 64) UNION ALL \
+             SELECT id FROM range(0, 1000, 1, 64)))";
+    assert_eq!(rows(&s, q), vec![vec!["2000".to_owned(), "128".to_owned()]]);
+}
+
+/// A seeded random above a generator draws by the split too (Generate keeps the batch's split).
+#[test]
+fn a_seeded_random_above_a_generator_draws_by_split_not_by_driver() {
+    let s = Session::new().unwrap();
+    let q = "SELECT md5(CAST(sort_array(collect_list(x)) AS STRING)) FROM \
+             (SELECT rand(7) AS x FROM (SELECT explode(array(1, 2)) AS e FROM range(50000)))";
+    let first = column(rows(&s, q));
+    for run in 0..5 {
+        assert_eq!(column(rows(&s, q)), first, "run {run}");
+    }
+}
+
+/// Two reads of one shared CTE number their splits apart: the stored batches carry no split tag of the
+/// pipeline that produced them, so ids drawn per split stay unique across the readers.
+#[test]
+fn two_reads_of_a_shared_cte_draw_ids_from_distinct_splits() {
+    let s = Session::new().unwrap();
+    let q = "WITH t AS (SELECT id, rand() AS r FROM range(0, 1000, 1, 4) UNION ALL SELECT count(*), rand() FROM range(10)) \
+             SELECT count(DISTINCT m) FROM (SELECT monotonically_increasing_id() AS m FROM t \
+             UNION ALL SELECT monotonically_increasing_id() AS m FROM t)";
+    assert_eq!(column(rows(&s, q)), vec!["2002"]);
+}

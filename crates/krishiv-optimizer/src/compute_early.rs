@@ -59,7 +59,7 @@ pub(crate) fn rewrite(
     stats: &dyn Statistics,
     propagate: bool,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
-    let mut memo = HashMap::new();
+    let mut memo = crate::expr::AddrMap::default();
     let mut next = max_id(&root, &mut memo).saturating_add(1);
     let mut est = Estimator::with_propagation(stats, propagate);
     let mut notes = Vec::new();

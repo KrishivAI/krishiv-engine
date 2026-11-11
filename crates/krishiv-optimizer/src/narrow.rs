@@ -19,7 +19,6 @@ use krishiv_plan::{AttrId, Builtin, Expr, ExprNode, Literal, ResolvedExpr};
 
 use crate::expr::{builtin, has_subquery, is_deterministic, references};
 use crate::stats::{AttrStats, DEFAULT_SELECTIVITY, RelStats, number, to_f64};
-use std::sync::Arc;
 
 /// The columns of a relation as a predicate sees them: the base estimates
 /// under the columns the predicate narrowed.
@@ -463,61 +462,4 @@ pub(crate) fn equi_columns(pred: &Expr, est: &RelStats) -> Option<[(AttrId, f64)
         _ => None,
     };
     Some([side(a)?, side(b)?])
-}
-
-/// The selectivity of a join condition `pred` over `l` and `r`. Column
-/// equalities between the same two inputs (two or more distinct column pairs
-/// in one conjunction) form a composite key: the product of their
-/// selectivities would assume the columns independent, but a foreign key to a
-/// composite primary key matches every row. The key's selectivity is
-/// `1 / NDV` of the side with fewer key values (each side's NDV is the product
-/// of its distinct key columns' NDVs, at most its rows), the rule the join
-/// orderer applies (`composite_keys`). Every conjunct still narrows the
-/// columns it reads.
-pub(crate) fn join_selectivity(
-    pred: &Arc<Expr>,
-    l: &RelStats,
-    r: &RelStats,
-    v: &mut View<'_>,
-) -> f64 {
-    let conj = crate::expr::conjuncts(pred);
-    // Each key conjunct's (left column, right column) with their NDVs.
-    let pair = |c: &Expr| -> Option<[(AttrId, f64); 2]> {
-        let Some((Builtin::Eq, [a, b], _)) = builtin(c) else {
-            return None;
-        };
-        let col = |e: &Expr, s: &RelStats| match &e.node {
-            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some((c.id, s.cols.get(&c.id)?.ndv)),
-            _ => None,
-        };
-        match (col(a, l), col(b, r), col(a, r), col(b, l)) {
-            (Some(x), Some(y), _, _) | (_, _, Some(y), Some(x)) => Some([x, y]),
-            _ => None,
-        }
-    };
-    let keys: Vec<Option<[(AttrId, f64); 2]>> = conj.iter().map(|c| pair(c)).collect();
-    let mut sides: [std::collections::HashMap<AttrId, f64>; 2] = Default::default();
-    for [x, y] in keys.iter().flatten() {
-        sides[0].insert(x.0, x.1);
-        sides[1].insert(y.0, y.1);
-    }
-    if keys.iter().flatten().count() < 2 || sides[0].len() < 2 && sides[1].len() < 2 {
-        return apply(pred, v);
-    }
-    let ndv = |s: &std::collections::HashMap<AttrId, f64>, rows: f64| {
-        s.values().product::<f64>().min(rows)
-    };
-    let key_sel = 1.0 / ndv(&sides[0], l.rows).min(ndv(&sides[1], r.rows)).max(1.0);
-    let mut sel = key_sel;
-    for (c, k) in conj.iter().zip(&keys) {
-        let s = apply(c, v);
-        if k.is_none() {
-            sel *= s;
-        }
-    }
-    if sel.is_finite() {
-        sel.clamp(0.0, 1.0)
-    } else {
-        DEFAULT_SELECTIVITY
-    }
 }

@@ -85,7 +85,8 @@ pub(crate) fn block_on<T: Send>(
     py: Python<'_>,
     work: impl std::future::Future<Output = Result<T, KrishivError>> + Send,
 ) -> PyResult<T> {
-    py.detach(|| futures::executor::block_on(work))
+    crate::udf::runtime::refuse_inside_udf(py)?;
+    py.detach(|| crate::stream::wait_for(work))
         .map_err(|e| to_py(py, &e))
 }
 
@@ -96,6 +97,7 @@ pub(crate) fn block_on_sql<T: Send>(
     sql: &str,
     work: impl std::future::Future<Output = Result<T, KrishivError>> + Send,
 ) -> PyResult<T> {
-    py.detach(|| futures::executor::block_on(work))
+    crate::udf::runtime::refuse_inside_udf(py)?;
+    py.detach(|| crate::stream::wait_for(work))
         .map_err(|e| to_py_for_sql(py, &e, sql))
 }

@@ -265,6 +265,42 @@ impl OptionSchema {
         ))
     }
 
+    /// `user` with the value `session` gives each conf fallback the user
+    /// did not set (case-insensitive), written as if the user had set it.
+    /// A plan built on the driver carries these options, so a worker
+    /// parsing them against its own configuration reads the session's
+    /// values (`spark.sql.binaryOutputStyle`, the session time zone, a
+    /// Parquet codec), never the worker's. Secret options are left out.
+    ///
+    /// Every fallback of the schema is carried, read-side ones too, so a
+    /// worker running in strict mode (`krishiv.io.strictOptions`) must
+    /// know every option a newer driver's schema has. A fallback key that
+    /// is not in the config registry and is unset on the driver is not
+    /// carried: a worker that sets it reads its own value (today all such
+    /// keys are read-side only).
+    #[must_use]
+    pub fn with_conf_fallbacks(
+        &self,
+        user: &BTreeMap<String, OptionValue>,
+        session: &Config,
+    ) -> BTreeMap<String, OptionValue> {
+        let mut out = user.clone();
+        for spec in self.options {
+            let Some(conf) = spec.conf_fallback else {
+                continue;
+            };
+            if spec.kind == OptionKind::Secret
+                || user.keys().any(|k| k.eq_ignore_ascii_case(spec.name))
+            {
+                continue;
+            }
+            if let Some(raw) = conf_value(session, conf) {
+                out.insert(spec.name.to_owned(), OptionValue::from_user(spec.name, raw));
+            }
+        }
+        out
+    }
+
     fn typed(&self, spec: &OptionSpec, key: &str, value: &OptionValue) -> Result<Value> {
         if spec.kind == OptionKind::Secret {
             return Ok(Value::Secret(match value {

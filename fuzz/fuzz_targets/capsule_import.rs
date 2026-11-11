@@ -193,7 +193,11 @@ fuzz_target!(|data: &[u8]| {
     let Some((&kind, rest)) = data.split_first() else {
         return;
     };
-    let Ok((mut array, schema)) = to_ffi(&batch(kind).to_data()) else {
+    let original = batch(kind);
+    // The same tree also goes through `import_column` (a Python UDF result, P2-T059 unit 2a),
+    // declared as the struct it is; the input's length picks which import runs.
+    let (declared, rows, as_column) = (original.data_type().clone(), original.len(), rest.len() % 2 == 1);
+    let Ok((mut array, schema)) = to_ffi(&original.to_data()) else {
         return;
     };
     let mut schema: FFI_ArrowSchema = schema;
@@ -274,7 +278,11 @@ fuzz_target!(|data: &[u8]| {
     // SAFETY: both are valid structs (headers possibly inconsistent, which is what is tested).
     unsafe {
         drop(ffi::read_schema(&raw const schema));
-        drop(ffi::import_array(&raw const schema, &raw mut array));
+        if as_column {
+            drop(ffi::import_column(&raw const schema, &raw mut array, &declared, rows));
+        } else {
+            drop(ffi::import_array(&raw const schema, &raw mut array));
+        }
         for (n, original) in saved {
             std::ptr::write(n, std::mem::ManuallyDrop::into_inner(original));
         }

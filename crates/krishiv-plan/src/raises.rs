@@ -43,6 +43,114 @@ pub fn may_raise(e: &Expr, ansi: bool) -> bool {
     !never_raises(e, ansi)
 }
 
+/// Whether `e` may run on rows Spark would not evaluate it on, with no
+/// observable effect: it is deterministic, holds no subquery, and raises on
+/// no row, either by [`may_raise`] or because it is exact decimal arithmetic
+/// ([`exact_decimal`], which also holds with ANSI on).
+#[must_use]
+pub fn runs_on_any_row(e: &Expr, ansi: bool) -> bool {
+    is_deterministic(e) && !has_subquery(e) && (exact_decimal(e) || !may_raise(e, ansi))
+}
+
+fn has_subquery(e: &Expr) -> bool {
+    let mut found = false;
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        if let crate::walk::Node::Expr(x) = n
+            && matches!(x.node, ExprNode::Subquery { .. })
+        {
+            found = true;
+            return std::ops::ControlFlow::Break(());
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    found
+}
+
+/// Whether `e` is decimal `+`, `-` and `*` whose every result is exact: each
+/// node's resolved type is the type Spark gives its operands before any
+/// `allowPrecisionLoss` adjustment (`(p1 + p2 + 1, s1 + s2)` for `*`,
+/// `(max(p1 - s1, p2 - s2) + max(s1, s2) + 1, max(s1, s2))` for `+`/`-`),
+/// so it is at most 38 digits and no value can overflow it: no
+/// `NUMERIC_VALUE_OUT_OF_RANGE` with ANSI on, no NULL with it off, under
+/// either precision-loss setting. The leaves are decimal columns and
+/// literals, integral columns cast to a decimal that holds every value, and
+/// integral literals cast to a decimal that holds them (the analyzer's
+/// `cast(1 AS decimal(1,0))`).
+#[must_use]
+pub fn exact_decimal(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Literal(Literal::Decimal { .. }) => true,
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => matches!(c.data_type, DataType::Decimal(_)),
+        ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => exact_decimal(expr),
+        ExprNode::Cast {
+            expr,
+            to: DataType::Decimal(to),
+            ..
+        } => match (&expr.node, type_of(expr)) {
+            (ExprNode::Literal(l), _) => integral_literal_digits(l)
+                .is_some_and(|d| d <= i32::from(to.precision()) - i32::from(to.scale())),
+            (_, Some(from @ DataType::Decimal(_))) => {
+                exact_decimal(expr) && widens(&from, &DataType::Decimal(*to))
+            }
+            (
+                ExprNode::Resolved(ResolvedExpr::Column(_)),
+                Some(
+                    from @ (DataType::Byte | DataType::Short | DataType::Integer | DataType::Long),
+                ),
+            ) => widens(&from, &DataType::Decimal(*to)),
+            _ => false,
+        },
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            if f.kind != FunctionKind::Scalar || f.filter.is_some() {
+                return false;
+            }
+            let FunctionId::Builtin(op) = &f.id else {
+                return false;
+            };
+            let [l, r] = f.args.as_slice() else {
+                return false;
+            };
+            let (Some(DataType::Decimal(a)), Some(DataType::Decimal(b)), DataType::Decimal(out)) =
+                (type_of(l), type_of(r), &f.data_type)
+            else {
+                return false;
+            };
+            let (p1, s1) = (i32::from(a.precision()), i32::from(a.scale()));
+            let (p2, s2) = (i32::from(b.precision()), i32::from(b.scale()));
+            let exact = match op {
+                Builtin::Multiply => (p1 + p2 + 1, s1 + s2),
+                Builtin::Add | Builtin::Subtract => {
+                    let s = s1.max(s2);
+                    ((p1 - s1).max(p2 - s2) + s + 1, s)
+                }
+                _ => return false,
+            };
+            exact == (i32::from(out.precision()), i32::from(out.scale()))
+                && exact_decimal(l)
+                && exact_decimal(r)
+        }
+        _ => false,
+    }
+}
+
+/// The decimal digits of an integral literal's absolute value.
+fn integral_literal_digits(l: &Literal) -> Option<i32> {
+    let v: u128 = match l {
+        Literal::Byte(v) => u128::from(v.unsigned_abs()),
+        Literal::Short(v) => u128::from(v.unsigned_abs()),
+        Literal::Integer(v) => u128::from(v.unsigned_abs()),
+        Literal::Long(v) => u128::from(v.unsigned_abs()),
+        _ => return None,
+    };
+    let mut digits = 1;
+    let mut rest = v / 10;
+    while rest > 0 {
+        digits += 1;
+        rest /= 10;
+    }
+    Some(digits)
+}
+
 /// Whether `e` holds no nondeterministic call (`rand`, `monotonically_increasing_id`,
 /// ...), so evaluating it twice gives the same values. An unresolved call
 /// counts as nondeterministic.
@@ -94,6 +202,8 @@ fn never_raises(e: &Expr, ansi: bool) -> bool {
         | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => true,
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => never_raises(expr, ansi),
         ExprNode::Resolved(ResolvedExpr::Field { base, .. }) => never_raises(base, ansi),
+        // The pinned mode decides inside (T184).
+        ExprNode::Resolved(ResolvedExpr::EvalMode { ansi, expr, .. }) => never_raises(expr, *ansi),
         ExprNode::Cast { expr, to, mode } => {
             never_raises(expr, ansi)
                 && type_of(expr).is_some_and(|from| cast_never_raises(&from, to, *mode))
@@ -160,7 +270,7 @@ fn function_never_raises(id: &FunctionId, args: &[std::sync::Arc<Expr>], ansi: b
             _ => false,
         },
         // User code may raise (or fail its contract): never assumed pure.
-        FunctionId::Udf { .. } => false,
+        FunctionId::Udf { .. } | FunctionId::PythonUdf { .. } => false,
     }
 }
 
@@ -232,7 +342,9 @@ pub(crate) fn type_of(e: &Expr) -> Option<DataType> {
             | ResolvedExpr::LambdaVar(c)
             | ResolvedExpr::Alias { output: c, .. },
         ) => Some(c.data_type.clone()),
-        ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => Some(data_type.clone()),
+        ExprNode::Resolved(
+            ResolvedExpr::Field { data_type, .. } | ResolvedExpr::EvalMode { data_type, .. },
+        ) => Some(data_type.clone()),
         ExprNode::Resolved(ResolvedExpr::Function(f)) => Some(f.data_type.clone()),
         ExprNode::Cast { to, .. } => Some(to.clone()),
         ExprNode::Literal(l) => literal_type(l),
@@ -517,5 +629,88 @@ mod tests {
             let got: Vec<&Expr> = conjuncts(e);
             assert_eq!(got, vec![&a, &b, &c]);
         }
+    }
+
+    /// q09's `amount`: `l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity`,
+    /// typed as Spark types it, with the analyzer's `cast(1 AS decimal(1,0))`.
+    fn amount() -> Expr {
+        let one = cast(lit(Literal::Integer(1)), dec(1, 0), CastMode::Ansi);
+        let disc = op(
+            Builtin::Subtract,
+            vec![one, col("l_discount", dec(15, 2))],
+            dec(16, 2),
+        );
+        let rev = op(
+            Builtin::Multiply,
+            vec![col("l_extendedprice", dec(15, 2)), disc],
+            dec(32, 4),
+        );
+        let cost = op(
+            Builtin::Multiply,
+            vec![
+                col("ps_supplycost", dec(15, 2)),
+                col("l_quantity", dec(15, 2)),
+            ],
+            dec(31, 4),
+        );
+        op(Builtin::Subtract, vec![rev, cost], dec(33, 4))
+    }
+
+    #[test]
+    fn exact_decimal_arithmetic_runs_on_any_row_under_ansi() {
+        let a = amount();
+        assert!(exact_decimal(&a));
+        assert!(may_raise(&a, true));
+        for ansi in [false, true] {
+            assert!(runs_on_any_row(&a, ansi), "{a}");
+        }
+        // An integral column widened to a decimal that holds it.
+        let widened = op(
+            Builtin::Add,
+            vec![
+                cast(col("k", DataType::Integer), dec(10, 0), CastMode::Ansi),
+                col("d", dec(10, 2)),
+            ],
+            dec(13, 2),
+        );
+        assert!(exact_decimal(&widened));
+    }
+
+    #[test]
+    fn inexact_decimal_arithmetic_is_refused() {
+        // decimal(38,0) * decimal(2,0): Spark's unadjusted (41,0) is cut to 38.
+        let wide = op(
+            Builtin::Multiply,
+            vec![col("a", dec(38, 0)), col("b", dec(2, 0))],
+            dec(38, 0),
+        );
+        assert!(!exact_decimal(&wide));
+        assert!(!runs_on_any_row(&wide, true));
+        assert!(runs_on_any_row(&wide, false));
+        // A resolved type that is not the exact one (precision loss applied).
+        let cut = op(
+            Builtin::Add,
+            vec![col("a", dec(15, 2)), col("b", dec(15, 2))],
+            dec(15, 2),
+        );
+        assert!(!exact_decimal(&cut));
+        // Division never.
+        let div = op(
+            Builtin::Divide,
+            vec![col("a", dec(10, 2)), col("b", dec(10, 2))],
+            dec(23, 13),
+        );
+        assert!(!exact_decimal(&div));
+        // A literal that does not fit its cast.
+        let big = cast(lit(Literal::Integer(100)), dec(2, 0), CastMode::Ansi);
+        assert!(!exact_decimal(&big));
+        // Integer arithmetic is not decimal.
+        let int = op(
+            Builtin::Add,
+            vec![col("k", DataType::Integer), lit(Literal::Integer(1))],
+            DataType::Integer,
+        );
+        assert!(!exact_decimal(&int));
+        assert!(!runs_on_any_row(&int, true));
     }
 }
