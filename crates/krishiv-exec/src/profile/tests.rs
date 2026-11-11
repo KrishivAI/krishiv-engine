@@ -825,14 +825,14 @@ fn identity_round_trips_and_a_shared_profile_drops_it_with_the_trace() {
 
     let shared = p.shareable();
     let text = shared.to_json();
-    for secret in [
+    for marker in [
         "sentinel-principal-ada",
         "sentinel-tag-data",
         "sentinel-trace-7f3a",
         "sentinel-session-9c1d",
         "\"trace\"",
     ] {
-        assert!(!text.contains(secret), "{secret} survived --share: {text}");
+        assert!(!text.contains(marker), "{marker} survived --share: {text}");
     }
     // Every number is kept.
     assert_eq!(shared.metrics, p.metrics);
