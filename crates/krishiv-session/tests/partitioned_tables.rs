@@ -2058,3 +2058,75 @@ fn added_and_inserted_partition_values_are_cast_to_their_types() {
     assert_eq!(rows(&s, "select concat_ws('|', x, p) from b"), ["1|7"]);
     assert!(dir.path().join("b/p=7").is_dir());
 }
+
+/// `ALTER TABLE .. PARTITION (..) SET LOCATION` casts its spec as ADD and RENAME do: the rows of a real Spark run
+/// (3.5.9, 4.0.5, 4.1.4 and 4.2.0 agree; krishiv-internal `research/spark/partition-followups/probe4.py`).
+#[test]
+fn set_location_casts_its_partition_spec() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table c (x int, p int, s string) using parquet partitioned by (p, s)",
+    );
+    run(&s, "alter table c add partition (p=7, s='a')");
+    let new1 = dir.path().join("new1");
+    run(
+        &s,
+        &format!(
+            "alter table c partition (p='007', s='a') set location '{}'",
+            new1.display()
+        ),
+    );
+    assert_eq!(rows(&s, "show partitions c"), ["p=7/s=a"]);
+    let location = rows(&s, "describe formatted c partition (p=7, s='a')")
+        .into_iter()
+        .find(|r| r.starts_with("Location"))
+        .unwrap();
+    assert!(location.ends_with("new1"), "{location}");
+    let other = dir.path().join("new2");
+    assert_eq!(
+        class(
+            &s,
+            &format!(
+                "alter table c partition (p='abc', s='a') set location '{}'",
+                other.display()
+            )
+        ),
+        "CAST_INVALID_INPUT"
+    );
+    assert_eq!(
+        params(
+            &s,
+            &format!(
+                "alter table c partition (p='8', s='a') set location '{}'",
+                other.display()
+            )
+        ),
+        [
+            "partitionList=PARTITION (`p` = 8, `s` = a)",
+            "tableName=`default`.`c`"
+        ]
+    );
+    s.conf()
+        .set(
+            "spark.sql.legacy.skipTypeValidationOnAlterPartition",
+            "true",
+        )
+        .unwrap();
+    for value in ["007", "abc"] {
+        assert_eq!(
+            params(
+                &s,
+                &format!(
+                    "alter table c partition (p='{value}', s='a') set location '{}'",
+                    other.display()
+                )
+            ),
+            [
+                format!("partitionList=PARTITION (`p` = {value}, `s` = a)"),
+                "tableName=`default`.`c`".to_owned()
+            ]
+        );
+    }
+}

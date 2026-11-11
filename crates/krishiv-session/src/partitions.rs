@@ -943,7 +943,13 @@ impl Session {
         require_partition_provider(table, "ALTER TABLE SET LOCATION")?;
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
         let written = self.written_spec(partition, original).await?;
-        let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
+        // Cast as ADD and RENAME cast (`'007'` finds `p=7`; Spark 3.5.9-4.2.0 agree, krishiv-internal
+        // `research/spark/partition-followups/probe4.py`).
+        let spec = ordered(
+            table,
+            &exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?,
+        );
+        let spec = self.alter_partition_spec(table, &spec).await?;
         let mut changed = (**table).clone();
         let path = qualified(self, location)?;
         // Reads and writes of the table follow the table root, not a partition's own location, so a location
