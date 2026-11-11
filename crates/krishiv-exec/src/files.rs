@@ -374,8 +374,8 @@ impl FileReads {
     /// any directory that is not a partition of the declared columns, is not
     /// one of the table's files (`spark.sql.hive.manageFilesourcePartitions`
     /// is not modelled: Spark's default, true). Values are read as the
-    /// columns' declared types. Nothing is inferred and nothing is cached, so every query lists
-    /// the table afresh.
+    /// columns' declared types. Nothing is inferred and nothing is cached,
+    /// so every query lists the table afresh.
     ///
     /// # Errors
     /// The listing errors of [`Self::listing`], except that no files is not
@@ -437,7 +437,8 @@ impl FileReads {
         // Any catalog table skips a directory that is not `name=value`
         // (Spark 4.2.0 reads an unpartitioned table's root files only, and a
         // partitioned one's registered locations only).
-        mode.skip_foreign_dirs = known.is_some() && mode.base.is_none();
+        // (`recursiveFileLookup` keeps reading every directory, as before.)
+        mode.skip_foreign_dirs = known.is_some() && mode.base.is_none() && !mode.recursive;
         // Spark checks the paths before the format.
         let mut listed: Vec<(FileRef, Vec<Segment>)> = Vec::new();
         for p in paths {
