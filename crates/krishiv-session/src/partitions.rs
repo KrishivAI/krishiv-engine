@@ -943,12 +943,10 @@ impl Session {
         require_partition_provider(table, "ALTER TABLE SET LOCATION")?;
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
         let written = self.written_spec(partition, original).await?;
-        // Cast as ADD and RENAME cast (`'007'` finds `p=7`; Spark 3.5.9-4.2.0 agree, krishiv-internal
-        // `research/spark/partition-followups/probe4.py`).
-        let spec = ordered(
-            table,
-            &exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?,
-        );
+        // Cast as ADD and RENAME cast (`'007'` finds `p=7`), in the order written: `PARTITIONS_NOT_FOUND` lists
+        // the spec as written (Spark 3.5.9-4.2.0 agree, krishiv-internal
+        // `research/spark/partition-followups/probe4.py`, `probe5.py`).
+        let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
         let spec = self.alter_partition_spec(table, &spec).await?;
         let mut changed = (**table).clone();
         let path = qualified(self, location)?;
@@ -991,10 +989,9 @@ impl Session {
         let mut exact = Vec::with_capacity(2);
         for spec in specs {
             let written = self.written_spec(spec, original).await?;
-            let spec = ordered(
-                table,
-                &exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?,
-            );
+            // In the order written: both errors below list a spec as written (Spark 4.2.0,
+            // krishiv-internal `research/spark/partition-followups/probe5.py`).
+            let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
             exact.push(self.alter_partition_spec(table, &spec).await?);
         }
         let [from, to] = exact.as_slice() else {
@@ -1021,6 +1018,8 @@ impl Session {
                 "ALTER TABLE ... RENAME PARTITION of an external table",
             ));
         }
+        // The catalog and the directory name keep the partition columns' order.
+        let to = &ordered(table, to);
         let mut changed = (**table).clone();
         let target = partition_path(&table.location, to);
         self.authorize_dir(&target).await?;

@@ -2130,3 +2130,62 @@ fn set_location_casts_its_partition_spec() {
         );
     }
 }
+
+/// `SET LOCATION` and `RENAME` report a spec in the order it was written, and a rename written out of column
+/// order still stores and names the partition in column order (Spark 4.2.0 and 3.5.9, krishiv-internal
+/// `research/spark/partition-followups/probe5.py`).
+#[test]
+fn partition_errors_list_a_spec_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table c (x int, p int, s string) using parquet partitioned by (p, s)",
+    );
+    run(&s, "alter table c add partition (p=7, s='a')");
+    run(&s, "alter table c add partition (p=9, s='b')");
+    let missing = |list: &str| {
+        vec![
+            format!("partitionList=PARTITION ({list})"),
+            "tableName=`default`.`c`".to_owned(),
+        ]
+    };
+    let n1 = dir.path().join("n1");
+    assert_eq!(
+        params(
+            &s,
+            &format!(
+                "alter table c partition (s='a', p=8) set location '{}'",
+                n1.display()
+            )
+        ),
+        missing("`s` = a, `p` = 8")
+    );
+    assert_eq!(
+        params(
+            &s,
+            "alter table c partition (s='a', p=8) rename to partition (s='b', p=10)"
+        ),
+        missing("`s` = a, `p` = 8")
+    );
+    assert_eq!(
+        params(
+            &s,
+            "alter table c partition (s='a', p=7) rename to partition (s='b', p='009')"
+        ),
+        missing("`s` = b, `p` = 9")
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table c partition (s='a', p=7) rename to partition (s='b', p='009')"
+        ),
+        "PARTITIONS_ALREADY_EXIST"
+    );
+    run(
+        &s,
+        "alter table c partition (s='a', p=7) rename to partition (s='c', p='010')",
+    );
+    assert_eq!(rows(&s, "show partitions c"), ["p=10/s=c", "p=9/s=b"]);
+    assert!(dir.path().join("c").join("p=10").join("s=c").is_dir());
+}
