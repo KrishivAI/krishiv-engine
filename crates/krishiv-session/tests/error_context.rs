@@ -181,3 +181,32 @@ fn runtime_error_innermost_span_wins() {
     assert_eq!(e.query_contexts().len(), 1);
     assert_eq!(span(&e), (12, 16, "a / b"));
 }
+
+/// The error `sql` raises when the physical plan is encoded and decoded before it
+/// runs, as a worker receives it (`krishiv.exec.debug.planRoundTrip`).
+fn fails_round_tripped(sql: &str) -> KrishivError {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.exec.debug.planRoundTrip", "true")
+        .unwrap();
+    match block_on(s.sql(sql)) {
+        Err(e) => e,
+        Ok(df) => block_on(df.collect()).expect_err("the query fails"),
+    }
+}
+
+/// A plan that crossed the codec keeps the spans of its expressions, so a worker's
+/// run-time error renders the same context as in-process.
+#[test]
+fn a_plan_through_the_codec_renders_the_same_runtime_contexts() {
+    for sql in [
+        "SELECT a / b FROM VALUES (1, 0) AS t(a, b)",
+        "SELECT CAST(a AS TINYINT) FROM VALUES (1000) AS t(a)",
+        "SELECT 1 + (a / b) FROM VALUES (1, 0) AS t(a, b)",
+    ] {
+        let direct = fails(sql);
+        let shipped = fails_round_tripped(sql);
+        assert_eq!(shipped.error_class(), direct.error_class(), "{sql}");
+        assert_eq!(span(&shipped), span(&direct), "{sql}");
+    }
+}
