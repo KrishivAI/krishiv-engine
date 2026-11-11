@@ -264,21 +264,22 @@ fn composite_factor(pairs: &[(AttrId, AttrId)], l: &RelStats, r: &RelStats) -> f
         return 1.0;
     }
     // A key column without known distinct counts (a guess) makes the tuple count unknown: no
-    // factor. A filtered side's key domain is its filtered distinct counts scaled back by the
-    // filter's fraction, so a selective filter keeps its reduction in the join's rows.
+    // factor. A filtered side's key domain is that of the unfiltered side: each column's count
+    // is taken back through the filter's shrink (`unfiltered_distinct`), so a filter on a key
+    // keeps its reduction in the join's rows and one on another column leaves the domain alone.
     let tuples = |ids: &[AttrId], s: &RelStats| -> Option<f64> {
+        let base = s.base_rows().max(1.0);
+        let kept = s.rows.max(1.0) / base;
         let product = ids
             .iter()
             .map(|i| {
                 s.cols
                     .get(i)
                     .filter(|c| c.ndv_known())
-                    .map(|c| c.ndv.max(1.0))
+                    .map(|c| unfiltered_distinct(c.ndv.max(1.0), kept, base))
             })
             .product::<Option<f64>>()?;
-        let base = s.base_rows().max(1.0);
-        let scale = base / s.rows.max(1.0);
-        Some((product * scale.max(1.0)).min(base))
+        Some(product.min(base))
     };
     let (Some(lt), Some(rt)) = (tuples(&lc, l), tuples(&rc, r)) else {
         return 1.0;
@@ -914,4 +915,24 @@ fn kept_distinct(ndv: f64, kept: f64, rows: f64) -> f64 {
     }
     let per_value = (rows / ndv).max(1.0);
     ndv * (1.0 - (1.0 - kept).powf(per_value))
+}
+
+/// The distinct count a column held before a filter that kept the fraction `kept` of `rows` rows
+/// left it with `ndv`: the inverse of [`kept_distinct`] (monotone in the count, found by
+/// bisection between `ndv` and `rows`). A column of few values over many rows comes back as it
+/// is; a unique one comes back at `ndv / kept`.
+fn unfiltered_distinct(ndv: f64, kept: f64, rows: f64) -> f64 {
+    if !(kept > 0.0 && kept < 1.0) || ndv >= rows {
+        return ndv;
+    }
+    let (mut lo, mut hi) = (ndv, rows);
+    for _ in 0..40 {
+        let mid = 0.5 * (lo + hi);
+        if kept_distinct(mid, kept, rows) < ndv {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi
 }

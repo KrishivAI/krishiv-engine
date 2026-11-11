@@ -504,6 +504,17 @@ fn a_composite_key_over_a_computed_column_gets_no_composite_factor() {
 }
 
 #[test]
+fn a_filter_on_a_non_key_column_does_not_inflate_the_composite_key_domain() {
+    let whole = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v").rows();
+    let filtered =
+        join("SELECT * FROM (SELECT * FROM t WHERE x < 50) t JOIN u ON t.a = u.k AND t.b = u.v")
+            .rows();
+    // The filter keeps a third of `t` (the default selectivity for the range): the join keeps
+    // the same third, not less (the key domain is not multiplied by the fraction a second time).
+    close(filtered, whole / 3.0, "filtered");
+}
+
+#[test]
 fn a_composite_outer_join_keeps_the_unmatched_fraction() {
     // Only inner joins take the composite rule: an outer join still finds rows of `t` without a
     // match (TPC-DS q78's anti join collapsed to one row when it did not).
