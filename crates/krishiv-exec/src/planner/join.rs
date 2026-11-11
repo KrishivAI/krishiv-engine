@@ -419,6 +419,12 @@ impl Planner<'_> {
                 placement,
             });
         }
+        let mut probe = probe;
+        let fused = self.fuse_probe_filter(&mut probe, &probe_exprs, &residual);
+        let select = fused.map(|(select, predicate)| {
+            detail.push_str(&format!(", probe filter: {predicate}"));
+            select
+        });
         let plan = HashJoinPlan {
             probe: Box::new(probe.node),
             build: Box::new(build.node),
@@ -431,6 +437,7 @@ impl Planner<'_> {
             distinct_build: false,
             runtime_filters,
             distribution,
+            select: None,
         };
         // Validates the join and gives its schema, over placeholder cells.
         let schema = hash_join(
@@ -443,6 +450,9 @@ impl Planner<'_> {
             Producer::default(),
         )?
         .schema();
+        // Validated without the selection: the probe's input is now the
+        // fused filter's, whose columns the probe reads as `probe_schema`.
+        let plan = HashJoinPlan { select, ..plan };
         Ok(Planned {
             ordering: Vec::new(),
             schema,

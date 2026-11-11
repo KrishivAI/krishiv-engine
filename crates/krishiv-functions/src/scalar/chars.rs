@@ -40,6 +40,11 @@ pub(super) const NAMES: &[&str] = &[
     "locate",
     "__locate_lcase",
     "__find_in_set_lcase",
+    "__trim_collated",
+    "__replace_lcase",
+    "__translate_lcase",
+    "__split_part_lcase",
+    "__substring_index_lcase",
     "position",
     "substring_index",
     "split_part",
@@ -156,6 +161,46 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         ("split_part", "SSI") => Binding::new(DataType::Utf8, |x| {
             let (s, d, n) = (x.str(0)?, x.str(1)?, x.int(2)?);
             Ok(utf8(string::split_part(
+                s.operand(),
+                d.operand(),
+                n.operand(),
+            )?))
+        }),
+        ("__trim_collated", "ISS") => Binding::new(DataType::Utf8, |x| {
+            let (mode, s, chars) = (x.int(0)?, x.str(1)?, x.str(2)?);
+            Ok(utf8(string::trim_collated(
+                mode.operand(),
+                s.operand(),
+                chars.operand(),
+            )?))
+        }),
+        ("__replace_lcase", "SSS") => Binding::new(DataType::Utf8, |x| {
+            let (s, a, b) = (x.str(0)?, x.str(1)?, x.str(2)?);
+            Ok(utf8(string::replace_lcase(
+                s.operand(),
+                a.operand(),
+                b.operand(),
+            )?))
+        }),
+        ("__translate_lcase", "SSS") => Binding::new(DataType::Utf8, |x| {
+            let (s, a, b) = (x.str(0)?, x.str(1)?, x.str(2)?);
+            Ok(utf8(string::translate_lcase(
+                s.operand(),
+                a.operand(),
+                b.operand(),
+            )?))
+        }),
+        ("__split_part_lcase", "SSI") => Binding::new(DataType::Utf8, |x| {
+            let (s, d, n) = (x.str(0)?, x.str(1)?, x.int(2)?);
+            Ok(utf8(string::split_part_lcase(
+                s.operand(),
+                d.operand(),
+                n.operand(),
+            )?))
+        }),
+        ("__substring_index_lcase", "SSI") => Binding::new(DataType::Utf8, |x| {
+            let (s, d, n) = (x.str(0)?, x.str(1)?, x.int(2)?);
+            Ok(utf8(string::substring_index_lcase(
                 s.operand(),
                 d.operand(),
                 n.operand(),

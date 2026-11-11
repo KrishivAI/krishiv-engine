@@ -39,6 +39,7 @@ mod chars;
 mod charsets;
 pub(crate) mod codec;
 mod collation_key;
+mod lcase;
 mod like;
 mod mask_table;
 mod split;
@@ -63,6 +64,10 @@ pub use codec::{
 };
 pub use collation_key::{
     collation_key, collation_key_type, keyed_map, keyed_map_type, push_collation_key,
+};
+pub use lcase::{
+    replace_lcase, split_part_lcase, substring_index_lcase, translate_lcase, trim_collated,
+    trim_mode,
 };
 pub use like::{LikePattern, like};
 pub use split::{literal_delimiter, split_literal};

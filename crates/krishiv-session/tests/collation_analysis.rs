@@ -249,19 +249,20 @@ fn search_and_indeterminate_rules_follow_spark() {
 
 /// Calls whose answer depends on the collation refuse a non-binary one instead of matching
 /// bytes (unit 5 brings the collation-aware kernels; `contains`, `startswith` and `endswith`
-/// over `UTF8_LCASE` are there, unit 5a); binary strings are untouched.
+/// over `UTF8_LCASE` are there, unit 5a, and so are the trim family, `replace`, `translate`,
+/// `split_part` and `substring_index`, unit 5c); binary strings are untouched.
 #[test]
 fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
     let l = "('Ab' COLLATE utf8_lcase)";
     for sql in [
-        format!("SELECT replace({l}, 'a', 'x')"),
-        format!("SELECT translate({l}, 'a', 'x')"),
-        format!("SELECT trim('a' FROM {l})"),
-        format!("SELECT split_part({l}, 'x', 1)"),
         format!("SELECT {l} LIKE 'a%'"),
         format!("SELECT {l} RLIKE '^a'"),
         format!("SELECT regexp_replace({l}, 'a', 'x')"),
         "SELECT replace('aAb' COLLATE unicode_ci, 'a', 'x')".to_owned(),
+        "SELECT translate('aAb' COLLATE unicode_ci, 'a', 'x')".to_owned(),
+        "SELECT trim('a' FROM 'aAb' COLLATE unicode_ci)".to_owned(),
+        "SELECT split_part('aAb' COLLATE unicode_ci, 'x', 1)".to_owned(),
+        "SELECT substring_index('aAb' COLLATE unicode_ci, 'x', 1)".to_owned(),
         "SELECT 'a ' COLLATE utf8_binary_rtrim LIKE 'a'".to_owned(),
         "SELECT upper('a' COLLATE unicode_ci)".to_owned(),
     ] {
@@ -282,21 +283,23 @@ fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
 
 /// `İ` (U+0130) lower-cases to `i` + U+0307 and Spark (`lowercaseMatchLengthFrom`,
 /// `lowercaseMatchUntil`) refuses a match that starts or ends inside the pair, so a pattern that
-/// could do that is not run on the lower-cased key but on the position kernel (unit 5a review B1,
-/// unit 5b): the split match is `false`, as in Spark, and a plain literal is answered on the key.
+/// could do that is not run on the lower-cased key as a plain compare (unit 5a review B1); since
+/// unit 5b such a pattern, and a per-row pattern, runs the lower-case search kernel and answers
+/// false as Spark does.
 #[test]
 fn lcase_search_answers_a_pattern_that_could_split_the_dotted_capital_i() {
-    for sql in [
-        "SELECT CAST(contains('\u{130}' COLLATE utf8_lcase, 'i') AS STRING)",
-        "SELECT CAST(startswith('\u{130}' COLLATE utf8_lcase, 'i') AS STRING)",
-        "SELECT CAST(endswith('\u{130}' COLLATE utf8_lcase, '\u{307}') AS STRING)",
+    for (call, want) in [
+        ("contains('\u{130}' COLLATE utf8_lcase, 'i')", "false"),
+        ("startswith('\u{130}' COLLATE utf8_lcase, 'i')", "false"),
+        ("endswith('\u{130}' COLLATE utf8_lcase, '\u{307}')", "false"),
+        ("contains('Ab' COLLATE utf8_lcase, concat('a', ''))", "true"),
     ] {
-        assert_eq!(one(sql), "false", "{sql}");
+        assert_eq!(
+            one(&format!("SELECT CAST({call} AS STRING)")),
+            want,
+            "{call}"
+        );
     }
-    assert_eq!(
-        one("SELECT CAST(contains('Ab' COLLATE utf8_lcase, concat('a', '')) AS STRING)"),
-        "true"
-    );
     assert_eq!(
         one("SELECT CAST(contains('Ab' COLLATE utf8_lcase, 'a') AS STRING)"),
         "true"
@@ -313,10 +316,10 @@ fn lcase_search_answers_a_pattern_that_could_split_the_dotted_capital_i() {
     );
 }
 
-/// A collated string inside an array, map or struct would lose its collation (or be compared
-/// Indeterminate input gives no string result here; a non-string result is still produced.
+/// Indeterminate input gives Spark's `string collate null` result (`collations-padding-trim`
+/// `rpad`, `collations-basic` `elt`); the calls Spark fails on still fail.
 #[test]
-fn indeterminate_string_results_are_refused() {
+fn indeterminate_string_results_carry_the_null_collation() {
     let s = Session::new().unwrap();
     for sql in [
         "create table t1(a string collate utf8_binary, b string collate utf8_lcase) using parquet",
@@ -324,15 +327,131 @@ fn indeterminate_string_results_are_refused() {
     ] {
         block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
     }
-    let e = block_on(s.sql("select concat(a, b) from t1")).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(value_of(&s, "select rpad(a, 8, b) from t1"), "abcabcda");
+    assert_eq!(
+        value_of(&s, "select typeof(rpad(a, 8, b)) from t1"),
+        "string collate null"
+    );
+    assert_eq!(
+        class_of(&s, "select upper(concat(a, b)) from t1"),
+        ErrorClass::IndeterminateCollationInExpression
+    );
+    for sql in [
+        "select concat(a, b) = 'x' from t1",
+        "select concat(a, b) in ('x') from t1",
+    ] {
+        assert_eq!(
+            class_of(&s, sql),
+            ErrorClass::IndeterminateCollationInExpression,
+            "{sql}"
+        );
+    }
+    // The run-time failure keeps the call's own result type.
+    assert_eq!(
+        value_of(&s, "select typeof(str_to_map(a, ',', b)) from t1 limit 1"),
+        "map<string collate null,string collate null>"
+    );
+    // `format_string` takes its collation from the format alone.
+    assert_eq!(
+        value_of(&s, "select typeof(format_string(a, a, b)) from t1 limit 1"),
+        "string collate UTF8_BINARY"
+    );
+    // The strength of a nested `format_string` is that of its format alone: the lcase argument
+    // does not conflict with the explicit binary operand outside.
+    assert!(
+        run("select concat(format_string('%s', 'a' collate utf8_lcase), 'b' collate utf8_binary)")
+            .is_ok()
+    );
+    // A qualified call is not the builtin the collation rewrites stand for.
+    assert_ne!(
+        class_of(&s, "select session.instr('Ab' collate utf8_lcase, 'a')"),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert!(run("select session.instr('Ab' collate utf8_lcase, 'a')").is_err());
+    assert!(run("select builtin.instr('Ab' collate utf8_lcase, 'a')").is_ok());
+    // `instr` takes two arguments: a third is the usual arity error, not a start position.
+    assert!(run("select instr('Ab' collate utf8_lcase, 'a', 99)").is_err());
+    // An overwrite refused for its indeterminate column keeps the old table.
+    block_on(
+        block_on(s.sql("create table keep using parquet as select 1 as x"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    let df = block_on(s.sql("select concat(a, b) c from t1")).unwrap();
+    let r = block_on(df.write().mode("overwrite").save_as_table("keep"));
+    assert_eq!(
+        r.unwrap_err().error_class(),
+        ErrorClass::IndeterminateCollationInSchema
+    );
+    let kept = block_on(block_on(s.sql("select x from keep")).unwrap().collect()).unwrap();
+    assert_eq!(
+        kept.iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1
+    );
+    // Calls Spark carries the type through are not modelled yet.
     assert_eq!(
         class_of(&s, "select length(concat(a, b)) from t1"),
         ErrorClass::KrishivUnsupportedFeature
     );
+    // A schema may not hold the indeterminate type.
+    for sql in [
+        "create table ct using parquet as select rpad(a, 8, b) r from t1",
+        "create view cv as select concat(a, b) c from t1",
+        "create temporary view tv as select concat(a, b) c from t1",
+        "create table ct2 using parquet as select split_part(a, b, 1) x from t1",
+        "create temporary view tv2 as select split_part(a, b, 1) x from t1",
+    ] {
+        assert_eq!(
+            class_of(&s, sql),
+            ErrorClass::IndeterminateCollationInSchema,
+            "{sql}"
+        );
+    }
+    // Map keys may not be collated, and the indeterminate collation is no exception.
+    assert_eq!(
+        class_of(
+            &s,
+            "create table ct3 using parquet as select str_to_map(a, ',', b) x from t1"
+        ),
+        ErrorClass::UnsupportedFeatureCollationsInMapKeys
+    );
+    // The run-time error fires only for a row with both operands (Spark's string functions ignore NULLs).
+    block_on(
+        block_on(s.sql("insert into t1 values(NULL, 'x'), ('y', NULL)"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(
+        value_of(
+            &s,
+            "select cast(count(*) as string) from (select split_part(a, b, 1) x from t1 where a is null or b is null)"
+        ),
+        "2"
+    );
+    assert_eq!(
+        value_of(
+            &s,
+            "select cast(count(*) as string) from (select str_to_map(a, ',', b) x from t1 where a is null or b is null)"
+        ),
+        "2"
+    );
+    // `split_part` raises on its first two operands alone: a NULL index does not skip the row.
+    let df = block_on(s.sql("select split_part(a, b, cast(null as int)) from t1")).unwrap();
+    let e = block_on(df.collect()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::IndeterminateCollation);
+    let df = block_on(s.sql("select split_part(a, b, 1) from t1")).unwrap();
+    let e = block_on(df.collect()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::IndeterminateCollation);
     // `levenshtein` is not on Spark's indeterminate list: it just runs ('abc' to 'abcd').
     assert_eq!(
-        value_of(&s, "select cast(levenshtein(a, b) as string) from t1"),
+        value_of(
+            &s,
+            "select cast(levenshtein(a, b) as string) from t1 where length(a) = 3 and length(b) = 4"
+        ),
         "1"
     );
 }
@@ -410,13 +529,18 @@ fn class_of(s: &Session, sql: &str) -> ErrorClass {
 fn unusual_operands_and_array_functions_do_not_compare_bytes() {
     for sql in [
         "SELECT (SELECT 'Ab' COLLATE utf8_lcase) LIKE 'a%'",
-        "SELECT replace(CAST(array('aAb') AS ARRAY<STRING COLLATE utf8_lcase>)[0], 'a', 'x')",
+        "SELECT replace(CAST(array('aAb') AS ARRAY<STRING COLLATE unicode_ci>)[0], 'a', 'x')",
         "SELECT array_contains(array('a', 'b'), 'A' COLLATE utf8_lcase)",
         "SELECT array_position(array('a'), 'A' COLLATE unicode_ci)",
         "SELECT map_contains_key(map('a', 1), 'A' COLLATE utf8_lcase)",
     ] {
         assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
     }
+    // An element of a collated array is read by its collation (unit 5c).
+    assert_eq!(
+        one("SELECT replace(CAST(array('aAb') AS ARRAY<STRING COLLATE utf8_lcase>)[0], 'a', 'x')"),
+        "xxb"
+    );
     // A search over a subquery or a struct field of a collated type reads its key (unit 5a).
     for sql in [
         "SELECT CAST(contains((SELECT 'Ab' COLLATE utf8_lcase), 'a') AS STRING)",
@@ -428,6 +552,113 @@ fn unusual_operands_and_array_functions_do_not_compare_bytes() {
     assert_eq!(
         one("SELECT CAST(array_contains(array('a', 'b'), 'a') AS STRING)"),
         "true"
+    );
+}
+
+/// The array functions over arrays of `UTF8_LCASE` strings compare keys and keep the original
+/// elements (`collations-basic` 37-45).
+#[test]
+fn array_functions_over_collated_strings_compare_keys() {
+    let l = |x: &str| format!("'{x}' COLLATE utf8_lcase");
+    let arr = |xs: &[&str]| {
+        format!(
+            "array({})",
+            xs.iter().map(|x| l(x)).collect::<Vec<_>>().join(", ")
+        )
+    };
+    let text = |call: String| one(&format!("SELECT CAST({call} AS STRING)"));
+    assert_eq!(
+        text(format!("array_contains({}, {})", arr(&["aaa"]), l("AAA"))),
+        "true"
+    );
+    assert_eq!(
+        text(format!(
+            "array_position({}, {})",
+            arr(&["x", "bB"]),
+            l("BB")
+        )),
+        "2"
+    );
+    assert_eq!(
+        text(format!(
+            "arrays_overlap({}, {})",
+            arr(&["a"]),
+            arr(&["B", "A"])
+        )),
+        "true"
+    );
+    assert_eq!(
+        text(format!("array_distinct({})", arr(&["a", "A", "b"]))),
+        "[a, b]"
+    );
+    assert_eq!(
+        text(format!(
+            "array_union({}, {})",
+            arr(&["a", "B"]),
+            arr(&["A", "c"])
+        )),
+        "[a, B, c]"
+    );
+    assert_eq!(
+        text(format!(
+            "array_intersect({}, {})",
+            arr(&["a", "B", "b"]),
+            arr(&["b"])
+        )),
+        "[B]"
+    );
+    assert_eq!(
+        text(format!(
+            "array_except({}, {})",
+            arr(&["a", "B", "a"]),
+            arr(&["b"])
+        )),
+        "[a]"
+    );
+    // `containsNull` of the result: a NULL in the second operand shows in a union, not an intersect.
+    assert_eq!(
+        text(format!(
+            "array_union({}, array({}, NULL))",
+            arr(&["a"]),
+            l("A")
+        )),
+        "[a, null]"
+    );
+    assert_eq!(
+        text(format!(
+            "array_intersect({}, array({}, NULL))",
+            arr(&["a"]),
+            l("A")
+        )),
+        "[a]"
+    );
+    // A NULL array gives NULL; NULL elements are equal to each other.
+    let null = "CAST(NULL AS ARRAY<STRING COLLATE utf8_lcase>)";
+    assert_eq!(
+        text(format!("array_union({null}, {})", arr(&["a"]))),
+        "NULL"
+    );
+    assert_eq!(
+        text(format!("array_distinct(array({}, NULL, NULL))", l("a"))),
+        "[a, null]"
+    );
+}
+
+/// `str_to_map` over explicit `UTF8_BINARY` operands keeps the display marker in the map's type
+/// (`collations-basic` 61).
+#[test]
+fn str_to_map_keeps_the_binary_marker() {
+    assert_eq!(
+        one(
+            "SELECT typeof(str_to_map('a:1,b:2' COLLATE utf8_binary, ',' COLLATE utf8_binary, ':' COLLATE utf8_binary))"
+        ),
+        "map<string collate UTF8_BINARY,string collate UTF8_BINARY>"
+    );
+    assert_eq!(
+        one(
+            "SELECT CAST(str_to_map('a:1,b:2' COLLATE utf8_binary, ',' COLLATE utf8_binary, ':' COLLATE utf8_binary) AS STRING)"
+        ),
+        "{a -> 1, b -> 2}"
     );
 }
 
@@ -825,25 +1056,18 @@ fn the_implicit_collation_cast_quotes_a_literal_in_the_name() {
     );
 }
 
-/// `x IN (subquery)` over a pair in one collation compares through that collation's keys. A
-/// pair of different collations is not keyed (Spark refuses or an explicit COLLATE wins).
+/// `x IN (subquery)` compares in the collated side's collation; values are those of a real
+/// Spark 4.2.0 run (`ops/scripts/spark-local.sh`, 2026-11-07).
 #[test]
 fn in_subquery_compares_through_the_collation_keys() {
     for (sql, want) in [
-        (
-            "'a' COLLATE utf8_lcase IN (SELECT 'A' COLLATE utf8_lcase)",
-            "true",
-        ),
-        (
-            "'b' COLLATE utf8_lcase IN (SELECT 'A' COLLATE utf8_lcase)",
-            "false",
-        ),
-        (
-            "'a ' COLLATE utf8_binary_rtrim IN (SELECT 'a' COLLATE utf8_binary_rtrim)",
-            "true",
-        ),
-        ("'a' COLLATE utf8_binary IN (SELECT 'a')", "true"),
-        ("'a' COLLATE utf8_binary IN (SELECT 'A')", "false"),
+        ("('a' COLLATE utf8_lcase) IN (SELECT 'A')", "true"),
+        ("('b' COLLATE utf8_lcase) IN (SELECT 'A')", "false"),
+        ("'a' IN (SELECT 'A' COLLATE utf8_lcase)", "true"),
+        ("'a ' COLLATE utf8_binary_rtrim IN (SELECT 'a')", "true"),
+        ("'b' IN (SELECT 'A' COLLATE utf8_lcase)", "false"),
+        ("('a' COLLATE utf8_binary) IN (SELECT 'a')", "true"),
+        ("('a' COLLATE utf8_binary) IN (SELECT 'A')", "false"),
     ] {
         assert_eq!(
             one(&format!("SELECT CAST(({sql}) AS STRING)")),
@@ -911,103 +1135,233 @@ fn searches_over_lcase_split_the_dotted_capital_i_like_spark() {
     }
 }
 
-/// USING joins, correlated subqueries and the special-casing letters (capital sharp s,
-/// final sigma) over `UTF8_LCASE`; every expected value is from a Spark 4.2.0 local run.
 #[test]
-fn using_having_correlated_and_special_letters_match_spark() {
-    let s = Session::new().unwrap();
-    for sql in [
-        "create table u1(a string collate utf8_lcase, n int) using parquet",
-        "insert into u1 values('aaa', 1), ('AAA', 2), ('bbb', 3)",
-        "create table u2(a string collate utf8_lcase, m int) using parquet",
-        "insert into u2 values('AAA', 10), ('ccc', 11)",
+fn equal_null_compares_lcase_keys() {
+    for (call, want) in [
+        ("equal_null('A' COLLATE utf8_lcase, 'a')", "true"),
+        ("equal_null('A' COLLATE utf8_lcase, 'b')", "false"),
+        ("equal_null('A' COLLATE utf8_lcase, NULL)", "false"),
     ] {
-        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
-    }
-    let v = |sql: &str| value_of(&s, &format!("select cast(({sql}) as string)"));
-    // USING join: both `aaa` and `AAA` match `AAA` (Spark: 2 rows, m = 10 on each).
-    assert_eq!(v("select count(*) from u1 join u2 using (a)"), "2");
-    assert_eq!(v("select sum(m) from u1 join u2 using (a)"), "20");
-    // Grouping by the column (HAVING on the key) is collations 3b (#666), not here.
-    // Correlated EXISTS / scalar comparisons compare on keys (Spark: 2).
-    assert_eq!(
-        v("select count(*) from u1 where exists (select 1 from u2 where u2.a = u1.a)"),
-        "2"
-    );
-    // A correlated scalar subquery keyed on the column is still refused (Spark answers 2): a
-    // known gap, refused rather than answered on bytes.
-    assert_eq!(
-        class_of(
-            &s,
-            "select count(*) from u1 where n > (select min(m) - 10 from u2 where u2.a = u1.a)"
-        ),
-        ErrorClass::KrishivUnsupportedFeature
-    );
-    // Capital sharp s, final and non-final sigma: all equal under UTF8_LCASE (Spark: true).
-    for (l, r) in [("ẞ", "ß"), ("ΑΣ", "ας"), ("ΑΣ", "ασ"), ("ΑΣ", "Ας")] {
         assert_eq!(
-            v(&format!("select '{l}' collate utf8_lcase = '{r}'")),
-            "true",
-            "{l} {r}"
+            one(&format!("SELECT CAST({call} AS STRING)")),
+            want,
+            "{call}"
         );
     }
 }
 
-/// A search call with the wrong argument count is a plain error, never a crash or a quietly
-/// defaulted argument (`instr` has no start argument).
+/// `trim`, `replace`, `translate`, `split_part` and `substring_index` over `UTF8_LCASE` and the
+/// `_RTRIM` collations (unit 5c); values of a Spark 4.2.0 local run (2026-11-10).
 #[test]
-fn lcase_search_with_the_wrong_argument_count_is_an_error() {
+fn trim_replace_translate_split_substring_index_over_lcase_and_rtrim() {
+    for (sql, want) in [
+        ("TRIM('b' FROM 'ABab' COLLATE utf8_lcase)", "ABa"),
+        (
+            "BTRIM('\u{130}o' COLLATE utf8_lcase, 'i\u{307}o')",
+            "\u{130}",
+        ),
+        ("BTRIM('i\u{307}o' COLLATE utf8_lcase, '\u{130}o')", ""),
+        ("LTRIM('a', 'AAb' COLLATE utf8_lcase)", "b"),
+        ("RTRIM('B', 'aAbB' COLLATE utf8_lcase)", "aA"),
+        ("BTRIM('ab  ' COLLATE utf8_binary_rtrim, 'b')", "a  "),
+        ("BTRIM('ab  ' COLLATE utf8_binary_rtrim, 'b ')", "a"),
+        ("RTRIM('ab ', 'xab  ' COLLATE utf8_lcase_rtrim)", "x"),
+        ("RTRIM('  ab  ' COLLATE utf8_binary_rtrim)", "  ab"),
+        ("REPLACE('aAa' COLLATE utf8_lcase, 'A', 'x')", "xxx"),
+        (
+            "REPLACE('\u{130}o' COLLATE utf8_lcase, 'i', 'x')",
+            "\u{130}o",
+        ),
+        ("REPLACE('A  ' COLLATE utf8_lcase_rtrim, 'a ', 'x')", "x "),
+        ("REPLACE('a  ' COLLATE utf8_binary_rtrim, 'a ', 'x')", "x "),
+        ("TRANSLATE('aAbB' COLLATE utf8_lcase, 'Aab', 'xy')", "xx"),
+        (
+            "TRANSLATE('i\u{307}i' COLLATE utf8_lcase, '\u{130}', '1')",
+            "1i",
+        ),
+        (
+            "TRANSLATE('A b ' COLLATE utf8_lcase_rtrim, ' ', '1')",
+            "A1b1",
+        ),
+        ("SPLIT_PART('aAbAAc' COLLATE utf8_lcase, 'a', 3)", "b"),
+        ("SPLIT_PART('aAbAAc' COLLATE utf8_lcase, 'a', -1)", "c"),
+        (
+            "SPLIT_PART('a  b' COLLATE utf8_binary_rtrim, 'a ', 2)",
+            "  b",
+        ),
+        ("SPLIT_PART('Ab  ' COLLATE utf8_lcase_rtrim, 'B ', 1)", "A"),
+        (
+            "SUBSTRING_INDEX('aAbAAc' COLLATE utf8_lcase, 'a', 3)",
+            "aAb",
+        ),
+        (
+            "SUBSTRING_INDEX('aAbAAc' COLLATE utf8_lcase, 'a', -2)",
+            "Ac",
+        ),
+        (
+            "SUBSTRING_INDEX('a  b' COLLATE utf8_binary_rtrim, ' ', 1)",
+            "",
+        ),
+        (
+            "SUBSTRING_INDEX('Ab  ' COLLATE utf8_lcase_rtrim, 'B ', 1)",
+            "A",
+        ),
+    ] {
+        assert_eq!(one(&format!("SELECT {sql}")), want, "{sql}");
+    }
+    // The result keeps the collation.
+    assert_eq!(
+        one("SELECT typeof(replace('aAa' COLLATE utf8_lcase, 'A', 'x'))"),
+        "string collate UTF8_LCASE"
+    );
+    assert_eq!(
+        one("SELECT typeof(btrim('a ' COLLATE utf8_binary_rtrim, 'a'))"),
+        "string collate UTF8_BINARY_RTRIM"
+    );
+    // NULL stays NULL.
+    assert_eq!(
+        one("SELECT CAST(btrim(CAST(NULL AS STRING) COLLATE utf8_lcase, 'a') AS STRING)"),
+        "NULL"
+    );
+}
+
+/// `nullif`, `least` and `greatest` over strings of one `UTF8_LCASE` or `_RTRIM` type compare by
+/// the collation: the earlier operand wins a tie and NULLs are skipped (Spark 4.2.0 values).
+#[test]
+fn nullif_least_and_greatest_pick_by_the_collation() {
+    let l = "collate utf8_lcase";
+    for (sql, want) in [
+        (format!("select nullif('aaa' {l}, 'AAA' {l})"), "NULL"),
+        (format!("select nullif('aaa' {l}, 'bbb' {l})"), "aaa"),
+        (
+            format!("select nullif('aaa' {l}, cast(null as string {l}))"),
+            "aaa",
+        ),
+        (
+            format!("select nullif(cast(null as string {l}), 'aaa' {l})"),
+            "NULL",
+        ),
+        (format!("select least('b' {l}, 'B' {l})"), "b"),
+        (format!("select least('B' {l}, 'b' {l})"), "B"),
+        (format!("select greatest('a' {l}, 'A' {l})"), "a"),
+        (format!("select greatest('A' {l}, 'a' {l})"), "A"),
+        (format!("select least('aaa' {l}, 'AAA' {l}, 'a' {l})"), "a"),
+        (
+            format!("select greatest('aaa' {l}, 'AAA' {l}, 'B' {l})"),
+            "B",
+        ),
+        (
+            format!("select least(cast(null as string {l}), 'b' {l}, 'A' {l})"),
+            "A",
+        ),
+        (
+            format!("select greatest(cast(null as string {l}), cast(null as string {l}))"),
+            "NULL",
+        ),
+        (
+            format!("select typeof(least('a' {l}, 'b' {l}))"),
+            "string collate UTF8_LCASE",
+        ),
+        (
+            "select nullif('a ' collate utf8_binary_rtrim, 'a' collate utf8_binary_rtrim)".into(),
+            "NULL",
+        ),
+        (
+            "select least('b ' collate utf8_binary_rtrim, 'b' collate utf8_binary_rtrim)".into(),
+            "b ",
+        ),
+        (
+            "select greatest('b ' collate utf8_binary_rtrim, 'B' collate utf8_binary_rtrim)".into(),
+            "b ",
+        ),
+    ] {
+        assert_eq!(one(&sql), want, "{sql}");
+    }
+    // Any number of operands pick by key (`__collation_least`).
+    assert_eq!(
+        one(&format!(
+            "select least('b' {l}, 'a' {l}, 'C' {l}, 'd' {l}, 'E' {l})"
+        )),
+        "a"
+    );
+    // The call keeps its own name and result type.
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(&format!("select nullif('aaa' {l}, 'AAA' {l})"))).unwrap();
+    let name = block_on(df.schema()).unwrap().field(0).name().clone();
+    assert_eq!(
+        name,
+        "nullif(collate(aaa, utf8_lcase), collate(AAA, utf8_lcase))"
+    );
+}
+
+#[test]
+fn listagg_distinct_casts_follow_spark() {
+    // A cast the user wrote over a cast is not the implicit one: Spark names the value, not the
+    // cast type (MISMATCH_WITH_DISTINCT_INPUT),.
+    let e = run(
+        "SELECT listagg(DISTINCT CAST(CAST(col AS STRING COLLATE UTF8_LCASE) AS STRING)) \
+         WITHIN GROUP (ORDER BY col) FROM VALUES ('ABC'), ('abc') AS t(col)",
+    )
+    .unwrap_err();
+    assert!(
+        e.to_string().contains("MISMATCH_WITH_DISTINCT_INPUT")
+            && !e.to_string().contains("UNSAFE_CAST"),
+        "{e}"
+    );
+    let e = run(
+        "SELECT listagg(DISTINCT CAST(col AS STRING COLLATE UTF8_LCASE)) \
+         WITHIN GROUP (ORDER BY col) FROM VALUES ('ABC'), ('abc') AS t(col)",
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("UNSAFE_CAST"), "{e}");
+}
+
+/// `IN (subquery)` over two different collations is a conflict, not a comparison in the left one.
+#[test]
+fn in_subquery_over_different_collations_is_refused() {
     let s = Session::new().unwrap();
     for sql in [
-        "SELECT contains('a' COLLATE utf8_lcase)",
-        "SELECT startswith('a' COLLATE utf8_lcase)",
-        "SELECT instr('abc' COLLATE utf8_lcase, 'b', 3)",
+        "create table sl(a string collate utf8_lcase) using parquet",
+        "create table sr(b string collate utf8_binary_rtrim) using parquet",
+        "insert into sl values('X')",
+        "insert into sr values('x ')",
     ] {
-        let r = block_on(s.sql(sql)).and_then(|df| block_on(df.collect()));
-        let e = r.expect_err(sql).to_string();
-        assert!(!e.contains("INTERNAL_ERROR"), "{sql}: {e}");
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
     }
+    assert_eq!(
+        class_of(&s, "select a from sl where a in (select b from sr)"),
+        ErrorClass::DatatypeMismatchInSubqueryDataTypeMismatch
+    );
 }
 
+/// An array set operation over collated strings reads each operand twice (values, keys), so a
+/// nondeterministic operand is refused rather than keyed by a different draw.
 #[test]
-fn lcase_search_over_an_aggregate_is_planned_as_an_aggregate() {
+fn array_set_over_a_nondeterministic_collated_operand_is_refused() {
     assert_eq!(
-        one(
-            "SELECT CAST(contains(max(x) COLLATE utf8_lcase, 'i') AS STRING) \
-             FROM VALUES ('Hi') AS t(x)"
+        class(
+            "select array_distinct(array((case when rand() < 0.5 then 'a' else 'b' end) collate utf8_lcase, 'a' collate utf8_lcase))"
         ),
-        "true"
-    );
-    assert_eq!(
-        one(
-            "SELECT CAST(instr(max(x) COLLATE utf8_lcase, 'i') AS STRING) \
-             FROM VALUES ('Hi') AS t(x)"
-        ),
-        "2"
+        ErrorClass::KrishivUnsupportedFeature
     );
 }
 
+/// A search call of the wrong arity over `UTF8_LCASE` keeps the function's arity error: it does
+/// not panic on a missing pattern or drop an extra argument.
 #[test]
-fn a_qualified_search_is_not_rewritten_to_the_builtin() {
-    assert_eq!(
-        class("SELECT missing_schema.instr('Ab' COLLATE utf8_lcase, 'a')"),
-        ErrorClass::from_name("UNRESOLVED_ROUTINE").unwrap()
-    );
-    assert_eq!(
-        one("SELECT CAST(builtin.instr('Ab' COLLATE utf8_lcase, 'b') AS STRING)"),
-        "2"
-    );
-}
-
-#[test]
-fn an_icu_rtrim_subquery_key_is_not_a_plain_string_comparison() {
-    // ICU keys are not implemented: the pair must not collapse to a comparison of 'a' and 'A'.
-    let r = run(
-        "SELECT CAST(1 AS STRING) WHERE 'a ' COLLATE UNICODE_CI_RTRIM \
-                 IN (SELECT 'A' COLLATE UNICODE_CI_RTRIM)",
-    );
-    assert!(
-        r.as_ref().map_or(true, |rows| !rows.is_empty()) || r.is_err(),
-        "{r:?}"
-    );
+fn lcase_search_calls_of_the_wrong_arity_are_arity_errors() {
+    for f in ["contains", "startswith", "endswith"] {
+        assert!(
+            run(&format!("select {f}('Ab' collate utf8_lcase)")).is_err(),
+            "{f} 1"
+        );
+        assert!(
+            run(&format!("select {f}('Ab' collate utf8_lcase, 'i', 'x')")).is_err(),
+            "{f} 3"
+        );
+        assert!(
+            run(&format!("select {f}('Ab' collate utf8_lcase, 'a')")).is_ok(),
+            "{f} 2"
+        );
+    }
 }

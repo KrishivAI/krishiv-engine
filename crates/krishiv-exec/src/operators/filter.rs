@@ -76,8 +76,9 @@ impl Operator for Filter {
 /// `batch` (the filtered rows of `input`) with each top-level view column
 /// compacted (`gc`) whose data buffers hold more than 16 times the bytes
 /// its views use, or more than twice when its views use under a quarter of
-/// the bytes `input`'s views of the same column use.
-fn compact_sparse_views(input: &Batch, batch: Batch) -> Result<Batch> {
+/// the bytes `input`'s views of the same column use. Also the hash probe's,
+/// over the rows a fused filter selected; `batch`'s columns are `input`'s.
+pub(crate) fn compact_sparse_views(input: &Batch, batch: Batch) -> Result<Batch> {
     use arrow_array::cast::AsArray;
     use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
     use arrow_schema::DataType;
