@@ -315,6 +315,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
             | "__contains_lcase"
             | "__startswith_lcase"
             | "__endswith_lcase"
+            | "__find_in_set_lcase"
     ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {
