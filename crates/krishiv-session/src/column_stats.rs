@@ -177,7 +177,12 @@ impl Session {
         }
         let store = &self.state.catalog.store;
         loop {
-            let Some(current) = store.table(&name.namespace, &name.name) else {
+            // A table dropped meanwhile, or dropped and created again under its name, gets none of them: they
+            // describe the analyzed table's rows.
+            let Some(current) = store
+                .table(&name.namespace, &name.name)
+                .filter(|t| t.incarnation == table.incarnation)
+            else {
                 return Ok(());
             };
             let mut changed = (*current).clone();
@@ -204,5 +209,59 @@ impl Session {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use futures::executor::block_on;
+
+    use crate::Session;
+    use crate::store::CatalogStore as _;
+    use crate::table_commands::TableName;
+
+    fn run(s: &Session, sql: &str) {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+
+    /// Statistics an `ANALYZE` computed land only on the table it read: a table dropped and created again under
+    /// the name meanwhile (another session, between the aggregate and the catalog update) gets none.
+    #[test]
+    fn statistics_of_a_replaced_table_are_discarded() {
+        let s = Session::new().unwrap();
+        run(&s, "create table cs(a int) using parquet");
+        run(&s, "insert into cs values (1), (2)");
+        let store = &s.state.catalog.store;
+        let analyzed = store.table("default", "cs").unwrap();
+        let name = TableName {
+            namespace: "default".to_owned(),
+            name: "cs".to_owned(),
+            written: "`cs`".to_owned(),
+            bare: true,
+        };
+        run(&s, "drop table cs");
+        run(&s, "create table cs(a int) using parquet");
+        run(&s, "insert into cs values (7)");
+        let columns: Vec<_> = analyzed.columns.iter().collect();
+        block_on(s.store_column_stats(&name, &analyzed, &columns)).unwrap();
+        assert!(
+            store
+                .table("default", "cs")
+                .unwrap()
+                .column_stats
+                .is_empty()
+        );
+        // The same table, changed meanwhile through the catalog (a property), keeps its incarnation and gets them.
+        let current = store.table("default", "cs").unwrap();
+        run(&s, "alter table cs set tblproperties ('k' = 'v')");
+        let columns: Vec<_> = current.columns.iter().collect();
+        block_on(s.store_column_stats(&name, &current, &columns)).unwrap();
+        let stats = store.table("default", "cs").unwrap().column_stats.clone();
+        assert_eq!(
+            stats.get("a").map(|c| c.min.as_deref()),
+            Some(Some("7")),
+            "{stats:?}"
+        );
     }
 }

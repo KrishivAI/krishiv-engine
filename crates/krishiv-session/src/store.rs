@@ -188,6 +188,11 @@ pub(crate) struct CatalogTable {
     pub(crate) layout: TableLayout,
     /// `ANALYZE TABLE .. FOR COLUMNS` results by column name (Spark's `CatalogStatistics.colStats`).
     pub(crate) column_stats: BTreeMap<String, ColumnStats>,
+    /// Which entry of its name this is: set by the store when the table is created (a table dropped and created
+    /// again, or replaced by `CREATE OR REPLACE`, gets a new one) and kept by [`CatalogStore::replace_table`]. A
+    /// command that read the table and publishes later checks it, so a result never lands on a new table of the
+    /// same name. Built entries carry 0 until the store sets it.
+    pub(crate) incarnation: u64,
 }
 
 impl CatalogTable {
@@ -603,8 +608,10 @@ impl CatalogStore for InMemoryCatalogStore {
             (true, CreateMode::Replace) | (false, _) => {}
         }
         let changed = format!("{}.{}", key.0, key.1);
+        // The epoch moves under the state lock on every create, so each created entry gets its own value.
+        let mut table = table;
+        table.incarnation = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
         state.tables.insert(key, Arc::new(table));
-        self.epoch.fetch_add(1, Ordering::AcqRel);
         // What the result cache holds for this table is stale (it also covers the results
         // computed between a table's data being written and its partitions being registered).
         self.hub.invalidate_table(&changed);
@@ -619,6 +626,9 @@ impl CatalogStore for InMemoryCatalogStore {
             _ => return false,
         }
         let changed = format!("{}.{}", key.0, key.1);
+        // The same table, changed: it keeps its incarnation.
+        let mut table = table;
+        table.incarnation = expected.incarnation;
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
         self.hub.invalidate_table(&changed);
@@ -752,6 +762,7 @@ mod tests {
             view: None,
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
+            incarnation: 0,
         }
     }
 
