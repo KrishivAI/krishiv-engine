@@ -25,7 +25,7 @@
   --accent-foreground: var(--k-text);
   --destructive: var(--k-error);
   --border: var(--k-border);
-  --input: var(--k-border-strong);
+  --input: var(--k-btn-border);
   --ring: var(--k-focus);
   --radius: var(--k-radius-md);
 }
