@@ -422,7 +422,7 @@ impl Session {
                 if self.state.catalog.exists(only, case_sensitive) {
                     return Some(only.clone());
                 }
-                let namespace = self.state.catalog.current_namespace();
+                let namespace = self.stored_namespace().ok()?;
                 store
                     .table(&namespace, &fold(only))
                     .map(|_| format!("{namespace}.{}", fold(only)))
@@ -437,7 +437,7 @@ impl Session {
                 // The cache records a view by the last part of the name it was read by.
                 Some(name.clone())
             }
-            [namespace, name] => store
+            [namespace, name] if self.stored_namespace().is_ok() => store
                 .table(&fold(namespace), &fold(name))
                 .map(|_| format!("{}.{}", fold(namespace), fold(name))),
             _ => None,

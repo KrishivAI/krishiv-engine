@@ -1185,3 +1185,18 @@ fn namespace_metadata_and_qualified_view_bodies_follow_the_defining_catalog_unde
     // The system tables themselves still list.
     assert!(!column_of(&s, "SHOW TABLES IN system", 1).is_empty());
 }
+
+#[test]
+fn cache_and_refresh_of_a_stored_table_do_not_reach_the_session_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a INT)").unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in [
+        "CACHE TABLE t",
+        "CACHE TABLE default.t",
+        "UNCACHE TABLE t",
+        "REFRESH TABLE default.t",
+    ] {
+        assert!(run(&s, sql).is_err(), "{sql}");
+    }
+}
