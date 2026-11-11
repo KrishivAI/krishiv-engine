@@ -1085,3 +1085,88 @@ proptest! {
         prop_assert_eq!(reference::time_parse(&text), Some(nanos));
     }
 }
+
+/// Text from the characters the collations treat specially: ASCII case, trailing spaces, a tab,
+/// `U+0130` (two code points lowered), the sigmas, `ß` (unchanged) and a supplementary letter.
+fn collated_text() -> impl Strategy<Value = Option<String>> {
+    let chars = prop::sample::select(vec![
+        'a',
+        'A',
+        'z',
+        'Z',
+        ' ',
+        '\t',
+        '\u{130}',
+        'Σ',
+        'σ',
+        'ς',
+        'ß',
+        'É',
+        '日',
+        '\u{10400}',
+    ]);
+    prop::option::weighted(0.85, prop::collection::vec(chars, 0..8))
+        .prop_map(|c| c.map(|c| c.into_iter().collect()))
+}
+
+proptest! {
+    #![proptest_config(config())]
+
+    /// `collation_key` of an `ARRAY<STRING COLLATE c>` column, on either string carrier, equals the
+    /// row-at-a-time oracle: the shape, the NULL lists and NULL elements are the value's.
+    #[test]
+    fn collation_key_matches_reference(
+        rows in prop::collection::vec(
+            prop::option::weighted(0.9, prop::collection::vec(collated_text(), 0..5)),
+            0..40,
+        ),
+        collation in prop::sample::select(vec![
+            "UTF8_BINARY", "UTF8_BINARY_RTRIM", "UTF8_LCASE", "UTF8_LCASE_RTRIM",
+        ]),
+        view in any::<bool>(),
+    ) {
+        use std::sync::Arc;
+        use arrow_array::builder::{ListBuilder, StringBuilder, StringViewBuilder};
+        use krishiv_types::{ArrayType, Collation, DataType};
+        let c = Collation::parse(collation).unwrap();
+        let list: ArrayRef = if view {
+            let mut b = ListBuilder::new(StringViewBuilder::new());
+            for row in &rows {
+                match row {
+                    Some(l) => {
+                        l.iter().for_each(|e| b.values().append_option(e.as_deref()));
+                        b.append(true);
+                    }
+                    None => b.append(false),
+                }
+            }
+            Arc::new(b.finish())
+        } else {
+            let mut b = ListBuilder::new(StringBuilder::new());
+            for row in &rows {
+                match row {
+                    Some(l) => {
+                        l.iter().for_each(|e| b.values().append_option(e.as_deref()));
+                        b.append(true);
+                    }
+                    None => b.append(false),
+                }
+            }
+            Arc::new(b.finish())
+        };
+        let t = DataType::Array(Arc::new(ArrayType::new(DataType::collated_string(c), true)));
+        let fast = krishiv_kernels::string::collation_key(&t, &list).unwrap();
+        let fast = fast.as_list::<i32>();
+        let got: Vec<Option<Vec<Option<Vec<u8>>>>> = (0..fast.len())
+            .map(|i| {
+                fast.is_valid(i).then(|| {
+                    let v = fast.value(i);
+                    let v = v.as_binary_view();
+                    v.iter().map(|e| e.map(<[u8]>::to_vec)).collect()
+                })
+            })
+            .collect();
+        let want = reference::collation_key_lists(c, &rows).unwrap();
+        prop_assert_eq!(got, want);
+    }
+}

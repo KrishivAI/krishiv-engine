@@ -143,6 +143,12 @@ pub(crate) struct SessionState {
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
     udfs: Arc<UdfLibrary>,
+    /// The session's Python UDFs (P2-T059), shared with the registry above:
+    /// plans name them by name and version only.
+    pub(crate) python_udfs: Arc<crate::python_udfs::PythonUdfLibrary>,
+    /// The runtime that evaluates them in this process (set by the Python
+    /// facade); without one a plan calling a Python UDF fails to run.
+    pub(crate) python_runtime: Mutex<Option<Arc<dyn krishiv_exec::python_eval::UdfRuntime>>>,
     /// The SQL-bodied functions the session defines.
     pub(crate) sql_functions: SqlFunctions,
     /// The process-wide part of the engine this session runs on.
@@ -2416,7 +2422,7 @@ impl Session {
     /// from the plan with the query's I/O context, formats and configuration;
     /// batch splits resolve through the session's relation store.
     fn worker(&self, env: &QueryEnv) -> WorkerContext {
-        WorkerContext::new(
+        let worker = WorkerContext::new(
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
         )
         .with_udfs(Arc::clone(&self.state.udfs))
@@ -2426,7 +2432,8 @@ impl Session {
         }))
         .with_io(env.io.clone())
         .with_formats(Arc::clone(&self.state.runtime.formats))
-        .with_config(Arc::clone(&env.config))
+        .with_config(Arc::clone(&env.config));
+        self.with_python_runtime(worker)
     }
 }
 

@@ -532,6 +532,18 @@ impl Encoder {
                 self.expr(expr, bias);
                 self.bound(output, bias);
             }
+            ResolvedExpr::EvalMode {
+                ansi,
+                expr,
+                data_type,
+                nullable,
+            } => {
+                self.tag("revalmode");
+                self.debug(ansi);
+                self.debug(data_type);
+                self.debug(nullable);
+                self.expr(expr, bias);
+            }
         }
     }
 
