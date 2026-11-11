@@ -72,6 +72,8 @@ impl super::Expander<'_> {
         if self.view_namespace.is_some()
             && let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
             && let [namespace, table] = name.as_slice()
+            && !crate::system::is_system(namespace)
+            && !namespace.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
         {
             let name = vec![super::CATALOG.to_owned(), namespace.clone(), table.clone()];
             let read = ReadSource::Table {

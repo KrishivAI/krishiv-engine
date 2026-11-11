@@ -1677,7 +1677,10 @@ impl Session {
     ) -> Result<String, KrishivError> {
         // A bare name is the session's temporary view or nothing; a two-part name is a namespace of the
         // CURRENT catalog, and `system` has none.
-        if (parts.len() == 2 || (parts.len() == 1 && !self.is_temp_name(&parts[0], env)))
+        let global =
+            parts.len() == 2 && parts[0].eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE);
+        if !global
+            && (parts.len() == 2 || (parts.len() == 1 && !self.is_temp_name(&parts[0], env)))
             && is_system(&self.state.catalog.current_catalog())
         {
             return Err(krishiv_common::error::TableOrViewNotFound {

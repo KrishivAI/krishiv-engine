@@ -1241,3 +1241,17 @@ fn use_catalog_and_namespace_is_one_step() {
     );
     assert_eq!(column_of(&s, "SELECT current_schema()", 0), ["other_db"]);
 }
+
+#[test]
+fn a_view_over_a_system_table_and_global_temp_views_work_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE VIEW cv AS SELECT name FROM system.capabilities").unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    assert!(!column_of(&s, "SELECT * FROM spark_catalog.default.cv", 0).is_empty());
+    assert_eq!(column_of(&s, "DESCRIBE global_temp.gv", 0), ["x"]);
+    assert_eq!(
+        column_of(&s, "SELECT CAST(x AS STRING) FROM global_temp.gv", 0),
+        ["1"]
+    );
+}
