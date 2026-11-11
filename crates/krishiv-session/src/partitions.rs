@@ -977,13 +977,17 @@ impl Session {
     /// `ALTER TABLE name PARTITION (...) RENAME TO PARTITION (...)` (`AlterTableRenamePartitionCommand`): both specs
     /// name every partition column (`_LEGACY_ERROR_TEMP_1232`); the old partition must exist and the new one must
     /// not. A managed table's partition directory moves to the new spec's path, as `InMemoryCatalog
-    /// .renamePartitions` does; the caller swaps the catalog entry returned here.
+    /// .renamePartitions` does, then the catalog entry is swapped against a fresh copy each try (a concurrent
+    /// change of another part of the entry is kept); when the swap cannot happen, the directory and the log go
+    /// back and the statement fails. Column statistics stay, as in Spark 4.2.0 (krishiv-internal
+    /// `research/spark/partition-followups/probe6.py`).
     pub(crate) async fn rename_partition(
         &self,
         table: &Arc<CatalogTable>,
+        name: &crate::table_commands::TableName,
         specs: [&PartitionSpec; 2],
         original: &str,
-    ) -> Result<CatalogTable, KrishivError> {
+    ) -> Result<(), KrishivError> {
         require_partition_provider(table, "ALTER TABLE RENAME PARTITION")?;
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
         let mut exact = Vec::with_capacity(2);
@@ -1020,16 +1024,12 @@ impl Session {
         }
         // The catalog and the directory name keep the partition columns' order.
         let to = &ordered(table, to);
-        let mut changed = (**table).clone();
         let target = partition_path(&table.location, to);
         self.authorize_dir(&target).await?;
-        let found = changed
-            .layout
-            .partitions
-            .iter_mut()
-            .find(|p| from.iter().all(|kv| p.spec.contains(kv)))
-            .ok_or_else(|| internal("the partition was found above".to_owned()))?;
-        let source = found.location.clone();
+        let source = find_partition(table, from)
+            .ok_or_else(|| internal("the partition was found above".to_owned()))?
+            .location
+            .clone();
         // The log moves first, then the directory: a lost race or a failed commit changes nothing, and a crash in
         // between leaves the log one rename ahead of the files, which a rerun of the statement completes (the
         // log then lists nothing below the old directory). A failed move puts the log back.
@@ -1045,9 +1045,56 @@ impl Session {
             }
             return Err(e);
         }
-        found.spec.clone_from(to);
-        found.location.clone_from(&target);
-        Ok(changed)
+        if self.swap_renamed(table, name, from, &source, to, &target) {
+            return Ok(());
+        }
+        // The entry changed under the rename (the table dropped or replaced, the partition gone or taken):
+        // the directory and the log go back, so the catalog, the log and the files agree again.
+        move_partition_dir(&target, &source)?;
+        self.relog_partitions(&table.location, &[(target, Some(source))])
+            .await?;
+        Err(crate::table_commands::concurrent_change(name))
+    }
+
+    /// Swaps `name`'s catalog entry for one where the partition `from` at `source` is `to` at `target`, against a
+    /// fresh entry each try, as long as the entry is still `table`'s and still holds `from` (not `to`).
+    fn swap_renamed(
+        &self,
+        table: &CatalogTable,
+        name: &crate::table_commands::TableName,
+        from: &[(String, String)],
+        source: &Path,
+        to: &[(String, String)],
+        target: &Path,
+    ) -> bool {
+        const RACES: u32 = 32;
+        let store = &self.state.catalog.store;
+        for _ in 0..RACES {
+            let Some(current) = store.table(&name.namespace, &name.name) else {
+                return false;
+            };
+            if current.created_ms != table.created_ms
+                || current.location != table.location
+                || find_partition(&current, to).is_some()
+            {
+                return false;
+            }
+            let mut changed = (*current).clone();
+            let Some(found) = changed
+                .layout
+                .partitions
+                .iter_mut()
+                .find(|p| from.iter().all(|kv| p.spec.contains(kv)) && p.location == source)
+            else {
+                return false;
+            };
+            found.spec = to.to_vec();
+            found.location = target.to_path_buf();
+            if store.replace_table(&current, changed) {
+                return true;
+            }
+        }
+        false
     }
 
     /// The partition actions of `ALTER TABLE`: the catalog entry to swap in.
@@ -1073,9 +1120,6 @@ impl Session {
             } => {
                 self.set_partition_location(table, partition, location, original)
                     .await
-            }
-            AlterTableAction::RenamePartition { from, to, .. } => {
-                self.rename_partition(table, [from, to], original).await
             }
             _ => Err(internal("not a partition action".to_owned())),
         }
@@ -1629,6 +1673,70 @@ impl crate::Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run(s: &Session, sql: &str) {
+        futures::executor::block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+
+    fn name() -> crate::table_commands::TableName {
+        crate::table_commands::TableName {
+            namespace: "default".to_owned(),
+            name: "r".to_owned(),
+            written: "`r`".to_owned(),
+            bare: true,
+        }
+    }
+
+    fn spec(p: &str) -> Vec<(String, String)> {
+        vec![("p".to_owned(), p.to_owned())]
+    }
+
+    /// A rename's catalog swap goes against the entry as it is now: a concurrent change of another part of it is
+    /// kept, and a dropped table or a partition taken meanwhile refuses the swap (the rename then moves back).
+    #[test]
+    fn a_rename_swaps_against_a_fresh_entry() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let s = Session::new().unwrap_or_else(|e| panic!("{e}"));
+        s.conf()
+            .set(
+                "spark.sql.warehouse.dir",
+                dir.path().to_str().unwrap_or_default(),
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        run(
+            &s,
+            "create table r (a int, p int) using parquet partitioned by (p)",
+        );
+        run(&s, "insert into r values (1, 1)");
+        let store = &s.state.catalog.store;
+        let old = store
+            .table("default", "r")
+            .unwrap_or_else(|| panic!("no table"));
+        let source = find_partition(&old, &spec("1"))
+            .unwrap_or_else(|| panic!("no partition"))
+            .location
+            .clone();
+        let target = partition_path(&old.location, &spec("5"));
+        // A concurrent SET TBLPROPERTIES replaced the entry after the rename read it.
+        run(&s, "alter table r set tblproperties ('k' = 'v')");
+        assert!(s.swap_renamed(&old, &name(), &spec("1"), &source, &spec("5"), &target));
+        let now = store
+            .table("default", "r")
+            .unwrap_or_else(|| panic!("no table"));
+        assert_eq!(now.properties.get("k").map(String::as_str), Some("v"));
+        assert!(find_partition(&now, &spec("5")).is_some_and(|p| p.location == target));
+        assert!(find_partition(&now, &spec("1")).is_none());
+        // The partition is gone under the old spec: nothing to swap.
+        assert!(!s.swap_renamed(&old, &name(), &spec("1"), &source, &spec("6"), &target));
+        // A partition taken meanwhile.
+        run(&s, "alter table r add partition (p=7)");
+        let t5 = partition_path(&old.location, &spec("5"));
+        assert!(!s.swap_renamed(&now, &name(), &spec("5"), &t5, &spec("7"), &target));
+        // A dropped table.
+        run(&s, "drop table r");
+        assert!(!s.swap_renamed(&now, &name(), &spec("5"), &t5, &spec("8"), &target));
+    }
 
     #[test]
     fn path_names_round_trip() {

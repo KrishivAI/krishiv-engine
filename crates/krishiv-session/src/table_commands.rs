@@ -1099,9 +1099,14 @@ impl Session {
                 return Err(table_operation(&name, "DROP COLUMN"));
             }
             AlterTableAction::AddPartition { .. }
-            | AlterTableAction::SetPartitionLocation { .. }
-            | AlterTableAction::RenamePartition { .. } => {
+            | AlterTableAction::SetPartitionLocation { .. } => {
                 changed = self.alter_partitions(&table, &a.action, original).await?;
+            }
+            // It swaps the catalog entry itself, between its directory move and the statement's end.
+            AlterTableAction::RenamePartition { from, to, .. } => {
+                self.rename_partition(&table, &name, [from, to], original)
+                    .await?;
+                return self.empty_frame().await;
             }
             // It swaps the catalog entry itself, between its log commit and its deletes.
             AlterTableAction::DropPartition {
