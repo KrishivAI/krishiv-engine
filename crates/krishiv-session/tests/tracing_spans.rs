@@ -56,6 +56,18 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for Ca
     }
 
     /// Fields recorded after the span was created (the query attributes are).
+    fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(&id) else { return };
+        let Some(Slot(slot)) = span.extensions().get::<Slot>().copied() else {
+            return;
+        };
+        if let Ok(mut spans) = self.0.lock()
+            && let Some((_, fields)) = spans.get_mut(slot)
+        {
+            fields.insert("closed".to_owned(), "true".to_owned());
+        }
+    }
+
     fn on_record(
         &self,
         id: &tracing::span::Id,
@@ -234,4 +246,32 @@ fn analysis_planning_and_execution_are_child_spans() {
             "no {child} span under krishiv.query in {all:#?}"
         );
     }
+}
+
+/// The execution span lasts while the result stream is alive, not only until the stream is handed
+/// back.
+#[test]
+fn the_execution_span_stays_open_while_the_results_are_consumed() {
+    use futures::StreamExt as _;
+    spans();
+    let s = session("orders_open");
+    let df = block_on(s.sql("SELECT a FROM orders_open")).expect("plans");
+    let mut stream = block_on(df.execute_stream()).expect("starts");
+    let exec = || {
+        spans()
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(n, _)| n == "krishiv.execute")
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(exec().len(), 1);
+    assert!(
+        !exec()[0].1.contains_key("closed"),
+        "closed before the rows were read"
+    );
+    while block_on(stream.next()).is_some() {}
+    drop(stream);
+    assert!(exec()[0].1.contains_key("closed"), "still open after drop");
 }

@@ -186,6 +186,34 @@ pub(crate) fn in_span(stream: RecordBatchStream, span: Span) -> RecordBatchStrea
     })
 }
 
+/// `stream` kept open inside `span`: the span closes when the stream is dropped, so a child
+/// stage (`krishiv.execute`) lasts while the rows are produced, not only until `run` returns.
+/// A disabled span adds nothing.
+pub(crate) fn hold_span(stream: RecordBatchStream, span: Span) -> RecordBatchStream {
+    if span.is_disabled() {
+        return stream;
+    }
+    Box::pin(HeldSpan {
+        inner: stream,
+        span,
+    })
+}
+
+struct HeldSpan {
+    inner: RecordBatchStream,
+    span: Span,
+}
+
+impl Stream for HeldSpan {
+    type Item = <RecordBatchStream as Stream>::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+        let _entered = this.span.enter();
+        this.inner.as_mut().poll_next(cx)
+    }
+}
+
 struct SpanStream {
     inner: RecordBatchStream,
     span: Span,

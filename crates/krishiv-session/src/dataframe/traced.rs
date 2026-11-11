@@ -73,11 +73,15 @@ impl DataFrame {
                 .physical_cached(&a)
                 .instrument(tracing::info_span!("krishiv.plan"))
                 .await?;
+            // The execution span stays open while the rows are produced and read: it closes when
+            // the result stream is dropped, not when `run` returns the stream.
+            let exec = tracing::info_span!("krishiv.execute");
             let stream = self
                 .session
                 .run(&physical, &a.env)
-                .instrument(tracing::info_span!("krishiv.execute"))
+                .instrument(exec.clone())
                 .await?;
+            let stream = crate::telemetry::hold_span(stream, exec);
             let stream = fill.fill(stream, &self.session.state.cache);
             let stream = match result {
                 Some((settings, key)) => crate::result_cache::fill(
