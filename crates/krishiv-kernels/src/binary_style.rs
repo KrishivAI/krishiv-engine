@@ -137,20 +137,48 @@ fn java_split_comma(text: &str) -> Vec<&str> {
     parts
 }
 
+/// First code point of each Unicode decimal-digit (`Nd`) block of ten, which is what Java's
+/// `Character.digit(c, 10)` accepts besides ASCII.
+const ND_ZEROS: &[u32] = &[
+    0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66,
+    0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90,
+    0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10,
+    0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650,
+    0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x16A60, 0x16AC0, 0x16B50,
+    0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E950, 0x1FBF0,
+];
+
+/// The decimal value of a Unicode decimal digit, as `Character.digit(c, 10)`.
+fn java_digit(c: char) -> Option<u32> {
+    let cp = u32::from(c);
+    ND_ZEROS
+        .iter()
+        .find(|&&z| cp.checked_sub(z).is_some_and(|d| d < 10))
+        .map(|&z| cp.wrapping_sub(z))
+}
+
 /// `s.trim.toByte`: Java `trim` strips chars up to U+0020; `Byte.parseByte` takes an optional
-/// sign and ASCII digits, range -128..=127 (Java also takes other Unicode decimal digits: not
-/// matched here, a miss).
+/// sign and Unicode decimal digits, range -128..=127.
 fn parse_java_byte(s: &str) -> Option<u8> {
     let t = s.trim_matches(|c: char| c <= ' ');
-    let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+    let (neg, digits) = match t.strip_prefix('-') {
+        Some(d) => (true, d),
+        None => (false, t.strip_prefix('+').unwrap_or(t)),
+    };
+    if digits.is_empty() {
         return None;
     }
-    t.strip_prefix('+')
-        .unwrap_or(t)
-        .parse::<i8>()
-        .ok()
-        .map(i8::cast_unsigned)
+    let mut v: i32 = 0;
+    for c in digits.chars() {
+        v = v
+            .checked_mul(10)?
+            .checked_add(i32::try_from(java_digit(c)?).ok()?)?;
+        if v > 128 {
+            return None;
+        }
+    }
+    let v = if neg { v.checked_neg()? } else { v };
+    i8::try_from(v).ok().map(i8::cast_unsigned)
 }
 
 /// `Hex.unhex`: hex digits of either case; an odd length reads the first digit as a byte alone.
@@ -271,6 +299,19 @@ fn base64_unpadded(bytes: &[u8], out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn java_byte_accepts_unicode_decimal_digits() {
+        assert_eq!(parse_java_byte("\u{FF11}\u{FF12}"), Some(12));
+        assert_eq!(parse_java_byte(" -\u{0661}\u{0662}\u{0663} "), Some(0x85));
+        assert_eq!(parse_java_byte("+127"), Some(127));
+        assert_eq!(parse_java_byte("-128"), Some(0x80));
+        assert_eq!(parse_java_byte("128"), None);
+        assert_eq!(parse_java_byte("-129"), None);
+        assert_eq!(parse_java_byte("\u{00B2}"), None);
+        assert_eq!(parse_java_byte("+"), None);
+        assert_eq!(parse_java_byte("1_0"), None);
+    }
 
     #[test]
     fn parse_reads_back_what_render_prints() {
