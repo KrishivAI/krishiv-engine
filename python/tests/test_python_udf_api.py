@@ -193,6 +193,20 @@ def test_register_a_function_then_sql_and_the_dataframe(spark: SparkSession) -> 
     assert _values(spark.sql("SELECT stringLengthInt('test')").collect()) == [4]
 
 
+def test_udfs_over_typed_literal_columns(spark: SparkSession) -> None:
+    # PySpark `test_arrow_python_udf` over `SELECT TIMESTAMP '...' AS ts` (and dates, intervals, binary): the folded
+    # literal is the UDF's argument; it used to fail with "a Python UDF argument has no resolved type".
+    df = spark.sql(
+        "SELECT TIMESTAMP '2020-02-02 12:15:16' AS ts, DATE '2020-02-02' AS d, "
+        "INTERVAL '1 02:03:04' DAY TO SECOND AS i, X'0102' AS b"
+    )
+    for use_arrow in (False, True):
+        u = F.udf(lambda v: str(type(v).__name__), useArrow=use_arrow)
+        row = df.select(u("ts"), u("d"), u("i"), u("b")).collect()[0]
+        assert list(row)[:3] == ["datetime", "date", "timedelta"], use_arrow
+        assert row[3] in ("bytes", "bytearray"), use_arrow
+
+
 def test_register_a_udf_keeps_its_type_and_determinism(spark: SparkSession) -> None:
     # `sql/udf.py:644-657`.
     slen = F.udf(lambda s: len(s), IntegerType())

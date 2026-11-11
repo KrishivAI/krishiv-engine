@@ -5,34 +5,7 @@ use super::*;
 use krishiv_kernels::cast::{TimestampText, timestamp_text};
 
 pub(in crate::analyzer) fn literal_type(v: &Literal) -> Option<DataType> {
-    Some(match v {
-        Literal::Null(t) => return t.clone().filter(|t| *t != DataType::Null),
-        Literal::Boolean(_) => DataType::Boolean,
-        Literal::Byte(_) => DataType::Byte,
-        Literal::Short(_) => DataType::Short,
-        Literal::Integer(_) => DataType::Integer,
-        Literal::Long(_) => DataType::Long,
-        Literal::Float(_) => DataType::Float,
-        Literal::Double(_) => DataType::Double,
-        Literal::Decimal { data_type, .. } => DataType::Decimal(*data_type),
-        Literal::String(_) => DataType::String,
-        Literal::Map(_) => DataType::Map(
-            krishiv_types::MapType::new(DataType::String, DataType::String, false).into(),
-        ),
-        Literal::Binary(_) => DataType::Binary,
-        Literal::Date(_) => DataType::Date,
-        Literal::Timestamp(_) => DataType::Timestamp,
-        Literal::TimestampNtz(_) => DataType::TimestampNtz,
-        Literal::YearMonthInterval { start, end, .. } => DataType::YearMonthInterval {
-            start: *start,
-            end: *end,
-        },
-        Literal::DayTimeInterval { start, end, .. } => DataType::DayTimeInterval {
-            start: *start,
-            end: *end,
-        },
-        Literal::CalendarInterval { .. } => DataType::CalendarInterval,
-    })
+    v.data_type()
 }
 
 /// A typed datetime literal as Spark's `AstBuilder` builds it: the same

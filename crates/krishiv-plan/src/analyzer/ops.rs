@@ -2122,7 +2122,17 @@ impl Resolver<'_> {
                 *slot = Some(self.bind(k, &cx)?);
             }
         }
-        let group: Vec<Bound> = group.into_iter().flatten().collect();
+        // Spark's `CleanupAliases` trims the aliases of grouping
+        // expressions: `df.groupBy((col("id") + 1).alias("k"))` groups by
+        // `id + 1`, and the select list's `k` names that key's output.
+        let group: Vec<Bound> = group
+            .into_iter()
+            .flatten()
+            .map(|mut b| {
+                b.expr = Arc::clone(trim_alias(&b.expr));
+                b
+            })
+            .collect();
         self.check_grouping(&group, items)?;
         Ok(group)
     }

@@ -103,7 +103,9 @@ def _engine_registration(
             messageParameters={"feature": f"Python UDFs of eval type {eval_type}"},
         )
     ddl = _engine_ddl(return_type)
-    return run, ddl, make_wrapper(func, run, _parse_datatype_string(ddl))
+    # The original eval type: Spark's legacy conversion applies to `SQL_ARROW_BATCHED_UDF` only, not to
+    # `SQL_BATCHED_UDF` running on the Arrow path.
+    return run, ddl, make_wrapper(func, eval_type, _parse_datatype_string(ddl))
 
 
 # --- pyspark/sql/udf.py:73-85 ---

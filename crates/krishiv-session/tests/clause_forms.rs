@@ -1518,3 +1518,26 @@ fn a_correlated_scalar_aggregate_with_having() -> R {
     );
     Ok(())
 }
+
+/// `df.groupBy((col("id") + 1).alias("k")).count()`: Spark's `CleanupAliases`
+/// trims the grouping key's alias, so the key groups by `id + 1` and the
+/// output column is `k` (PySpark `test_udf_with_aggregate_function`). It
+/// failed with "attribute #0 is not an input column".
+#[test]
+fn an_aliased_dataframe_grouping_key_groups_by_its_expression() -> R {
+    let s = Session::new()?;
+    let df = block_on(s.sql("SELECT id FROM range(5)"))?;
+    let key = krishiv_session::functions::expr("id % 2")?.alias("k");
+    let out = df
+        .group_by([key])
+        .agg([krishiv_session::functions::count_star().alias("n")])
+        .sort([col("k")]);
+    let batches = block_on(out.collect())?;
+    assert_eq!(batches[0].schema().field(0).name(), "k");
+    let n: Vec<i64> = batches
+        .iter()
+        .flat_map(|b| b.column(1).as_primitive::<Int64Type>().values().to_vec())
+        .collect();
+    assert_eq!(n, vec![3, 2]);
+    Ok(())
+}

@@ -657,7 +657,12 @@ impl Expr {
     /// expression alone.
     #[must_use]
     pub fn resolved_type(&self) -> Option<DataType> {
-        crate::raises::type_of(self)
+        match &self.node {
+            // Every typed literal (dates, timestamps, intervals, binary, ...);
+            // the raise analysis' own typing covers fewer.
+            ExprNode::Literal(l) if !matches!(l, Literal::Null(_)) => l.data_type(),
+            _ => crate::raises::type_of(self),
+        }
     }
 
     /// An expression of unknown origin.
@@ -1072,6 +1077,31 @@ impl Drop for Expr {
 mod tests {
     use super::*;
     use crate::literal::Literal;
+
+    /// A Python UDF over `TIMESTAMP '...'` or an interval literal needs its
+    /// argument types: every typed literal has one (an untyped NULL is NULL).
+    #[test]
+    fn every_typed_literal_has_a_resolved_type() {
+        use crate::DayTimeField;
+        let t = |l: Literal| Expr::literal(l).resolved_type();
+        assert_eq!(t(Literal::Timestamp(0)), Some(DataType::Timestamp));
+        assert_eq!(t(Literal::TimestampNtz(0)), Some(DataType::TimestampNtz));
+        assert_eq!(t(Literal::Date(0)), Some(DataType::Date));
+        assert_eq!(t(Literal::Binary(vec![1])), Some(DataType::Binary));
+        assert_eq!(
+            t(Literal::DayTimeInterval {
+                micros: 1,
+                start: DayTimeField::Day,
+                end: DayTimeField::Second,
+            }),
+            Some(DataType::DayTimeInterval {
+                start: DayTimeField::Day,
+                end: DayTimeField::Second,
+            })
+        );
+        assert_eq!(t(Literal::Null(None)), Some(DataType::Null));
+        assert_eq!(t(Literal::Integer(1)), Some(DataType::Integer));
+    }
 
     #[test]
     fn negated_finds_negative_operands_resolved_or_not() {

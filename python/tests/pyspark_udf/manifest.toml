@@ -214,9 +214,7 @@ reason = "Variant values in Python UDFs"
 file = "test_udf.py"
 cls = "BaseUDFTestsMixin"
 name = "test_udf_with_aggregate_function"
-status = "excluded"
-category = "krishiv-bug"
-reason = "Krishiv bug (not UDF specific): groupBy on an aliased expression, df.groupBy(expr.alias('k')), fails with INTERNAL_ERROR 'attribute #0 is not an input column'"
+status = "included"
 
 [[test]]
 file = "test_udf.py"
@@ -566,9 +564,7 @@ reason = "CHAR/VARCHAR types in UDF return types"
 file = "test_udf.py"
 cls = "BaseUDFTestsMixin"
 name = "test_udf_binary_type"
-status = "excluded"
-category = "krishiv-bug"
-reason = "Krishiv bug: the legacy Arrow conversion (BinaryType always bytes) is not honored; the UDF receives bytearray"
+status = "included"
 
 [[test]]
 file = "test_udf.py"
@@ -1306,25 +1302,19 @@ status = "included"
 file = "test_arrow_python_udf.py"
 cls = "ArrowPythonUDFTestsMixin"
 name = "test_day_time_interval_type_casting"
-status = "excluded"
-category = "krishiv-bug"
-reason = "Krishiv bug: a day-time interval UDF argument fails with INTERNAL_ERROR 'a Python UDF argument has no resolved type'"
+status = "included"
 
 [[test]]
 file = "test_arrow_python_udf.py"
 cls = "ArrowPythonUDFTestsMixin"
 name = "test_day_time_interval_in_struct"
-status = "excluded"
-category = "krishiv-bug"
-reason = "Krishiv bug: a day-time interval UDF argument fails with INTERNAL_ERROR 'a Python UDF argument has no resolved type'"
+status = "included"
 
 [[test]]
 file = "test_arrow_python_udf.py"
 cls = "ArrowPythonUDFLegacyTestsMixin"
 name = "test_udf_binary_type"
-status = "excluded"
-category = "krishiv-bug"
-reason = "Krishiv bug: the legacy Arrow conversion (BinaryType always bytes) is not honored; the UDF receives bytearray"
+status = "included"
 
 [[test]]
 file = "test_arrow_python_udf.py"
@@ -1338,9 +1328,7 @@ reason = "createDataFrame with nested array/map/struct columns (the test's input
 file = "test_arrow_python_udf.py"
 cls = "ArrowPythonUDFTests"
 name = "test_udf_binary_type"
-status = "excluded"
-category = "krishiv-bug"
-reason = "Krishiv bug: the legacy Arrow conversion (BinaryType always bytes) is not honored; the UDF receives bytearray"
+status = "included"
 
 [[test]]
 file = "test_arrow_python_udf.py"
@@ -1349,3 +1337,12 @@ name = "test_udf_binary_type_in_nested_structures"
 status = "excluded"
 category = "engine-feature"
 reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_type_coercion_string_to_numeric"
+runner = "ArrowPythonUDFLegacyTests"
+status = "excluded"
+category = "krishiv-divergence"
+reason = "environment, not engine: the legacy path (Spark's own conversion code, vendored unchanged) relies on pyarrow refusing strings in pa.Array.from_pandas(type=decimal); pyarrow 26 converts '1' to Decimal(1), so the decimal cases do not raise. The same code with the same pyarrow behaves the same in Spark"
