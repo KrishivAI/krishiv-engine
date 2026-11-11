@@ -369,6 +369,8 @@ fn indeterminate_string_results_carry_the_null_collation() {
     );
     assert!(run("select session.instr('Ab' collate utf8_lcase, 'a')").is_err());
     assert!(run("select builtin.instr('Ab' collate utf8_lcase, 'a')").is_ok());
+    // `instr` takes two arguments: a third is the usual arity error, not a start position.
+    assert!(run("select instr('Ab' collate utf8_lcase, 'a', 99)").is_err());
     // An overwrite refused for its indeterminate column keeps the old table.
     block_on(
         block_on(s.sql("create table keep using parquet as select 1 as x"))

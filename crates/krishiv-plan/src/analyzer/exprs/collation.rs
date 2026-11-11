@@ -686,7 +686,7 @@ impl Resolver<'_> {
             "instr" | "locate" | "position" | "find_in_set"
         ) && !f.distinct
             && (2..=3).contains(&n)
-            && (n == 2 || name != "find_in_set")
+            && (n == 2 || !matches!(name.as_str(), "find_in_set" | "instr"))
             && kids[..2].iter().all(|k| is_string(k.ty.data_type.as_ref()))
             && kids[..2]
                 .iter()

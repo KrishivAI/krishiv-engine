@@ -1538,3 +1538,25 @@ fn string_functions_over_lcase_follow_spark() {
     assert_eq!(si("aba", "A", i32::MAX), "aba");
     assert_eq!(si("aba", "A", i32::MIN), "");
 }
+
+/// `endswith` over `UTF8_LCASE` looks at one start only (the lower-cased point count of the
+/// suffix), so a long text with a long non-matching pattern is linear, and the İ pair, an empty
+/// pattern and a longer pattern keep their answers.
+#[test]
+fn search_lcase_end_scans_back_from_the_end() {
+    use s::LcaseSearch::End;
+    let at = |text: &str, pat: &str| {
+        s::search_lcase(End, lit(Some(text)), StrOperand::Array(&r1(pat)))
+            .unwrap()
+            .value(0)
+    };
+    let text = "a".repeat(200_000);
+    let pat = format!("{}b", "a".repeat(100_000));
+    assert!(!at(&text, &pat));
+    assert!(at(&text, &"A".repeat(100_000)));
+    assert!(at("abc", ""));
+    assert!(!at("c", "abc"));
+    // `İ` lower-cases to two points: a match may not start between them.
+    assert!(at("xİ", "i\u{307}"));
+    assert!(!at("xİ", "\u{307}"));
+}

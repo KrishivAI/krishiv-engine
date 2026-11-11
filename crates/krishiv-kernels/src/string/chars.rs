@@ -716,7 +716,30 @@ pub fn search_lcase<O: OffsetSizeTrait>(
             Some(match kind {
                 LcaseSearch::Start => hit(0).is_some(),
                 LcaseSearch::Anywhere => (0..=chars.len()).any(|at| hit(at).is_some()),
-                LcaseSearch::End => (0..=chars.len()).any(|at| hit(at) == Some(chars.len())),
+                LcaseSearch::End => {
+                    // A match ending at the end consumes the lower-cased points of `chars[at..]`
+                    // exactly: scan back from the end, and try the one start (every character
+                    // gives at least one point, so the count only grows) where the count is the
+                    // pattern's.
+                    let mut points = 0usize;
+                    let mut scratch = Vec::new();
+                    let mut at = chars.len();
+                    loop {
+                        if points == pat.len() {
+                            break hit(at) == Some(chars.len());
+                        }
+                        if points > pat.len() {
+                            break false;
+                        }
+                        let Some(prev) = at.checked_sub(1) else {
+                            break false;
+                        };
+                        at = prev;
+                        scratch.clear();
+                        lcase_points(chars[at], &mut scratch);
+                        points = points.saturating_add(scratch.len());
+                    }
+                }
             })
         })
         .collect())
