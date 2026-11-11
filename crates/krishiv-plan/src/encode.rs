@@ -143,6 +143,8 @@ pub(crate) fn expr_tag(node: &ExprNode) -> u8 {
         ExprNode::MultiAlias { .. } => 33,
         ExprNode::Pipe { .. } => 34,
         ExprNode::Collate { .. } => 40,
+        ExprNode::StoredField { .. } => 41,
+        ExprNode::Resolved(ResolvedExpr::EvalMode { .. }) => 42,
     }
 }
 
@@ -628,8 +630,21 @@ impl<'k, 'a> Encoder<'k, 'a> {
     #[inline(never)]
     fn function_id(&mut self, id: &crate::FunctionId) {
         self.str(id.name());
-        if let crate::FunctionId::Udf { version, .. } = id {
-            self.u32(*version);
+        match id {
+            crate::FunctionId::Udf { version, .. } => self.u32(*version),
+            crate::FunctionId::PythonUdf {
+                version,
+                eval_type,
+                thread_safe,
+                ..
+            } => {
+                // A tag no Rust UDF key has, so the two never share a key.
+                self.u32(u32::MAX);
+                self.u32(*version);
+                self.u32(eval_type.code().unsigned_abs());
+                self.u32(u32::from(*thread_safe));
+            }
+            _ => {}
         }
     }
 
@@ -1240,6 +1255,17 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.call(args, *distinct, filter.as_ref());
                 self.call_within_group(e);
             }
+            ExprNode::StoredField { expr, comment } => {
+                self.u8(41);
+                match comment {
+                    None => self.u8(0),
+                    Some(c) => {
+                        self.u8(1);
+                        self.str(c);
+                    }
+                }
+                self.expr(expr);
+            }
             ExprNode::Collate {
                 expr,
                 collation,
@@ -1322,6 +1348,17 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
                 self.bound(output);
+                self.expr(expr);
+            }
+            ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi,
+                expr,
+                data_type,
+                nullable,
+            }) => {
+                self.bool(*ansi);
+                self.data_type(data_type);
+                self.bool(*nullable);
                 self.expr(expr);
             }
             ExprNode::Lambda { params, body } => {

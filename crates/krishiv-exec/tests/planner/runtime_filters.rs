@@ -784,7 +784,9 @@ fn fused_through_project(node: &krishiv_exec::physical::PhysNode) -> usize {
         PhysNode::Filter { input, runtime, .. }
             if !runtime.is_empty()
                 && matches!(input.as_ref(), PhysNode::Project { input: i, .. }
-                    if matches!(i.as_ref(), PhysNode::Scan(s) if s.row_stage_in_filter)) =>
+                    if matches!(i.as_ref(), PhysNode::Scan(s) if s.row_stage_in_filter))
+                || matches!(node, PhysNode::Filter { input, runtime, .. } if !runtime.is_empty()
+                    && matches!(input.as_ref(), PhysNode::Scan(s) if s.row_stage_in_filter)) =>
         {
             1
         }

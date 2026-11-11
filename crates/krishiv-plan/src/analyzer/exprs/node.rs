@@ -1583,6 +1583,9 @@ impl Resolver<'_> {
                     _ => kids[0].clone(),
                 }
             }
+            // Metadata only: the comment is taken from the written form by the alias above it
+            // (`carry_declared_item`).
+            ExprNode::StoredField { .. } => kids[0].clone(),
             ExprNode::Collate {
                 collation, name, ..
             } => {
@@ -1713,7 +1716,12 @@ impl Resolver<'_> {
                     ResolvedExpr::Alias { output, .. } => column(output),
                     ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
                     ResolvedExpr::StateInput { raw_type, .. } => arg_type(raw_type.clone(), true),
-                    ResolvedExpr::Field {
+                    ResolvedExpr::EvalMode {
+                        data_type,
+                        nullable,
+                        ..
+                    }
+                    | ResolvedExpr::Field {
                         data_type,
                         nullable,
                         ..

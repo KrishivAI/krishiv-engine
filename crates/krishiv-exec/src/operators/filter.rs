@@ -98,7 +98,9 @@ impl Operator for Filter {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
         let state = local_mut::<FilterLocal>(local, "Filter")?;
-        let mask = self.predicate.evaluate_in(input.data(), state.partition)?;
+        let mask = self
+            .predicate
+            .evaluate_in(input.data(), input.split().unwrap_or(state.partition))?;
         let mask = match state.rows.as_mut() {
             Some(rows) => match rows.mask(input.data())? {
                 Some(dropped) => both(&mask, &dropped),
@@ -172,5 +174,6 @@ fn compact_sparse_views(input: &Batch, batch: Batch) -> Result<Batch> {
     )
     .map_err(|e| crate::error::internal(e.to_string()))?;
     Batch::with_weights(compacted, batch.weights().clone())
+        .map(|b| b.with_split(batch.split()))
         .map_err(|e| crate::error::internal(e.to_string()))
 }

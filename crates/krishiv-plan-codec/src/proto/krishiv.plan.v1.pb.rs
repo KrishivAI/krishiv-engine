@@ -145,7 +145,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -214,7 +214,31 @@ pub mod node {
         /// feature: exchange_source
         #[prost(message, tag = "25")]
         ExchangeSource(super::ExchangeSourceNode),
+        /// feature: python_udf
+        #[prost(message, tag = "26")]
+        PythonEval(super::PythonEvalNode),
     }
+}
+/// feature: python_udf
+/// The rows of `input`, then one column per Python UDF call over every row.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonEvalNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, repeated, tag = "3")]
+    pub calls: ::prost::alloc::vec::Vec<PythonCall>,
+}
+/// feature: python_udf
+/// One call of a `PythonEvalNode`: the call expression and the attribute of
+/// its output column.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonCall {
+    #[prost(uint32, tag = "1")]
+    pub call: u32,
+    #[prost(uint64, tag = "2")]
+    pub output: u64,
 }
 /// feature: exchange_source
 /// The rows a task reads from an exchange another stage wrote: a leaf of a
@@ -1120,7 +1144,7 @@ pub struct BoundColumn {
 pub struct Expr {
     #[prost(message, optional, tag = "1")]
     pub origin: ::core::option::Option<Origin>,
-    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10")]
+    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11")]
     pub kind: ::core::option::Option<expr::Kind>,
 }
 /// Nested message and enum types in `Expr`.
@@ -1148,7 +1172,24 @@ pub mod expr {
         /// feature: lambda_functions
         #[prost(message, tag = "10")]
         LambdaVar(super::BoundColumn),
+        /// feature: captured_eval_mode
+        #[prost(message, tag = "11")]
+        EvalMode(super::EvalModeExpr),
     }
+}
+/// An expression evaluated in ANSI mode `ansi` whatever the query's mode is: the body
+/// of a SQL function created under the other mode (T184).
+/// feature: captured_eval_mode
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EvalModeExpr {
+    #[prost(uint32, tag = "1")]
+    pub expr: u32,
+    #[prost(bool, tag = "2")]
+    pub ansi: bool,
+    #[prost(message, optional, tag = "3")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(bool, tag = "4")]
+    pub nullable: bool,
 }
 /// A lambda (`x -> body`): the bound body of a higher-order function's
 /// argument, with its variables as `lambda_var` leaves.
@@ -1209,7 +1250,7 @@ pub struct Function {
     pub deterministic: bool,
     /// A canonical operator name (`==`, `and`, ...), a registry function, or
     /// a session UDF.
-    #[prost(oneof = "function::Id", tags = "1, 2, 10")]
+    #[prost(oneof = "function::Id", tags = "1, 2, 10, 11")]
     pub id: ::core::option::Option<function::Id>,
 }
 /// Nested message and enum types in `Function`.
@@ -1225,6 +1266,9 @@ pub mod function {
         /// feature: rust_udf
         #[prost(message, tag = "10")]
         Udf(super::UdfFunction),
+        /// feature: python_udf
+        #[prost(message, tag = "11")]
+        PythonUdf(super::PythonUdfFunction),
     }
 }
 /// A function of the registry, by name and registry id. A worker must run
@@ -1245,6 +1289,21 @@ pub struct UdfFunction {
     pub name: ::prost::alloc::string::String,
     #[prost(uint64, tag = "2")]
     pub version: u64,
+}
+/// A session-registered Python UDF, by name and registration version; the
+/// worker resolves the callable through its UDF runtime.
+/// feature: python_udf
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonUdfFunction {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub version: u64,
+    /// Spark's `PythonEvalType` code.
+    #[prost(int32, tag = "3")]
+    pub eval_type: i32,
+    #[prost(bool, tag = "4")]
+    pub thread_safe: bool,
 }
 /// A Spark type.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

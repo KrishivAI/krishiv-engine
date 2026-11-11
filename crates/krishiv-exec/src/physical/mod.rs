@@ -66,9 +66,9 @@ mod shared_tests;
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
 pub(crate) use instantiate::{
-    Detached, LoopRun, Unbuilt, Values, aggregate_node, aggregate_spec, distinct_phases, expand_op,
-    filter_op, final_of, generate_op, group_limit_op, hash_join, nested_loop_join, project_op,
-    replicate_op, scan_filter, sort_merge_join, sort_op, top_n_op,
+    Detached, LoopRun, Unbuilt, Values, aggregate_node, aggregate_spec, compile_all,
+    distinct_phases, expand_op, filter_op, final_of, generate_op, group_limit_op, hash_join,
+    nested_loop_join, project_op, replicate_op, scan_filter, sort_merge_join, sort_op, top_n_op,
 };
 pub use instantiate::{
     ExchangeInput, SpillScopes, TaskSpec, WorkerContext, exchange_schemas, instantiate,
@@ -413,6 +413,19 @@ pub enum PhysNode {
         offset: u64,
         /// The row count.
         limit: u64,
+    },
+    /// The rows of `input`, then one column per Python UDF call evaluated
+    /// over **every** row (design P2-T059 §2.2, Spark's `ExtractPythonUDFs`):
+    /// the nodes above read each call's column by its attribute. Calls of
+    /// one eval type share a node; a call over another call's result sits
+    /// in a node above it.
+    PythonEval {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The attribute of each input column.
+        layout: Vec<AttrId>,
+        /// The calls, in output column order.
+        calls: Vec<PythonCallPlan>,
     },
     /// Each row of `input` `count` times (`INTERSECT ALL`, `EXCEPT ALL`).
     ReplicateRows {
@@ -953,6 +966,7 @@ plan_data!(enum PhysNode {
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
     ReplicateRows { input, layout, count, subqueries },
+    PythonEval { input, layout, calls },
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
@@ -972,6 +986,7 @@ plan_data!(enum PhysNode {
     UnionLoop { id, anchor, recursive, layout, nullable, limits },
     LoopRef { id, layout },
 });
+plan_data!(struct PythonCallPlan { call, output });
 plan_data!(struct LoopLimits { level, rows, pushed_limit });
 plan_data!(struct WritePlan {
     format,
@@ -1050,6 +1065,7 @@ impl PhysNode {
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
+            | Self::PythonEval { input, .. }
             | Self::WriteFiles { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
@@ -1095,6 +1111,7 @@ impl PhysNode {
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
+            | Self::PythonEval { input, .. }
             | Self::WriteFiles { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
@@ -1106,6 +1123,17 @@ impl PhysNode {
             } => vec![anchor.as_mut(), recursive.as_mut()],
         }
     }
+}
+
+/// One call of a [`PhysNode::PythonEval`]: the resolved Python UDF call
+/// (a `FunctionId::PythonUdf` function over expressions of the input) and
+/// the attribute of the column it produces.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PythonCallPlan {
+    /// The call.
+    pub call: Arc<Expr>,
+    /// The attribute of its output column.
+    pub output: AttrId,
 }
 
 /// An executable plan as data: the root node, the schema of its result

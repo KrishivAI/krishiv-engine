@@ -4,12 +4,16 @@ expression: "WITH v AS (SELECT a FROM t WHERE b = 'x') SELECT a FROM u WHERE a I
 ---
 Join LeftAnti, ((a#3 == (a + 1)#8) or isnull((a#3 == (a + 1)#8)))
 :- Join LeftSemi, (a#3 == a#5)
-:  :- Scan spark_catalog.default.u [a#3]
+:  :- Filter isnotnull(a#3)
+:  :  +- Scan spark_catalog.default.u [a#3]
 :  +- Project [a#9 AS a#5]
-:     +- Shift +9 (shared #1)
+:     +- Shift +9
 :        +- Project [a#0]
-:           +- Filter (b#1 == 'x')
-:              +- Scan spark_catalog.default.t [a#0, b#1]
+:           +- Filter ((b#1 == 'x') and isnotnull(a#0))
+:              +- Scan spark_catalog.default.t [a#0, b#1] (shared #1)
 +- Shift +2
    +- Project [(a#9 + 1) AS (a + 1)#6]
-      +- Shared #1, printed above
+      +- Shift +9
+         +- Project [a#0]
+            +- Filter (b#1 == 'x')
+               +- Shared #1, printed above

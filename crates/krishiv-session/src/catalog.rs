@@ -46,9 +46,11 @@ use crate::cache::{RelationCache, is_cache_name};
 
 mod file_tables;
 mod ndv_sampling;
+mod scans;
 mod script_results;
 
 use self::file_tables::{FileScanOf, reference_key};
+pub(crate) use self::scans::reads_stored_table;
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -103,6 +105,9 @@ pub(crate) enum TempTable {
         columns: Vec<TableColumn>,
         /// The hidden names this view pinned, owned by this view.
         pins: Vec<String>,
+        /// The query text of a view `CREATE TEMPORARY VIEW` made (`SHOW TABLE EXTENDED` prints it as
+        /// `View Text`); `None` for a DataFrame view.
+        text: Option<String>,
     },
 }
 
@@ -204,6 +209,7 @@ impl SessionCatalog {
                     plan,
                     columns,
                     pins,
+                    text: None,
                 }),
             ),
         );
@@ -803,44 +809,6 @@ async fn run_on<T: Send + 'static>(
     }
 }
 
-/// Whether the analyzed `plan` reads the permanent table `namespace.name` (directly, or through a view or a
-/// subquery): `INSERT OVERWRITE` of a table that is also read would delete what it reads.
-pub(crate) fn reads_stored_table(
-    plan: &LogicalPlan,
-    namespace: &str,
-    name: &str,
-    current: &str,
-) -> bool {
-    let mut scans = Vec::new();
-    collect_scans(plan, &mut scans);
-    scans.iter().any(|scan| {
-        let ReadSource::Table { name: parts, .. } = &scan.source else {
-            return false;
-        };
-        let (ns, table) = match parts.as_slice() {
-            [table] => (current, table),
-            [.., ns, table] => (ns.as_str(), table),
-            [] => return false,
-        };
-        ns.eq_ignore_ascii_case(namespace) && table.eq_ignore_ascii_case(name)
-    })
-}
-
-/// The scans of `plan` and of the subqueries in its expressions.
-fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
-    fn in_expr<'a>(e: &'a Arc<krishiv_plan::Expr>, out: &mut Vec<&'a Scan>) {
-        if let ExprNode::Subquery { plan, .. } = &e.node {
-            collect_scans(plan, out);
-        }
-        e.for_each_child(&mut |c| in_expr(c, out));
-    }
-    if let PlanNode::Scan(scan) = &plan.node {
-        out.push(scan);
-    }
-    plan.for_each_expr(&mut |e| in_expr(e, out));
-    plan.for_each_child(&mut |c| collect_scans(c, out));
-}
-
 /// The scans of the streaming pipeline of `root`: those a task splits.
 /// Joins contribute only their probe side and nodes only their streaming
 /// input; subquery plans and join builds read whole (no entry), so tasks
@@ -878,6 +846,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::Window { input, .. }
             | PhysNode::WindowGroupLimit { input, .. }
             | PhysNode::Aggregate { input, .. }
+            | PhysNode::PythonEval { input, .. }
             | PhysNode::WriteFiles { input, .. } => go(input, out),
             PhysNode::Exchange(e) => go(&e.input, out),
             PhysNode::HashJoin(join) => go(&join.probe, out),
@@ -1605,51 +1574,40 @@ impl Expander<'_> {
         self.path.pop();
         let mut input = input?;
         let mode = crate::view_schema::effective_mode(view.schema_mode, stored.binding_enabled);
+        let projection = crate::view_schema::projection(mode);
+        let mut columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
         self.stored_reads.push(crate::view_schema::StoredRead {
             entry: Arc::clone(entry),
             query: Arc::clone(&input),
             mode,
+            renamed: projection != crate::view_schema::ReadProjection::Output
+                && view.query_columns.len() == columns.len()
+                && crate::view_schema::repeats_names(&view.query_columns),
         });
-        let projection = crate::view_schema::projection(mode);
-        let mut columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
-        let unique = view
-            .query_columns
-            .iter()
-            .map(|c| c.to_lowercase())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len()
-            == view.query_columns.len();
         if projection == crate::view_schema::ReadProjection::Output {
             // `EVOLUTION`: the view is its query's output, whatever the stored schema says.
             columns.clear();
-        } else if unique && view.query_columns.len() == columns.len() {
+        } else if view.query_columns.len() == columns.len() {
             // The stored columns, by their query names: a base table that gained columns since does not change
             // what the view returns. In their stored types (the binding check ran on the analyzed query), or in
             // the query's types under `TYPE EVOLUTION`.
-            let exprs = view
-                .query_columns
+            let names;
+            (input, names) =
+                crate::view_schema::read_names(input, &view.query_columns, &table, plan.origin);
+            let cast = projection == crate::view_schema::ReadProjection::Cast;
+            let exprs = names
                 .iter()
                 .zip(&entry.columns)
                 .map(|(q, c)| {
-                    // The name is one part: `col(q)` would split a dot or read a trailing `*`.
-                    let stored = crate::column::Column::new(Expr::new(ExprNode::Column(
-                        krishiv_plan::ColumnRef::new(vec![q.clone()]),
-                    )));
-                    let typed = if projection == crate::view_schema::ReadProjection::Cast {
-                        stored.cast_ansi(c.data_type.clone())
-                    } else {
-                        stored
-                    };
-                    Arc::new(typed.alias(&c.name).expr)
+                    let to = cast.then(|| c.data_type.clone());
+                    crate::view_schema::read_column(q, to, Some(c.comment.clone()), &c.name)
                 })
                 .collect();
             input = Arc::new(
                 LogicalPlan::new(PlanNode::Project { input, exprs }).with_origin(plan.origin),
             );
         }
-        // Otherwise (a query that repeats a column name, or a column list of another length) the columns are only
-        // renamed by position: a repeated name cannot be cast, since `ColumnRef` has no ordinal. The binding check
-        // matches by name and ordinal as Spark does, so a type change under such a view is not cast here.
+        // Otherwise (a view stored without its query's column names) the columns are only renamed by position.
         Ok(Arc::new(
             LogicalPlan::new(PlanNode::SubqueryAlias {
                 input,
@@ -2168,6 +2126,7 @@ mod tests {
             plan: Arc::new(LogicalPlan::table([name])),
             columns: Vec::new(),
             pins: Vec::new(),
+            text: None,
         };
         session.put("a", view("b"));
         session.put("b", view("a"));

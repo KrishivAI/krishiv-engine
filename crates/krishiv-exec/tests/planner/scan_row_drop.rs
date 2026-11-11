@@ -157,6 +157,13 @@ impl Fixture {
 
 /// The rows of `q`, or its error, and the rows its file scans returned.
 fn run(t: &Tpch, q: &str) -> (Result<Vec<String>, KrishivError>, u64) {
+    let (out, scanned, _) = run_counting_filters(t, q);
+    (out, scanned)
+}
+
+/// As `run`, plus the rows the `Filter`s leave (the runtime filters' row stage may run in a `Filter` above
+/// the scan, P2-E3 U1: the scan then returns every row and the filter drops them).
+fn run_counting_filters(t: &Tpch, q: &str) -> (Result<Vec<String>, KrishivError>, u64, u64) {
     let plan: Runnable = t.plan_sql(q).unwrap_or_else(|e| panic!("{q}: {e}"));
     let root = TreePool::new(&MemoryConfig {
         limit: Some(1 << 30),
@@ -170,11 +177,19 @@ fn run(t: &Tpch, q: &str) -> (Result<Vec<String>, KrishivError>, u64) {
         .filter(|e| e.name == "FileScan")
         .map(|e| e.metrics.rows_out)
         .sum();
+    let kept = query
+        .metrics()
+        .operators
+        .values()
+        .filter(|e| e.name == "Filter")
+        .map(|e| e.metrics.rows_out)
+        .min()
+        .unwrap_or(scanned);
     let mut out = out.map(|b| rows(&b));
     if let Ok(r) = out.as_mut() {
         r.sort_unstable();
     }
-    (out, scanned)
+    (out, scanned, kept)
 }
 
 fn cast_error(r: &Result<Vec<String>, KrishivError>, value: &str, q: &str) {
@@ -265,9 +280,12 @@ fn a_runtime_filter_never_hides_a_row_from_a_raising_conjunct() {
     let q = "SELECT count(*) FROM t JOIN d ON t.k = d.dk WHERE d.x = 1";
     let plan = t.plan_sql(q).unwrap();
     assert!(plan.to_string().contains("RuntimeFilter #"), "{plan}");
-    let (r, scanned) = run(&t, q);
+    let (r, scanned, kept) = run_counting_filters(&t, q);
     count(&r, 10, q);
-    assert!(scanned < 100, "{q}: the scan returned {scanned} rows");
+    assert!(
+        scanned.min(kept) < 100,
+        "{q}: the scan returned {scanned} rows, the filters kept {kept}"
+    );
 }
 
 /// Conjunct shapes for the differential test, raising (under ANSI) and

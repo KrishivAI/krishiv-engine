@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/join_order.rs
+assertion_line: 112
 expression: optimized.root().to_string()
 ---
 Sort [s_name#1 ASC NULLS FIRST], true
@@ -7,21 +8,23 @@ Sort [s_name#1 ASC NULLS FIRST], true
    +- Join LeftSemi, (s_suppkey#0 == ps_suppkey#12)
       :- Project [s_suppkey#0, s_name#1, s_address#2]
       :  +- Join Inner, (s_nationkey#3 == n_nationkey#7)
-      :     :- Scan spark_catalog.default.supplier [s_suppkey#0, s_name#1, s_address#2, s_nationkey#3]
+      :     :- Filter (isnotnull(s_nationkey#3) and isnotnull(s_suppkey#0))
+      :     :  +- Scan spark_catalog.default.supplier [s_suppkey#0, s_name#1, s_address#2, s_nationkey#3]
       :     +- Project [n_nationkey#7]
-      :        +- Filter (n_name#8 == 'CANADA')
+      :        +- Filter ((n_name#8 == 'CANADA') and isnotnull(n_nationkey#7))
       :           +- Scan spark_catalog.default.nation [n_nationkey#7, n_name#8]
       +- Project [ps_suppkey#12]
          +- Join Inner, (((ps_partkey#11 == l_partkey#26) and (ps_suppkey#12 == l_suppkey#27)) and (CAST(ps_availqty#13 AS DECIMAL(27,3)) > (0.5 * sum(l_quantity))#41))
             :- Join LeftSemi, (ps_partkey#11 == p_partkey#16) (shared #1)
-            :  :- Scan spark_catalog.default.partsupp [ps_partkey#11, ps_suppkey#12, ps_availqty#13]
+            :  :- Filter (isnotnull(ps_partkey#11) and isnotnull(ps_suppkey#12))
+            :  :  +- Scan spark_catalog.default.partsupp [ps_partkey#11, ps_suppkey#12, ps_availqty#13]
             :  +- Project [p_partkey#16]
-            :     +- Filter (p_name#17 like 'forest%')
+            :     +- Filter ((p_name#17 like 'forest%') and isnotnull(p_partkey#16))
             :        +- Scan spark_catalog.default.part [p_partkey#16, p_name#17]
             +- Aggregate [l_partkey#26, l_suppkey#27], [(0.5 * sum(l_quantity#29)) AS (0.5 * sum(l_quantity))#41, l_partkey#26, l_suppkey#27]
                +- Join LeftSemi, ((l_partkey#26 == ps_partkey#53) and (l_suppkey#27 == ps_suppkey#54))
                   :- Project [l_partkey#26, l_suppkey#27, l_quantity#29]
-                  :  +- Filter ((l_shipdate#35 >= DATE '1994-01-01') and (l_shipdate#35 < DATE '1995-01-01'))
+                  :  +- Filter ((((l_shipdate#35 >= DATE '1994-01-01') and (l_shipdate#35 < DATE '1995-01-01')) and isnotnull(l_partkey#26)) and isnotnull(l_suppkey#27))
                   :     +- Scan spark_catalog.default.lineitem [l_partkey#26, l_suppkey#27, l_quantity#29, l_shipdate#35]
                   +- Shift +42
                      +- Project [ps_partkey#11, ps_suppkey#12]
