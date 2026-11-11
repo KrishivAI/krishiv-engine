@@ -310,6 +310,24 @@ impl Session {
         audit(self, StatementClass::Read, r)
     }
 
+    /// `parts` (a name written in a statement's target), with a bare temporary relation placed in the session
+    /// catalog's current namespace: a temporary relation resolves before any catalog, `system` included.
+    fn temp_first(&self, parts: Vec<String>, env: &QueryEnv) -> Vec<String> {
+        match parts.as_slice() {
+            [name]
+                if crate::system::is_system(&self.state.catalog.current_catalog())
+                    && self.is_temp_name(name, env) =>
+            {
+                vec![
+                    crate::catalog::CATALOG.to_owned(),
+                    self.state.catalog.current_namespace(),
+                    name.clone(),
+                ]
+            }
+            _ => parts,
+        }
+    }
+
     /// The securables `object` stands for: as written, then folded.
     fn securables_of(
         &self,
@@ -366,7 +384,7 @@ impl Session {
             out
         };
         Ok(match object {
-            TargetObject::Table(name) => tables(table(&parts(name)?)?, false),
+            TargetObject::Table(name) => tables(table(&self.temp_first(parts(name)?, env))?, false),
             TargetObject::TableIn {
                 table: t,
                 namespace,
@@ -375,7 +393,7 @@ impl Session {
                 p.extend(parts(t)?.pop());
                 tables(table(&p)?, false)
             }
-            TargetObject::View(name) => tables(table(&parts(name)?)?, true),
+            TargetObject::View(name) => tables(table(&self.temp_first(parts(name)?, env))?, true),
             TargetObject::GlobalTempView(name) => {
                 let name = parts(name)?
                     .pop()

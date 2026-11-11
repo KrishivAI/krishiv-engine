@@ -790,35 +790,33 @@ async fn load(
                 origin,
             ));
         }
-        // A bare name tries each schema of the SQL path in order (the
+        // A bare name tries each schema of the SQL path in order, in the catalog of its entry (the
         // current namespace when the path names none of this catalog's).
-        let mut candidates: Vec<TableIdent> = Vec::new();
+        let mut candidates: Vec<(Arc<dyn Catalog>, TableIdent)> = Vec::new();
         if name.len() == 1 && !scan {
             for entry in ctx.catalogs.sql_path() {
-                match entry.as_slice() {
+                let (c, namespace) = match entry.as_slice() {
                     // `system.builtin` and `system.session` hold functions, never tables: not candidates.
                     [c, n]
-                        if c.eq_ignore_ascii_case(catalog.name())
-                            && !(c.eq_ignore_ascii_case("system")
-                                && (n.eq_ignore_ascii_case("builtin")
-                                    || n.eq_ignore_ascii_case("session"))) =>
+                        if !(c.eq_ignore_ascii_case("system")
+                            && (n.eq_ignore_ascii_case("builtin")
+                                || n.eq_ignore_ascii_case("session"))) =>
                     {
-                        candidates.push(TableIdent {
-                            catalog: ident.catalog.clone(),
-                            namespace: vec![n.clone()],
-                            name: ident.name.clone(),
-                        });
+                        (c, vec![n.clone()])
                     }
                     // A catalog with an empty namespace (`USE system`).
-                    [c] if c.eq_ignore_ascii_case(catalog.name()) => {
-                        candidates.push(TableIdent {
-                            catalog: ident.catalog.clone(),
-                            namespace: Vec::new(),
-                            name: ident.name.clone(),
-                        });
-                    }
-                    _ => {}
-                }
+                    [c] => (c, Vec::new()),
+                    _ => continue,
+                };
+                let Some(entry_catalog) = ctx.catalogs.catalog(c) else {
+                    continue;
+                };
+                let ident = TableIdent {
+                    catalog: entry_catalog.name().to_owned(),
+                    namespace,
+                    name: ident.name.clone(),
+                };
+                candidates.push((entry_catalog, ident));
             }
         }
         let mut temporary_only = false;
@@ -831,15 +829,11 @@ async fn load(
             };
             if name.len() > 1 || scan || ctx.catalogs.sql_path().iter().any(session) {
                 temporary_only = name.len() == 1 && !scan;
-                candidates.push(ident.clone());
+                candidates.push((Arc::clone(&catalog), ident.clone()));
             }
         }
         let mut meta = None;
-        let mut ident = candidates.first().cloned().unwrap_or_else(|| ident.clone());
-        for (i, candidate) in candidates.into_iter().enumerate() {
-            if i > 0 {
-                ident = candidate;
-            }
+        for (catalog, ident) in candidates {
             // Asked as written, and folded the way a case-insensitive catalog
             // folds, so no spelling of a name dodges a rule on another (the
             // catalog's own identifier is asked below once the table is loaded).

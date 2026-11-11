@@ -1458,9 +1458,12 @@ fn a_view_frozen_path_picks_the_first_matching_entry_system_before_a_stored_sche
     )
     .unwrap();
     // The view reads the system table, as it did when it was created.
-    let names = column_of(&s, "SELECT name FROM spark_catalog.default.v", 0);
-    assert!(!names.contains(&"stored".to_owned()));
-    assert!(!names.is_empty());
+    let mut names = column_of(&s, "SELECT name FROM spark_catalog.default.v", 0);
+    let mut oracle = column_of(&s, "SELECT name FROM system.capabilities", 0);
+    names.sort();
+    oracle.sort();
+    assert!(!oracle.is_empty() && !oracle.contains(&"stored".to_owned()));
+    assert_eq!(names, oracle);
 }
 
 #[test]
@@ -1475,10 +1478,45 @@ fn a_top_level_bare_read_follows_the_path_order_between_system_and_a_stored_view
     run(&s, "USE system").unwrap();
     run(&s, "SET PATH = CURRENT_SCHEMA, spark_catalog.default").unwrap();
     // `system` comes first in the path: the stored view of the same name does not take the read.
-    let names = column_of(&s, "SELECT name FROM capabilities", 0);
-    assert!(!names.contains(&"wrong".to_owned()));
-    assert!(!names.is_empty());
+    let mut names = column_of(&s, "SELECT name FROM capabilities", 0);
+    let mut oracle = column_of(&s, "SELECT name FROM system.capabilities", 0);
+    names.sort();
+    oracle.sort();
+    assert!(!oracle.is_empty() && !oracle.contains(&"wrong".to_owned()));
+    assert_eq!(names, oracle);
     // With the stored schema first, it does.
     run(&s, "SET PATH = spark_catalog.default, CURRENT_SCHEMA").unwrap();
     assert_eq!(column_of(&s, "SELECT name FROM capabilities", 0), ["wrong"]);
+}
+
+#[test]
+fn a_stored_table_before_system_in_the_path_is_read_by_its_bare_name() {
+    let s = Session::builder().build().unwrap();
+    run(&s, "SET spark.sql.path.enabled=true").unwrap();
+    run(&s, "CREATE TABLE capabilities (name STRING)").unwrap();
+    run(&s, "INSERT INTO capabilities VALUES ('stored')").unwrap();
+    run(&s, "USE system").unwrap();
+    // `system` first: the system table. The stored schema first: the stored table.
+    run(&s, "SET PATH = CURRENT_SCHEMA, spark_catalog.default").unwrap();
+    assert!(!column_of(&s, "SELECT name FROM capabilities", 0).contains(&"stored".to_owned()));
+    run(&s, "SET PATH = spark_catalog.default, CURRENT_SCHEMA").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT name FROM capabilities", 0),
+        ["stored"]
+    );
+}
+
+#[test]
+fn show_columns_and_drop_table_reach_what_their_names_stand_for_under_system() {
+    let s = Session::builder().build().unwrap();
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    // SHOW COLUMNS lists a system table's columns, as DESCRIBE does.
+    let columns = column_of(&s, "SHOW COLUMNS IN system.queries", 0);
+    let described = column_of(&s, "DESCRIBE system.queries", 0);
+    assert!(!columns.is_empty());
+    assert_eq!(columns, described);
+    // A temporary view resolves before the catalog: DROP TABLE reaches it, a system table stays reserved.
+    assert!(run(&s, "DROP TABLE system.queries").is_err());
+    run(&s, "DROP TABLE tv").unwrap();
 }

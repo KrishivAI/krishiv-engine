@@ -10,13 +10,13 @@ use std::borrow::Cow;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use reedline::{
-    ColumnarMenu, Completer, CompletionResult, Emacs, FileBackedHistory, HistoryItem, KeyCode,
-    KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch, Reedline,
+    ColumnarMenu, Completer, CompletionResult, Emacs, FileBackedHistory, HistoryItem, InputMode,
+    KeyCode, KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch, Reedline,
     ReedlineEvent, ReedlineMenu, Signal, Span, Suggestion, ValidationResult, Validator,
     default_emacs_keybindings,
 };
 
-use crate::complete::{CompletionContext, complete, completion_start};
+use crate::complete::{CompletionContext, complete, completion_end, completion_start};
 
 /// What one read of the editor gave.
 pub(crate) enum Read {
@@ -62,7 +62,7 @@ struct SqlCompleter(Arc<Mutex<CompletionContext>>);
 impl Completer for SqlCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> CompletionResult {
         let start = completion_start(line, pos);
-        let end = line.floor_char_boundary(pos.min(line.len()));
+        let end = completion_end(line, pos);
         let ctx = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let suggestions: Vec<Suggestion> = complete(line, pos, &ctx)
             .into_iter()
@@ -123,7 +123,9 @@ impl Editor {
             .with_completer(Box::new(SqlCompleter(Arc::clone(&ctx))))
             .with_validator(Box::new(StatementValidator))
             .with_menu(ReedlineMenu::EngineCompleter(Box::new(
-                ColumnarMenu::default().with_name("completion_menu"),
+                ColumnarMenu::default()
+                    .with_name("completion_menu")
+                    .with_input_mode(InputMode::FullBuffer),
             )))
             .with_edit_mode(Box::new(Emacs::new(keys)));
         Some(Self { line, ctx })

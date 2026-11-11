@@ -1253,6 +1253,8 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) path: Vec<Vec<String>>,
     /// `spark.sql.legacy.viewSchemaBindingMode` of the query's snapshot: views read by their schema binding mode.
     pub(crate) binding_enabled: bool,
+    /// Whether `system` was the current catalog as the query snapshot saw it.
+    pub(crate) in_system: bool,
     /// Qualifies the bare routine calls of an expression written in a namespace under a frozen path
     /// (`None` when nothing changed): the calls of a stored view's query resolve where the view was
     /// created, not where it is read.
@@ -1477,21 +1479,6 @@ impl Expander<'_> {
         }
         let plan = self.children_and_exprs(plan, scope)?;
         self.expand_stored(plan, scope)
-    }
-
-    /// The first schema of `path` (in the catalog store) holding the table or view `table`.
-    fn path_schema_of(&self, path: &[Vec<String>], table: &str) -> Option<String> {
-        path.iter().find_map(|entry| match entry.as_slice() {
-            [c, n] if c.eq_ignore_ascii_case(CATALOG) => {
-                let (n_key, t_key) = if self.case_sensitive {
-                    (n.clone(), table.to_owned())
-                } else {
-                    (n.to_lowercase(), table.to_lowercase())
-                };
-                self.catalog.store.table(&n_key, &t_key).map(|_| n.clone())
-            }
-            _ => None,
-        })
     }
 
     /// `plan`, or when it reads a stored view, that view's query as a subquery named for the view.

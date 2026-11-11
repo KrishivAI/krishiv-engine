@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, ReadSource, Scan};
 
+use crate::store::CatalogStore as _;
+
 /// Whether the analyzed `plan` reads the permanent table `namespace.name` (directly, or through a view or a
 /// subquery): `INSERT OVERWRITE` of a table that is also read would delete what it reads.
 pub(crate) fn reads_stored_table(
@@ -58,18 +60,41 @@ fn collect_scans_in<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>, seen: &m
 }
 
 impl super::Expander<'_> {
+    /// Whether `system` was current as the query snapshot saw it (the live catalog outside a query's expansion).
+    fn in_system(&self) -> bool {
+        self.stored.map_or_else(
+            || crate::system::is_system(&self.catalog.current_catalog()),
+            |s| s.in_system,
+        )
+    }
+
+    /// The first schema of `path` (in the catalog store) holding the table or view `table`.
+    pub(super) fn path_schema_of(&self, path: &[Vec<String>], table: &str) -> Option<String> {
+        path.iter().find_map(|entry| match entry.as_slice() {
+            [c, n] if c.eq_ignore_ascii_case(super::CATALOG) => {
+                let (n_key, t_key) = if self.case_sensitive {
+                    (n.clone(), table.to_owned())
+                } else {
+                    (n.to_lowercase(), table.to_lowercase())
+                };
+                self.catalog.store.table(&n_key, &t_key).map(|_| n.clone())
+            }
+            _ => None,
+        })
+    }
+
     /// Whether a two-part name is `namespace.table` of the session catalog's store: inside a
     /// stored view always, outside one only while the current catalog is the session catalog. A
     /// two-part name is a namespace of the CURRENT catalog, and `system` has none, so there it is
     /// no stored view (and it is authorized as `system.<ns>.<table>`, never as the store's).
     pub(super) fn names_a_stored_namespace(&self) -> bool {
-        self.view_namespace.is_some() || !crate::system::is_system(&self.catalog.current_catalog())
+        self.view_namespace.is_some() || !self.in_system()
     }
 
     /// The name of a table a stored view reads from `namespace`: `spark_catalog.namespace.table` while `system` is
     /// current (the view's tables belong to the catalog that defines it), else `namespace.table` as ever.
     pub(super) fn view_read_name(&self, namespace: String, table: String) -> Vec<String> {
-        if crate::system::is_system(&self.catalog.current_catalog()) {
+        if self.in_system() {
             vec![super::CATALOG.to_owned(), namespace, table]
         } else {
             vec![namespace, table]
@@ -80,7 +105,7 @@ impl super::Expander<'_> {
     /// is current: a view's table belongs to the catalog that defines it.
     pub(super) fn anchored(&self, plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         if self.view_namespace.is_some()
-            && crate::system::is_system(&self.catalog.current_catalog())
+            && self.in_system()
             && let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
             && let [namespace, table] = name.as_slice()
             && !crate::system::is_system(namespace)
@@ -98,6 +123,11 @@ impl super::Expander<'_> {
 }
 
 impl super::QueryCatalog {
+    /// Whether `system` is the current catalog of this query's snapshot.
+    pub(crate) fn in_system(&self) -> bool {
+        crate::system::is_system(&self.catalog)
+    }
+
     /// The `system` catalog of this query, with the session's temporary relations in front of it.
     pub(super) fn system_catalog(self: &Arc<Self>) -> crate::system::SystemCatalog {
         crate::system::SystemCatalog::of(&self.system).with_temps(Arc::clone(self))

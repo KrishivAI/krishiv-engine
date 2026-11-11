@@ -171,6 +171,12 @@ impl QueryFunctions {
         }
     }
 
+    /// This registry as the query snapshot saw the current catalog (`system` or not).
+    pub(crate) fn in_system(mut self, in_system: bool) -> Self {
+        self.in_system = in_system;
+        self
+    }
+
     /// This registry resolving bare names through `path`.
     pub(crate) fn with_path(mut self, path: Vec<Vec<String>>) -> Self {
         self.path = path;
@@ -246,6 +252,7 @@ impl QueryFunctions {
                     // A body reads a view as written; schema binding modes
                     // apply to the views a query reads itself.
                     binding_enabled: false,
+                    in_system: self.in_system,
                     path: if def.path.is_empty() {
                         self.path.clone()
                     } else {

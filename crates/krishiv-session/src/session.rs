@@ -1206,7 +1206,8 @@ impl Session {
                     },
                 }),
             )
-            .with_path(catalog.sql_path_snapshot()),
+            .with_path(catalog.sql_path_snapshot())
+            .in_system(catalog.in_system()),
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
@@ -1274,6 +1275,7 @@ impl Session {
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
                 path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
+                in_system: env.catalog.in_system(),
                 qualify: Some(&|e, namespace, path| {
                     env.sql_functions
                         .qualify_calls(e, namespace, path, self.state.profile, true)

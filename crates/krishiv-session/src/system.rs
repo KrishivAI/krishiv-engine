@@ -1628,8 +1628,11 @@ mod tests {
         };
         let got =
             mask.apply_message("The variant value `\"x` secret_canary\"` cannot be cast to `INT`.");
-        assert!(!got.contains("secret_canary"), "{got}");
-        assert!(got.contains("`INT`"), "{got}");
+        assert_eq!(got, "The variant value `?` cannot be cast to `INT`.");
+        // An escaped double quote in the rendered value does not close its JSON string.
+        let got = mask
+            .apply_message("The variant value `\"x\\\"` secret_canary\"` cannot be cast to `INT`.");
+        assert_eq!(got, "The variant value `?` cannot be cast to `INT`.");
     }
 
     #[test]

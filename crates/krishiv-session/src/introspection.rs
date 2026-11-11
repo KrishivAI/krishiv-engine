@@ -525,6 +525,28 @@ impl Session {
                 table, namespace, ..
             } => {
                 let env = self.query_env();
+                if namespace.is_none()
+                    && let Some(t) = self.system_table_of(table, &env)?
+                {
+                    let analysis = DataFrame::new(
+                        self.clone(),
+                        Arc::new(krishiv_plan::LogicalPlan::table([
+                            "system",
+                            &t.to_lowercase(),
+                        ])),
+                    )
+                    .analyzed_in(env.clone())
+                    .await?;
+                    let names = analysis
+                        .analyzed
+                        .output
+                        .iter()
+                        .map(|c| vec![s(&c.name)])
+                        .collect();
+                    return self
+                        .frame_with_order(&["col_name"], &[], names, false)
+                        .await;
+                }
                 // With `FROM ns` the table is named by that namespace: no guard on the bare name first.
                 let mut name = if namespace.is_some() {
                     let parts = crate::access::ddl_parts(table, &env)?;
@@ -883,6 +905,23 @@ impl Session {
             .collect())
     }
 
+    /// The table of the `system` catalog `table` names (current under `USE system` and not a temporary view, or
+    /// written `system.<table>`), if it is one.
+    fn system_table_of(
+        &self,
+        table: &DdlName,
+        env: &crate::session::QueryEnv,
+    ) -> Result<Option<String>, KrishivError> {
+        let parts = crate::access::ddl_parts(table, env)?;
+        let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
+        Ok(match parts.as_slice() {
+            [t] if in_system && !self.is_temp_name(t, env) => Some(t.clone()),
+            [c, t] if crate::system::is_system(c) => Some(t.clone()),
+            _ => None,
+        }
+        .filter(|t| crate::system::is_system_table(&["system".to_owned(), t.to_lowercase()])))
+    }
+
     /// `DESCRIBE system.<table>`: the table's columns (name, type, no comment). The variants that
     /// describe stored metadata (`EXTENDED`, `PARTITION`, `AS JSON`, one column) are refused: the
     /// catalog is generated, so it has none.
@@ -932,16 +971,7 @@ impl Session {
                 ..
             } => {
                 // A table of the read-only `system` catalog: its columns, nothing stored.
-                let parts = crate::access::ddl_parts(table, &env)?;
-                let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
-                let system_table = match parts.as_slice() {
-                    [t] if in_system && !self.is_temp_name(t, &env) => Some(t.clone()),
-                    [c, t] if crate::system::is_system(c) => Some(t.clone()),
-                    _ => None,
-                }
-                .filter(|t| {
-                    crate::system::is_system_table(&["system".to_owned(), t.to_lowercase()])
-                });
+                let system_table = self.system_table_of(table, &env)?;
                 if let Some(table) = system_table {
                     return self
                         .describe_system_table(

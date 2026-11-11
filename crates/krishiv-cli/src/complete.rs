@@ -292,6 +292,17 @@ pub(crate) fn completion_start(line: &str, cursor: usize) -> usize {
     }
 }
 
+/// Where the word [`complete`] replaces ends in `line`: past `cursor` over the rest of the word, so
+/// completing inside `lin|eitem` replaces all of it (a `SET` key's dots belong to the word).
+pub(crate) fn completion_end(line: &str, cursor: usize) -> usize {
+    let end = line.floor_char_boundary(cursor.min(line.len()));
+    let dotted = in_set_context(&line[..end]);
+    end + line[end..]
+        .char_indices()
+        .find(|(_, c)| !(c.is_alphanumeric() || *c == '_' || (dotted && *c == '.')))
+        .map_or(line.len() - end, |(i, _)| i)
+}
+
 /// The dotted run right before the cursor (`spark.sql.ansi`), for `SET`
 /// key completion.
 fn dotted_word(prefix: &str) -> &str {
@@ -368,6 +379,20 @@ fn selected_table(line: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_completion_inside_a_word_replaces_the_whole_word() {
+        let line = "select * from lineitem where x";
+        let cursor = "select * from lin".len();
+        assert_eq!(completion_start(line, cursor), "select * from ".len());
+        assert_eq!(completion_end(line, cursor), "select * from lineitem".len());
+        // At the end of a word, or before a space, nothing more is replaced.
+        assert_eq!(
+            completion_end(line, "select * from lineitem".len()),
+            "select * from lineitem".len()
+        );
+        assert_eq!(completion_end("select * from ", 14), 14);
+    }
+
     #[test]
     fn keywords_are_upper_case_sorted_and_unique() {
         // `is_keyword_word` binary-searches the table: a misplaced entry would silently vanish.

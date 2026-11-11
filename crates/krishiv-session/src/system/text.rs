@@ -125,6 +125,20 @@ pub(super) fn mask_quoted(message: &str) -> String {
     out
 }
 
+/// Whether `text` ends inside a JSON string: an unescaped double quote opens it, a backslash escapes the next character.
+fn open_json_string(text: &str) -> bool {
+    let (mut open, mut escaped) = (false, false);
+    for c in text.chars() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if open => escaped = true,
+            '"' => open = !open,
+            _ => {}
+        }
+    }
+    open
+}
+
 /// `message` with each backquoted run that is not a plain name replaced by `` `?` ``: some messages print an
 /// offending value (a variant rendered as JSON, say) between backquotes, while names (`db`.`t`) stay.
 pub(super) fn mask_backquoted(message: &str) -> String {
@@ -151,7 +165,7 @@ pub(super) fn mask_backquoted(message: &str) -> String {
         // A value rendered as JSON may hold backquotes of its own (`"x` secret"`): while the span has an open
         // double quote, it runs on to the next closing backquote.
         let mut j = j;
-        while message[chars[i + 1].0..chars[j].0].matches('"').count() % 2 == 1 {
+        while open_json_string(&message[chars[i + 1].0..chars[j].0]) {
             let next = (j + 1..chars.len())
                 .find(|&k| chars[k].1 == '`' && chars.get(k + 1).is_none_or(|n| !word(n.1)));
             match next {

@@ -1878,5 +1878,5 @@ fn a_stored_view_and_its_tables_are_authorized_in_their_defining_catalog_under_s
         1
     );
     // Reading the stored table by a name that would be system.* is refused, as before.
-    assert!(rows(&s, "SELECT * FROM default.t_stored").is_err());
+    assert_eq!(class(rows(&s, "SELECT * FROM default.t_stored")), DENIED);
 }
