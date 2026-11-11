@@ -73,6 +73,13 @@ approve the `testpypi` deployment. Verify the install from TestPyPI in a clean
 venv: `pip install --index-url https://test.pypi.org/simple/ --extra-index-url
 https://pypi.org/simple/ "krishiv[pyarrow]==0.2.0a0"`.
 
+## Release artifacts (manual, publishes nothing)
+
+`release.yml` (dispatch on `main` or a `v*` tag) builds the wheels, the Linux and macOS arm64 CLI binaries,
+`SHA256SUMS`, a CycloneDX SBOM and build-provenance attestations from one commit, and keeps them as the
+`release-bundle` workflow artifact. It has no publish step, tag or GitHub Release; the gated publish jobs are a
+later change by the maintainer.
+
 ## crates.io and PyPI (not set up)
 
 Publishing to crates.io or PyPI proper is not wired up at all. It needs, in
