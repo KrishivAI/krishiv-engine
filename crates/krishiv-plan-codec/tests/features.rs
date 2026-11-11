@@ -47,6 +47,10 @@ fn the_header_lists_exactly_the_features_in_use() {
     assert_eq!(m.epoch, EPOCH);
     assert_eq!(message("limit_offset").features, ["limit_offset"]);
     assert!(message("limit").features.is_empty());
+    assert_eq!(
+        message("captured_eval_mode").features,
+        ["captured_eval_mode"]
+    );
     // A lambda over arrays needs both features.
     assert_eq!(
         message("lambda_functions").features,
@@ -84,6 +88,7 @@ fn the_header_lists_exactly_the_features_in_use() {
     });
     assert!(plan_features(&zero).is_empty());
     assert_eq!(message("aggregate_filter").features, ["aggregate_filter"]);
+    assert_eq!(message("fused_probe").features, ["fused_probe"]);
     assert_eq!(message("session_zone_name").features, ["session_zone_name"]);
     assert_eq!(
         message("legacy_charset_switches").features,
@@ -307,6 +312,11 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         Some(Feature::LambdaFunctions)
     );
     assert_eq!(Feature::LambdaFunctions.kind(), FeatureKind::Semantic);
+    assert_eq!(
+        feature_of(Construct::EvalMode),
+        Some(Feature::CapturedEvalMode)
+    );
+    assert_eq!(Feature::CapturedEvalMode.kind(), FeatureKind::Semantic);
     assert_eq!(feature_of(Construct::Node(&PhysNode::OneRow)), None);
     let null_of = krishiv_exec::physical::ProjectItemPlan::NullOf {
         index: 0,
@@ -620,6 +630,23 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         err,
         CodecError::UnsupportedFeatures {
             missing: vec!["partial_aggregate".to_owned()]
+        }
+    );
+    // A reader without `fused_probe` refuses a probe that selects its rows
+    // (it would join every row of the batch).
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "fused_probe")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["fused_probe".to_owned()]
         }
     );
     // A reader without `shared_subplan` refuses a plan with shared plans.
@@ -1073,6 +1100,7 @@ fn only_udf_plans_need_rust_udf_and_every_expression_position_counts() {
             distinct_build: false,
             runtime_filters: Vec::new(),
             distribution: krishiv_exec::physical::JoinDistribution::Broadcast,
+            select: None,
         }));
         assert_eq!(plan_features(&plan).contains(&Feature::RustUdf), wants);
     }
@@ -1903,5 +1931,27 @@ fn a_decoded_collation_is_checked() {
     corrupt(
         &on_string,
         "a collation on a type that is not a collated string",
+    );
+}
+
+/// A plan calling a Python UDF lists `python_udf` (a semantic feature: no
+/// plan without the node computes the same rows), and a reader without it
+/// refuses the plan naming the feature.
+#[test]
+fn a_python_udf_needs_its_feature() {
+    assert_eq!(message("python_udf").features, ["python_udf"]);
+    assert_eq!(Feature::PythonUdf.kind(), FeatureKind::Semantic);
+    let bytes = message("python_udf").encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::PythonUdf),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["python_udf".to_owned()]
+        }
     );
 }

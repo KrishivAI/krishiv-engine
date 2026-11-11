@@ -311,7 +311,7 @@ impl Restrict<'_> {
         }
         // The domain: the deepest subtree of `other` that still holds the
         // keys' values without many more of them.
-        let mut want = Attrs::new();
+        let mut want = Attrs::default();
         for p in &kept {
             want.extend(references(p.other));
         }
@@ -339,9 +339,9 @@ impl Restrict<'_> {
         // Fresh ids for the domain's instance.
         let offset = match self.next {
             Some(n) => n,
-            None => max_id(&self.root, &mut HashMap::new()).saturating_add(1),
+            None => max_id(&self.root, &mut Default::default()).saturating_add(1),
         };
-        let top = max_id(&domain, &mut HashMap::new());
+        let top = max_id(&domain, &mut Default::default());
         self.next = Some(
             offset
                 .checked_add(top)?
@@ -661,7 +661,8 @@ fn output(p: &LogicalPlan) -> Option<Vec<BoundColumn>> {
 }
 
 fn output_ids(p: &LogicalPlan) -> Option<Attrs> {
-    Some(output(p)?.into_iter().map(|c| c.id).collect())
+    let mut ids = Attrs::default();
+    crate::pushdown::collect_ids(p, &mut ids).then_some(ids)
 }
 
 /// Whether this node's own expressions call only deterministic functions.
@@ -727,16 +728,38 @@ fn shift(e: &Arc<Expr>, offset: u64) -> Arc<Expr> {
 
 /// The largest attribute id `p` holds: outputs, references and subquery
 /// plans, each shift at its offset.
-pub(crate) fn max_id(p: &Arc<LogicalPlan>, memo: &mut HashMap<*const LogicalPlan, u64>) -> u64 {
+pub(crate) fn max_id(
+    p: &Arc<LogicalPlan>,
+    memo: &mut crate::expr::AddrMap<LogicalPlan, u64>,
+) -> u64 {
     if let Some(m) = memo.get(&Arc::as_ptr(p)) {
         return *m;
     }
-    let mut m = output(p)
-        .unwrap_or_default()
-        .iter()
-        .map(|c| c.id.0)
-        .max()
-        .unwrap_or(0);
+    // A node that passes its inputs' columns on has no id of its own above
+    // theirs (taken below); its output would be rebuilt from the whole
+    // subtree at every level.
+    let passes_on = match &p.node {
+        PlanNode::Filter { .. }
+        | PlanNode::Sort { .. }
+        | PlanNode::Limit { .. }
+        | PlanNode::Offset { .. }
+        | PlanNode::WithCte { .. }
+        | PlanNode::JoinHint { .. }
+        | PlanNode::Repartition { .. }
+        | PlanNode::ReplicateRows { .. } => true,
+        PlanNode::Join { kind, .. } => !matches!(kind, JoinKind::Existence(_)),
+        _ => false,
+    };
+    let mut m = if passes_on {
+        0
+    } else {
+        output(p)
+            .unwrap_or_default()
+            .iter()
+            .map(|c| c.id.0)
+            .max()
+            .unwrap_or(0)
+    };
     let mut kids = Vec::new();
     p.for_each_child(&mut |c| kids.push(Arc::clone(c)));
     let offset = match &p.node {
@@ -749,7 +772,7 @@ pub(crate) fn max_id(p: &Arc<LogicalPlan>, memo: &mut HashMap<*const LogicalPlan
     let mut exprs = Vec::new();
     p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
     for e in &exprs {
-        let mut ids = Attrs::new();
+        let mut ids = Attrs::default();
         crate::expr::references_into(e, &mut ids);
         m = m.max(
             ids.iter()

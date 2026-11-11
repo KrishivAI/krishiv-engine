@@ -25,7 +25,7 @@ use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::{DriverStats, OperatorMetrics};
-use crate::morsel::{Barrier, Countdown};
+use crate::morsel::{Barrier, Baton, Countdown};
 use crate::operator::{FlushOutput, GlobalState, LocalState, OperatorOutput, SinkStatus};
 use crate::pipeline::Pipeline;
 
@@ -44,8 +44,24 @@ pub(crate) struct PipelineRun {
     pub(crate) sink_global: GlobalState,
     /// Shared by the pipelines of a fan-in, as is `sink_global`.
     pub(crate) countdown: Arc<Countdown>,
+    /// The fan-in's baton and this pipeline's member index, when the
+    /// members of a deterministic fan-in take turns (see [`Baton`]).
+    pub(crate) turn: Option<(Arc<Baton>, usize)>,
     pub(crate) query: Arc<QueryContext>,
     pub(crate) executor: Arc<dyn Executor>,
+}
+
+/// A driver's place in its fan-in's [`Baton`]: it leaves when dropped, so
+/// a driver that ends, fails or is aborted never keeps the others waiting.
+struct Turn {
+    baton: Arc<Baton>,
+    member: usize,
+}
+
+impl Drop for Turn {
+    fn drop(&mut self) {
+        self.baton.leave(self.member);
+    }
 }
 
 /// What woke a [`pause`].
@@ -122,13 +138,22 @@ fn since(executor: &dyn Executor, start: Instant) -> Duration {
 /// Spawns one driver of `run`: `partition` is the driver's
 /// scheduler-assigned globally unique partition id within its pipeline
 /// group (see [`TaskContext::with_partition`]).
-pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle {
+pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32, base: u32) -> TaskHandle {
     let pipeline = run.pipeline.index;
     let query = Arc::clone(&run.query);
     let executor = Arc::clone(&run.executor);
     let q = Arc::clone(&query);
+    // Made here and moved into the task, so a driver that fails to start,
+    // or is aborted before its first poll, still leaves the baton; dropped
+    // only after a failure is recorded, so the member left behind sees the
+    // query failed rather than a fan-in nobody can run (first error wins).
+    let turn = run.turn.as_ref().map(|(baton, member)| Turn {
+        baton: Arc::clone(baton),
+        member: *member,
+    });
     let body = async move {
-        if let Err(e) = drive(run, partition).await {
+        let _turn = turn;
+        if let Err(e) = drive(run, partition, base).await {
             q.fail(e);
         }
     };
@@ -148,8 +173,8 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle 
     crate::console::spawn_named(&executor, &query, query.class(), &name, Box::pin(timed))
 }
 
-async fn drive(run: Arc<PipelineRun>, partition: u32) -> Result<()> {
-    Driver::new(run, partition)?.run().await
+async fn drive(run: Arc<PipelineRun>, partition: u32, base: u32) -> Result<()> {
+    Driver::new(run, partition, base)?.run().await
 }
 
 /// Times every poll of a driver: the stall detector. A poll is a
@@ -445,10 +470,13 @@ struct Driver {
     yields: u64,
     /// The source position last reported to the sink.
     position: Option<u64>,
+    /// The driver's baton and member index in a deterministic fan-in, if it
+    /// takes turns (its [`Turn`] guard is held by the driver's task).
+    turn: Option<(Arc<Baton>, usize)>,
 }
 
 impl Driver {
-    fn new(run: Arc<PipelineRun>, partition: u32) -> Result<Self> {
+    fn new(run: Arc<PipelineRun>, partition: u32, base: u32) -> Result<Self> {
         let owner = SpillOwner::new();
         let ctx = |id, name| {
             TaskContext::new(
@@ -459,6 +487,7 @@ impl Driver {
                 name,
             )
             .with_partition(partition)
+            .with_partition_base(base)
         };
         let p = &run.pipeline;
         let (source_id, source) = &p.source;
@@ -501,6 +530,7 @@ impl Driver {
             batches: 0,
             yields: 0,
             position: None,
+            turn: run.turn.clone(),
             owner,
             run,
         })
@@ -527,6 +557,7 @@ impl Driver {
         let source = &run.pipeline.source.1;
         // The first operator whose buffered output is still wanted.
         let mut finish_from = 0;
+        self.take_turn().await?;
         loop {
             self.boundary().await?;
             let start = run.executor.now();
@@ -567,6 +598,30 @@ impl Driver {
             self.metrics(k).compute_time += since(&*run.executor, start);
         }
         Ok(())
+    }
+
+    /// Waits until this driver holds its fan-in's baton, if it takes turns.
+    async fn take_turn(&mut self) -> Result<()> {
+        let Some((baton, member)) = self.turn.clone() else {
+            return Ok(());
+        };
+        let run = Arc::clone(&self.run);
+        let (held, _) = pause(
+            &run,
+            Some((&self.owner, &self.slots)),
+            baton.acquire(member),
+        )
+        .await?;
+        if held {
+            Ok(())
+        } else {
+            // Only a member that failed leaves the others stuck: its error
+            // (already recorded) wins over this one.
+            run.query.check_cancelled()?;
+            Err(internal(
+                "every member of a deterministic fan-in waits at a closed flush barrier".to_owned(),
+            ))
+        }
     }
 
     /// Tells the sink when the source moved to another morsel (see
@@ -649,7 +704,8 @@ impl Driver {
                 self.yield_now().await;
             }
             if let Some(barrier) = run.barriers.get(i).filter(|_| op.needs_flush()) {
-                from = self.flush(i, barrier, from).await?;
+                let barrier = Arc::clone(barrier);
+                from = self.flush(i, &barrier, from).await?;
             }
             self.release_unwanted(from);
         }
@@ -695,7 +751,7 @@ impl Driver {
     /// [`Operator::needs_flush`](crate::Operator::needs_flush)); every
     /// driver arrives at its barrier exactly once, also when operator `i`'s
     /// output is no longer wanted (`i < from`). Returns the new `from`.
-    async fn flush(&mut self, i: usize, barrier: &Barrier, mut from: usize) -> Result<usize> {
+    async fn flush(&mut self, i: usize, barrier: &Arc<Barrier>, mut from: usize) -> Result<usize> {
         let run = Arc::clone(&self.run);
         let Some((_, op)) = run.pipeline.operators.get(i) else {
             return Ok(from);
@@ -710,6 +766,14 @@ impl Driver {
         self.put_local(i, local)?;
         ended?.0?;
         barrier.arrive();
+        // Taking turns, a driver at a closed barrier hands the baton on and
+        // gets it back once the barrier has opened.
+        if let Some((baton, member)) = &self.turn
+            && !barrier.is_open()
+        {
+            baton.pass(*member, Arc::clone(barrier));
+            self.take_turn().await?;
+        }
         pause(&run, Some((&self.owner, &self.slots)), barrier.wait()).await?;
         while i >= from {
             self.boundary().await?;
@@ -1001,6 +1065,9 @@ impl Drop for Driver {
         let slots = self.slots.get_mut();
         slots.metrics[0].morsels += p.source.1.morsels_claimed(&self.source_local);
         for (k, slot) in slots.slots.iter().enumerate() {
+            // Per-driver peak. `QueryContext::metrics` overwrites it for local queries with the
+            // concurrent peak over all consumers of the operator; task metrics merged directly
+            // (distributed folds) still carry this value.
             if let Some(m) = slot.ctx.registered() {
                 slots.metrics[k].peak_reserved = m.consumer().peak() as u64;
             }

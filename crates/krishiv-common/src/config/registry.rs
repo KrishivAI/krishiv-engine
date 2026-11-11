@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The config entries. Add new entries here and to [`REGISTRY`].
 
+use super::registry_join::{
+    EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT,
+};
 use std::borrow::Cow;
 use std::time::Duration;
 
-use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
+use super::{
+    ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
+    build_projection::EXEC_JOIN_BUILD_PROJECTION, join_cost::JOIN_COST,
+};
+
+mod python;
+pub use python::{ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS};
+mod result_cache;
+pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -13,6 +24,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ANSI_ENABLED,
     &SESSION_TIME_ZONE,
     &SQL_PATH_ENABLED,
+    &SCHEMA_LEVEL_COLLATIONS_ENABLED,
     &SQL_DEFAULT_PATH,
     &STORE_ASSIGNMENT_POLICY,
     &CTE_PRECEDENCE_POLICY,
@@ -24,10 +36,12 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
+    &EXEC_JOIN_BUILD_PROJECTION,
     &EXEC_JOIN_RADIX_BITS,
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
+    &EXEC_JOIN_FUSE_PROBE_SELECT,
     &EXEC_JOIN_IDLE_SPILL_AFTER,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
@@ -113,11 +127,15 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
+    &ARROW_MAX_RECORDS_PER_BATCH,
+    &PYTHON_UDF_ARROW_ENABLED,
+    &PYTHON_UDF_THREADS,
     &JOIN_ENUMERATOR,
     &JOIN_DP_LIMIT,
     &NDV_SAMPLING_ENABLED,
     &NDV_SAMPLING_ROWS,
     &NDV_SAMPLING_TIMEOUT,
+    &JOIN_COST,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -161,6 +179,8 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.cache.diskBytes", &IO_CACHE_DISK_BYTES),
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
+    ("krishiv.optimizer.joinCost", &JOIN_COST),
+    ("krishiv.python.udf.threads", &PYTHON_UDF_THREADS),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
@@ -223,6 +243,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.cteRecursionLevelLimit",
         &CTE_RECURSION_LEVEL_LIMIT,
+    ),
+    (
+        "krishiv.exec.join.buildProjection",
+        &EXEC_JOIN_BUILD_PROJECTION,
+    ),
+    (
+        "krishiv.exec.join.fuseProbeSelect",
+        &EXEC_JOIN_FUSE_PROBE_SELECT,
     ),
     (
         "krishiv.exec.join.smj.bufferBytes",
@@ -384,6 +412,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &AVRO_DATETIME_REBASE_MODE_IN_READ,
     ),
     (
+        "spark.sql.collation.schemaLevel.enabled",
+        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
+    ),
+    (
         "spark.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
@@ -412,6 +444,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &AVRO_DATETIME_REBASE_MODE_IN_READ,
     ),
     (
+        "krishiv.sql.collation.schemaLevel.enabled",
+        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
+    ),
+    (
         "krishiv.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
@@ -424,8 +460,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_PARQUET_DICTIONARY_FILTER_ENABLED,
     ),
     (
+        "spark.sql.execution.pythonUDF.arrow.enabled",
+        &PYTHON_UDF_ARROW_ENABLED,
+    ),
+    (
+        "spark.sql.execution.arrow.maxRecordsPerBatch",
+        &ARROW_MAX_RECORDS_PER_BATCH,
+    ),
+    (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
         &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
+    ),
+    (
+        "krishiv.sql.execution.pythonUDF.arrow.enabled",
+        &PYTHON_UDF_ARROW_ENABLED,
     ),
     (
         "spark.sql.optimizer.windowGroupLimitThreshold",
@@ -434,6 +482,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.bloom.minApplicationRows",
         &RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
+    ),
+    (
+        "krishiv.sql.execution.arrow.maxRecordsPerBatch",
+        &ARROW_MAX_RECORDS_PER_BATCH,
     ),
     (
         "krishiv.sql.optimizer.windowGroupLimitThreshold",
@@ -485,6 +537,22 @@ pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.path.enabled"),
+};
+
+/// Whether schema-level default collations (`CREATE|ALTER SCHEMA .. DEFAULT COLLATION`) are allowed.
+pub static SCHEMA_LEVEL_COLLATIONS_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.collation.schemaLevel.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether a schema may have a default collation (`CREATE SCHEMA .. DEFAULT COLLATION`, \
+          `ALTER SCHEMA .. DEFAULT COLLATION`). Off, as in Spark 4.2, the clause is \
+          `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`. On, the schema stores it and `DESCRIBE \
+          SCHEMA` shows it; tables, views and functions are not created in such a schema yet \
+          (Spark gives their strings the schema's collation; Krishiv does not apply it).",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.collation.schemaLevel.enabled"),
 };
 
 /// What `DEFAULT_PATH` expands to.
@@ -628,21 +696,6 @@ pub static EXEC_JOIN_BUILD_SIDE: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// Hash join keys in the row layout with a size-adaptive index (P2-T158).
-pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
-    key: "krishiv.exec.join.rowLayout",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
-    doc: "Internal: hash joins store their keys as fixed-width rows and index them with a \
-          table that switches by size between a flat and a salted directory. Results are \
-          the same either way; joins whose key types have no row encoding keep the \
-          columnar path.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
 /// Hash buckets of a sort below a window (P2-T055).
 pub static EXEC_SORT_HASH_BUCKETS: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.sort.hashBuckets",
@@ -711,23 +764,6 @@ pub static EXEC_JOIN_SHARED_BROADCAST_BYTES: ConfigEntry = ConfigEntry {
           stops, and each task of the query builds its own table from the broadcast rows \
           instead, spilling as needed. A cap below the query's memory avoids the spill of the query's \
           other memory that precedes that fallback when the table does not fit.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// How long a finished hash join build waits for its probe before the
-/// memory arbitrator spills it ahead of running consumers (study 30, M2).
-pub static EXEC_JOIN_IDLE_SPILL_AFTER: ConfigEntry = ConfigEntry {
-    key: "krishiv.exec.join.idleSpillAfter",
-    value_type: ValueType::Duration,
-    default: Some(ConfigValue::Duration(Duration::from_secs(1))),
-    doc: "How long a finished hash join build table may wait for its probe side to start \
-          before it counts as idle. When memory runs short, an idle table is spilled first, \
-          one partition at a time, before an operator that is running spills its own state; \
-          the probe reads the spilled partitions back from disk. A shorter wait keeps less \
-          memory idle; a longer one spills less often when the probe starts soon.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
@@ -964,60 +1000,15 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           states (a decimal `sum` or `avg`, whose overflow can depend on the order of the \
           merges) are merged in the order the input arrives and a query without `ORDER BY` \
           returns its rows in the same order on every run, byte for byte, for the engine's \
-          own scans. Costs the parallelism of the query: meant for reproducing a result, \
-          comparing two builds, and tests. Memory pressure from other queries in the process \
-          can still change when an operator spills, and so the order of what it returns, and the \
+          own scans. The key hashes take a fixed seed, so an operator that spills splits \
+          its rows the same way on every run. Costs the parallelism of the query: meant for \
+          reproducing a result, comparing two builds, and tests. Memory pressure from other queries in the process \
+          can still change when an operator spills, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
-          probing a union) still run side by side. Off by default.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// Whether the process-wide result cache serves and stores query results.
-pub static RESULT_CACHE_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.resultCache.enabled",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
-    doc: "Keep the rows of a query for later runs of the same query by any session of the process \
-          with the same principal and access-policy version. Only queries over permanent \
-          catalog tables with no non-deterministic function are cached. Entries are dropped by \
-          `REFRESH TABLE`, `CLEAR CACHE` and every write the engine commits to a table they \
-          read; a change made outside the engine is not seen until the entry expires. Off by \
+          probing a union) take turns, one after another, so they lose their overlap too. Off by \
           default.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// How long a result-cache entry is served.
-pub static RESULT_CACHE_TTL: ConfigEntry = ConfigEntry {
-    key: "krishiv.resultCache.ttl",
-    value_type: ValueType::Duration,
-    default: Some(ConfigValue::Duration(Duration::from_secs(24 * 60 * 60))),
-    doc: "How long the result cache serves an entry, counted from when it was stored; an older \
-          entry is dropped before the next lookup and the query runs again. `0s` never \
-          expires. Needs `krishiv.resultCache.enabled`.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// Byte cap of the process-wide result cache.
-pub static RESULT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
-    key: "krishiv.resultCache.maxBytes",
-    value_type: ValueType::Size,
-    default: Some(ConfigValue::Size(64 * MIB)),
-    doc: "Most bytes the result cache of an engine runtime holds (the process-wide store of \
-          sessions built alone, or a supplied runtime's own), as Arrow batches outside the query \
-          memory pool; fixed when the runtime is built. A result \
-          larger than the cap is not stored; when a new result would pass the cap the oldest \
-          entries go first, and entries past their ttl go whenever a result is stored. Needs `krishiv.resultCache.enabled`.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };

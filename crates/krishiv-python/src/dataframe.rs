@@ -305,7 +305,9 @@ impl PyDataFrame {
         })?;
         let reader = QueryReader::new(schema, first, stream);
         let slot = reader.error_slot();
-        Ok(ArrowStream::new(Box::new(reader)).with_error_slot(slot))
+        // A consumer reading with the GIL held must not block the Python
+        // UDF calls the query waits on (design P2-T059 §2.5).
+        Ok(ArrowStream::new(Box::new(crate::stream::Detaching(reader))).with_error_slot(slot))
     }
 
     /// The number of result rows (executes the query, the GIL released).

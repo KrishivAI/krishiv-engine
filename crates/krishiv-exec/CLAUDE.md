@@ -16,9 +16,10 @@ TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.r
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
 `expr.rs` the `Predicate`/`ScalarExpr` evaluator interface the physical planner plugs in ·
+`select.rs` (design P2-E3 U2) `Selection` (ascending `u32` row ids) and `RowSelect` (a fused predicate and a scan's row stage, evaluated over a whole batch) ·
 `hash.rs` shared hash-table blocks (seeded key hash, key normalization + row encoding, `KeyTable`, spill
 partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
-`accumulator.rs` per-group states, `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
+`accumulator.rs` per-group states (`accumulator/paired.rs`: a decimal `sum(x)` and `avg(x)` of one aggregate folded in one pass where both take the proof path), `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
 `spill_global`; a batch whose worst case the pool refuses is applied in slices, `slice_tests.rs`, unless a spill of the driver's tables would free the shortfall (then it spills, ADR 0007 addendum 2026-11-08); `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
 (P2-T117b) `file_scan.rs` FileScan/FileScanSource over any `krishiv_io::FileFormat` (Spark partitions cut into
 about four morsels per driver, footer read-ahead, `_metadata` struct column; filters stay `Inexact`) · `file_write.rs` FileWriteSink
@@ -50,7 +51,7 @@ partials merge with `KeyFilter::merge` under the publishing join's options (`Val
 partitioned join's Bloom size is planned (`KeyFilterOptions::bloom_bytes`, P2-T177 unit 2) and dropped at
 instantiation when the filter has one producer partition.
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
-(adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
+(adaptive switch-off; a scan can hand its drivers' stages to the hash probe above it, `RuntimeFilters::hand_to_consumer`); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
 starts after the pipelines publishing the filters worth the wait (`scan_waits`: not when the build reads the scan's
 own table, unless it is far smaller) unless they run with or after it (`runner.rs`, `with_filter_order`); no driver
 ever waits on a filter's value. A `TopN` offers the first key of its last row the same way (`PhysNode::TopN::bound`, `ValueService::tighten`, design P2-T063): never where a filter below may raise or a nondeterministic plan sits below.
@@ -73,9 +74,7 @@ Operators with work after their input (`needs_flush`) get `end_input` + a per-pi
 round of the recursive term run as queries of their own over a child `QueryContext` (child memory pool, cancelled with the
 outer query); every batch goes downstream at once and into the round's working table (`shared.rs` `Output::open/append`,
 spilled to the query's scope under pressure), which the next round's `LoopRef` reads (`SharedSource::over`). `Detached`
-(`instantiate.rs`) re-instantiates the recursive term per round with the loop tables bound; shared plans are built again each
-round. Limits (`LoopLimits`) are plan data. Seeded random functions draw round `k`'s stream at partition `k - 1` (`EvalEnv::partition_shift`, as Spark does); a working table of at most 100 rows is read by one driver in order (`Output::read_by_one_driver`), as Spark reads its `LocalRelation`. Not matched: Spark round-robins a larger working table into the shuffle partitions, which Krishiv's drivers do not reproduce. Not done: a
-nondeterministic enclosing CTE is evaluated once per round. `EXPLAIN ANALYZE` reports the rounds, their rows and the folded compute time and spill bytes of every round, a LIMIT-stopped one included (`add_run_metrics`).
+(`physical/instantiate/detached.rs`) instantiates the anchor and each round when it starts, with the loop tables bound; shared plans are built again for each run, their unseeded random calls salted as the outer plan salted them, so an enclosing nondeterministic CTE gives the anchor, round 1 and the outer query one value and round `k` the stream of partition `k - 1`, as in Spark (the runs' own calls take a salt range per loop). Limits (`LoopLimits`) are plan data. Seeded random functions draw round `k`'s stream at partition `k - 1` (`EvalEnv::partition_shift`, as Spark does); a working table of at most 100 rows is read by one driver in order (`Output::read_by_one_driver`), as Spark reads its `LocalRelation`. Not matched: Spark round-robins a larger working table into the shuffle partitions, which Krishiv's drivers do not reproduce. `EXPLAIN ANALYZE` reports the rounds, their rows and the folded compute time and spill bytes of every round, a LIMIT-stopped one included (`add_run_metrics`).
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
 worker that runs it; the planner validates nodes with the same builders). `instantiate/distributed.rs`: what only a task of a cut plan
@@ -97,6 +96,9 @@ finalize) and `ExchangeRead` (a reduce task's `PhysNode::ExchangeSource`: `(map,
 in map order for a gather). `instantiate_task` writes a root exchange when `TaskSpec::output` is set and reads each
 source as `TaskSpec::exchanges` says; `exchange_schemas` gives a fragmenter each exchange's columns. Storage is
 `krishiv-shuffle`'s, fragments and stages are `krishiv-scheduler`'s.
+`planner/probe_select.rs` (design P2-E3 U2) fuses a `Filter` (nothing may raise: predicate, keys, residual) and a
+scan's row stage below a hash probe's column-only projections into `HashJoinPlan::select` (codec feature `fused_probe`);
+the probe (`join/probe.rs`) encodes the selected rows' keys and gathers by composed ids; `EXPLAIN` prints `probe filter:` on the join.
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
 only where a requirement is unmet, plus one hash exchange for every `DISTRIBUTE BY` (`Planner::repartition`: key expressions computed below, dropped above, so they are evaluated as Spark's shuffle evaluates them); on one worker instantiation lowers each exchange into the operators around it.
@@ -115,6 +117,7 @@ Paths are relative to this crate.
 - `src/runner.rs` `QueryRunner` and the scheduler (first error wins)
 - `src/physical/mod.rs` `PhysNode` and `PhysicalPlan` as serializable data; `src/physical/instantiate.rs` builds operators on the worker
 - `src/planner/mod.rs` physical planner (IR to physical plan); `src/planner/runtime_filter.rs` runtime-filter sites
+- `src/planner/build_project.rs` (S4') an exact, narrowing expression above an inner hash join computed on the build input before its table is built; `krishiv.exec.join.buildProjection`; differential `tests/planner/build_projection.rs`
 - `src/operators/mod.rs` stateless operators (scan, filter, project, limit, union)
 - `src/aggregate/mod.rs` hash aggregate (`rowtable.rs` the row tables, `merge_index.rs` the salted index of a large final-phase merge); `src/join/mod.rs` hash join (build, probe, grace spill)
 - `src/rows/mod.rs` row-table layout and pages shared by aggregate and join; the stored row hash `h` is a fast seedless

@@ -11,6 +11,7 @@
 )]
 
 mod broadcast_reuse;
+mod build_projection;
 mod conditionals;
 mod correlated_or;
 mod cse;
@@ -19,6 +20,7 @@ mod eager_aggregate;
 mod exchanges;
 mod existence;
 mod folding;
+mod fused_probe;
 mod group_limit;
 mod hints;
 mod late_fetch;

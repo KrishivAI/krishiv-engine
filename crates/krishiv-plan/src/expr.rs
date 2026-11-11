@@ -136,6 +136,16 @@ pub enum ExprNode {
         /// Error behaviour on invalid input.
         mode: CastMode,
     },
+    /// A column of a permanent view's read projection, with the field metadata the view stored for it
+    /// (Spark's `Alias(UpCast(col), name)(explicitMetadata = ...)` in `View` resolution): the comment the
+    /// view's column has, whatever the column under it says (`None`: the stored column has none). The value
+    /// is `expr`'s; the analyzer resolves it away (only the comment stays, on the alias it is under).
+    StoredField {
+        /// The value.
+        expr: Arc<Expr>,
+        /// The stored column comment.
+        comment: Option<String>,
+    },
     /// `expr COLLATE name` / `collate(expr, name)`: the value with an *explicit* collation
     /// (the strongest of the coercion pass, ADR 0043). It resolves to a cast to the collated
     /// type, free at run time; a non-string child is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`.
@@ -567,6 +577,19 @@ pub enum ResolvedExpr {
         /// The attribute it produces.
         output: BoundColumn,
     },
+    /// `expr` evaluated in ANSI mode `ansi`, whatever the query's mode is: a SQL
+    /// function body runs in the mode it was created under (T184). The analyzer
+    /// wraps a body only when the captured mode differs from the query's.
+    EvalMode {
+        /// The ANSI mode `expr` evaluates in.
+        ansi: bool,
+        /// The wrapped expression.
+        expr: Arc<Expr>,
+        /// Its type (the type of `expr`).
+        data_type: DataType,
+        /// Whether it may be null.
+        nullable: bool,
+    },
     /// The only argument of an aggregate call that merges the states of a
     /// [`PlanNode::PartialAggregate`](crate::PlanNode) instead of reading
     /// raw values. It is not a value: only the aggregate planned around it
@@ -628,6 +651,13 @@ impl Expr {
         }
         let t = crate::raises::type_of(self)?;
         (t.is_nested() && holds_interval(&t)).then_some(t)
+    }
+
+    /// The Spark type of a resolved expression, when it is known from the
+    /// expression alone.
+    #[must_use]
+    pub fn resolved_type(&self) -> Option<DataType> {
+        crate::raises::type_of(self)
     }
 
     /// An expression of unknown origin.
@@ -770,13 +800,16 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Collate { expr, .. }
+            | ExprNode::StoredField { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::Pipe { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
-                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+                ResolvedExpr::Alias { expr, .. }
+                | ResolvedExpr::EvalMode { expr, .. }
+                | ResolvedExpr::Field { base: expr, .. },
             ) => f(expr),
             ExprNode::UpdateFields { .. } => self.update_fields_children(f),
             ExprNode::Subquery { kind, .. } => match kind {
@@ -834,13 +867,16 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Collate { expr, .. }
+            | ExprNode::StoredField { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::Pipe { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
-                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+                ResolvedExpr::Alias { expr, .. }
+                | ResolvedExpr::EvalMode { expr, .. }
+                | ResolvedExpr::Field { base: expr, .. },
             ) => f(expr),
             ExprNode::UpdateFields { .. } => update_fields_children_mut(&mut self.node, f),
             ExprNode::Subquery { kind, .. } => match kind {

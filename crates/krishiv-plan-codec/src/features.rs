@@ -122,12 +122,14 @@ registry! {
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
     (binary_output_style, BinaryOutputStyle, POST_MIGRATION_READER_VERSION, Semantic, "The `binary_output_style` expression environment setting (`spark.sql.binaryOutputStyle`): `to_csv` and `to_xml` print binary fields as UTF-8 text, signed bytes, base64 or hex instead of `[45 61]`."),
     (calendar_struct, CalendarStruct, POST_MIGRATION_READER_VERSION, Semantic, "CALENDAR INTERVAL columns on the struct carrier (months, days, microseconds, each child marked `krishiv.calendar`; ADR 0009 update 2026-11-06). A reader without it would read the column as a plain STRUCT."),
+    (captured_eval_mode, CapturedEvalMode, POST_MIGRATION_READER_VERSION, Semantic, "An expression evaluated in a fixed ANSI mode whatever the query's: the body of a SQL function created under the other mode (T184). A reader without it would evaluate the body in the query's mode."),
     (collated_strings, CollatedStrings, POST_MIGRATION_READER_VERSION, Semantic, "STRING types with a collation other than UTF8_BINARY, by canonical name."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
     (exchange_filters, ExchangeFilters, POST_MIGRATION_READER_VERSION, Optimization, "Runtime filters an exchange collects from the rows it writes, for scans of other stages (`ExchangePlan.filters`, distributed stages); without them the fragmenter drops the filters, which never changes rows."),
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (fused_probe, FusedProbe, POST_MIGRATION_READER_VERSION, Optimization, "A hash join's probe selection (`HashJoinPlan.select`, design P2-E3 U2): a filter and a scan's runtime-filter row stage fused into the probe, which joins the selected rows by id; without it the planner keeps the `Filter` node and the scan's own row stage."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
     (interval_types, IntervalTypes, POST_MIGRATION_READER_VERSION, Semantic, "The year-month, day-time and calendar interval types, with their fields; calendar literals, and year-month and day-time literals as a cast or function argument. A bare year-month or day-time literal stays baseline."),
@@ -149,6 +151,7 @@ registry! {
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
     (percentile_aggregates, PercentileAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The percentile family and `approx_count_distinct` aggregates (`percentile`, `percentile_approx`, `percentile_disc`, `approx_count_distinct` with their folded parameters)."),
+    (python_udf, PythonUdf, POST_MIGRATION_READER_VERSION, Semantic, "Python UDF calls (`PythonUdfFunction`, by name and registration version) and the `PythonEval` node evaluating them; a worker without a UDF runtime refuses the plan."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udaf, RustUdaf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust aggregate UDF (`UdafCall`, by name and version, with its argument and state columns)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
@@ -226,10 +229,14 @@ pub enum Construct<'a> {
     /// A lambda expression or variable: the bound body of a higher-order
     /// function's argument.
     Lambda,
+    /// An expression pinned to an ANSI mode (`ResolvedExpr::EvalMode`).
+    EvalMode,
     /// A `WritePlan` naming the Spark types of input columns.
     WriteColumnTypes,
     /// A `Generate` node's generator.
     Generator(krishiv_plan::GeneratorKind),
+    /// A hash join's probe selection (`HashJoinPlan.select`).
+    ProbeSelect,
 }
 
 /// The feature a type needs on its own. The walk reports a type inside an
@@ -390,6 +397,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::UnionLoop { .. } | PhysNode::LoopRef { .. } => Some(Feature::UnionLoop),
             PhysNode::SortMergeJoin(_) => Some(Feature::SortMergeJoin),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
+            PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
             // ignored and the rows written flat).
@@ -454,7 +462,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // A lambda is plan data behind its own feature: a reader without
         // it misreads the higher-order call's argument.
         Construct::Lambda => Some(Feature::LambdaFunctions),
+        Construct::EvalMode => Some(Feature::CapturedEvalMode),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
+        Construct::ProbeSelect => Some(Feature::FusedProbe),
         Construct::Generator(kind) => match kind {
             krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
             krishiv_plan::GeneratorKind::Explode
@@ -545,7 +555,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::CovarPop => Some(Feature::MomentAggregates),
             AggregateFunction::AnyValue { .. }
             | AggregateFunction::MaxBy
-            | AggregateFunction::MinBy => Some(Feature::AnyValueByAggregates),
+            | AggregateFunction::MinBy
+            | AggregateFunction::MaxByKeyFirst
+            | AggregateFunction::MinByKeyFirst => Some(Feature::AnyValueByAggregates),
             AggregateFunction::CollectList
             | AggregateFunction::CollectSet
             | AggregateFunction::VectorSum
@@ -578,6 +590,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // session UDF (by name and version) needs a reader with it.
         Construct::Function(id) => match id {
             FunctionId::Udf { .. } => Some(Feature::RustUdf),
+            FunctionId::PythonUdf { .. } => Some(Feature::PythonUdf),
             FunctionId::Builtin(b) if b.is_analyzer_internal() => Some(Feature::IntervalTypes),
             FunctionId::Builtin(_) => None,
             // A future identity is baseline until it is classified
@@ -626,7 +639,12 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             .aggregates
             .iter()
             .for_each(|a| aggregate_constructs(a, f)),
-        PhysNode::HashJoin(j) => f(Construct::Join(j.join_type)),
+        PhysNode::HashJoin(j) => {
+            f(Construct::Join(j.join_type));
+            if j.select.is_some() {
+                f(Construct::ProbeSelect);
+            }
+        }
         PhysNode::SortMergeJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Generate { kind, .. } => f(Construct::Generator(*kind)),
@@ -668,6 +686,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
+        | PhysNode::PythonEval { .. }
         | PhysNode::Union { .. } => {}
         PhysNode::WriteFiles { write, .. } => {
             if write.as_ref().is_some_and(|w| !w.column_types.is_empty()) {
@@ -687,6 +706,9 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             ExprNode::Lambda { .. } | ExprNode::Resolved(ResolvedExpr::LambdaVar(_))
         ) {
             f(Construct::Lambda);
+        }
+        if matches!(&e.node, ExprNode::Resolved(ResolvedExpr::EvalMode { .. })) {
+            f(Construct::EvalMode);
         }
         f(Construct::Expr(e));
         // A UDF call hides in any expression of the node (`exprs_of`
@@ -749,7 +771,9 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
             }
             ExprNode::Resolved(ResolvedExpr::Function(f)) => out.push(&f.data_type),
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => out.push(&output.data_type),
-            ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => out.push(data_type),
+            ExprNode::Resolved(
+                ResolvedExpr::Field { data_type, .. } | ResolvedExpr::EvalMode { data_type, .. },
+            ) => out.push(data_type),
             _ => {}
         }
     }
@@ -782,7 +806,16 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         }
         PhysNode::ReplicateRows { count, .. } => roots.push(count),
         PhysNode::Generate { arg, .. } => roots.push(arg),
-        PhysNode::HashJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::PythonEval { calls, .. } => roots.extend(calls.iter().map(|c| &c.call)),
+        PhysNode::HashJoin(j) => {
+            roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts));
+            roots.extend(
+                j.select
+                    .iter()
+                    .flat_map(|s| &s.filter)
+                    .map(|f| &f.predicate),
+            );
+        }
         PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::OneRow
