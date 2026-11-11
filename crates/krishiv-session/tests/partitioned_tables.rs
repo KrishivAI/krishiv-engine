@@ -2033,6 +2033,36 @@ fn drop_partition_refuses_a_partition_outside_its_default_directory() {
     assert_eq!(rows(&s, "show partitions o"), ["p=1", "p=2", "p=3"]);
 }
 
+/// A partition whose default directory resolves outside the table through a symbolic link in a parent directory
+/// (`t/p=1` linked elsewhere, partition `p=1/q=1`) is not dropped: deleting it would delete files outside the table.
+/// Refused before the log, the catalog or any file changes.
+#[cfg(unix)]
+#[test]
+fn drop_partition_refuses_a_directory_resolved_outside_the_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table l(x int, p int, q int) using parquet partitioned by (p, q)",
+    );
+    run(&s, "insert into l values (1,2,2)");
+    let root = dir.path().join("l");
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join("q=1")).unwrap();
+    std::fs::write(outside.path().join("q=1").join("keep.txt"), "x").unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.join("p=1")).unwrap();
+    run(&s, "alter table l add partition (p=1, q=1)");
+    assert_eq!(
+        class(&s, "alter table l drop partition (p=1, q=1)"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert!(outside.path().join("q=1").join("keep.txt").is_file());
+    assert_eq!(rows(&s, "show partitions l"), ["p=1/q=1", "p=2/q=2"]);
+    // A partition inside the table still drops.
+    run(&s, "alter table l drop partition (p=2, q=2)");
+    assert_eq!(rows(&s, "show partitions l"), ["p=1/q=1"]);
+}
+
 /// A partition registered away from its default directory is not renamed: Spark 4.2.0 moves that directory, which
 /// may be another table's (krishiv-internal `research/spark/partition-followups/probe9.py`); the engine refuses
 /// before the log or any file changes, as DROP PARTITION does.

@@ -1278,6 +1278,22 @@ impl Session {
                 p.location.display()
             )));
         }
+        // A default directory that resolves outside the table (a symbolic link on its way, `p=1` linked elsewhere
+        // under partition `p=1/q=1`) is not deleted: the files there are not the table's. Checked before the log,
+        // the catalog or any file changes; the authorized path below is then inside the table.
+        let root = std::fs::canonicalize(&table.location).ok();
+        for p in &gone {
+            match std::fs::canonicalize(&p.location) {
+                Ok(real) if root.as_ref().is_some_and(|r| real.starts_with(r)) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) | Err(_) => {
+                    return Err(unsupported(&format!(
+                        "ALTER TABLE ... DROP PARTITION of a partition whose directory {} resolves outside the table",
+                        p.location.display()
+                    )));
+                }
+            }
+        }
         // The files of each dropped partition are deleted.
         for p in &gone {
             self.authorize_dir_for(&p.location, Privilege::Modify)
