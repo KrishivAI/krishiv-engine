@@ -1,8 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      132
-    ],
     "parser-pipe-collate": [
       46,
       47,

@@ -1239,3 +1239,50 @@ fn listagg_distinct_casts_follow_spark() {
     .unwrap_err();
     assert!(e.to_string().contains("UNSAFE_CAST"), "{e}");
 }
+
+/// The output column of a call names an operand of another collation as Spark shows it, cast to
+/// the call's collation (collations-basic 132, collations-string-functions 22/60/67/145).
+#[test]
+fn schema_names_show_the_cast_to_the_calls_collation() {
+    let s = Session::new().unwrap();
+    block_on(s.sql(
+        "create table nm(utf8_binary string collate utf8_binary, utf8_lcase string collate utf8_lcase) using parquet",
+    ))
+    .unwrap();
+    let mut bad = 0;
+    for (sql, want) in [
+        (
+            "select instr(utf8_binary, 'a'), instr(utf8_lcase, 'a') from nm",
+            "instr(utf8_binary, a),instr(utf8_lcase, 'a' collate UTF8_LCASE)",
+        ),
+        (
+            "select find_in_set(utf8_lcase, 'a,b') from nm",
+            "find_in_set(utf8_lcase, 'a,b' collate UTF8_LCASE)",
+        ),
+        (
+            "select locate(utf8_lcase, 'a') from nm",
+            "locate(utf8_lcase, 'a' collate UTF8_LCASE, 1)",
+        ),
+        (
+            "select CASE WHEN utf8_lcase = 'XX' THEN 'XX' ELSE utf8_lcase END from nm",
+            "CASE WHEN (utf8_lcase = 'XX' collate UTF8_LCASE) THEN 'XX' collate UTF8_LCASE ELSE utf8_lcase END",
+        ),
+        (
+            "select concat_ws(' ', utf8_binary, utf8_lcase) from nm",
+            "concat_ws(' ' collate null, utf8_binary, utf8_lcase)",
+        ),
+    ] {
+        let df = block_on(s.sql(sql)).unwrap();
+        let names: Vec<String> = block_on(df.schema())
+            .unwrap()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        if names.join(",") != want {
+            println!("{sql}\n  got  {}\n  want {want}", names.join(","));
+            bad += 1;
+        }
+    }
+    assert_eq!(bad, 0);
+}

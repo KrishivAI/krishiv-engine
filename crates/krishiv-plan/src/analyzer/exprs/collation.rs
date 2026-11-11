@@ -837,8 +837,10 @@ impl Resolver<'_> {
                 );
                 // `btrim` is Spark's runtime-replaceable call: its own arguments are shown as
                 // written, the replacement is the one that casts.
-                if let (Some(own), Some(want)) = (own, chosen)
-                    && own != want
+                if let (Some(own), Some(want)) = (
+                    own,
+                    chosen.or(indeterminate.then_some(Collation::INDETERMINATE)),
+                ) && own != want
                     && literal
                     && name != "btrim"
                     && !matches!(
@@ -1098,7 +1100,16 @@ impl Resolver<'_> {
         {
             return self.search_lcase(e, kids, name, in_agg, window_fn, cx);
         }
-        let search = KEYED_SEARCH.contains(&name).then_some(c);
+        // The cast of a default-strength literal is shown (golden collations-basic 132) when no
+        // operand is explicitly collated; the explicit case has no Spark run behind it yet.
+        let mut memo = Memo::new();
+        let explicit = kids[..n].iter().any(|k| {
+            matches!(
+                strength_of(&k.shown(), &mut memo),
+                Some((_, Strength::Explicit))
+            )
+        });
+        let search = (KEYED_SEARCH.contains(&name) || !explicit).then_some(c);
         self.compare_keys(e, kids, n, |_| string_of(c), search, in_agg, window_fn, cx)
             .map(Some)
     }
@@ -1529,7 +1540,47 @@ impl Resolver<'_> {
         )
         .with_origin(e.origin);
         let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
-        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        // A string literal of another collation (a default-strength one) is shown cast to the
+        // call's, as the plain path shows it: `instr(c, 'a' collate UTF8_LCASE)`.
+        let mut memo = Memo::new();
+        let shown: Vec<Arc<Expr>> = kids
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let own = match &k.ty.data_type {
+                    Some(DataType::CollatedString(o)) => Some(*o),
+                    Some(DataType::String) => Some(Collation::UTF8_BINARY),
+                    _ => None,
+                };
+                let literal = matches!(
+                    strength_of(&k.shown(), &mut memo),
+                    Some((_, Strength::Default))
+                );
+                if i < 2 && literal && own.is_some_and(|o| o != c) {
+                    Arc::new(
+                        Expr::new(ExprNode::Cast {
+                            expr: k.shown(),
+                            to: DataType::collated_string(c),
+                            mode: CastMode::Default,
+                        })
+                        .with_origin(e.origin),
+                    )
+                } else {
+                    k.shown()
+                }
+            })
+            .collect();
+        // `locate(sub, str)` is written with Spark's default start position.
+        let mut shown = shown;
+        if name == "locate" && shown.len() == 2 {
+            shown.push(Arc::clone(&keyed[2].expr));
+            b.shown = Some(Arc::new(
+                Expr::function("locate", shown.iter().map(|k| (**k).clone()).collect())
+                    .with_origin(e.origin),
+            ));
+        } else {
+            b.shown = Some(with_children(e, shown));
+        }
         Ok(Some(b))
     }
 
