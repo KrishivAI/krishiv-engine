@@ -16,6 +16,7 @@
 //! the groups and results are the same either way.
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type};
@@ -32,12 +33,18 @@ use crate::rows::EncodedKeys;
 pub(super) const DIRECT_MAX: usize = 1024;
 /// Packed keys are at most this many bits (one byte per key column).
 const PACKED_BITS: u32 = 16;
+/// Bytes of a table's direct scratch once allocated: the packed-key map and
+/// the list of keys a batch set (at most [`DIRECT_MAX`]).
+const SCRATCH_BYTES: usize = ((1 << PACKED_BITS) + DIRECT_MAX) * size_of::<u16>();
 
 /// A table's scratch for the direct path: the packed-key to id map, kept
 /// between batches and cleared entry by entry.
 #[derive(Debug)]
 pub(super) struct Direct {
     scratch: Mutex<Scratch>,
+    /// Whether `scratch` holds its map ([`SCRATCH_BYTES`]); it is allocated
+    /// by the first batch that passes the proof and kept for the table's life.
+    allocated: AtomicBool,
 }
 
 #[derive(Debug, Default)]
@@ -60,6 +67,17 @@ impl Direct {
     pub(super) fn new() -> Self {
         Self {
             scratch: Mutex::new(Scratch::default()),
+            allocated: AtomicBool::new(false),
+        }
+    }
+
+    /// Bytes the direct scratch holds: 0 until a batch first passes the
+    /// proof, then [`SCRATCH_BYTES`] (counted in the table's size).
+    pub(super) fn bytes(&self) -> usize {
+        if self.allocated.load(Ordering::Relaxed) {
+            SCRATCH_BYTES
+        } else {
+            0
         }
     }
 
@@ -80,6 +98,8 @@ impl Direct {
         let Scratch { lut, set } = &mut *s;
         if lut.is_empty() {
             lut.resize(1 << PACKED_BITS, 0);
+            set.reserve_exact(DIRECT_MAX);
+            self.allocated.store(true, Ordering::Relaxed);
         }
         let mut ids = Vec::with_capacity(n);
         let mut firsts: Vec<u32> = Vec::new();
@@ -172,6 +192,13 @@ fn add_bytes(packed: &mut Vec<u16>, a: &dyn Array, first: bool, shift: u32) -> O
 }
 
 impl RowTable {
+    /// Finds a batch's groups by direct addressing when its keys are tiny
+    /// (`krishiv.exec.agg.directKeys`).
+    pub(crate) fn with_direct(mut self, on: bool) -> Self {
+        self.direct = on.then(Direct::new);
+        self
+    }
+
     /// [`prepare`](RowTable::prepare) on the direct path: only the first
     /// row of each id is encoded; the partition counts are its rows'.
     pub(super) fn prepare_direct(
@@ -286,7 +313,10 @@ impl RowTable {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{Int64Array, RecordBatch, StringViewArray};
+    use arrow_array::{
+        BinaryViewArray, Int8Array, Int16Array, Int32Array, Int64Array, RecordBatch,
+        StringViewArray, UInt8Array,
+    };
     use arrow_schema::{Field, Schema};
 
     use super::super::RADIX_BITS;
@@ -296,9 +326,13 @@ mod tests {
     use crate::hash::HashSeed;
 
     fn core() -> Arc<AggCore> {
+        core_of(DataType::Utf8View, DataType::Utf8View)
+    }
+
+    fn core_of(a: DataType, b: DataType) -> Arc<AggCore> {
         let input = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8View, true),
-            Field::new("b", DataType::Utf8View, true),
+            Field::new("a", a, true),
+            Field::new("b", b, true),
             Field::new("v", DataType::Int64, true),
         ]));
         let spec = AggregateSpec {
@@ -446,5 +480,109 @@ mod tests {
                 assert_eq!(on, off, "{mode:?} {bits}");
             }
         }
+    }
+
+    /// A key column of `t` with `n` rows over a five-key domain, cut from a
+    /// longer array at offset 3 (a sliced column).
+    fn typed(t: &DataType, n: usize, start: usize) -> ArrayRef {
+        let k: Vec<u8> = (0..n + 10)
+            .map(|i| u8::try_from((i + start) * 7 % 5).unwrap())
+            .collect();
+        let it = || k.iter().copied();
+        let a: ArrayRef = match t {
+            DataType::Utf8View => Arc::new(StringViewArray::from_iter_values(
+                it().map(|x| ["a", "b", "c", "d", "e"][usize::from(x)]),
+            )),
+            DataType::BinaryView => {
+                Arc::new(BinaryViewArray::from_iter_values(it().map(|x| [b'a' + x])))
+            }
+            DataType::UInt8 => Arc::new(UInt8Array::from_iter_values(it().map(|x| 250 + x))),
+            DataType::Int8 => Arc::new(Int8Array::from_iter_values(
+                it().map(|x| i8::MIN + i8::try_from(x).unwrap()),
+            )),
+            DataType::Int16 => Arc::new(Int16Array::from_iter_values(
+                it().map(|x| i16::from(x) * 31 - 64),
+            )),
+            DataType::Int32 => Arc::new(Int32Array::from_iter_values(
+                it().map(|x| 127 - i32::from(x)),
+            )),
+            other => panic!("no test column of {other}"),
+        };
+        a.slice(3, n)
+    }
+
+    /// Every key type the proof takes, in mixed pairs and sliced, gives the
+    /// groups, counts and sums of the per-row path.
+    #[test]
+    fn typed_and_sliced_keys_equal_per_row_tables() {
+        use DataType::{BinaryView, Int8, Int16, Int32, UInt8, Utf8View};
+        let seed = HashSeed::new(Some(5));
+        for (ta, tb) in [
+            (Utf8View, Int32),
+            (BinaryView, UInt8),
+            (Int8, Int16),
+            (UInt8, Utf8View),
+        ] {
+            let core = core_of(ta.clone(), tb.clone());
+            let out = |direct: bool| {
+                let mut t = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS)
+                    .unwrap()
+                    .with_direct(direct);
+                for start in [0, 1, 4] {
+                    let n = 3000;
+                    let v = Int64Array::from((0..n as i64).collect::<Vec<_>>());
+                    let cols = vec![typed(&ta, n, start), typed(&tb, n, 2 * start), Arc::new(v)];
+                    let b = Batch::new(
+                        RecordBatch::try_new(Arc::clone(&core.spec.input), cols).unwrap(),
+                    );
+                    let p = t.prepare(&b, false).unwrap();
+                    assert_eq!(p.local.is_some(), direct, "{ta} {tb}");
+                    t.apply(&p).unwrap();
+                }
+                let mut m = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+                for p in 0..t.part_count() {
+                    let c = t.merge_chunk(p, 0..t.part_len(p)).unwrap();
+                    m.apply_merge(&t, &c).unwrap();
+                }
+                let out = m.output_batch(&m.ids(0..m.len())).unwrap();
+                let mut r: Vec<String> = (0..out.num_rows())
+                    .map(|i| {
+                        let cells: Vec<_> = out.columns().iter().map(|c| c.slice(i, 1)).collect();
+                        format!("{cells:?}")
+                    })
+                    .collect();
+                r.sort();
+                r
+            };
+            let (on, off) = (out(true), out(false));
+            assert!(on.len() >= 5, "{ta} {tb}");
+            assert_eq!(on, off, "{ta} {tb}");
+        }
+    }
+
+    /// The direct map is part of the table's size from the first batch that
+    /// takes the path, and `projected` covers it.
+    #[test]
+    fn the_map_is_counted_in_the_table_size_once_allocated() {
+        let core = core();
+        let seed = HashSeed::new(Some(3));
+        let mut t = RowTable::new(&core, &seed, Mode::Grow, true, 0)
+            .unwrap()
+            .with_direct(true);
+        let wide = t
+            .prepare(&batch(&core, vec!["AA"], vec!["B"]), false)
+            .unwrap();
+        assert!(wide.local.is_none());
+        t.apply(&wide).unwrap();
+        assert_eq!(t.direct.as_ref().map(Direct::bytes), Some(0));
+        let before = t.memory_size();
+        let p = t
+            .prepare(&batch(&core, vec!["A"], vec!["B"]), false)
+            .unwrap();
+        assert!(p.local.is_some());
+        let want = t.projected(&p);
+        t.apply(&p).unwrap();
+        assert!(t.memory_size() >= before + SCRATCH_BYTES);
+        assert!(t.memory_size() <= want, "{} > {want}", t.memory_size());
     }
 }

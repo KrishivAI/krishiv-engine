@@ -557,6 +557,20 @@ mod tests {
     }
 
     #[test]
+    fn direct_keys_round_trip_and_default_when_absent() {
+        let off = ExecConfig {
+            agg_direct_keys: false,
+            ..ExecConfig::default()
+        };
+        let (_, got) = decode_task(&encode_task(&TaskSpec::whole(), &off).unwrap()).unwrap();
+        assert!(!got.agg_direct_keys);
+        // A descriptor written before tag 16 existed.
+        let mut old = Settings::of(&off);
+        old.agg_direct_keys = None;
+        assert!(old.config().unwrap().agg_direct_keys);
+    }
+
+    #[test]
     fn file_splits_round_trip_and_relation_batches_are_refused() {
         let files: Arc<[SplitFileRef]> = Arc::from(vec![
             SplitFileRef {

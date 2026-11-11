@@ -482,13 +482,6 @@ impl RowTable {
         })
     }
 
-    /// Finds a batch's groups by direct addressing when its keys are tiny
-    /// (`krishiv.exec.agg.directKeys`).
-    pub(crate) fn with_direct(mut self, on: bool) -> Self {
-        self.direct = on.then(direct::Direct::new);
-        self
-    }
-
     /// Number of rows (groups; a group may have several rows in a table
     /// whose fixed index was cleared).
     pub(crate) fn len(&self) -> usize {
@@ -701,6 +694,7 @@ impl RowTable {
             + buckets(&self.index) * BUCKET_BYTES
             + self.merge_index.as_ref().map_or(0, MergeIndex::bytes)
             + self.sketch_bytes()
+            + self.direct.as_ref().map_or(0, direct::Direct::bytes)
     }
 
     /// The scratch of folding `n` rows: each row's reference, the gather
@@ -998,6 +992,7 @@ impl RowTable {
         rows + self.index_bytes(self.next_mode(), n)
             + self.projected_accs(&p.counts, &p.cols, Self::fold_of(p))
             + self.projected_sketch_bytes(n)
+            + self.direct.as_ref().map_or(0, direct::Direct::bytes)
     }
 
     /// Bytes [`apply`](Self::apply)ing `p` needs while it runs and frees
