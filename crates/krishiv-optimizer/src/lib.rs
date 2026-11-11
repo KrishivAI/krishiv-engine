@@ -137,6 +137,7 @@ pub struct RuleStep {
 /// by default; the differential harnesses turn one off at a time and
 /// compare results with it on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Options {
     /// Common-subexpression elimination within one operator (`cse`).
     pub cse: bool,
@@ -149,6 +150,14 @@ pub struct Options {
     /// statistics say it pays. Needs statistics; a session configuration,
     /// when given, can switch it off.
     pub eager_aggregation: bool,
+    /// Subquery as window (`win_magic`, P3 W1 shape (a)): a correlated
+    /// aggregate subquery over the outer block's own join runs as a window.
+    /// Runs only when `krishiv.optimizer.subqueryAsWindow` is also on.
+    pub subquery_as_window: bool,
+    /// Sharing a subtree the main block and a subquery both read (`ShareCte`
+    /// direct members, P3 W1 shape (b)). Runs only when
+    /// `krishiv.optimizer.shareRepeatedSubtrees` is also on.
+    pub share_repeated_subtrees: bool,
 }
 
 impl Default for Options {
@@ -157,6 +166,8 @@ impl Default for Options {
             cse: true,
             stats_propagation: true,
             eager_aggregation: true,
+            subquery_as_window: true,
+            share_repeated_subtrees: true,
         }
     }
 }

@@ -14,7 +14,9 @@ use super::{
 
 mod python;
 pub use python::{ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS};
+mod optimizer;
 mod result_cache;
+pub use optimizer::{SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW};
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 
 const MIB: u64 = 1024 * 1024;
@@ -63,6 +65,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RESULT_CACHE_ENABLED,
     &RESULT_CACHE_TTL,
     &RESULT_CACHE_MAX_BYTES,
+    &SUBQUERY_AS_WINDOW,
+    &SHARE_REPEATED_SUBTREES,
     &SPILL_DIR,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
@@ -299,6 +303,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ),
     ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
+    ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
     (
         "krishiv.sql.avro.compression.codec",
         &AVRO_COMPRESSION_CODEC,
@@ -398,6 +403,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.sources.bucketing.maxBuckets",
         &BUCKETING_MAX_BUCKETS,
+    ),
+    (
+        "krishiv.optimizer.shareRepeatedSubtrees",
+        &SHARE_REPEATED_SUBTREES,
     ),
     (
         "krishiv.sql.legacy.statisticalAggregate",

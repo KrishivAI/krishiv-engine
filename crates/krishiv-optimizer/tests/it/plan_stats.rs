@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_optimizer::{
-    AttrStats, ColumnStats, Options, PlanStats, StatSource, Statistics, TableStats, estimated_rows,
+    AttrStats, ColumnStats, PlanStats, StatSource, Statistics, TableStats, estimated_rows,
     optimize_with, optimize_with_options,
 };
 use krishiv_plan::analyzer::{AnalysisContext, MemoryCatalog, TableColumn};
@@ -286,10 +286,7 @@ fn an_equality_outside_the_range_estimates_no_rows_and_removes_nothing() {
     let off = optimize_with_options(
         &plan,
         &stats,
-        &Options {
-            stats_propagation: false,
-            ..Options::default()
-        },
+        &support::options(|o| o.stats_propagation = false),
     )
     .unwrap();
     let text = on.root().to_string();
