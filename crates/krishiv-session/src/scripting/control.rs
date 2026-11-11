@@ -47,6 +47,7 @@ impl Session {
         self.check_open()?;
         let env = self.query_env();
         let row = self.state.queries.begin_as(
+            crate::system::TextPolicy::from_config(&env.config),
             env.text.as_deref(),
             env.statement_class,
             self.operation_id(),

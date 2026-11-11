@@ -311,7 +311,18 @@ impl Session {
         let fold = !env.analysis.conf.case_sensitive;
         let parts = |name: &DdlName| ddl_parts(name, env);
         let table = |parts: &[String]| {
-            table_ident(catalogs, parts).ok_or_else(|| unplaceable("an empty name"))
+            let ident = table_ident(catalogs, parts).ok_or_else(|| unplaceable("an empty name"))?;
+            // `global_temp.x` belongs to the session catalog's registry, whatever catalog is current.
+            Ok::<TableIdent, KrishivError>(
+                if parts.len() == 2 && parts[0].eq_ignore_ascii_case(GLOBAL_TEMP) {
+                    TableIdent {
+                        catalog: crate::catalog::CATALOG.to_owned(),
+                        ..ident
+                    }
+                } else {
+                    ident
+                },
+            )
         };
         let current_catalog = || catalogs.current_catalog().to_owned();
         let tables = |ident: TableIdent, view: bool| {
@@ -362,7 +373,7 @@ impl Session {
                     .ok_or_else(|| unplaceable("an empty name"))?;
                 tables(
                     TableIdent {
-                        catalog: current_catalog(),
+                        catalog: crate::catalog::CATALOG.to_owned(),
                         namespace: vec![GLOBAL_TEMP.to_owned()],
                         name,
                     },
@@ -404,7 +415,11 @@ impl Session {
                 )
             }
             TargetObject::GlobalTempNamespace => {
-                namespaces(vec![current_catalog(), GLOBAL_TEMP.to_owned()])
+                // The `global_temp` registry belongs to the session catalog, whatever catalog is current.
+                namespaces(vec![
+                    crate::catalog::CATALOG.to_owned(),
+                    GLOBAL_TEMP.to_owned(),
+                ])
             }
             TargetObject::Namespace(name) => namespaces(namespace_parts(catalogs, &parts(name)?)),
             TargetObject::ParentOfNamespace(name) => {

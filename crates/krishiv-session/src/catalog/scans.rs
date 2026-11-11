@@ -104,3 +104,22 @@ impl super::SessionCatalog {
         self.epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
+
+impl super::SessionCatalog {
+    /// [`sql_path`](Self::sql_path) with the current position given: the path of a query is built from the
+    /// same read of the position as its catalog and namespace.
+    pub(crate) fn sql_path_in(
+        &self,
+        default_conf: &str,
+        catalog: &str,
+        namespace: &[String],
+    ) -> Vec<Vec<String>> {
+        let current: Vec<String> = std::iter::once(catalog.to_owned())
+            .chain(namespace.iter().cloned())
+            .collect();
+        let entries = self
+            .stored_path()
+            .unwrap_or_else(|| crate::sql_path::default_entries(default_conf));
+        entries.iter().map(|e| e.parts(&current)).collect()
+    }
+}

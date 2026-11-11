@@ -323,7 +323,10 @@ impl QueryHistory {
     pub(crate) fn push(&self, row: QueryRow) {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
         rows.trim(&row.principal, 1, self.capacity);
+        let principal = row.principal.clone();
         rows.add(row);
+        // The incoming row's own bytes may have passed the bound: finished rows go, running ones stay.
+        rows.trim(&principal, 0, self.capacity);
     }
 
     /// Adds `row` under a caller's operation id: refused
@@ -341,7 +344,9 @@ impl QueryHistory {
             return Err(InvalidHandleOperationAlreadyExists { handle: row.id }.into());
         }
         rows.trim(&row.principal, 1, self.capacity);
+        let principal = row.principal.clone();
         rows.add(row);
+        rows.trim(&principal, 0, self.capacity);
         Ok(())
     }
 
@@ -360,10 +365,13 @@ impl QueryHistory {
             let before = row.heap_bytes();
             f(row);
             *bytes = (*bytes + row.heap_bytes()).saturating_sub(before);
-            if was_running && row.ended_ms.is_some() {
+            let just_finished = was_running && row.ended_ms.is_some();
+            if just_finished {
                 held.entry(row.principal.clone()).or_default().finished += 1;
-                // Rows added while everything was running may have gone past
-                // the bounds: a finished row can now go.
+            }
+            // Rows added while everything was running may have gone past the bounds: a finished row can
+            // now go. A row that grows after it finished (a late error message) can pass the byte bound.
+            if just_finished || *bytes > MAX_BYTES {
                 let principal = row.principal.clone();
                 Rows::trim_parts(rows, held, bytes, &principal, 0, self.capacity);
             }
@@ -661,6 +669,50 @@ mod tests {
         history.push(big("run2"));
         let ids: Vec<String> = history.snapshot(None).into_iter().map(|r| r.id).collect();
         assert!(ids.contains(&"run".to_owned()) && ids.contains(&"run2".to_owned()));
+    }
+
+    #[test]
+    fn a_finished_row_that_grows_and_a_big_incoming_row_are_trimmed_to_the_byte_bound() {
+        let history = QueryHistory::new(1_000);
+        let row = |id: &str, bytes: usize| {
+            let log = crate::system::QueryLog::default();
+            let mut r = log.snapshot_row_for_tests(id);
+            r.session_id = "s".to_owned();
+            r.text = Some("x".repeat(bytes));
+            r
+        };
+        let total = |h: &QueryHistory| {
+            h.snapshot(None)
+                .iter()
+                .map(QueryRow::heap_bytes)
+                .sum::<usize>()
+        };
+        // Finished rows just under the bound, then a late message grows the newest past it.
+        for i in 0..15 {
+            let id = i.to_string();
+            history.push(row(&id, 4 << 20));
+            history.update("s", &id, |r| r.ended_ms = Some(1));
+        }
+        history.update("s", "14", |r| r.error_message = Some("e".repeat(8 << 20)));
+        assert!(
+            total(&history) <= MAX_BYTES,
+            "a growing finished row is trimmed"
+        );
+        // A large running row arriving while finished rows hold the budget evicts them, not itself.
+        history.push(row("big", 30 << 20));
+        assert!(total(&history) <= MAX_BYTES + (30 << 20));
+        let ids: Vec<String> = history.snapshot(None).into_iter().map(|r| r.id).collect();
+        assert!(ids.contains(&"big".to_owned()));
+        let finished: usize = history
+            .snapshot(None)
+            .iter()
+            .filter(|r| r.ended_ms.is_some())
+            .map(QueryRow::heap_bytes)
+            .sum();
+        assert!(
+            finished + row("big", 30 << 20).heap_bytes() <= MAX_BYTES + (1 << 20),
+            "{finished}"
+        );
     }
 
     /// Rows added past the capacity while everything ran are trimmed as

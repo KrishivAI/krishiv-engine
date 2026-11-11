@@ -796,7 +796,13 @@ async fn load(
         if name.len() == 1 && !scan {
             for entry in ctx.catalogs.sql_path() {
                 match entry.as_slice() {
-                    [c, n] if c.eq_ignore_ascii_case(catalog.name()) => {
+                    // `system.builtin` and `system.session` hold functions, never tables: not candidates.
+                    [c, n]
+                        if c.eq_ignore_ascii_case(catalog.name())
+                            && !(c.eq_ignore_ascii_case("system")
+                                && (n.eq_ignore_ascii_case("builtin")
+                                    || n.eq_ignore_ascii_case("session"))) =>
+                    {
                         candidates.push(TableIdent {
                             catalog: ident.catalog.clone(),
                             namespace: vec![n.clone()],

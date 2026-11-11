@@ -514,7 +514,7 @@ impl QueryCatalog {
         } else {
             vec![current_namespace]
         };
-        let path = session.sql_path(default_path);
+        let path = session.sql_path_in(default_path, &catalog, &namespace);
         Self {
             session,
             cache,

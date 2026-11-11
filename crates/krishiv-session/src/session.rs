@@ -500,12 +500,8 @@ impl Session {
         if let Err(error) = &result
             && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
         {
-            self.state
-                .queries
-                .set_text_policy(crate::system::TextPolicy::from_config(
-                    &self.state.conf.snapshot(),
-                ));
             self.state.queries.record_refused(
+                crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
                 Some(krishiv_sql::redact_sql(query).as_str()),
                 None,
                 error,
@@ -1600,12 +1596,9 @@ impl Session {
         env: &QueryEnv,
         exempt: bool,
     ) -> Result<Admitted, KrishivError> {
-        self.state
-            .queries
-            .set_text_policy(crate::system::TextPolicy::from_config(
-                &self.state.conf.snapshot(),
-            ));
+        // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
         let log_id = self.state.queries.begin_as(
+            crate::system::TextPolicy::from_config(&env.config),
             env.text.as_deref(),
             env.statement_class,
             self.operation_id(),

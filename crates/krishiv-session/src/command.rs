@@ -1555,7 +1555,7 @@ impl Session {
                     .filter(|n| crate::introspection::keep(pattern.as_ref(), n))
                     .map(|n| vec![Some(n.to_owned())])
                     .collect();
-                self.string_frame(&["catalog"], rows).await
+                self.ordered_frame(&["catalog"], &[], rows).await
             }
             _ => self.exec_show_catalog(s, original).await,
         }

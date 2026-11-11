@@ -896,7 +896,15 @@ fn a_scan_records_the_files_it_opened() {
         &s,
         "SELECT CAST(files_read AS STRING) FROM system.queries WHERE files_read > 0",
     );
-    assert_eq!(r.len(), 1, "{r:?}");
+    // Each file counts once, however many morsels its splits were cut into.
+    let written = std::fs::read_dir(&out)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .is_ok_and(|e| e.path().extension().is_some_and(|x| x == "parquet"))
+        })
+        .count();
+    assert_eq!(r, [written.to_string()], "{r:?}");
 }
 
 #[test]
@@ -1271,4 +1279,30 @@ fn show_databases_lists_nothing_under_system_and_use_namespace_can_name_the_sess
     );
     assert_eq!(column_of(&s, "SELECT current_schema()", 0), ["other_db"]);
     assert!(column_of(&s, "SHOW DATABASES", 0).contains(&"other_db".to_owned()));
+}
+
+#[test]
+fn global_temp_views_can_be_created_and_dropped_under_system_and_stored_functions_need_the_session_catalog()
+ {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE FUNCTION f() RETURNS INT RETURN 1").unwrap();
+    run(&s, "USE system").unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv2 AS SELECT 1 AS x").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(x AS STRING) FROM global_temp.gv2", 0),
+        ["1"]
+    );
+    run(&s, "DROP VIEW global_temp.gv2").unwrap();
+    // A two-part call is a namespace of the current catalog, and system has none.
+    assert!(run(&s, "SELECT default.f()").is_err());
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(default.f() AS STRING)", 0),
+        ["1"]
+    );
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(spark_catalog.default.f() AS STRING)", 0),
+        ["1"]
+    );
 }

@@ -121,6 +121,8 @@ pub(crate) struct QueryFunctions {
     map: Arc<FunctionMap>,
     catalog: Arc<SessionCatalog>,
     case_sensitive: bool,
+    /// The current catalog is `system` (which has no namespaces): a two-part call is no stored function.
+    in_system: bool,
     /// The functions stored in the catalog's namespaces, as of the start of
     /// the query, and the namespace a bare name resolves in.
     stored: Arc<StoredFunctions>,
@@ -154,7 +156,9 @@ impl QueryFunctions {
     ) -> Self {
         let stored = catalog.store.functions();
         let path = catalog.sql_path("");
+        let in_system = crate::system::is_system(&catalog.current_catalog());
         Self {
+            in_system,
             path,
             base,
             map,
@@ -457,7 +461,7 @@ impl FunctionRegistry for QueryFunctions {
             }),
             [q, f] if q == "session" => temporary(f),
             [s, q, f] if s == "system" && q == "session" => temporary(f),
-            [_, f] => stored(&ns(0), f),
+            [_, f] if !self.in_system => stored(&ns(0), f),
             [c, _, f] if c == crate::catalog::CATALOG => stored(&ns(1), f),
             _ => None,
         };

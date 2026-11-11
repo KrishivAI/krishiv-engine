@@ -323,7 +323,7 @@ impl ScanPushdown for FileScan {
 pub struct FileScanMetrics {
     /// Splits opened.
     pub splits: u64,
-    /// Files opened (a file counts with its split that starts at byte 0).
+    /// Files opened (each counts once, with the first piece of it that is opened).
     pub files: u64,
     /// Units (row groups) decoders were opened with, after statistics pruning.
     pub units: u64,
@@ -471,6 +471,9 @@ pub struct FileScanSource {
     layout: Vec<Slot>,
     runtime: super::RuntimeFilters,
     metrics: Arc<Mutex<FileScanMetrics>>,
+    /// The files a piece was opened for, so `FileScanMetrics::files` counts each once however many pieces
+    /// (of one split, or of splits that do not start at byte 0) are read.
+    opened_files: Arc<Mutex<std::collections::HashSet<usize>>>,
     /// Whether the row id ends the output.
     row_id: bool,
 }
@@ -504,8 +507,6 @@ fn record_split(metrics: &Mutex<FileScanMetrics>, current: &Current) {
     let mut metrics = metrics.lock().unwrap_or_else(PoisonError::into_inner);
     metrics.add(&current.stream.metrics(), current.stream.overcommitted());
     metrics.add_reads(&current.stream.read_stats());
-    // The piece that starts the file counts it, once however many morsels the split was cut into.
-    metrics.files += u64::from(current.range.start == 0);
 }
 
 /// The piece being read.
@@ -514,8 +515,6 @@ struct Current {
     file: usize,
     /// The planned split the piece belongs to (for `_metadata`).
     split: ByteRange,
-    /// The bytes this piece reads.
-    range: ByteRange,
     /// The file's partition values, one row each, as the partition fields
     /// type them.
     partition_values: Vec<ArrayRef>,
@@ -819,6 +818,7 @@ impl FileScanSource {
             mapped,
             runtime: p.dynamic,
             metrics: Arc::new(Mutex::new(FileScanMetrics::default())),
+            opened_files: Arc::default(),
             row_id: p.row_id,
         })
     }
@@ -1096,11 +1096,21 @@ impl FileScanSource {
         )
         .await?
         .with_gate(Arc::clone(&local.gate));
+        if self
+            .opened_files
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(file)
+        {
+            self.metrics
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .files += 1;
+        }
         local.current = Some(Current {
             stream,
             file,
             split,
-            range,
             partition_values,
             row_file,
         });

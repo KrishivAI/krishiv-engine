@@ -974,8 +974,6 @@ pub(crate) struct QueryLog {
     trace_id: Mutex<Option<String>>,
     /// The session's tags, by key.
     tags: Mutex<std::collections::BTreeMap<String, String>>,
-    /// How the next rows show their text.
-    text: Mutex<TextPolicy>,
 }
 
 pub(crate) fn now_ms() -> i64 {
@@ -994,11 +992,6 @@ impl QueryLog {
             history,
             ..Self::default()
         }
-    }
-
-    /// Sets how the rows recorded from now show their text.
-    pub(crate) fn set_text_policy(&self, policy: TextPolicy) {
-        *self.text.lock().unwrap_or_else(PoisonError::into_inner) = policy;
     }
 
     /// The session's id (UUIDv7).
@@ -1052,12 +1045,12 @@ impl QueryLog {
     /// A row for a query that starts now, named `id`.
     fn row(
         &self,
+        policy: TextPolicy,
         id: String,
         ms: i64,
         text: Option<&str>,
         class: Option<&'static str>,
     ) -> QueryRow {
-        let policy = *self.text.lock().unwrap_or_else(PoisonError::into_inner);
         let (text, truncated) = match text {
             None => (None, false),
             Some(t) => {
@@ -1106,7 +1099,7 @@ impl QueryLog {
     /// A running row named `id` (tests of the history).
     #[cfg(test)]
     pub(crate) fn snapshot_row_for_tests(&self, id: &str) -> QueryRow {
-        self.row(id.to_owned(), 0, None, None)
+        self.row(TextPolicy::default(), id.to_owned(), 0, None, None)
     }
 
     /// The session's operation ids.
@@ -1117,7 +1110,7 @@ impl QueryLog {
     /// Records a query that started now under a minted id and returns it.
     #[cfg(test)]
     pub(crate) fn begin(&self, text: Option<&str>, class: Option<&'static str>) -> String {
-        self.record(text, class, None)
+        self.record(TextPolicy::default(), text, class, None)
     }
 
     /// Records a query that started now, named `operation` when the caller
@@ -1129,16 +1122,17 @@ impl QueryLog {
     /// this session runs under the same operation id.
     pub(crate) fn begin_as(
         &self,
+        policy: TextPolicy,
         text: Option<&str>,
         class: Option<&'static str>,
         operation: Option<&crate::QueryId>,
     ) -> Result<String, KrishivError> {
         let Some(operation) = operation else {
-            return Ok(self.record(text, class, None));
+            return Ok(self.record(policy, text, class, None));
         };
         let id = operation.as_str().to_owned();
         self.history
-            .push_given(self.row(id.clone(), now_ms(), text, class))?;
+            .push_given(self.row(policy, id.clone(), now_ms(), text, class))?;
         Ok(id)
     }
 
@@ -1146,13 +1140,15 @@ impl QueryLog {
     /// refused, or answered from the result cache).
     fn record(
         &self,
+        policy: TextPolicy,
         text: Option<&str>,
         class: Option<&'static str>,
         operation: Option<&crate::QueryId>,
     ) -> String {
         let ms = now_ms();
         let id = operation.map_or_else(|| self.history.mint(ms), |o| o.as_str().to_owned());
-        self.history.push(self.row(id.clone(), ms, text, class));
+        self.history
+            .push(self.row(policy, id.clone(), ms, text, class));
         id
     }
 
@@ -1211,11 +1207,12 @@ impl QueryLog {
     /// session's current tags and trace id) that took no execution.
     pub(crate) fn record_replayed(
         &self,
+        policy: TextPolicy,
         text: Option<&str>,
         class: Option<&'static str>,
         operation: Option<&crate::QueryId>,
     ) -> String {
-        let id = self.record(text, class, operation);
+        let id = self.record(policy, text, class, operation);
         self.history
             .update(&self.session_id, &id, |row| row.result_cache_hit = true);
         self.finish(
@@ -1237,12 +1234,13 @@ impl QueryLog {
     /// cancellation `cancelled`. Returns the row's id.
     pub(crate) fn record_refused(
         &self,
+        policy: TextPolicy,
         text: Option<&str>,
         class: Option<&'static str>,
         error: &KrishivError,
         operation: Option<&crate::QueryId>,
     ) -> String {
-        let id = self.record(text, class, operation);
+        let id = self.record(policy, text, class, operation);
         let class = error.error_class().name();
         let state = outcome_state(class);
         self.finish(
@@ -1581,6 +1579,21 @@ mod tests {
     }
 
     #[test]
+    fn scientific_notation_and_other_bare_numbers_are_masked_in_a_message() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let got = mask.apply_message(
+            "The value 1e400 and 1.5E-3 and 7e+2 and v2 and 42P01x cannot be cast. SQLSTATE: 22003",
+        );
+        assert_eq!(
+            got,
+            "The value ? and ? and ? and v2 and 42P01x cannot be cast. SQLSTATE: 22003"
+        );
+    }
+
+    #[test]
     fn an_escaped_quote_does_not_end_a_masked_value() {
         let mask = TextPolicy {
             max_bytes: 4096,
@@ -1680,7 +1693,7 @@ mod tests {
         let log = QueryLog::default();
         log.set_trace_id(Some("trace".to_owned()));
         assert!(log.try_set_tag("team", "etl"));
-        let id = log.record_replayed(Some("SELECT 1"), Some("READ"), None);
+        let id = log.record_replayed(TextPolicy::default(), Some("SELECT 1"), Some("READ"), None);
         let row = &log.snapshot(false)[0];
         assert_eq!(row.id, id);
         assert_eq!(row.state, "finished");
@@ -1692,20 +1705,22 @@ mod tests {
     #[test]
     fn an_error_is_masked_by_the_policy_the_query_started_under() {
         let log = QueryLog::default();
-        log.set_text_policy(TextPolicy {
+        let mask = TextPolicy {
             mask: true,
             ..TextPolicy::default()
-        });
-        let id = log.begin(Some("SELECT 'a'"), None);
-        // Another statement of the session switches masking off before this one fails.
-        log.set_text_policy(TextPolicy::default());
+        };
+        let id = log.begin_as(mask, Some("SELECT 'a'"), None, None).unwrap();
+        // Another statement of the session runs under `keep` before this one fails.
+        let _ = log.begin_as(TextPolicy::default(), Some("SELECT 'b'"), None, None);
         log.note_error(
             &id,
             &KrishivError::from(InternalError {
                 message: "bad value 'secret'".to_owned(),
             }),
         );
-        let message = log.snapshot(false)[0].error_message.clone().unwrap();
+        let rows = log.snapshot(false);
+        let row = rows.iter().find(|r| r.id == id).unwrap();
+        let message = row.error_message.clone().unwrap();
         assert!(!message.contains("secret"), "{message}");
     }
 

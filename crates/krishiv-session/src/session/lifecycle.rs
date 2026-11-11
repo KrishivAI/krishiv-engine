@@ -328,14 +328,10 @@ impl Session {
         class: Option<&'static str>,
         error: &KrishivError,
     ) -> String {
+        let policy = crate::system::TextPolicy::from_config(&self.state.conf.snapshot());
         self.state
             .queries
-            .set_text_policy(crate::system::TextPolicy::from_config(
-                &self.state.conf.snapshot(),
-            ));
-        self.state
-            .queries
-            .record_refused(text, class, error, self.operation_id())
+            .record_refused(policy, text, class, error, self.operation_id())
     }
 }
 
@@ -351,7 +347,11 @@ mod tests {
     #[test]
     fn a_cancel_before_the_context_fails_the_query_at_once() {
         let s = Session::new().unwrap();
-        let id = s.state.queries.begin_as(Some("q"), None, None).unwrap();
+        let id = s
+            .state
+            .queries
+            .begin_as(crate::system::TextPolicy::default(), Some("q"), None, None)
+            .unwrap();
         let runtime = &s.state.runtime;
         let index = runtime.reserve(s.state.number, s.state.queries.session_id(), &id);
         let ids = runtime.cancel_where(crate::CancelReason::User, |_, q| q == id);
@@ -376,7 +376,16 @@ mod tests {
             .unwrap();
         assert_eq!(row.cancel_reason, Some("user"));
         // Attaching on a closed session is refused.
-        let late = s.state.queries.begin_as(Some("late"), None, None).unwrap();
+        let late = s
+            .state
+            .queries
+            .begin_as(
+                crate::system::TextPolicy::default(),
+                Some("late"),
+                None,
+                None,
+            )
+            .unwrap();
         let index = runtime.reserve(s.state.number, s.state.queries.session_id(), &late);
         s.close();
         let query = QueryContext::new(

@@ -53,13 +53,8 @@ impl DataFrame {
             {
                 // A hit is a request answered, so it has its row in `system.queries` too; it is not a
                 // physical execution, so the metrics registry does not count it.
-                self.session
-                    .state
-                    .queries
-                    .set_text_policy(crate::system::TextPolicy::from_config(
-                        &self.session.state.conf.snapshot(),
-                    ));
                 let id = self.session.state.queries.record_replayed(
+                    crate::system::TextPolicy::from_config(&a.env.config),
                     a.env.text.as_deref(),
                     a.env.statement_class,
                     self.session.operation_id(),

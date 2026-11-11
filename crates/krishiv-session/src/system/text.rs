@@ -147,6 +147,19 @@ pub(super) fn mask_numbers(message: &str) -> String {
             while j > i && chars[j - 1] == '.' {
                 j -= 1;
             }
+            // An exponent: `1e400`, `1.5E-3`.
+            if matches!(chars.get(j), Some('e' | 'E')) {
+                let mut k = j + 1;
+                if matches!(chars.get(k), Some('+' | '-')) {
+                    k += 1;
+                }
+                if chars.get(k).is_some_and(char::is_ascii_digit) {
+                    while chars.get(k).is_some_and(char::is_ascii_digit) {
+                        k += 1;
+                    }
+                    j = k;
+                }
+            }
             if chars.get(j).is_none_or(|n| !word(*n)) {
                 out.push('?');
                 i = j;
