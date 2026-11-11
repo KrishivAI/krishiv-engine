@@ -29,7 +29,9 @@
 //! `abfs://`, `abfss://`, `az://`, resolved by [`ObjectPaths`] through the
 //! [`StoreRegistry`]) are supported. Not yet supported, failing with
 //! `KRISHIV_UNSUPPORTED_FEATURE`: subdirectories that are
-//! not `name=value` partition directories, paths with any other scheme, file sources Spark
+//! not `name=value` partition directories in a read by path (a catalog
+//! table reads its registered partitions only and skips other directories,
+//! as Spark's `CatalogFileIndex`), paths with any other scheme, file sources Spark
 //! knows but the engine has no [`FileFormat`] for, and merging the files'
 //! schemas (`mergeSchema`). A name Spark does not know at all fails with
 //! Spark's `DATA_SOURCE_NOT_FOUND`.
@@ -366,16 +368,18 @@ impl FileReads {
     /// `paths` (none is fine: the table is empty), with `schema` as their
     /// schema. `partitions` are the table's partition columns (the last
     /// columns of `schema`, in this order) and the partitions its catalog
-    /// registered: the `name=value` directories above its files must name
-    /// exactly those columns and hold registered partitions, and their
-    /// values are read as the columns' declared types. Nothing is inferred
-    /// and nothing is cached, so every query lists the table afresh.
+    /// registered. Only the files of registered partitions are read, as
+    /// Spark's `CatalogFileIndex` lists only their locations: a file under a
+    /// directory the catalog does not know (before `MSCK REPAIR`), or under
+    /// any directory that is not a partition of the declared columns, is not
+    /// one of the table's files. Values are read as the columns' declared
+    /// types. Nothing is inferred and nothing is cached, so every query lists
+    /// the table afresh.
     ///
     /// # Errors
     /// The listing errors of [`Self::listing`], except that no files is not
-    /// an error; `KRISHIV_UNSUPPORTED_FEATURE` when the directories do not
-    /// match the declared partition columns or the registered partitions,
-    /// or a partition column's type is not read from a directory yet.
+    /// an error; `KRISHIV_UNSUPPORTED_FEATURE` when a partition column's type
+    /// is not read from a directory yet.
     pub async fn listing_known(
         &self,
         format: &str,
@@ -450,6 +454,16 @@ impl FileReads {
         });
         // Overlapping roots (`/d/{a,a/b}`, or a glob and a plain path) reach a file twice: it is read once.
         listed.dedup_by(|a, b| a.0.path == b.0.path && a.0.store == b.0.store);
+        // A partitioned catalog table reads its registered partitions only
+        // (Spark's `CatalogFileIndex`): other directories under its root are
+        // not its locations, so their files are not read (Spark 4.2.0: an
+        // external table's `p=1` directory left on disk after `DROP PARTITION`
+        // is not read).
+        if let Some((_, declared)) = &known
+            && !declared.columns.is_empty()
+        {
+            listed.retain(|(_, segs)| is_registered(declared, segs));
+        }
         let format = match self.formats.get(format) {
             Ok(format) => format,
             Err(e) => {
@@ -471,8 +485,7 @@ impl FileReads {
         let infer = known.is_none() && self.infers_partition_types();
         let partition_columns = partition_columns(&discovered, infer)?;
         if let Some((schema, declared)) = known {
-            let partition_columns =
-                declared_partitions(&schema, declared, &partition_columns, &discovered)?;
+            let partition_columns = declared_partitions(&schema, declared, &partition_columns)?;
             return Ok(FileListing {
                 format,
                 files: files.into(),
@@ -924,7 +937,15 @@ impl FileReads {
                 .iter()
                 .map(|p| p.as_ref().to_owned())
                 .collect();
-            let segments = Self::base_segments(at, mode, &names)?;
+            let segments = match Self::base_segments(at, mode, &names) {
+                Ok(segments) => segments,
+                // A catalog table's listing (`missing_is_empty`): a directory
+                // that is not a `name=value` partition directory is none of its
+                // registered locations, so its files are not the table's
+                // (Spark's `CatalogFileIndex` never lists it).
+                Err(_) if missing_is_empty => continue,
+                Err(e) => return Err(e),
+            };
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
         }
         if committed.is_none() && inherited.is_none() && self.log_appeared(at, mode).await? {
@@ -1069,17 +1090,15 @@ pub struct KnownPartitions {
 }
 
 /// The partition columns of a known table: its `declared` columns, the
-/// last of `schema`, typed as declared, when the directories above its
-/// files (`found`, per file) name exactly those (in order, names compared
-/// case-insensitively) and every one holds a registered partition; none
-/// when there are no partition directories (an empty or unpartitioned
-/// table). Spark reads a catalog table's registered partitions
-/// (`CatalogFileIndex`), not the directories under its root: a directory
-/// the catalog does not know (before `MSCK REPAIR`) is refused here, never
-/// read, and so is a partition column of a type whose directory value the
-/// scan does not read yet (only strings, integers and dates are: a
-/// timestamp is local time in the session zone, which the scan does not
-/// have).
+/// last of `schema`, typed as declared, when the partition columns
+/// `discovered` from its files name exactly those (in order, names compared
+/// case-insensitively); none when there are no partition directories (an
+/// empty or unpartitioned table). The listing has kept the registered partitions' files only
+/// (`is_registered`, as Spark's `CatalogFileIndex` reads only the
+/// registered locations). A partition column of a type whose directory
+/// value the scan does not read yet is refused (only strings, integers and
+/// dates are: a timestamp is local time in the session zone, which the scan
+/// does not have).
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` in those cases.
@@ -1087,7 +1106,6 @@ fn declared_partitions(
     schema: &SchemaRef,
     declared: &KnownPartitions,
     discovered: &[FieldRef],
-    found: &[(String, Vec<Segment>)],
 ) -> Result<Vec<FieldRef>> {
     use arrow_schema::DataType as T;
     if discovered.is_empty() {
@@ -1118,15 +1136,21 @@ fn declared_partitions(
         }
         out.push(Arc::clone(field));
     }
-    for (path, segs) in found {
-        let values: Vec<Option<String>> = segs.iter().map(|(_, v)| v.clone()).collect();
-        if !declared.registered.contains(&values) {
-            return Err(unsupported(format!(
-                "reading {path}: a partition directory the catalog does not know (MSCK REPAIR TABLE registers it)"
-            )));
-        }
-    }
     Ok(out)
+}
+
+/// Whether a file's partition directories (`segs`) are one of `declared`'s
+/// registered partitions: exactly the declared columns, in order (names
+/// compared case-insensitively), with registered values.
+fn is_registered(declared: &KnownPartitions, segs: &[Segment]) -> bool {
+    segs.len() == declared.columns.len()
+        && segs
+            .iter()
+            .zip(&declared.columns)
+            .all(|((name, _), column)| name.eq_ignore_ascii_case(column))
+        && declared.registered.iter().any(|values| {
+            values.len() == segs.len() && values.iter().zip(segs).all(|(v, (_, s))| v == s)
+        })
 }
 
 /// `schema` followed by `partitions`.
