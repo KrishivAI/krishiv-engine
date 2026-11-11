@@ -1162,3 +1162,26 @@ fn a_stored_view_over_a_stored_table_reads_under_system_when_qualified() {
     );
     assert!(run(&s, "SELECT a FROM default.v").is_err());
 }
+
+#[test]
+fn namespace_metadata_and_qualified_view_bodies_follow_the_defining_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a INT)").unwrap();
+    run(&s, "INSERT INTO t VALUES (7)").unwrap();
+    run(&s, "CREATE VIEW v AS SELECT a FROM default.t").unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in ["DESCRIBE SCHEMA EXTENDED default", "SHOW TABLES IN default"] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("SCHEMA_NOT_FOUND"), "{sql}: {e}");
+    }
+    assert_eq!(
+        column_of(
+            &s,
+            "SELECT CAST(a AS STRING) FROM spark_catalog.default.v",
+            0
+        ),
+        ["7"]
+    );
+    // The system tables themselves still list.
+    assert!(!column_of(&s, "SHOW TABLES IN system", 1).is_empty());
+}

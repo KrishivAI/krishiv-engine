@@ -1616,7 +1616,16 @@ impl Session {
         crate::admission::Permit::unlimited()
     }
 
-    /// The namespace `ns` of a two-part stored-function name: refused under `system`, which has none.
+    /// A namespace named on its own (`SHOW TABLES IN ns`, `DESCRIBE SCHEMA ns`): `system` itself stays
+    /// nameable (it lists the system tables), any other is refused under `system`.
+    pub(crate) fn namespace_arg(&self, ns: &str) -> Result<String, KrishivError> {
+        if is_system(ns) {
+            return Ok(ns.to_owned());
+        }
+        self.function_namespace(ns)
+    }
+
+    /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none.
     pub(crate) fn function_namespace(&self, ns: &str) -> Result<String, KrishivError> {
         if is_system(&self.state.catalog.current_catalog()) {
             return Err(krishiv_common::error::SchemaNotFound {

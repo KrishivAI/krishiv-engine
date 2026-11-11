@@ -291,7 +291,7 @@ impl Session {
             }
         };
         match parts.as_slice() {
-            [ns] => Ok(fold(ns)),
+            [ns] => self.namespace_arg(&fold(ns)),
             [catalog, ns] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => Ok(fold(ns)),
             [catalog, _] => Err(unsupported(&format!(
                 "namespaces in the catalog `{catalog}`"

@@ -1558,10 +1558,10 @@ impl Expander<'_> {
             self.reads.push(candidate);
         }
         let Some(entry) = entry else {
-            return Ok(plan);
+            return Ok(self.anchored(plan));
         };
         let Some(view) = &entry.view else {
-            return Ok(plan);
+            return Ok(self.anchored(plan));
         };
         match self.inline_stored(&plan, &entry, view, &namespace, &table_key, scope) {
             Ok(done) => Ok(done),

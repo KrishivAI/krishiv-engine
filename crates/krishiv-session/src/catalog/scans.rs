@@ -65,4 +65,21 @@ impl super::Expander<'_> {
     pub(super) fn names_a_stored_namespace(&self) -> bool {
         self.view_namespace.is_some() || !crate::system::is_system(&self.catalog.current_catalog())
     }
+
+    /// `plan`, a read of `namespace.table` inside a stored view, as `spark_catalog.namespace.table`: a
+    /// view's table belongs to the catalog that defines it, whatever the current catalog is.
+    pub(super) fn anchored(&self, plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+        if self.view_namespace.is_some()
+            && let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
+            && let [namespace, table] = name.as_slice()
+        {
+            let name = vec![super::CATALOG.to_owned(), namespace.clone(), table.clone()];
+            let read = ReadSource::Table {
+                name,
+                options: options.clone(),
+            };
+            return Arc::new(LogicalPlan::new(PlanNode::Read(read)).with_origin(plan.origin));
+        }
+        plan
+    }
 }
