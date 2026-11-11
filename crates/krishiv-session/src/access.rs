@@ -255,7 +255,12 @@ impl Session {
                 }
             }
             if let Some((namespace, name)) = &read.view {
-                let parts = [namespace.clone(), name.clone()];
+                // A stored view belongs to the session catalog, whatever catalog is current.
+                let parts = [
+                    crate::catalog::CATALOG.to_owned(),
+                    namespace.clone(),
+                    name.clone(),
+                ];
                 let view =
                     table_ident(catalogs, &parts).ok_or_else(|| unplaceable("an empty name"))?;
                 securables.push(Securable::View(view.clone()));
@@ -288,7 +293,11 @@ impl Session {
         name: &str,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
-        let parts = [namespace.to_owned(), name.to_owned()];
+        let parts = [
+            crate::catalog::CATALOG.to_owned(),
+            namespace.to_owned(),
+            name.to_owned(),
+        ];
         let ident = table_ident(&*env.analysis.catalogs, &parts)
             .ok_or_else(|| unplaceable("an empty name"))?;
         let r = authorize(

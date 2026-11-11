@@ -1306,3 +1306,28 @@ fn global_temp_views_can_be_created_and_dropped_under_system_and_stored_function
         ["1"]
     );
 }
+
+#[test]
+fn qualified_views_functions_and_global_temp_listings_follow_their_defining_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE FUNCTION g() RETURNS INT RETURN 1").unwrap();
+    run(&s, "CREATE FUNCTION f() RETURNS INT RETURN default.g()").unwrap();
+    run(&s, "CREATE VIEW v AS SELECT 'c' AS value").unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv3 AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(spark_catalog.default.f() AS STRING)", 0),
+        ["1"]
+    );
+    assert_eq!(
+        column_of(&s, "SELECT value FROM spark_catalog.default.v", 0),
+        ["c"]
+    );
+    assert!(column_of(&s, "SHOW VIEWS IN global_temp", 1).contains(&"gv3".to_owned()));
+    assert!(!column_of(&s, "SHOW TABLES IN global_temp", 1).is_empty());
+    // A path with only function schemas finds no system table by its bare name.
+    run(&s, "SET spark.sql.path.enabled=true").unwrap();
+    run(&s, "SET PATH = system.session, system.builtin").unwrap();
+    assert!(run(&s, "SELECT * FROM capabilities").is_err());
+    assert!(!column_of(&s, "SELECT name FROM system.capabilities LIMIT 1", 0).is_empty());
+}

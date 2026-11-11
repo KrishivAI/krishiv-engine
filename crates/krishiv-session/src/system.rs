@@ -1406,6 +1406,10 @@ impl Catalog for SystemCatalog {
                 if let Some(found) = temps.load_table(id, version, only_temporary).await? {
                     return Ok(Some(found));
                 }
+                // The path names no schema with tables: a bare name is a temporary relation or nothing.
+                if form.temporary_only {
+                    return Ok(None);
+                }
             }
             // Two-part names only: `system.<table>`, with no namespace.
             if !id.namespace.is_empty() {
@@ -1502,7 +1506,7 @@ impl Session {
     /// A namespace named on its own (`SHOW TABLES IN ns`, `DESCRIBE SCHEMA ns`): `system` itself stays
     /// nameable (it lists the system tables), any other is refused under `system`.
     pub(crate) fn namespace_arg(&self, ns: &str) -> Result<String, KrishivError> {
-        if is_system(ns) {
+        if is_system(ns) || ns.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE) {
             return Ok(ns.to_owned());
         }
         self.function_namespace(ns)

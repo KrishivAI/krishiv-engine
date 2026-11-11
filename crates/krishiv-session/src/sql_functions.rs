@@ -343,6 +343,18 @@ impl QueryFunctions {
                     let ExprNode::Function(call) = &e.node else {
                         return Ok(e);
                     };
+                    // A call written `ns.f()` inside a stored body is the defining catalog's, whatever
+                    // catalog is current when the body is expanded.
+                    if let [q] = call.qualifier.as_slice()
+                        && !q.eq_ignore_ascii_case("session")
+                        && !q.eq_ignore_ascii_case("system")
+                    {
+                        let mut call = call.clone();
+                        call.qualifier = vec![crate::catalog::CATALOG.to_owned(), q.clone()];
+                        let mut next = (*e).clone();
+                        next.node = ExprNode::Function(call);
+                        return Ok(Arc::new(next));
+                    }
                     // Canonical operators and built-ins stay bare; anything
                     // else, session UDFs included, is a user function.
                     let builtin = ["system".to_owned(), "builtin".to_owned(), call.name.clone()];
@@ -415,7 +427,7 @@ impl QueryFunctions {
                         // A view whose path holds no catalog schema keeps the
                         // call bare, unresolved, not the view's namespace.
                         None if temporary_visible => return Ok(e),
-                        None => vec![namespace.to_owned()],
+                        None => vec![crate::catalog::CATALOG.to_owned(), namespace.to_owned()],
                     };
                     let mut next = (*e).clone();
                     next.node = ExprNode::Function(call);
