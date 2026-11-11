@@ -15,6 +15,6 @@ pub static EXEC_AGG_DIRECT_KEYS: ConfigEntry = ConfigEntry {
           the same either way; false hashes every row.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
-    version_added: "0.1.0",
+    version_added: "0.2.0",
     spark_alias: None,
 };
