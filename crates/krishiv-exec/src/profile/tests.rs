@@ -612,6 +612,49 @@ fn planning_round_trips() {
     assert!(QueryProfile::from_json(&v.to_string()).is_err());
 }
 
+/// `trace` (minor 4) round-trips; a minor-3 document without it reads as `None`; a `trace` that
+/// is not an object is refused.
+#[test]
+fn trace_round_trips_and_is_optional_and_checked() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), false);
+    p.trace = Some(serde_json::json!({
+        "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+        "span_id": "00f067aa0ba902b7"
+    }));
+    let back = QueryProfile::from_json(&p.to_json()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back, p);
+    // A minor-3 document: no `trace` member.
+    let mut v = p.to_json_value();
+    v["minor"] = 3.into();
+    if let Some(o) = v.as_object_mut() {
+        o.remove("trace");
+    }
+    let old = QueryProfile::from_json(&v.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(old.trace, None);
+    // `null` reads as absent; any other non-object is an error.
+    v["trace"] = serde_json::Value::Null;
+    assert_eq!(
+        QueryProfile::from_json(&v.to_string())
+            .map(|b| b.trace)
+            .ok(),
+        Some(None)
+    );
+    for bad in [
+        serde_json::json!("x"),
+        serde_json::json!([1]),
+        serde_json::json!(7),
+    ] {
+        v["trace"] = bad;
+        let err = QueryProfile::from_json(&v.to_string())
+            .err()
+            .map(|e| e.to_string());
+        assert!(
+            err.is_some_and(|m| m.contains("trace is not an object")),
+            "a non-object trace is refused"
+        );
+    }
+}
+
 /// The usage block sums the operators' counters (T138).
 #[test]
 fn usage_equals_the_operator_sums() {
