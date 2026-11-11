@@ -8,7 +8,10 @@ from krishiv import _cpu
 _cpu.ensure_supported()  # before the native module: an old CPU would die with SIGILL there
 
 from krishiv._native import __allocator__, __version__  # noqa: E402
+from krishiv._udf_hooks import register as _register_udf_hooks  # noqa: E402
 from krishiv.sql.profile_view import ProfileView, ui  # noqa: E402
+
+_register_udf_hooks()
 from krishiv.sql.session import SparkSession  # noqa: E402
 
 __all__ = ["ProfileView", "SparkSession", "__version__", "build_info", "metrics", "session", "ui"]

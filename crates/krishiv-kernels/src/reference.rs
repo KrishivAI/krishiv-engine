@@ -583,6 +583,57 @@ pub fn list_create(
     ))
 }
 
+/// Reference for [`crate::string::collation_key`] over an `ARRAY<STRING COLLATE c>` column given
+/// row by row: each element trimmed of its trailing `U+0020`s under an `_RTRIM` collation, then
+/// keyed one code point at a time (no ASCII fast path, no columnar builder).
+///
+/// # Errors
+/// `INTERNAL_ERROR` for an ICU collation, as the fast path.
+#[expect(
+    clippy::type_complexity,
+    reason = "the oracle's shape is the value's: rows of nullable lists of nullable keys"
+)]
+pub fn collation_key_lists(
+    collation: krishiv_types::Collation,
+    rows: &[Option<Vec<Option<String>>>],
+) -> Result<Vec<Option<Vec<Option<Vec<u8>>>>>, KernelError> {
+    use krishiv_types::{Collation, CollationFamily};
+    let per_char = match collation.family() {
+        CollationFamily::Utf8Binary => Collation::UTF8_BINARY,
+        CollationFamily::Utf8Lcase => Collation::UTF8_LCASE,
+        CollationFamily::Icu { .. } => {
+            return Err(KernelError::internal(format!(
+                "no collation key for {}",
+                collation.name()
+            )));
+        }
+    };
+    let key = |s: &str| -> Result<Vec<u8>, KernelError> {
+        let s = if collation.rtrim() {
+            s.trim_end_matches(' ')
+        } else {
+            s
+        };
+        let mut out = Vec::new();
+        let mut buf = [0; 4];
+        for c in s.chars() {
+            crate::string::push_collation_key(per_char, c.encode_utf8(&mut buf), &mut out)?;
+        }
+        Ok(out)
+    };
+    rows.iter()
+        .map(|row| {
+            row.as_ref()
+                .map(|list| {
+                    list.iter()
+                        .map(|e| e.as_deref().map(key).transpose())
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()
+        })
+        .collect()
+}
+
 /// Nanoseconds since midnight for the text of a `TIME`, read one byte at a
 /// time (the grammar of [`crate::cast::parse_time`] written as a scanner):
 /// `[T]h[h]:m[m][:s[s][.digits]][ AM|PM]` inside ASCII whitespace, a fraction

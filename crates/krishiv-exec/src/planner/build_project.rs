@@ -97,7 +97,8 @@ fn is_column(e: &Expr) -> bool {
 
 impl Planner<'_> {
     /// Plans `Project { input, exprs }`, moving what it can below the join
-    /// under it.
+    /// under it; its Python UDF calls (if any) are evaluated below it (a call
+    /// never moves: it may raise, so `runs_on_any_row` refuses it).
     pub(super) fn plan_project(
         &mut self,
         node: &Arc<LogicalPlan>,
@@ -109,6 +110,7 @@ impl Planner<'_> {
         }
         let planned = self.plan(input)?;
         let exprs = self.moved_exprs(node, exprs);
+        let (planned, exprs) = self.extract_python(planned, &exprs)?;
         self.project(planned, &exprs)
     }
 

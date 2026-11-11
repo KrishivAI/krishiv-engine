@@ -154,6 +154,42 @@ pub fn call_udf(name: &str, args: impl IntoIterator<Item = Column>) -> Column {
     call_function(name, args)
 }
 
+/// A call of an unregistered Python UDF (a DataFrame-side `udf(...)`,
+/// design P2-T059 unit 2c (a)): `def` at `version` (top bit set), shown as
+/// `def.name(args)` and resolvable only through this call, never by name
+/// from SQL. The runtime the session holds must know `(def.name, version)`.
+///
+/// ```
+/// use krishiv_plan::PythonEvalType;
+/// use krishiv_session::PythonUdfDef;
+/// use krishiv_session::functions::{col, python_udf_call};
+/// let def = PythonUdfDef {
+///     name: "<lambda>".to_owned(),
+///     eval_type: PythonEvalType::ArrowBatched,
+///     return_type: krishiv_types::DataType::Long,
+///     deterministic: true,
+///     thread_safe: true,
+/// };
+/// let c = python_udf_call(&def, 0x8000_0001, [col("id")])?;
+/// # Ok::<(), krishiv_common::error::KrishivError>(())
+/// ```
+///
+/// # Errors
+/// `KRISHIV_INTERNAL_ERROR` when `version` lacks the top bit or the name
+/// holds a NUL.
+pub fn python_udf_call(
+    def: &crate::PythonUdfDef,
+    version: u32,
+    args: impl IntoIterator<Item = Column>,
+) -> Result<Column, krishiv_common::error::KrishivError> {
+    let name = crate::python_udfs::anonymous_call_name(def, version)?;
+    Ok(Column::qualified_function(
+        vec!["session".to_owned()],
+        name,
+        args.into_iter().collect(),
+    ))
+}
+
 /// `sum(c)`.
 ///
 /// ```
