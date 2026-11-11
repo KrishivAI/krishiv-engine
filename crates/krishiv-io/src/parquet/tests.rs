@@ -1642,3 +1642,97 @@ fn deep_nested_nulls_round_trip() {
         }
     }
 }
+
+/// Predicates over a path into a nullable struct (null struct rows, null
+/// leaves, several row groups, row filter on and off) never drop a row the
+/// predicate keeps, and `IS NULL` keeps rows whose struct is null.
+#[test]
+fn nested_path_predicates_keep_every_matching_row() {
+    use crate::request::RowFilterPolicy;
+    let env = Env::new();
+    let n: i32 = 3000;
+    let leaf = arrow_schema::Fields::from(vec![Field::new("x", DataType::Int32, true)]);
+    // x is null every 7th row; the whole struct is null every 11th row.
+    let x = Int32Array::from_iter((0..n).map(|i| (i % 7 != 0).then_some(i)));
+    let st = arrow_array::StructArray::new(
+        leaf.clone(),
+        vec![Arc::new(x) as ArrayRef],
+        Some((0..n).map(|i| i % 11 != 0).collect()),
+    );
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("s", DataType::Struct(leaf), true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from_iter_values(0..n)), Arc::new(st)],
+    )
+    .unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(500))
+        .build();
+    let file = env.put("np.parquet", write(&[batch], props));
+    let o = env.options(&[]);
+    let file_schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+        )
+        .unwrap()
+        .schema();
+    let path = || ColumnPath::nested(["s", "x"]);
+    let is_null = |i: i32| i % 11 == 0 || i % 7 == 0;
+    type Keeps = Box<dyn Fn(i32) -> bool>;
+    let cases: Vec<(&str, PushdownExpr, Keeps)> = vec![
+        ("is null", PushdownExpr::IsNull(path()), Box::new(is_null)),
+        (
+            "is not null",
+            PushdownExpr::IsNotNull(path()),
+            Box::new(move |i| !is_null(i)),
+        ),
+        (
+            "> 2500",
+            PushdownExpr::cmp(path(), CmpOp::Gt, ScalarValue::Int32(2500)),
+            Box::new(move |i| !is_null(i) && i > 2500),
+        ),
+        (
+            "= 1234",
+            PushdownExpr::cmp(path(), CmpOp::Eq, ScalarValue::Int32(1234)),
+            Box::new(move |i| !is_null(i) && i == 1234),
+        ),
+    ];
+    for policy in [
+        RowFilterPolicy::Off,
+        RowFilterPolicy::On,
+        RowFilterPolicy::Auto,
+    ] {
+        for (name, pred, keeps) in &cases {
+            let mut req = ScanRequest::new(
+                Arc::clone(&file_schema),
+                vec![ColumnPath::new("id"), ColumnPath::new("s")],
+            );
+            req.predicate = Some(pred.clone());
+            req.row_filter = policy;
+            let out = env.scan(&file, &req, &o).unwrap();
+            let b = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+            let ids = b.column(0).as_primitive::<Int32Type>();
+            let got: std::collections::BTreeSet<i32> = ids.values().iter().copied().collect();
+            let want: Vec<i32> = (0..n).filter(|i| keeps(*i)).collect();
+            assert!(
+                want.iter().all(|i| got.contains(i)),
+                "{policy:?} {name}: lost {:?}",
+                want.iter()
+                    .filter(|i| !got.contains(i))
+                    .take(5)
+                    .collect::<Vec<_>>()
+            );
+            // Rows kept above the predicate are consistent with the data.
+            let s = b.column(1).as_struct();
+            for r in 0..b.num_rows() {
+                let i = ids.value(r);
+                assert_eq!(s.is_null(r), i % 11 == 0, "{policy:?} {name} id {i}");
+            }
+        }
+    }
+}
