@@ -21,7 +21,8 @@
 # +11 lines: the schema-level collation parser key, the written IDENTIFIER(..) text passed to view and function commands, the repeated-name view renames (row 14 batch B-6)
 # +3 lines: the statement text reaches CREATE TEMPORARY VIEW (row 14 batch B-6)
 # +2 lines: a write's plan carries the session's conf fallbacks (row 36 batch B-8)
-2835 crates/krishiv-session/src/session.rs
+# +11 lines over 2835: file partitions are cut for a constant slot count under krishiv.deterministicOrder (T094 G1)
+2846 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
 # +4 lines over main: a view column list without a comment keeps the query column's comment (Spark's aliasPlan, PR #589)

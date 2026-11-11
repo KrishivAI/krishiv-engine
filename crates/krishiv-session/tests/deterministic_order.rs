@@ -180,6 +180,7 @@ fn the_result_does_not_depend_on_the_thread_count() {
         // Sources that cut their morsels by the executor's parallelism (review RB1): a range
         // without a slice count, and a parquet scan.
         "SELECT sum(CAST(id AS DOUBLE) / 7), count(*) FROM range(0, 400000)",
+        "SELECT id % 11 AS g, sum(CAST(id AS DOUBLE) / 7) FROM range(0, 400000) GROUP BY id % 11",
         "SELECT sum(x), sum(r), sum(m) FROM (SELECT x, rand(7) AS r, monotonically_increasing_id() AS m FROM tp)",
         "SELECT k, sum(y) FROM (SELECT k, x * rand(3) AS y FROM tp) GROUP BY k",
         // A fan-in mixing a branch that splits into lanes with one holding a flush barrier
@@ -203,7 +204,7 @@ fn the_result_does_not_depend_on_the_thread_count() {
             .unwrap();
         run(
             &s,
-            "CREATE TABLE tp USING parquet AS SELECT id, id % 7 AS k, CAST(id AS DOUBLE) / 3 AS x FROM range(300000)",
+            "CREATE TABLE tp USING parquet AS SELECT id, id % 7 AS k, CAST(id AS DOUBLE) / 3 AS x FROM range(3000000)",
         );
         shapes.push(
             queries
@@ -352,7 +353,7 @@ fn morsel_layouts_do_not_follow_the_thread_count() {
             .unwrap();
         run(
             &s,
-            "CREATE TABLE tp USING parquet AS SELECT id, CAST(id AS DOUBLE) / 3 AS x FROM range(300000)",
+            "CREATE TABLE tp USING parquet AS SELECT id, CAST(id AS DOUBLE) / 3 AS x FROM range(3000000)",
         );
         seen.push((
             max_drivers(
@@ -364,4 +365,6 @@ fn morsel_layouts_do_not_follow_the_thread_count() {
     }
     assert!(seen.windows(2).all(|w| w[0] == w[1]), "{seen:?}");
     assert_eq!(seen[0].0, 16, "{seen:?}");
+    // The scan test is not vacuous: the file scan splits into several lanes.
+    assert!(seen[0].1 > 1, "{seen:?}");
 }

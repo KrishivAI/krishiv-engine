@@ -995,7 +995,9 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
     key: "krishiv.deterministicOrder",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(false)),
-    doc: "Make a query's result reproducible: the same bytes at any thread count. A scan \
+    doc: "Make a query's result reproducible, aiming at the same bytes at any thread count (a \
+          float sum under a window, a sort-merge join or a very large grouping can still differ, \
+          because those size their buckets by the thread count). A scan \
           pipeline whose source can be split deterministically runs one driver per logical \
           partition (up to 16), morsels are dealt to them by ordinal, and their partial states \
           are combined in partition order, so partial states (a decimal `sum` or `avg`, whose \
