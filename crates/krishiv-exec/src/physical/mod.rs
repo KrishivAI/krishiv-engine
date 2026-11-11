@@ -798,6 +798,71 @@ pub struct HashJoinPlan {
     pub runtime_filters: Vec<JoinFilterPlan>,
     /// Broadcast or partitioned.
     pub distribution: JoinDistribution,
+    /// The rows of each probe batch the probe joins: a filter and a scan's
+    /// runtime-filter row stage fused into it (design P2-E3 U2). `None`:
+    /// every row.
+    pub select: Option<ProbeSelect>,
+}
+
+/// What a hash probe keeps of each input batch before it joins it (design
+/// P2-E3 U2): the predicate of a `Filter` that sat below it (with the
+/// column-only projections between them) and the row stage of a
+/// runtime-filtered scan below it, in the same pipeline through
+/// column-only projections. The probe evaluates both over every input
+/// batch and joins the selected rows by id, without a filtered copy. The
+/// planner fuses only a predicate that cannot raise on a row, beside keys
+/// and a residual that cannot either (ADR 0008 §6).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeSelect {
+    /// The fused filter.
+    pub filter: Option<ProbeFilter>,
+    /// The scan whose row stage the probe runs.
+    pub row_stage: Option<ProbeRowStage>,
+    /// The column-only projection between the fused filter and the probe,
+    /// fused too: the probe's input columns, as columns of the batches it
+    /// receives (`None`: those batches as they are). The filter and the row
+    /// stage see the batches received.
+    pub columns: Option<Vec<ProbeColumn>>,
+}
+
+/// A probe input column read out of the batches the probe receives
+/// ([`ProbeSelect::columns`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeColumn {
+    /// Its column in the batches received.
+    pub index: usize,
+    /// Its name in the probe input.
+    pub name: String,
+}
+
+/// A filter fused into a hash probe ([`ProbeSelect::filter`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeFilter {
+    /// The attribute of each column of the batches the probe receives.
+    pub layout: Vec<AttrId>,
+    /// A boolean expression; NULL does not select a row.
+    pub predicate: Arc<Expr>,
+}
+
+/// A scan's runtime-filter row stage run by a hash probe above it
+/// ([`ProbeSelect::row_stage`]): the scan drops no row itself, and the
+/// probe evaluates the stage the scan's driver built (same filters,
+/// counters and switch-off).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeRowStage {
+    /// The scan.
+    pub scan: ScanId,
+    /// Each runtime filter of the scan with its column in the probe input.
+    pub columns: Vec<ProbeFilterColumn>,
+}
+
+/// A runtime filter's column in a hash probe's input.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProbeFilterColumn {
+    /// The filter.
+    pub id: FilterId,
+    /// Its column in the probe input.
+    pub column: usize,
 }
 
 impl HashJoinPlan {
@@ -1013,8 +1078,13 @@ plan_data!(struct AggregatePlan { group_by, aggregates, distinct, output });
 plan_data!(struct Residual { layout, conjuncts });
 plan_data!(struct HashJoinPlan {
     probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match,
-    distinct_build, runtime_filters, distribution
+    distinct_build, runtime_filters, distribution, select
 });
+plan_data!(struct ProbeSelect { filter, row_stage, columns });
+plan_data!(struct ProbeFilter { layout, predicate });
+plan_data!(struct ProbeColumn { index, name });
+plan_data!(struct ProbeRowStage { scan, columns });
+plan_data!(struct ProbeFilterColumn { id, column });
 plan_data!(struct SortMergeJoinPlan {
     probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match
 });
