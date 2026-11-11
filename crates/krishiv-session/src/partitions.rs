@@ -1064,8 +1064,14 @@ impl Session {
             tracing::warn!(error = %e, "a partition rename that lost its catalog swap could not move its directory back");
             return Err(e);
         }
+        // A cancel or an error here leaves the log one rename ahead of the files; a rerun of the statement completes
+        // it (as after a crash between the log and the move, above).
         self.relog_partitions(&table.location, &[(target, Some(source))])
             .await?;
+        // Again after the undo, so no query that ran in between keeps the half-undone state cached.
+        self.state
+            .cache
+            .invalidate_table(&format!("{}.{}", table.namespace, table.name));
         Err(crate::table_commands::concurrent_change(name))
     }
 
