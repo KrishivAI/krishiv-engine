@@ -41,3 +41,36 @@ fn binary_reads_back_from_4_1_and_always_misses_on_4_0() {
     assert_eq!(read_b(SparkVersion::V4_0), (true, None));
     assert_eq!(read_b(SparkVersion::V4_1), (true, Some(vec![0x01, 0xFF])));
 }
+
+/// Spark 4.0 has no BINARY case: every style, in both modes, is a miss (NULL) or the parse-mode error.
+#[test]
+fn v4_0_misses_in_every_style_and_mode() {
+    use arrow_array::builder::{MapBuilder, StringBuilder};
+    use krishiv_kernels::binary_style::BinaryStyle;
+
+    let mut mode = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+    mode.keys().append_value("mode");
+    mode.values().append_value("FAILFAST");
+    mode.append(true).unwrap();
+    let mode: ArrayRef = Arc::new(mode.finish());
+    let xml = strs(&[Some("<ROW><b>abc</b></ROW>")]);
+    let schema: ArrayRef = strs(&[Some("b binary")]);
+    for style in [BinaryStyle::Utf8, BinaryStyle::Basic, BinaryStyle::Hex] {
+        let opts = BindOptions::default()
+            .with_binary_style(style)
+            .with_kernel(KernelCtx::new().with_spark_version(SparkVersion::V4_0));
+        let args = [
+            xml.data_type().clone().into(),
+            BindArg::Literal(Arc::clone(&schema)),
+            BindArg::Literal(Arc::clone(&mode)),
+        ];
+        let f = bind_scalar("from_xml", &args, &opts).unwrap();
+        let err = f
+            .invoke(&[col(&xml), lit(&schema), lit(&mode)], 1)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("MALFORMED_RECORD_IN_PARSING"),
+            "{style:?}: {err}"
+        );
+    }
+}
