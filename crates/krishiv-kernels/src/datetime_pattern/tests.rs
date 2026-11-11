@@ -465,3 +465,13 @@ fn aligned_week_of_month_and_quarter_change_on_the_right_day_and_month() {
         );
     }
 }
+
+#[test]
+fn localized_offsets_print_minutes_and_seconds_only_when_set() {
+    assert_eq!(fmt("O", 0, "+05:30", 19_800), "GMT+5:30");
+    assert_eq!(fmt("O", 0, "+05:00", 18_000), "GMT+5");
+    assert_eq!(fmt("O", 0, "+00:00:15", 15), "GMT+0:00:15");
+    assert_eq!(fmt("OOOO", 0, "+05:30", 19_800), "GMT+05:30");
+    assert_eq!(fmt("OOOO", 0, "-08:00", -28_800), "GMT-08:00");
+    assert_eq!(fmt("OOOO", 0, "Z", 0), "GMT");
+}
