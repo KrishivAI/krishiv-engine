@@ -10,7 +10,7 @@
 
 use krishiv_common::error::{
     CollationMismatchExplicit, DatatypeMismatchUnexpectedInputType,
-    IndeterminateCollationInExpression, WrongNumArgsWithoutSuggestion,
+    IndeterminateCollationInExpression,
 };
 use krishiv_types::{Collation, CollationFamily};
 
@@ -59,9 +59,19 @@ const COMPARING: &[&str] = &[
 ];
 
 /// Comparisons that run on collation keys when their collation has a key built from existing
-/// functions (`UTF8_LCASE`, `_RTRIM`). `greatest`, `least`, `nullif` and `equal_null` return or
-/// reuse the operands and wait for unit 3b.
-const KEYED: &[&str] = &["==", "<=>", "<", "<=", ">", ">=", "in", "between"];
+/// functions (`UTF8_LCASE`, `_RTRIM`). `equal_null` is `<=>`. `greatest`, `least` and `nullif`
+/// return the operands and wait for unit 3b.
+const KEYED: &[&str] = &[
+    "==",
+    "<=>",
+    "<",
+    "<=",
+    ">",
+    ">=",
+    "in",
+    "between",
+    "equal_null",
+];
 
 /// Searches that see a `UTF8_LCASE` operand through its lower-cased key: Spark's
 /// `lowercaseContains` / `lowercaseStartsWith` / `lowercaseEndsWith` compare the lower-cased
@@ -91,6 +101,10 @@ const FAILS_INDETERMINATE: &[&str] = &[
     "lcase",
     "initcap",
 ];
+
+/// Calls that tolerate operands without one collation at analysis and fail while running
+/// (`INDETERMINATE_COLLATION`).
+const RUNTIME_INDETERMINATE: &[&str] = &["str_to_map", "split_part"];
 
 /// Calls whose result depends on the collation (Spark's `CollationSupport` and the pattern
 /// matchers). Their collation-aware kernels belong to unit 5, so until then they refuse a
@@ -226,7 +240,7 @@ fn typed_call(name: &str, x: &Arc<Expr>, t: &DataType, origin: crate::Origin) ->
 
 /// The comparison key of `x` read as `t` (design 3.3): the bytes of a binary string, else
 /// `__collation_key`, which is `lowerCaseCodePoints` and the right trim.
-fn key_of(x: &Arc<Expr>, t: &DataType, origin: crate::Origin) -> Arc<Expr> {
+pub(super) fn key_of(x: &Arc<Expr>, t: &DataType, origin: crate::Origin) -> Arc<Expr> {
     if matches!(t, DataType::String) {
         return Arc::new(
             Expr::new(ExprNode::Cast {
@@ -240,13 +254,8 @@ fn key_of(x: &Arc<Expr>, t: &DataType, origin: crate::Origin) -> Arc<Expr> {
     typed_call("__collation_key", x, t, origin)
 }
 
-/// The comparison key of `x` under the collation `c` (`IN (subquery)` pairs).
-pub(super) fn key_of_collation(x: &Arc<Expr>, c: Collation, origin: crate::Origin) -> Arc<Expr> {
-    key_of(x, &string_of(c), origin)
-}
-
 /// `t` with a binary collation as `STRING`, else the collated string.
-fn string_of(c: Collation) -> DataType {
+pub(super) fn string_of(c: Collation) -> DataType {
     if c.is_utf8_binary() {
         DataType::String
     } else {
@@ -299,28 +308,49 @@ pub(super) fn subquery_key_collation(
     if !is_string(left) || !is_string(Some(right)) {
         return None;
     }
-    // Only a pair in one and the same collation is keyed. A pair of different collations is
-    // Spark's COLLATION_MISMATCH / INDETERMINATE_COLLATION_IN_EXPRESSION (or an explicit
-    // `COLLATE` winning), which keying one side would answer wrongly.
-    match (left, right) {
-        (Some(DataType::CollatedString(l)), DataType::CollatedString(r))
-            if l == r
-                && matches!(
-                    l.family(),
-                    CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
-                )
-                && (l.rtrim() || matches!(l.family(), CollationFamily::Utf8Lcase)) =>
+    // Two different collations are a conflict, not a choice: the pair goes to the common-type
+    // check, which refuses it.
+    if let (Some(DataType::CollatedString(a)), DataType::CollatedString(b)) = (left, right)
+        && a != b
+    {
+        return None;
+    }
+    [left, Some(right)].into_iter().find_map(|t| match t {
+        Some(DataType::CollatedString(c))
+            if c.rtrim() || matches!(c.family(), CollationFamily::Utf8Lcase) =>
         {
-            Some(*l)
+            Some(*c)
         }
         _ => None,
-    }
+    })
 }
 
 /// How many leading arguments of `name` only select (a null test) and so take no part in the
 /// collation of the result: `nvl2(selector, if_not_null, if_null)`.
 fn selector_args(name: &str) -> usize {
     usize::from(name.eq_ignore_ascii_case("nvl2"))
+}
+
+/// How many leading arguments of `name` give the collation of the result: the others are numbers
+/// (`left(str, len)` takes its collation from `str` alone, even when `len` is written
+/// `collate(2, utf8_lcase)`, which Spark casts to an integer).
+fn collation_args(name: &str, n: usize) -> usize {
+    if [
+        "left",
+        "right",
+        "repeat",
+        "substring",
+        "substr",
+        "format_string",
+        "printf",
+    ]
+    .iter()
+    .any(|f| name.eq_ignore_ascii_case(f))
+    {
+        1.min(n)
+    } else {
+        n
+    }
 }
 
 /// Whether a lookup in a map compares keys of a collated type (`m[k]`, `element_at`): the
@@ -412,15 +442,20 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             Some((Collation::UTF8_BINARY, Strength::Default))
         }
         ExprNode::Function(_) | ExprNode::Resolved(ResolvedExpr::Function(_)) => {
-            let skip = match &e.node {
-                ExprNode::Function(f) => selector_args(&f.name),
-                ExprNode::Resolved(ResolvedExpr::Function(f)) => selector_args(f.id.name()),
-                _ => 0,
+            let name = match &e.node {
+                ExprNode::Function(f) => f.name.as_str(),
+                ExprNode::Resolved(ResolvedExpr::Function(f)) => f.id.name(),
+                _ => "",
             };
+            let skip = selector_args(name);
+            let mut count = 0;
+            e.for_each_child(&mut |_| count += 1);
+            // The arguments that give the result its collation, as `choose_collation` reads them.
+            let end = collation_args(name, count).max(skip.min(count));
             let mut kids = Vec::new();
             let mut index = 0;
             e.for_each_child(&mut |k| {
-                if index >= skip {
+                if index >= skip && index < end {
                     kids.extend(strength_of(k, memo));
                 }
                 index += 1;
@@ -474,6 +509,86 @@ fn safe_search_pattern(e: &Expr) -> bool {
     }
 }
 
+/// An argument of a [`Rewrite`]d call.
+#[derive(Clone, Copy, Debug)]
+enum RwArg {
+    /// The call's own argument, as a plain string when it is one.
+    Kid(usize),
+    /// The call's argument with its trailing spaces dropped (`_RTRIM` ignores them in a delimiter).
+    RtrimKid(usize),
+    /// An integer constant.
+    Int(i32),
+}
+
+/// The kernel call that answers a collation-dependent call over `UTF8_LCASE` or `_RTRIM`
+/// strings (unit 5c).
+#[derive(Debug)]
+struct Rewrite {
+    name: &'static str,
+    args: Vec<RwArg>,
+}
+
+/// How a collation-dependent call runs over the collation `c`: `None` when it is not supported
+/// (ICU collations, other arities), `Some(None)` when it runs as written on the plain strings,
+/// `Some(Some(rewrite))` when a collation-aware kernel answers it.
+///
+/// The `_RTRIM` collations change the trim family (trailing spaces of the source are kept and
+/// not trimmed unless the characters hold a space) and the delimiter of `split_part` and
+/// `substring_index` (its trailing spaces are dropped); `replace` and `translate` compare as
+/// the base collation does. Each rule was read off a Spark 4.2.0 run.
+fn collated_rewrite(name: &str, n: usize, c: Collation) -> Option<Option<Rewrite>> {
+    let family = c.family();
+    let lcase = matches!(family, CollationFamily::Utf8Lcase);
+    let rtrim = c.rtrim();
+    if !(lcase || (rtrim && matches!(family, CollationFamily::Utf8Binary))) {
+        return None;
+    }
+    let (kernel, args): (&'static str, Vec<RwArg>) = match (name, n) {
+        // The source and the characters, in the order the kernel takes them.
+        ("trim" | "ltrim" | "rtrim" | "btrim", 1) => return Some(None),
+        ("trim" | "ltrim" | "rtrim" | "btrim", 2) => {
+            // Bits of `krishiv_kernels::string::trim_mode`: side (0 both, 1 leading, 2
+            // trailing), 4 for lower-case matching, 8 for `_RTRIM`.
+            let side = match name {
+                "ltrim" => 1,
+                "rtrim" => 2,
+                _ => 0,
+            };
+            let mode = side | (i32::from(lcase) << 2) | (i32::from(rtrim) << 3);
+            let (src, chars) = if name == "btrim" { (0, 1) } else { (1, 0) };
+            (
+                "__trim_collated",
+                vec![RwArg::Int(mode), RwArg::Kid(src), RwArg::Kid(chars)],
+            )
+        }
+        ("replace" | "translate", 3) if !lcase => return Some(None),
+        ("replace", 3) => (
+            "__replace_lcase",
+            vec![RwArg::Kid(0), RwArg::Kid(1), RwArg::Kid(2)],
+        ),
+        ("translate", 3) => (
+            "__translate_lcase",
+            vec![RwArg::Kid(0), RwArg::Kid(1), RwArg::Kid(2)],
+        ),
+        ("split_part" | "substring_index", 3) => {
+            let delim = if rtrim {
+                RwArg::RtrimKid(1)
+            } else {
+                RwArg::Kid(1)
+            };
+            let kernel = match (name, lcase) {
+                ("split_part", true) => "__split_part_lcase",
+                ("split_part", false) => "split_part",
+                (_, true) => "__substring_index_lcase",
+                (_, false) => "substring_index",
+            };
+            (kernel, vec![RwArg::Kid(0), delim, RwArg::Kid(2)])
+        }
+        _ => return None,
+    };
+    Some(Some(Rewrite { name: kernel, args }))
+}
+
 /// A copy of the `i`-th argument of the call `e` (a name for error messages).
 fn arg_of(e: &Expr, i: usize) -> Expr {
     match &e.node {
@@ -500,18 +615,52 @@ impl Resolver<'_> {
         };
         let n = f.args.len().min(kids.len());
         let name = f.name.to_ascii_lowercase();
-        // A call qualified by anything but the built-in catalog is resolved (or refused) by
-        // `expr_node_inner`; the rewrites below would replace it with the built-in.
-        let rewritable =
-            f.qualifier.is_empty() || super::super::bind::is_builtin_qualifier(&f.qualifier);
-        if INTERNAL.contains(&name.as_str()) {
+        // A value of Spark's indeterminate string type is only inspected here: what the other
+        // calls do with it (Spark fails most) is not modelled.
+        if !INTERNAL.contains(&name.as_str())
+            && !INSPECTS.contains(&name.as_str())
+            && kids[..n].iter().any(|k| {
+                matches!(&k.ty.data_type, Some(DataType::CollatedString(c)) if c.is_indeterminate())
+            })
+        {
+            if FAILS_INDETERMINATE.contains(&name.as_str()) || KEYED.contains(&name.as_str()) {
+                let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
+                return Err(AnalysisError::new(
+                    IndeterminateCollationInExpression {
+                        expr: format!("\"{}\"", pretty(&shown, self.ctx.conf.session_zone)),
+                    },
+                    e.origin,
+                ));
+            }
+            return Err(unsupported("an indeterminate string operand", e.origin));
+        }
+        // A call qualified to something other than the builtin namespace (`session.instr`) is not
+        // the builtin the rewrites below stand for: it keeps its own lookup.
+        let builtin_scope = f.qualifier.is_empty()
+            || matches!(
+                f.qualifier
+                    .iter()
+                    .map(|q| q.to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                [a] if a == "builtin"
+            )
+            || matches!(
+                f.qualifier
+                    .iter()
+                    .map(|q| q.to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                [a, b] if a == "system" && b == "builtin"
+            );
+        if INTERNAL.contains(&name.as_str()) || !builtin_scope {
             return self.expr_node_inner(e, kids, in_agg, window_fn, cx);
         }
         if let Some(bound) = self.collated_call(e, kids, n, &name, in_agg, window_fn, cx)? {
             return Ok(bound);
         }
         // Comparisons of `UTF8_LCASE` / `_RTRIM` strings compare their keys (design 3.3, unit 3a).
-        if (KEYED.contains(&name.as_str()) || (rewritable && KEYED_SEARCH.contains(&name.as_str())))
+        if (KEYED.contains(&name.as_str()) || KEYED_SEARCH.contains(&name.as_str()))
             && !f.distinct
             && kids[..n].iter().any(|k| {
                 k.ty.data_type
@@ -522,12 +671,22 @@ impl Resolver<'_> {
         {
             return Ok(bound);
         }
+        // `nullif`, `greatest` and `least` over strings of one `UTF8_LCASE` / `_RTRIM` type pick
+        // among the operands by their keys (unit 3b).
+        if matches!(name.as_str(), "nullif" | "greatest" | "least")
+            && !f.distinct
+            && let Some(bound) = self.keyed_pick(e, kids, n, &name, in_agg, window_fn, cx)?
+        {
+            return Ok(bound);
+        }
         // `instr` / `locate` / `position` over `UTF8_LCASE` strings answer positions in the
         // original text: the kernel `__locate_lcase` matches the lower-cased code points (unit 5b).
-        if rewritable
-            && matches!(name.as_str(), "instr" | "locate" | "position")
-            && !f.distinct
+        if matches!(
+            name.as_str(),
+            "instr" | "locate" | "position" | "find_in_set"
+        ) && !f.distinct
             && (2..=3).contains(&n)
+            && (n == 2 || !matches!(name.as_str(), "find_in_set" | "instr"))
             && kids[..2].iter().all(|k| is_string(k.ty.data_type.as_ref()))
             && kids[..2]
                 .iter()
@@ -599,6 +758,61 @@ impl Resolver<'_> {
         }
         let mut memo = Memo::new();
         let (chosen, indeterminate) = self.choose_collation(e, kids, n, &name)?;
+        if indeterminate && RUNTIME_INDETERMINATE.contains(&name.as_str()) {
+            // Spark raises `INDETERMINATE_COLLATION` while evaluating the call, not at analysis.
+            // The operands as the call sees them (the type of its result stays Spark's), padded
+            // to three: a NULL in any of them makes the row NULL.
+            let mut keyed = Vec::with_capacity(3);
+            // `split_part` raises on its first two operands only (its index may be NULL).
+            let real = if name == "split_part" { 2 } else { n.min(3) };
+            for k in &kids[..real] {
+                keyed.push(if is_string(k.ty.data_type.as_ref()) {
+                    self.plain_string(k, e.origin, cx)?
+                } else {
+                    k.clone()
+                });
+            }
+            while keyed.len() < 3 {
+                let pad = Expr::new(ExprNode::Literal(Literal::String(String::new())))
+                    .with_origin(e.origin);
+                keyed.push(self.expr(&Arc::new(pad), cx)?);
+            }
+            // Spark keeps the indeterminate collation in the result type: the call is typed over
+            // plain operands, then every string in the result is re-tagged `collate null`.
+            let mut plain = Vec::with_capacity(n);
+            for k in &kids[..n] {
+                plain.push(if is_string(k.ty.data_type.as_ref()) {
+                    self.plain_string(k, e.origin, cx)?
+                } else {
+                    k.clone()
+                });
+            }
+            let result_type = self
+                .expr_node_inner(e, &plain, in_agg, window_fn, cx)?
+                .ty
+                .data_type
+                .map(|t| indeterminate_strings(&t));
+            let call = Expr::function(
+                "__indeterminate_collation",
+                keyed.iter().map(|k| (*k.expr).clone()).collect(),
+            )
+            .with_origin(e.origin);
+            let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
+            let shown = with_children(e, kids.iter().map(Bound::shown).collect());
+            if let Some(to) = result_type {
+                b.expr = Arc::new(
+                    Expr::new(ExprNode::Cast {
+                        expr: Arc::clone(&b.expr),
+                        to: to.clone(),
+                        mode: CastMode::Ansi,
+                    })
+                    .with_origin(e.origin),
+                );
+                b.ty.data_type = Some(to);
+            }
+            b.shown = Some(shown);
+            return Ok(b);
+        }
         if SEARCHES.contains(&name.as_str())
             && matches!(
                 chosen.map(Collation::family),
@@ -621,16 +835,59 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
-        if let Some(c) = chosen
-            && !c.is_utf8_binary()
-            && (DEPENDS.contains(&name.as_str())
-                || (ICU_CASE.contains(&name.as_str())
-                    && matches!(c.family(), CollationFamily::Icu { .. })))
+        // The two-argument trim family rejects an accent-insensitive ICU collation: Spark names
+        // the source as the first parameter and prints the call as `TRIM(side chars FROM src)`.
+        if n == 2
+            && matches!(name.as_str(), "trim" | "ltrim" | "rtrim" | "btrim")
+            && matches!(
+                chosen.map(Collation::family),
+                Some(CollationFamily::Icu {
+                    ci: false,
+                    ai: true
+                })
+            )
         {
-            return Err(unsupported(
-                format!("{name} over a collated string"),
+            let (src, chars) = if name == "btrim" { (0, 1) } else { (1, 0) };
+            let side = match name.as_str() {
+                "ltrim" => "LEADING",
+                "rtrim" => "TRAILING",
+                _ => "BOTH",
+            };
+            let zone = self.ctx.conf.session_zone;
+            let shown = |i: usize| pretty(&kids[i].shown(), zone);
+            return Err(AnalysisError::new(
+                DatatypeMismatchUnexpectedInputType {
+                    sql_expr: format!("\"TRIM({side} {} FROM {})\"", shown(chars), shown(src)),
+                    param_index: coerce::ordinal(0),
+                    required_type: "\"STRING\"".to_owned(),
+                    input_sql: format!("\"{}\"", shown(src)),
+                    input_type: coerce::quoted_type(kids[src].ty.data_type.as_ref()),
+                },
                 e.origin,
             ));
+        }
+        let mut rewrite = None;
+        if let Some(c) = chosen
+            && !c.is_utf8_binary()
+        {
+            if DEPENDS.contains(&name.as_str()) {
+                match collated_rewrite(&name, n, c) {
+                    Some(rw) => rewrite = rw,
+                    None => {
+                        return Err(unsupported(
+                            format!("{name} over a collated string"),
+                            e.origin,
+                        ));
+                    }
+                }
+            } else if ICU_CASE.contains(&name.as_str())
+                && matches!(c.family(), CollationFamily::Icu { .. })
+            {
+                return Err(unsupported(
+                    format!("{name} over a collated string"),
+                    e.origin,
+                ));
+            }
         }
         // The call runs on plain strings: the carrier is one.
         let plain: Vec<Bound> = kids
@@ -649,9 +906,12 @@ impl Resolver<'_> {
                     strength_of(&k.shown(), &mut memo),
                     Some((_, Strength::Default))
                 );
+                // `btrim` is Spark's runtime-replaceable call: its own arguments are shown as
+                // written, the replacement is the one that casts.
                 if let (Some(own), Some(want)) = (own, chosen)
                     && own != want
                     && literal
+                    && name != "btrim"
                     && !matches!(
                         name.as_str(),
                         "encode" | "decode" | "to_binary" | "try_to_binary"
@@ -687,19 +947,28 @@ impl Resolver<'_> {
                 Some(DataType::String) => Some(Collation::UTF8_BINARY),
                 _ => None,
             };
+            // `trim(chars, src)`, `ltrim` and `rtrim` take the type of the source, the second.
+            let skip = if matches!(name.as_str(), "trim" | "ltrim" | "rtrim") && n == 2 {
+                1
+            } else {
+                skip
+            };
             kids[skip..n]
                 .iter()
                 .find(|k| own(k).is_some())
                 .is_some_and(|head| is_marker(head.ty.data_type.as_ref()) || own(head) != chosen)
         };
-        let mut bound = self.expr_node_inner(e, &plain, in_agg, window_fn, cx)?;
+        let mut bound = match rewrite {
+            Some(rw) => self.rewritten_call(e, &kids[..n], &plain, &rw, in_agg, window_fn, cx)?,
+            None => self.expr_node_inner(e, &plain, in_agg, window_fn, cx)?,
+        };
         if let Some(t) = bound.ty.data_type.as_ref() {
             // A nested result would drop the collation of its strings; an indeterminate string
             // result has no type here (Spark carries an indeterminate type).
             let nested = chosen.is_some_and(|c| !c.is_utf8_binary())
                 && !matches!(t, DataType::String)
                 && t.any_type(&|x| matches!(x, DataType::String));
-            if nested || (indeterminate && *t == DataType::String) {
+            if nested {
                 return Err(unsupported(
                     "a collated or indeterminate string inside a result",
                     e.origin,
@@ -718,10 +987,37 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        // `str_to_map` over explicit `UTF8_BINARY` operands keeps the display marker in its map.
+        if name == "str_to_map"
+            && marked
+            && !window_fn
+            && chosen.is_some_and(Collation::is_utf8_binary)
+            && matches!(&bound.ty.data_type, Some(DataType::Map(m))
+                if matches!(m.key_type(), DataType::String) && matches!(m.value_type(), DataType::String))
+        {
+            let mark = DataType::collated_string(Collation::UTF8_BINARY);
+            let to = DataType::Map(Arc::new(krishiv_types::MapType::new(
+                mark.clone(),
+                mark,
+                true,
+            )));
+            let shown = bound.shown();
+            bound.expr = Arc::new(
+                Expr::new(ExprNode::Cast {
+                    expr: Arc::clone(&bound.expr),
+                    to: to.clone(),
+                    mode: CastMode::Ansi,
+                })
+                .with_origin(e.origin),
+            );
+            bound.shown = Some(shown);
+            bound.ty.data_type = Some(to);
+        }
         // The result is re-tagged with the chosen collation. For `UTF8_BINARY` that is the
         // display-only marker (Spark prints `upper(c)` of a `STRING COLLATE UTF8_BINARY` column
         // that way), kept only when `marked` and outside windows and the inspecting functions.
-        if let Some(c) = chosen
+        // Operands with no one collation give Spark's indeterminate string type (`string collate null`).
+        if let Some(c) = chosen.or(indeterminate.then_some(Collation::INDETERMINATE))
             && bound.ty.data_type == Some(DataType::String)
             && !BINARY_RESULT.contains(&name.as_str())
             && if c.is_utf8_binary() {
@@ -816,7 +1112,7 @@ impl Resolver<'_> {
             }
             let t = t.clone();
             return self
-                .compare_keys(e, kids, n, |_| t.clone(), in_agg, window_fn, cx)
+                .compare_keys(e, kids, n, |_| t.clone(), None, in_agg, window_fn, cx)
                 .map(Some);
         }
         // The keys are for string-to-string comparisons. Against a timestamp, a number or a binary
@@ -852,14 +1148,20 @@ impl Resolver<'_> {
                 return Ok(Some(both));
             }
         }
+        // A call of the wrong arity keeps the function's own arity error.
+        if KEYED_SEARCH.contains(&name) && kids.len() != 2 {
+            return Ok(None);
+        }
         let (chosen, _) = self.choose_collation(e, kids, n, name)?;
         let Some(c) = chosen else {
             return Ok(None);
         };
-        if !has_key(&string_of(c))
-            || (KEYED_SEARCH.contains(&name)
-                && (c.rtrim() || !matches!(c.family(), CollationFamily::Utf8Lcase)))
+        if KEYED_SEARCH.contains(&name)
+            && (c.rtrim() || !matches!(c.family(), CollationFamily::Utf8Lcase))
         {
+            return Ok(None);
+        }
+        if !has_key(&string_of(c)) {
             return Ok(None);
         }
         // Lower-casing `İ` (U+0130) gives `i` + U+0307, and Spark refuses a match that starts or
@@ -871,7 +1173,8 @@ impl Resolver<'_> {
         {
             return self.search_lcase(e, kids, name, in_agg, window_fn, cx);
         }
-        self.compare_keys(e, kids, n, |_| string_of(c), in_agg, window_fn, cx)
+        let search = KEYED_SEARCH.contains(&name).then_some(c);
+        self.compare_keys(e, kids, n, |_| string_of(c), search, in_agg, window_fn, cx)
             .map(Some)
     }
 
@@ -886,35 +1189,31 @@ impl Resolver<'_> {
         kids: &[Bound],
         n: usize,
         type_of: impl Fn(usize) -> DataType,
+        search: Option<Collation>,
         in_agg: bool,
         window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Bound, AnalysisError> {
-        let search = matches!(
-            &e.node,
-            ExprNode::Function(f) if KEYED_SEARCH.contains(&f.name.to_ascii_lowercase().as_str())
-        );
         let mut keyed = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
             if i >= n || k.ty.data_type.is_none() {
                 keyed.push(k.clone());
                 continue;
             }
-            let target = type_of(i);
-            let mut b = self.expr(&key_of(&k.expr, &target, e.origin), cx)?;
+            let mut b = self.expr(&key_of(&k.expr, &type_of(i), e.origin), cx)?;
             b.shown = Some(k.shown());
             // A literal of another collation is shown cast to the call's, as in the plain path.
-            if search
+            if let Some(c) = search
                 && matches!(
                     strength_of(&k.shown(), &mut Memo::new()),
                     Some((_, Strength::Default))
                 )
-                && k.ty.data_type.as_ref() != Some(&target)
+                && k.ty.data_type != Some(DataType::collated_string(c))
             {
                 b.shown = Some(Arc::new(
                     Expr::new(ExprNode::Cast {
                         expr: k.shown(),
-                        to: target,
+                        to: DataType::collated_string(c),
                         mode: CastMode::Default,
                     })
                     .with_origin(e.origin),
@@ -968,6 +1267,92 @@ impl Resolver<'_> {
             return self
                 .expr_node_inner(e, &keyed, in_agg, window_fn, cx)
                 .map(Some);
+        }
+        // `array_contains`, `array_position` and `arrays_overlap` over arrays of collated strings
+        // compare the keys of the elements; the answers are booleans and positions, so nothing
+        // of the original strings is lost.
+        if matches!(name, "array_contains" | "array_position" | "arrays_overlap")
+            && n == 2
+            && let Some(DataType::Array(a)) = kids[0].ty.data_type.clone()
+            && a.element_type().is_collated_string()
+            && has_key(a.element_type())
+        {
+            let arr_t = DataType::Array(Arc::clone(&a));
+            let overlap = name == "arrays_overlap";
+            let want = if overlap { &arr_t } else { a.element_type() };
+            let same = match (&kids[1].ty.data_type, overlap) {
+                (Some(DataType::Array(b)), true) => b.element_type() == a.element_type(),
+                (t, _) => t.as_ref() == Some(want),
+            };
+            if same {
+                let second = if overlap {
+                    typed_call("__collation_key", &kids[1].expr, &arr_t, e.origin)
+                } else {
+                    key_of(&kids[1].expr, a.element_type(), e.origin)
+                };
+                let first = typed_call("__collation_key", &kids[0].expr, &arr_t, e.origin);
+                let mut keyed = vec![self.expr(&first, cx)?, self.expr(&second, cx)?];
+                keyed[0].shown = Some(kids[0].shown());
+                keyed[1].shown = Some(kids[1].shown());
+                return self
+                    .expr_node_inner(e, &keyed, in_agg, window_fn, cx)
+                    .map(Some);
+            }
+        }
+        // `array_distinct`, `array_union`, `array_intersect` and `array_except` over arrays of
+        // collated strings: elements are equal when their keys are, and the result keeps the
+        // original elements (`__collation_array_set`).
+        if matches!(
+            name,
+            "array_distinct" | "array_union" | "array_intersect" | "array_except"
+        ) && n == if name == "array_distinct" { 1 } else { 2 }
+            && let Some(DataType::Array(a)) = kids[0].ty.data_type.clone()
+            && a.element_type().is_collated_string()
+            && has_key(a.element_type())
+            && matches!(&kids[n - 1].ty.data_type, Some(DataType::Array(b)) if b.element_type() == a.element_type())
+        {
+            // The values and their keys are two evaluations of each operand: a nondeterministic
+            // operand would give keys that describe other elements.
+            if kids[..n]
+                .iter()
+                .any(|k| !crate::raises::is_deterministic(&k.expr))
+            {
+                return Err(unsupported(
+                    "a nondeterministic array operand over a collated string",
+                    e.origin,
+                ));
+            }
+            let arr_t = DataType::Array(Arc::clone(&a));
+            let op = name.trim_start_matches("array_");
+            let second = &kids[n - 1];
+            let lit =
+                Expr::new(ExprNode::Literal(Literal::String(op.to_owned()))).with_origin(e.origin);
+            let mut keyed = vec![
+                self.expr(&Arc::new(lit), cx)?,
+                kids[0].clone(),
+                self.expr(
+                    &typed_call("__collation_key", &kids[0].expr, &arr_t, e.origin),
+                    cx,
+                )?,
+                second.clone(),
+                self.expr(
+                    &typed_call("__collation_key", &second.expr, &arr_t, e.origin),
+                    cx,
+                )?,
+            ];
+            keyed[2].shown = Some(kids[0].shown());
+            keyed[4].shown = Some(second.shown());
+            let call = Expr::function(
+                "__collation_array_set",
+                keyed.iter().map(|k| (*k.expr).clone()).collect(),
+            )
+            .with_origin(e.origin);
+            let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
+            b.shown = Some(with_children(
+                e,
+                kids[..n].iter().map(Bound::shown).collect(),
+            ));
+            return Ok(Some(b));
         }
         if !any_collated || !strings {
             return Ok(None);
@@ -1062,6 +1447,97 @@ impl Resolver<'_> {
         }
     }
 
+    /// `nullif(a, b)` is `a` unless the keys of `a` and `b` are equal; `least` and `greatest` keep the
+    /// operand with the smallest (largest) key, the earlier one on a tie and skipping NULLs, as
+    /// Spark's evaluation does. The call keeps its own name and result type; the operands are the
+    /// same collated type, so the keys are those of one collation. At most four operands: the
+    /// fold repeats the running value, and more stay with the execution guard.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments of `expr_node`, plus the call's"
+    )]
+    fn keyed_pick(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        n: usize,
+        name: &str,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        let first = kids.first().and_then(|k| k.ty.data_type.clone());
+        let ok_arity = if name == "nullif" {
+            n == 2
+        } else {
+            (2..=4).contains(&n)
+        };
+        if !ok_arity
+            || !is_collated(first.as_ref())
+            || !kids[..n].iter().all(|k| k.ty.data_type == first)
+        {
+            return Ok(None);
+        }
+        let (chosen, _) = self.choose_collation(e, kids, n, name)?;
+        let Some(c) = chosen else {
+            return Ok(None);
+        };
+        if !matches!(
+            c.family(),
+            CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
+        ) {
+            return Ok(None);
+        }
+        let original = self.expr_node_inner(e, kids, in_agg, window_fn, cx)?;
+        let o = e.origin;
+        let operand = |i: usize| (*kids[i].expr).clone();
+        let key = |x: &Expr| Expr::clone(&key_of(&Arc::new(x.clone()), &string_of(c), o));
+        let call = |f: &str, args: Vec<Expr>| Expr::function(f, args).with_origin(o);
+        let built = if name == "nullif" {
+            let null = Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(o);
+            call(
+                "if",
+                vec![
+                    call("==", vec![key(&operand(0)), key(&operand(1))]),
+                    null,
+                    operand(0),
+                ],
+            )
+        } else {
+            let better = if name == "least" { "<" } else { ">" };
+            let mut acc = operand(0);
+            for i in 1..n {
+                let next = operand(i);
+                acc = call(
+                    "if",
+                    vec![
+                        call("isnull", vec![acc.clone()]),
+                        next.clone(),
+                        call(
+                            "if",
+                            vec![
+                                call("isnull", vec![next.clone()]),
+                                acc.clone(),
+                                call(
+                                    "if",
+                                    vec![
+                                        call(better, vec![key(&next), key(&acc)]),
+                                        next,
+                                        acc.clone(),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                );
+            }
+            acc
+        };
+        let mut b = self.expr(&Arc::new(built), cx)?;
+        b.shown.clone_from(&original.shown);
+        Ok(Some(b))
+    }
+
     /// `contains` / `startswith` / `endswith` with a pattern the lower-cased key cannot answer
     /// (a column, or a literal that may split `İ`'s pair) as the `__*_lcase` kernel call.
     fn search_lcase(
@@ -1073,9 +1549,6 @@ impl Resolver<'_> {
         window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Option<Bound>, AnalysisError> {
-        if kids.len() != 2 {
-            return Err(wrong_num_args(name, "2", kids.len(), e));
-        }
         let mut plain = Vec::with_capacity(2);
         for k in &kids[..2] {
             let cast = Expr::new(ExprNode::Cast {
@@ -1085,8 +1558,9 @@ impl Resolver<'_> {
             })
             .with_origin(e.origin);
             let mut b = self.expr(&Arc::new(cast), cx)?;
-            b.shown = Some(k.shown());
+            // The re-bound operand keeps the aggregate, window and outer markers of the original.
             b.carry_markers(std::slice::from_ref(k));
+            b.shown = Some(k.shown());
             plain.push(b);
         }
         let call = Expr::function(
@@ -1112,12 +1586,6 @@ impl Resolver<'_> {
         window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Option<Bound>, AnalysisError> {
-        if name == "instr" && n != 2 {
-            return Err(wrong_num_args(name, "2", n, e));
-        }
-        if !(2..=3).contains(&n) {
-            return Err(wrong_num_args(name, "[2, 3]", n, e));
-        }
         let (chosen, _) = self.choose_collation(e, kids, 2, name)?;
         let Some(c) = chosen else {
             return Ok(None);
@@ -1126,33 +1594,96 @@ impl Resolver<'_> {
             return Ok(None);
         }
         let (sub, text) = if name == "instr" { (1, 0) } else { (0, 1) };
-        let plain = |this: &mut Self, k: &Bound| -> Result<Bound, AnalysisError> {
-            let cast = Expr::new(ExprNode::Cast {
-                expr: Arc::clone(&k.expr),
-                to: DataType::String,
-                mode: CastMode::Ansi,
-            })
-            .with_origin(e.origin);
-            let mut b = this.expr(&Arc::new(cast), cx)?;
-            b.shown = Some(k.shown());
-            b.carry_markers(std::slice::from_ref(k));
-            Ok(b)
-        };
-        let start = if n == 3 && name != "instr" {
-            kids[2].clone()
-        } else {
-            let one = Expr::new(ExprNode::Literal(Literal::Integer(1))).with_origin(e.origin);
-            self.expr(&Arc::new(one), cx)?
-        };
-        let keyed = vec![plain(self, &kids[sub])?, plain(self, &kids[text])?, start];
+        let find_in_set = name == "find_in_set";
+        let mut keyed = vec![
+            self.plain_string(&kids[sub], e.origin, cx)?,
+            self.plain_string(&kids[text], e.origin, cx)?,
+        ];
+        if !find_in_set {
+            keyed.push(if n == 3 && name != "instr" {
+                kids[2].clone()
+            } else {
+                let one = Expr::new(ExprNode::Literal(Literal::Integer(1))).with_origin(e.origin);
+                self.expr(&Arc::new(one), cx)?
+            });
+        }
         let call = Expr::function(
-            "__locate_lcase",
+            if find_in_set {
+                "__find_in_set_lcase"
+            } else {
+                "__locate_lcase"
+            },
             keyed.iter().map(|k| (*k.expr).clone()).collect(),
         )
         .with_origin(e.origin);
         let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
         b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
         Ok(Some(b))
+    }
+
+    /// `k` as a plain string: the collation tag cast away.
+    fn plain_string(
+        &mut self,
+        k: &Bound,
+        origin: crate::Origin,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        let cast = Expr::new(ExprNode::Cast {
+            expr: Arc::clone(&k.expr),
+            to: DataType::String,
+            mode: CastMode::Ansi,
+        })
+        .with_origin(origin);
+        let mut b = self.expr(&Arc::new(cast), cx)?;
+        b.carry_markers(std::slice::from_ref(k));
+        b.shown = Some(k.shown());
+        Ok(b)
+    }
+
+    /// The call `e` as the collation-aware kernel call `rw`, named and typed as `e` (its children
+    /// are shown as the plain path shows them: `plain`).
+    #[expect(clippy::too_many_arguments, reason = "the arguments of `expr_node`")]
+    fn rewritten_call(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        plain: &[Bound],
+        rw: &Rewrite,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        let mut args = Vec::with_capacity(rw.args.len());
+        for a in &rw.args {
+            args.push(match *a {
+                RwArg::Kid(i) | RwArg::RtrimKid(i) => {
+                    let k = &kids[i];
+                    let mut b = if is_string(k.ty.data_type.as_ref()) {
+                        self.plain_string(k, e.origin, cx)?
+                    } else {
+                        k.clone()
+                    };
+                    if matches!(a, RwArg::RtrimKid(_)) {
+                        let call =
+                            Expr::function("rtrim", vec![(*b.expr).clone()]).with_origin(e.origin);
+                        let shown = b.shown();
+                        b = self.expr(&Arc::new(call), cx)?;
+                        b.shown = Some(shown);
+                    }
+                    b
+                }
+                RwArg::Int(v) => {
+                    let lit =
+                        Expr::new(ExprNode::Literal(Literal::Integer(v))).with_origin(e.origin);
+                    self.expr(&Arc::new(lit), cx)?
+                }
+            });
+        }
+        let call = Expr::function(rw.name, args.iter().map(|k| (*k.expr).clone()).collect())
+            .with_origin(e.origin);
+        let mut b = self.expr_node_inner(&Arc::new(call), &args, in_agg, window_fn, cx)?;
+        b.shown = Some(with_children(e, plain.iter().map(Bound::shown).collect()));
+        Ok(b)
     }
 
     /// The one collation of the string operands of the call `e` (its first `n` arguments),
@@ -1169,7 +1700,8 @@ impl Resolver<'_> {
         name: &str,
     ) -> Result<(Option<Collation>, bool), AnalysisError> {
         let mut memo = Memo::new();
-        let items: Vec<(Collation, Strength)> = kids[selector_args(name).min(n)..n]
+        let items: Vec<(Collation, Strength)> = kids
+            [selector_args(name).min(n)..collation_args(name, n).max(selector_args(name).min(n))]
             .iter()
             .filter(|k| is_string(k.ty.data_type.as_ref()))
             .filter_map(|k| {
@@ -1214,17 +1746,17 @@ impl Resolver<'_> {
     }
 }
 
-/// `WRONG_NUM_ARGS` for a call of `name` with `actual` arguments where `expected` is allowed.
-fn wrong_num_args(name: &str, expected: &str, actual: usize, e: &Arc<Expr>) -> AnalysisError {
-    AnalysisError::new(
-        WrongNumArgsWithoutSuggestion {
-            function_name: format!("`{name}`"),
-            expected_num: expected.to_owned(),
-            actual_num: actual.to_string(),
-            docroot: SPARK_DOC_ROOT.to_owned(),
-        },
-        e.origin,
-    )
+/// `t` with every plain `STRING` in it (map keys and values included) made `string collate null`.
+fn indeterminate_strings(t: &DataType) -> DataType {
+    match t {
+        DataType::String => DataType::collated_string(Collation::INDETERMINATE),
+        DataType::Map(m) => DataType::Map(Arc::new(krishiv_types::MapType::new(
+            indeterminate_strings(m.key_type()),
+            indeterminate_strings(m.value_type()),
+            m.value_contains_null(),
+        ))),
+        other => other.clone(),
+    }
 }
 
 #[cfg(test)]

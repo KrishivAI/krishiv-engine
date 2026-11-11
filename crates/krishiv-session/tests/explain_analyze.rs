@@ -149,17 +149,28 @@ fn analyze_counts_the_rows_the_query_returns() {
         // Every operator but the result sink is placed under a plan node.
         let placed = m.operators.values().filter(|e| e.node.is_some()).count();
         assert_eq!(placed, m.operators.len() - 1);
-        // The scans' rows are the join's input: 4 customers, and the
-        // orders over 10 of a customer (the pushed filter and the runtime
-        // filter drop the rest in the scan).
+        // The scans' rows: 4 customers, and the orders over 10 (the
+        // pushed filter drops the rest in the scan). The runtime filter's
+        // row stage runs in the probe above the orders scan (design P2-E3
+        // U2): the probe joins the orders of a customer.
         let scanned: u64 = m
             .operators
             .values()
             .filter(|e| e.role == OperatorRole::Source && e.name.contains("Scan"))
             .map(|e| e.metrics.rows_out)
             .sum();
+        let over_10 = (0..2000_i64).filter(|i| i % 40 > 10).count() as u64;
+        assert_eq!(scanned, over_10 + 4);
+        let probed: u64 = m
+            .operators
+            .values()
+            .filter(|e| e.name == "HashJoinProbe")
+            .flat_map(|e| e.extra.iter())
+            .filter(|(name, _)| name.as_ref() == "probe_rows")
+            .map(|(_, v)| v.value().unwrap_or(0))
+            .sum();
         let want = (0..2000_i64).filter(|i| i % 40 > 10 && i % 5 < 4).count() as u64;
-        assert_eq!(scanned, want + 4);
+        assert_eq!(probed, want);
         // Drivers merge: a pipeline's operators count the pipeline's drivers.
         for (id, p) in &m.pipelines {
             assert!(p.drivers >= 1 && p.threads >= 1, "pipeline {id}");

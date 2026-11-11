@@ -73,11 +73,15 @@ impl DataFrame {
                 .physical_cached(&a)
                 .instrument(tracing::info_span!("krishiv.plan"))
                 .await?;
+            // The execute span lasts until the result is read to the end (or dropped), and the
+            // pipeline tasks run inside it: `run` only submits them.
+            let exec_span = tracing::info_span!("krishiv.execute");
             let stream = self
                 .session
                 .run(&physical, &a.env)
-                .instrument(tracing::info_span!("krishiv.execute"))
+                .instrument(exec_span.clone())
                 .await?;
+            let stream = crate::telemetry::retain_span(stream, exec_span);
             let stream = fill.fill(stream, &self.session.state.cache);
             let stream = match result {
                 Some((settings, key)) => crate::result_cache::fill(

@@ -545,6 +545,7 @@ impl Session {
             .iter()
             .map(|c| c.name.clone())
             .collect();
+        crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
         let mut columns = crate::char_write::output_columns(&analysis.analyzed, None);
         if !v.columns.is_empty() {
             let mut declared = Vec::with_capacity(v.columns.len());
@@ -935,6 +936,7 @@ impl Session {
                 }
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
+                crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
                 changed.columns = crate::char_write::output_columns(&analysis.analyzed, None);
                 let query_columns = analysis
                     .analyzed
@@ -1700,6 +1702,7 @@ impl Session {
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
+        crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
         table.columns = crate::char_write::output_columns(&analysis.analyzed, Some(true));
         let name = TableName {
             namespace: table.namespace.clone(),
@@ -2596,6 +2599,8 @@ impl Session {
                     .into());
                 }
                 self.validate_new_table(&name, &spec)?;
+                // The write refuses an indeterminate string column: not after the drop.
+                crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
                 // What the write itself would refuse (a format the engine does not
                 // write, duplicate output columns, options the format rejects) must
                 // not come after the drop.

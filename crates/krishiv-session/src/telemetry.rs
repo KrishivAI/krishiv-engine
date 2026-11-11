@@ -197,6 +197,16 @@ pub(crate) fn plain_span(who: &Who) -> Span {
 /// span lasts as long as the result is being produced and read, not only the
 /// planning. A disabled span adds nothing.
 pub(crate) fn in_span(stream: RecordBatchStream, span: Span) -> RecordBatchStream {
+    wrap_span(stream, span, false)
+}
+
+/// As [`in_span`], but keeps only the span alive: no "query finished" / "query failed"
+/// record (the statement's outer wrapper writes the one record of the query).
+pub(crate) fn retain_span(stream: RecordBatchStream, span: Span) -> RecordBatchStream {
+    wrap_span(stream, span, true)
+}
+
+fn wrap_span(stream: RecordBatchStream, span: Span, quiet: bool) -> RecordBatchStream {
     if span.is_disabled() {
         return stream;
     }
@@ -206,7 +216,8 @@ pub(crate) fn in_span(stream: RecordBatchStream, span: Span) -> RecordBatchStrea
         started: std::time::Instant::now(),
         rows: 0,
         batches: 0,
-        done: false,
+        // A quiet wrapper never logs the end.
+        done: quiet,
     })
 }
 
