@@ -2599,6 +2599,8 @@ impl Session {
                     .into());
                 }
                 self.validate_new_table(&name, &spec)?;
+                // The write refuses an indeterminate string column: not after the drop.
+                crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
                 // What the write itself would refuse (a format the engine does not
                 // write, duplicate output columns, options the format rejects) must
                 // not come after the drop.

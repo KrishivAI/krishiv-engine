@@ -356,6 +356,39 @@ fn indeterminate_string_results_carry_the_null_collation() {
         value_of(&s, "select typeof(format_string(a, a, b)) from t1 limit 1"),
         "string collate UTF8_BINARY"
     );
+    // The strength of a nested `format_string` is that of its format alone: the lcase argument
+    // does not conflict with the explicit binary operand outside.
+    assert!(
+        run("select concat(format_string('%s', 'a' collate utf8_lcase), 'b' collate utf8_binary)")
+            .is_ok()
+    );
+    // A qualified call is not the builtin the collation rewrites stand for.
+    assert_ne!(
+        class_of(&s, "select session.instr('Ab' collate utf8_lcase, 'a')"),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert!(run("select session.instr('Ab' collate utf8_lcase, 'a')").is_err());
+    assert!(run("select builtin.instr('Ab' collate utf8_lcase, 'a')").is_ok());
+    // An overwrite refused for its indeterminate column keeps the old table.
+    block_on(
+        block_on(s.sql("create table keep using parquet as select 1 as x"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    let df = block_on(s.sql("select concat(a, b) c from t1")).unwrap();
+    let r = block_on(df.write().mode("overwrite").save_as_table("keep"));
+    assert_eq!(
+        r.unwrap_err().error_class(),
+        ErrorClass::IndeterminateCollationInSchema
+    );
+    let kept = block_on(block_on(s.sql("select x from keep")).unwrap().collect()).unwrap();
+    assert_eq!(
+        kept.iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1
+    );
     // Calls Spark carries the type through are not modelled yet.
     assert_eq!(
         class_of(&s, "select length(concat(a, b)) from t1"),

@@ -442,15 +442,20 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             Some((Collation::UTF8_BINARY, Strength::Default))
         }
         ExprNode::Function(_) | ExprNode::Resolved(ResolvedExpr::Function(_)) => {
-            let skip = match &e.node {
-                ExprNode::Function(f) => selector_args(&f.name),
-                ExprNode::Resolved(ResolvedExpr::Function(f)) => selector_args(f.id.name()),
-                _ => 0,
+            let name = match &e.node {
+                ExprNode::Function(f) => f.name.as_str(),
+                ExprNode::Resolved(ResolvedExpr::Function(f)) => f.id.name(),
+                _ => "",
             };
+            let skip = selector_args(name);
+            let mut count = 0;
+            e.for_each_child(&mut |_| count += 1);
+            // The arguments that give the result its collation, as `choose_collation` reads them.
+            let end = collation_args(name, count).max(skip.min(count));
             let mut kids = Vec::new();
             let mut index = 0;
             e.for_each_child(&mut |k| {
-                if index >= skip {
+                if index >= skip && index < end {
                     kids.extend(strength_of(k, memo));
                 }
                 index += 1;
@@ -629,7 +634,26 @@ impl Resolver<'_> {
             }
             return Err(unsupported("an indeterminate string operand", e.origin));
         }
-        if INTERNAL.contains(&name.as_str()) {
+        // A call qualified to something other than the builtin namespace (`session.instr`) is not
+        // the builtin the rewrites below stand for: it keeps its own lookup.
+        let builtin_scope = f.qualifier.is_empty()
+            || matches!(
+                f.qualifier
+                    .iter()
+                    .map(|q| q.to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                [a] if a == "builtin"
+            )
+            || matches!(
+                f.qualifier
+                    .iter()
+                    .map(|q| q.to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                [a, b] if a == "system" && b == "builtin"
+            );
+        if INTERNAL.contains(&name.as_str()) || !builtin_scope {
             return self.expr_node_inner(e, kids, in_agg, window_fn, cx);
         }
         if let Some(bound) = self.collated_call(e, kids, n, &name, in_agg, window_fn, cx)? {
