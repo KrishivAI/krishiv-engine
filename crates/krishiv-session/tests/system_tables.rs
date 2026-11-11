@@ -1200,3 +1200,44 @@ fn cache_and_refresh_of_a_stored_table_do_not_reach_the_session_catalog_under_sy
         assert!(run(&s, sql).is_err(), "{sql}");
     }
 }
+
+#[test]
+fn registered_batches_win_over_system_tables_of_the_same_name_under_system() {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![9]))],
+    )
+    .unwrap();
+    s.register_batches("capabilities", Arc::clone(&schema), vec![batch.clone()])
+        .unwrap();
+    s.register_batches("mine", schema, vec![batch]).unwrap();
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(n AS STRING) FROM capabilities", 0),
+        ["9"]
+    );
+    assert_eq!(
+        column_of(&s, "SELECT CAST(n AS STRING) FROM mine", 0),
+        ["9"]
+    );
+    // The system table is still there under its qualified name.
+    assert!(!column_of(&s, "SELECT name FROM system.capabilities LIMIT 1", 0).is_empty());
+}
+
+#[test]
+fn use_catalog_and_namespace_is_one_step() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE DATABASE other_db").unwrap();
+    run(&s, "USE system").unwrap();
+    run(&s, "USE spark_catalog.other_db").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT current_catalog()", 0),
+        ["spark_catalog"]
+    );
+    assert_eq!(column_of(&s, "SELECT current_schema()", 0), ["other_db"]);
+}

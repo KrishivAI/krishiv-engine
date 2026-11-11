@@ -83,3 +83,22 @@ impl super::Expander<'_> {
         plan
     }
 }
+
+impl super::QueryCatalog {
+    /// The `system` catalog of this query, with the session's temporary relations in front of it.
+    pub(super) fn system_catalog(self: &Arc<Self>) -> crate::system::SystemCatalog {
+        crate::system::SystemCatalog::of(&self.system).with_temps(Arc::clone(self))
+    }
+}
+
+impl super::SessionCatalog {
+    /// `USE catalog.namespace` in one step, so a query never sees the catalog changed and the namespace not.
+    pub(crate) fn use_position(&self, catalog: &str, namespace: &str) {
+        *self
+            .position
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            (catalog.to_owned(), namespace.to_owned());
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}

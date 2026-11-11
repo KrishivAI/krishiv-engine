@@ -1504,13 +1504,23 @@ pub(crate) fn provider(
 pub(crate) struct SystemCatalog {
     /// The query's `MONITOR` decision, made when a per-principal table loads.
     monitor: Arc<Monitor>,
+    /// The session catalog of the query, asked first for a bare name: a temporary table or view of the
+    /// session wins over a system table of the same name, as it does over any table.
+    temps: Option<Arc<crate::catalog::QueryCatalog>>,
 }
 
 impl SystemCatalog {
+    /// This catalog, with the session's temporary relations in front of it.
+    pub(crate) fn with_temps(mut self, session: Arc<crate::catalog::QueryCatalog>) -> Self {
+        self.temps = Some(session);
+        self
+    }
+
     /// The `system` catalog of the query that reads `sources`.
     pub(crate) fn of(sources: &Sources) -> Self {
         Self {
             monitor: Arc::clone(&sources.monitor),
+            temps: None,
         }
     }
 }
@@ -1527,10 +1537,22 @@ impl Catalog for SystemCatalog {
     fn load_table<'a>(
         &'a self,
         id: &'a TableIdent,
-        _: Option<TableVersion>,
-        _: NameForm,
+        version: Option<TableVersion>,
+        form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         Box::pin(async move {
+            if id.namespace.is_empty()
+                && !form.qualified
+                && let Some(temps) = &self.temps
+            {
+                let only_temporary = NameForm {
+                    temporary_only: true,
+                    ..form
+                };
+                if let Some(found) = temps.load_table(id, version, only_temporary).await? {
+                    return Ok(Some(found));
+                }
+            }
             // Two-part names only: `system.<table>`, with no namespace.
             if !id.namespace.is_empty() {
                 return Ok(None);

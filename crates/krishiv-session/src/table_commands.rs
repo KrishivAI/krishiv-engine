@@ -500,8 +500,9 @@ impl Session {
             }
             .into());
         }
-        self.state.catalog.use_catalog(crate::catalog::CATALOG);
-        self.state.catalog.use_namespace(&name);
+        self.state
+            .catalog
+            .use_position(crate::catalog::CATALOG, &name);
         self.empty_frame().await
     }
 
