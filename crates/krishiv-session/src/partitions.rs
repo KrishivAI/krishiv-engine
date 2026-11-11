@@ -433,16 +433,16 @@ fn find_partition<'a>(
         .find(|p| spec.iter().all(|kv| p.spec.contains(kv)))
 }
 
-/// `_LEGACY_ERROR_TEMP_1251` unless the table's partitions are in the catalog (`DDLUtils
-/// What a catalog swap of a dropped partition did.
+/// What the catalog swap of a dropped or renamed partition did.
 enum Swap {
     Done,
-    /// The entry kept changing under it.
+    /// The entry kept changing under it, or (a rename) its partition changed.
     Lost,
     /// The table was dropped, replaced or is no longer partitioned.
     Gone,
 }
 
+/// `_LEGACY_ERROR_TEMP_1251` unless the table's partitions are in the catalog (`DDLUtils
 /// .verifyPartitionProviderIsHive`): only partitioned tables track them.
 fn require_partition_provider(table: &CatalogTable, action: &str) -> Result<(), KrishivError> {
     if table.is_partitioned() {
@@ -988,6 +988,10 @@ impl Session {
         specs: [&PartitionSpec; 2],
         original: &str,
     ) -> Result<(), KrishivError> {
+        // One partition command that moves or deletes directories at a time; the entry is read again under it.
+        let _ddl = self.state.catalog.store.partition_ddl().await;
+        let fresh = self.fresh_entry(table, name)?;
+        let table = &fresh;
         require_partition_provider(table, "ALTER TABLE RENAME PARTITION")?;
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
         let mut exact = Vec::with_capacity(2);
@@ -1045,19 +1049,44 @@ impl Session {
             }
             return Err(e);
         }
-        if self.swap_renamed(table, name, from, &source, to, &target) {
-            return Ok(());
+        match self.swap_renamed(table, name, from, &source, to, &target) {
+            Swap::Done => return Ok(()),
+            // Dropped or replaced: its root (and any new table's log there) is left alone, as DROP PARTITION does.
+            Swap::Gone => return Err(crate::table_commands::concurrent_change(name)),
+            Swap::Lost => {}
         }
-        // The entry changed under the rename (the table dropped or replaced, the partition gone or taken):
-        // the directory and the log go back, so the catalog, the log and the files agree again.
-        move_partition_dir(&target, &source)?;
+        // The partition changed under the rename (gone, moved or its new spec taken): the directory and the log go
+        // back, so the catalog, the log and the files agree again.
+        self.state
+            .cache
+            .invalidate_table(&format!("{}.{}", table.namespace, table.name));
+        if let Err(e) = move_partition_dir(&target, &source) {
+            tracing::warn!(error = %e, "a partition rename that lost its catalog swap could not move its directory back");
+            return Err(e);
+        }
         self.relog_partitions(&table.location, &[(target, Some(source))])
             .await?;
         Err(crate::table_commands::concurrent_change(name))
     }
 
+    /// `table`'s entry as the catalog holds it now; `concurrent_change` when it was dropped or replaced since
+    /// the statement read it.
+    fn fresh_entry(
+        &self,
+        table: &CatalogTable,
+        name: &crate::table_commands::TableName,
+    ) -> Result<Arc<CatalogTable>, KrishivError> {
+        self.state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .filter(|t| t.created_ms == table.created_ms && t.location == table.location)
+            .ok_or_else(|| crate::table_commands::concurrent_change(name))
+    }
+
     /// Swaps `name`'s catalog entry for one where the partition `from` at `source` is `to` at `target`, against a
-    /// fresh entry each try, as long as the entry is still `table`'s and still holds `from` (not `to`).
+    /// fresh entry each try, as long as the entry is still `table`'s ([`Swap::Gone`] otherwise) and still holds
+    /// `from` and not `to` ([`Swap::Lost`] otherwise).
     fn swap_renamed(
         &self,
         table: &CatalogTable,
@@ -1066,18 +1095,18 @@ impl Session {
         source: &Path,
         to: &[(String, String)],
         target: &Path,
-    ) -> bool {
+    ) -> Swap {
         const RACES: u32 = 32;
         let store = &self.state.catalog.store;
         for _ in 0..RACES {
             let Some(current) = store.table(&name.namespace, &name.name) else {
-                return false;
+                return Swap::Gone;
             };
-            if current.created_ms != table.created_ms
-                || current.location != table.location
-                || find_partition(&current, to).is_some()
-            {
-                return false;
+            if current.created_ms != table.created_ms || current.location != table.location {
+                return Swap::Gone;
+            }
+            if find_partition(&current, to).is_some() {
+                return Swap::Lost;
             }
             let mut changed = (*current).clone();
             let Some(found) = changed
@@ -1086,15 +1115,15 @@ impl Session {
                 .iter_mut()
                 .find(|p| from.iter().all(|kv| p.spec.contains(kv)) && p.location == source)
             else {
-                return false;
+                return Swap::Lost;
             };
             found.spec = to.to_vec();
             found.location = target.to_path_buf();
             if store.replace_table(&current, changed) {
-                return true;
+                return Swap::Done;
             }
         }
-        false
+        Swap::Lost
     }
 
     /// The partition actions of `ALTER TABLE`: the catalog entry to swap in.
@@ -1147,6 +1176,10 @@ impl Session {
         if_exists: bool,
         original: &str,
     ) -> Result<(), KrishivError> {
+        // One partition command that moves or deletes directories at a time; the entry is read again under it.
+        let _ddl = self.state.catalog.store.partition_ddl().await;
+        let fresh = self.fresh_entry(table, name)?;
+        let table = &fresh;
         require_partition_provider(table, "ALTER TABLE DROP PARTITION")?;
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
         let mut typed = Vec::with_capacity(specs.len());
@@ -1720,7 +1753,10 @@ mod tests {
         let target = partition_path(&old.location, &spec("5"));
         // A concurrent SET TBLPROPERTIES replaced the entry after the rename read it.
         run(&s, "alter table r set tblproperties ('k' = 'v')");
-        assert!(s.swap_renamed(&old, &name(), &spec("1"), &source, &spec("5"), &target));
+        assert!(matches!(
+            s.swap_renamed(&old, &name(), &spec("1"), &source, &spec("5"), &target),
+            Swap::Done
+        ));
         let now = store
             .table("default", "r")
             .unwrap_or_else(|| panic!("no table"));
@@ -1728,14 +1764,35 @@ mod tests {
         assert!(find_partition(&now, &spec("5")).is_some_and(|p| p.location == target));
         assert!(find_partition(&now, &spec("1")).is_none());
         // The partition is gone under the old spec: nothing to swap.
-        assert!(!s.swap_renamed(&old, &name(), &spec("1"), &source, &spec("6"), &target));
+        assert!(matches!(
+            s.swap_renamed(&old, &name(), &spec("1"), &source, &spec("6"), &target),
+            Swap::Lost
+        ));
         // A partition taken meanwhile.
         run(&s, "alter table r add partition (p=7)");
         let t5 = partition_path(&old.location, &spec("5"));
-        assert!(!s.swap_renamed(&now, &name(), &spec("5"), &t5, &spec("7"), &target));
-        // A dropped table.
+        assert!(matches!(
+            s.swap_renamed(&now, &name(), &spec("5"), &t5, &spec("7"), &target),
+            Swap::Lost
+        ));
+        // A dropped table, then one made again under the name: neither is the statement's table.
         run(&s, "drop table r");
-        assert!(!s.swap_renamed(&now, &name(), &spec("5"), &t5, &spec("8"), &target));
+        assert!(matches!(
+            s.swap_renamed(&now, &name(), &spec("5"), &t5, &spec("8"), &target),
+            Swap::Gone
+        ));
+        assert!(s.fresh_entry(&now, &name()).is_err());
+        run(
+            &s,
+            "create table r (a int, p int) using parquet partitioned by (p)",
+        );
+        let again = store
+            .table("default", "r")
+            .unwrap_or_else(|| panic!("no table"));
+        assert!(s.fresh_entry(&again, &name()).is_ok());
+        if again.created_ms != now.created_ms {
+            assert!(s.fresh_entry(&now, &name()).is_err());
+        }
     }
 
     #[test]

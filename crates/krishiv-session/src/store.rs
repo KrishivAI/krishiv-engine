@@ -409,6 +409,10 @@ pub(crate) struct InMemoryCatalogStore {
     /// Where a table change reaches every cache of the runtime: its result
     /// cache and each session's relation cache.
     hub: Arc<crate::cache::Invalidation>,
+    /// Held by a partition command that moves or deletes partition directories (`RENAME PARTITION`,
+    /// `DROP PARTITION`) from its log commit to its catalog swap, so two of them never interleave their
+    /// directory moves and log entries (one lock for the runtime: such commands are rare).
+    partition_ddl: tokio::sync::Mutex<()>,
 }
 
 #[derive(Debug)]
@@ -440,7 +444,13 @@ impl InMemoryCatalogStore {
                 functions: Arc::new(StoredFunctions::default()),
             }),
             epoch: AtomicU64::new(0),
+            partition_ddl: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// Serializes the partition commands that move or delete directories (see the field).
+    pub(crate) async fn partition_ddl(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.partition_ddl.lock().await
     }
 
     /// Marks a change to a table's data (an `INSERT`, a `TRUNCATE`): cached
