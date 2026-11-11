@@ -1221,3 +1221,24 @@ fn join_idle_spill_after_parses_and_defaults() {
     assert_eq!(get(&c), Some(Duration::ZERO));
     assert!(c.set("krishiv.exec.join.idleSpillAfter", "soon").is_err());
 }
+
+#[test]
+fn fuse_probe_select_defaults_on_and_parses() {
+    let mut config = Config::new();
+    assert_eq!(
+        config.get(&EXEC_JOIN_FUSE_PROBE_SELECT),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert!(
+        config
+            .set("krishiv.exec.join.fuseProbeSelect", "maybe")
+            .is_err()
+    );
+    config
+        .set("krishiv.exec.join.fuseProbeSelect", "false")
+        .unwrap();
+    assert_eq!(
+        config.get(&EXEC_JOIN_FUSE_PROBE_SELECT),
+        Some(&ConfigValue::Bool(false))
+    );
+}

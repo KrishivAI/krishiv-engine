@@ -457,6 +457,28 @@ impl DataType {
         matches!(self, Self::CollatedString(c) if c.is_utf8_binary())
     }
 
+    /// The type of the collation key of a value of this type: every string leaf is `BINARY`,
+    /// the shape is unchanged.
+    #[must_use]
+    pub fn collation_key_type(&self) -> Self {
+        match self {
+            Self::String | Self::CollatedString(_) => Self::Binary,
+            Self::Array(a) => Self::Array(Arc::new(ArrayType::new(
+                a.element_type().collation_key_type(),
+                a.contains_null(),
+            ))),
+            Self::Map(m) => Self::Map(Arc::new(MapType::new(
+                m.key_type().collation_key_type(),
+                m.value_type().collation_key_type(),
+                m.value_contains_null(),
+            ))),
+            Self::Struct(s) => Self::Struct(StructType::new(s.fields().iter().map(|f| {
+                StructField::new(f.name(), f.data_type().collation_key_type(), f.nullable())
+            }))),
+            other => other.clone(),
+        }
+    }
+
     /// Whether this is a collated string that is more than the display-only
     /// `UTF8_BINARY` marker.
     #[must_use]
