@@ -2107,6 +2107,36 @@ fn drop_partition_removes_the_files_from_the_log_in_one_entry() {
     );
 }
 
+/// Without a commit log a dropped partition's directory goes whole; one that cannot be removed is Spark's
+/// `_LEGACY_ERROR_TEMP_2036` ("Unable to delete partition path"), naming the path.
+#[cfg(unix)]
+#[test]
+fn drop_partition_whose_directory_cannot_be_removed_is_legacy_error_2036() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table du(a int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into du values (1,1),(2,2)");
+    let root = dir.path().join("du");
+    std::fs::remove_dir_all(root.join("_krishiv_log")).unwrap();
+    let part = root.join("p=1");
+    std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // A user who can write a read-only directory (root) cannot make the removal fail this way.
+    if std::fs::write(part.join("probe"), b"").is_ok() {
+        std::fs::remove_file(part.join("probe")).unwrap();
+        std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let e = err(&s, "alter table du drop partition (p=1)");
+    std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(e.error_class().name(), "_LEGACY_ERROR_TEMP_2036", "{e}");
+    assert!(e.to_string().contains("p=1"), "{e}");
+    assert!(part.is_dir());
+}
+
 /// `ADD PARTITION` and the static values of `INSERT .. PARTITION` are cast to the partition column types
 /// (`castPartitionSpec`, Spark 4.2.0): `'007'` is `7`, `'2024-1-5'` is `2024-01-05`, `'abc'` and `3.7` for an INT
 /// are `CAST_INVALID_INPUT`; under `storeAssignmentPolicy=LEGACY` a value the cast makes NULL is the default

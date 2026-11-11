@@ -474,6 +474,10 @@ fn the_broadcast_threshold_defaults_to_10_mib_under_both_keys() {
 fn spark_aliases_map_to_krishiv_keys() {
     let mut c = Config::new();
     assert_eq!(
+        LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION.key,
+        "krishiv.sql.legacy.skipTypeValidationOnAlterPartition"
+    );
+    assert_eq!(
         lookup("spark.sql.legacy.skipTypeValidationOnAlterPartition").map(|e| e.key),
         Some(LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION.key)
     );
