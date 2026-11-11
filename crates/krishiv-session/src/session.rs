@@ -1291,6 +1291,17 @@ impl Session {
         let (synced, renames) =
             Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await?;
         let plan = Plan::try_new(crate::view_schema::apply_renames(&expansion.plan, &renames))?;
+        // The views the bodies of SQL functions read are checked the same way; a body's failure
+        // surfaces when the analyzer calls the function.
+        let binding = crate::view_schema::binding_enabled(&env.config);
+        for (key, reads) in env
+            .sql_functions
+            .prepare_bodies(binding, self.state.profile)
+        {
+            let checks = Box::pin(self.check_stored_views(&reads, env)).await;
+            env.sql_functions
+                .finish_body(&key, checks, self.state.profile);
+        }
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or
         // a failure inside a view's text) is shown. One boxed future for both
@@ -1315,7 +1326,8 @@ impl Session {
         let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
         // Spark's `ViewSyncSchemaToMetaStore`: once the query analyzed, evolved views store their new schema. A
         // concurrent change of the view wins (its entry is no longer the one the read found).
-        for (found, changed) in synced {
+        let body_synced = env.sql_functions.take_evolved();
+        for (found, changed) in synced.into_iter().chain(body_synced) {
             crate::store::CatalogStore::replace_table(&*self.state.catalog.store, &found, changed);
         }
         for view in views {

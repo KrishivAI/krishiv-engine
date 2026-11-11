@@ -134,6 +134,34 @@ pub(crate) struct QueryFunctions {
     /// first failure inside a stored view's text (see
     /// [`crate::catalog::Expansion`]).
     reads: Mutex<(Vec<ReadCandidate>, Option<KrishivError>)>,
+    /// Bodies expanded ahead of the analysis with their views' schema binding checked
+    /// ([`Self::prepare_bodies`]); one moves to `expanded` (with its reads and failure to `reads`)
+    /// when the analyzer first asks for the function, so an uncalled function costs the query nothing.
+    prepared: Mutex<HashMap<String, Prepared>>,
+    /// The evolved view entries (as found, as changed) of the prepared bodies the analyzer asked for.
+    evolved: Mutex<Vec<EvolvedView>>,
+}
+
+/// A view entry as found and as its schema evolved.
+pub(crate) type EvolvedView = (Arc<crate::store::CatalogTable>, crate::store::CatalogTable);
+
+/// A function body expanded ahead of the analysis.
+struct Prepared {
+    def: Arc<SqlFunction>,
+    /// The one-row project holding the expanded body, `None` when no expansion could read it.
+    plan: Option<Arc<LogicalPlan>>,
+    out: Arc<SqlFunction>,
+    reads: Vec<ReadCandidate>,
+    error: Option<KrishivError>,
+    evolved: Vec<EvolvedView>,
+}
+
+/// What expanding a body's views found.
+struct Core {
+    plan: Option<Arc<LogicalPlan>>,
+    reads: Vec<ReadCandidate>,
+    deferred: Option<KrishivError>,
+    stored_reads: Vec<crate::view_schema::StoredRead>,
 }
 
 /// How a body's permanent views are read: the parser options of the query
@@ -164,6 +192,8 @@ impl QueryFunctions {
             views,
             expanded: Mutex::new(HashMap::new()),
             reads: Mutex::new((Vec::new(), None)),
+            prepared: Mutex::new(HashMap::new()),
+            evolved: Mutex::new(Vec::new()),
         }
     }
 
@@ -227,21 +257,59 @@ impl QueryFunctions {
         if let Some(hit) = cache.get(&key) {
             return Arc::clone(hit);
         }
+        let prepared = self
+            .prepared
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&key);
+        if let Some(p) = prepared {
+            self.note_reads(p.reads, p.error);
+            self.evolved
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend(p.evolved);
+            cache.insert(key, Arc::clone(&p.out));
+            return p.out;
+        }
         let stored_in = def.qualifier.get(1).cloned();
         if stored_in.is_some() && self.views.is_none() {
             let out = self.qualified(def, profile);
             cache.insert(key, Arc::clone(&out));
             return out;
         }
+        // A body reads a view as written here; the schema binding checks of the views a query
+        // calls through are made ahead of the analysis ([`Self::prepare_bodies`]).
+        let core = self.expand_core(def, false);
+        self.note_reads(core.reads, core.deferred);
+        let out = self.built(def, core.plan.as_ref(), profile);
+        cache.insert(key, Arc::clone(&out));
+        out
+    }
+
+    /// Records the catalog-store lookups of a body and the first failure inside a view's text.
+    fn note_reads(&self, reads: Vec<ReadCandidate>, failure: Option<KrishivError>) {
+        let mut seen = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
+        for read in reads {
+            if !seen.0.contains(&read) {
+                seen.0.push(read);
+            }
+        }
+        if let Some(e) = failure {
+            seen.1.get_or_insert(e);
+        }
+    }
+
+    /// The views `def`'s body reads, inlined: `plan` is the one-row project holding the body.
+    /// `binding` applies the schema binding modes of the views ([`StoredViews::binding_enabled`]).
+    fn expand_core(&self, def: &Arc<SqlFunction>, binding: bool) -> Core {
+        let stored_in = def.qualifier.get(1).cloned();
         let wrapper = one_row_project(vec![Arc::clone(&def.body)]);
         let next_source = |views: &ViewSource| (views.next_source)();
         let expansion = match &self.views {
             Some(views) => {
                 let stored = StoredViews {
                     parser: views.parser,
-                    // A body reads a view as written; schema binding modes
-                    // apply to the views a query reads itself.
-                    binding_enabled: false,
+                    binding_enabled: binding,
                     path: if def.path.is_empty() {
                         self.path.clone()
                     } else {
@@ -273,24 +341,33 @@ impl QueryFunctions {
         };
         // A body no view expansion can read (a snapshot name, a cycle)
         // stays as written: the analyzer then reports the table missing.
-        let body = match expansion {
-            Ok(expansion) => {
-                let mut seen = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
-                for read in expansion.reads {
-                    if !seen.0.contains(&read) {
-                        seen.0.push(read);
-                    }
-                }
-                if let Some(e) = expansion.deferred {
-                    seen.1.get_or_insert(e);
-                }
-                match &expansion.plan.node {
-                    PlanNode::Project { exprs, .. } => exprs.first().cloned(),
-                    _ => None,
-                }
-            }
-            Err(_) => None,
-        };
+        match expansion {
+            Ok(e) => Core {
+                plan: Some(e.plan),
+                reads: e.reads,
+                deferred: e.deferred,
+                stored_reads: e.stored_reads,
+            },
+            Err(_) => Core {
+                plan: None,
+                reads: Vec::new(),
+                deferred: None,
+                stored_reads: Vec::new(),
+            },
+        }
+    }
+
+    /// `def` with the body of `plan` (its expansion) and its bare calls qualified.
+    fn built(
+        &self,
+        def: &Arc<SqlFunction>,
+        plan: Option<&Arc<LogicalPlan>>,
+        profile: SparkProfile,
+    ) -> Arc<SqlFunction> {
+        let body = plan.and_then(|p| match &p.node {
+            PlanNode::Project { exprs, .. } => exprs.first().cloned(),
+            _ => None,
+        });
         let out = match body {
             Some(body) if !Arc::ptr_eq(&body, &def.body) => Arc::new(SqlFunction {
                 body,
@@ -298,9 +375,90 @@ impl QueryFunctions {
             }),
             _ => Arc::clone(def),
         };
-        let out = self.qualified(&out, profile);
-        cache.insert(key, Arc::clone(&out));
+        self.qualified(&out, profile)
+    }
+
+    /// Expands, ahead of the analysis, the bodies that read a permanent view, and returns for each
+    /// (by cache key) the stored views it read, for the caller to check their schema binding
+    /// ([`Self::finish_body`]). Reads and failures wait until the analyzer calls the function.
+    pub(crate) fn prepare_bodies(
+        &self,
+        binding: bool,
+        profile: SparkProfile,
+    ) -> Vec<(String, Vec<crate::view_schema::StoredRead>)> {
+        if self.views.is_none() || !binding {
+            return Vec::new();
+        }
+        let defs: Vec<Arc<SqlFunction>> = self
+            .map
+            .entries
+            .values()
+            .chain(self.stored.iter().map(|f| &f.entry))
+            .map(|e| Arc::clone(&e.def))
+            .filter(|d| reads_relation(&d.body, self.case_sensitive))
+            .collect();
+        let mut out = Vec::new();
+        let mut prepared = self.prepared.lock().unwrap_or_else(PoisonError::into_inner);
+        for def in defs {
+            let key = cache_key(&def);
+            if prepared.contains_key(&key) {
+                continue;
+            }
+            let core = self.expand_core(&def, binding);
+            if core.stored_reads.is_empty() {
+                continue;
+            }
+            let built = self.built(&def, core.plan.as_ref(), profile);
+            out.push((key.clone(), core.stored_reads));
+            prepared.insert(
+                key,
+                Prepared {
+                    def,
+                    plan: core.plan,
+                    out: built,
+                    reads: core.reads,
+                    error: core.deferred,
+                    evolved: Vec::new(),
+                },
+            );
+        }
         out
+    }
+
+    /// The outcome of the schema binding checks of a prepared body's views: the renames of its
+    /// repeated-name reads go into the body; a failure is raised when the analyzer calls the function.
+    pub(crate) fn finish_body(
+        &self,
+        key: &str,
+        checks: Result<crate::view_schema::StoredViewChecks, KrishivError>,
+        profile: SparkProfile,
+    ) {
+        let mut prepared = self.prepared.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(p) = prepared.get_mut(key) else {
+            return;
+        };
+        match checks {
+            Ok((synced, renames)) => {
+                p.evolved = synced;
+                let renamed = p
+                    .plan
+                    .as_ref()
+                    .filter(|_| !renames.is_empty())
+                    .map(|plan| crate::view_schema::apply_renames(plan, &renames));
+                if let Some(plan) = renamed {
+                    p.out = self.built(&p.def, Some(&plan), profile);
+                    p.plan = Some(plan);
+                }
+            }
+            Err(e) => {
+                p.error.get_or_insert(e);
+            }
+        }
+    }
+
+    /// The evolved views of the prepared bodies the analyzer called, to store once the query analyzed.
+    pub(crate) fn take_evolved(&self) -> Vec<EvolvedView> {
+        std::mem::take(&mut *self.evolved.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// `def` with, for a stored function, its bare calls qualified.

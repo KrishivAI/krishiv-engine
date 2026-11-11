@@ -657,12 +657,11 @@ fn every_read_of_a_repeated_name_view_goes_by_name_and_ordinal() {
     assert_eq!(rows(&s, "SELECT * FROM lv"), ["1|13|2|20"]);
 }
 
-/// KNOWN GAP (krishiv-internal `ops/queue-opus-b2.md`, "views in SQL function bodies"): a view a SQL function's
-/// body reads is inlined without the schema binding checks, so a repeated-name view there is still read by
-/// position. Spark (probe7) returns 11 here, and 12 after `t1` gains a column, where this creation fails. This
-/// test pins the gap so its fix updates it.
+/// A view a SQL function's body reads is checked like one a query reads (Spark 4.2.0, probe7 and probe_fn):
+/// a repeated-name view is read by name and ordinal, and a view that no longer up-casts under BINDING fails
+/// at the call.
 #[test]
-fn a_repeated_name_view_in_a_function_body_is_still_read_by_position() {
+fn a_view_in_a_function_body_gets_the_schema_binding_checks() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     run(&s, "CREATE TABLE t1 (id INT, x INT) USING parquet");
@@ -679,6 +678,28 @@ fn a_repeated_name_view_in_a_function_body_is_still_read_by_position() {
         &s,
         "CREATE TEMPORARY FUNCTION tf() RETURNS INT RETURN SELECT max(q) FROM v",
     );
-    assert_eq!(rows(&s, "SELECT tf()"), ["1"]);
+    assert_eq!(rows(&s, "SELECT tf()"), ["11"]);
     assert_eq!(rows(&s, "SELECT max(q) FROM v"), ["11"]);
+    // A function the query does not call costs it nothing.
+    run(&s, "DROP TABLE t2");
+    assert_eq!(rows(&s, "SELECT 1"), ["1"]);
+}
+
+/// Spark 4.2.0 (probe_fn): under BINDING a view in a function body whose table no longer up-casts is
+/// `CANNOT_UP_CAST_DATATYPE` at the call; a function the query does not call is not checked.
+#[test]
+fn binding_fails_a_view_in_a_function_body_at_the_call_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t(c1 INT NOT NULL) USING PARQUET");
+    run(&s, "CREATE VIEW v WITH SCHEMA BINDING AS SELECT * FROM t");
+    run(
+        &s,
+        "CREATE TEMPORARY FUNCTION tf() RETURNS INT RETURN SELECT max(c1) FROM v",
+    );
+    run(&s, "DROP TABLE t");
+    run(&s, "CREATE TABLE t(c1 BIGINT NOT NULL) USING PARQUET");
+    assert_eq!(rows(&s, "SELECT 1"), ["1"]);
+    let e = err(&s, "SELECT tf()");
+    assert_eq!(e.error_class().name(), "CANNOT_UP_CAST_DATATYPE", "{e}");
 }
