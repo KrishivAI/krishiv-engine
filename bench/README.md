@@ -29,7 +29,7 @@ For publishable numbers run from a clean committed tree (the result JSON records
 | Service | Image | Host port | Notes |
 |---|---|---|---|
 | spark | `apache/spark:4.2.0` | 15002 (Connect), 14040 (UI) | `local[*]`, driver 8g, container cap 12g, `$KRISHIV_DATA` mounted **read-only** at `/data` |
-| minio | `minio/minio` (digest-pinned, RELEASE.2025-09-07) | 19100 (S3), 19101 (console) | own instance, creds `krishiv` / `krishiv-bench-secret`; unrelated to `bench-minio` |
+| minio | `cgr.dev/chainguard/minio` (digest-pinned, RELEASE.2026-11-09; Docker Hub no longer serves `minio/minio`; runs as root to keep an existing volume) | 19100 (S3), 19101 (console) | own instance, creds `krishiv` / `krishiv-bench-secret`; unrelated to `bench-minio` |
 | kafka | `apache/kafka:4.0.0` (KRaft, 1 node) | 19092 | profile `kafka`: `docker compose ... --profile kafka up -d` |
 
 Ports are env-overridable (`SPARK_CONNECT_PORT`, `MINIO_S3_PORT`, `KAFKA_PORT`, ...). Spark 4.2.0 is the newest 4.2.x
