@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `from_xml` reading a `BINARY` field: Spark 4.0.x has no BINARY case in
 //! `StaxXmlParser.castTo`, so every non-empty text is a miss there; 4.1+ decodes it
-//! by the output style (source-derived, v4.0.0 / v4.1.0).
+//! by the output style (source-derived, v4.0.1 / v4.1.1).
 
 use std::sync::Arc;
 

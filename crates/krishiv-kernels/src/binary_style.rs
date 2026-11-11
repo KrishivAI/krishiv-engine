@@ -214,16 +214,21 @@ fn low(v: u32) -> Option<u8> {
     u8::try_from(v & 0xff).ok()
 }
 
+/// Standard base64 alphabet value of each byte, 255 for a byte outside it.
+const BASE64_TABLE: [u8; 256] = {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut table = [255_u8; 256];
+    let mut i = 0_u8;
+    while i < 64 {
+        table[ALPHABET[i as usize] as usize] = i;
+        i += 1;
+    }
+    table
+};
+
 /// `java.util.Base64.getDecoder().decode`: standard alphabet, padding optional, no whitespace,
 /// nothing after the padding, unused trailing bits not checked.
 fn base64_decode(text: &str) -> Option<Vec<u8>> {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut table = [255_u8; 256];
-    for (i, c) in ALPHABET.iter().enumerate() {
-        if let Some(slot) = table.get_mut(usize::from(*c)) {
-            *slot = u8::try_from(i).ok()?;
-        }
-    }
     let b = text.as_bytes();
     let mut out = Vec::with_capacity(b.len().div_ceil(4).saturating_mul(3));
     let mut acc = 0_u32;
@@ -250,7 +255,7 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
             }
             break;
         }
-        let v = u32::from(*table.get(usize::from(c))?);
+        let v = u32::from(*BASE64_TABLE.get(usize::from(c))?);
         if v == 255 {
             return None;
         }
