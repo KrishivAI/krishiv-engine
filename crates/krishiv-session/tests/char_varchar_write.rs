@@ -324,8 +324,8 @@ fn msck_repair_registers_the_partition_directories_it_finds() {
     run(&s, "msck repair table pr").unwrap();
     assert_eq!(first_text(&s, "show partitions pr"), "v=ke/c=nt");
     assert_eq!(rows("show partitions pr"), 1);
-    let e = run(&s, "msck repair table pr sync partitions").unwrap_err();
-    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    run(&s, "msck repair table pr sync partitions").unwrap();
+    assert_eq!(rows("show partitions pr"), 1);
 }
 
 fn all_text(s: &Session, sql: &str) -> String {
@@ -395,37 +395,6 @@ fn the_declared_type_follows_aliases_instances_and_unions() {
 }
 
 #[test]
-fn in_over_a_char_column_pads_to_the_common_width_and_nested_char_writes_are_refused() {
-    let s = fresh();
-    run(
-        &s,
-        "insert into t values ('a', 'x'), ('b', 'y'), ('abc', 'z')",
-    )
-    .unwrap();
-    // `ApplyCharTypePadding`: the column and the shorter literals pad to max(n, longest literal).
-    assert_eq!(count(&s, "select * from t where c in ('a', 'b')"), 2);
-    assert_eq!(count(&s, "select * from t where c in ('abc')"), 1);
-    assert_eq!(count(&s, "select * from t where c in ('abcd')"), 0);
-    assert_eq!(count(&s, "select * from t where c in ('a', NULL)"), 0);
-    assert_eq!(count(&s, "select * from t where c not in ('a', 'b')"), 1);
-    // A list member that is not a literal stays refused.
-    let e = block_on(async {
-        s.sql("select * from t where c in ('a', v)")
-            .await?
-            .collect()
-            .await
-    })
-    .unwrap_err();
-    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
-    // A varchar column and the legacy flag are not affected.
-    run(&s, "select * from t where v in ('a', 'b')").unwrap();
-    run(&s, "drop table if exists tn").unwrap();
-    run(&s, "create table tn(a array<varchar(2)>) using parquet").unwrap();
-    let e = run(&s, "insert into tn values (array('abc'))").unwrap_err();
-    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
-}
-
-#[test]
 fn lengths_count_code_points_and_nulls_pass() {
     let s = fresh();
     // Four-byte characters: three of them overflow char(3)? No: exactly three fit, four do not.
@@ -480,11 +449,170 @@ fn review_cases_static_partitions_windows_missing_sizes_metadata_and_nested_read
     assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH");
     run(&s, "insert into sp partition (p='ab  ') select 1").unwrap();
     assert_eq!(first_text(&s, "show partitions sp"), "p=ab");
-    // Reads of a nested CHAR column are refused, as the matching writes are.
-    run(&s, "drop table if exists tn").unwrap();
-    run(&s, "create table tn(a array<char(2)>) using parquet").unwrap();
-    let e = block_on(async { s.sql("select * from tn").await?.collect().await }).unwrap_err();
-    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+/// The answers below are a real Spark 4.2.0 run's (`ApplyCharTypePadding` on `IN`).
+#[test]
+fn in_over_a_char_column_pads_as_spark_does() {
+    let s = fresh();
+    run(&s, "drop table if exists c1").unwrap();
+    run(
+        &s,
+        "create table c1(id int, c char(3), d char(5), v varchar(3)) using parquet",
+    )
+    .unwrap();
+    run(
+        &s,
+        "insert into c1 values (1,'a','b','a'),(2,'ab','xyz','a'),(3,null,null,null),(4,'abc','abcde','abc')",
+    )
+    .unwrap();
+    let ids = |s: &Session, cond: &str| -> Vec<String> {
+        block_on(async {
+            s.sql(&format!("select id from c1 where {cond} order by id"))
+                .await?
+                .collect()
+                .await
+        })
+        .unwrap()
+        .iter()
+        .flat_map(|b| {
+            let a = b
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow_array::Int32Array>()
+                .unwrap()
+                .clone();
+            (0..a.len())
+                .map(move |i| a.value(i).to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+    };
+    assert_eq!(ids(&s, "c in ('a')"), ["1"]);
+    assert_eq!(ids(&s, "c in ('a  ')"), ["1"]);
+    assert_eq!(ids(&s, "c in ('a','ab')"), ["1", "2"]);
+    assert_eq!(ids(&s, "c in ('a','abcd')"), ["1"]);
+    assert!(ids(&s, "c in ('a  x')").is_empty());
+    assert_eq!(ids(&s, "c not in ('a')"), ["2", "4"]);
+    // A `NULL` in the list: no padding at all.
+    assert!(ids(&s, "c in ('a', null)").is_empty());
+    assert!(ids(&s, "c in (null, 'a', 'abcd')").is_empty());
+    // A constant string folds, then pads; `upper('a')` is `A`.
+    assert_eq!(ids(&s, "c in (concat('a', ''))"), ["1"]);
+    assert!(ids(&s, "c in (upper('a'))").is_empty());
+    // Only an all-`char` list of attributes pads.
+    assert!(ids(&s, "c in (d)").is_empty());
+    assert_eq!(ids(&s, "c in (d, c)"), ["1", "2", "4"]);
+    assert_eq!(ids(&s, "c in (d, v)"), ["4"]);
+    assert!(ids(&s, "c in ('a', d)").is_empty());
+    let names = block_on(async {
+        s.sql("select c in ('a','abcd') from c1")
+            .await
+            .unwrap()
+            .schema()
+            .await
+    })
+    .unwrap();
+    assert_eq!(names.fields()[0].name(), "(c IN (a, abcd))");
+}
+
+/// The answers below are a real Spark 4.2.0 run's (`CharVarcharUtils.stringLengthCheck`, `addPaddingForScan`).
+#[test]
+fn nested_char_and_varchar_columns_are_checked_on_write_and_padded_on_read() {
+    let s = fresh();
+    run(&s, "drop table if exists n1").unwrap();
+    run(&s, "drop table if exists n2").unwrap();
+    run(
+        &s,
+        "create table n1(a array<char(2)>, s struct<x:char(2),y:varchar(3)>, m map<char(2),varchar(2)>) using parquet",
+    )
+    .unwrap();
+    run(
+        &s,
+        "insert into n1 values (array('a','bb'), named_struct('x','a','y','b'), map('k','v'))",
+    )
+    .unwrap();
+    assert_eq!(
+        first_text(
+            &s,
+            "select concat_ws('|', a[0], a[1], s.x, s.y, m['k ']) from n1"
+        ),
+        "a |bb|a |b|v"
+    );
+    assert_eq!(
+        first_text(&s, "select cast(length(a[0]) as string) from n1"),
+        "2"
+    );
+    // Trailing spaces go down to the limit.
+    run(
+        &s,
+        "insert into n1 values (array('a  '), named_struct('x','a ','y','bcd '), map('k ','v '))",
+    )
+    .unwrap();
+    assert_eq!(
+        first_text(
+            &s,
+            "select concat_ws('|', a[0], s.x, s.y, m['k ']) from n1 where s.y = 'bcd'"
+        ),
+        "a |a |bcd|v "
+    );
+    // NULLs at every level stay NULL.
+    run(&s, "insert into n1 select null,null,null").unwrap();
+    run(
+        &s,
+        "insert into n1 values (array(null,'b'), null, map('k',null))",
+    )
+    .unwrap();
+    assert_eq!(
+        first_text(
+            &s,
+            "select cast(count(*) as string) from n1 where s is null and a[0] is null"
+        ),
+        "2"
+    );
+    for (sql, limit) in [
+        (
+            "insert into n1 values (array('abc'), named_struct('x','a','y','b'), map('k','v'))",
+            "2",
+        ),
+        (
+            "insert into n1 values (array('a'), named_struct('x','a','y','bcde'), map('k','v'))",
+            "3",
+        ),
+        (
+            "insert into n1 values (array('a'), named_struct('x','a','y','b'), map('kkk','v'))",
+            "2",
+        ),
+        (
+            "insert into n1 values (array('a'), named_struct('x','a','y','b'), map('k','vvv'))",
+            "2",
+        ),
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH", "{sql}");
+        assert!(e.to_string().contains(limit), "{sql}: {e}");
+    }
+    // Structs inside arrays inside structs.
+    run(
+        &s,
+        "create table n2(s struct<x:char(4),a:array<struct<y:char(2)>>>) using parquet",
+    )
+    .unwrap();
+    run(
+        &s,
+        "insert into n2 values (named_struct('x','a','a',array(named_struct('y','b'))))",
+    )
+    .unwrap();
+    assert_eq!(
+        first_text(&s, "select concat(s.x, s.a[0].y) from n2"),
+        "a   b "
+    );
+    let e = run(
+        &s,
+        "insert into n2 values (named_struct('x','a','a',array(named_struct('y','bcd'))))",
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH");
 }
 
 #[test]
@@ -551,6 +679,58 @@ fn a_dataframe_temp_view_keeps_the_declared_type() {
     })
     .unwrap();
     assert_eq!(count(&s, "select * from dv3 where z = 'a'"), 0);
+}
+
+/// A DataFrame temp view over nested `CHAR` columns stores their read-side padding (`transform`, `named_struct`,
+/// `map_from_arrays` around `rpad`); reading the view keeps each declared type, as for a bare `CHAR`, so a table
+/// created from it keeps the length checks.
+#[test]
+fn a_dataframe_temp_view_keeps_nested_declared_types() {
+    let s = fresh();
+    run(&s, "drop table if exists n").unwrap();
+    run(
+        &s,
+        "create table n(a array<char(3)>, st struct<f: char(2), g: int>, m map<char(2), char(3)>) using parquet",
+    )
+    .unwrap();
+    run(
+        &s,
+        "insert into n values (array('a'), named_struct('f', 'b', 'g', 1), map('c', 'd'))",
+    )
+    .unwrap();
+    block_on(async { s.table("n").create_or_replace_temp_view("ndv").await }).unwrap();
+    let types = |table: &str| -> Vec<String> {
+        let b = block_on(async {
+            s.sql(&format!("describe table {table}"))
+                .await?
+                .collect()
+                .await
+        })
+        .unwrap();
+        let a = b[0].column(1);
+        (0..3)
+            .map(|i| {
+                a.as_string_opt::<i32>().map_or_else(
+                    || a.as_string_view().value(i).to_owned(),
+                    |x| x.value(i).to_owned(),
+                )
+            })
+            .collect()
+    };
+    let declared = [
+        "array<char(3)>",
+        "struct<`f`:char(2),`g`:int>",
+        "map<char(2),char(3)>",
+    ];
+    assert_eq!(types("n"), declared);
+    assert_eq!(types("ndv"), declared);
+    run(&s, "drop table if exists ncopy").unwrap();
+    run(&s, "create table ncopy using parquet as select * from ndv").unwrap();
+    assert!(run(
+        &s,
+        "insert into ncopy values (array('abcd'), named_struct('f', 'b', 'g', 1), map('c', 'd'))"
+    )
+    .is_err());
 }
 
 /// Spark 4.2.0 (local run 2026-11-07): a DataFrame temp view over a permanent view over `CHAR(3)` keeps the
@@ -692,25 +872,203 @@ fn unimplemented_char_varchar_switches_are_refused() {
     }
 }
 
-/// `DESCRIBE EXTENDED t col` prints NULL statistics while none were asked for. After `ANALYZE
-/// TABLE .. FOR COLUMNS` Spark prints values, and the engine stores none, so it refuses (review of
-/// #496 M2); the plain column form still answers.
+/// The rows below are a real Spark 4.2.0 run's (`AnalyzeColumnCommand`, `DescribeColumnCommand`).
 #[test]
-fn column_statistics_after_analyze_are_refused_not_null() {
+fn column_statistics_are_stored_and_described() {
     let s = fresh();
-    run(&s, "DESC EXTENDED t c").unwrap();
-    run(&s, "ANALYZE TABLE t COMPUTE STATISTICS").unwrap();
-    run(&s, "DESC EXTENDED t c").unwrap();
-    run(&s, "ANALYZE TABLE t COMPUTE STATISTICS FOR COLUMNS c").unwrap();
-    for sql in ["DESC EXTENDED t c", "DESCRIBE FORMATTED t v"] {
-        let e = run(&s, sql).unwrap_err();
-        assert_eq!(
-            e.error_class().name(),
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            "{sql}"
-        );
-    }
-    run(&s, "DESC t c").unwrap();
+    run(&s, "drop table if exists st").unwrap();
+    run(
+        &s,
+        "create table st(b boolean, i int, l bigint, f float, db double, dc decimal(10,2), x string, bi binary, dt date, ts timestamp, tn timestamp_ntz, c char(3)) using parquet",
+    )
+    .unwrap();
+    run(
+        &s,
+        "insert into st values (true,1,1,1.5,2.5,1.25,'abc',X'01',date'2020-01-02',timestamp'2020-01-02 03:04:05',timestamp_ntz'2020-01-02 03:04:05.5','a'),(false,5,50000000000,-1.0,1e10,-3.50,'héllo',X'0203',date'1969-12-31',timestamp'1969-12-31 23:59:59.123456',timestamp_ntz'2021-01-02 03:04:05','bcd'),(null,null,null,null,null,null,null,null,null,null,null,null)",
+    )
+    .unwrap();
+    run(&s, "set spark.sql.session.timeZone=UTC").unwrap();
+    run(
+        &s,
+        "analyze table st compute statistics for columns b,i,l,f,db,dc,x,bi,dt,ts,tn,c",
+    )
+    .unwrap();
+    let stats = |s: &Session, sql: &str| -> Vec<String> {
+        let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+        b.iter()
+            .flat_map(|batch| {
+                (3..batch.num_rows())
+                    .map(|i| {
+                        let a = batch.column(1);
+                        a.as_string_opt::<i32>().map_or_else(
+                            || a.as_string_view().value(i).to_owned(),
+                            |x| x.value(i).to_owned(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let row = |v: [&str; 6]| {
+        let mut out: Vec<String> = v.iter().map(ToString::to_string).collect();
+        out.push("NULL".to_owned());
+        out
+    };
+    let e = |c: &str| format!("describe extended st {c}");
+    assert_eq!(
+        stats(&s, &e("b")),
+        row(["false", "true", "1", "2", "1", "1"])
+    );
+    assert_eq!(stats(&s, &e("i")), row(["1", "5", "1", "2", "4", "4"]));
+    assert_eq!(
+        stats(&s, &e("l")),
+        row(["1", "50000000000", "1", "2", "8", "8"])
+    );
+    assert_eq!(stats(&s, &e("f")), row(["-1.0", "1.5", "1", "2", "4", "4"]));
+    assert_eq!(
+        stats(&s, &e("db")),
+        row(["2.5", "1.0E10", "1", "2", "8", "8"])
+    );
+    assert_eq!(
+        stats(&s, &e("dc")),
+        row(["-3.50", "1.25", "1", "2", "8", "8"])
+    );
+    assert_eq!(
+        stats(&s, &e("x")),
+        row(["NULL", "NULL", "1", "2", "4", "5"])
+    );
+    assert_eq!(
+        stats(&s, "describe formatted st bi"),
+        row(["NULL", "NULL", "1", "2", "2", "2"])
+    );
+    assert_eq!(
+        stats(&s, &e("dt")),
+        row(["1969-12-31", "2020-01-02", "1", "2", "4", "4"])
+    );
+    assert_eq!(
+        stats(&s, &e("ts")),
+        row([
+            "1969-12-31 23:59:59.123456 +0000",
+            "2020-01-02 03:04:05.000000 +0000",
+            "1",
+            "2",
+            "8",
+            "8"
+        ])
+    );
+    assert_eq!(
+        stats(&s, &e("tn")),
+        row([
+            "2020-01-02 03:04:05.500000",
+            "2021-01-02 03:04:05.000000",
+            "1",
+            "2",
+            "8",
+            "8"
+        ])
+    );
+    run(&s, "set spark.sql.session.timeZone=Asia/Tokyo").unwrap();
+    assert_eq!(
+        stats(&s, &e("ts")),
+        row([
+            "1970-01-01 08:59:59.123456 +0900",
+            "2020-01-02 12:04:05.000000 +0900",
+            "1",
+            "2",
+            "8",
+            "8"
+        ])
+    );
+    run(&s, "set spark.sql.session.timeZone=UTC").unwrap();
+    // Plain `DESCRIBE` has no statistics rows.
+    assert!(stats(&s, "describe st i").is_empty());
+
+    // An empty table, then NaN and NULL-only columns.
+    run(&s, "drop table if exists e1").unwrap();
+    run(
+        &s,
+        "create table e1(i int, x string, f double) using parquet",
+    )
+    .unwrap();
+    run(&s, "analyze table e1 compute statistics for all columns").unwrap();
+    assert_eq!(
+        stats(&s, "describe extended e1 i"),
+        row(["NULL", "NULL", "0", "0", "4", "4"])
+    );
+    assert_eq!(
+        stats(&s, "describe extended e1 x"),
+        row(["NULL", "NULL", "0", "0", "20", "20"])
+    );
+    run(
+        &s,
+        "insert into e1 values (null,null,double('NaN')),(null,null,1.0)",
+    )
+    .unwrap();
+    run(&s, "analyze table e1 compute statistics for columns i,x,f").unwrap();
+    assert_eq!(
+        stats(&s, "describe extended e1 i"),
+        row(["NULL", "NULL", "2", "0", "4", "4"])
+    );
+    assert_eq!(
+        stats(&s, "describe extended e1 x"),
+        row(["NULL", "NULL", "2", "0", "20", "20"])
+    );
+    assert_eq!(
+        stats(&s, "describe extended e1 f"),
+        row(["1.0", "NaN", "0", "2", "8", "8"])
+    );
+
+    // A write drops all of them; a later ANALYZE restores only what it names.
+    let none = || row(["NULL", "NULL", "NULL", "NULL", "NULL", "NULL"]);
+    run(&s, "insert into e1 values (7,'x',2)").unwrap();
+    assert_eq!(stats(&s, "describe extended e1 i"), none());
+    run(&s, "analyze table e1 compute statistics for columns x").unwrap();
+    assert_eq!(stats(&s, "describe extended e1 i"), none());
+    assert_eq!(
+        stats(&s, "describe extended e1 x"),
+        row(["NULL", "NULL", "2", "1", "1", "1"])
+    );
+    run(&s, "truncate table e1").unwrap();
+    assert_eq!(stats(&s, "describe extended e1 x"), none());
+
+    // The HyperLogLog estimate is Spark's; a rename and a new column keep the statistics.
+    run(&s, "drop table if exists e3").unwrap();
+    run(&s, "drop table if exists e4").unwrap();
+    run(&s, "create table e3(x string, i int) using parquet").unwrap();
+    run(
+        &s,
+        "insert into e3 select cast(id % 5 as string), cast(id as int) from range(100)",
+    )
+    .unwrap();
+    run(&s, "analyze table e3 compute statistics for columns x, i").unwrap();
+    assert_eq!(
+        stats(&s, "describe extended e3 i"),
+        row(["0", "99", "0", "99", "4", "4"])
+    );
+    assert_eq!(
+        stats(&s, "describe extended e3 x"),
+        row(["NULL", "NULL", "0", "5", "1", "1"])
+    );
+    run(&s, "alter table e3 rename to e4").unwrap();
+    run(&s, "alter table e4 add columns (z int)").unwrap();
+    assert_eq!(
+        stats(&s, "describe extended e4 i"),
+        row(["0", "99", "0", "99", "4", "4"])
+    );
+
+    // Partition columns are columns too.
+    run(&s, "drop table if exists p9").unwrap();
+    run(
+        &s,
+        "create table p9(a int, p int) using parquet partitioned by (p)",
+    )
+    .unwrap();
+    run(&s, "insert into p9 values (1,1),(2,2)").unwrap();
+    run(&s, "analyze table p9 compute statistics for columns a,p").unwrap();
+    assert_eq!(
+        stats(&s, "describe extended p9 p"),
+        row(["1", "2", "0", "2", "4", "4"])
+    );
 }
 
 /// Fixture `ddl_temp_view_desc` (Spark 4.2.0): `DESCRIBE` of a temporary view over a table with
@@ -742,4 +1100,179 @@ fn a_temporary_view_describes_its_char_varchar_columns() {
             "s string"
         ]
     );
+}
+
+/// The rows below are a real Spark 4.2.0 run's: struct fields whose names differ only in case compare, and the
+/// equal lengths need no padding.
+#[test]
+fn nested_char_comparison_ignores_field_name_case() {
+    let s = fresh();
+    run(&s, "drop table if exists nc").unwrap();
+    run(
+        &s,
+        "create table nc(i int, a struct<X:char(3)>, b struct<x:char(3)>) using parquet",
+    )
+    .unwrap();
+    run(
+        &s,
+        "insert into nc values (1, named_struct('X','a'), named_struct('x','a')), (2, named_struct('X','ab'), named_struct('x','b'))",
+    )
+    .unwrap();
+    assert_eq!(count(&s, "select i from nc where a = b"), 1);
+    assert_eq!(
+        first_text(&s, "select cast(i as string) from nc where a = b"),
+        "1"
+    );
+}
+
+/// A struct field's `NOT NULL` and `COMMENT` do not hide its `CHAR`/`VARCHAR` limit (Spark 4.2.0, krishiv-internal
+/// `research/spark/partition-followups/probe6.py`: each overlong insert is `EXCEED_LIMIT_LENGTH`, `CHAR(2)` pads).
+#[test]
+fn a_struct_fields_not_null_and_comment_keep_its_limit() {
+    let s = fresh();
+    for (table, ddl, read) in [
+        ("m1", "s struct<x: char(2) not null>", "a |2"),
+        ("m2", "s struct<x: varchar(2) comment 'text'>", "a|1"),
+        ("m3", "s struct<x: char(2) not null comment 'c'>", "a |2"),
+    ] {
+        run(&s, &format!("drop table if exists {table}")).unwrap();
+        run(&s, &format!("create table {table}({ddl}) using parquet")).unwrap();
+        let e = run(
+            &s,
+            &format!("insert into {table} select named_struct('x', 'abc')"),
+        )
+        .unwrap_err();
+        assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH", "{table}");
+        run(
+            &s,
+            &format!("insert into {table} select named_struct('x', 'a')"),
+        )
+        .unwrap();
+        assert_eq!(
+            first_text(
+                &s,
+                &format!("select concat(s.x, '|', cast(length(s.x) as string)) from {table}")
+            ),
+            read,
+            "{table}"
+        );
+    }
+}
+
+/// A field comment holding `,`, `(` and `<` neither splits the struct nor hides the limit (Spark 4.2.0,
+/// krishiv-internal `research/spark/partition-followups/probe7.py`).
+#[test]
+fn a_struct_field_comment_with_brackets_and_commas_keeps_the_fields() {
+    let s = fresh();
+    run(&s, "drop table if exists k").unwrap();
+    run(
+        &s,
+        "create table k (s struct<x: char(2) comment 'a,b (c) <d>', y: int>) using parquet",
+    )
+    .unwrap();
+    let e = run(&s, "insert into k select named_struct('x', 'abc', 'y', 1)").unwrap_err();
+    assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH");
+    run(&s, "insert into k select named_struct('x', 'a', 'y', 2)").unwrap();
+    assert_eq!(
+        first_text(
+            &s,
+            "select concat(s.x, '|', cast(length(s.x) as string), '|', cast(s.y as string)) from k"
+        ),
+        "a |2|2"
+    );
+}
+
+/// A `CHAR`/`VARCHAR` with an explicit collation keeps its limit on write and its padding on read, and the
+/// collation (Spark 4.2.0, krishiv-internal `research/spark/partition-followups/probe8.py`, `probe10.py`).
+#[test]
+fn a_collated_char_or_varchar_keeps_its_limit_and_collation() {
+    let s = fresh();
+    for (table, ddl, value, read) in [
+        (
+            "k1",
+            "c char(2) collate UTF8_BINARY",
+            "'a'",
+            "[a ]|2|SYSTEM.BUILTIN.UTF8_BINARY",
+        ),
+        (
+            "k2",
+            "c varchar(2) collate UTF8_LCASE",
+            "'a'",
+            "[a]|1|SYSTEM.BUILTIN.UTF8_LCASE",
+        ),
+        (
+            "k3",
+            "c char(2) collate UTF8_BINARY",
+            "'ab  '",
+            "[ab]|2|SYSTEM.BUILTIN.UTF8_BINARY",
+        ),
+        (
+            "k4",
+            "c varchar(2) collate UTF8_LCASE",
+            "'ab  '",
+            "[ab]|2|SYSTEM.BUILTIN.UTF8_LCASE",
+        ),
+    ] {
+        run(&s, &format!("drop table if exists {table}")).unwrap();
+        run(&s, &format!("create table {table}({ddl}) using parquet")).unwrap();
+        let e = run(&s, &format!("insert into {table} values ('abc')")).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "EXCEED_LIMIT_LENGTH",
+            "{table}: {e}"
+        );
+        run(&s, &format!("insert into {table} values ({value})")).unwrap();
+        assert_eq!(
+            first_text(
+                &s,
+                &format!(
+                    "select concat('[', c collate UTF8_BINARY, ']', '|', cast(length(c) as string), '|', collation(c)) from {table}"
+                )
+            ),
+            read,
+            "{table}"
+        );
+    }
+    // Inside a nested value: a binary collation is checked as Spark does; any other collation inside a nested
+    // value is not supported by the engine yet, so its writes stay refused, never stored unchecked.
+    for (ddl, value, class) in [
+        (
+            "a array<char(2) collate UTF8_BINARY>",
+            "array('abc')",
+            "EXCEED_LIMIT_LENGTH",
+        ),
+        ("a array<char(2) collate UTF8_BINARY>", "array('a')", ""),
+        (
+            "a struct<x: varchar(2) collate UTF8_LCASE>",
+            "named_struct('x', 'abc')",
+            "KRISHIV_UNSUPPORTED_FEATURE",
+        ),
+        // Spark stores this one (probe10.py); the engine refuses it and leaves the table as it was.
+        (
+            "a struct<x: varchar(2) collate UTF8_LCASE>",
+            "named_struct('x', 'a')",
+            "KRISHIV_UNSUPPORTED_FEATURE",
+        ),
+    ] {
+        run(&s, "drop table if exists k5").unwrap();
+        run(&s, &format!("create table k5({ddl}) using parquet")).unwrap();
+        let got = run(&s, &format!("insert into k5 select {value}"));
+        match got {
+            Ok(()) => {
+                assert_eq!(class, "", "{ddl} {value}");
+                // The element reads back padded to its length.
+                assert_eq!(
+                    first_text(
+                        &s,
+                        "select concat('[', a[0] collate UTF8_BINARY, ']') from k5"
+                    ),
+                    "[a ]"
+                );
+            }
+            Err(e) => {
+                assert_eq!(e.error_class().name(), class, "{ddl} {value}: {e}");
+                assert_eq!(count(&s, "select 1 from k5"), 0, "{ddl} {value}");
+            }
+        }
+    }
 }

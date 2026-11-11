@@ -230,28 +230,34 @@ impl Resolver<'_> {
                 }
             }
         }
-        let padded_in = if matches!(op, Builtin::In) {
-            let padded = self.pad_char_in(kids);
-            if padded.is_none() {
-                self.refuse_char_in(kids, origin)?;
-            }
-            padded
-        } else {
-            None
-        };
         // `ApplyCharTypePadding`: a bare `char(n)` operand of a comparison pads (see `char_varchar`).
-        let padded = matches!(
+        if matches!(
             op,
-            Builtin::Eq
+            Builtin::In
+                | Builtin::Eq
                 | Builtin::EqNullSafe
                 | Builtin::Lt
                 | Builtin::LtEq
                 | Builtin::Gt
                 | Builtin::GtEq
-        )
-        .then(|| self.pad_char_comparison(kids))
-        .flatten()
-        .or(padded_in);
+        ) {
+            self.refuse_nested_char_comparison(kids, origin)?;
+        }
+        let padded = if matches!(op, Builtin::In) {
+            self.pad_char_in(kids)?
+        } else {
+            matches!(
+                op,
+                Builtin::Eq
+                    | Builtin::EqNullSafe
+                    | Builtin::Lt
+                    | Builtin::LtEq
+                    | Builtin::Gt
+                    | Builtin::GtEq
+            )
+            .then(|| self.pad_char_comparison(kids))
+            .flatten()
+        };
         let kids = padded.as_deref().unwrap_or(kids);
         let args: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let conf = self.ctx.conf;
