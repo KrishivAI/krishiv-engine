@@ -173,11 +173,17 @@ fn distribute_by_evaluates_as_spark() {
         let s = &sessions.iter().find(|(c, _)| c == &case["conf"]).unwrap().1;
         let got = outcome(s, sql);
         let mut want = expected(case);
-        // Run-time errors carry no SQL context yet, a plain projection's
-        // included (`SELECT CAST(x AS INT) FROM t`): compare their class.
+        // An error raised where no span is known has no context: compare its class.
+        // Spark 4.2.0 also raises some with none (a DISTRIBUTE BY in a correlated subquery loses
+        // its expressions' origin), where Krishiv may give the expression's span.
+        let mut got = got;
         if got["error"].is_object() && got["error"]["fragment"].is_null() {
             for k in ["fragment", "start", "stop"] {
                 want["error"][k] = Value::Null;
+            }
+        } else if want["error"].is_object() && want["error"]["fragment"].is_null() {
+            for k in ["fragment", "start", "stop"] {
+                got["error"][k] = Value::Null;
             }
         }
         let ansi_off = conf.get("spark.sql.ansi.enabled").and_then(Value::as_str) == Some("false");

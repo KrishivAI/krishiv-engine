@@ -79,6 +79,13 @@ impl DataFrame {
                 ),
                 None => stream,
             };
+            let stream = match a.env.redacted.clone() {
+                Some(text) => Box::pin(
+                    stream
+                        .map(move |r| r.map_err(|e| crate::session::resolve_site(e, Some(&text)))),
+                ),
+                None => stream,
+            };
             Ok(if edge {
                 crate::carrier::client_stream(stream)
             } else {

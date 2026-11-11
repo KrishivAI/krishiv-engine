@@ -97,12 +97,17 @@ fn multi_byte_text_counts_characters() {
 }
 
 #[test]
-fn an_error_without_a_context_is_the_message() {
-    let sql = "SELECT 1/0";
-    let e = fails(sql);
+fn a_constant_division_by_zero_has_the_division_span() {
+    // Spark 4.2.0 (`SELECT 1/0`): fragment `1/0`, start 7, stop 9.
+    let e = fails("SELECT 1/0");
     assert_eq!(e.error_class(), ErrorClass::DivideByZero);
-    assert!(e.query_contexts().is_empty());
-    assert_eq!(render_with_context(&e, sql), e.to_string());
+    assert_eq!(span(&e), (7, 9, "1/0"));
+}
+
+#[test]
+fn a_runtime_error_in_a_projection_has_its_span() {
+    let e = fails("SELECT x / 0 FROM VALUES (1) AS t(x)");
+    assert_eq!(span(&e), (7, 11, "x / 0"));
 }
 
 /// `Display` and the message parameters stay Spark's: the unknown function
@@ -150,4 +155,29 @@ fn column_proposals_are_ranked_by_edit_distance() {
             ("proposal", "`name`, `age`, `id`".to_owned())
         ]
     );
+}
+
+// Run-time errors carry the span of the expression that raised them (P3 design
+// P2-runtime-error-context, unit 1).
+#[test]
+fn runtime_divide_by_zero_has_the_division_span() {
+    let sql = "SELECT a / b FROM VALUES (1, 0) AS t(a, b)";
+    let e = fails(sql);
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert_eq!(span(&e), (7, 11, "a / b"));
+}
+
+#[test]
+fn runtime_cast_overflow_has_the_cast_span() {
+    let sql = "SELECT CAST(a AS TINYINT) FROM VALUES (1000) AS t(a)";
+    let e = fails(sql);
+    assert_eq!(span(&e), (7, 24, "CAST(a AS TINYINT)"));
+}
+
+#[test]
+fn runtime_error_innermost_span_wins() {
+    let sql = "SELECT 1 + (a / b) FROM VALUES (1, 0) AS t(a, b)";
+    let e = fails(sql);
+    assert_eq!(e.query_contexts().len(), 1);
+    assert_eq!(span(&e), (12, 16, "a / b"));
 }

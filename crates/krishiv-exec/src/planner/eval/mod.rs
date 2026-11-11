@@ -406,8 +406,68 @@ fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
     }))
 }
 
-/// Compiles `e` over `input`.
+/// Compiles `e` over `input`. An expression that can raise at run time and
+/// came from SQL text carries its span (see [`Sited`]).
 pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
+    let compiled = compile_node(e, input)?;
+    // A cast the analyzer inserted (implicit coercion) has its operand's span:
+    // Spark reports the expression it serves, so the enclosing site applies.
+    let implicit_cast =
+        matches!(&e.node, ExprNode::Cast { expr, .. } if expr.origin.sql == e.origin.sql);
+    let can_raise = !implicit_cast
+        && matches!(
+            &e.node,
+            ExprNode::Cast { .. } | ExprNode::Resolved(ResolvedExpr::Function(_))
+        );
+    Ok(match e.origin.sql {
+        Some((source, span)) if can_raise => Arc::new(Sited {
+            inner: compiled,
+            site: krishiv_common::error::ErrorSite {
+                source: source.0,
+                start: span.start,
+                end: span.end,
+            },
+        }),
+        _ => compiled,
+    })
+}
+
+/// An expression that can raise, with the span of SQL text it came from: its
+/// error is marked with that site (the innermost expression's wins), and the
+/// session renders the span as Spark's `== SQL ==` context. The Ok path is the
+/// inner expression's; no text enters the plan.
+struct Sited {
+    inner: Arc<dyn PhysExpr>,
+    site: krishiv_common::error::ErrorSite,
+}
+
+impl fmt::Debug for Sited {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl PhysExpr for Sited {
+    fn data_type(&self) -> &ArrowType {
+        self.inner.data_type()
+    }
+    fn nullable(&self) -> bool {
+        self.inner.nullable()
+    }
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        self.inner
+            .eval(batch, partition)
+            .map_err(|e| e.with_pending_site(self.site))
+    }
+    fn is_constant(&self) -> bool {
+        self.inner.is_constant()
+    }
+    fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
+        self.inner.null_on_overflow()
+    }
+}
+
+fn compile_node(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     match &e.node {
         ExprNode::Literal(l) => Ok(Arc::new(Lit::new(l)?)),
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {

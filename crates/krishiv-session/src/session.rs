@@ -1235,6 +1235,7 @@ impl Session {
             variables_version: variables.version,
             policy_version: self.state.policy.version().0,
             text: None,
+            redacted: None,
             statement_class: None,
             row: Arc::default(),
             identifier_spans: Arc::default(),
@@ -2564,6 +2565,22 @@ pub(crate) fn sql_context(
     ))
 }
 
+/// A run-time error marked with the span of SQL it arose at, with that span rendered as its query
+/// context: `text` is the statement's own text, which only a span of source 0 indexes (a span in
+/// a SQL function's body keeps no context). An error without a site passes unchanged.
+pub(crate) fn resolve_site(error: KrishivError, text: Option<&RedactedSql>) -> KrishivError {
+    let Some(site) = error.pending_site() else {
+        return error;
+    };
+    let error = error.without_pending_site();
+    match text {
+        Some(t) if site.source == 0 && site.start < site.end => {
+            sql_context(error, t, site.start as usize, site.end as usize)
+        }
+        _ => error,
+    }
+}
+
 /// An analysis error with its query context attached: the SQL span of
 /// `text`, or the DataFrame operation that raised it. With no text, a
 /// SQL span has no fragment to attach, so only DataFrame contexts cross.
@@ -2637,6 +2654,9 @@ pub(crate) struct QueryEnv {
     /// The statement as the session may show it (redacted), for
     /// `system.queries`; `None` for a query no SQL text started.
     pub(crate) text: Option<Arc<str>>,
+    /// The same text with the map from original offsets, to render the span of a run-time
+    /// error ([`resolve_site`]).
+    pub(crate) redacted: Option<Arc<RedactedSql>>,
     /// The statement's class (`StatementClass::name`), for `system.queries`.
     pub(crate) statement_class: Option<&'static str>,
     /// The id of the `system.queries` row the statement's latest query began, if any: `sql`

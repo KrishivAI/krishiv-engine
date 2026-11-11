@@ -1015,6 +1015,7 @@ impl DataFrame {
         // `system.queries` shows of it.
         if let Some(a) = &cached {
             env.text.clone_from(&a.env.text);
+            env.redacted.clone_from(&a.env.redacted);
             env.statement_class = a.env.statement_class;
             env.row = Arc::clone(&a.env.row);
         }
@@ -1077,6 +1078,7 @@ impl DataFrame {
         let mut env = env;
         if let Some(t) = text {
             env.text = Some(Arc::from(t.as_str()));
+            env.redacted = Some(Arc::new(t.clone()));
         }
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
@@ -1099,6 +1101,7 @@ impl DataFrame {
         {
             let mut env = QueryEnv::clone(&a.env);
             env.text = Some(Arc::from(text.as_str()));
+            env.redacted = Some(Arc::new(text.clone()));
             env.statement_class = Some(class);
             *cached = Some(Arc::new(Analysis {
                 env: Arc::new(env),
