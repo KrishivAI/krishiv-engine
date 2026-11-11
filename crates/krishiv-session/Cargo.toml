@@ -57,7 +57,7 @@ insta.workspace = true
 parquet = { workspace = true, features = ["arrow"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
-tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+tracing-subscriber = { workspace = true, features = ["registry", "std", "fmt", "json"] }
 
 [features]
 # Cloud object stores (S3, GCS, Azure) via `krishiv-io/cloud`. Opt-in so the
@@ -81,9 +81,20 @@ telemetry-otlp = [
     "dep:tracing-subscriber",
 ]
 
+# Structured JSON logs with the query's ids and a per-callsite rate limit (`logging.rs`).
+telemetry-logs = [
+    "dep:tracing-subscriber",
+    "tracing-subscriber/fmt",
+    "tracing-subscriber/json",
+]
+
 [[test]]
 name = "otlp_collector"
 required-features = ["telemetry-otlp"]
+
+[[test]]
+name = "log_records"
+required-features = ["telemetry-logs"]
 
 [lints]
 workspace = true

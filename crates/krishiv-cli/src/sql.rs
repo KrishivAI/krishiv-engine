@@ -152,6 +152,10 @@ pub(crate) struct SqlArgs {
     /// stage (as --explain-verbose shows it) to the profile's `planning` member.
     #[arg(long, requires = "explain_analyze")]
     planning: bool,
+    /// With --explain-analyze: print the profile as JSON for sharing outside the deployment,
+    /// without the principal, tags, session and trace ids. Every number and the plan are kept, including the plan's literals and paths: review before sharing.
+    #[arg(long, requires = "explain_analyze")]
+    share: bool,
 }
 
 impl SqlArgs {
@@ -184,6 +188,17 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
             io::stderr(),
             "error: the argument '--json' cannot be used with '--explain-format {}'\n\nFor more information, try '--help'.",
             format.name(),
+        );
+        return 2;
+    }
+    if args.share
+        && args
+            .explain_format
+            .is_some_and(|f| f != ExplainFormat::Json)
+    {
+        let _ = writeln!(
+            io::stderr(),
+            "error: '--share' writes JSON only: drop '--explain-format' or use 'json'\n\nFor more information, try '--help'."
         );
         return 2;
     }
@@ -344,7 +359,8 @@ fn gate_bytes(session: &krishiv::Session) -> u64 {
 /// The output format of `--explain-analyze` and `--explain-verbose`:
 /// `--json` is a synonym for `--explain-format json`.
 fn explain_format(args: &SqlArgs) -> ExplainFormat {
-    if args.json {
+    // `--share` always writes the JSON profile, so planning validation sees JSON.
+    if args.json || args.share {
         ExplainFormat::Json
     } else {
         args.explain_format.unwrap_or(ExplainFormat::Text)
@@ -358,7 +374,15 @@ fn print_explain(out: &mut dyn Write, df: &DataFrame, args: &SqlArgs) -> Result<
     // `explain_*_with`, so there is a single route to each document and no
     // second rendering that can drift.
     let format = explain_format(args);
-    let text = if args.explain_analyze && args.planning {
+    let text = if args.share {
+        let profile = if args.planning {
+            futures::executor::block_on(df.explain_analyze_verbose())
+        } else {
+            futures::executor::block_on(df.explain_analyze())
+        }
+        .map_err(|e| e.to_string())?;
+        profile.shareable().to_json()
+    } else if args.explain_analyze && args.planning {
         futures::executor::block_on(df.explain_analyze_verbose())
             .map_err(|e| e.to_string())?
             .to_json()
