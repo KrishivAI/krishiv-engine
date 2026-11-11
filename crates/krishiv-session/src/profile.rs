@@ -340,6 +340,9 @@ impl DataFrame {
         physical: &krishiv_exec::planner::PhysicalPlan,
         keep: bool,
     ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
+        // The trace context at the start of the query: a later `set_trace_context` on the session
+        // applies to the queries started after it, not to this profile.
+        let trace = crate::telemetry::profile_trace(&self.session.state);
         let (mut stream, query) = self.session.run_profiled(physical, &a.env).await?;
         let mut out = Vec::new();
         while let Some(batch) = stream.next().await {
@@ -352,7 +355,7 @@ impl DataFrame {
         // Every driver has merged its counters once the query finished.
         query.finished().await;
         let mut profile = QueryProfile::new(physical, query.metrics(), true);
-        profile.trace = crate::telemetry::profile_trace(&self.session.state);
+        profile.trace = trace;
         Ok((out, profile))
     }
 

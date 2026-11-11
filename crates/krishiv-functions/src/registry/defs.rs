@@ -6,13 +6,14 @@
 use krishiv_common::error::{
     DatatypeMismatchDataDiffTypes, DatatypeMismatchInvalidOrderingType,
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchUnsupportedInputType, DatatypeMismatchValueOutOfRange, InvalidExtractField,
-    InvalidParameterValueBoolean, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210,
-    NonFoldableArgument, SecondFunctionArgumentNotInteger,
+    DatatypeMismatchValueOutOfRange, InvalidExtractField, InvalidParameterValueBoolean,
+    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210, NonFoldableArgument,
+    SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{ArrayType, DataType, DayTimeField, DecimalType, YearMonthField};
 
+use super::collection::collect_set;
 use super::math::is_ansi_interval;
 use super::{Aggregate, Execution};
 use crate::signature::{
@@ -1439,37 +1440,12 @@ fn by(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// skipped by the executor). Spark names `array_agg`'s column
 /// `collect_list(...)`, so the analyzer resolves it as `collect_list`
 /// (see `krishiv_plan::analyzer`).
-fn collect(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn collect(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let element = c.data_type(0).cloned().unwrap_or(DataType::Null);
     Ok(ArgType::new(
         DataType::Array(ArrayType::new(element, false).into()),
         false,
     ))
-}
-
-/// Whether `t` is or contains a map at any depth.
-fn has_map(t: &DataType) -> bool {
-    match t {
-        DataType::Map(_) => true,
-        DataType::Array(a) => has_map(a.element_type()),
-        DataType::Struct(s) => s.fields().iter().any(|f| has_map(f.data_type())),
-        _ => false,
-    }
-}
-
-/// `collect_set(x)`: as [`collect`], but Spark refuses an input that
-/// contains a map at any depth (`DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE`),
-/// as a map has no equality to deduplicate by.
-fn collect_set(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    if let Some(t) = c.data_type(0).filter(|t| has_map(t)) {
-        return Err(DatatypeMismatchUnsupportedInputType {
-            sql_expr: format!("\"collect_set({})\"", c.sql(0).unwrap_or_default()),
-            function_name: "`collect_set`".to_owned(),
-            data_type: format!("\"{}\"", t.sql()),
-        }
-        .into());
-    }
-    collect(c)
 }
 
 /// `vector_sum(x)` / `vector_avg(x)`: element-wise aggregates over

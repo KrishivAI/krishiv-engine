@@ -1148,3 +1148,274 @@ fn misaligned_pointers_are_rejected() {
     assert!(!array_c.is_released(), "the array was not moved out");
     drop(unaligned_schema.take());
 }
+
+// --- One column across the boundary (Python UDF arguments and results, P2-T059 unit 2a) ---
+
+/// Exports `column` and imports it back as `declared` with `rows` values.
+fn column_round_trip(
+    column: &ArrayRef,
+    declared: &DataType,
+    rows: usize,
+) -> Result<ArrayRef, krishiv_common::error::KrishivError> {
+    let (schema, mut array) = ffi::export_column(column)?;
+    // SAFETY: both are the live structs `export_column` just built; the
+    // array is moved out of once.
+    unsafe { ffi::import_column(&raw const schema, &raw mut array, declared, rows) }
+}
+
+#[test]
+fn a_sliced_column_round_trips_with_its_offset() {
+    let full: ArrayRef = Arc::new(Int64Array::from(vec![
+        Some(1),
+        None,
+        Some(3),
+        Some(4),
+        Some(5),
+    ]));
+    let sliced = full.slice(1, 3);
+    let back = column_round_trip(&sliced, &DataType::Int64, 3).unwrap();
+    assert_eq!(back.as_ref(), sliced.as_ref());
+}
+
+#[test]
+fn a_string_view_column_round_trips() {
+    let column: ArrayRef = Arc::new(arrow_array::StringViewArray::from(vec![
+        Some("a string longer than twelve bytes"),
+        None,
+        Some("short"),
+    ]));
+    let back = column_round_trip(&column, &DataType::Utf8View, 3).unwrap();
+    assert_eq!(back.as_ref(), column.as_ref());
+}
+
+#[test]
+fn a_result_of_another_type_is_rejected() {
+    let column: ArrayRef = Arc::new(StringArray::from(vec!["x", "y"]));
+    let err = column_round_trip(&column, &DataType::Utf8View, 2).unwrap_err();
+    assert!(
+        err.to_string().contains("where Utf8View was declared"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_result_of_another_length_is_rejected() {
+    let column: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+    let err = column_round_trip(&column, &DataType::Int64, 2).unwrap_err();
+    assert!(err.to_string().contains("3 rows for 2"), "{err}");
+}
+
+#[test]
+fn a_dictionary_of_the_declared_type_is_rejected_not_reinterpreted() {
+    let dict: arrow_array::DictionaryArray<arrow_array::types::Int32Type> =
+        vec!["a", "b", "a"].into_iter().collect();
+    let column: ArrayRef = Arc::new(dict);
+    let err = column_round_trip(&column, &DataType::Utf8, 3).unwrap_err();
+    assert!(err.to_string().contains("where Utf8 was declared"), "{err}");
+}
+
+#[test]
+fn a_nested_result_with_other_field_names_is_read_as_the_declared_type() {
+    // pyarrow names a list's element `item`; the declared type may name it
+    // otherwise: same layout, so the result is accepted and keeps the
+    // declared name.
+    let values = Int64Array::from(vec![1, 2, 3]);
+    let produced = arrow_array::ListArray::new(
+        Arc::new(Field::new("item", DataType::Int64, true)),
+        arrow_buffer::OffsetBuffer::new(vec![0, 2, 3].into()),
+        Arc::new(values),
+        None,
+    );
+    let declared = DataType::List(Arc::new(Field::new("element", DataType::Int64, true)));
+    let back = column_round_trip(&(Arc::new(produced) as ArrayRef), &declared, 2).unwrap();
+    assert_eq!(back.data_type(), &declared);
+    assert_eq!(back.len(), 2);
+}
+
+#[test]
+fn a_sliced_string_column_round_trips() {
+    let full: ArrayRef = Arc::new(StringArray::from(vec![
+        Some("a"),
+        None,
+        Some("ccc"),
+        Some("dd"),
+    ]));
+    let sliced = full.slice(1, 2);
+    let back = column_round_trip(&sliced, &DataType::Utf8, 2).unwrap();
+    assert_eq!(back.as_ref(), sliced.as_ref());
+}
+
+#[test]
+fn an_array_is_consumed_once() {
+    let column: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+    let (schema, mut array) = ffi::export_column(&column).unwrap();
+    // SAFETY: live structs from `export_column`; the second call sees the
+    // released array the first left behind.
+    let first =
+        unsafe { ffi::import_column(&raw const schema, &raw mut array, &DataType::Int64, 2) };
+    assert!(first.is_ok());
+    // SAFETY: as above.
+    let second =
+        unsafe { ffi::import_column(&raw const schema, &raw mut array, &DataType::Int64, 2) };
+    assert!(second.unwrap_err().to_string().contains("already consumed"));
+}
+
+#[test]
+fn an_exported_column_not_imported_releases_on_drop() {
+    // Miri reports a leak or a double free if `release` is not run once.
+    let column: ArrayRef = Arc::new(StringArray::from(vec![Some("kept"), None]));
+    let (schema, array) = ffi::export_column(&column).unwrap();
+    drop((schema, array));
+    assert_eq!(column.len(), 2);
+}
+
+/// Every buffer address of `data` and its children, the null bitmaps included.
+fn all_addresses(data: &ArrayData, out: &mut Vec<usize>) {
+    out.extend(data.buffers().iter().map(|b| b.as_ptr() as usize));
+    if let Some(n) = data.nulls() {
+        out.push(n.inner().values().as_ptr() as usize);
+    }
+    for c in data.child_data() {
+        all_addresses(c, out);
+    }
+}
+
+/// Design P2-T059 unit 3b M3: the copy equals the input and shares no buffer.
+fn assert_owned_copy(array: &ArrayRef) {
+    let data = array.to_data();
+    let copy = ffi::owned_copy(&data).unwrap();
+    copy.validate_full().unwrap();
+    assert_eq!(copy, data, "{}", data.data_type());
+    let (mut before, mut after) = (Vec::new(), Vec::new());
+    all_addresses(&data, &mut before);
+    all_addresses(&copy, &mut after);
+    assert_eq!(before.len(), after.len());
+    for a in &after {
+        assert!(
+            !before.contains(a),
+            "{}: a buffer is shared",
+            data.data_type()
+        );
+    }
+}
+
+#[test]
+fn owned_copy_shares_no_buffer_and_keeps_the_values() {
+    let ints: ArrayRef = Arc::new(Int64Array::from(vec![
+        Some(1),
+        None,
+        Some(3),
+        Some(4),
+        None,
+    ]));
+    assert_owned_copy(&ints);
+    // Sliced: the offset is kept (nulls at a bit offset).
+    assert_owned_copy(&ints.slice(1, 3));
+    let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), None, Some("ccc")]));
+    assert_owned_copy(&strings);
+    assert_owned_copy(&strings.slice(1, 2));
+    let dict: arrow_array::DictionaryArray<arrow_array::types::Int32Type> =
+        vec![Some("x"), None, Some("y"), Some("x")]
+            .into_iter()
+            .collect();
+    assert_owned_copy(&(Arc::new(dict) as ArrayRef));
+    let list =
+        arrow_array::ListArray::from_iter_primitive::<arrow_array::types::Int64Type, _, _>(vec![
+            Some(vec![Some(1), None]),
+            None,
+            Some(vec![]),
+        ]);
+    assert_owned_copy(&(Arc::new(list) as ArrayRef));
+    let ree = arrow_array::RunArray::<arrow_array::types::Int32Type>::try_new(
+        &arrow_array::Int32Array::from(vec![2, 5]),
+        &Int64Array::from(vec![Some(7), None]),
+    )
+    .unwrap();
+    assert_owned_copy(&(Arc::new(ree) as ArrayRef));
+    let structs: ArrayRef = Arc::new(StructArray::from(vec![(
+        Arc::new(Field::new("s", DataType::Utf8, true)),
+        Arc::clone(&strings),
+    )]));
+    assert_owned_copy(&structs);
+}
+
+/// Review 2026-11-09 I3: a small slice of a large array (what pyarrow exports
+/// for a UDF returning `big.slice(i, n)`) is copied as its window, not as the
+/// parent's whole buffers; values kept, no buffer shared.
+#[test]
+fn owned_tight_copy_of_a_small_slice_copies_only_its_window() {
+    // Under Miri a smaller parent: still past the 4 KiB bound when copied whole.
+    let n: i64 = if cfg!(miri) { 2_000 } else { 100_000 };
+    let ints: ArrayRef = Arc::new(Int64Array::from_iter(
+        (0..n).map(|i| (i % 7 != 0).then_some(i)),
+    ));
+    let strings: ArrayRef = Arc::new(StringArray::from_iter(
+        (0..n).map(|i| Some(format!("s{i}"))),
+    ));
+    let list: ArrayRef = Arc::new(arrow_array::ListArray::from_iter_primitive::<
+        arrow_array::types::Int64Type,
+        _,
+        _,
+    >((0..n).map(|i| Some(vec![Some(i), None]))));
+    for parent in [ints, strings, list] {
+        let slice = parent.slice(usize::try_from(n / 2).unwrap(), 3).to_data();
+        let copy = ffi::owned_tight_copy(&slice).unwrap();
+        copy.validate_full().unwrap();
+        assert_eq!(copy, slice, "{}", slice.data_type());
+        assert!(
+            copy.get_buffer_memory_size() < 4096,
+            "{}: copied {} bytes for 3 rows",
+            slice.data_type(),
+            copy.get_buffer_memory_size()
+        );
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        all_addresses(&slice, &mut before);
+        all_addresses(&copy, &mut after);
+        assert!(
+            after.iter().all(|a| !before.contains(a)),
+            "{}: a buffer is shared",
+            slice.data_type()
+        );
+    }
+    // Not sliced: the plain deep copy, same layout.
+    let whole = Int64Array::from(vec![Some(1), None, Some(3)]).into_data();
+    let copy = ffi::owned_tight_copy(&whole).unwrap();
+    assert_eq!(copy, whole);
+    assert_eq!(copy.offset(), whole.offset());
+}
+
+#[test]
+fn wait_for_returns_once_another_thread_wakes_the_future() {
+    // `query::wait_for` replaces `futures::executor::block_on` (no `thread::park`, which a forked child cannot
+    // use on Apple platforms): a future that is pending until another thread completes it still finishes.
+    let (tx, rx) = futures::channel::oneshot::channel::<u32>();
+    let sender = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tx.send(7).unwrap();
+    });
+    assert_eq!(query::wait_for(rx), Ok(7));
+    sender.join().unwrap();
+    assert_eq!(query::wait_for(async { 3 }), 3);
+}
+
+#[test]
+fn wait_for_polls_again_when_the_future_wakes_itself_during_a_poll() {
+    // Review N1: a wake inside `poll` (before the wait) must not be lost:
+    // the future is pending twice, waking itself each time, then ready.
+    struct SelfWaking(u8);
+    impl std::future::Future for SelfWaking {
+        type Output = u8;
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<u8> {
+            if self.0 == 2 {
+                return std::task::Poll::Ready(self.0);
+            }
+            self.0 += 1;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    }
+    assert_eq!(query::wait_for(SelfWaking(0)), 2);
+}

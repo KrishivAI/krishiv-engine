@@ -60,22 +60,6 @@ use crate::store::{
 /// The file formats a table can have.
 const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
-/// Spark's `CatalogUtils.makeQualifiedDBObjectPath` on the local file system: a location with a URI scheme
-/// stays as written; any other is resolved against the warehouse directory (an absolute path stays itself)
-/// and qualified as a `file:` URI.
-fn qualified_namespace_location(location: &str, warehouse: &std::path::Path) -> String {
-    let scheme = location.split_once(':').is_some_and(|(s, _)| {
-        s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-            && s.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-    });
-    if scheme {
-        location.to_owned()
-    } else {
-        format!("file:{}", warehouse.join(location).display())
-    }
-}
-
 /// The short name of a data source written fully qualified, as Spark maps its built-in classes
 /// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
 fn short_provider(written: &str) -> String {
@@ -336,7 +320,11 @@ impl Session {
         let meta = NamespaceMeta {
             collation,
             comment: n.comment.clone(),
-            location: n.location.clone(),
+            location: n
+                .location
+                .as_deref()
+                .map(|l| qualified_namespace_location(l, || self.warehouse_dir()))
+                .transpose()?,
             properties: options_of(&n.properties, original),
         };
         if !self.state.catalog.store.create_namespace(&name, meta) && !n.if_not_exists {
@@ -362,7 +350,7 @@ impl Session {
                 Box::new(move |m| m.properties.extend(properties.clone()))
             }
             AlterNamespaceAction::SetLocation(l) => {
-                let l = qualified_namespace_location(l, &self.warehouse_dir()?);
+                let l = qualified_namespace_location(l, || self.warehouse_dir())?;
                 Box::new(move |m| m.location = Some(l.clone()))
             }
             AlterNamespaceAction::SetComment(c) => {
@@ -3330,6 +3318,9 @@ fn clear_dir(dir: &Path) -> Result<(), KrishivError> {
     }
     Ok(())
 }
+
+mod location;
+use location::qualified_namespace_location;
 
 #[cfg(test)]
 mod tests;

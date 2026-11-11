@@ -10,9 +10,11 @@ use arrow_array::{
     Array, BinaryArray, BooleanArray, Int32Array, Int64Array, LargeStringArray, StringArray,
 };
 use krishiv_common::error::ErrorClass;
-use krishiv_kernels::Operand;
 use krishiv_kernels::string::{self as s, StrOperand};
+use krishiv_kernels::{Operand, SparkVersion};
 use proptest::prelude::*;
+
+const V: SparkVersion = SparkVersion::V4_2;
 
 type S<'a> = StrOperand<'a, i32>;
 type I<'a> = Operand<'a, Int32Type>;
@@ -929,7 +931,31 @@ fn url_encoding_and_decoding() {
     assert_eq!(dec("%+f%-0", false).unwrap().unwrap(), "\u{0F}\0");
     assert_eq!(dec("%٤١", false).unwrap().unwrap(), "A");
     assert_eq!(dec("", false).unwrap().unwrap(), "");
-    for bad in ["%", "%4", "%zz", "a%2", "%-1", "%%41", "%4g"] {
+    // Java reads UTF-16 units: a full-width digit is one unit and a digit (U+1D7D9) outside the
+    // Basic Multilingual Plane is two (Spark 4.2.0: `%\u{ff11}\u{ff10}` is 0x10, `%\u{1d7d9}0` is
+    // CANNOT_DECODE_URL).
+    assert_eq!(dec("%\u{ff11}\u{ff10}", false).unwrap().unwrap(), "\u{10}");
+    assert_eq!(dec("%3\u{663}", false).unwrap().unwrap(), "3");
+    assert_eq!(
+        dec("%\u{ff21}\u{ff26}", false).unwrap().unwrap(),
+        "\u{fffd}"
+    );
+    assert_eq!(
+        dec("%\u{ff41}\u{ff46}", false).unwrap().unwrap(),
+        "\u{fffd}"
+    );
+    assert!(dec("%\u{ff47}\u{ff10}", false).is_err());
+    for bad in [
+        "%",
+        "%4",
+        "%zz",
+        "a%2",
+        "%-1",
+        "%%41",
+        "%4g",
+        "%\u{1d7d9}0",
+        "%0\u{1d7d9}",
+    ] {
         assert_eq!(
             dec(bad, false).unwrap_err(),
             (ErrorClass::CannotDecodeUrl, bad.to_owned()),
@@ -1262,7 +1288,7 @@ fn single_byte_tables_round_trip() {
 #[test]
 fn locate_lcase_follows_spark_lowercase_matching() {
     let at = |sub: &str, text: &str, start: i32| {
-        s::locate_lcase(StrOperand::Array(&r1(sub)), lit(Some(text)), int(start))
+        s::locate_lcase(StrOperand::Array(&r1(sub)), lit(Some(text)), int(start), V)
             .unwrap()
             .value(0)
     };
@@ -1285,7 +1311,7 @@ fn locate_lcase_follows_spark_lowercase_matching() {
 fn search_lcase_follows_spark_lowercase_matching() {
     use s::LcaseSearch::{Anywhere, End, Start};
     let at = |kind, text: &str, pat: &str| {
-        s::search_lcase(kind, lit(Some(text)), StrOperand::Array(&r1(pat)))
+        s::search_lcase(kind, lit(Some(text)), StrOperand::Array(&r1(pat)), V)
             .unwrap()
             .value(0)
     };
@@ -1355,10 +1381,35 @@ fn search_lcase_follows_spark_lowercase_matching() {
 /// `endswith` over `UTF8_LCASE` finds the one start that can end the text, so a long suffix
 /// match is linear (a row of 100,000 `a` against a pattern of 50,000), and keeps the `İ` rules.
 #[test]
+fn search_lcase_contains_is_linear_and_exact() {
+    use s::LcaseSearch::Anywhere;
+    let has = |text: &str, pat: &str| {
+        s::search_lcase(Anywhere, lit(Some(text)), StrOperand::Array(&r1(pat)), V)
+            .unwrap()
+            .value(0)
+    };
+    let (n, half): (usize, usize) = if cfg!(miri) {
+        (400, 200)
+    } else {
+        (100_000, 50_000)
+    };
+    let text = "a".repeat(n);
+    let pat = format!("{}b", "A".repeat(half.saturating_sub(1)));
+    assert!(!has(&text, &pat));
+    assert!(has(&format!("{text}b"), &pat));
+    assert!(has("xaab", "AAB") && has("aaab", "aab") && !has("aab", "aaab"));
+    assert!(has("ab", ""));
+    // A match may not start or end between the two code points of the capital I with a dot.
+    assert!(
+        has("x\u{130}", "i\u{307}") && !has("x\u{130}", "\u{307}") && !has("x\u{130}", "x\u{69}")
+    );
+}
+
+#[test]
 fn search_lcase_endswith_is_linear_and_exact() {
     use s::LcaseSearch::End;
     let at = |text: &str, pat: &str| {
-        s::search_lcase(End, lit(Some(text)), StrOperand::Array(&r1(pat)))
+        s::search_lcase(End, lit(Some(text)), StrOperand::Array(&r1(pat)), V)
             .unwrap()
             .value(0)
     };
@@ -1376,4 +1427,22 @@ fn search_lcase_endswith_is_linear_and_exact() {
     assert!(at("x\u{130}", "i\u{307}"));
     assert!(!at("x\u{130}", "\u{307}"));
     assert!(at("x\u{130}", "x\u{130}"));
+}
+
+#[test]
+fn search_lcase_uses_the_version_gated_case_mapping() {
+    use s::LcaseSearch::Anywhere;
+    let has = |v: SparkVersion| {
+        s::search_lcase(
+            Anywhere,
+            lit(Some("\u{a7ce}")),
+            StrOperand::Array(&r1("\u{a7cf}")),
+            v,
+        )
+        .unwrap()
+        .value(0)
+    };
+    // U+A7CE is a Unicode 17 letter: Spark 4.0 and 4.1 leave it as it is, as `lower` does.
+    assert!(!has(SparkVersion::V4_1));
+    assert!(has(SparkVersion::V4_2));
 }

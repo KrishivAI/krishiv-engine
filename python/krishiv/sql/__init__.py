@@ -11,6 +11,7 @@ from krishiv.sql.readwriter import DataFrameReader, DataFrameWriter, DataFrameWr
 from krishiv.sql.row import Row
 from krishiv.sql.session import Catalog, SparkSession
 from krishiv.sql.stat import DataFrameStatFunctions
+from krishiv.sql.udf import UDFRegistration
 from krishiv.sql.window import Window, WindowSpec
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "Row",
     "RuntimeConfig",
     "SparkSession",
+    "UDFRegistration",
     "Window",
     "WindowSpec",
     "functions",

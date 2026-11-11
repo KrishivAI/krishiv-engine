@@ -1,0 +1,1351 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every test method of PySpark 4.2.0 test_udf.py, pandas/test_pandas_udf_scalar.py and arrow/test_arrow_python_udf.py.
+# status = included (runs, must pass) or excluded (skipped with `category` and `reason`). See README.md.
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_callable"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_partial_function"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_on_sql_context"
+status = "excluded"
+category = "jvm-internals"
+reason = "SQLContext, the legacy JVM-backed context, which Krishiv does not have"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf2"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf3"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_registration_return_type_none"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_registration_return_type_not_none"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_nondeterministic_udf"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_nondeterministic_udf2"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_nondeterministic_udf3"
+status = "excluded"
+category = "jvm-internals"
+reason = "py4j/JVM handles (_jdf, _judf_placeholder) that an in-process runtime has no counterpart for"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_nondeterministic_udf_in_aggregate"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_chained_udf"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_single_udf_with_repeated_argument"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_multiple_udfs"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_in_filter_on_top_of_outer_join"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_in_filter_on_top_of_join"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_in_join_condition"
+status = "excluded"
+category = "engine-feature"
+reason = "implicit cartesian product detection (spark.sql.crossJoin.enabled=false)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_in_left_outer_join_condition"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_and_common_filter_in_join_condition"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_not_supported_in_join_condition"
+status = "excluded"
+category = "krishiv-divergence"
+reason = "Krishiv raises UnsupportedOperationException (Spark: AnalysisException) and supports one-sided calls in outer-join conditions"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_as_join_condition"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_without_arguments"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_array_type"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_broadcast_in_udf"
+status = "excluded"
+category = "jvm-internals"
+reason = "SparkContext APIs (broadcast, accumulator, RDDs)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_filter_function"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_variant_input"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_complex_variant_input"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs: the runtime sees VARIANT as struct<metadata,value> and does not convert to or from VariantVal"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_variant_output"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_complex_variant_output"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_chained_udfs_with_variant"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_aggregate_function"
+status = "excluded"
+category = "krishiv-bug"
+reason = "Krishiv bug (not UDF specific): groupBy on an aliased expression, df.groupBy(expr.alias('k')), fails with INTERNAL_ERROR 'attribute #0 is not an input column'"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_in_generate"
+status = "excluded"
+category = "engine-feature"
+reason = "the explode generator function (krishiv.sql.functions.explode) is not available"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_order_by_and_limit"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_registration_returns_udf"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_registration_returns_udf_on_sql_context"
+status = "excluded"
+category = "jvm-internals"
+reason = "SQLContext, the legacy JVM-backed context, which Krishiv does not have"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_register_java_function"
+status = "excluded"
+category = "jvm-internals"
+reason = "registerJavaFunction/registerJavaUDAF: Java UDFs need a JVM"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_register_java_udaf"
+status = "excluded"
+category = "jvm-internals"
+reason = "registerJavaFunction/registerJavaUDAF: Java UDFs need a JVM"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_err_udf_registration"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_non_existed_udf"
+status = "excluded"
+category = "jvm-internals"
+reason = "registerJavaFunction/registerJavaUDAF: Java UDFs need a JVM"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_non_existed_udf_with_sql_context"
+status = "excluded"
+category = "jvm-internals"
+reason = "SQLContext, the legacy JVM-backed context, which Krishiv does not have"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_non_existed_udaf"
+status = "excluded"
+category = "jvm-internals"
+reason = "registerJavaFunction/registerJavaUDAF: Java UDFs need a JVM"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_input_file_name"
+status = "excluded"
+category = "jvm-internals"
+reason = "reads Spark's checked-in test resource files (python/test_support)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_input_file_name_for_hadooprdd"
+status = "excluded"
+category = "jvm-internals"
+reason = "SparkContext APIs (broadcast, accumulator, RDDs)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_defers_judf_initialization"
+status = "excluded"
+category = "jvm-internals"
+reason = "py4j/JVM handles (_jdf, _judf_placeholder) that an in-process runtime has no counterpart for"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_string_return_type"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_should_not_accept_noncallable_object"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_decorator"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_wrapper"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_timestamp_ntz"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_daytime_interval"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with interval columns"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_nonparam_udf_with_aggregate"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_datasource_with_udf"
+status = "excluded"
+category = "jvm-internals"
+reason = "reads Spark's checked-in test resource files (python/test_support)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_file_dsv2_with_udf_filter"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_same_accumulator_in_udfs"
+status = "excluded"
+category = "jvm-internals"
+reason = "SparkContext APIs (broadcast, accumulator, RDDs)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_in_subquery"
+status = "excluded"
+category = "engine-feature"
+reason = "DataFrame.createTempView is not available (createOrReplaceTempView is)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_globals_not_overwritten"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_worker_original_stdin_closed"
+status = "excluded"
+category = "jvm-internals"
+reason = "SparkContext APIs (broadcast, accumulator, RDDs)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_256_args"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_cache"
+status = "excluded"
+category = "jvm-internals"
+reason = "asserts Spark's physical-plan text (InMemoryTableScan / InMemoryRelation)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_input_serialization_valuecompare_disabled"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_column_vector"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_rand"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_nested_struct"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_nested_map"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_nested_array"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_complex_return_types"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_named_arguments"
+status = "excluded"
+category = "engine-feature"
+reason = "named and keyword arguments for Python UDFs"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_named_arguments_negative"
+status = "excluded"
+category = "engine-feature"
+reason = "named and keyword arguments for Python UDFs"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_kwargs"
+status = "excluded"
+category = "engine-feature"
+reason = "named and keyword arguments for Python UDFs"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_named_arguments_and_defaults"
+status = "excluded"
+category = "engine-feature"
+reason = "named and keyword arguments for Python UDFs"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_num_arguments"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_raise_stop_iteration"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_python_udf_segfault"
+status = "excluded"
+category = "jvm-internals"
+reason = "a UDF that segfaults kills the worker process in Spark; in-process it would kill the interpreter"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_kill_on_timeout"
+status = "excluded"
+category = "jvm-internals"
+reason = "kill-on-idle-timeout of the Python worker process (spark.sql.execution.pyspark.udf.idleTimeoutSeconds); UDFs run in-process"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_err_udf_init"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_timeout_util_with_udf"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_udt"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_empty_frame"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_collated_string_types"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with collated string columns"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_char_varchar_return_type"
+status = "excluded"
+category = "engine-feature"
+reason = "CHAR/VARCHAR types in UDF return types"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_binary_type"
+status = "excluded"
+category = "krishiv-bug"
+reason = "Krishiv bug: the legacy Arrow conversion (BinaryType always bytes) is not honored; the UDF receives bytearray"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_binary_type_in_nested_structures"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_logging"
+status = "excluded"
+category = "engine-feature"
+reason = "spark.tvf.* table-valued functions (worker logging)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_multiple_udfs_with_logging"
+status = "excluded"
+category = "engine-feature"
+reason = "spark.tvf.* table-valued functions (worker logging)"
+
+[[test]]
+file = "test_udf.py"
+cls = "BaseUDFTestsMixin"
+name = "test_udf_with_pyspark_logger"
+status = "excluded"
+category = "engine-feature"
+reason = "PySparkLogger (pyspark.logger) is not available in Krishiv"
+
+[[test]]
+file = "test_udf.py"
+cls = "UDFTests"
+name = "test_udf_with_various_batch_size"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "UDFTests"
+name = "test_udf_with_various_buffer_size"
+status = "included"
+
+[[test]]
+file = "test_udf.py"
+cls = "UDFInitializationTests"
+name = "test_udf_init_should_not_initialize_context"
+status = "excluded"
+category = "jvm-internals"
+reason = "SparkContext APIs (broadcast, accumulator, RDDs)"
+
+[[test]]
+file = "test_udf.py"
+cls = "UDFInitializationTests"
+name = "test_err_parse_type_when_no_sc"
+status = "excluded"
+category = "jvm-internals"
+reason = "SparkContext/SparkSession singletons"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_pandas_udf_tokenize"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_pandas_udf_nested_arrays"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_input_nested_structs"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested struct columns (the test input cannot be built)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_input_nested_maps"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_input_nested_arrays"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_pandas_array_struct"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_basic"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_register_nondeterministic_vectorized_udf_basic"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_boolean"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_byte"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_short"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_int"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_long"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_float"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_double"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_decimal"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_string"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_string_in_udf"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_datatype_string"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_binary"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_array_type"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_null_array"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_struct_type"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_struct_complex"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_struct_empty"
+status = "excluded"
+category = "engine-feature"
+reason = "struct<> (empty struct) type string is not parsed"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_nested_struct"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_map_type"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_complex"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_exception"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_invalid_length"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_chained"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_chained_struct_type"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_wrong_return_type"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_return_scalar"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_udf_with_variant_input"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_udf_with_variant_output"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_udf_with_nested_variant_input"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs: the runtime sees VARIANT as struct<metadata,value> and does not convert to or from VariantVal"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_udf_struct_with_metadata_value_field"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_udf_with_variant_nested_output"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs: the runtime sees VARIANT as struct<metadata,value> and does not convert to or from VariantVal"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_chained_udfs_with_variant"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_chained_udfs_with_complex_variant"
+status = "excluded"
+category = "engine-feature"
+reason = "Variant values in Python UDFs: the runtime sees VARIANT as struct<metadata,value> and does not convert to or from VariantVal"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_udafs_with_variant_input"
+status = "excluded"
+category = "grouped-kind"
+reason = "grouped-aggregate pandas UDF (eval type 202) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_udafs_with_complex_variant_input"
+status = "excluded"
+category = "grouped-kind"
+reason = "grouped-aggregate pandas UDF (eval type 202) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_udafs_with_variant_output"
+status = "excluded"
+category = "grouped-kind"
+reason = "grouped-aggregate pandas UDF (eval type 202) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_udafs_with_complex_variant_output"
+status = "excluded"
+category = "grouped-kind"
+reason = "grouped-aggregate pandas UDF (eval type 202) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_decorator"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_empty_partition"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_struct_with_empty_partition"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_varargs"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_dates"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_timestamps"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_return_timestamp_tz"
+status = "excluded"
+category = "engine-feature"
+reason = "TimestampType.fromInternal/toInternal (the epoch-microsecond helpers of pyspark.sql.types) are missing from krishiv.sql.types"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_check_config"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_vectorized_udf_timestamps_respect_session_timezone"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_nondeterministic_vectorized_udf"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_nondeterministic_vectorized_udf_in_aggregate"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_register_vectorized_udf_basic"
+status = "excluded"
+category = "krishiv-bug"
+reason = "Krishiv bug: see message"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_scalar_iter_udf_init"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_scalar_iter_udf_close"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_scalar_iter_udf_close_early"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_timestamp_dst"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_udf_category_type"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_type_annotation"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_mixed_udf"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_mixed_udf_and_sql"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_datasource_with_udf"
+status = "excluded"
+category = "jvm-internals"
+reason = "reads Spark's checked-in test resource files (python/test_support)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_pandas_udf_with_column_vector"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_named_arguments"
+status = "excluded"
+category = "engine-feature"
+reason = "named and keyword arguments for Python UDFs"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_named_arguments_negative"
+status = "excluded"
+category = "engine-feature"
+reason = "named and keyword arguments for Python UDFs"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_kwargs"
+status = "excluded"
+category = "engine-feature"
+reason = "named and keyword arguments for Python UDFs"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_named_arguments_and_defaults"
+status = "excluded"
+category = "engine-feature"
+reason = "named and keyword arguments for Python UDFs"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_arrow_cast_enabled_numeric_to_decimal"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_arrow_cast_enabled_str_to_numeric"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_scalar_pandas_udf_with_logging"
+status = "excluded"
+category = "engine-feature"
+reason = "spark.tvf.* table-valued functions (worker logging)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_scalar_iter_pandas_udf_with_logging"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_scalar_pandas_udf_with_compression_codec"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_scalar_pandas_udf_with_compression_codec_complex_types"
+status = "included"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_scalar_iter_pandas_udf_with_compression_codec"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_pandas_udf_scalar.py"
+cls = "ScalarPandasUDFTestsMixin"
+name = "test_scalar_iter_pandas_udf_with_single_output_batch"
+status = "excluded"
+category = "iterator-kind"
+reason = "scalar iterator pandas UDF (eval type 204) is out of scope (ADR 0022 section 1)"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_broadcast_in_udf"
+status = "excluded"
+category = "jvm-internals"
+reason = "SparkContext APIs (broadcast, accumulator, RDDs)"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_register_java_function"
+status = "excluded"
+category = "jvm-internals"
+reason = "registerJavaFunction/registerJavaUDAF: Java UDFs need a JVM"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_register_java_udaf"
+status = "excluded"
+category = "jvm-internals"
+reason = "registerJavaFunction/registerJavaUDAF: Java UDFs need a JVM"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_complex_input_types"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_use_arrow"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_eval_type"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_register"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_nested_array_input"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_type_coercion_string_to_numeric"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_arrow_udf_int_to_decimal_coercion"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_decimal_round"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_err_return_type"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_named_arguments_negative"
+status = "excluded"
+category = "engine-feature"
+reason = "named and keyword arguments for Python UDFs"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_udf_with_udt"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_udf_use_arrow_and_session_conf"
+status = "included"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_day_time_interval_type_casting"
+status = "excluded"
+category = "krishiv-bug"
+reason = "Krishiv bug: a day-time interval UDF argument fails with INTERNAL_ERROR 'a Python UDF argument has no resolved type'"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
+name = "test_day_time_interval_in_struct"
+status = "excluded"
+category = "krishiv-bug"
+reason = "Krishiv bug: a day-time interval UDF argument fails with INTERNAL_ERROR 'a Python UDF argument has no resolved type'"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFLegacyTestsMixin"
+name = "test_udf_binary_type"
+status = "excluded"
+category = "krishiv-bug"
+reason = "Krishiv bug: the legacy Arrow conversion (BinaryType always bytes) is not honored; the UDF receives bytearray"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFLegacyTestsMixin"
+name = "test_udf_binary_type_in_nested_structures"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTests"
+name = "test_udf_binary_type"
+status = "excluded"
+category = "krishiv-bug"
+reason = "Krishiv bug: the legacy Arrow conversion (BinaryType always bytes) is not honored; the UDF receives bytearray"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTests"
+name = "test_udf_binary_type_in_nested_structures"
+status = "excluded"
+category = "engine-feature"
+reason = "createDataFrame with nested array/map/struct columns (the test's input data cannot be built)"

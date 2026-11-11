@@ -709,6 +709,101 @@ pub(crate) unsafe fn import_array(
     validated_batch(table, &data)
 }
 
+/// Exports one column (a Python UDF's argument) as a C schema and array
+/// pair for the `arrow_schema` and `arrow_array` capsules. The array keeps
+/// the column's buffers alive until its `release` runs; a sliced column
+/// keeps its offset.
+///
+/// # Errors
+/// [`KrishivInvalidArrowData`] for a type the C data interface cannot
+/// carry.
+pub(crate) fn export_column(
+    column: &arrow_array::ArrayRef,
+) -> Result<(FFI_ArrowSchema, FFI_ArrowArray), KrishivError> {
+    let field = Field::new("", column.data_type().clone(), true);
+    let schema = FFI_ArrowSchema::try_from(&field).map_err(|e| invalid(arrow_message(&e)))?;
+    let data = column.to_data();
+    let array = catch_panic(|| FFI_ArrowArray::new(&data))?;
+    Ok((schema, array))
+}
+
+/// Imports one `ArrowArray` + `ArrowSchema` pair (a Python UDF's result) as
+/// one column of `declared` with `rows` values. Imports are untrusted: the
+/// header is checked, the data validated in full and arrow-rs panics
+/// contained before anything reads a value. The result's type must have
+/// `declared`'s layout ([`DataType::equals_datatype`]: nested field names
+/// and metadata may differ, so a nested result pyarrow built is accepted);
+/// it is then read as `declared`, whose names and metadata the engine keeps.
+/// Another layout (a dictionary or run-end encoding of `declared` included)
+/// is rejected, never reinterpreted: the converters cast a result to the
+/// declared type before they export it (design P2-T059 §7 item 9).
+///
+/// # Safety
+///
+/// As [`import_array`]: `schema` is only borrowed, `array` is moved out of.
+///
+/// # Errors
+/// [`KrishivInvalidArrowData`] for a consumed, malformed or invalid array,
+/// another type than `declared`, or another length than `rows`.
+pub(crate) unsafe fn import_column(
+    schema: *const FFI_ArrowSchema,
+    array: *mut FFI_ArrowArray,
+    declared: &DataType,
+    rows: usize,
+) -> Result<arrow_array::ArrayRef, KrishivError> {
+    aligned(schema, "schema")?;
+    aligned(array, "array")?;
+    // SAFETY: the caller guarantees `array` is a valid, initialized C array
+    // we may move out of, and it is aligned (checked); `from_raw` leaves a
+    // released one behind.
+    let array = unsafe { FFI_ArrowArray::from_raw(array) };
+    if array.is_released() {
+        return Err(invalid("the Arrow array was already consumed"));
+    }
+    // SAFETY: the caller guarantees `schema` points to a C schema.
+    unsafe { check_schema(schema) }?;
+    // SAFETY: checked above; it is borrowed, never moved or released.
+    let schema = unsafe { &*schema };
+    let field = catch_panic(|| Field::try_from(schema))?.map_err(|e| {
+        invalid(format!(
+            "the result's schema is invalid: {}",
+            arrow_message(&e)
+        ))
+    })?;
+    if !field.data_type().equals_datatype(declared) {
+        return Err(invalid(format!(
+            "a Python UDF returned {} where {declared} was declared",
+            field.data_type()
+        )));
+    }
+    // SAFETY: `array` is the producer's C array of a type with `declared`'s
+    // layout (checked above), so reading it as `declared` reads the same
+    // buffers the producer described.
+    unsafe { check_array(&raw const array, declared) }?;
+    let data = catch_panic(|| {
+        // SAFETY: `array` is the producer's C array of `declared`, its
+        // header checked above (only its pointers and the sizes they point to
+        // are trusted); the values are validated in full before anything
+        // reads them.
+        unsafe { arrow_array::ffi::from_ffi_and_data_type(array, declared.clone()) }
+    })?
+    .map_err(|e| {
+        invalid(format!(
+            "importing the result failed: {}",
+            arrow_message(&e)
+        ))
+    })?;
+    // The cheap check first: a wrong length needs no validation pass.
+    if data.len() != rows {
+        return Err(invalid(format!(
+            "a Python UDF returned {} rows for {rows}",
+            data.len()
+        )));
+    }
+    catch_panic(|| data.validate_full())?.map_err(|e| invalid(arrow_message(&e)))?;
+    catch_panic(|| arrow_array::make_array(data))
+}
+
 /// A reader over batches already in memory.
 #[derive(Debug)]
 pub(crate) struct MemoryReader {
@@ -878,4 +973,89 @@ fn panic_message(p: &(dyn Any + Send)) -> String {
         .map(|s| (*s).to_owned())
         .or_else(|| p.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "unknown panic".to_owned())
+}
+
+/// Bytes an unsliced result's buffers may exceed twice its window by before
+/// [`owned_tight_copy`] compacts it first.
+const TIGHT_SLACK: usize = 4096;
+
+/// [`owned_copy`] of `data`, first cut to the bytes its window reaches when
+/// its buffers are much larger than that window: pyarrow exports a slice of
+/// a larger array (a UDF returning `big.slice(i, n)`) as the parent's whole
+/// buffers with an offset, which a plain copy would copy whole on every call
+/// (review 2026-11-09 I3). Compacted when the offset is nonzero, the type is
+/// nested (not a dictionary), or the buffers exceed twice the window plus
+/// [`TIGHT_SLACK`]; a layout the compaction cannot take (an arrow-rs panic)
+/// is copied whole, as before.
+///
+/// # Errors
+/// As [`owned_copy`].
+pub(crate) fn owned_tight_copy(data: &ArrayData) -> Result<ArrayData, KrishivError> {
+    // A nonzero offset is a slice. A nested array can be one at offset 0
+    // (arrow-rs slices a list's offsets and keeps its whole child, which
+    // `get_slice_memory_size` counts), so one is always compacted: a second
+    // copy of the window, never of the parent. A dictionary's keys are its
+    // only sliced part, so it takes the size check like a flat array.
+    let nested =
+        !data.child_data().is_empty() && !matches!(data.data_type(), DataType::Dictionary(..));
+    let window = data.get_slice_memory_size().unwrap_or(usize::MAX);
+    let oversized =
+        data.get_buffer_memory_size() > window.saturating_mul(2).saturating_add(TIGHT_SLACK);
+    if data.offset() == 0 && !oversized && !nested {
+        return owned_copy(data);
+    }
+    let compacted = catch_panic(|| {
+        let mut m = arrow_data::transform::MutableArrayData::new(vec![data], false, data.len());
+        m.try_extend(0, 0, data.len()).map(|()| m.freeze())
+    });
+    match compacted {
+        // The compaction's buffers are Rust's, but a dictionary's values are
+        // still the producer's: the deep copy owns every one.
+        Ok(Ok(c)) => owned_copy(&c),
+        Ok(Err(_)) | Err(_) => owned_copy(data),
+    }
+}
+
+/// A copy of `data` whose every buffer is newly allocated by Rust: each
+/// buffer, the null bitmap and, recursively, all `child_data` (a
+/// dictionary's values, run ends and values, list, struct and map children),
+/// with the same type, offset and length (design P2-T059, unit 3b M3).
+///
+/// An imported array may hold memory a Python object owns (pyarrow over a
+/// numpy buffer), whose release takes the GIL; the UDF pool thread copies a
+/// result with this while attached and drops the import there, so no engine
+/// thread, and nothing after interpreter exit, runs the producer's release.
+///
+/// # Errors
+/// `KRISHIV_INVALID_ARROW_DATA` when the copy fails arrow-rs's layout checks
+/// (it cannot for an array that passed [`import_column`]) or arrow-rs panics.
+pub(crate) fn owned_copy(data: &ArrayData) -> Result<ArrayData, KrishivError> {
+    let children = data
+        .child_data()
+        .iter()
+        .map(owned_copy)
+        .collect::<Result<Vec<_>, _>>()?;
+    let buffers = data
+        .buffers()
+        .iter()
+        .map(|b| arrow_buffer::Buffer::from_slice_ref(b.as_slice()))
+        .collect();
+    let nulls = data.nulls().map(|n| {
+        let bits = n.inner();
+        arrow_buffer::NullBuffer::new(arrow_buffer::BooleanBuffer::new(
+            arrow_buffer::Buffer::from_slice_ref(bits.values()),
+            bits.offset(),
+            bits.len(),
+        ))
+    });
+    catch_panic(|| {
+        ArrayData::builder(data.data_type().clone())
+            .len(data.len())
+            .offset(data.offset())
+            .buffers(buffers)
+            .child_data(children)
+            .nulls(nulls)
+            .build()
+    })?
+    .map_err(|e| invalid(format!("copying the result failed: {}", arrow_message(&e))))
 }

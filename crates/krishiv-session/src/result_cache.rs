@@ -416,7 +416,11 @@ fn survey(plan: &Arc<LogicalPlan>) -> Found {
                         if !f.deterministic || reads_clock || RUN_DEPENDENT.contains(&f.id.name()) {
                             found.nondeterministic = true;
                         }
-                        if matches!(f.id, krishiv_plan::FunctionId::Udf { .. }) {
+                        if matches!(
+                            f.id,
+                            krishiv_plan::FunctionId::Udf { .. }
+                                | krishiv_plan::FunctionId::PythonUdf { .. }
+                        ) {
                             found.session_udf = true;
                         }
                     }

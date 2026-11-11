@@ -1716,7 +1716,12 @@ impl Resolver<'_> {
                     ResolvedExpr::Alias { output, .. } => column(output),
                     ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
                     ResolvedExpr::StateInput { raw_type, .. } => arg_type(raw_type.clone(), true),
-                    ResolvedExpr::Field {
+                    ResolvedExpr::EvalMode {
+                        data_type,
+                        nullable,
+                        ..
+                    }
+                    | ResolvedExpr::Field {
                         data_type,
                         nullable,
                         ..

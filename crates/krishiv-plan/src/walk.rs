@@ -451,7 +451,9 @@ impl Teardown {
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
-                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+                ResolvedExpr::Alias { expr, .. }
+                | ResolvedExpr::EvalMode { expr, .. }
+                | ResolvedExpr::Field { base: expr, .. },
             ) => self.exprs.push(expr),
             ExprNode::UpdateFields { base, ops } => {
                 self.exprs.push(base);

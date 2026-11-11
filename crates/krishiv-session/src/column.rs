@@ -390,6 +390,24 @@ impl Column {
         }
     }
 
+    /// A call of `name` exactly as given (no dot splitting) under
+    /// `qualifier`.
+    pub(crate) fn qualified_function(
+        qualifier: Vec<String>,
+        name: String,
+        args: Vec<Self>,
+    ) -> Self {
+        Self::new(Expr::new(ExprNode::Function(FunctionCall {
+            name,
+            qualifier,
+            arg_names: Vec::new(),
+            args: args.into_iter().map(|c| Arc::new(c.expr)).collect(),
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+        })))
+    }
+
     /// The expression of an aggregate call `name(args)`. Dots separate
     /// name parts outside backquotes, as in SQL (`system.session.f`).
     pub(crate) fn function(name: &str, args: Vec<Self>, distinct: bool) -> Self {
