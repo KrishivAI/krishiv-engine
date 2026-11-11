@@ -114,6 +114,8 @@ use crate::error::{Result, internal};
 use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
 use crate::rows::{EncodedKeys, FLAT_MAX_BYTES, Hll, RowLayout};
 
+mod direct;
+
 /// Radix bits of `h` of a partitioned table (DuckDB's initial 4 bits; the
 /// final phase merges ranges of these partitions, see [`final_tasks`]).
 pub(crate) const RADIX_BITS: u32 = 4;
@@ -306,7 +308,10 @@ const ALL_NEW: f64 = 0.9;
 
 /// A batch prepared for [`RowTable::apply`].
 pub(crate) struct RowPrepared {
+    /// The batch's keys; on the direct path, only each id's first row.
     keys: EncodedKeys,
+    /// The direct path's batch-local id of each row (an index into `keys`).
+    local: Option<Box<[u16]>>,
     /// Rows per radix partition (bounds each partition's growth).
     counts: [usize; PARTS],
     /// Long key bytes per radix partition (bounds each heap's growth;
@@ -315,6 +320,13 @@ pub(crate) struct RowPrepared {
     cols: Vec<ArrayRef>,
     weights: Weights,
     states: bool,
+}
+
+impl RowPrepared {
+    /// Input rows.
+    fn rows(&self) -> usize {
+        self.local.as_ref().map_or(self.keys.len(), |l| l.len())
+    }
 }
 
 /// A chunk of another table's rows to merge (the final phase).
@@ -406,6 +418,8 @@ pub(crate) struct RowTable {
     /// Batches left before the batch-local key map is tried again, after a
     /// batch held more than [`LOCAL_MAX`] distinct keys.
     local_skip: u8,
+    /// Direct-address ids for tiny keys (`krishiv.exec.agg.directKeys`).
+    direct: Option<direct::Direct>,
 }
 
 impl RowTable {
@@ -463,7 +477,15 @@ impl RowTable {
             resizes: None,
             probes: None,
             local_skip: 0,
+            direct: None,
         })
+    }
+
+    /// Finds a batch's groups by direct addressing when its keys are tiny
+    /// (`krishiv.exec.agg.directKeys`).
+    pub(crate) fn with_direct(mut self, on: bool) -> Self {
+        self.direct = on.then(direct::Direct::new);
+        self
     }
 
     /// Number of rows (groups; a group may have several rows in a table
@@ -750,6 +772,11 @@ impl RowTable {
                 })
                 .collect::<Result<_>>()?
         };
+        if let Some(d) = &self.direct
+            && let Some(ids) = d.ids(&keys, b.num_rows())
+        {
+            return self.prepare_direct(b, &keys, ids, states);
+        }
         // `h` is seedless (Appendix C).
         let keys = layout(&self.core)?.encode(&keys)?;
         let mut counts = [0; PARTS];
@@ -775,6 +802,7 @@ impl RowTable {
             }
         }
         Ok(RowPrepared {
+            local: None,
             keys,
             counts,
             heap_counts,
@@ -955,7 +983,7 @@ impl RowTable {
     /// [`memory_size`](Self::memory_size) after [`apply`](Self::apply)ing
     /// `p` (an upper bound).
     pub(crate) fn projected(&self, p: &RowPrepared) -> usize {
-        let n = p.keys.len();
+        let n = p.rows();
         let rows: usize = self
             .parts
             .iter()
@@ -980,7 +1008,10 @@ impl RowTable {
         } else {
             0
         };
-        Self::scratch(p.keys.len()) + gather + p.keys.bytes()
+        Self::scratch(p.rows())
+            + gather
+            + p.keys.bytes()
+            + p.local.as_ref().map_or(0, |l| l.len() * size_of::<u16>())
     }
 
     fn fold_of(p: &RowPrepared) -> Fold {
@@ -1086,7 +1117,7 @@ impl RowTable {
     /// [`projected`](Self::projected) bytes.
     pub(crate) fn apply(&mut self, p: &RowPrepared) -> Result<()> {
         self.only_hashbrown()?;
-        let n = p.keys.len();
+        let n = p.rows();
         self.rows_in = self.rows_in.saturating_add(n);
         self.switch(self.next_mode());
         self.start_sketches(n);
@@ -1107,7 +1138,10 @@ impl RowTable {
         let mut refs = Vec::with_capacity(n);
         let before = self.groups;
         self.reserve_index(n);
-        let result = self.lookup(&p.keys, &mut refs);
+        let result = match &p.local {
+            Some(ids) => self.lookup_direct(&p.keys, ids, &mut refs),
+            None => self.lookup(&p.keys, &mut refs),
+        };
         if let Some(a) = self.adapt.as_mut() {
             a.pushed += self.groups - before;
         }
@@ -1975,6 +2009,7 @@ impl RowTable {
                     resizes: None,
                     probes: None,
                     local_skip: 0,
+                    direct: None,
                 }
             })
             .collect()

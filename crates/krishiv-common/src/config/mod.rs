@@ -23,10 +23,12 @@ use std::time::Duration;
 use crate::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig};
 
 mod build_projection;
+mod direct_keys;
 mod join_cost;
 mod registry;
 
 pub use build_projection::EXEC_JOIN_BUILD_PROJECTION;
+pub use direct_keys::EXEC_AGG_DIRECT_KEYS;
 pub use join_cost::JOIN_COST;
 pub use registry::*;
 

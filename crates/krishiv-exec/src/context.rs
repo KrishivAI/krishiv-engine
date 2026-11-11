@@ -53,6 +53,9 @@ pub struct ExecConfig {
     /// Grouped aggregations with fixed-width keys use row-layout,
     /// radix-partitioned tables (`krishiv.exec.agg.rowLayout`; P2-T159).
     pub agg_row_layout: bool,
+    /// Thread-local row tables find the groups of a batch with one-byte keys
+    /// by direct addressing (`krishiv.exec.agg.directKeys`; study 32 D1).
+    pub agg_direct_keys: bool,
     /// Collect the costlier metrics of a detailed profile (`EXPLAIN
     /// ANALYZE`): per-lookup hash-table probe lengths. The always-on
     /// counters do not depend on it.
@@ -99,6 +102,7 @@ impl Default for ExecConfig {
             fail_on_stall: false,
             seed: None,
             agg_row_layout: true,
+            agg_direct_keys: true,
             detailed_metrics: false,
             join_row_layout: true,
             join_radix_bits: 3,
@@ -122,6 +126,10 @@ impl ExecConfig {
             .unwrap_or(DEFAULT_BATCH_SIZE);
         let agg_row_layout = config
             .get(&EXEC_AGG_ROW_LAYOUT)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
+        let agg_direct_keys = config
+            .get(&krishiv_common::config::EXEC_AGG_DIRECT_KEYS)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
         let join_row_layout = config
@@ -170,6 +178,7 @@ impl ExecConfig {
             deterministic_order,
             sort_hash_buckets,
             agg_row_layout,
+            agg_direct_keys,
             join_row_layout,
             join_radix_bits,
             join_merge_buffer_bytes,

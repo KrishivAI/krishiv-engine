@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use super::{
     ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
-    build_projection::EXEC_JOIN_BUILD_PROJECTION, join_cost::JOIN_COST,
+    build_projection::EXEC_JOIN_BUILD_PROJECTION, direct_keys::EXEC_AGG_DIRECT_KEYS,
+    join_cost::JOIN_COST,
 };
 
 mod python;
@@ -30,6 +31,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
+    &EXEC_AGG_DIRECT_KEYS,
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
@@ -178,6 +180,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.joinCost", &JOIN_COST),
     ("krishiv.python.udf.threads", &PYTHON_UDF_THREADS),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
+    ("krishiv.exec.agg.directKeys", &EXEC_AGG_DIRECT_KEYS),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
