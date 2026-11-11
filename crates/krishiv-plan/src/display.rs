@@ -935,6 +935,11 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS {}#{}", output.name, output.id.0)));
         }
+        ExprNode::Resolved(ResolvedExpr::EvalMode { ansi, expr, .. }) => {
+            out.push(Piece::Owned(format!("eval_mode(ansi={ansi}, ")));
+            out.push(Piece::Expr(expr));
+            out.push(Piece::Owned(")".to_owned()));
+        }
         ExprNode::Window(w) => {
             out.push(Piece::Expr(&w.function));
             match &w.window {

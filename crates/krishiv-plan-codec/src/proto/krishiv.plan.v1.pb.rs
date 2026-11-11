@@ -801,6 +801,60 @@ pub struct HashJoinNode {
     /// ignorable: a reader without it builds every row, with the same result.
     #[prost(bool, tag = "11")]
     pub distinct_build: bool,
+    /// The rows of each probe batch the probe joins: a filter and a scan's
+    /// runtime-filter row stage fused into it (design P2-E3 U2).
+    /// feature: fused_probe
+    #[prost(message, optional, tag = "12")]
+    pub select: ::core::option::Option<ProbeSelect>,
+}
+/// feature: fused_probe
+/// What a hash probe keeps of each input batch before it joins it.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProbeSelect {
+    #[prost(message, optional, tag = "1")]
+    pub filter: ::core::option::Option<ProbeFilter>,
+    #[prost(message, optional, tag = "2")]
+    pub row_stage: ::core::option::Option<ProbeRowStage>,
+    /// The probe input's columns of each batch received (a fused column-only
+    /// projection); empty: the batch as it is.
+    #[prost(message, repeated, tag = "3")]
+    pub columns: ::prost::alloc::vec::Vec<ProbeColumn>,
+}
+/// feature: fused_probe
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProbeColumn {
+    #[prost(uint64, tag = "1")]
+    pub index: u64,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+}
+/// feature: fused_probe
+/// A filter fused into a hash probe: `predicate` over the probe input, whose
+/// columns it knows as the attributes `layout`.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProbeFilter {
+    #[prost(uint64, repeated, tag = "1")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint32, tag = "2")]
+    pub predicate: u32,
+}
+/// feature: fused_probe
+/// The scan whose runtime-filter row stage the probe runs, with each
+/// filter's column in the probe input.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProbeRowStage {
+    #[prost(uint64, tag = "1")]
+    pub scan: u64,
+    #[prost(message, repeated, tag = "2")]
+    pub columns: ::prost::alloc::vec::Vec<ProbeFilterColumn>,
+}
+/// feature: fused_probe
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProbeFilterColumn {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(uint64, tag = "2")]
+    pub column: u64,
 }
 /// feature: sort_merge_join
 /// A join of its inputs sorted on the keys; the sorts are the join's own.
@@ -1135,7 +1189,7 @@ pub struct BoundColumn {
 pub struct Expr {
     #[prost(message, optional, tag = "1")]
     pub origin: ::core::option::Option<Origin>,
-    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10")]
+    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11")]
     pub kind: ::core::option::Option<expr::Kind>,
 }
 /// Nested message and enum types in `Expr`.
@@ -1163,7 +1217,24 @@ pub mod expr {
         /// feature: lambda_functions
         #[prost(message, tag = "10")]
         LambdaVar(super::BoundColumn),
+        /// feature: captured_eval_mode
+        #[prost(message, tag = "11")]
+        EvalMode(super::EvalModeExpr),
     }
+}
+/// An expression evaluated in ANSI mode `ansi` whatever the query's mode is: the body
+/// of a SQL function created under the other mode (T184).
+/// feature: captured_eval_mode
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EvalModeExpr {
+    #[prost(uint32, tag = "1")]
+    pub expr: u32,
+    #[prost(bool, tag = "2")]
+    pub ansi: bool,
+    #[prost(message, optional, tag = "3")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(bool, tag = "4")]
+    pub nullable: bool,
 }
 /// A lambda (`x -> body`): the bound body of a higher-order function's
 /// argument, with its variables as `lambda_var` leaves.
