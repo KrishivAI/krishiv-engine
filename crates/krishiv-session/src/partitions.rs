@@ -1055,6 +1055,17 @@ impl Session {
             )));
         }
         let source = found.location.clone();
+        // Nor is a directory moved from or to a place a symbolic link on its way redirects (another directory's files
+        // moved into the table, or the partition's moved out of it).
+        if let Some(path) = [&source, &target]
+            .into_iter()
+            .find(|path| !resolves_in_place(&table.location, path))
+        {
+            return Err(unsupported(&format!(
+                "ALTER TABLE ... RENAME PARTITION through {}, which does not resolve to its own path in the table",
+                path.display()
+            )));
+        }
         // The files leave the source directory and land in the target.
         self.authorize_dir_for(&source, Privilege::Modify).await?;
         self.authorize_dir(&target).await?;
@@ -1278,27 +1289,17 @@ impl Session {
                 p.location.display()
             )));
         }
-        // A default directory that resolves outside the table (a symbolic link on its way, `p=1` linked elsewhere
-        // under partition `p=1/q=1`) is not deleted: the files there are not the table's. Checked before the log,
-        // the catalog or any file changes; the authorized path below is then inside the table.
-        // The resolved directory must be the partition's own path under the resolved root: a link to another
-        // partition of the table (`p=4` -> `p=2`) would delete that partition's files.
-        let root = std::fs::canonicalize(&table.location).ok();
-        for p in &gone {
-            let own = root.as_ref().and_then(|r| {
-                let rel = p.location.strip_prefix(&table.location).ok()?;
-                Some(r.join(rel))
-            });
-            match std::fs::canonicalize(&p.location) {
-                Ok(real) if own.as_ref() == Some(&real) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Ok(_) | Err(_) => {
-                    return Err(unsupported(&format!(
-                        "ALTER TABLE ... DROP PARTITION of a partition whose directory {} does not resolve to its own path in the table",
-                        p.location.display()
-                    )));
-                }
-            }
+        // A directory that does not resolve to its own path in the table (a symbolic link on its way, `p=1` linked
+        // elsewhere or to another partition) is not deleted: the files there are not the partition's. Checked before
+        // the log, the catalog or any file changes; the authorized path below is then the one deleted.
+        if let Some(p) = gone
+            .iter()
+            .find(|p| !resolves_in_place(&table.location, &p.location))
+        {
+            return Err(unsupported(&format!(
+                "ALTER TABLE ... DROP PARTITION of a partition whose directory {} does not resolve to its own path in the table",
+                p.location.display()
+            )));
         }
         // The files of each dropped partition are deleted.
         for p in &gone {
@@ -1770,6 +1771,31 @@ impl crate::Session {
         })?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         df.analyzed_in_with_text(env, Some(&redacted)).await
+    }
+}
+
+/// Whether `path`, a directory under a table's `location`, is its own path in the table once links resolve: the
+/// deepest part of it that exists resolves to the same place under the table's resolved root. A table root that does
+/// not exist has nothing under it to delete or move.
+fn resolves_in_place(location: &Path, path: &Path) -> bool {
+    let root = match std::fs::canonicalize(location) {
+        Ok(r) => r,
+        Err(e) => return e.kind() == std::io::ErrorKind::NotFound,
+    };
+    let mut existing = path;
+    loop {
+        match std::fs::canonicalize(existing) {
+            Ok(real) => {
+                return existing
+                    .strip_prefix(location)
+                    .is_ok_and(|rel| real == root.join(rel));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => match existing.parent() {
+                Some(up) if up.starts_with(location) => existing = up,
+                _ => return false,
+            },
+            Err(_) => return false,
+        }
     }
 }
 

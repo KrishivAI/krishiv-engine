@@ -2078,6 +2078,55 @@ fn drop_partition_refuses_a_directory_resolved_outside_the_table() {
     assert_eq!(rows(&s, "show partitions l"), ["p=1/q=1", "p=4/q=2"]);
 }
 
+/// RENAME PARTITION neither moves a source directory nor writes into a target that resolves away from its own path
+/// in the table through a symbolic link in a parent directory: it would move another directory's files into the
+/// table, or the partition's files out of it. Refused before the log or any file changes.
+#[cfg(unix)]
+#[test]
+fn rename_partition_refuses_directories_resolved_away_from_their_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table rl(x int, p int, q int) using parquet partitioned by (p, q)",
+    );
+    run(&s, "insert into rl values (1,2,2)");
+    let root = dir.path().join("rl");
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join("q=1")).unwrap();
+    std::fs::write(outside.path().join("q=1").join("keep.txt"), "x").unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.join("p=1")).unwrap();
+    run(&s, "alter table rl add partition (p=1, q=1)");
+    // The source resolves outside the table.
+    assert_eq!(
+        class(
+            &s,
+            "alter table rl partition (p=1, q=1) rename to partition (p=3, q=1)"
+        ),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert!(outside.path().join("q=1").join("keep.txt").is_file());
+    // The target's parent resolves outside the table.
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), root.join("p=5")).unwrap();
+    assert_eq!(
+        class(
+            &s,
+            "alter table rl partition (p=2, q=2) rename to partition (p=5, q=2)"
+        ),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert!(root.join("p=2").join("q=2").is_dir());
+    assert!(!elsewhere.path().join("q=2").exists());
+    assert_eq!(rows(&s, "show partitions rl"), ["p=1/q=1", "p=2/q=2"]);
+    // A rename inside the table still works.
+    run(
+        &s,
+        "alter table rl partition (p=2, q=2) rename to partition (p=6, q=2)",
+    );
+    assert_eq!(rows(&s, "show partitions rl"), ["p=1/q=1", "p=6/q=2"]);
+}
+
 /// A partition registered away from its default directory is not renamed: Spark 4.2.0 moves that directory, which
 /// may be another table's (krishiv-internal `research/spark/partition-followups/probe9.py`); the engine refuses
 /// before the log or any file changes, as DROP PARTITION does.
