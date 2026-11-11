@@ -133,6 +133,10 @@ pub struct RuleStep {
     pub note: String,
 }
 
+/// The default of `krishiv.optimizer.shareRepeatedSubtrees` when no
+/// configuration value is set (off until the P3 W1 flip, unit 6).
+const SHARE_REPEATED_SUBTREES_DEFAULT: bool = false;
+
 /// A test-only switch per optimizer rule: which rewrites run. All are on
 /// by default; the differential harnesses turn one off at a time and
 /// compare results with it on.
@@ -517,7 +521,7 @@ fn run(
                 config
                     .get(&SHARE_REPEATED_SUBTREES)
                     .and_then(ConfigValue::as_bool)
-                    .unwrap_or(false)
+                    .unwrap_or(SHARE_REPEATED_SUBTREES_DEFAULT)
             });
         let root = if share {
             t.once("ShareCte", &root, |r| {

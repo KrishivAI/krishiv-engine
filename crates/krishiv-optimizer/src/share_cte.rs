@@ -8,6 +8,11 @@
 //! tidy, turns them into references to one `WITH` definition that the
 //! physical planner computes once per query (`SharedRead`).
 //!
+//! With `direct` (P3 W1 shape (b), `krishiv.optimizer.shareRepeatedSubtrees`)
+//! the places that read a shifted body without the `Shift` are members too: a
+//! subtree the main block reads and a subquery reads again becomes one
+//! definition whose references have `output == source`.
+//!
 //! A group is shared when
 //! - it has two or more members (instances, subquery plans included) whose
 //!   bodies are equal: bucketed by the normalized subtree hash, decided by
@@ -325,7 +330,13 @@ impl Sharer<'_> {
     /// the body itself is not replaced by its own reference (a direct member
     /// is keyed by the body's pointer).
     fn go_def(&mut self, plan: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
-        if !self.replace.contains_key(&Arc::as_ptr(&plan)) {
+        // Only the body's own direct reference (`output == source`, offset 0)
+        // is skipped; a shared `Shift` that happens to be a body is replaced.
+        let own = self.replace.get(&Arc::as_ptr(&plan)).is_some_and(|r| {
+            matches!(&r.node, PlanNode::CteRef(c)
+                if c.output.iter().map(|o| o.id).eq(c.source.iter().copied()))
+        });
+        if !own {
             return self.go(plan);
         }
         Arc::clone(&plan)

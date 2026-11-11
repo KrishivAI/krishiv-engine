@@ -42,6 +42,8 @@ fn q11_shares_the_join_the_subquery_rereads() {
         "{text}"
     );
     insta::assert_snapshot!("share_subtree_q11", text);
+    // `CteRef` with `output == source` is a valid plan.
+    Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
     // A fixed point.
     let again = optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &{
         let mut c = Config::new();
