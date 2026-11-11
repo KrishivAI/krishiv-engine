@@ -81,7 +81,7 @@ impl DataFrame {
                 .run(&physical, &a.env)
                 .instrument(exec_span.clone())
                 .await?;
-            let stream = crate::telemetry::in_span(stream, exec_span);
+            let stream = crate::telemetry::retain_span(stream, exec_span);
             let stream = fill.fill(stream, &self.session.state.cache);
             let stream = match result {
                 Some((settings, key)) => crate::result_cache::fill(
