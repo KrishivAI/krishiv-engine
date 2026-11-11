@@ -90,10 +90,11 @@ impl DeclaredType {
             let fields = split_top(body, ',')
                 .into_iter()
                 .map(|f| {
-                    split_top(f, ':').get(1).map_or(Self::Other, |t| {
-                        // The type follows the field name's `:`, up to the field's `NOT NULL` or `COMMENT`.
-                        Self::parse(field_type(f.split_once(':').map_or(*t, |(_, ty)| ty)))
-                    })
+                    // The type follows the field name's `:` (outside a backquoted name), up to the field's
+                    // `NOT NULL` or `COMMENT`.
+                    top_level(f)
+                        .find(|&(_, c)| c == ':')
+                        .map_or(Self::Other, |(i, _)| Self::parse(field_type(&f[i + 1..])))
                 })
                 .collect();
             return Self::Struct(fields);
@@ -126,39 +127,63 @@ impl DeclaredType {
 }
 
 /// A struct field's type without the modifiers after it (`char(2) not null comment 'c'` is `char(2)`): the
-/// text up to the first space outside `<...>` and `(...)`. Only types that are [`DeclaredType::Other`] anyway
-/// (`interval day to second`) hold such a space.
+/// text up to the first space outside `<...>`, `(...)` and quotes. Only types that are [`DeclaredType::Other`]
+/// anyway (`interval day to second`) hold such a space.
 fn field_type(s: &str) -> &str {
     let s = s.trim_start();
-    let mut depth = 0_i32;
-    for (i, c) in s.char_indices() {
-        match c {
-            '<' | '(' => depth += 1,
-            '>' | ')' => depth -= 1,
-            _ if c.is_whitespace() && depth == 0 => return &s[..i],
-            _ => {}
-        }
-    }
-    s
+    top_level(s)
+        .find(|&(_, c)| c.is_whitespace())
+        .map_or(s, |(i, _)| &s[..i])
 }
 
-/// `s` split at each `sep` outside `<...>` and `(...)`.
+/// `s` split at each `sep` outside `<...>`, `(...)` and quotes.
 fn split_top(s: &str, sep: char) -> Vec<&str> {
     let mut parts = Vec::new();
-    let (mut depth, mut start) = (0_i32, 0);
-    for (i, c) in s.char_indices() {
-        match c {
-            '<' | '(' => depth += 1,
-            '>' | ')' => depth -= 1,
-            _ if c == sep && depth == 0 => {
-                parts.push(&s[start..i]);
-                start = i + c.len_utf8();
-            }
-            _ => {}
+    let mut start = 0;
+    for (i, c) in top_level(s) {
+        if c == sep {
+            parts.push(&s[start..i]);
+            start = i + c.len_utf8();
         }
     }
     parts.push(&s[start..]);
     parts
+}
+
+/// The characters of `s` outside `<...>` and `(...)` and outside quoted text: a `'...'` or `"..."` string (a
+/// backslash escapes the next character, as in a catalog string's `COMMENT`) and a `` `...` `` name (a doubled
+/// backquote stays inside it). The brackets themselves are not yielded.
+fn top_level(s: &str) -> impl Iterator<Item = (usize, char)> + '_ {
+    let mut depth = 0_i32;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut chars = s.char_indices().peekable();
+    std::iter::from_fn(move || {
+        while let Some((i, c)) = chars.next() {
+            if let Some(q) = quote {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' && q != '`' {
+                    escaped = true;
+                } else if c == q {
+                    if q == '`' && chars.peek().is_some_and(|&(_, n)| n == '`') {
+                        chars.next();
+                    } else {
+                        quote = None;
+                    }
+                }
+                continue;
+            }
+            match c {
+                '\'' | '"' | '`' => quote = Some(c),
+                '<' | '(' => depth += 1,
+                '>' | ')' => depth -= 1,
+                _ if depth == 0 => return Some((i, c)),
+                _ => {}
+            }
+        }
+        None
+    })
 }
 
 impl Resolver<'_> {
@@ -848,5 +873,30 @@ impl Resolver<'_> {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod declared_tests {
+    use super::DeclaredType;
+
+    #[test]
+    fn field_modifiers_quotes_and_names_keep_the_limits() {
+        let t = DeclaredType::parse(
+            "struct<x: char(2) not null comment 'a,b (c) <d>', `y:z`: varchar(3) comment 'it\\'s', w: int>",
+        );
+        let DeclaredType::Struct(f) = &t else {
+            panic!("{t:?}")
+        };
+        assert_eq!(f.len(), 3, "{f:?}");
+        assert!(matches!(f[0], DeclaredType::Char(2)), "{f:?}");
+        assert!(matches!(f[1], DeclaredType::Varchar(3)), "{f:?}");
+        assert!(matches!(f[2], DeclaredType::Other), "{f:?}");
+        let n = DeclaredType::parse("array<struct<a: struct<`b``c`: char(1) comment ')'>>>");
+        assert!(n.is_limited(), "{n:?}");
+        assert!(matches!(
+            DeclaredType::parse("struct<i: interval day to second>"),
+            DeclaredType::Struct(ref f) if matches!(f.as_slice(), [DeclaredType::Other])
+        ));
     }
 }

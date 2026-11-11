@@ -1106,3 +1106,26 @@ fn a_struct_fields_not_null_and_comment_keep_its_limit() {
         );
     }
 }
+
+/// A field comment holding `,`, `(` and `<` neither splits the struct nor hides the limit (Spark 4.2.0,
+/// krishiv-internal `research/spark/partition-followups/probe7.py`).
+#[test]
+fn a_struct_field_comment_with_brackets_and_commas_keeps_the_fields() {
+    let s = fresh();
+    run(&s, "drop table if exists k").unwrap();
+    run(
+        &s,
+        "create table k (s struct<x: char(2) comment 'a,b (c) <d>', y: int>) using parquet",
+    )
+    .unwrap();
+    let e = run(&s, "insert into k select named_struct('x', 'abc', 'y', 1)").unwrap_err();
+    assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH");
+    run(&s, "insert into k select named_struct('x', 'a', 'y', 2)").unwrap();
+    assert_eq!(
+        first_text(
+            &s,
+            "select concat(s.x, '|', cast(length(s.x) as string), '|', cast(s.y as string)) from k"
+        ),
+        "a |2|2"
+    );
+}
