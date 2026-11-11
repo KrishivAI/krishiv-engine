@@ -359,7 +359,8 @@ fn gate_bytes(session: &krishiv::Session) -> u64 {
 /// The output format of `--explain-analyze` and `--explain-verbose`:
 /// `--json` is a synonym for `--explain-format json`.
 fn explain_format(args: &SqlArgs) -> ExplainFormat {
-    if args.json {
+    // `--share` always writes the JSON profile, so planning validation sees JSON.
+    if args.json || args.share {
         ExplainFormat::Json
     } else {
         args.explain_format.unwrap_or(ExplainFormat::Text)
