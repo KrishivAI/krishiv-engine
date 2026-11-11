@@ -264,7 +264,7 @@ pub(super) struct ScanLocal {
     /// The claim ordinal of the current morsel.
     pub(super) position: Option<u64>,
     /// The runtime filters' row stage.
-    pub(super) rows: super::RowStage,
+    pub(super) rows: super::ScanRows,
     /// The claimed morsel's split (the driver's partition before the first
     /// claim): pushed filters evaluate stateful functions in it (see [`Predicate::evaluate_in`]).
     pub(super) partition: u32,
@@ -526,16 +526,18 @@ impl Source for MemoryScan {
         global_ref::<ScanGlobal>(global, "MemoryScan").map_or(1, |g| g.morsels.len().max(1))
     }
 
-    fn local_state(&self, _ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
+    fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let g = global_ref::<ScanGlobal>(global, "MemoryScan")?;
         Ok(Box::new(ScanLocal {
             batches: 0..0,
             offset: 0,
             claimed: 0,
             position: None,
-            rows: super::RowStage::new(&g.runtime, &self.table, self.runtime.settings()),
-            partition: _ctx.partition(),
-            base: _ctx.partition_base(),
+            rows: self
+                .runtime
+                .scan_stage(&g.runtime, &self.table, ctx.partition()),
+            partition: ctx.partition(),
+            base: ctx.partition_base(),
         }))
     }
 

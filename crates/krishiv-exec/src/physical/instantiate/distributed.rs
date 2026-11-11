@@ -241,6 +241,7 @@ impl Instantiation<'_> {
             &self.values,
             self.worker.producer,
         )?;
+        let join = self.hand_row_stage(join, j)?;
         let decision = Arc::new(Decision::new(
             tables,
             key,
