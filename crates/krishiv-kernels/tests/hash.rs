@@ -61,6 +61,51 @@ fn values_recorded_from_spark() {
 }
 
 #[test]
+fn float_values_hash_as_their_bit_patterns() {
+    // Float.floatToIntBits / Double.doubleToLongBits, -0.0 as 0.0, NaN canonical.
+    for v in [1.5_f32, -2.25, f32::INFINITY, f32::MIN_POSITIVE, 1e-40] {
+        let bits = i32::from_ne_bytes(v.to_bits().to_ne_bytes());
+        assert_eq!(
+            h(&[&Float32Array::from(vec![v])]),
+            h(&[&Int32Array::from(vec![bits])]),
+            "{v}"
+        );
+    }
+    for v in [1.5_f64, -2.25, f64::NEG_INFINITY, 1e-310, 3.0e300] {
+        let bits = i64::from_ne_bytes(v.to_bits().to_ne_bytes());
+        assert_eq!(
+            h(&[&Float64Array::from(vec![v])]),
+            h(&[&Int64Array::from(vec![bits])]),
+            "{v}"
+        );
+    }
+}
+
+#[test]
+fn wide_decimal_edge_values_hash_their_minimal_bytes() {
+    let cases: [(i128, &[u8]); 8] = [
+        (0, &[0]),
+        (1, &[1]),
+        (-1, &[0xff]),
+        (127, &[0x7f]),
+        (128, &[0, 0x80]),
+        (-128, &[0x80]),
+        (-129, &[0xff, 0x7f]),
+        (
+            i128::MIN,
+            &[0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ),
+    ];
+    for (v, bytes) in cases {
+        let d = arrow_array::Decimal128Array::from(vec![v])
+            .with_precision_and_scale(38, 0)
+            .unwrap();
+        let bin = BinaryArray::from(vec![bytes]);
+        assert_eq!(h(&[&d]), h(&[&bin]), "{v}");
+    }
+}
+
+#[test]
 fn narrow_types_hash_as_int_and_wide_as_long() {
     let (a, b, c) = (
         Int8Array::from(vec![-3]),
