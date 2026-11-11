@@ -258,16 +258,27 @@ fn composite_factor(pairs: &[(AttrId, AttrId)], l: &RelStats, r: &RelStats) -> f
     lc.dedup();
     rc.sort_unstable();
     rc.dedup();
-    if lc.len().min(rc.len()) < 2 {
+    // A column in two equalities narrows sequentially in `narrow::apply`; the product of original
+    // distinct counts below would not match it, so such keys get no factor.
+    if lc.len().min(rc.len()) < 2 || lc.len() != pairs.len() || rc.len() != pairs.len() {
         return 1.0;
     }
-    // A key column without statistics makes the tuple count unknown: no factor.
+    // A key column without known distinct counts (a guess) makes the tuple count unknown: no
+    // factor. A filtered side's key domain is its filtered distinct counts scaled back by the
+    // filter's fraction, so a selective filter keeps its reduction in the join's rows.
     let tuples = |ids: &[AttrId], s: &RelStats| -> Option<f64> {
         let product = ids
             .iter()
-            .map(|i| s.cols.get(i).map(|c| c.ndv.max(1.0)))
+            .map(|i| {
+                s.cols
+                    .get(i)
+                    .filter(|c| c.ndv_known())
+                    .map(|c| c.ndv.max(1.0))
+            })
             .product::<Option<f64>>()?;
-        Some(product.min(s.base_rows().max(1.0)))
+        let base = s.base_rows().max(1.0);
+        let scale = base / s.rows.max(1.0);
+        Some((product * scale.max(1.0)).min(base))
     };
     let (Some(lt), Some(rt)) = (tuples(&lc, l), tuples(&rc, r)) else {
         return 1.0;
