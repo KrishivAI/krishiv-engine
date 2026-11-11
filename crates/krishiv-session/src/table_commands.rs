@@ -2395,6 +2395,13 @@ impl Session {
             return self.check_table_write(table, &df, overwrite).await;
         }
         let mode = if overwrite { "overwrite" } else { "append" };
+        // A RENAME or DROP PARTITION waits until these rows are written and their partitions registered (it could
+        // otherwise move or drop a partition between this write's log commit and its registration).
+        let _partitions = if table.is_partitioned() {
+            Some(self.state.catalog.store.partition_write().await)
+        } else {
+            None
+        };
         let written = self.write_table_rows(table, &df, mode, &mut None).await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();

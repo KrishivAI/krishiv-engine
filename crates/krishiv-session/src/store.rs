@@ -409,10 +409,12 @@ pub(crate) struct InMemoryCatalogStore {
     /// Where a table change reaches every cache of the runtime: its result
     /// cache and each session's relation cache.
     hub: Arc<crate::cache::Invalidation>,
-    /// Held by a partition command that moves or deletes partition directories (`RENAME PARTITION`,
-    /// `DROP PARTITION`) from its log commit to its catalog swap, so two of them never interleave their
-    /// directory moves and log entries (one lock for the runtime: such commands are rare).
-    partition_ddl: tokio::sync::Mutex<()>,
+    /// Held exclusively by a partition command that moves or deletes partition directories (`RENAME PARTITION`,
+    /// `DROP PARTITION`) from before it reads the entry to after its catalog swap, and shared by an `INSERT`
+    /// into a partitioned table from its write to its partition registration: no two such commands, and no
+    /// such command and a write, interleave their directory moves, log entries and catalog swaps. One lock for
+    /// the runtime (such commands are rare); writes never wait for each other.
+    partition_ddl: tokio::sync::RwLock<()>,
 }
 
 #[derive(Debug)]
@@ -444,13 +446,18 @@ impl InMemoryCatalogStore {
                 functions: Arc::new(StoredFunctions::default()),
             }),
             epoch: AtomicU64::new(0),
-            partition_ddl: tokio::sync::Mutex::new(()),
+            partition_ddl: tokio::sync::RwLock::new(()),
         }
     }
 
-    /// Serializes the partition commands that move or delete directories (see the field).
-    pub(crate) async fn partition_ddl(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.partition_ddl.lock().await
+    /// The exclusive hold of a partition command that moves or deletes directories (see the field).
+    pub(crate) async fn partition_ddl(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
+        self.partition_ddl.write().await
+    }
+
+    /// The shared hold of a write into a partitioned table (see the field).
+    pub(crate) async fn partition_write(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
+        self.partition_ddl.read().await
     }
 
     /// Marks a change to a table's data (an `INSERT`, a `TRUNCATE`): cached

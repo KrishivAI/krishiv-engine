@@ -1731,6 +1731,51 @@ mod tests {
         vec![("p".to_owned(), p.to_owned())]
     }
 
+    /// A RENAME PARTITION waits for a write into the table that holds the partition lock (an INSERT holds it
+    /// from its write to its partition registration), then runs.
+    #[test]
+    fn a_rename_waits_for_a_write_in_progress() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let s = Session::new().unwrap_or_else(|e| panic!("{e}"));
+        s.conf()
+            .set(
+                "spark.sql.warehouse.dir",
+                dir.path().to_str().unwrap_or_default(),
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        run(
+            &s,
+            "create table r (a int, p int) using parquet partitioned by (p)",
+        );
+        run(&s, "insert into r values (1, 1)");
+        let store = Arc::clone(&s.state.catalog.store);
+        let renamed = |p: &str| {
+            store
+                .table("default", "r")
+                .is_some_and(|t| find_partition(&t, &spec(p)).is_some())
+        };
+        let write = futures::executor::block_on(store.partition_write());
+        std::thread::scope(|scope| {
+            let rename = scope.spawn(|| {
+                run(
+                    &s,
+                    "alter table r partition (p=1) rename to partition (p=5)",
+                );
+            });
+            // Without the lock the rename is done well inside this (milliseconds); with it, it waits.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(
+                renamed("1") && !renamed("5"),
+                "the rename ran during the write"
+            );
+            drop(write);
+            rename
+                .join()
+                .unwrap_or_else(|_| panic!("the rename panicked"));
+        });
+        assert!(renamed("5") && !renamed("1"));
+    }
+
     /// A rename's catalog swap goes against the entry as it is now: a concurrent change of another part of it is
     /// kept, and a dropped table or a partition taken meanwhile refuses the swap (the rename then moves back).
     #[test]
