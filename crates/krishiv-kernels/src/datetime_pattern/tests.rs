@@ -435,3 +435,33 @@ fn utc_and_gmt_zone_names() {
         "CET"
     );
 }
+
+#[test]
+fn aligned_week_of_month_and_quarter_change_on_the_right_day_and_month() {
+    let day = |d: i64| 1_577_836_800_000_000 + (d - 1) * 86_400_000_000; // 2020-01-d
+    for (d, want) in [
+        (1, 1),
+        (6, 1),
+        (7, 1),
+        (8, 2),
+        (14, 2),
+        (15, 3),
+        (28, 4),
+        (29, 5),
+    ] {
+        assert_eq!(fmt("F", day(d), "UTC", 0), want.to_string(), "day {d}");
+    }
+    // Quarters change after March, June and September.
+    let first_of = |m: i64| {
+        let days = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+            [usize::try_from(m - 1).unwrap()];
+        1_577_836_800_000_000 + days * 86_400_000_000
+    };
+    for m in 1..=12 {
+        assert_eq!(
+            fmt("Q", first_of(m), "UTC", 0),
+            ((m - 1) / 3 + 1).to_string(),
+            "month {m}"
+        );
+    }
+}
