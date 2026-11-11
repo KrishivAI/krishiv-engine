@@ -1620,4 +1620,25 @@ fn deep_nested_nulls_round_trip() {
             "split column {c}"
         );
     }
+    // A row selection inside one page of nested columns (the skipped rows
+    // hold the null list, the empty list and a list of structs) keeps
+    // the rows that follow aligned.
+    for (name, f) in [("one", &file), ("split", &split)] {
+        for ranges in [&[(2, 4)][..], &[(0, 1), (3, 4)], &[(1, 3)]] {
+            let mut req = ScanRequest::all(meta.schema());
+            req.selection = Some(RowSelection::from_ranges(ranges.iter().map(|&(a, b)| a..b)));
+            let out = env.scan(f, &req, &o).unwrap();
+            let out = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+            let idx =
+                arrow_array::UInt64Array::from_iter_values(ranges.iter().flat_map(|&(a, b)| a..b));
+            for c in 0..3 {
+                let want = arrow_select::take::take(batch.column(c), &idx, None).unwrap();
+                assert_eq!(
+                    out.column(c).to_data(),
+                    want.to_data(),
+                    "{name} {ranges:?} column {c}"
+                );
+            }
+        }
+    }
 }
