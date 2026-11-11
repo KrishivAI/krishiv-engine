@@ -1504,8 +1504,8 @@ fn msck_repair_drop_and_sync_forget_partitions_whose_directory_is_gone() {
     dropped(&root, "p=9");
     run(&s, "msck repair table pt add partitions");
     assert_eq!(rows(&s, "show partitions pt"), ["p=1/q=x", "p=9/q=w"]);
-    // Column statistics survive DROP and SYNC: Spark 4.2.0 keeps min 10 and distinct_count 2 after the partition
-    // holding 10 is forgotten.
+    // Column statistics survive DROP and SYNC: a Spark 4.2.0 run keeps min, max and distinct_count as they were
+    // after the partition holding the minimum is forgotten.
     run(
         &s,
         "create table ps(a int, p int) using parquet partitioned by (p)",
@@ -2148,8 +2148,17 @@ fn drop_partition_whose_directory_cannot_be_removed_is_legacy_error_2036() {
         std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755)).unwrap();
         return;
     }
-    let e = err(&s, "alter table du drop partition (p=1)");
+    let failed = block_on(async {
+        s.sql("alter table du drop partition (p=1)")
+            .await?
+            .collect()
+            .await
+    });
+    // Writable again before any assertion, so the temporary directory can be removed whatever happened.
     std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let Err(e) = failed else {
+        panic!("the partition directory cannot be removed");
+    };
     assert_eq!(e.error_class().name(), "_LEGACY_ERROR_TEMP_2036", "{e}");
     assert!(e.to_string().contains("p=1"), "{e}");
     assert!(part.is_dir());

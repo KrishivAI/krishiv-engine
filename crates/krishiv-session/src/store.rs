@@ -787,6 +787,15 @@ mod tests {
         let epoch = s.epoch();
         assert!(s.replace_table(&read, table("default", "t")));
         assert_eq!(s.epoch(), epoch + 1);
+        // A replacement never lowers the data version, even when it was built fresh (version 0).
+        let current = s.table("default", "t").unwrap();
+        let mut changed = (*current).clone();
+        changed.data_changed();
+        assert!(s.replace_table(&current, changed));
+        let current = s.table("default", "t").unwrap();
+        assert_eq!(current.data_version, 1);
+        assert!(s.replace_table(&current, table("default", "t")));
+        assert_eq!(s.table("default", "t").unwrap().data_version, 1);
         // `read` is stale now.
         assert!(!s.replace_table(&read, table("default", "t")));
         // And so is a copy of a dropped table: it is not recreated.
