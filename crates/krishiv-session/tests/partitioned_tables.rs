@@ -883,6 +883,72 @@ fn add_partition_outside_the_policy_is_denied() {
     assert!(rows(&s, "SHOW PARTITIONS t").is_empty());
 }
 
+/// Denies `MODIFY` on any path with `p=locked` in it; allows everything else (table DDL, `CREATE` on paths).
+struct LockedPartition;
+
+impl krishiv_session::AccessPolicy for LockedPartition {
+    fn version(&self) -> krishiv_plan::analyzer::PolicyVersion {
+        krishiv_plan::analyzer::PolicyVersion(0)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a krishiv_session::Principal,
+        securable: &'a krishiv_session::Securable,
+        privilege: krishiv_session::Privilege,
+    ) -> krishiv_plan::analyzer::BoxFuture<'a, Result<krishiv_session::AccessDecision, KrishivError>>
+    {
+        let denied = privilege == krishiv_session::Privilege::Modify
+            && matches!(securable, krishiv_session::Securable::Path(p)
+                if p.as_plain().is_some_and(|t| t.contains("p=locked")));
+        Box::pin(std::future::ready(Ok(if denied {
+            krishiv_session::AccessDecision::Deny {
+                reason: "locked".to_owned(),
+            }
+        } else {
+            krishiv_session::AccessDecision::Allow
+        })))
+    }
+}
+
+/// DROP PARTITION deletes the partition's files and RENAME PARTITION moves them out of its directory: both need
+/// `MODIFY` on that directory, as TRUNCATE and INSERT need it on the paths they change. A denial changes nothing.
+#[test]
+fn drop_or_rename_of_a_partition_whose_path_is_not_modifiable_is_denied() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let warehouse = dir.path().join("wh");
+    std::fs::create_dir_all(&warehouse).unwrap();
+    let s = Session::builder()
+        .access_policy(Arc::new(LockedPartition))
+        .config("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+        .build()
+        .unwrap();
+    run(
+        &s,
+        "CREATE TABLE t (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "ALTER TABLE t ADD PARTITION (p = 'locked')");
+    run(&s, "ALTER TABLE t ADD PARTITION (p = 'free')");
+    let locked = warehouse.join("t").join("p=locked");
+    std::fs::write(locked.join("keep.txt"), "x").unwrap();
+    for sql in [
+        "ALTER TABLE t DROP PARTITION (p = 'locked')",
+        "ALTER TABLE t PARTITION (p = 'locked') RENAME TO PARTITION (p = 'moved')",
+    ] {
+        assert_eq!(class(&s, sql), "KRISHIV_INSUFFICIENT_PERMISSIONS", "{sql}");
+        assert!(locked.join("keep.txt").is_file(), "{sql}");
+        assert_eq!(
+            rows(&s, "SHOW PARTITIONS t"),
+            ["p=free", "p=locked"],
+            "{sql}"
+        );
+    }
+    // Other partitions are not affected.
+    run(&s, "ALTER TABLE t DROP PARTITION (p = 'free')");
+    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=locked"]);
+}
+
 #[test]
 fn msck_repair_of_a_denied_partition_directory_is_denied() {
     // MSCK REPAIR registers each partition at its directory, so it asks the policy as ADD PARTITION does.
@@ -1403,4 +1469,980 @@ fn a_timestamp_partition_renders_in_a_region_session_zone() {
         rows(&s, "SHOW PARTITIONS t"),
         ["c=1969-12-31 16%3A00%3A00", "c=2018-07-01 12%3A00%3A00"]
     );
+}
+
+fn dropped(dir: &std::path::Path, relative: &str) {
+    std::fs::remove_dir_all(dir.join(relative)).unwrap();
+}
+
+/// The rows below are a real Spark 4.2.0 run's (`RepairTableCommand`).
+#[test]
+fn msck_repair_drop_and_sync_forget_partitions_whose_directory_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table pt(a int, p int, q string) using parquet partitioned by (p,q)",
+    );
+    run(&s, "insert into pt values (1,1,'x'),(2,2,'y'),(3,3,'z')");
+    let root = dir.path().join("pt");
+    dropped(&root, "p=2");
+    run(&s, "msck repair table pt");
+    assert_eq!(rows(&s, "show partitions pt").len(), 3);
+    run(&s, "msck repair table pt drop partitions");
+    assert_eq!(rows(&s, "show partitions pt"), ["p=1/q=x", "p=3/q=z"]);
+    assert_eq!(
+        rows(&s, "select cast(a as string) from pt order by a"),
+        ["1", "3"]
+    );
+    // SYNC does both.
+    dropped(&root, "p=3");
+    std::fs::create_dir_all(root.join("p=9/q=w")).unwrap();
+    run(&s, "repair table pt sync partitions");
+    assert_eq!(rows(&s, "show partitions pt"), ["p=1/q=x", "p=9/q=w"]);
+    // ADD never forgets one.
+    dropped(&root, "p=9");
+    run(&s, "msck repair table pt add partitions");
+    assert_eq!(rows(&s, "show partitions pt"), ["p=1/q=x", "p=9/q=w"]);
+    // Column statistics survive DROP and SYNC: a Spark 4.2.0 run keeps min, max and distinct_count as they were
+    // after the partition holding the minimum is forgotten.
+    run(
+        &s,
+        "create table ps(a int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into ps values (10,1),(20,2),(30,3)");
+    run(&s, "analyze table ps compute statistics for columns a");
+    let ps = dir.path().join("ps");
+    dropped(&ps, "p=1");
+    run(&s, "msck repair table ps drop partitions");
+    dropped(&ps, "p=2");
+    run(&s, "msck repair table ps sync partitions");
+    assert_eq!(rows(&s, "select cast(a as string) from ps"), ["30"]);
+    let described = rows(&s, "describe extended ps a");
+    for kept in ["min\t10", "max\t30", "distinct_count\t3"] {
+        assert!(described.iter().any(|r| r == kept), "{described:?}");
+    }
+    run(&s, "create table pu(a int) using parquet");
+    assert_eq!(
+        class(&s, "msck repair table pu drop partitions"),
+        "NOT_A_PARTITIONED_TABLE"
+    );
+}
+
+/// The rows below are a real Spark 4.2.0 run's (`AlterTableRenamePartitionCommand`).
+#[test]
+fn rename_partition_moves_a_managed_partition() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table r1(a int, p int, q string) using parquet partitioned by (p,q)",
+    );
+    run(&s, "insert into r1 values (1,1,'x'),(2,2,'y')");
+    run(
+        &s,
+        "alter table r1 partition (p=1,q='x') rename to partition (p=5,q='new val')",
+    );
+    assert_eq!(rows(&s, "show partitions r1"), ["p=2/q=y", "p=5/q=new val"]);
+    assert_eq!(
+        rows(&s, "select concat_ws('|', a, p, q) from r1 order by a"),
+        ["1|5|new val", "2|2|y"]
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=1,q='x') rename to partition (p=7,q='a')"
+        ),
+        "PARTITIONS_NOT_FOUND"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=2,q='y') rename to partition (p=5,q='new val')"
+        ),
+        "PARTITIONS_ALREADY_EXIST"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=2) rename to partition (p=3,q='y')"
+        ),
+        "_LEGACY_ERROR_TEMP_1232"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=2,q='y') rename to partition (p=3)"
+        ),
+        "_LEGACY_ERROR_TEMP_1232"
+    );
+    run(
+        &s,
+        "alter table r1 partition (P=2,Q='y') rename to partition (P=3,Q='Y')",
+    );
+    assert_eq!(rows(&s, "show partitions r1"), ["p=3/q=Y", "p=5/q=new val"]);
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=3,q='Y') rename to partition (p=3,q='Y')"
+        ),
+        "PARTITIONS_ALREADY_EXIST"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table r1 partition (p=3,q='Y') rename to partition (p='abc',q='Y')"
+        ),
+        "CAST_INVALID_INPUT"
+    );
+}
+
+/// The `.json` entries of a table root's commit log.
+fn log_entries(root: &std::path::Path) -> usize {
+    std::fs::read_dir(root.join("_krishiv_log")).map_or(0, |d| {
+        d.filter_map(Result::ok)
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                name.ends_with(".json") && !name.ends_with(".checkpoint.json")
+            })
+            .count()
+    })
+}
+
+/// A rename whose log commit fails moves nothing: the log is written before the directory moves, so the table
+/// still reads its rows under the old spec.
+#[cfg(unix)]
+#[test]
+fn a_rename_whose_log_commit_fails_leaves_the_table_readable() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table r2(a int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into r2 values (1,1),(2,2)");
+    let log = dir.path().join("r2").join("_krishiv_log");
+    assert!(log.is_dir(), "the table root has a commit log");
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // A user who can write a read-only directory (root) cannot make the commit fail this way.
+    if std::fs::write(log.join("probe"), b"").is_ok() {
+        std::fs::remove_file(log.join("probe")).unwrap();
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let failed = block_on(async {
+        s.sql("alter table r2 partition (p=1) rename to partition (p=5)")
+            .await?
+            .collect()
+            .await
+    });
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(failed.is_err(), "the commit cannot be written");
+    assert!(dir.path().join("r2/p=1").is_dir());
+    assert!(!dir.path().join("r2/p=5").exists());
+    assert_eq!(rows(&s, "show partitions r2"), ["p=1", "p=2"]);
+    assert_eq!(
+        rows(&s, "select concat_ws('|', a, p) from r2 order by a"),
+        ["1|1", "2|2"]
+    );
+}
+
+/// A rename whose directory move fails after the log moved puts the log back.
+#[test]
+fn a_rename_whose_move_fails_puts_the_log_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table r3(a int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into r3 values (1,1),(2,2)");
+    let root = dir.path().join("r3");
+    // A directory the catalog does not know, not empty: the move onto it fails.
+    std::fs::create_dir_all(root.join("p=5")).unwrap();
+    std::fs::write(root.join("p=5").join("_keep"), b"").unwrap();
+    let before = log_entries(&root);
+    let failed = block_on(async {
+        s.sql("alter table r3 partition (p=1) rename to partition (p=5)")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(
+        failed.is_err(),
+        "the move cannot replace a non-empty directory"
+    );
+    assert_eq!(log_entries(&root), before + 2, "the move and its inverse");
+    assert_eq!(rows(&s, "show partitions r3"), ["p=1", "p=2"]);
+    assert_eq!(
+        rows(&s, "select concat_ws('|', a, p) from r3 order by a"),
+        ["1|1", "2|2"]
+    );
+}
+
+/// The rows below are a real Spark 4.2.0 run's: `castPartitionSpec` casts with ANSI on under the default
+/// `spark.sql.storeAssignmentPolicy`, whatever `spark.sql.ansi.enabled` says, and the value is re-rendered.
+#[test]
+fn rename_partition_values_cast_as_spark_casts_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table r(a int, p int, q string) using parquet partitioned by (p,q)",
+    );
+    run(&s, "insert into r values (1,1,'x'),(2,2,'y'),(3,3,'z')");
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    assert_eq!(
+        class(
+            &s,
+            "alter table r partition (p=1,q='x') rename to partition (p='abc',q='x')"
+        ),
+        "CAST_INVALID_INPUT"
+    );
+    run(
+        &s,
+        "alter table r partition (p=1,q='x') rename to partition (p='007',q='x')",
+    );
+    assert_eq!(
+        rows(&s, "show partitions r"),
+        ["p=2/q=y", "p=3/q=z", "p=7/q=x"]
+    );
+    s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(
+        &s,
+        "alter table r partition (p=2,q='y') rename to partition (p='abc',q='y')",
+    );
+    assert_eq!(
+        rows(&s, "show partitions r"),
+        ["p=3/q=z", "p=7/q=x", "p=__HIVE_DEFAULT_PARTITION__/q=y"]
+    );
+    run(
+        &s,
+        "alter table r partition (p='0003',q='z') rename to partition (p=4,q='z')",
+    );
+    assert_eq!(
+        rows(&s, "show partitions r"),
+        ["p=4/q=z", "p=7/q=x", "p=__HIVE_DEFAULT_PARTITION__/q=y"]
+    );
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "ANSI")
+        .unwrap();
+    run(
+        &s,
+        "create table d(a int, p date) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into d values (1, date'2024-01-02')");
+    run(
+        &s,
+        "alter table d partition (p='2024-01-02') rename to partition (p='2024-1-3')",
+    );
+    assert_eq!(rows(&s, "show partitions d"), ["p=2024-01-03"]);
+}
+
+/// `MSCK REPAIR TABLE .. DROP PARTITIONS` takes every vanished partition out of the log in one entry.
+#[test]
+fn msck_repair_drop_forgets_vanished_partitions_in_one_log_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table pv(a int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into pv values (1,1),(2,2),(3,3)");
+    let root = dir.path().join("pv");
+    let before = log_entries(&root);
+    dropped(&root, "p=1");
+    dropped(&root, "p=2");
+    run(&s, "msck repair table pv drop partitions");
+    assert_eq!(log_entries(&root), before + 1);
+    assert_eq!(rows(&s, "show partitions pv"), ["p=3"]);
+    assert_eq!(rows(&s, "select cast(a as string) from pv"), ["3"]);
+}
+
+/// `ALTER TABLE .. DROP PARTITION` (Spark 4.2.0, krishiv-internal `research/spark/partition-followups/probe.{py,out}`):
+/// values are cast to the column types, every spec must match a partition exactly (a partial one is not found),
+/// all specs are checked before any is dropped, `IF EXISTS` skips the missing ones, a managed table's
+/// directories go, and the column statistics are dropped (`updateTableStats`).
+#[test]
+fn drop_partition_drops_exact_partitions_of_a_managed_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table c(x int, p int, s string) using parquet partitioned by (p, s)",
+    );
+    run(
+        &s,
+        "insert into c values (1,1,'a'),(2,1,'b'),(3,2,'a'),(4,3,'c')",
+    );
+    run(&s, "analyze table c compute statistics for columns x");
+    let root = dir.path().join("c");
+    run(&s, "alter table c drop partition (p='01', s='a')");
+    assert_eq!(
+        rows(&s, "show partitions c"),
+        ["p=1/s=b", "p=2/s=a", "p=3/s=c"]
+    );
+    assert!(!root.join("p=1/s=a").exists());
+    assert!(root.join("p=1/s=b").is_dir());
+    assert_eq!(
+        rows(&s, "select concat_ws('|', x, p, s) from c order by x"),
+        ["2|1|b", "3|2|a", "4|3|c"]
+    );
+    assert!(
+        rows(&s, "describe extended c x")
+            .iter()
+            .any(|r| r == "min\tNULL"),
+        "{:?}",
+        rows(&s, "describe extended c x")
+    );
+    assert_eq!(
+        params(&s, "alter table c drop partition (p=9, s='z')"),
+        [
+            "partitionList=PARTITION (`p` = 9, `s` = z)",
+            "tableName=`default`.`c`"
+        ]
+    );
+    run(&s, "alter table c drop if exists partition (p=9, s='z')");
+    assert_eq!(
+        params(&s, "alter table c drop partition (p=1)"),
+        [
+            "partitionList=PARTITION (`p` = 1)",
+            "tableName=`default`.`c`"
+        ]
+    );
+    // One missing spec drops nothing; with IF EXISTS the others go.
+    assert_eq!(
+        class(
+            &s,
+            "alter table c drop partition (p=2, s='a'), partition (p=9, s='z')"
+        ),
+        "PARTITIONS_NOT_FOUND"
+    );
+    assert_eq!(
+        rows(&s, "show partitions c"),
+        ["p=1/s=b", "p=2/s=a", "p=3/s=c"]
+    );
+    run(
+        &s,
+        "alter table c drop if exists partition (p=2, s='a'), partition (p=9, s='z')",
+    );
+    assert_eq!(rows(&s, "show partitions c"), ["p=1/s=b", "p=3/s=c"]);
+    assert_eq!(
+        params(&s, "alter table c drop partition (q=1)"),
+        [
+            "partitionList=`q`",
+            "tableName=`spark_catalog`.`default`.`c`"
+        ]
+    );
+    assert_eq!(
+        class(&s, "alter table c drop partition (p='abc')"),
+        "CAST_INVALID_INPUT"
+    );
+    run(&s, "alter table c drop partition (p=3, s='c') purge");
+    assert_eq!(rows(&s, "show partitions c"), ["p=1/s=b"]);
+    assert!(!root.join("p=3/s=c").exists());
+    assert_eq!(rows(&s, "select cast(x as string) from c"), ["2"]);
+    run(&s, "create table n(x int) using parquet");
+    assert_eq!(
+        class(&s, "alter table n drop partition (p=1)"),
+        "_LEGACY_ERROR_TEMP_1251"
+    );
+}
+
+/// More of Spark 4.2.0's `DROP PARTITION` (krishiv-internal `research/spark/partition-followups/probe2.{py,out}`):
+/// a bare key is a parse error for every partition `ALTER`, every missing spec is listed, every spec is cast
+/// before any is looked up, a repeated spec drops once, and `p=NULL` is the default partition.
+#[test]
+fn drop_partition_checks_every_spec_as_spark() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table c(x int, p int, s string) using parquet partitioned by (p, s)",
+    );
+    run(&s, "insert into c values (1,1,'a'),(2,2,'b'),(3,NULL,'c')");
+    for (sql, key) in [
+        ("alter table c drop partition (p, s)", "`p`"),
+        ("alter table c drop partition (p=1, s)", "`s`"),
+        ("alter table c add partition (p, s)", "`p`"),
+        (
+            "alter table c partition (p=1, s) rename to partition (p=5, s='x')",
+            "`s`",
+        ),
+        (
+            "alter table c partition (p=1, s) set location '/tmp/x'",
+            "`s`",
+        ),
+    ] {
+        assert_eq!(
+            class(&s, sql),
+            "INVALID_SQL_SYNTAX.EMPTY_PARTITION_VALUE",
+            "{sql}"
+        );
+        assert_eq!(params(&s, sql), [format!("partKey={key}")], "{sql}");
+    }
+    // A repeated key comes first (probe3).
+    for (sql, key) in [
+        ("alter table c drop partition (p, p)", "`p`"),
+        ("alter table c drop partition (p=1, p)", "`p`"),
+        ("alter table c add partition (s, p, s)", "`s`"),
+    ] {
+        assert_eq!(class(&s, sql), "DUPLICATE_KEY", "{sql}");
+        assert_eq!(params(&s, sql), [format!("keyColumn={key}")], "{sql}");
+    }
+    assert_eq!(
+        params(
+            &s,
+            "alter table c drop partition (p=8, s='z'), partition (p=9, s='y')"
+        ),
+        [
+            "partitionList=PARTITION (`p` = 8, `s` = z), PARTITION (`p` = 9, `s` = y)",
+            "tableName=`default`.`c`"
+        ]
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table c drop partition (p=9, s='z'), partition (p='abc', s='a')"
+        ),
+        "CAST_INVALID_INPUT"
+    );
+    assert_eq!(
+        params(
+            &s,
+            "alter table c drop partition (p=9, s='z'), partition (q=1)"
+        ),
+        [
+            "partitionList=`q`",
+            "tableName=`spark_catalog`.`default`.`c`"
+        ]
+    );
+    run(
+        &s,
+        "alter table c drop partition (p=1, s='a'), partition (p=1, s='a')",
+    );
+    run(&s, "alter table c drop partition (p=NULL, s='c')");
+    assert_eq!(rows(&s, "show partitions c"), ["p=2/s=b"]);
+    // The emptied parent `p=1` stays, as Spark leaves it.
+    let root = dir.path().join("c");
+    assert!(root.join("p=1").is_dir());
+    assert!(!root.join("p=1/s=a").exists());
+    assert_eq!(rows(&s, "select cast(x as string) from c"), ["2"]);
+}
+
+/// `spark.sql.legacy.skipTypeValidationOnAlterPartition` keeps `ALTER TABLE` partition values as written (Spark
+/// 4.2.0); `INSERT`'s static values follow `storeAssignmentPolicy` alone, whatever `spark.sql.ansi.enabled` says.
+#[test]
+fn partition_value_casts_follow_the_legacy_settings_as_spark() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table c(x int, p int, s string) using parquet partitioned by (p, s)",
+    );
+    run(
+        &s,
+        "set spark.sql.legacy.skipTypeValidationOnAlterPartition=true",
+    );
+    run(&s, "alter table c add partition (p='abc', s='k')");
+    run(&s, "alter table c add partition (p='007', s='k')");
+    assert_eq!(rows(&s, "show partitions c"), ["p=007/s=k", "p=abc/s=k"]);
+    run(&s, "alter table c drop partition (p='abc', s='k')");
+    run(&s, "alter table c drop partition (p='007', s='k')");
+    assert_eq!(rows(&s, "show partitions c"), Vec::<String>::new());
+    run(
+        &s,
+        "set spark.sql.legacy.skipTypeValidationOnAlterPartition=false",
+    );
+    run(
+        &s,
+        "create table b(x int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "set spark.sql.storeAssignmentPolicy=LEGACY");
+    run(&s, "insert into b partition (p='abc') select 1");
+    run(&s, "insert into b partition (p='008') select 2");
+    assert_eq!(
+        rows(&s, "show partitions b"),
+        ["p=8", "p=__HIVE_DEFAULT_PARTITION__"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select concat_ws('|', x, coalesce(cast(p as string), 'null')) from b order by x"
+        ),
+        ["1|null", "2|8"]
+    );
+    run(&s, "set spark.sql.storeAssignmentPolicy=ANSI");
+    run(&s, "set spark.sql.ansi.enabled=false");
+    assert_eq!(
+        class(&s, "insert into b partition (p='xyz') select 3"),
+        "CAST_INVALID_INPUT"
+    );
+    assert_eq!(
+        class(&s, "alter table b add partition (p='xyz')"),
+        "CAST_INVALID_INPUT"
+    );
+    run(&s, "set spark.sql.ansi.enabled=true");
+    run(&s, "insert into b partition (p=NULL) select 4");
+    assert_eq!(
+        rows(&s, "show partitions b"),
+        ["p=8", "p=__HIVE_DEFAULT_PARTITION__"]
+    );
+}
+
+/// A partition registered away from its default directory is never deleted: its directory may be anything (the
+/// table root itself, another table's data), and reads of the table never list it.
+#[test]
+fn drop_partition_refuses_a_partition_outside_its_default_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table o(x int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into o values (1,1)");
+    let root = dir.path().join("o");
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("keep.txt"), "x").unwrap();
+    run(
+        &s,
+        &format!(
+            "alter table o add partition (p=2) location '{}'",
+            elsewhere.path().display()
+        ),
+    );
+    run(
+        &s,
+        &format!(
+            "alter table o add partition (p=3) location '{}'",
+            root.display()
+        ),
+    );
+    for p in [2, 3] {
+        assert_eq!(
+            class(&s, &format!("alter table o drop partition (p={p})")),
+            "KRISHIV_UNSUPPORTED_FEATURE"
+        );
+    }
+    assert!(elsewhere.path().join("keep.txt").is_file());
+    assert!(root.join("p=1").is_dir());
+    assert_eq!(rows(&s, "show partitions o"), ["p=1", "p=2", "p=3"]);
+}
+
+/// A partition whose default directory resolves outside the table through a symbolic link in a parent directory
+/// (`t/p=1` linked elsewhere, partition `p=1/q=1`), or to another partition's directory, is not dropped: deleting it
+/// would delete files that are not the partition's.
+/// Refused before the log, the catalog or any file changes.
+#[cfg(unix)]
+#[test]
+fn drop_partition_refuses_a_directory_resolved_outside_the_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table l(x int, p int, q int) using parquet partitioned by (p, q)",
+    );
+    run(&s, "insert into l values (1,2,2)");
+    let root = dir.path().join("l");
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join("q=1")).unwrap();
+    std::fs::write(outside.path().join("q=1").join("keep.txt"), "x").unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.join("p=1")).unwrap();
+    run(&s, "alter table l add partition (p=1, q=1)");
+    assert_eq!(
+        class(&s, "alter table l drop partition (p=1, q=1)"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert!(outside.path().join("q=1").join("keep.txt").is_file());
+    // A link to another partition of the table (`p=4` -> `p=2`): dropping `p=4/q=2` would delete `p=2/q=2`'s files.
+    std::os::unix::fs::symlink(root.join("p=2"), root.join("p=4")).unwrap();
+    run(&s, "alter table l add partition (p=4, q=2)");
+    assert_eq!(
+        class(&s, "alter table l drop partition (p=4, q=2)"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(
+        rows(&s, "select cast(x as string) from l where p = 2"),
+        ["1"]
+    );
+    assert_eq!(
+        rows(&s, "show partitions l"),
+        ["p=1/q=1", "p=2/q=2", "p=4/q=2"]
+    );
+    // A partition inside the table still drops.
+    run(&s, "alter table l drop partition (p=2, q=2)");
+    assert_eq!(rows(&s, "show partitions l"), ["p=1/q=1", "p=4/q=2"]);
+}
+
+/// RENAME PARTITION neither moves a source directory nor writes into a target that resolves away from its own path
+/// in the table through a symbolic link in a parent directory: it would move another directory's files into the
+/// table, or the partition's files out of it. Refused before the log or any file changes.
+#[cfg(unix)]
+#[test]
+fn rename_partition_refuses_directories_resolved_away_from_their_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table rl(x int, p int, q int) using parquet partitioned by (p, q)",
+    );
+    run(&s, "insert into rl values (1,2,2)");
+    let root = dir.path().join("rl");
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join("q=1")).unwrap();
+    std::fs::write(outside.path().join("q=1").join("keep.txt"), "x").unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.join("p=1")).unwrap();
+    run(&s, "alter table rl add partition (p=1, q=1)");
+    // The source resolves outside the table.
+    assert_eq!(
+        class(
+            &s,
+            "alter table rl partition (p=1, q=1) rename to partition (p=3, q=1)"
+        ),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert!(outside.path().join("q=1").join("keep.txt").is_file());
+    // The target's parent resolves outside the table.
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), root.join("p=5")).unwrap();
+    assert_eq!(
+        class(
+            &s,
+            "alter table rl partition (p=2, q=2) rename to partition (p=5, q=2)"
+        ),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert!(root.join("p=2").join("q=2").is_dir());
+    assert!(!elsewhere.path().join("q=2").exists());
+    assert_eq!(rows(&s, "show partitions rl"), ["p=1/q=1", "p=2/q=2"]);
+    // A rename inside the table still works.
+    run(
+        &s,
+        "alter table rl partition (p=2, q=2) rename to partition (p=6, q=2)",
+    );
+    assert_eq!(rows(&s, "show partitions rl"), ["p=1/q=1", "p=6/q=2"]);
+}
+
+/// A partition registered away from its default directory is not renamed: Spark 4.2.0 moves that directory, which
+/// may be another table's (krishiv-internal `research/spark/partition-followups/probe9.py`); the engine refuses
+/// before the log or any file changes, as DROP PARTITION does.
+#[test]
+fn rename_partition_refuses_a_partition_outside_its_default_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table other(x int) using parquet");
+    run(&s, "insert into other values (5)");
+    let other = dir.path().join("other");
+    run(
+        &s,
+        "create table ro(x int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into ro values (1,1)");
+    run(
+        &s,
+        &format!(
+            "alter table ro add partition (p=2) location '{}'",
+            other.display()
+        ),
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table ro partition (p=2) rename to partition (p=3)"
+        ),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(rows(&s, "show partitions ro"), ["p=1", "p=2"]);
+    assert!(!dir.path().join("ro").join("p=3").exists());
+    assert_eq!(rows(&s, "select cast(x as string) from other"), ["5"]);
+    // A partition at its default directory still renames.
+    run(
+        &s,
+        "alter table ro partition (p=1) rename to partition (p=4)",
+    );
+    assert_eq!(rows(&s, "show partitions ro"), ["p=2", "p=4"]);
+}
+
+/// Spark keeps an external table's files of a dropped partition and stops reading them; the engine's reads refuse
+/// a directory the catalog does not know, so the drop is refused and changes nothing.
+#[test]
+fn drop_partition_of_an_external_table_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let ext = tempfile::tempdir().unwrap();
+    run(
+        &s,
+        &format!(
+            "create table e(x int, p int) using parquet partitioned by (p) location '{}'",
+            ext.path().display()
+        ),
+    );
+    run(&s, "insert into e values (1,1),(2,2)");
+    assert_eq!(
+        class(&s, "alter table e drop partition (p=1)"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(rows(&s, "show partitions e"), ["p=1", "p=2"]);
+    // A missing spec is still reported first, and IF EXISTS over nothing changes nothing.
+    assert_eq!(
+        class(&s, "alter table e drop partition (p=9)"),
+        "PARTITIONS_NOT_FOUND"
+    );
+    run(&s, "alter table e drop if exists partition (p=9)");
+}
+
+/// The commit log forgets a dropped partition's files in one entry, so a read of the table does not list them.
+#[test]
+fn drop_partition_removes_the_files_from_the_log_in_one_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table dl(a int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into dl values (1,1),(2,2),(3,3)");
+    let root = dir.path().join("dl");
+    let before = log_entries(&root);
+    run(&s, "alter table dl drop partition (p=1), partition (p=2)");
+    assert_eq!(log_entries(&root), before + 1);
+    assert_eq!(rows(&s, "select cast(a as string) from dl"), ["3"]);
+    // A cached read sees the drop.
+    run(&s, "cache table dl");
+    run(&s, "alter table dl drop partition (p=3)");
+    assert_eq!(
+        rows(&s, "select cast(a as string) from dl"),
+        Vec::<String>::new()
+    );
+}
+
+/// Without a commit log a dropped partition's directory goes whole; one that cannot be removed is Spark's
+/// `_LEGACY_ERROR_TEMP_2036` ("Unable to delete partition path"), naming the path.
+#[cfg(unix)]
+#[test]
+fn drop_partition_whose_directory_cannot_be_removed_is_legacy_error_2036() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table du(a int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into du values (1,1),(2,2)");
+    let root = dir.path().join("du");
+    std::fs::remove_dir_all(root.join("_krishiv_log")).unwrap();
+    let part = root.join("p=1");
+    std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // A user who can write a read-only directory (root) cannot make the removal fail this way.
+    if std::fs::write(part.join("probe"), b"").is_ok() {
+        std::fs::remove_file(part.join("probe")).unwrap();
+        std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let failed = block_on(async {
+        s.sql("alter table du drop partition (p=1)")
+            .await?
+            .collect()
+            .await
+    });
+    // Writable again before any assertion, so the temporary directory can be removed whatever happened.
+    std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let Err(e) = failed else {
+        panic!("the partition directory cannot be removed");
+    };
+    assert_eq!(e.error_class().name(), "_LEGACY_ERROR_TEMP_2036", "{e}");
+    assert!(e.to_string().contains("p=1"), "{e}");
+    assert!(part.is_dir());
+}
+
+/// `ADD PARTITION` and the static values of `INSERT .. PARTITION` are cast to the partition column types
+/// (`castPartitionSpec`, Spark 4.2.0): `'007'` is `7`, `'2024-1-5'` is `2024-01-05`, `'abc'` and `3.7` for an INT
+/// are `CAST_INVALID_INPUT`; under `storeAssignmentPolicy=LEGACY` a value the cast makes NULL is the default
+/// partition.
+#[test]
+fn added_and_inserted_partition_values_are_cast_to_their_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table a(x int, p int, d date) using parquet partitioned by (p, d)",
+    );
+    run(&s, "alter table a add partition (p='007', d='2024-01-05')");
+    assert_eq!(
+        class(&s, "alter table a add partition (p='abc', d='2024-01-05')"),
+        "CAST_INVALID_INPUT"
+    );
+    run(&s, "alter table a add partition (p=8, d='2024-1-5')");
+    assert_eq!(
+        class(&s, "alter table a add partition (p='7', d='2024-01-05')"),
+        "PARTITIONS_ALREADY_EXIST"
+    );
+    run(
+        &s,
+        "alter table a add if not exists partition (p='7', d='2024-01-05')",
+    );
+    assert_eq!(
+        rows(&s, "show partitions a"),
+        ["p=7/d=2024-01-05", "p=8/d=2024-01-05"]
+    );
+    assert!(dir.path().join("a/p=7/d=2024-01-05").is_dir());
+    run(&s, "set spark.sql.storeAssignmentPolicy=LEGACY");
+    run(&s, "alter table a add partition (p='abc', d='2024-01-06')");
+    assert_eq!(
+        rows(&s, "show partitions a"),
+        [
+            "p=7/d=2024-01-05",
+            "p=8/d=2024-01-05",
+            "p=__HIVE_DEFAULT_PARTITION__/d=2024-01-06"
+        ]
+    );
+    run(&s, "set spark.sql.storeAssignmentPolicy=ANSI");
+    run(
+        &s,
+        "create table b(x int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into b partition (p='007') select 1");
+    for v in ["'abc'", "3.7"] {
+        assert_eq!(
+            class(&s, &format!("insert into b partition (p={v}) select 2")),
+            "CAST_INVALID_INPUT"
+        );
+    }
+    assert_eq!(rows(&s, "show partitions b"), ["p=7"]);
+    assert_eq!(rows(&s, "select concat_ws('|', x, p) from b"), ["1|7"]);
+    assert!(dir.path().join("b/p=7").is_dir());
+}
+
+/// `ALTER TABLE .. PARTITION (..) SET LOCATION` casts its spec as ADD and RENAME do: the rows of a real Spark run
+/// (3.5.9, 4.0.5, 4.1.4 and 4.2.0 agree; krishiv-internal `research/spark/partition-followups/probe4.py`).
+#[test]
+fn set_location_casts_its_partition_spec() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table c (x int, p int, s string) using parquet partitioned by (p, s)",
+    );
+    run(&s, "alter table c add partition (p=7, s='a')");
+    let new1 = dir.path().join("new1");
+    run(
+        &s,
+        &format!(
+            "alter table c partition (p='007', s='a') set location '{}'",
+            new1.display()
+        ),
+    );
+    assert_eq!(rows(&s, "show partitions c"), ["p=7/s=a"]);
+    let location = rows(&s, "describe formatted c partition (p=7, s='a')")
+        .into_iter()
+        .find(|r| r.starts_with("Location"))
+        .unwrap();
+    assert!(location.ends_with("new1"), "{location}");
+    let other = dir.path().join("new2");
+    assert_eq!(
+        class(
+            &s,
+            &format!(
+                "alter table c partition (p='abc', s='a') set location '{}'",
+                other.display()
+            )
+        ),
+        "CAST_INVALID_INPUT"
+    );
+    assert_eq!(
+        params(
+            &s,
+            &format!(
+                "alter table c partition (p='8', s='a') set location '{}'",
+                other.display()
+            )
+        ),
+        [
+            "partitionList=PARTITION (`p` = 8, `s` = a)",
+            "tableName=`default`.`c`"
+        ]
+    );
+    s.conf()
+        .set(
+            "spark.sql.legacy.skipTypeValidationOnAlterPartition",
+            "true",
+        )
+        .unwrap();
+    for value in ["007", "abc"] {
+        assert_eq!(
+            params(
+                &s,
+                &format!(
+                    "alter table c partition (p='{value}', s='a') set location '{}'",
+                    other.display()
+                )
+            ),
+            [
+                format!("partitionList=PARTITION (`p` = {value}, `s` = a)"),
+                "tableName=`default`.`c`".to_owned()
+            ]
+        );
+    }
+}
+
+/// `SET LOCATION` and `RENAME` report a spec in the order it was written, and a rename written out of column
+/// order still stores and names the partition in column order (Spark 4.2.0 and 3.5.9, krishiv-internal
+/// `research/spark/partition-followups/probe5.py`).
+#[test]
+fn partition_errors_list_a_spec_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table c (x int, p int, s string) using parquet partitioned by (p, s)",
+    );
+    run(&s, "alter table c add partition (p=7, s='a')");
+    run(&s, "alter table c add partition (p=9, s='b')");
+    let missing = |list: &str| {
+        vec![
+            format!("partitionList=PARTITION ({list})"),
+            "tableName=`default`.`c`".to_owned(),
+        ]
+    };
+    let n1 = dir.path().join("n1");
+    assert_eq!(
+        params(
+            &s,
+            &format!(
+                "alter table c partition (s='a', p=8) set location '{}'",
+                n1.display()
+            )
+        ),
+        missing("`s` = a, `p` = 8")
+    );
+    assert_eq!(
+        params(
+            &s,
+            "alter table c partition (s='a', p=8) rename to partition (s='b', p=10)"
+        ),
+        missing("`s` = a, `p` = 8")
+    );
+    assert_eq!(
+        params(
+            &s,
+            "alter table c partition (s='a', p=7) rename to partition (s='b', p='009')"
+        ),
+        missing("`s` = b, `p` = 9")
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table c partition (s='a', p=7) rename to partition (s='b', p='009')"
+        ),
+        "PARTITIONS_ALREADY_EXIST"
+    );
+    run(
+        &s,
+        "alter table c partition (s='a', p=7) rename to partition (s='c', p='010')",
+    );
+    assert_eq!(rows(&s, "show partitions c"), ["p=10/s=c", "p=9/s=b"]);
+    assert!(dir.path().join("c").join("p=10").join("s=c").is_dir());
 }
