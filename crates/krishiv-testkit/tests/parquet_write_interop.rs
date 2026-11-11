@@ -418,8 +418,8 @@ fn map_of(keys: ArrayRef, values: ArrayRef, lens: &[Option<usize>]) -> ArrayRef 
     ))
 }
 
-/// Row `i`'s length for a nested column of period `p`: null, empty, then 1..: one in `p` rows is a
-/// null container, one in `p` an empty one.
+/// Row `i`'s length for a nested column of period `p`: null, empty, then 1..: one in `2p` rows is a
+/// null container, one in `2p` an empty one.
 fn len_at(i: usize, p: usize, max: usize) -> Option<usize> {
     match i % (p * 2) {
         0 => None,

@@ -137,7 +137,7 @@ def bad_statistics(path: Path) -> tuple[list[str], int]:
                 try:
                     lo, hi = st.min, st.max
                 except pa.ArrowNotImplementedError:
-                    continue  # pyarrow cannot decode these statistics (e.g. 16-byte decimals)
+                    continue  # pyarrow cannot decode these statistics (the INT32/INT64-backed decimals)
                 checked[0] += 1
                 if min(values) < lo or max(values) > hi:
                     bad.append(f"{name} rg{g}: values outside [{lo}, {hi}]")
