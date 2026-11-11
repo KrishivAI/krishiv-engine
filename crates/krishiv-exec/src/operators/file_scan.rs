@@ -534,7 +534,7 @@ struct FileScanLocal {
     /// file: the next piece of that file starts from it instead of guessing
     /// again.
     row_filter: Option<(usize, bool)>,
-    rows: super::RowStage,
+    rows: super::ScanRows,
     /// The scan's totals, to record a split this driver abandons (a limit above
     /// stopped it before the split's end): its reads were made and paid for. The
     /// split's rows, bytes and unit counts are added with them; the decode
@@ -1501,7 +1501,9 @@ impl Source for FileScanSource {
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
         Ok(Box::new(FileScanLocal {
-            rows: super::RowStage::new(&g.request.dynamic, &self.mapped, self.runtime.settings()),
+            rows: self
+                .runtime
+                .scan_stage(&g.request.dynamic, &self.mapped, ctx.partition()),
             consumer: Arc::clone(ctx.consumer().consumer()),
             gate: Arc::clone(ctx.query().scan_gate()),
             morsel: None,

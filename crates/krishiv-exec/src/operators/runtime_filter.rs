@@ -32,13 +32,22 @@
 //!   rows. They depend on row counts, never on time, but in a file scan also
 //!   on which morsels a driver won. A filter only drops rows its join would
 //!   drop, so the query's output does not depend on them.
+//! - **Handed to a consumer (design P2-E3 U2).** A scan whose rows go, in
+//!   the same pipeline, into an operator that selects rows itself (a hash
+//!   probe's [`RowSelect`](super::select::RowSelect)) can hand that
+//!   operator its row stage ([`RuntimeFilters::hand_to_consumer`]): each
+//!   driver's stage is then built by the scan as before and restarted by it
+//!   as before, but the consumer evaluates it, on the same rows in the same
+//!   driver, and the scan drops no row itself. The rows tested, dropped and
+//!   switched off are the same as when the scan applies it.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use arrow_array::{BooleanArray, RecordBatch};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_schema::Schema;
-use krishiv_io::{FilterCounts, KeyFilter, RuntimeFilter, ScanFilter};
+use krishiv_io::{FilterCounts, FilterId, KeyFilter, RuntimeFilter, ScanFilter};
 
 use crate::error::{Result, internal};
 
@@ -65,6 +74,11 @@ impl Default for RowStageSettings {
 struct Inner {
     filters: Vec<Arc<RuntimeFilter>>,
     settings: RowStageSettings,
+    /// The row stage runs in a consumer: each filter's column in the
+    /// consumer's batches.
+    consumer: Option<Arc<HashMap<FilterId, usize>>>,
+    /// The stage of each driver (by partition) while a consumer runs it.
+    stages: HashMap<u32, SharedStage>,
 }
 
 /// The runtime filters a planner pushes into one scan (see the module
@@ -78,7 +92,7 @@ impl RuntimeFilters {
     pub fn new(filters: Vec<Arc<RuntimeFilter>>) -> Self {
         Self(Arc::new(Mutex::new(Inner {
             filters,
-            settings: RowStageSettings::default(),
+            ..Inner::default()
         })))
     }
 
@@ -106,6 +120,49 @@ impl RuntimeFilters {
     #[must_use]
     pub fn settings(&self) -> RowStageSettings {
         self.lock().settings
+    }
+
+    /// Hands the row stage to the consumer above the scan, whose batches
+    /// hold filter `id`'s column at `columns[id]`: every filter the stage
+    /// can evaluate (a top-level target) must have one, else nothing is
+    /// handed and `false` is returned (the scan keeps its stage). Call
+    /// before the scan runs.
+    pub(crate) fn hand_to_consumer(&self, columns: HashMap<FilterId, usize>) -> bool {
+        let mut inner = self.lock();
+        let covered = inner
+            .filters
+            .iter()
+            .all(|f| f.target().0.len() != 1 || columns.contains_key(&f.id()));
+        if covered {
+            inner.consumer = Some(Arc::new(columns));
+        }
+        covered
+    }
+
+    /// The row stage of the scan driver in `partition` over batches of
+    /// `schema`, evaluating `filters`: the scan's own, or a stage it only
+    /// restarts while its consumer evaluates it
+    /// ([`Self::hand_to_consumer`]).
+    pub(crate) fn scan_stage(
+        &self,
+        filters: &[ScanFilter],
+        schema: &Schema,
+        partition: u32,
+    ) -> ScanRows {
+        let mut inner = self.lock();
+        let stage = RowStage::new(filters, schema, inner.settings);
+        let Some(columns) = inner.consumer.clone() else {
+            return ScanRows::Here(stage);
+        };
+        let shared = SharedStage(Arc::new(Mutex::new(stage.at_columns(&columns))));
+        inner.stages.insert(partition, shared.clone());
+        ScanRows::Handed(shared)
+    }
+
+    /// The stage the scan driver in `partition` handed to its consumer
+    /// (`None` before that driver started, or when nothing was handed).
+    pub(crate) fn consumer_stage(&self, partition: u32) -> Option<SharedStage> {
+        self.lock().stages.get(&partition).cloned()
     }
 
     /// The filters at the table level of `table` (filters whose target is
@@ -228,6 +285,18 @@ impl RowStage {
         Self { filters, settings }
     }
 
+    /// The same stage over batches that hold filter `id`'s column at
+    /// `columns[id]` (a filter without one is dropped).
+    fn at_columns(mut self, columns: &HashMap<FilterId, usize>) -> Self {
+        self.filters.retain_mut(|f| {
+            columns.get(&f.filter.filter().id()).is_some_and(|&c| {
+                f.column = c;
+                true
+            })
+        });
+        self
+    }
+
     /// A new stretch of the scan starts: every filter is measured afresh, so
     /// the switch-off decisions depend on that stretch's rows only.
     pub(crate) fn start_partition(&mut self) {
@@ -330,6 +399,66 @@ impl RowStage {
             Some(mask) => arrow_select::filter::filter_record_batch(&batch, &mask)
                 .map_err(|e| internal(e.to_string())),
         }
+    }
+}
+
+/// A scan driver's row stage: its own, or one its consumer evaluates.
+#[derive(Debug)]
+pub(crate) enum ScanRows {
+    /// The scan drops the rows.
+    Here(RowStage),
+    /// The consumer drops them; the scan restarts the measurement.
+    Handed(SharedStage),
+}
+
+impl ScanRows {
+    /// See [`RowStage::start_partition`].
+    pub(crate) fn start_partition(&mut self) {
+        match self {
+            Self::Here(stage) => stage.start_partition(),
+            Self::Handed(stage) => stage.lock().start_partition(),
+        }
+    }
+
+    /// The scan's mask of `batch` ([`RowStage::mask`]; `None` when handed).
+    ///
+    /// # Errors
+    /// As [`RowStage::mask`].
+    pub(crate) fn mask(&mut self, batch: &RecordBatch) -> Result<Option<BooleanArray>> {
+        match self {
+            Self::Here(stage) => stage.mask(batch),
+            Self::Handed(_) => Ok(None),
+        }
+    }
+
+    /// `batch` without the rows the scan drops ([`RowStage::apply`]).
+    ///
+    /// # Errors
+    /// As [`RowStage::mask`].
+    pub(crate) fn apply(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+        match self {
+            Self::Here(stage) => stage.apply(batch),
+            Self::Handed(_) => Ok(batch),
+        }
+    }
+}
+
+/// One driver's row stage, shared by the scan that restarts it and the
+/// consumer that evaluates it (the same driver: never contended).
+#[derive(Debug, Clone)]
+pub(crate) struct SharedStage(Arc<Mutex<RowStage>>);
+
+impl SharedStage {
+    fn lock(&self) -> MutexGuard<'_, RowStage> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// See [`RowStage::mask`], over the consumer's batch.
+    ///
+    /// # Errors
+    /// As [`RowStage::mask`].
+    pub(crate) fn mask(&self, batch: &RecordBatch) -> Result<Option<BooleanArray>> {
+        self.lock().mask(batch)
     }
 }
 
