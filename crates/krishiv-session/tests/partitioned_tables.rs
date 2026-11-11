@@ -1949,6 +1949,46 @@ fn drop_partition_refuses_a_partition_outside_its_default_directory() {
     assert_eq!(rows(&s, "show partitions o"), ["p=1", "p=2", "p=3"]);
 }
 
+/// A partition registered away from its default directory is not renamed: Spark 4.2.0 moves that directory, which
+/// may be another table's (krishiv-internal `research/spark/partition-followups/probe9.py`); the engine refuses
+/// before the log or any file changes, as DROP PARTITION does.
+#[test]
+fn rename_partition_refuses_a_partition_outside_its_default_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table other(x int) using parquet");
+    run(&s, "insert into other values (5)");
+    let other = dir.path().join("other");
+    run(
+        &s,
+        "create table ro(x int, p int) using parquet partitioned by (p)",
+    );
+    run(&s, "insert into ro values (1,1)");
+    run(
+        &s,
+        &format!(
+            "alter table ro add partition (p=2) location '{}'",
+            other.display()
+        ),
+    );
+    assert_eq!(
+        class(
+            &s,
+            "alter table ro partition (p=2) rename to partition (p=3)"
+        ),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(rows(&s, "show partitions ro"), ["p=1", "p=2"]);
+    assert!(!dir.path().join("ro").join("p=3").exists());
+    assert_eq!(rows(&s, "select cast(x as string) from other"), ["5"]);
+    // A partition at its default directory still renames.
+    run(
+        &s,
+        "alter table ro partition (p=1) rename to partition (p=4)",
+    );
+    assert_eq!(rows(&s, "show partitions ro"), ["p=2", "p=4"]);
+}
+
 /// Spark keeps an external table's files of a dropped partition and stops reading them; the engine's reads refuse
 /// a directory the catalog does not know, so the drop is refused and changes nothing.
 #[test]

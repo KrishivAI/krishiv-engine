@@ -1042,11 +1042,20 @@ impl Session {
         // The catalog and the directory name keep the partition columns' order.
         let to = &ordered(table, to);
         let target = partition_path(&table.location, to);
+        let found = find_partition(table, from)
+            .ok_or_else(|| internal("the partition was found above".to_owned()))?;
+        // A partition registered at another directory (`ADD PARTITION ... LOCATION`) is not moved: that directory
+        // may hold another table's files, which Spark 4.2.0 moves with it (krishiv-internal
+        // `research/spark/partition-followups/probe9.py`). Refused before the log or any file changes, as DROP
+        // PARTITION refuses it.
+        if found.location != partition_path(&table.location, &found.spec) {
+            return Err(unsupported(&format!(
+                "ALTER TABLE ... RENAME PARTITION of a partition at {} (not its default directory)",
+                found.location.display()
+            )));
+        }
+        let source = found.location.clone();
         self.authorize_dir(&target).await?;
-        let source = find_partition(table, from)
-            .ok_or_else(|| internal("the partition was found above".to_owned()))?
-            .location
-            .clone();
         // The log moves first, then the directory: a lost race or a failed commit changes nothing, and a crash in
         // between leaves the log one rename ahead of the files, which a rerun of the statement completes (the
         // log then lists nothing below the old directory). A failed move puts the log back.
