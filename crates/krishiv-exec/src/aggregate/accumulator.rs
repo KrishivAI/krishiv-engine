@@ -139,26 +139,6 @@ impl Values {
         }
     }
 
-    /// Whether row `i` of `src` replaces group `g`'s value: Spark's
-    /// `MaxBy`/`MinBy` keep the held row only while it orders strictly after
-    /// (`max`) or before the new one, so a tie takes the new row (the last
-    /// of equal keys; `-0.0` equals `0.0`, NaN equals NaN).
-    fn beats(&self, g: usize, src: &Col<'_>, i: usize, max: bool) -> Result<bool> {
-        let takes = |o: std::cmp::Ordering| if max { o.is_ge() } else { o.is_le() };
-        Ok(match (self, src) {
-            (Self::Int(v), Col::Int(c)) => takes(c[i].cmp(&v[g])),
-            (Self::Float(v), Col::Float(c)) => {
-                !float_lt(if max { c[i] } else { v[g] }, if max { v[g] } else { c[i] })
-            }
-            (Self::Bytes(v), Col::Bytes(c)) => takes(c[i].cmp(&v[g][..])),
-            _ => {
-                return Err(internal(
-                    "an ordering key of another kind than its state".to_owned(),
-                ));
-            }
-        })
-    }
-
     /// Stores row `i` of `src` as group `g`'s value, keeping `heap` (the
     /// bytes of `Bytes` values) current.
     fn put(&mut self, g: usize, src: &Col<'_>, i: usize, heap: &mut usize) -> Result<()> {
@@ -285,6 +265,8 @@ enum Kind {
     /// the bytes of both `Bytes` vectors.
     By {
         max: bool,
+        /// A tie keeps the held row (`min`/`max` of a collated string) instead of taking the new.
+        first_wins: bool,
         values: Values,
         keys: Values,
         set: Vec<bool>,
@@ -453,12 +435,13 @@ impl Accumulator {
                 set: Vec::new(),
                 heap: 0,
             },
-            (F::MaxBy | F::MinBy, _) => {
+            (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => {
                 let (v, k) = expr
                     .by_types()
                     .ok_or_else(|| internal("max_by without value and key types".to_owned()))?;
                 Kind::By {
-                    max: expr.function == F::MaxBy,
+                    max: matches!(expr.function, F::MaxBy | F::MaxByKeyFirst),
+                    first_wins: matches!(expr.function, F::MaxByKeyFirst | F::MinByKeyFirst),
                     values: Values::empty(v),
                     keys: Values::empty(k),
                     set: Vec::new(),
@@ -1133,3 +1116,4 @@ mod fold;
 
 mod helpers;
 pub(crate) use helpers::*;
+mod by_key;

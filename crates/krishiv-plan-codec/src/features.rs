@@ -551,7 +551,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::CovarPop => Some(Feature::MomentAggregates),
             AggregateFunction::AnyValue { .. }
             | AggregateFunction::MaxBy
-            | AggregateFunction::MinBy => Some(Feature::AnyValueByAggregates),
+            | AggregateFunction::MinBy
+            | AggregateFunction::MaxByKeyFirst
+            | AggregateFunction::MinByKeyFirst => Some(Feature::AnyValueByAggregates),
             AggregateFunction::CollectList
             | AggregateFunction::CollectSet
             | AggregateFunction::VectorSum

@@ -6,13 +6,14 @@
 use krishiv_common::error::{
     DatatypeMismatchDataDiffTypes, DatatypeMismatchInvalidOrderingType,
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchUnsupportedInputType, DatatypeMismatchValueOutOfRange, InvalidExtractField,
-    InvalidParameterValueBoolean, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210,
-    NonFoldableArgument, SecondFunctionArgumentNotInteger,
+    DatatypeMismatchValueOutOfRange, InvalidExtractField, InvalidParameterValueBoolean,
+    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210, NonFoldableArgument,
+    SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{ArrayType, DataType, DayTimeField, DecimalType, YearMonthField};
 
+use super::collection::collect_set;
 use super::math::is_ansi_interval;
 use super::{Aggregate, Execution};
 use crate::signature::{
@@ -1510,6 +1511,6 @@ fn casts() -> Vec<Spec> {
 }
 
 mod aggregates;
-pub(super) use aggregates::spark_orderable;
 use aggregates::*;
 pub use aggregates::{approx_percentile_result, exact_percentile_result};
+pub(super) use aggregates::{collect, spark_orderable};

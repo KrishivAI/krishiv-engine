@@ -94,6 +94,9 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `-0.0 == 0.0`). The module docs list which functions are bit-identical to Spark's JVM results and the share of inputs where
   `sin`/`cos`/`tan`/`ln`/`log10` differ in the last bit (the JVM's intrinsics are not fdlibm); `tests/math_differential.rs` in
   `krishiv-testkit` holds that bound.
+- `string/collation_key.rs` (ADR 0043): the collation key of a string (`UTF8_LCASE` is Spark's `lowerCaseCodePoints`, checked for every code point
+  against `tests/fixtures/spark-4.2.0/collation-lowercase.json`; `_RTRIM` drops trailing `U+0020`) and of nested values; a type that does not
+  describe the column is `INTERNAL_ERROR`. Oracle `reference::collation_key_lists`, property `collation_key_matches_reference`, bench `collation_key`.
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 
 ## Key files

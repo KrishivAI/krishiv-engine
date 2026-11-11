@@ -96,12 +96,12 @@ impl Resolver<'_> {
             return Ok(None);
         }
         let calls = Self::aggregate_calls(items);
-        // A `DISTINCT` call with an ordering has its keys among the
-        // arguments the expansion would split: leave it to the ordinary path.
-        if calls
-            .iter()
-            .any(|(_, f)| f.distinct && !f.within_group.is_empty())
-        {
+        // A `DISTINCT` call with an ordering has its keys among the arguments the expansion would
+        // split, one keeping collated values dedupes by key: leave them to the ordinary path.
+        if calls.iter().any(|(_, f)| {
+            (f.distinct && !f.within_group.is_empty())
+                || super::super::unexecutable::keeps_collated(f)
+        }) {
             return Ok(None);
         }
         let mut memo = HashMap::new();

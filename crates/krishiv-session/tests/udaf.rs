@@ -829,3 +829,58 @@ fn a_udaf_named_like_a_whole_partition_builtin_takes_any_frame() {
         "{e}"
     );
 }
+
+/// `max`: the number of rows, refusing any argument list but its one declared argument.
+#[derive(Debug)]
+struct OneArgMax(Signature);
+
+impl AggregateUdf for OneArgMax {
+    fn name(&self) -> &str {
+        "max"
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn return_field(&self, args: &[ArgField]) -> Result<ReturnField, UdfError> {
+        if args.len() != 1 {
+            return Err(UdfError::new(format!("{} arguments", args.len())));
+        }
+        Ok(ReturnField {
+            data_type: DataType::Long,
+            nullable: true,
+        })
+    }
+    fn state_fields(&self, _: &[ArgField]) -> Result<Vec<StateField>, UdfError> {
+        Ok(vec![StateField {
+            name: "rows".to_owned(),
+            data_type: DataType::Long,
+            nullable: true,
+        }])
+    }
+    fn accumulator(
+        &self,
+        args: &[ArgField],
+        _: &InvokeContext,
+    ) -> Result<Box<dyn GroupsAccumulator>, UdfError> {
+        if args.len() != 1 {
+            return Err(UdfError::new(format!("{} arguments", args.len())));
+        }
+        Ok(Box::new(RowCount(Vec::new())))
+    }
+}
+
+#[test]
+fn a_udaf_named_like_a_built_in_keeps_its_collated_argument() {
+    let s = session_with(&[], Fault::None);
+    s.register_udaf(OneArgMax(Signature::Exact(vec![UdfInputType::Any])))
+        .unwrap();
+    // The built-in `max` of a collated string gains a key argument; the UDF never does.
+    let got = run(
+        &s,
+        "SELECT session.max(c), CAST(count(*) AS BIGINT) FROM (SELECT c COLLATE utf8_lcase c FROM VALUES ('a'),('B') t(c))",
+    );
+    assert_eq!(pairs(&got), [(Some(2), Some(2))]);
+}

@@ -834,6 +834,7 @@ impl Accumulator {
             (
                 Kind::By {
                     max,
+                    first_wins,
                     values,
                     keys,
                     set,
@@ -854,7 +855,10 @@ impl Accumulator {
                 let key_valid = |i: usize| nulls[1].as_ref().is_none_or(|n| n.is_valid(i));
                 for (i, &g) in groups.iter().enumerate() {
                     let g = g as usize;
-                    if active(i) && key_valid(i) && (!set[g] || keys.beats(g, &y, i, *max)?) {
+                    if active(i)
+                        && key_valid(i)
+                        && (!set[g] || keys.beats(g, &y, i, *max, *first_wins)?)
+                    {
                         keys.put(g, &y, i, heap)?;
                         if valid(i) {
                             values.put(g, &x, i, heap)?;
