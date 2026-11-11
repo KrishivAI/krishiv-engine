@@ -6,10 +6,12 @@ Project [a#3, n#2]
 +- Join RightOuter, (a#0 == a#3)
    :- Aggregate [a#0], [a#0, count(1) AS n#2]
    :  +- Join LeftSemi, (a#0 == a#9)
-   :     :- Scan spark_catalog.default.u [a#0]
+   :     :- Filter isnotnull(a#0)
+   :     :  +- Scan spark_catalog.default.u [a#0]
    :     +- Shift +6
    :        +- Project [a#3]
-   :           +- Filter (b#4 == 'x') (shared #1)
-   :              +- Scan spark_catalog.default.t [a#3, b#4]
+   :           +- Filter ((b#4 == 'x') and isnotnull(a#3))
+   :              +- Scan spark_catalog.default.t [a#3, b#4] (shared #1)
    +- Project [a#3]
-      +- Shared #1, printed above
+      +- Filter (b#4 == 'x')
+         +- Shared #1, printed above

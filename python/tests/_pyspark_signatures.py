@@ -9,6 +9,13 @@ is caught here until its PySpark signature is added too.
 """
 
 PYSPARK_SIGNATURES = {
+    # The UDF builders (pyspark 4.2.0 `sql/functions/builtin.py:30453-30458`, `sql/pandas/functions.py:58, 399`)
+    # and the two type classes (no parameters).
+    "udf": "f=None, returnType=StringType(), *, useArrow=None",
+    "pandas_udf": "f=None, returnType=None, functionType=None",
+    "arrow_udf": "f=None, returnType=None, functionType=None",
+    "ArrowUDFType": "",
+    "PandasUDFType": "",
     "abs": "col",
     "acos": "col",
     "acosh": "col",

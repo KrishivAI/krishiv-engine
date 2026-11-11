@@ -169,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 19 };
+        let kinds = if depth == 0 { 5 } else { 21 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -311,6 +311,16 @@ impl Gen<'_> {
                 )
                 .unwrap(),
                 name: self.name(),
+            },
+            20 => ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi: self.flag(),
+                expr: Arc::new(self.expr(d)),
+                data_type: self.data_type(),
+                nullable: self.flag(),
+            }),
+            19 => ExprNode::StoredField {
+                expr: Arc::new(self.expr(d)),
+                comment: self.flag().then(|| self.name()),
             },
             _ => ExprNode::Subquery {
                 kind: match self.pick(3) {
@@ -843,6 +853,17 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             m_string(name, w) || m_expr(expr, w)
         }
         ExprNode::Alias { expr, name } => m_string(name, w) || m_expr(expr, w),
+        ExprNode::StoredField { expr, comment } => {
+            site!(
+                w,
+                *comment = if comment.is_some() {
+                    None
+                } else {
+                    Some("c".to_owned())
+                }
+            );
+            m_expr(expr, w)
+        }
         ExprNode::MultiAlias { expr, names } => {
             names.iter_mut().any(|n| m_string(n, w)) || m_expr(expr, w)
         }
@@ -939,6 +960,17 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                         name: name.clone(),
                         version: version.wrapping_add(1),
                     },
+                    FunctionId::PythonUdf {
+                        name,
+                        version,
+                        eval_type,
+                        thread_safe,
+                    } => FunctionId::PythonUdf {
+                        name: name.clone(),
+                        version: version.wrapping_add(1),
+                        eval_type: *eval_type,
+                        thread_safe: *thread_safe,
+                    },
                 };
                 site!(w, *id = other);
                 site!(w, flip(kind, FunctionKind::Scalar, FunctionKind::Window));
@@ -947,6 +979,16 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                 m_type(data_type, w) || m_exprs(args, w) || m_filter(filter, w)
             }
             ResolvedExpr::Alias { expr, output } => m_bound(output, w) || m_expr(expr, w),
+            ResolvedExpr::EvalMode {
+                ansi,
+                expr,
+                data_type,
+                nullable,
+            } => {
+                site!(w, *ansi = !*ansi);
+                site!(w, *nullable = !*nullable);
+                m_type(data_type, w) || m_expr(expr, w)
+            }
             ResolvedExpr::StateInput { columns, raw_type } => {
                 m_exprs(columns, w) || m_type(raw_type, w)
             }

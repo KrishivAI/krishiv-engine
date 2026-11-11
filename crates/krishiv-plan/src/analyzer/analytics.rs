@@ -518,10 +518,9 @@ impl Resolver<'_> {
             };
             let ty = arg_type(v.data_type.clone(), true);
             let copy = self.attr(&name, &ty);
-            // The key's copy keeps the column's comment (Spark 4.2.0: ROLLUP/CUBE/GROUPING SETS keys do).
-            if let Some(t) = self.comments.get(&v.id).cloned() {
-                self.comments.insert(copy.id, t);
-            }
+            // The key's copy keeps the column's comment and declared `CHAR`/`VARCHAR` type (Spark 4.2.0:
+            // ROLLUP/CUBE/GROUPING SETS keys do, `column-comments/probe5.out`).
+            self.carry_column_meta(v.id, copy.id);
             copies.push(GroupExpr {
                 key: keys_of[j],
                 attr: Attr {
@@ -731,7 +730,7 @@ impl Resolver<'_> {
                 // `SELECT session.upper(s) ... GROUP BY ROLLUP(s)` would
                 // silently run the built-in `upper` over the copy.
                 let (name, qualifier) = match &f.id {
-                    FunctionId::Udf { name, .. } => (
+                    FunctionId::Udf { name, .. } | FunctionId::PythonUdf { name, .. } => (
                         name.clone(),
                         vec!["system".to_owned(), "session".to_owned()],
                     ),

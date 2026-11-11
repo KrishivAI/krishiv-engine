@@ -20,7 +20,7 @@ pub struct PyColumn {
 }
 
 impl PyColumn {
-    fn wrap(inner: Column) -> Self {
+    pub(crate) fn wrap(inner: Column) -> Self {
         Self { inner }
     }
 }

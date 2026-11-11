@@ -24,7 +24,8 @@ py="$work/venv/bin/python"
 "$py" -m pip install --quiet "$dist"/*.whl pytest
 # Versions come from python/ci-interop-constraints.txt, the same pins ci.yml
 # and nightly.yml use, so every wheel leg tests against one known set.
-for dep in pyarrow polars duckdb; do
+# pandas and numpy: the pandas_udf tests and the PySpark UDF conformance tests (T059 unit 3a); a missing wheel skips them.
+for dep in pyarrow polars duckdb pandas numpy; do
   if ! "$py" -m pip install --quiet --only-binary :all: \
       --constraint "$repo/python/ci-interop-constraints.txt" "$dep"; then
     echo "::notice::$dep has no wheel for this target ($flavour, $("$py" -c 'import sysconfig; print(sysconfig.get_platform())')); its tests are skipped"

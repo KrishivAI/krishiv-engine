@@ -6,9 +6,12 @@ Project [a#0]
 +- Filter (c#2 > CASE WHEN isnull(count(1)#7) THEN 0L ELSE count(1)#7 END)
    +- Join LeftOuter, ((b#1 == d#6) and (a#3 == a#5))
       :- Join Inner, (a#0 == a#3)
-      :  :- Scan spark_catalog.default.t [a#0, b#1, c#2]
+      :  :- Filter isnotnull(a#0)
+      :  :  +- Scan spark_catalog.default.t [a#0, b#1, c#2]
       :  +- Project [a#3]
-      :     +- Scan spark_catalog.default.u [a#3, d#4] (shared #1)
+      :     +- Filter isnotnull(a#3)
+      :        +- Scan spark_catalog.default.u [a#3, d#4] (shared #1)
       +- Aggregate [d#6, a#5], [count(1) AS count(1)#7, d#6, a#5]
          +- Shift +2
-            +- Shared #1, printed above
+            +- Filter (isnotnull(a#3) and isnotnull(d#4))
+               +- Shared #1, printed above

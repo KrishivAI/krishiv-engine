@@ -22,9 +22,14 @@ from krishiv.sql import _generated_functions
 from krishiv.sql._function_support import ColumnOrName, _call, _lit, _named, _num_or_col
 from krishiv.sql._generated_functions import *  # noqa: F403  # re-exported through `__all__`
 from krishiv.sql.column import Column, _literal, _operand
+from krishiv.sql.pandas.functions import ArrowUDFType, PandasUDFType, arrow_udf, pandas_udf  # noqa: F401  # re-exported through `__all__`
+from krishiv.sql.types import DataType, StringType
 
 #: The functions written by hand below; every other name in ``__all__`` is generated.
 _HAND_WRITTEN = [
+    "ArrowUDFType",
+    "PandasUDFType",
+    "arrow_udf",
     "asc",
     "call_function",
     "col",
@@ -34,7 +39,9 @@ _HAND_WRITTEN = [
     "make_dt_interval",
     "make_interval",
     "make_ym_interval",
+    "pandas_udf",
     "try_make_interval",
+    "udf",
     "count",
     "countDistinct",
     "count_distinct",
@@ -229,3 +236,37 @@ def asc(col: ColumnOrName) -> Column:
 
 def desc(col: ColumnOrName) -> Column:
     return Column(_named(col, "col")).desc()
+
+
+def udf(
+    f: Any = None,
+    returnType: DataType | str = StringType(),  # noqa: B008  # Spark's default, an immutable type
+    *,
+    useArrow: bool | None = None,
+) -> Any:
+    """Creates a user defined function (``pyspark.sql.functions.udf``, PySpark 4.2.0
+    ``sql/functions/builtin.py:30428-30635``): ``udf(f, returnType)``, ``@udf``, ``@udf(returnType)`` or
+    ``@udf(returnType=...)``. ``returnType`` defaults to ``StringType``; ``useArrow=None`` follows
+    ``spark.sql.execution.pythonUDF.arrow.enabled`` and the function's type hints (``pd.Series -> pd.Series`` is
+    a pandas UDF, ``pa.Array -> pa.Array`` an Arrow UDF). Calling the result gives a Column named
+    ``<function name>(<args>)`` (``<lambda>`` for a lambda); it is not callable from SQL until
+    ``spark.udf.register``.
+
+    Only the Arrow paths are implemented: a UDF Spark would run pickled (``useArrow=False``) runs Arrow-batched
+    with a warning (a documented divergence)."""
+    import functools
+
+    from krishiv.sql.udf import _create_py_udf
+
+    # decorator @udf, @udf(), @udf(dataType())
+    if f is None or isinstance(f, str | DataType):
+        # If DataType has been passed as a positional argument
+        # for decorator use it as a returnType
+        return_type = f or returnType
+        return functools.partial(
+            _create_py_udf,
+            returnType=return_type,
+            useArrow=useArrow,
+        )
+    else:
+        return _create_py_udf(f=f, returnType=returnType, useArrow=useArrow)

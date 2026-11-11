@@ -27,6 +27,7 @@
 
 mod aggregate;
 mod build;
+mod build_project;
 pub(crate) mod eval;
 mod explain;
 mod file_table;
@@ -37,6 +38,7 @@ pub(crate) mod nodes;
 mod orient;
 mod properties;
 pub(crate) mod pushdown;
+mod python_udf;
 mod runtime_filter;
 pub(crate) mod subquery;
 mod table;
