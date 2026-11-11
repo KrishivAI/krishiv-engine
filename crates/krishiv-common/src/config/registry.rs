@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The config entries. Add new entries here and to [`REGISTRY`].
 
+use super::registry_join::{
+    EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT,
+};
 use std::borrow::Cow;
 use std::time::Duration;
 
@@ -39,6 +42,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
+    &EXEC_JOIN_FUSE_PROBE_SELECT,
     &EXEC_JOIN_IDLE_SPILL_AFTER,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
@@ -245,6 +249,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.exec.join.buildProjection",
         &EXEC_JOIN_BUILD_PROJECTION,
+    ),
+    (
+        "krishiv.exec.join.fuseProbeSelect",
+        &EXEC_JOIN_FUSE_PROBE_SELECT,
     ),
     (
         "krishiv.exec.join.smj.bufferBytes",
@@ -698,21 +706,6 @@ pub static EXEC_JOIN_BUILD_SIDE: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// Hash join keys in the row layout with a size-adaptive index (P2-T158).
-pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
-    key: "krishiv.exec.join.rowLayout",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
-    doc: "Internal: hash joins store their keys as fixed-width rows and index them with a \
-          table that switches by size between a flat and a salted directory. Results are \
-          the same either way; joins whose key types have no row encoding keep the \
-          columnar path.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
 /// Hash buckets of a sort below a window (P2-T055).
 pub static EXEC_SORT_HASH_BUCKETS: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.sort.hashBuckets",
@@ -781,23 +774,6 @@ pub static EXEC_JOIN_SHARED_BROADCAST_BYTES: ConfigEntry = ConfigEntry {
           stops, and each task of the query builds its own table from the broadcast rows \
           instead, spilling as needed. A cap below the query's memory avoids the spill of the query's \
           other memory that precedes that fallback when the table does not fit.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// How long a finished hash join build waits for its probe before the
-/// memory arbitrator spills it ahead of running consumers (study 30, M2).
-pub static EXEC_JOIN_IDLE_SPILL_AFTER: ConfigEntry = ConfigEntry {
-    key: "krishiv.exec.join.idleSpillAfter",
-    value_type: ValueType::Duration,
-    default: Some(ConfigValue::Duration(Duration::from_secs(1))),
-    doc: "How long a finished hash join build table may wait for its probe side to start \
-          before it counts as idle. When memory runs short, an idle table is spilled first, \
-          one partition at a time, before an operator that is running spills its own state; \
-          the probe reads the spilled partitions back from disk. A shorter wait keeps less \
-          memory idle; a longer one spills less often when the probe starts soon.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
@@ -1036,11 +1012,10 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           returns its rows in the same order on every run, byte for byte, for the engine's \
           own scans. The key hashes take a fixed seed, so an operator that spills splits \
           its rows the same way on every run. Costs the parallelism of the query: meant for \
-          reproducing a result, \
-          comparing two builds, and tests. Memory pressure from other queries in the process \
+          reproducing a result, comparing two builds, and tests. Memory pressure from other queries in the process \
           can still change when an operator spills, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
-          probing a union) take turns in branch order, so they lose their overlap too. Off by \
+          probing a union) take turns, one after another, so they lose their overlap too. Off by \
           default.",
     scope: Scope::Session,
     settable_by: SettableBy::User,

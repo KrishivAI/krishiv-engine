@@ -16,6 +16,7 @@ TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.r
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
 `expr.rs` the `Predicate`/`ScalarExpr` evaluator interface the physical planner plugs in ·
+`select.rs` (design P2-E3 U2) `Selection` (ascending `u32` row ids) and `RowSelect` (a fused predicate and a scan's row stage, evaluated over a whole batch) ·
 `hash.rs` shared hash-table blocks (seeded key hash, key normalization + row encoding, `KeyTable`, spill
 partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
 `accumulator.rs` per-group states (`accumulator/paired.rs`: a decimal `sum(x)` and `avg(x)` of one aggregate folded in one pass where both take the proof path), `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
@@ -50,7 +51,7 @@ partials merge with `KeyFilter::merge` under the publishing join's options (`Val
 partitioned join's Bloom size is planned (`KeyFilterOptions::bloom_bytes`, P2-T177 unit 2) and dropped at
 instantiation when the filter has one producer partition.
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
-(adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
+(adaptive switch-off; a scan can hand its drivers' stages to the hash probe above it, `RuntimeFilters::hand_to_consumer`); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
 starts after the pipelines publishing the filters worth the wait (`scan_waits`: not when the build reads the scan's
 own table, unless it is far smaller) unless they run with or after it (`runner.rs`, `with_filter_order`); no driver
 ever waits on a filter's value. A `TopN` offers the first key of its last row the same way (`PhysNode::TopN::bound`, `ValueService::tighten`, design P2-T063): never where a filter below may raise or a nondeterministic plan sits below.
@@ -95,6 +96,9 @@ finalize) and `ExchangeRead` (a reduce task's `PhysNode::ExchangeSource`: `(map,
 in map order for a gather). `instantiate_task` writes a root exchange when `TaskSpec::output` is set and reads each
 source as `TaskSpec::exchanges` says; `exchange_schemas` gives a fragmenter each exchange's columns. Storage is
 `krishiv-shuffle`'s, fragments and stages are `krishiv-scheduler`'s.
+`planner/probe_select.rs` (design P2-E3 U2) fuses a `Filter` (nothing may raise: predicate, keys, residual) and a
+scan's row stage below a hash probe's column-only projections into `HashJoinPlan::select` (codec feature `fused_probe`);
+the probe (`join/probe.rs`) encodes the selected rows' keys and gathers by composed ids; `EXPLAIN` prints `probe filter:` on the join.
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
 only where a requirement is unmet, plus one hash exchange for every `DISTRIBUTE BY` (`Planner::repartition`: key expressions computed below, dropped above, so they are evaluated as Spark's shuffle evaluates them); on one worker instantiation lowers each exchange into the operators around it.
