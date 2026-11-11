@@ -545,6 +545,7 @@ impl Session {
             .iter()
             .map(|c| c.name.clone())
             .collect();
+        crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
         let mut columns = crate::char_write::output_columns(&analysis.analyzed, None);
         if !v.columns.is_empty() {
             let mut declared = Vec::with_capacity(v.columns.len());
@@ -935,6 +936,7 @@ impl Session {
                 }
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
+                crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
                 changed.columns = crate::char_write::output_columns(&analysis.analyzed, None);
                 let query_columns = analysis
                     .analyzed

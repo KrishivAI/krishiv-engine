@@ -1520,7 +1520,10 @@ pub(super) fn can_cast(
             Err(BadCast::Without)
         };
     }
-    if *from == T::String || *to == T::String {
+    // A collated string is a string here: it casts as `STRING` does.
+    if matches!(from, T::String | T::CollatedString(_))
+        || matches!(to, T::String | T::CollatedString(_))
+    {
         return Ok(());
     }
     // Within a family, and between an ANSI interval and a number (which runs

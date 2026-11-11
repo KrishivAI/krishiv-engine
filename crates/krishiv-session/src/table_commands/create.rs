@@ -420,6 +420,7 @@ impl Session {
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
+        crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
         table.columns = crate::char_write::output_columns(&analysis.analyzed, Some(true));
         let name = TableName {
             namespace: table.namespace.clone(),

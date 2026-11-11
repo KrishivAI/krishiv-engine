@@ -343,11 +343,29 @@ impl Resolver<'_> {
                     key(&o.expr) == key(value) || (collated && key(&o.expr) == key(written))
                 });
             if !same {
-                let cast_of = match &call_kids[0].expr.node {
+                // The value reads as `STRING` (listagg's input type): when
+                // it is a cast the analyzer put over a written cast, the
+                // written cast is the one that counts (a cast to `STRING`
+                // the user wrote stays as it is).
+                let mut written = &call_kids[0].expr;
+                if let ExprNode::Cast {
+                    expr,
+                    to: DataType::String,
+                    ..
+                } = &written.node
+                    && matches!(expr.node, ExprNode::Cast { .. })
+                    && key(&kids[0].expr) != key(&call_kids[0].expr)
+                {
+                    written = expr;
+                }
+                let cast_of = match &written.node {
                     ExprNode::Cast { expr, to, .. }
                         if orders.len() == 1
                             && orders.first().is_some_and(|o| key(&o.expr) == key(expr))
-                            && matches!(to, DataType::String | DataType::Binary) =>
+                            && matches!(
+                                to,
+                                DataType::String | DataType::Binary | DataType::CollatedString(_)
+                            ) =>
                     {
                         Some(to.clone())
                     }
