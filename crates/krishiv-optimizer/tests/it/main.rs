@@ -17,6 +17,7 @@ mod plan_stats;
 mod props;
 mod qerror;
 mod rules;
+mod share_subtree;
 mod sum_rewrite;
 mod support;
 mod tpcds;

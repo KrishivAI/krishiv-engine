@@ -76,7 +76,7 @@ use std::sync::Arc;
 
 use krishiv_common::config::{
     ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, JOIN_COST, JOIN_DP_LIMIT,
-    JOIN_ENUMERATOR, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+    JOIN_ENUMERATOR, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -510,8 +510,19 @@ fn run(
                 .and_then(ConfigValue::as_bool)
                 .unwrap_or(true)
         });
+        // P3 W1 shape (b): the places that read a shared body directly
+        // count as members too (`krishiv.optimizer.shareRepeatedSubtrees`).
+        let direct = options.share_repeated_subtrees
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SHARE_REPEATED_SUBTREES)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
         let root = if share {
-            t.once("ShareCte", &root, |r| share_cte::share(Arc::clone(r)))?
+            t.once("ShareCte", &root, |r| {
+                share_cte::share(Arc::clone(r), direct)
+            })?
         } else {
             root
         };
