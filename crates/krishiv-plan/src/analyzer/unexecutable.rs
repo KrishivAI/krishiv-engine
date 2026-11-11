@@ -60,56 +60,164 @@ fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
     )
 }
 
-/// The execution guard of the collation units (ADR 0043, design P2-collations section 3.2):
-/// until the planner rewrites the comparing positions onto collation keys, a collated value
-/// there would be compared as bytes, silently wrong. Unit 3a lifts the scalar comparisons,
-/// unit 3b the keys of aggregates, joins, sorts, windows and set operations.
+/// Whether a collated leaf of `t` has no key here: ICU collations (unit 6) and an indeterminate
+/// one.
+fn no_key(t: Option<&DataType>) -> bool {
+    t.is_some_and(|t| {
+        t.any_type(&|x| {
+            matches!(x, DataType::CollatedString(c) if !matches!(
+                c.family(),
+                krishiv_types::CollationFamily::Utf8Binary
+                    | krishiv_types::CollationFamily::Utf8Lcase
+            ) || c.is_indeterminate())
+        })
+    })
+}
+
+/// A collated string inside an array, map or struct: it has an equality key but no ordering yet.
+fn nested_order(t: Option<&DataType>) -> bool {
+    t.is_some_and(|t| t.contains_collation() && !t.is_collated_string())
+}
+
+/// Every aggregate call under `e` (not those inside another call's arguments).
+fn aggregate_calls<'a>(e: &'a crate::Expr, out: &mut Vec<&'a crate::ResolvedFunction>) {
+    if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
+        && f.kind == crate::FunctionKind::Aggregate
+    {
+        out.push(f);
+        return;
+    }
+    e.for_each_child(&mut |c| aggregate_calls(c, out));
+}
+
+/// Whether `f` is a `DISTINCT` aggregate whose collated values must survive (`listagg`,
+/// `collect_list`): the optimizer dedupes them by key in an aggregate of their own
+/// (`krishiv_optimizer::collation_keys`), so the analyzer's distinct rewrite leaves it alone.
+pub(super) fn keeps_collated(f: &crate::ResolvedFunction) -> bool {
+    // `listagg` casts its value to a plain string: the collation is the child's.
+    let value_collated = |a: &crate::Expr| match &a.node {
+        ExprNode::Cast {
+            expr,
+            to: DataType::String,
+            ..
+        } if is_collated(expr_type(expr)) => true,
+        _ => is_collated(expr_type(a)),
+    };
+    f.kind == crate::FunctionKind::Aggregate
+        && f.distinct
+        && !matches!(f.id.name(), "count" | "approx_count_distinct")
+        && f.args.first().is_some_and(|a| value_collated(a))
+}
+
+/// A [`keeps_collated`] call beside another aggregate call or with a filter: the optimizer's
+/// plan for it does not take either yet.
+fn distinct_kept_beside(aggregates: &[std::sync::Arc<crate::Expr>]) -> bool {
+    let mut calls = Vec::new();
+    aggregates
+        .iter()
+        .for_each(|a| aggregate_calls(a, &mut calls));
+    match calls.as_slice() {
+        [one] => keeps_collated(one) && one.filter.is_some(),
+        many => many.iter().any(|f| keeps_collated(f)),
+    }
+}
+
+/// The execution guard of the collation units (ADR 0043, design `P2-collations.md` section 3.2),
+/// the one table of what still has no key. Everything else runs on keys
+/// (`krishiv_optimizer::collation_keys`, and `exprs/collation.rs` for scalars):
+///
+/// | Position | Refused | Owner |
+/// |---|---|---|
+/// | group, distinct, window partition | a leaf without a key | 6 |
+/// | sort, window order, `min`/`max`/`min_by`/`max_by` ordering | a leaf without a key, nested | 6, later |
+/// | `DISTINCT`, `listagg`, `approx_count_distinct` | a leaf without a key | 6 |
+/// | `mode` | any collated string | 5 |
+/// | `DISTINCT` `listagg`/`collect_list` beside another call or with a filter | any collated string | later |
+/// | a comparison the analyzer did not key | any collated string | 6 |
 fn collated_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
     const KEY: &str = "a collated string as a grouping, distinct, sort, window or join key, a set \
                        operation, or a min/max/count(DISTINCT)/collect_set/listagg/mode argument";
     const COMPARISON: &str = "a comparison of collated strings";
-    if let Node::Plan(p) = node
-        && let PlanNode::Sort { order, .. } = &p.node
-        && order.iter().any(|o| is_collated(expr_type(&o.expr)))
-    {
-        return Some((KEY, p.origin));
+    const DISTINCT: &str =
+        "a DISTINCT aggregate of a collated string beside another aggregate or with a filter";
+    let order_refused = |t: Option<&DataType>| no_key(t) || nested_order(t);
+    match node {
+        Node::Plan(p) => {
+            let bad = match &p.node {
+                PlanNode::Sort { order, .. } => {
+                    order.iter().any(|o| order_refused(expr_type(&o.expr)))
+                }
+                PlanNode::Aggregate { aggregates, .. } if distinct_kept_beside(aggregates) => {
+                    return Some((DISTINCT, p.origin));
+                }
+                PlanNode::Aggregate { grouping, .. } => match grouping {
+                    crate::Grouping::GroupBy(e)
+                    | crate::Grouping::Rollup(e)
+                    | crate::Grouping::Cube(e) => e.iter().any(|x| no_key(expr_type(x))),
+                    crate::Grouping::GroupingSets { exprs, .. } => {
+                        exprs.iter().any(|x| no_key(expr_type(x)))
+                    }
+                },
+                PlanNode::Window {
+                    partition_by,
+                    order_by,
+                    ..
+                } => {
+                    partition_by.iter().any(|x| no_key(expr_type(x)))
+                        || order_by.iter().any(|o| order_refused(expr_type(&o.expr)))
+                }
+                PlanNode::Distinct { input } => {
+                    matches!(&input.node, PlanNode::Project { exprs, .. }
+                    if exprs.iter().any(|x| no_key(expr_type(x))))
+                }
+                _ => false,
+            };
+            bad.then_some((KEY, p.origin))
+        }
+        Node::Expr(e) => {
+            let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+                return None;
+            };
+            if f.kind != crate::FunctionKind::Aggregate {
+                let comparing = matches!(
+                    f.id.name(),
+                    "==" | "<=>"
+                        | "<"
+                        | "<="
+                        | ">"
+                        | ">="
+                        | "in"
+                        | "between"
+                        | "greatest"
+                        | "least"
+                        | "nullif"
+                        | "equal_null"
+                ) && f.args.iter().any(|a| is_collated(expr_type(a)));
+                return comparing.then_some((COMPARISON, e.origin));
+            }
+            // `listagg` casts its value to a plain string: the collation is the child's.
+            let peeled = |a: &crate::Expr| match &a.node {
+                ExprNode::Cast {
+                    expr,
+                    to: DataType::String,
+                    ..
+                } if is_collated(expr_type(expr)) => expr_type(expr).cloned(),
+                _ => expr_type(a).cloned(),
+            };
+            let arg = |i: usize| f.args.get(i).and_then(|a| expr_type(a));
+            let name = super::exprs::builtin_name(f);
+            let bad = match name {
+                "mode" => is_collated(arg(0)),
+                "min" | "max" => order_refused(arg(0)),
+                "min_by" | "max_by" => order_refused(arg(1)),
+                "listagg" | "approx_count_distinct" => {
+                    f.args.iter().any(|a| no_key(peeled(a).as_ref()))
+                }
+                _ => f.distinct && f.args.iter().any(|a| no_key(expr_type(a))),
+            };
+            bad.then_some((KEY, e.origin))
+        }
     }
-    if let Node::Expr(e) = node
-        && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
-        && f.kind != crate::FunctionKind::Aggregate
-        && matches!(
-            f.id.name(),
-            "==" | "<=>"
-                | "<"
-                | "<="
-                | ">"
-                | ">="
-                | "in"
-                | "between"
-                | "greatest"
-                | "least"
-                | "nullif"
-                | "equal_null"
-        )
-        && f.args.iter().any(|a| is_collated(expr_type(a)))
-    {
-        return Some((COMPARISON, e.origin));
-    }
-    key_use(
-        node,
-        is_collated,
-        KEY,
-        &[
-            "min",
-            "max",
-            "min_by",
-            "max_by",
-            "mode",
-            "collect_set",
-            "listagg",
-            "approx_count_distinct",
-        ],
-    )
 }
 
 /// The use of a value of a type `held` accepts as a key at `node`, with its origin: a grouping,
