@@ -214,9 +214,22 @@ pub struct RelStats {
     /// not rest on default row counts (a `WITH` reference has its definition's;
     /// one whose definition is out of scope counts as default-sized).
     pub from_statistics: bool,
+    /// The rows of the relation before the filters applied directly to it (0: the same as
+    /// `rows`). A composite join key is a foreign key into the unfiltered side, so its tuple
+    /// count is capped by these rows, not by the filtered ones.
+    pub unfiltered_rows: f64,
 }
 
 impl RelStats {
+    /// The rows before the filters directly above the relation's source.
+    pub(crate) fn base_rows(&self) -> f64 {
+        if self.unfiltered_rows > 0.0 {
+            self.unfiltered_rows.max(self.rows)
+        } else {
+            self.rows
+        }
+    }
+
     pub(crate) fn unknown(rows: f64, ids: impl IntoIterator<Item = AttrId>) -> Self {
         let cols = ids
             .into_iter()
@@ -226,6 +239,7 @@ impl RelStats {
             rows,
             cols,
             from_statistics: false,
+            unfiltered_rows: 0.0,
         }
     }
 
