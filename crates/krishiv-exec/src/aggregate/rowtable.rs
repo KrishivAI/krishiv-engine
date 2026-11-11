@@ -114,6 +114,9 @@ use crate::error::{Result, internal};
 use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
 use crate::rows::{EncodedKeys, FLAT_MAX_BYTES, Hll, RowLayout};
 
+mod direct;
+mod local;
+
 /// Radix bits of `h` of a partitioned table (DuckDB's initial 4 bits; the
 /// final phase merges ranges of these partitions, see [`final_tasks`]).
 pub(crate) const RADIX_BITS: u32 = 4;
@@ -306,7 +309,10 @@ const ALL_NEW: f64 = 0.9;
 
 /// A batch prepared for [`RowTable::apply`].
 pub(crate) struct RowPrepared {
+    /// The batch's keys; on the direct path, only each id's first row.
     keys: EncodedKeys,
+    /// The direct path's batch-local id of each row (an index into `keys`).
+    local: Option<Box<[u16]>>,
     /// Rows per radix partition (bounds each partition's growth).
     counts: [usize; PARTS],
     /// Long key bytes per radix partition (bounds each heap's growth;
@@ -315,6 +321,13 @@ pub(crate) struct RowPrepared {
     cols: Vec<ArrayRef>,
     weights: Weights,
     states: bool,
+}
+
+impl RowPrepared {
+    /// Input rows.
+    fn rows(&self) -> usize {
+        self.local.as_ref().map_or(self.keys.len(), |l| l.len())
+    }
 }
 
 /// A chunk of another table's rows to merge (the final phase).
@@ -406,6 +419,8 @@ pub(crate) struct RowTable {
     /// Batches left before the batch-local key map is tried again, after a
     /// batch held more than [`LOCAL_MAX`] distinct keys.
     local_skip: u8,
+    /// Direct-address ids for tiny keys (`krishiv.exec.agg.directKeys`).
+    direct: Option<direct::Direct>,
 }
 
 impl RowTable {
@@ -463,7 +478,15 @@ impl RowTable {
             resizes: None,
             probes: None,
             local_skip: 0,
+            direct: None,
         })
+    }
+
+    /// Finds a batch's groups by direct addressing when its keys are tiny
+    /// (`krishiv.exec.agg.directKeys`).
+    pub(crate) fn with_direct(mut self, on: bool) -> Self {
+        self.direct = on.then(direct::Direct::new);
+        self
     }
 
     /// Number of rows (groups; a group may have several rows in a table
@@ -750,6 +773,11 @@ impl RowTable {
                 })
                 .collect::<Result<_>>()?
         };
+        if let Some(d) = &self.direct
+            && let Some(ids) = d.ids(&keys, b.num_rows())
+        {
+            return self.prepare_direct(b, &keys, ids, states);
+        }
         // `h` is seedless (Appendix C).
         let keys = layout(&self.core)?.encode(&keys)?;
         let mut counts = [0; PARTS];
@@ -775,6 +803,7 @@ impl RowTable {
             }
         }
         Ok(RowPrepared {
+            local: None,
             keys,
             counts,
             heap_counts,
@@ -955,7 +984,7 @@ impl RowTable {
     /// [`memory_size`](Self::memory_size) after [`apply`](Self::apply)ing
     /// `p` (an upper bound).
     pub(crate) fn projected(&self, p: &RowPrepared) -> usize {
-        let n = p.keys.len();
+        let n = p.rows();
         let rows: usize = self
             .parts
             .iter()
@@ -980,7 +1009,10 @@ impl RowTable {
         } else {
             0
         };
-        Self::scratch(p.keys.len()) + gather + p.keys.bytes()
+        Self::scratch(p.rows())
+            + gather
+            + p.keys.bytes()
+            + p.local.as_ref().map_or(0, |l| l.len() * size_of::<u16>())
     }
 
     fn fold_of(p: &RowPrepared) -> Fold {
@@ -1086,7 +1118,7 @@ impl RowTable {
     /// [`projected`](Self::projected) bytes.
     pub(crate) fn apply(&mut self, p: &RowPrepared) -> Result<()> {
         self.only_hashbrown()?;
-        let n = p.keys.len();
+        let n = p.rows();
         self.rows_in = self.rows_in.saturating_add(n);
         self.switch(self.next_mode());
         self.start_sketches(n);
@@ -1107,7 +1139,10 @@ impl RowTable {
         let mut refs = Vec::with_capacity(n);
         let before = self.groups;
         self.reserve_index(n);
-        let result = self.lookup(&p.keys, &mut refs);
+        let result = match &p.local {
+            Some(ids) => self.lookup_direct(&p.keys, ids, &mut refs),
+            None => self.lookup(&p.keys, &mut refs),
+        };
         if let Some(a) = self.adapt.as_mut() {
             a.pushed += self.groups - before;
         }
@@ -1295,87 +1330,6 @@ impl RowTable {
             }
         }
         Ok(())
-    }
-
-    /// The rows of a batch with few distinct keys (E2 step 2,
-    /// `design/P2b-E2-agg-batch-protocol.md`): rows whose encoded keys are
-    /// byte-equal share a batch-local id, and only each id's first row is
-    /// looked up in the table, in first-occurrence order; every row then takes
-    /// its id's row. Byte equality is never coarser than the table's key
-    /// equality, so a row gets the row a per-row probe would give it, except
-    /// that a fixed index that clears between two rows of one key no longer
-    /// splits that key in two (one partial duplicate less, merged anyway).
-    /// Returns `false`, with `refs` untouched, for a batch with long (heap)
-    /// key values or more than [`LOCAL_MAX`] distinct keys; after the latter
-    /// the next [`LOCAL_BACKOFF`] batches skip the attempt.
-    fn probe_local(
-        &mut self,
-        keys: &EncodedKeys,
-        refs: &mut Vec<u32>,
-        limit: usize,
-    ) -> Result<bool> {
-        if self.local_skip > 0 {
-            self.local_skip -= 1;
-            return Ok(false);
-        }
-        if !keys.heap().is_empty() || keys.len() < 2 * LOCAL_MAX {
-            return Ok(false);
-        }
-        let (hashes, gseed) = (keys.hashes(), self.gseed);
-        // Hashed by the seeded `g`, so crafted keys cannot pile up in it.
-        let mut map: HashTable<u32> = HashTable::with_capacity(2 * LOCAL_MAX);
-        let mut firsts: Vec<usize> = Vec::with_capacity(LOCAL_MAX);
-        let mut ids: Vec<u32> = Vec::with_capacity(keys.len());
-        for (k, &h) in hashes.iter().enumerate() {
-            let row = keys.row(k);
-            let g = fin(h, gseed);
-            let found = map
-                .find(g, |&j| keys.row(firsts[j as usize]) == row)
-                .copied();
-            let id = match found {
-                Some(j) => j,
-                None => {
-                    if firsts.len() == LOCAL_MAX {
-                        self.local_skip = LOCAL_BACKOFF;
-                        return Ok(false);
-                    }
-                    let j = u32::try_from(firsts.len()).map_err(|e| internal(e.to_string()))?;
-                    firsts.push(k);
-                    map.insert_unique(g, j, |&j| fin(hashes[firsts[j as usize]], gseed));
-                    j
-                }
-            };
-            ids.push(id);
-        }
-        let heap = keys.heap();
-        let mut count = ProbeCount::default();
-        let mut found = Vec::with_capacity(firsts.len());
-        for &k in &firsts {
-            let h = hashes[k];
-            let hg = (h, fin(h, gseed));
-            let row = keys.row(k);
-            found.push(match (self.views.is_some(), self.probes.is_some()) {
-                (true, false) => {
-                    self.find_or_insert::<true, false>(row, heap, hg, limit, &mut count)?
-                }
-                (false, false) => {
-                    self.find_or_insert::<false, false>(row, heap, hg, limit, &mut count)?
-                }
-                (true, true) => {
-                    self.find_or_insert::<true, true>(row, heap, hg, limit, &mut count)?
-                }
-                (false, true) => {
-                    self.find_or_insert::<false, true>(row, heap, hg, limit, &mut count)?
-                }
-            });
-        }
-        if let Some(totals) = &self.probes
-            && count.lookups > 0
-        {
-            totals.add(&count);
-        }
-        refs.extend(ids.iter().map(|&j| found[j as usize]));
-        Ok(true)
     }
 
     /// [`find_or_insert`](Self::find_or_insert) for every row of `keys`, in
@@ -1975,6 +1929,7 @@ impl RowTable {
                     resizes: None,
                     probes: None,
                     local_skip: 0,
+                    direct: None,
                 }
             })
             .collect()

@@ -298,6 +298,9 @@ struct Settings {
     /// `krishiv.exec.join.idleSpillAfter`; absent: the default.
     #[prost(uint64, optional, tag = "15")]
     join_idle_spill_after_nanos: Option<u64>,
+    /// `krishiv.exec.agg.directKeys`; absent: the default.
+    #[prost(bool, optional, tag = "16")]
+    agg_direct_keys: Option<bool>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -319,6 +322,7 @@ impl Settings {
             fail_on_stall,
             seed,
             agg_row_layout,
+            agg_direct_keys,
             detailed_metrics,
             join_row_layout,
             join_radix_bits,
@@ -346,6 +350,7 @@ impl Settings {
                 u64::try_from(join_idle_spill_after.as_nanos()).unwrap_or(u64::MAX),
             ),
             deterministic_order,
+            agg_direct_keys: Some(agg_direct_keys),
         }
     }
 
@@ -358,6 +363,9 @@ impl Settings {
             fail_on_stall: self.fail_on_stall,
             seed: self.seed,
             agg_row_layout: self.agg_row_layout,
+            agg_direct_keys: self
+                .agg_direct_keys
+                .unwrap_or(ExecConfig::default().agg_direct_keys),
             detailed_metrics: self.detailed_metrics,
             join_row_layout: self.join_row_layout,
             join_radix_bits: self.join_radix_bits,
