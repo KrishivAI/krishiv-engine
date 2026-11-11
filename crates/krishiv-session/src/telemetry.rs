@@ -155,8 +155,7 @@ impl QueryTrace {
 
 /// The trace the running action belongs to, for the query profile (`trace` member): the caller's
 /// trace id and, with the `telemetry-otlp` feature and an active exporter, the OpenTelemetry span id of
-/// the current span, when the action runs inside one (profiled actions run on an executor task that
-/// does not carry the query span yet, so in practice only `trace_id` is written; T116 follow-up).
+/// the current span, when the action runs inside one (a profiled action runs in its query span).
 /// `None` when neither is known.
 pub(crate) fn profile_trace(state: &crate::session::SessionState) -> Option<serde_json::Value> {
     let mut o = serde_json::Map::new();

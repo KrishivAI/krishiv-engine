@@ -333,8 +333,22 @@ impl DataFrame {
         self.run_profiled_plan(&a, &physical, keep).await
     }
 
-    /// Runs `physical` (the plan of `a`) with detailed metrics.
+    /// Runs `physical` (the plan of `a`) with detailed metrics, inside the
+    /// action's query span (the executor task carries none), so the profile's
+    /// `trace` and the drivers' records have the span id.
     async fn run_profiled_plan(
+        &self,
+        a: &Arc<crate::dataframe::Analysis>,
+        physical: &krishiv_exec::planner::PhysicalPlan,
+        keep: bool,
+    ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
+        use tracing::Instrument as _;
+        self.run_profiled_plan_in(a, physical, keep)
+            .instrument(self.span())
+            .await
+    }
+
+    async fn run_profiled_plan_in(
         &self,
         a: &Arc<crate::dataframe::Analysis>,
         physical: &krishiv_exec::planner::PhysicalPlan,

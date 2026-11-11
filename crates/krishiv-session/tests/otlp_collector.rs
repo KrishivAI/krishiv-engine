@@ -114,6 +114,14 @@ fn query_spans_reach_the_collector_with_the_database_attributes() {
     let s = Session::new().expect("session");
     let df = block_on(s.sql("SELECT 'secret-token' AS x, 1 + 1 AS y")).expect("plans");
     block_on(df.collect()).expect("runs");
+    // A profiled action runs in its query span: the profile's `trace` has the span id.
+    let df = block_on(s.sql("SELECT 1 AS z")).expect("plans");
+    let (_, profile) = block_on(df.collect_with_profile()).expect("profiles");
+    let json: serde_json::Value = serde_json::from_str(&profile.to_json()).expect("json");
+    let span_id = json["trace"]["span_id"]
+        .as_str()
+        .expect("a span_id in the profile's trace");
+    assert_eq!(span_id.len(), 16, "{span_id}");
     tracing.flush().expect("flush");
 
     // The request that holds the query span: a batch the exporter scheduled
