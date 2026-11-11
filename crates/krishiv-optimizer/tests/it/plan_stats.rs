@@ -484,6 +484,26 @@ fn a_filtered_key_side_keeps_its_fraction_of_a_composite_join() {
 }
 
 #[test]
+fn a_column_in_two_key_equalities_gets_no_composite_factor() {
+    // `t.a` appears twice: the equalities narrow one after the other, the composite rule is off.
+    let shared = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.a = u.v").rows();
+    let composite = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v").rows();
+    assert!(
+        shared < composite,
+        "shared {shared} vs composite {composite}"
+    );
+}
+
+#[test]
+fn a_composite_key_over_a_computed_column_gets_no_composite_factor() {
+    // `abs(t.b)` has no known distinct count: the tuple count is unknown, so the independent
+    // product stays, well below the 1,000 rows the composite rule gives for the plain columns.
+    let e =
+        join("SELECT * FROM t JOIN (SELECT k, abs(v) AS v FROM u) u ON t.a = u.k AND t.b = u.v");
+    assert!(e.rows() < 1000.0, "rows {}", e.rows());
+}
+
+#[test]
 fn a_composite_outer_join_keeps_the_unmatched_fraction() {
     // Only inner joins take the composite rule: an outer join still finds rows of `t` without a
     // match (TPC-DS q78's anti join collapsed to one row when it did not).
