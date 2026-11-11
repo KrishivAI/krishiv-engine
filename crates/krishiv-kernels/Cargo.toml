@@ -53,3 +53,7 @@ harness = false
 [[bench]]
 name = "list"
 harness = false
+
+[[bench]]
+name = "collation_key"
+harness = false

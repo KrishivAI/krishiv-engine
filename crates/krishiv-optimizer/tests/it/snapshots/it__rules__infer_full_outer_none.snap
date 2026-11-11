@@ -1,0 +1,9 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT x.a FROM (SELECT a FROM t WHERE a = 5) x FULL JOIN u ON x.a = u.a
+---
+Project [a#0]
++- Join FullOuter, (a#0 == a#3)
+   :- Filter (a#0 == 5)
+   :  +- Scan spark_catalog.default.t [a#0]
+   +- Scan spark_catalog.default.u [a#3]

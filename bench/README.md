@@ -29,8 +29,25 @@ For publishable numbers run from a clean committed tree (the result JSON records
 | Service | Image | Host port | Notes |
 |---|---|---|---|
 | spark | `apache/spark:4.2.0` | 15002 (Connect), 14040 (UI) | `local[*]`, driver `SPARK_DRIVER_MEMORY` (default 8g), container cap `SPARK_MEM_LIMIT` (default 12g; the benchmarks page's TPC-H baseline uses 20g in 28g, Krishiv's engine memory and scope), `$KRISHIV_DATA` mounted **read-only** at `/data` |
-| minio | `minio/minio` (digest-pinned, RELEASE.2025-09-07) | 19100 (S3), 19101 (console) | own instance, creds `krishiv` / `krishiv-bench-secret`; unrelated to `bench-minio` |
+| minio | `cgr.dev/chainguard/minio` (digest-pinned, RELEASE.2026-11-09; Docker Hub no longer serves `minio/minio`; runs as root to keep an existing volume) | 19100 (S3), 19101 (console) | own instance, creds `krishiv` / `krishiv-bench-secret`; unrelated to `bench-minio` |
 | kafka | `apache/kafka:4.0.0` (KRaft, 1 node) | 19092 | profile `kafka`: `docker compose ... --profile kafka up -d` |
+
+### Spark baseline of the benchmarks page (method)
+The TPC-H Spark column of the 0.2 benchmarks page (first run 2026-11-10/11 on the laptop, 12 cores, 62 GB) is
+measured with this compose service and the harness's `spark-connect` engine:
+- Spark 4.2.0 (`apache/spark:4.2.0`), Spark Connect, `local[*]` (12 cores), Spark 4 defaults (ANSI on),
+  `spark.sql.shuffle.partitions=24`, `SPARK_DRIVER_MEMORY=20g` in `SPARK_MEM_LIMIT=28g`: Krishiv's engine memory
+  (`--memory-limit 20g`) and process scope (28 GB). Client `pyspark[connect]==4.2.0`; Spark's times include the
+  Connect round trip (one query, results collected to the client).
+- `krishiv-bench run --engine spark-connect --cold --iterations 2 --warmup 0 --min-mem-avail 0.3`: the page cache is
+  dropped for the dataset before every run; the p50 of two runs. `--min-mem-avail 0.3` because the JVM keeps its heap
+  between queries (the default 0.75 refuses runs on a 62 GB box with a 28 GB container).
+- SF10 (`tpch-duckdb/sf10`) and SF100 (`tpch/sf100`), the same Parquet files as Krishiv's and DuckDB's
+  `reproduce --cold` rows of the same night. SF1000: one cold run per query with a 1,800 s cap, in query order, until
+  a deadline; a query past the cap is cancelled (`interruptAll`) and listed as not finished.
+- Results are checked by row count against Krishiv's and DuckDB's (the harness has no answer values for these
+  datasets): every SF10 and SF100 query and every finished SF1000 query returned the same row count.
+- The service is stopped after the night (`docker compose stop spark`): its JVM holds its heap.
 
 Ports are env-overridable (`SPARK_CONNECT_PORT`, `MINIO_S3_PORT`, `KAFKA_PORT`, ...). Spark 4.2.0 is the newest 4.2.x
 published on Docker Hub (verified 2026-10-16 via `docker manifest inspect`); the client is pinned to

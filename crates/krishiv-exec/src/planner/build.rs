@@ -34,6 +34,7 @@ use krishiv_plan::{
 use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
 use super::properties::{Distribution, Placement, range_keys};
+use super::python_udf::has_python_udf;
 use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
 pub(crate) use super::subquery::has_subquery;
 use super::subquery::{ByPlan, SubqueryValue, subqueries, with_subquery_columns};
@@ -318,6 +319,8 @@ pub(crate) struct Planner<'a> {
     pub(crate) stats: PlanStats,
     /// The schema of each loop being planned, by id, for its `LoopRef`s.
     loops: HashMap<u32, SchemaRef>,
+    /// Build-side projections requested and applied (`build_project`).
+    pub(crate) moves: super::build_project::Moves,
 }
 
 impl<'a> Planner<'a> {
@@ -351,6 +354,7 @@ impl<'a> Planner<'a> {
             next_exchange: 0,
             scan_filters: HashMap::new(),
             loops: HashMap::new(),
+            moves: super::build_project::Moves::default(),
         }
     }
 
@@ -391,6 +395,9 @@ impl<'a> Planner<'a> {
     pub(crate) fn plan(&mut self, p: &Arc<LogicalPlan>) -> Result<Planned> {
         match &p.node {
             PlanNode::Scan(scan) => self.scan(p, scan, None),
+            PlanNode::Filter { input, predicate } if has_python_udf(predicate) => {
+                self.python_filter(input, predicate)
+            }
             PlanNode::Filter { input, predicate } => {
                 if let PlanNode::Scan(scan) = &input.node
                     && !has_subquery(predicate)
@@ -422,18 +429,12 @@ impl<'a> Planner<'a> {
                 }
                 self.filter(input, predicate)
             }
-            PlanNode::Project { input, exprs } => {
-                let input = self.plan(input)?;
-                self.project(input, exprs)
-            }
+            PlanNode::Project { input, exprs } => self.plan_project(p, input, exprs),
             PlanNode::Aggregate {
                 input,
                 grouping,
                 aggregates,
-            } => {
-                let input = self.plan(input)?;
-                self.aggregate(input, grouping, aggregates)
-            }
+            } => self.plan_aggregate(p, input, grouping, aggregates),
             PlanNode::PartialAggregate {
                 input,
                 keys,
@@ -1214,7 +1215,7 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn filter(&mut self, input: Planned, predicate: &Expr) -> Result<Planned> {
+    pub(crate) fn filter(&mut self, input: Planned, predicate: &Expr) -> Result<Planned> {
         let prepared = self.prepare(&[predicate])?;
         let e = prepared
             .exprs
