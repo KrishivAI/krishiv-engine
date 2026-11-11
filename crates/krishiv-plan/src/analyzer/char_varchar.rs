@@ -10,6 +10,7 @@
 //! same declared type. The declared type follows an attribute through a bare-column alias
 //! ([`Resolver::carry_declared`]) and a second instance of a relation (`Resolver::shifted`).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::AnalysisError;
@@ -345,6 +346,125 @@ fn read_padded_column(e: &Expr) -> Option<(&BoundColumn, i32)> {
             Some((c, *n))
         }
         _ => None,
+    }
+}
+
+/// The arguments of a registry call of `name` with `arity` arguments.
+fn registry_call<'e>(e: &'e Expr, name: &str, arity: usize) -> Option<&'e [Arc<Expr>]> {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return None;
+    };
+    (matches!(f.id, crate::FunctionId::Registry { .. })
+        && f.id.name() == name
+        && f.args.len() == arity)
+        .then_some(f.args.as_slice())
+}
+
+/// The first column `e` reads (in argument order, through fields and lambda bodies).
+fn first_column(e: &Expr) -> Option<&BoundColumn> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            f.args.iter().find_map(|a| first_column(a))
+        }
+        ExprNode::Resolved(ResolvedExpr::Field { base, .. }) => first_column(base),
+        ExprNode::Lambda { body, .. } => first_column(body),
+        _ => None,
+    }
+}
+
+/// The column `c` of a stored plan's read-side padding of a nested `CHAR` (`transform`, `named_struct`,
+/// `map_from_arrays` around `rpad`, as `Resolver::read_pad` builds it for `c`'s declared type), matched whole.
+fn nested_padded_column<'e>(
+    e: &'e Expr,
+    declared: &HashMap<AttrId, Arc<str>>,
+) -> Option<&'e BoundColumn> {
+    let c = first_column(e)?;
+    let d = DeclaredType::parse(declared.get(&c.id)?);
+    let is_c =
+        |x: &Expr| matches!(&x.node, ExprNode::Resolved(ResolvedExpr::Column(k)) if k.id == c.id);
+    (!matches!(d, DeclaredType::Char(_)) && d.has_char() && pads_as(e, &is_c, &d)).then_some(c)
+}
+
+/// Whether `e` is the read-side padding of a value `base` matches, declared `d` (module docs of
+/// `Resolver::read_pad`); a part without a `CHAR` is the value itself.
+fn pads_as(e: &Expr, base: &dyn Fn(&Expr) -> bool, d: &DeclaredType) -> bool {
+    if !d.has_char() {
+        return base(e);
+    }
+    match d {
+        DeclaredType::Char(n) => {
+            let Some([arg, len, blank]) = registry_call(e, "rpad", 3) else {
+                return false;
+            };
+            let Some([chars, m]) = registry_call(len, "greatest", 2) else {
+                return false;
+            };
+            let Some([counted]) = registry_call(chars, "char_length", 1) else {
+                return false;
+            };
+            base(arg)
+                && base(counted)
+                && matches!(&m.node, ExprNode::Literal(Literal::Integer(m)) if m == n)
+                && matches!(&blank.node, ExprNode::Literal(Literal::String(b)) if b == " ")
+        }
+        DeclaredType::Struct(fields) => {
+            // `if(isnull(x), NULL, named_struct(..))` over a nullable struct, else the `named_struct`.
+            let built = match &e.node {
+                ExprNode::Resolved(ResolvedExpr::Function(f))
+                    if f.id == crate::FunctionId::Builtin(crate::Builtin::When) =>
+                {
+                    let [test, null, built] = f.args.as_slice() else {
+                        return false;
+                    };
+                    let tested = registry_call(test, "isnull", 1)
+                        .is_some_and(|a| matches!(a, [x] if base(x)));
+                    if !tested || !matches!(&null.node, ExprNode::Literal(Literal::Null(_))) {
+                        return false;
+                    }
+                    built
+                }
+                _ => e,
+            };
+            let Some(args) = registry_call(built, "named_struct", fields.len() * 2) else {
+                return false;
+            };
+            fields.iter().enumerate().all(|(i, d)| {
+                let field = |x: &Expr| {
+                    matches!(&x.node, ExprNode::Resolved(ResolvedExpr::Field { base: b, ordinal, .. })
+                        if *ordinal == i && base(b))
+                };
+                matches!(&args[2 * i].node, ExprNode::Literal(Literal::String(_)))
+                    && pads_as(&args[2 * i + 1], &field, d)
+            })
+        }
+        DeclaredType::Array(el) => {
+            let Some([arr, lambda]) = registry_call(e, "transform", 2) else {
+                return false;
+            };
+            let ExprNode::Lambda { params, body } = &lambda.node else {
+                return false;
+            };
+            let [v] = params.as_slice() else {
+                return false;
+            };
+            let var = |x: &Expr| matches!(&x.node, ExprNode::Resolved(ResolvedExpr::LambdaVar(k)) if k.id == v.id);
+            base(arr) && pads_as(body, &var, el)
+        }
+        DeclaredType::Map(k, v) => {
+            let Some([keys, values]) = registry_call(e, "map_from_arrays", 2) else {
+                return false;
+            };
+            let of = |name: &'static str| {
+                move |x: &Expr| {
+                    registry_call(x, name, 1).is_some_and(|a| matches!(a, [m] if base(m)))
+                }
+            };
+            let array = |d: &DeclaredType| DeclaredType::Array(Box::new(d.clone()));
+            pads_as(keys, &of("map_keys"), &array(k))
+                && pads_as(values, &of("map_values"), &array(v))
+        }
+        DeclaredType::Varchar(_) | DeclaredType::Other => false,
     }
 }
 
@@ -703,8 +823,14 @@ impl Resolver<'_> {
         }
         if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
             && let Some(c) = bare_column(expr, internal_cast).or_else(|| {
-                let (c, n) = read_padded_column(expr).filter(|_| stored)?;
-                (self.declared.get(&c.id).and_then(|d| char_length(d)) == Some(n)).then_some(c)
+                if !stored {
+                    return None;
+                }
+                if let Some((c, n)) = read_padded_column(expr) {
+                    return (self.declared.get(&c.id).and_then(|d| char_length(d)) == Some(n))
+                        .then_some(c);
+                }
+                nested_padded_column(expr, &self.declared)
             })
             && let Some(d) = self.declared.get(&c.id).cloned()
         {

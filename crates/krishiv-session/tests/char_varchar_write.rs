@@ -681,6 +681,58 @@ fn a_dataframe_temp_view_keeps_the_declared_type() {
     assert_eq!(count(&s, "select * from dv3 where z = 'a'"), 0);
 }
 
+/// A DataFrame temp view over nested `CHAR` columns stores their read-side padding (`transform`, `named_struct`,
+/// `map_from_arrays` around `rpad`); reading the view keeps each declared type, as for a bare `CHAR`, so a table
+/// created from it keeps the length checks.
+#[test]
+fn a_dataframe_temp_view_keeps_nested_declared_types() {
+    let s = fresh();
+    run(&s, "drop table if exists n").unwrap();
+    run(
+        &s,
+        "create table n(a array<char(3)>, st struct<f: char(2), g: int>, m map<char(2), char(3)>) using parquet",
+    )
+    .unwrap();
+    run(
+        &s,
+        "insert into n values (array('a'), named_struct('f', 'b', 'g', 1), map('c', 'd'))",
+    )
+    .unwrap();
+    block_on(async { s.table("n").create_or_replace_temp_view("ndv").await }).unwrap();
+    let types = |table: &str| -> Vec<String> {
+        let b = block_on(async {
+            s.sql(&format!("describe table {table}"))
+                .await?
+                .collect()
+                .await
+        })
+        .unwrap();
+        let a = b[0].column(1);
+        (0..3)
+            .map(|i| {
+                a.as_string_opt::<i32>().map_or_else(
+                    || a.as_string_view().value(i).to_owned(),
+                    |x| x.value(i).to_owned(),
+                )
+            })
+            .collect()
+    };
+    let declared = [
+        "array<char(3)>",
+        "struct<`f`:char(2),`g`:int>",
+        "map<char(2),char(3)>",
+    ];
+    assert_eq!(types("n"), declared);
+    assert_eq!(types("ndv"), declared);
+    run(&s, "drop table if exists ncopy").unwrap();
+    run(&s, "create table ncopy using parquet as select * from ndv").unwrap();
+    assert!(run(
+        &s,
+        "insert into ncopy values (array('abcd'), named_struct('f', 'b', 'g', 1), map('c', 'd'))"
+    )
+    .is_err());
+}
+
 /// Spark 4.2.0 (local run 2026-11-07): a DataFrame temp view over a permanent view over `CHAR(3)` keeps the
 /// declared type, in `DESCRIBE` and in comparison padding.
 #[test]
