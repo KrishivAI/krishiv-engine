@@ -137,7 +137,7 @@ impl super::SessionCatalog {
 
 impl super::Expander<'_> {
     /// `plan`, a bare read inside a view created while `system` was current (its frozen path holds
-    /// `[system]`), as `system.<table>` when no schema of the path holds a stored table of that name and
+    /// `[system]`), as `system.<table>` when no schema before `system` in the path holds a stored table of that name and
     /// the name is a system table.
     pub(super) fn system_table_in_path(&self, plan: &Arc<LogicalPlan>) -> Option<Arc<LogicalPlan>> {
         let path = self.view_path.as_deref()?;
@@ -147,13 +147,14 @@ impl super::Expander<'_> {
         let [bare] = name.as_slice() else {
             return None;
         };
+        // The first matching entry of the path wins: only the schemas before `system` can shadow it.
         let system = path
             .iter()
-            .any(|e| matches!(e.as_slice(), [c] if crate::system::is_system(c)));
+            .position(|e| matches!(e.as_slice(), [c] if crate::system::is_system(c)));
         let qualified = vec![crate::system::SYSTEM.to_owned(), bare.to_lowercase()];
-        if !(system
-            && crate::system::is_system_table(&qualified)
-            && self.path_schema_of(path, bare).is_none())
+        let system = system?;
+        if !(crate::system::is_system_table(&qualified)
+            && self.path_schema_of(&path[..system], bare).is_none())
         {
             return None;
         }

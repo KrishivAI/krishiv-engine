@@ -1442,3 +1442,23 @@ fn listings_overrides_and_dataframe_writes_with_an_explicit_catalog_work_under_s
     run(&s, "USE spark_catalog").unwrap();
     assert_eq!(column_of(&s, "SELECT CAST(a AS STRING) FROM t", 0), ["4"]);
 }
+
+#[test]
+fn a_view_frozen_path_picks_the_first_matching_entry_system_before_a_stored_schema() {
+    let s = Session::builder().build().unwrap();
+    // A stored table with a system table's name, later in the path than `system`.
+    run(&s, "SET spark.sql.path.enabled=true").unwrap();
+    run(&s, "CREATE TABLE capabilities (name STRING)").unwrap();
+    run(&s, "INSERT INTO capabilities VALUES ('stored')").unwrap();
+    run(&s, "USE system").unwrap();
+    run(&s, "SET PATH = CURRENT_SCHEMA, spark_catalog.default").unwrap();
+    run(
+        &s,
+        "CREATE VIEW spark_catalog.default.v AS SELECT name FROM capabilities",
+    )
+    .unwrap();
+    // The view reads the system table, as it did when it was created.
+    let names = column_of(&s, "SELECT name FROM spark_catalog.default.v", 0);
+    assert!(!names.contains(&"stored".to_owned()));
+    assert!(!names.is_empty());
+}
