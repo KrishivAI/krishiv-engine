@@ -126,14 +126,24 @@ where
         .with_filter(EventRateLimit::new(per_second).and(LevelFilter::INFO))
 }
 
+/// Why [`install_json_logs`] did not install the JSON layer.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum LogInstallError {
+    /// A global tracing subscriber is already set in this process.
+    #[error("a global tracing subscriber is already set")]
+    SubscriberAlreadySet,
+}
+
 /// Installs [`json_layer`] on standard error as the process's subscriber.
 ///
 /// # Errors
-/// When a global subscriber is already set.
-pub fn install_json_logs(per_second: u32) -> Result<(), tracing_subscriber::util::TryInitError> {
+/// [`LogInstallError::SubscriberAlreadySet`] when a global subscriber is already set.
+pub fn install_json_logs(per_second: u32) -> Result<(), LogInstallError> {
     tracing_subscriber::registry()
         .with(json_layer(per_second, std::io::stderr))
         .try_init()
+        .map_err(|_| LogInstallError::SubscriberAlreadySet)
 }
 
 #[cfg(test)]
