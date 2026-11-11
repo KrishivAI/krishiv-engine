@@ -91,8 +91,8 @@ impl DeclaredType {
                 .into_iter()
                 .map(|f| {
                     split_top(f, ':').get(1).map_or(Self::Other, |t| {
-                        // The type is everything after the field name's `:`.
-                        Self::parse(f.split_once(':').map_or(*t, |(_, ty)| ty))
+                        // The type follows the field name's `:`, up to the field's `NOT NULL` or `COMMENT`.
+                        Self::parse(field_type(f.split_once(':').map_or(*t, |(_, ty)| ty)))
                     })
                 })
                 .collect();
@@ -123,6 +123,23 @@ impl DeclaredType {
             Self::Varchar(_) | Self::Other => false,
         }
     }
+}
+
+/// A struct field's type without the modifiers after it (`char(2) not null comment 'c'` is `char(2)`): the
+/// text up to the first space outside `<...>` and `(...)`. Only types that are [`DeclaredType::Other`] anyway
+/// (`interval day to second`) hold such a space.
+fn field_type(s: &str) -> &str {
+    let s = s.trim_start();
+    let mut depth = 0_i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth -= 1,
+            _ if c.is_whitespace() && depth == 0 => return &s[..i],
+            _ => {}
+        }
+    }
+    s
 }
 
 /// `s` split at each `sep` outside `<...>` and `(...)`.

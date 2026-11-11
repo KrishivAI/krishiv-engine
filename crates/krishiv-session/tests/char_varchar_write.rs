@@ -1072,3 +1072,37 @@ fn nested_char_comparison_ignores_field_name_case() {
         "1"
     );
 }
+
+/// A struct field's `NOT NULL` and `COMMENT` do not hide its `CHAR`/`VARCHAR` limit (Spark 4.2.0, krishiv-internal
+/// `research/spark/partition-followups/probe6.py`: each overlong insert is `EXCEED_LIMIT_LENGTH`, `CHAR(2)` pads).
+#[test]
+fn a_struct_fields_not_null_and_comment_keep_its_limit() {
+    let s = fresh();
+    for (table, ddl, read) in [
+        ("m1", "s struct<x: char(2) not null>", "a |2"),
+        ("m2", "s struct<x: varchar(2) comment 'text'>", "a|1"),
+        ("m3", "s struct<x: char(2) not null comment 'c'>", "a |2"),
+    ] {
+        run(&s, &format!("drop table if exists {table}")).unwrap();
+        run(&s, &format!("create table {table}({ddl}) using parquet")).unwrap();
+        let e = run(
+            &s,
+            &format!("insert into {table} select named_struct('x', 'abc')"),
+        )
+        .unwrap_err();
+        assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH", "{table}");
+        run(
+            &s,
+            &format!("insert into {table} select named_struct('x', 'a')"),
+        )
+        .unwrap();
+        assert_eq!(
+            first_text(
+                &s,
+                &format!("select concat(s.x, '|', cast(length(s.x) as string)) from {table}")
+            ),
+            read,
+            "{table}"
+        );
+    }
+}
