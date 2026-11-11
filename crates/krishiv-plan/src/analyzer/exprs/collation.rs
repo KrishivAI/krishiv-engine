@@ -1148,6 +1148,10 @@ impl Resolver<'_> {
                 return Ok(Some(both));
             }
         }
+        // A call of the wrong arity keeps the function's own arity error.
+        if KEYED_SEARCH.contains(&name) && kids.len() != 2 {
+            return Ok(None);
+        }
         let (chosen, _) = self.choose_collation(e, kids, n, name)?;
         let Some(c) = chosen else {
             return Ok(None);

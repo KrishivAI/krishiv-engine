@@ -1345,3 +1345,23 @@ fn array_set_over_a_nondeterministic_collated_operand_is_refused() {
         ErrorClass::KrishivUnsupportedFeature
     );
 }
+
+/// A search call of the wrong arity over `UTF8_LCASE` keeps the function's arity error: it does
+/// not panic on a missing pattern or drop an extra argument.
+#[test]
+fn lcase_search_calls_of_the_wrong_arity_are_arity_errors() {
+    for f in ["contains", "startswith", "endswith"] {
+        assert!(
+            run(&format!("select {f}('Ab' collate utf8_lcase)")).is_err(),
+            "{f} 1"
+        );
+        assert!(
+            run(&format!("select {f}('Ab' collate utf8_lcase, 'i', 'x')")).is_err(),
+            "{f} 3"
+        );
+        assert!(
+            run(&format!("select {f}('Ab' collate utf8_lcase, 'a')")).is_ok(),
+            "{f} 2"
+        );
+    }
+}
