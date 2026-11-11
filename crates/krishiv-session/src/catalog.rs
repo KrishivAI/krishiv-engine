@@ -1526,6 +1526,7 @@ impl Expander<'_> {
                 // Outside a stored view, the first schema of the path holding the name; inside one,
                 // the view's own namespace.
                 let path = self.view_path.as_deref().unwrap_or(&stored.path);
+                let path = Self::before_system(path, table);
                 let from_path = (self.view_namespace.is_none() || self.view_path.is_some())
                     .then(|| self.path_schema_of(path, table))
                     .flatten();

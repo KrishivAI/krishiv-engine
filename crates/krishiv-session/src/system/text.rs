@@ -148,6 +148,17 @@ pub(super) fn mask_backquoted(message: &str) -> String {
             i += 1;
             continue;
         };
+        // A value rendered as JSON may hold backquotes of its own (`"x` secret"`): while the span has an open
+        // double quote, it runs on to the next closing backquote.
+        let mut j = j;
+        while message[chars[i + 1].0..chars[j].0].matches('"').count() % 2 == 1 {
+            let next = (j + 1..chars.len())
+                .find(|&k| chars[k].1 == '`' && chars.get(k + 1).is_none_or(|n| !word(n.1)));
+            match next {
+                Some(k) => j = k,
+                None => break,
+            }
+        }
         let inner = &message[chars[i + 1].0..chars[j].0];
         let plain = inner
             .chars()

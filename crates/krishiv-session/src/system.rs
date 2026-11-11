@@ -1621,6 +1621,18 @@ mod tests {
     }
 
     #[test]
+    fn a_backquote_before_whitespace_inside_a_masked_value_does_not_end_it() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let got =
+            mask.apply_message("The variant value `\"x` secret_canary\"` cannot be cast to `INT`.");
+        assert!(!got.contains("secret_canary"), "{got}");
+        assert!(got.contains("`INT`"), "{got}");
+    }
+
+    #[test]
     fn scientific_notation_and_other_bare_numbers_are_masked_in_a_message() {
         let mask = TextPolicy {
             max_bytes: 4096,

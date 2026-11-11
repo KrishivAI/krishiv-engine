@@ -136,6 +136,25 @@ impl super::SessionCatalog {
 }
 
 impl super::Expander<'_> {
+    /// The part of `path` that can shadow the bare `table`: the entries before `system` when the name is a
+    /// system table and the path holds `system` (the first matching entry wins), else all of it.
+    pub(super) fn before_system<'p>(path: &'p [Vec<String>], table: &str) -> &'p [Vec<String>] {
+        let system = path
+            .iter()
+            .position(|e| matches!(e.as_slice(), [c] if crate::system::is_system(c)));
+        match system {
+            Some(at)
+                if crate::system::is_system_table(&[
+                    crate::system::SYSTEM.to_owned(),
+                    table.to_lowercase(),
+                ]) =>
+            {
+                &path[..at]
+            }
+            _ => path,
+        }
+    }
+
     /// `plan`, a bare read inside a view created while `system` was current (its frozen path holds
     /// `[system]`), as `system.<table>` when no schema before `system` in the path holds a stored table of that name and
     /// the name is a system table.

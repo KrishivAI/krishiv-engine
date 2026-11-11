@@ -1462,3 +1462,23 @@ fn a_view_frozen_path_picks_the_first_matching_entry_system_before_a_stored_sche
     assert!(!names.contains(&"stored".to_owned()));
     assert!(!names.is_empty());
 }
+
+#[test]
+fn a_top_level_bare_read_follows_the_path_order_between_system_and_a_stored_view() {
+    let s = Session::builder().build().unwrap();
+    run(&s, "SET spark.sql.path.enabled=true").unwrap();
+    run(
+        &s,
+        "CREATE VIEW spark_catalog.default.capabilities AS SELECT 'wrong' AS name",
+    )
+    .unwrap();
+    run(&s, "USE system").unwrap();
+    run(&s, "SET PATH = CURRENT_SCHEMA, spark_catalog.default").unwrap();
+    // `system` comes first in the path: the stored view of the same name does not take the read.
+    let names = column_of(&s, "SELECT name FROM capabilities", 0);
+    assert!(!names.contains(&"wrong".to_owned()));
+    assert!(!names.is_empty());
+    // With the stored schema first, it does.
+    run(&s, "SET PATH = spark_catalog.default, CURRENT_SCHEMA").unwrap();
+    assert_eq!(column_of(&s, "SELECT name FROM capabilities", 0), ["wrong"]);
+}
