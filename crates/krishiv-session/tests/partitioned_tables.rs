@@ -1298,8 +1298,9 @@ fn reading_a_partitioned_table_returns_its_partition_values() {
 
 /// Spark reads a catalog table's registered partitions (`CatalogFileIndex`), not every directory under its root:
 /// what a listing of the root cannot read the same way is refused, never read differently. A directory the catalog
-/// does not know is not read (the commit log lists the table's own files; a directory outside it is refused by the
-/// listing); a partition registered at another location is refused (the listing would not find its files).
+/// does not know is not read (the commit log lists the table's own files; without a log the listing skips it, see
+/// `a_table_over_foreign_files_skips_directories_the_catalog_does_not_know`); a partition registered at another
+/// location is refused (the listing would not find its files).
 #[test]
 fn reads_follow_the_registered_partitions() {
     let dir = tempfile::tempdir().unwrap();
@@ -1344,10 +1345,10 @@ fn reads_follow_the_registered_partitions() {
 }
 
 /// A table over files Krishiv did not write (no commit log: the listing reads its directory) reads its registered
-/// partitions only, as Spark's `CatalogFileIndex` (Spark 4.2.0, krishiv-internal
-/// `research/spark/partition-followups/probe.out`, table `e`: a `p=1` directory on disk but not registered is not
-/// read): a partition directory the catalog does not know, and a directory that is no partition at all, are skipped,
-/// not refused.
+/// partitions' exact locations only, as Spark's `CatalogFileIndex` (Spark 4.2.0, krishiv-internal
+/// `research/spark/registered-partitions/probe.out`, table `e`, and `partition-followups/probe.out`, table `e`): an
+/// unregistered `p=1`, a `tmp_x/` directory, a `P=2/` next to the registered `p=2`, a file at the root, and `p=007`
+/// when `p=7` is registered are all skipped, not refused.
 #[test]
 fn a_table_over_foreign_files_skips_directories_the_catalog_does_not_know() {
     let dir = tempfile::tempdir().unwrap();
@@ -1357,7 +1358,7 @@ fn a_table_over_foreign_files_skips_directories_the_catalog_does_not_know() {
         &s,
         "CREATE TABLE src (x INT, p INT) USING parquet PARTITIONED BY (p)",
     );
-    run(&s, "INSERT INTO src VALUES (1, 1), (2, 2)");
+    run(&s, "INSERT INTO src VALUES (1, 1), (2, 2), (7, 7)");
     let part = |sub: &str| {
         std::fs::read_dir(dir.path().join("src").join(sub))
             .unwrap()
@@ -1367,11 +1368,19 @@ fn a_table_over_foreign_files_skips_directories_the_catalog_does_not_know() {
             .path()
     };
     let loc = tempfile::tempdir().unwrap();
-    for (from, to) in [("p=1", "p=1"), ("p=2", "p=2"), ("p=2", "tmp_x")] {
+    let copies = [
+        ("p=1", "p=1"),
+        ("p=2", "p=2"),
+        ("p=2", "tmp_x"),
+        ("p=2", "P=2"),
+        ("p=7", "p=007"),
+    ];
+    for (from, to) in copies {
         let file = part(from);
         std::fs::create_dir_all(loc.path().join(to)).unwrap();
         std::fs::copy(&file, loc.path().join(to).join(file.file_name().unwrap())).unwrap();
     }
+    std::fs::copy(part("p=1"), loc.path().join("root.parquet")).unwrap();
     run(
         &s,
         &format!(
@@ -1379,15 +1388,42 @@ fn a_table_over_foreign_files_skips_directories_the_catalog_does_not_know() {
             loc.path().display()
         ),
     );
+    let read = "SELECT CAST(x AS STRING), CAST(p AS STRING) FROM e ORDER BY x";
+    assert!(rows(&s, read).is_empty());
     run(&s, "ALTER TABLE e ADD PARTITION (p = 2)");
     assert_eq!(rows(&s, "SHOW PARTITIONS e"), ["p=2"]);
-    assert_eq!(
-        rows(
-            &s,
-            "SELECT CAST(x AS STRING), CAST(p AS STRING) FROM e ORDER BY x"
+    assert_eq!(rows(&s, read), ["2\t2"]);
+    // `p=7` is registered, but its directory is `p=007`: not its location.
+    run(&s, "ALTER TABLE e ADD PARTITION (p = 7)");
+    assert_eq!(rows(&s, read), ["2\t2"]);
+}
+
+/// An unpartitioned table over foreign files reads its root's files only: a subdirectory is not read (Spark 4.2.0,
+/// krishiv-internal `research/spark/registered-partitions/probe.out`, table `u`: one row, `tmp_x/b.parquet` unread).
+#[test]
+fn an_unpartitioned_table_over_foreign_files_skips_a_subdirectory() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE src (x INT) USING parquet");
+    run(&s, "INSERT INTO src VALUES (1)");
+    let file = std::fs::read_dir(dir.path().join("src"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with("part-"))
+        .unwrap()
+        .path();
+    let loc = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(loc.path().join("tmp_x")).unwrap();
+    std::fs::copy(&file, loc.path().join(file.file_name().unwrap())).unwrap();
+    std::fs::copy(&file, loc.path().join("tmp_x").join("b.parquet")).unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE u (x INT) USING parquet LOCATION '{}'",
+            loc.path().display()
         ),
-        ["2\t2"]
     );
+    assert_eq!(rows(&s, "SELECT CAST(x AS STRING) FROM u"), ["1"]);
 }
 
 /// A table partitioned by a BINARY column, as Spark 4.2.0 writes and reads it (krishiv-internal
