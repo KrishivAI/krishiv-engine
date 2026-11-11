@@ -168,10 +168,19 @@ fn runtime_divide_by_zero_has_the_division_span() {
 }
 
 #[test]
-fn runtime_cast_overflow_has_the_cast_span() {
-    let sql = "SELECT CAST(a AS TINYINT) FROM VALUES (1000) AS t(a)";
+fn runtime_cast_invalid_input_has_the_cast_span() {
+    let sql = "SELECT CAST(a AS INT) FROM VALUES ('x') AS t(a)";
     let e = fails(sql);
-    assert_eq!(span(&e), (7, 24, "CAST(a AS TINYINT)"));
+    assert_eq!(e.error_class(), ErrorClass::CastInvalidInput);
+    assert_eq!(span(&e), (7, 20, "CAST(a AS INT)"));
+}
+
+/// Spark 4.2.0 (`cast.sql.out`): `CAST_OVERFLOW` carries no query context.
+#[test]
+fn runtime_cast_overflow_has_no_context() {
+    let e = fails("SELECT CAST(a AS TINYINT) FROM VALUES (1000) AS t(a)");
+    assert!(e.query_contexts().is_empty());
+    assert!(e.pending_site().is_none());
 }
 
 #[test]
@@ -201,12 +210,34 @@ fn fails_round_tripped(sql: &str) -> KrishivError {
 fn a_plan_through_the_codec_renders_the_same_runtime_contexts() {
     for sql in [
         "SELECT a / b FROM VALUES (1, 0) AS t(a, b)",
-        "SELECT CAST(a AS TINYINT) FROM VALUES (1000) AS t(a)",
+        "SELECT CAST(a AS INT) FROM VALUES ('x') AS t(a)",
         "SELECT 1 + (a / b) FROM VALUES (1, 0) AS t(a, b)",
     ] {
         let direct = fails(sql);
         let shipped = fails_round_tripped(sql);
         assert_eq!(shipped.error_class(), direct.error_class(), "{sql}");
         assert_eq!(span(&shipped), span(&direct), "{sql}");
+    }
+}
+
+/// A DataFrame expression is lowered with source id 0 too; a view made from it and read by
+/// SQL must not render its span against the reading statement's text.
+#[test]
+fn a_dataframe_expression_span_is_not_rendered_against_another_statement() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT * FROM VALUES (1, 0) AS t(a, b)")).unwrap();
+    let df = df.select_expr(["a / b AS q"]).unwrap();
+    block_on(df.create_or_replace_temp_view("v_ctx")).unwrap();
+    let sql = "SELECT q FROM v_ctx";
+    let e = match block_on(s.sql(sql)) {
+        Err(e) => e,
+        Ok(df) => block_on(df.collect()).expect_err("the query fails"),
+    };
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    for c in e.query_contexts() {
+        assert!(
+            !c.fragment.is_empty() && sql.contains(c.fragment.as_str()),
+            "a context from another text: {c:?}"
+        );
     }
 }

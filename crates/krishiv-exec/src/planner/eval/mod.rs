@@ -455,9 +455,13 @@ impl PhysExpr for Sited {
         self.inner.nullable()
     }
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
-        self.inner
-            .eval(batch, partition)
-            .map_err(|e| e.with_pending_site(self.site))
+        self.inner.eval(batch, partition).map_err(|e| {
+            if has_spark_context(e.error_class().name()) {
+                e.with_pending_site(self.site)
+            } else {
+                e
+            }
+        })
     }
     fn is_constant(&self) -> bool {
         self.inner.is_constant()
@@ -465,6 +469,25 @@ impl PhysExpr for Sited {
     fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
         self.inner.null_on_overflow()
     }
+}
+
+/// Whether Spark 4.2.0 gives an error of this class a `queryContext`. Only the classes its
+/// expressions raise through `SupportQueryContext` do; others (`CAST_OVERFLOW`,
+/// `CANNOT_PARSE_TIMESTAMP`, `USER_RAISED_EXCEPTION`, `INVALID_PARAMETER_VALUE.*`, ...)
+/// carry none, and adding one would diverge from Spark (ADR 0008).
+fn has_spark_context(class: &str) -> bool {
+    matches!(
+        class,
+        "CAST_INVALID_INPUT"
+            | "ARITHMETIC_OVERFLOW"
+            | "NUMERIC_VALUE_OUT_OF_RANGE"
+            | "DIVIDE_BY_ZERO"
+            | "REMAINDER_BY_ZERO"
+            | "INVALID_INDEX_OF_ZERO"
+            | "MAP_KEY_DOES_NOT_EXIST"
+    ) || class.starts_with("INVALID_ARRAY_INDEX")
+        || class.starts_with("INTERVAL_")
+        || class.starts_with("NUMERIC_VALUE_OUT_OF_RANGE")
 }
 
 fn compile_node(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {

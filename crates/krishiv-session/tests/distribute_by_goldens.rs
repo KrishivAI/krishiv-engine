@@ -171,17 +171,22 @@ fn distribute_by_evaluates_as_spark() {
             sessions.push((case["conf"].clone(), session(&fixture, conf)));
         }
         let s = &sessions.iter().find(|(c, _)| c == &case["conf"]).unwrap().1;
-        let got = outcome(s, sql);
+        let mut got = outcome(s, sql);
         let mut want = expected(case);
         // An error raised where no span is known has no context: compare its class.
-        // Spark 4.2.0 also raises some with none (a DISTRIBUTE BY in a correlated subquery loses
-        // its expressions' origin), where Krishiv may give the expression's span.
-        let mut got = got;
         if got["error"].is_object() && got["error"]["fragment"].is_null() {
             for k in ["fragment", "start", "stop"] {
                 want["error"][k] = Value::Null;
             }
-        } else if want["error"].is_object() && want["error"]["fragment"].is_null() {
+        }
+        // The one exception: with adaptive execution off Spark 4.2.0 wraps the error of a
+        // correlated subquery's DISTRIBUTE BY in an `ExecutionException` and loses its origin.
+        if sql.contains("EXISTS (SELECT 1 FROM t WHERE t.x = CAST(u.k")
+            && conf
+                .get("spark.sql.adaptive.enabled")
+                .and_then(Value::as_str)
+                == Some("false")
+        {
             for k in ["fragment", "start", "stop"] {
                 got["error"][k] = Value::Null;
             }
