@@ -70,6 +70,7 @@ pub mod otlp;
 mod partitions;
 mod plan_round_trip;
 mod profile;
+mod python_udfs;
 mod query_fold;
 mod recursion;
 mod result_cache;
@@ -121,6 +122,7 @@ pub use krishiv_udf_sdk::{
     UdfProperties,
 };
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
+pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
 pub use session::{RecordBatchStream, Session, SessionBuilder};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,

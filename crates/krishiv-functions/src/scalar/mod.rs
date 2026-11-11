@@ -34,6 +34,7 @@ mod array_shape;
 mod bitwise;
 mod chars;
 mod codec;
+mod collation;
 mod collection;
 mod csv;
 mod datetime;
@@ -526,6 +527,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (xml::NAMES, xml::bind),
     (vector::NAMES, vector::bind),
     (element::NAMES, element::bind),
+    (collation::NAMES, collation::bind),
     (array_edit::NAMES, array_edit::bind),
     (array_scan::NAMES, array_scan::bind),
     (array_set::NAMES, array_set::bind),

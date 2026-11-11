@@ -8,10 +8,10 @@
 //! DuckDB read it without copying. The C-level work is in [`ffi`], which has
 //! no pyo3 dependency so that it can be tested under Miri.
 
-mod ffi;
+pub(crate) mod ffi;
 mod query;
 
-pub(crate) use self::query::{ErrorSlot, QueryReader};
+pub(crate) use self::query::{ErrorSlot, QueryReader, wait_for};
 
 use std::ffi::CStr;
 use std::sync::Mutex;
@@ -36,7 +36,10 @@ fn value_error(e: &KrishivError) -> PyErr {
 }
 
 /// The pointer of `capsule`, which must be a PyCapsule named `name`.
-fn capsule_pointer(capsule: &Bound<'_, PyAny>, name: &CStr) -> PyResult<*mut std::ffi::c_void> {
+pub(crate) fn capsule_pointer(
+    capsule: &Bound<'_, PyAny>,
+    name: &CStr,
+) -> PyResult<*mut std::ffi::c_void> {
     let wanted = name.to_string_lossy();
     let capsule = capsule
         .cast::<PyCapsule>()
@@ -57,6 +60,87 @@ fn capsule_name(capsule: &Bound<'_, PyCapsule>) -> String {
         // is copied out at once.
         Ok(Some(name)) => unsafe { name.as_cstr() }.to_string_lossy().into_owned(),
         _ => "NULL".to_owned(),
+    }
+}
+
+/// A reader whose `next` runs with the calling thread detached from Python
+/// when it is attached (design P2-T059 §2.5 "Stream export", T091b §5): a
+/// consumer reading a query's stream while it holds the GIL (or, on a
+/// free-threaded build, an attached thread state) would otherwise block the
+/// Python UDF pool threads the query waits on. A thread without a Python
+/// thread state is left alone (it is never attached, which could block on
+/// the GIL).
+pub(crate) struct Detaching<R>(pub(crate) R);
+
+unsafe extern "C" {
+    /// Whether the calling thread holds the GIL. Not in the limited API, so
+    /// pyo3-ffi leaves it out of abi3 builds; every CPython 3.11+ exports it,
+    /// and the wheels (Linux, macOS) resolve it from the host interpreter.
+    fn PyGILState_Check() -> std::ffi::c_int;
+}
+
+/// Whether the calling thread is attached to Python (holds the GIL, or on a
+/// free-threaded build has an attached thread state).
+///
+/// - 3.12+: the current thread state is per thread, so swapping NULL in and
+///   the old state straight back reads only this thread's own state (review
+///   2c B1 found the swap probe unsound on 3.11 only).
+/// - 3.11: the current thread state is process-wide, so the swap would take
+///   another thread's; `PyGILState_Check` is exact there unless a
+///   subinterpreter exists (it then answers 1 on every thread, measured on
+///   3.11-3.14; T098b I1), which 3.11 makes only through the private
+///   `_xxsubinterpreters` module or a C embedder: a documented limit.
+fn attached() -> bool {
+    // SAFETY: `Py_Version` is a constant the interpreter exports (stable ABI
+    // since 3.11, the wheel's floor); reading it touches no state.
+    let version = unsafe { pyo3::ffi::Py_Version };
+    if version < 0x030C_0000 {
+        // SAFETY: a plain query of the calling thread's state; callable with
+        // or without the GIL.
+        return unsafe { PyGILState_Check() } != 0;
+    }
+    // SAFETY: on 3.12+ the swap reads and writes only the calling thread's
+    // current state: NULL detaches it if it was attached, and the swap back
+    // re-attaches the same state on the same thread at once. No object is
+    // touched in between.
+    let current = unsafe { pyo3::ffi::PyThreadState_Swap(std::ptr::null_mut()) };
+    if current.is_null() {
+        return false;
+    }
+    // SAFETY: as above: `current` is this thread's own state, just taken.
+    unsafe { pyo3::ffi::PyThreadState_Swap(current) };
+    true
+}
+
+/// Runs `f` with this thread detached from Python if it is attached
+/// ([`attached`]). The detach is pyo3's, which also keeps pyo3's own attach
+/// count right while detached (review 2c M1), whoever attached the thread.
+fn detached<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    if !attached() {
+        return f();
+    }
+    // SAFETY: `attached` just said this thread is attached, so a token is
+    // valid here; it is used only to detach (and re-attach after `f`, on
+    // this thread), never to touch an object, and does not escape.
+    let py = unsafe { Python::assume_attached() };
+    py.detach(f)
+}
+
+impl<R: Iterator + Send> Iterator for Detaching<R>
+where
+    R::Item: Send,
+{
+    type Item = R::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let inner = &mut self.0;
+        detached(|| inner.next())
+    }
+}
+
+impl<R: RecordBatchReader + Send> RecordBatchReader for Detaching<R> {
+    fn schema(&self) -> SchemaRef {
+        self.0.schema()
     }
 }
 
