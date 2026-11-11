@@ -105,5 +105,10 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::Expects(vec![exact(DataType::String)]),
         raise_error,
     ));
+    out.extend(scalar(
+        &["__indeterminate_collation"],
+        &Inputs::Expects(vec![InputType::Any, InputType::Any]),
+        raise_error,
+    ));
     out
 }

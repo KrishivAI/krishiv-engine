@@ -102,6 +102,10 @@ const FAILS_INDETERMINATE: &[&str] = &[
     "initcap",
 ];
 
+/// Calls that tolerate operands without one collation at analysis and fail while running
+/// (`INDETERMINATE_COLLATION`).
+const RUNTIME_INDETERMINATE: &[&str] = &["str_to_map", "split_part"];
+
 /// Calls whose result depends on the collation (Spark's `CollationSupport` and the pattern
 /// matchers). Their collation-aware kernels belong to unit 5, so until then they refuse a
 /// non-binary collation instead of matching bytes.
@@ -696,6 +700,21 @@ impl Resolver<'_> {
         }
         let mut memo = Memo::new();
         let (chosen, indeterminate) = self.choose_collation(e, kids, n, &name)?;
+        if indeterminate && RUNTIME_INDETERMINATE.contains(&name.as_str()) {
+            // Spark raises `INDETERMINATE_COLLATION` while evaluating the call, not at analysis.
+            let keyed = vec![
+                self.plain_string(&kids[0], e.origin, cx)?,
+                self.plain_string(&kids[1], e.origin, cx)?,
+            ];
+            let call = Expr::function(
+                "__indeterminate_collation",
+                keyed.iter().map(|k| (*k.expr).clone()).collect(),
+            )
+            .with_origin(e.origin);
+            let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
+            b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+            return Ok(b);
+        }
         if SEARCHES.contains(&name.as_str())
             && matches!(
                 chosen.map(Collation::family),

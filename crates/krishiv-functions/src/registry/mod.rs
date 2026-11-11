@@ -309,6 +309,8 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__translate_lcase" => "__translate_lcase",
         "__split_part_lcase" => "__split_part_lcase",
         "__substring_index_lcase" => "__substring_index_lcase",
+        // The run-time `INDETERMINATE_COLLATION` of a call whose operands have no one collation (`str_to_map`, `split_part`).
+        "__indeterminate_collation" => "__indeterminate_collation",
         _ => return None,
     };
     let arity = if matches!(
@@ -321,6 +323,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
             | "__startswith_lcase"
             | "__endswith_lcase"
             | "__find_in_set_lcase"
+            | "__indeterminate_collation"
     ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {

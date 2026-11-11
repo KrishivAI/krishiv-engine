@@ -108,6 +108,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "the analyzer's `locate` over `UTF8_LCASE` strings",
     ),
     (
+        "__indeterminate_collation",
+        "internal: raises `INDETERMINATE_COLLATION` where Spark does at run time",
+    ),
+    (
         "__find_in_set_lcase",
         "the analyzer's `find_in_set` over `UTF8_LCASE` strings",
     ),
