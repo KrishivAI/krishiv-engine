@@ -57,7 +57,9 @@ impl Operator for Filter {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
         let partition = local_mut::<PartitionState>(local, "Filter")?.partition;
-        let mask = self.predicate.evaluate_in(input.data(), partition)?;
+        let mask = self
+            .predicate
+            .evaluate_in(input.data(), input.split().unwrap_or(partition))?;
         let out = input.filter(&mask)?;
         if out.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
@@ -124,5 +126,6 @@ fn compact_sparse_views(input: &Batch, batch: Batch) -> Result<Batch> {
     )
     .map_err(|e| crate::error::internal(e.to_string()))?;
     Batch::with_weights(compacted, batch.weights().clone())
+        .map(|b| b.with_split(batch.split()))
         .map_err(|e| crate::error::internal(e.to_string()))
 }

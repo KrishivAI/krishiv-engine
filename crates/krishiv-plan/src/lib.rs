@@ -111,6 +111,7 @@
 //! | `ResolvedExpr::Alias` | R | - | - |
 //! | `ResolvedExpr::Field` | R | - | - |
 //! | `ResolvedExpr::StateInput` | R | - | - |
+//! | `ResolvedExpr::EvalMode` | R | - | - |
 //!
 //! Not in v1 (spec 13 §9; added with the features that need them):
 //! `Generate`, `Hint`, `Pivot`, `Command`,
@@ -147,7 +148,7 @@ pub use expr::{
     SortOrder, Star, SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec,
     WindowSpecRef,
 };
-pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
+pub use function::{Builtin, FunctionId, FunctionKind, PythonEvalType, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
@@ -172,5 +173,5 @@ pub use plan::{
     TABLE_FUNCTION_NAME_SEP, TableVersion, UnpivotColumnSet, generator_arg,
     without_generated_marker,
 };
-pub use raises::{conjuncts, is_deterministic, may_raise};
+pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
 pub use walk::{MAX_DEPTH, check_depth};

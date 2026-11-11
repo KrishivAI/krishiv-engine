@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The analysis signatures of the collection functions the higher-order
 //! functions need: `size` and `split` (Spark's `Size` and `StringSplit`).
-//! The `map` constructor is in the map family.
+//! The `map` constructor is in the map family. `collect_set`'s input check
+//! is here too.
 //!
 //! `split` fills its default `limit` of `-1` in the analyzer (see
 //! `krishiv-plan`'s materialized defaults), so the rule always sees three
 //! arguments.
 
-use krishiv_common::error::{DatatypeMismatchUnexpectedInputType, KrishivError};
+use krishiv_common::error::{
+    DatatypeMismatchUnexpectedInputType, DatatypeMismatchUnsupportedInputType, KrishivError,
+};
 use krishiv_types::{ArrayType, DataType};
 
-use super::defs::Spec;
+use super::defs::{Spec, collect};
 use super::hof::{call_sql, quoted};
 use crate::signature::{ArgType, CallTypes, FunctionKind, Inputs};
 
@@ -107,4 +110,38 @@ pub(super) fn specs() -> Vec<Spec> {
             split_result,
         ),
     ]
+}
+
+/// Whether `t` is or contains a map at any depth.
+fn has_map(t: &DataType) -> bool {
+    match t {
+        DataType::Map(_) => true,
+        DataType::Array(a) => has_map(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| has_map(f.data_type())),
+        _ => false,
+    }
+}
+
+/// `collect_set(x)`: as [`collect`](super::defs::collect), but Spark refuses an input that
+/// contains a map at any depth (`DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE`),
+/// as a map has no equality to deduplicate by.
+pub(super) fn collect_set(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if let Some(t) = c.data_type(0).filter(|t| has_map(t)) {
+        return Err(DatatypeMismatchUnsupportedInputType {
+            sql_expr: format!("\"collect_set({})\"", c.sql(0).unwrap_or_default()),
+            function_name: "`collect_set`".to_owned(),
+            data_type: format!("\"{}\"", t.sql()),
+        }
+        .into());
+    }
+    // Spark refuses a collated string too: its set would be by bytes.
+    if c.data_type(0).is_some_and(DataType::contains_collation) {
+        return Err(DatatypeMismatchUnsupportedInputType {
+            sql_expr: format!("\"collect_set({})\"", c.sql(0).unwrap_or_default()),
+            function_name: "`collect_set`".to_owned(),
+            data_type: "\"MAP\" or \"COLLATED STRING\"".to_owned(),
+        }
+        .into());
+    }
+    collect(c)
 }

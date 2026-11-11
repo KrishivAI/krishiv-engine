@@ -87,8 +87,11 @@ use crate::window::{GroupLimitPlan, WindowGroupLimit};
 
 mod detached;
 mod distributed;
+mod order;
+mod python_eval;
 pub(crate) use detached::{Detached, LoopRun};
 use distributed::planned_schema_holds;
+use order::{range_ordered_evals, reads_range_in_order};
 
 /// Creates the spill scope of one instantiation: the query's own spill
 /// directory on this worker, removed when the scope's last holder (the
@@ -111,6 +114,8 @@ pub trait SpillScopes: Send + Sync + fmt::Debug {
 pub struct WorkerContext {
     tables: Arc<dyn TableProviderResolver>,
     udfs: Option<Arc<UdfLibrary>>,
+    /// Resolves the Python UDFs a plan names (design P2-T059).
+    python: Option<Arc<dyn crate::python_eval::UdfRuntime>>,
     relations: Option<Arc<krishiv_memory::RelationStore>>,
     spill: Option<SpillScope>,
     scopes: Option<Arc<dyn SpillScopes>>,
@@ -205,6 +210,7 @@ impl WorkerContext {
         Self {
             tables,
             udfs: None,
+            python: None,
             relations: None,
             spill: None,
             scopes: None,
@@ -443,6 +449,7 @@ fn instantiate_with_schemas(
             loops: HashMap::new(),
             schemas: BTreeMap::new(),
             unit_weights: HashSet::new(),
+            range_ordered: range_ordered_evals(plan.roots(), Some(plan.root())),
             salts: HashMap::new(),
         };
         for root in plan.roots() {
@@ -517,6 +524,8 @@ struct Instantiation<'a> {
     /// Aggregate nodes (by address) that refuse weights other than 1: the
     /// partial phase of a written-out `DISTINCT` aggregation.
     unit_weights: HashSet<usize>,
+    /// `PythonEval` nodes (by address) keeping a `range`'s order (`order.rs`).
+    range_ordered: HashSet<usize>,
     /// The first unseeded-random salt of each shared plan, as the
     /// instantiation that built it first numbered it (`detached.rs`).
     salts: HashMap<super::SharedId, u64>,
@@ -908,6 +917,7 @@ impl Instantiation<'_> {
 
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
         match n {
+            PhysNode::PythonEval { .. } => self.python_eval(n),
             PhysNode::Scan(s) => self.scan(s),
             PhysNode::Range(r) => {
                 let source = Arc::new(crate::operators::Range::new(
@@ -1525,19 +1535,6 @@ impl Instantiation<'_> {
                 probe: probe.node,
             }),
         })
-    }
-}
-
-/// Whether `n` streams a `range` through row-wise nodes only (filters,
-/// projections and limits), so its rows reach a `LIMIT` or the result in a
-/// defined order.
-fn reads_range_in_order(n: &PhysNode) -> bool {
-    match n {
-        PhysNode::Range(_) => true,
-        PhysNode::Filter { input, .. }
-        | PhysNode::Project { input, .. }
-        | PhysNode::Limit { input, .. } => reads_range_in_order(input),
-        _ => false,
     }
 }
 

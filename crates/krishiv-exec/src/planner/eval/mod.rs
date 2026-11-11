@@ -29,6 +29,7 @@ mod cond;
 mod field;
 mod func;
 mod hof;
+mod in_prefix;
 mod interval;
 pub(crate) mod logic;
 mod nested_cast;
@@ -419,6 +420,15 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         // higher-order call compiled around the body (see `hof`).
         ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => column(input, c),
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
+        // A SQL function body created under the other ANSI mode (T184): everything below
+        // reads the mode through the environment it is compiled with.
+        ExprNode::Resolved(ResolvedExpr::EvalMode { ansi, expr, .. }) => {
+            let env = EvalEnv {
+                ansi: *ansi,
+                ..input.env.clone()
+            };
+            compile(expr, Input { env: &env, ..input })
+        }
         ExprNode::Resolved(ResolvedExpr::Field {
             base,
             ordinal,
@@ -754,7 +764,10 @@ fn builtin(
                 arith::negative(e, env)?
             }
         }
-        (Builtin::In, n) if n >= 2 => cond::in_list(args, env)?,
+        (Builtin::In, n) if n >= 2 => match in_prefix::in_prefix(f, &args, input)? {
+            Some(prefix) => prefix,
+            None => cond::in_list(args, env)?,
+        },
         (Builtin::Between, 3) => {
             let hi = args.pop().ok_or_else(arity)?;
             let lo = args.pop().ok_or_else(arity)?;
