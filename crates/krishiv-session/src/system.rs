@@ -859,6 +859,24 @@ impl TextPolicy {
     }
 }
 
+/// The index of the quote that closes the run starting at `from`: a quote before a non-word character, a
+/// backslash escaping the character after it (`\'` inside a value is not the end).
+fn closing_quote(
+    chars: &[(usize, char)],
+    from: usize,
+    word: impl Fn(char) -> bool,
+) -> Option<usize> {
+    let mut j = from;
+    while j < chars.len() {
+        match chars[j].1 {
+            '\\' => j += 2,
+            '\'' if chars.get(j + 1).is_none_or(|n| !word(n.1)) => return Some(j),
+            _ => j += 1,
+        }
+    }
+    None
+}
+
 /// `message` with each quoted `'...'` run replaced by `'?'`. A quote opens
 /// only after a non-word character and closes only before one, so the
 /// apostrophe of `can't` is prose; an unclosed quote is left as it is.
@@ -871,10 +889,7 @@ fn mask_quoted(message: &str) -> String {
     while i < chars.len() {
         let (at, c) = chars[i];
         let opens = c == '\'' && (i == 0 || !word(chars[i - 1].1));
-        if opens
-            && let Some(j) = (i + 1..chars.len())
-                .find(|&j| chars[j].1 == '\'' && chars.get(j + 1).is_none_or(|n| !word(n.1)))
-        {
+        if opens && let Some(j) = closing_quote(&chars, i + 1, word) {
             out.push_str(&message[copied..at]);
             out.push_str("'?'");
             copied = chars.get(j + 1).map_or(message.len(), |n| n.0);
@@ -1722,6 +1737,21 @@ mod tests {
         assert_eq!(keep.apply_message(m), m);
         // An unclosed quote hides nothing after it.
         assert_eq!(mask.apply_message("it's fine"), "it's fine");
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_end_a_masked_value() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let m = "The value 'x\\' secret_canary' of the type \"STRING\" cannot be cast.";
+        let got = mask.apply_message(m);
+        assert!(!got.contains("secret_canary"), "{got}");
+        assert_eq!(
+            mask.apply_message("a 'b\\\\' then 'c' end"),
+            "a '?' then '?' end"
+        );
     }
 
     #[test]
