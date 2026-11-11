@@ -1144,3 +1144,21 @@ fn a_masked_error_message_carries_no_value_of_the_failed_statement() {
     assert!(!m.is_empty());
     assert!(m.iter().all(|x| !x.contains("123456789")), "{m:?}");
 }
+
+#[test]
+fn a_stored_view_over_a_stored_table_reads_under_system_when_qualified() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a INT)").unwrap();
+    run(&s, "INSERT INTO t VALUES (5)").unwrap();
+    run(&s, "CREATE VIEW v AS SELECT a FROM t").unwrap();
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(
+            &s,
+            "SELECT CAST(a AS STRING) FROM spark_catalog.default.v",
+            0
+        ),
+        ["5"]
+    );
+    assert!(run(&s, "SELECT a FROM default.v").is_err());
+}

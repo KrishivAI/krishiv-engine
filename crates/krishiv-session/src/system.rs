@@ -954,6 +954,9 @@ pub(crate) struct QueryRow {
     pub(crate) error_class: Option<String>,
     /// The failure's message, cut and masked like the text.
     pub(crate) error_message: Option<String>,
+    /// The text policy the query started under: its error message is cut and masked by it, whatever the
+    /// session's policy is by the time it fails.
+    pub(crate) policy: TextPolicy,
     /// The operators it ran (a finished query only); shared, so a copy of
     /// the history doesn't copy them.
     pub(crate) operators: Arc<[OperatorRow]>,
@@ -1224,6 +1227,7 @@ impl QueryLog {
             peak_memory_bytes: None,
             error_class: None,
             error_message: None,
+            policy,
             operators: Arc::default(),
             workload_class: None,
             cpu_ns: None,
@@ -1419,10 +1423,10 @@ impl QueryLog {
         if outcome_state(error.error_class().name()) == "cancelled" {
             return;
         }
-        let policy = *self.text.lock().unwrap_or_else(PoisonError::into_inner);
-        let shown = policy.apply_message(&error.for_client().error().to_string());
-        self.history
-            .update(&self.session_id, id, |row| row.error_message = Some(shown));
+        let message = error.for_client().error().to_string();
+        self.history.update(&self.session_id, id, |row| {
+            row.error_message = Some(row.policy.apply_message(&message));
+        });
     }
 
     /// Marks the query `id` finished (a row evicted meanwhile is gone).
@@ -1771,6 +1775,26 @@ mod tests {
         assert_eq!(row.statement_class, Some("READ"));
         assert_eq!(row.tags, [("team".to_owned(), "etl".to_owned())]);
         assert_eq!(row.error_class, None);
+    }
+
+    #[test]
+    fn an_error_is_masked_by_the_policy_the_query_started_under() {
+        let log = QueryLog::default();
+        log.set_text_policy(TextPolicy {
+            mask: true,
+            ..TextPolicy::default()
+        });
+        let id = log.begin(Some("SELECT 'a'"), None);
+        // Another statement of the session switches masking off before this one fails.
+        log.set_text_policy(TextPolicy::default());
+        log.note_error(
+            &id,
+            &KrishivError::from(InternalError {
+                message: "bad value 'secret'".to_owned(),
+            }),
+        );
+        let message = log.snapshot(false)[0].error_message.clone().unwrap();
+        assert!(!message.contains("secret"), "{message}");
     }
 
     #[test]

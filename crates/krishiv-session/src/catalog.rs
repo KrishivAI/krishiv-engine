@@ -1402,7 +1402,7 @@ impl Expander<'_> {
                 })
                 .unwrap_or_else(|| namespace.clone());
             let qualified = ReadSource::Table {
-                name: vec![namespace, bare.clone()],
+                name: vec![CATALOG.to_owned(), namespace, bare.clone()],
                 options: options.clone(),
             };
             let plan =
