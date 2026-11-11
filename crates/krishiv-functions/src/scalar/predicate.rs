@@ -174,8 +174,8 @@ fn raise_error() -> Binding {
 fn indeterminate_collation() -> Binding {
     Binding::new(DataType::Null, move |x: &Inputs<'_>| {
         // The string functions ignore NULL inputs: only a row with both operands raises.
-        let (a, b) = (x.column(0)?, x.column(1)?);
-        if (0..x.rows()).any(|i| a.is_valid(i) && b.is_valid(i)) {
+        let cols = [x.column(0)?, x.column(1)?, x.column(2)?];
+        if (0..x.rows()).any(|i| cols.iter().all(|c| c.is_valid(i))) {
             return Err(krishiv_common::error::IndeterminateCollation {}.into());
         }
         Ok(arrow_array::new_null_array(&DataType::Null, x.rows()))
@@ -203,7 +203,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         ("isnotnull", [_]) => Ok(is_null(true)),
         ("assert_true", [DataType::Boolean, t]) if is_string(t) => Ok(assert_true()),
         ("raise_error", [t]) if is_string(t) => Ok(raise_error()),
-        ("__indeterminate_collation", [_, _]) => Ok(indeterminate_collation()),
+        ("__indeterminate_collation", [_, _, _]) => Ok(indeterminate_collation()),
         _ => return Some((listed, Err(bad_types(listed, args)))),
     };
     Some((listed, binding))

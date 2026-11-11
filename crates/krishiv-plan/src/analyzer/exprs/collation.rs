@@ -611,7 +611,7 @@ impl Resolver<'_> {
                 matches!(&k.ty.data_type, Some(DataType::CollatedString(c)) if c.is_indeterminate())
             })
         {
-            if FAILS_INDETERMINATE.contains(&name.as_str()) {
+            if FAILS_INDETERMINATE.contains(&name.as_str()) || KEYED.contains(&name.as_str()) {
                 let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
                 return Err(AnalysisError::new(
                     IndeterminateCollationInExpression {
@@ -729,17 +729,52 @@ impl Resolver<'_> {
         let (chosen, indeterminate) = self.choose_collation(e, kids, n, &name)?;
         if indeterminate && RUNTIME_INDETERMINATE.contains(&name.as_str()) {
             // Spark raises `INDETERMINATE_COLLATION` while evaluating the call, not at analysis.
-            let keyed = vec![
-                self.plain_string(&kids[0], e.origin, cx)?,
-                self.plain_string(&kids[1], e.origin, cx)?,
-            ];
+            // The operands as the call sees them (the type of its result stays Spark's), padded
+            // to three: a NULL in any of them makes the row NULL.
+            let mut keyed = Vec::with_capacity(3);
+            for k in &kids[..n.min(3)] {
+                keyed.push(if is_string(k.ty.data_type.as_ref()) {
+                    self.plain_string(k, e.origin, cx)?
+                } else {
+                    k.clone()
+                });
+            }
+            while keyed.len() < 3 {
+                let pad = Expr::new(ExprNode::Literal(Literal::String(String::new())))
+                    .with_origin(e.origin);
+                keyed.push(self.expr(&Arc::new(pad), cx)?);
+            }
+            let mut plain = Vec::with_capacity(n);
+            for k in &kids[..n] {
+                plain.push(if is_string(k.ty.data_type.as_ref()) {
+                    self.plain_string(k, e.origin, cx)?
+                } else {
+                    k.clone()
+                });
+            }
+            let result_type = self
+                .expr_node_inner(e, &plain, in_agg, window_fn, cx)
+                .ok()
+                .and_then(|b| b.ty.data_type);
             let call = Expr::function(
                 "__indeterminate_collation",
                 keyed.iter().map(|k| (*k.expr).clone()).collect(),
             )
             .with_origin(e.origin);
             let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
-            b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+            let shown = with_children(e, kids.iter().map(Bound::shown).collect());
+            if let Some(to) = result_type {
+                b.expr = Arc::new(
+                    Expr::new(ExprNode::Cast {
+                        expr: Arc::clone(&b.expr),
+                        to: to.clone(),
+                        mode: CastMode::Ansi,
+                    })
+                    .with_origin(e.origin),
+                );
+                b.ty.data_type = Some(to);
+            }
+            b.shown = Some(shown);
             return Ok(b);
         }
         if SEARCHES.contains(&name.as_str())

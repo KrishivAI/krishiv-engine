@@ -107,7 +107,7 @@ pub(super) fn specs() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["__indeterminate_collation"],
-        &Inputs::Expects(vec![InputType::Any, InputType::Any]),
+        &Inputs::Expects(vec![InputType::Any, InputType::Any, InputType::Any]),
         raise_error,
     ));
     out

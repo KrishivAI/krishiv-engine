@@ -336,6 +336,26 @@ fn indeterminate_string_results_carry_the_null_collation() {
         class_of(&s, "select upper(concat(a, b)) from t1"),
         ErrorClass::IndeterminateCollationInExpression
     );
+    for sql in [
+        "select concat(a, b) = 'x' from t1",
+        "select concat(a, b) in ('x') from t1",
+    ] {
+        assert_eq!(
+            class_of(&s, sql),
+            ErrorClass::IndeterminateCollationInExpression,
+            "{sql}"
+        );
+    }
+    // The run-time failure keeps the call's own result type.
+    assert_eq!(
+        value_of(&s, "select typeof(str_to_map(a, ',', b)) from t1 limit 1"),
+        "map<string,string>"
+    );
+    // `format_string` takes its collation from the format alone.
+    assert_eq!(
+        value_of(&s, "select typeof(format_string(a, a, b)) from t1 limit 1"),
+        "string collate UTF8_BINARY"
+    );
     // Calls Spark carries the type through are not modelled yet.
     assert_eq!(
         class_of(&s, "select length(concat(a, b)) from t1"),
@@ -364,6 +384,13 @@ fn indeterminate_string_results_carry_the_null_collation() {
         value_of(
             &s,
             "select cast(count(split_part(a, b, 1)) as string) from t1 where a is null or b is null"
+        ),
+        "0"
+    );
+    assert_eq!(
+        value_of(
+            &s,
+            "select cast(count(str_to_map(a, ',', b)) as string) from t1 where a is null or b is null"
         ),
         "0"
     );

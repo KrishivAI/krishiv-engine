@@ -314,7 +314,9 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__indeterminate_collation" => "__indeterminate_collation",
         _ => return None,
     };
-    let arity = if name == "__collation_array_set" {
+    let arity = if name == "__indeterminate_collation" {
+        Arity::new([false, false, false, true, false, false, false], "3")
+    } else if name == "__collation_array_set" {
         Arity::new([false, false, false, false, false, true, false], "5")
     } else if matches!(
         name,
@@ -326,7 +328,6 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
             | "__startswith_lcase"
             | "__endswith_lcase"
             | "__find_in_set_lcase"
-            | "__indeterminate_collation"
     ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {
