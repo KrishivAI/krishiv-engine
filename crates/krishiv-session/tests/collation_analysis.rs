@@ -1108,3 +1108,25 @@ fn nullif_least_and_greatest_pick_by_the_collation() {
         "nullif(collate(aaa, utf8_lcase), collate(AAA, utf8_lcase))"
     );
 }
+
+#[test]
+fn listagg_distinct_casts_follow_spark() {
+    // A cast the user wrote over a cast is not the implicit one: Spark names the value, not the
+    // cast type (MISMATCH_WITH_DISTINCT_INPUT),.
+    let e = run(
+        "SELECT listagg(DISTINCT CAST(CAST(col AS STRING COLLATE UTF8_LCASE) AS STRING)) \
+         WITHIN GROUP (ORDER BY col) FROM VALUES ('ABC'), ('abc') AS t(col)",
+    )
+    .unwrap_err();
+    assert!(
+        e.to_string().contains("MISMATCH_WITH_DISTINCT_INPUT")
+            && !e.to_string().contains("UNSAFE_CAST"),
+        "{e}"
+    );
+    let e = run(
+        "SELECT listagg(DISTINCT CAST(col AS STRING COLLATE UTF8_LCASE)) \
+         WITHIN GROUP (ORDER BY col) FROM VALUES ('ABC'), ('abc') AS t(col)",
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("UNSAFE_CAST"), "{e}");
+}
