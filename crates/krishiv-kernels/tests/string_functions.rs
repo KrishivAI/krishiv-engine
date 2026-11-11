@@ -1379,6 +1379,31 @@ fn search_lcase_follows_spark_lowercase_matching() {
 /// `endswith` over `UTF8_LCASE` finds the one start that can end the text, so a long suffix
 /// match is linear (a row of 100,000 `a` against a pattern of 50,000), and keeps the `İ` rules.
 #[test]
+fn search_lcase_contains_is_linear_and_exact() {
+    use s::LcaseSearch::Anywhere;
+    let has = |text: &str, pat: &str| {
+        s::search_lcase(Anywhere, lit(Some(text)), StrOperand::Array(&r1(pat)))
+            .unwrap()
+            .value(0)
+    };
+    let (n, half): (usize, usize) = if cfg!(miri) {
+        (400, 200)
+    } else {
+        (100_000, 50_000)
+    };
+    let text = "a".repeat(n);
+    let pat = format!("{}b", "A".repeat(half.saturating_sub(1)));
+    assert!(!has(&text, &pat));
+    assert!(has(&format!("{text}b"), &pat));
+    assert!(has("xaab", "AAB") && has("aaab", "aab") && !has("aab", "aaab"));
+    assert!(has("ab", ""));
+    // A match may not start or end between the two code points of the capital I with a dot.
+    assert!(
+        has("x\u{130}", "i\u{307}") && !has("x\u{130}", "\u{307}") && !has("x\u{130}", "x\u{69}")
+    );
+}
+
+#[test]
 fn search_lcase_endswith_is_linear_and_exact() {
     use s::LcaseSearch::End;
     let at = |text: &str, pat: &str| {

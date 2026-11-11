@@ -480,6 +480,79 @@ fn lcase_match_from(text: &[char], from: usize, pattern: &[char]) -> Option<usiz
     Some(t.saturating_sub(from))
 }
 
+/// A text lower-cased to the code points `UTF8_LCASE` compares, each tagged with the character it
+/// came from, so a match can be found in one pass and checked for Spark's rule that it may not
+/// start or end between the two code points `İ` lower-cases to.
+struct LcaseText {
+    points: Vec<char>,
+    owner: Vec<usize>,
+}
+
+impl LcaseText {
+    fn new(text: &[char]) -> Self {
+        let mut points = Vec::with_capacity(text.len());
+        let mut owner = Vec::with_capacity(text.len());
+        let mut buf = Vec::with_capacity(2);
+        for (i, c) in text.iter().enumerate() {
+            buf.clear();
+            lcase_points(*c, &mut buf);
+            for p in &buf {
+                points.push(*p);
+                owner.push(i);
+            }
+        }
+        Self { points, owner }
+    }
+
+    /// Whether a match may start at point `k` / end just before point `k`.
+    fn on_boundary(&self, k: usize) -> bool {
+        k == 0 || k >= self.owner.len() || self.owner.get(k) != self.owner.get(k.saturating_sub(1))
+    }
+
+    /// The character index of the first match of `pattern` (non-empty, already lower-cased)
+    /// that starts at a character at or after `from`: Knuth-Morris-Pratt, linear in both.
+    fn find(&self, pattern: &[char], from: usize) -> Option<usize> {
+        let m = pattern.len();
+        if m == 0 {
+            return None;
+        }
+        let mut fail = vec![0_usize; m];
+        let mut k = 0_usize;
+        for i in 1..m {
+            while k > 0 && pattern.get(i) != pattern.get(k) {
+                k = fail.get(k.saturating_sub(1)).copied().unwrap_or(0);
+            }
+            if pattern.get(i) == pattern.get(k) {
+                k = k.saturating_add(1);
+            }
+            if let Some(f) = fail.get_mut(i) {
+                *f = k;
+            }
+        }
+        let mut matched = 0_usize;
+        for (end, c) in self.points.iter().enumerate() {
+            while matched > 0 && pattern.get(matched) != Some(c) {
+                matched = fail.get(matched.saturating_sub(1)).copied().unwrap_or(0);
+            }
+            if pattern.get(matched) == Some(c) {
+                matched = matched.saturating_add(1);
+            }
+            if matched == m {
+                let stop = end.saturating_add(1);
+                let start = stop.saturating_sub(m);
+                if self.on_boundary(start)
+                    && self.on_boundary(stop)
+                    && self.owner.get(start).is_some_and(|o| *o >= from)
+                {
+                    return self.owner.get(start).copied();
+                }
+                matched = fail.get(m.saturating_sub(1)).copied().unwrap_or(0);
+            }
+        }
+        None
+    }
+}
+
 /// `locate(substr, str, start)` over `UTF8_LCASE` operands: the 1-based character position, in
 /// the original text, of the first match of `substr` at or after character `start`, comparing
 /// lower-cased code points as Spark's `lowercaseIndexOf` does. Same NULL, `start` and empty
@@ -516,8 +589,7 @@ pub fn locate_lcase<O: OffsetSizeTrait>(
                 lcase_points(c, &mut pattern);
             }
             let from = usize::try_from(begin.saturating_sub(1)).unwrap_or(0);
-            let found =
-                (from..text.len()).find(|at| lcase_match_from(&text, *at, &pattern).is_some());
+            let found = LcaseText::new(&text).find(&pattern, from);
             Some(found.map_or(0, |at| {
                 i32::try_from(at.saturating_add(1)).unwrap_or(i32::MAX)
             }))
@@ -731,7 +803,9 @@ pub fn search_lcase<O: OffsetSizeTrait>(
             let hit = |at: usize| lcase_match_from(&chars, at, &pat).map(|n| at.saturating_add(n));
             Some(match kind {
                 LcaseSearch::Start => hit(0).is_some(),
-                LcaseSearch::Anywhere => (0..=chars.len()).any(|at| hit(at).is_some()),
+                LcaseSearch::Anywhere => {
+                    pat.is_empty() || LcaseText::new(&chars).find(&pat, 0).is_some()
+                }
                 LcaseSearch::End => {
                     suffix_start(&chars, pat.len()).is_some_and(|at| hit(at) == Some(chars.len()))
                 }
