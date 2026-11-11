@@ -85,10 +85,23 @@ pub enum Weights {
 ///
 /// `PartialEq` is structural equality (same data, schema and weight
 /// representation), not Z-set equality; compare Z-sets after consolidation.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// A batch also carries an optional *split*: the index of the scan split
+/// (morsel) its rows were read from. A seeded random function draws from its
+/// split's stream, so a row gets the same value whichever driver runs it
+/// (Spark's partition index). The split is not part of equality and is
+/// dropped by every operation that mixes rows ([`Self::concat`]).
+#[derive(Clone, Debug)]
 pub struct Batch {
     data: RecordBatch,
     weights: Weights,
+    split: Option<u32>,
+}
+
+impl PartialEq for Batch {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data && self.weights == other.weights
+    }
 }
 
 /// The change batch of streaming and incremental view maintenance: the same
@@ -108,6 +121,7 @@ impl Batch {
         Self {
             data,
             weights: Weights::Const(1),
+            split: None,
         }
     }
 
@@ -132,7 +146,11 @@ impl Batch {
                 )));
             }
         }
-        Ok(Self { data, weights })
+        Ok(Self {
+            data,
+            weights,
+            split: None,
+        })
     }
 
     /// The number of rows.
@@ -148,6 +166,18 @@ impl Batch {
     /// The data columns.
     pub fn data(&self) -> &RecordBatch {
         &self.data
+    }
+
+    /// The scan split these rows were read from, if known.
+    pub fn split(&self) -> Option<u32> {
+        self.split
+    }
+
+    /// This batch tagged as read from scan split `split`.
+    #[must_use]
+    pub fn with_split(mut self, split: Option<u32>) -> Self {
+        self.split = split;
+        self
     }
 
     /// The row weights.
@@ -232,7 +262,11 @@ impl Batch {
                 Weights::Column(filtered.clone())
             }
         };
-        Ok(Self { data, weights })
+        Ok(Self {
+            data,
+            weights,
+            split: self.split,
+        })
     }
 
     /// The columns at `indices`, in that order, with the same rows and
@@ -249,6 +283,7 @@ impl Batch {
         Ok(Self {
             data,
             weights: self.weights.clone(),
+            split: self.split,
         })
     }
 
@@ -274,6 +309,7 @@ impl Batch {
         Ok(Self {
             data: self.data.slice(offset, len),
             weights,
+            split: self.split,
         })
     }
 
@@ -329,6 +365,7 @@ impl Batch {
         Ok(Self {
             weights: concat_weights(batches, data.num_rows()),
             data,
+            split: None,
         })
     }
 }

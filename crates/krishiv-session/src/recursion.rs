@@ -13,12 +13,24 @@ use krishiv_common::error::KrishivError;
 use krishiv_plan::analyzer::AnalyzedPlan;
 use krishiv_plan::{LogicalPlan, Plan, PlanNode};
 
-/// The plans of the subqueries inside `e`.
+/// The plans of the subqueries inside `e`. Each shared expression node is
+/// visited once (expressions are DAGs; revisiting is exponential in the
+/// nesting depth).
 fn subquery_plans(e: &Arc<krishiv_plan::Expr>, out: &mut Vec<Arc<LogicalPlan>>) {
-    if let krishiv_plan::ExprNode::Subquery { plan, .. } = &e.node {
-        out.push(Arc::clone(plan));
+    fn walk(
+        e: &Arc<krishiv_plan::Expr>,
+        out: &mut Vec<Arc<LogicalPlan>>,
+        seen: &mut HashSet<usize>,
+    ) {
+        if !seen.insert(Arc::as_ptr(e).addr()) {
+            return;
+        }
+        if let krishiv_plan::ExprNode::Subquery { plan, .. } = &e.node {
+            out.push(Arc::clone(plan));
+        }
+        e.for_each_child(&mut |c| walk(c, out, seen));
     }
-    e.for_each_child(&mut |c| subquery_plans(c, out));
+    walk(e, out, &mut HashSet::new());
 }
 
 /// `plan` with every relation `f` rewrites replaced, in subquery plans too.

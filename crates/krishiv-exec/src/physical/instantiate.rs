@@ -87,8 +87,13 @@ use crate::window::{GroupLimitPlan, WindowGroupLimit};
 
 mod detached;
 mod distributed;
+mod order;
+mod python_eval;
 pub(crate) use detached::{Detached, LoopRun};
+mod join;
 use distributed::planned_schema_holds;
+pub(crate) use join::hash_join;
+use order::{range_ordered_evals, reads_range_in_order};
 
 /// Creates the spill scope of one instantiation: the query's own spill
 /// directory on this worker, removed when the scope's last holder (the
@@ -111,6 +116,8 @@ pub trait SpillScopes: Send + Sync + fmt::Debug {
 pub struct WorkerContext {
     tables: Arc<dyn TableProviderResolver>,
     udfs: Option<Arc<UdfLibrary>>,
+    /// Resolves the Python UDFs a plan names (design P2-T059).
+    python: Option<Arc<dyn crate::python_eval::UdfRuntime>>,
     relations: Option<Arc<krishiv_memory::RelationStore>>,
     spill: Option<SpillScope>,
     scopes: Option<Arc<dyn SpillScopes>>,
@@ -205,6 +212,7 @@ impl WorkerContext {
         Self {
             tables,
             udfs: None,
+            python: None,
             relations: None,
             spill: None,
             scopes: None,
@@ -443,7 +451,9 @@ fn instantiate_with_schemas(
             loops: HashMap::new(),
             schemas: BTreeMap::new(),
             unit_weights: HashSet::new(),
+            range_ordered: range_ordered_evals(plan.roots(), Some(plan.root())),
             salts: HashMap::new(),
+            stages: HashMap::new(),
         };
         for root in plan.roots() {
             cx.declare_filters(root)?;
@@ -517,9 +527,13 @@ struct Instantiation<'a> {
     /// Aggregate nodes (by address) that refuse weights other than 1: the
     /// partial phase of a written-out `DISTINCT` aggregation.
     unit_weights: HashSet<usize>,
+    /// `PythonEval` nodes (by address) keeping a `range`'s order (`order.rs`).
+    range_ordered: HashSet<usize>,
     /// The first unseeded-random salt of each shared plan, as the
     /// instantiation that built it first numbered it (`detached.rs`).
     salts: HashMap<super::SharedId, u64>,
+    /// Each scan's runtime filters, for the probe it may hand its row stage.
+    stages: HashMap<ScanId, RuntimeFilters>,
 }
 
 /// A shared plan's body and the sink that keeps its rows; every reader's pipeline depends on this one.
@@ -908,6 +922,7 @@ impl Instantiation<'_> {
 
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
         match n {
+            PhysNode::PythonEval { .. } => self.python_eval(n),
             PhysNode::Scan(s) => self.scan(s),
             PhysNode::Range(r) => {
                 let source = Arc::new(crate::operators::Range::new(
@@ -1252,7 +1267,7 @@ impl Instantiation<'_> {
         }
     }
 
-    fn scan(&self, s: &ScanNode) -> Result<Built> {
+    fn scan(&mut self, s: &ScanNode) -> Result<Built> {
         let factory = self.worker.tables.provider(&s.scan)?.scan()?;
         let factory = self.splits(s.id, factory)?;
         if s.row_id && !factory.supports_take() {
@@ -1280,6 +1295,7 @@ impl Instantiation<'_> {
         }
         if !s.runtime_filters.is_empty() {
             dynamic.set_settings(s.row_stage);
+            self.stages.insert(s.id, dynamic.clone());
         }
         let source = factory.build(ScanPushdowns {
             projection: Some(s.projection.clone()),
@@ -1517,6 +1533,7 @@ impl Instantiation<'_> {
             &self.values,
             self.worker.producer,
         )?;
+        let join = self.hand_row_stage(join, j)?;
         Ok(Built {
             schema: join.schema(),
             node: Arc::new(HashJoinNode {
@@ -1525,19 +1542,6 @@ impl Instantiation<'_> {
                 probe: probe.node,
             }),
         })
-    }
-}
-
-/// Whether `n` streams a `range` through row-wise nodes only (filters,
-/// projections and limits), so its rows reach a `LIMIT` or the result in a
-/// defined order.
-fn reads_range_in_order(n: &PhysNode) -> bool {
-    match n {
-        PhysNode::Range(_) => true,
-        PhysNode::Filter { input, .. }
-        | PhysNode::Project { input, .. }
-        | PhysNode::Limit { input, .. } => reads_range_in_order(input),
-        _ => false,
     }
 }
 
@@ -1829,63 +1833,6 @@ fn residual(
         all = eval::and(e, all);
     }
     Ok(Some(Arc::new(Compiled(all)) as Arc<dyn Predicate>))
-}
-
-/// The hash join of `j` over inputs of `probe` and `build`, publishing its
-/// runtime filters to `values` (which declares them) as `producer`.
-pub(crate) fn hash_join(
-    probe: &SchemaRef,
-    build: &SchemaRef,
-    j: &HashJoinPlan,
-    env: &EvalEnv,
-    spill: Option<SpillScope>,
-    values: &Arc<dyn ValueService>,
-    producer: Producer,
-) -> Result<HashJoin> {
-    if j.distinct_build && !j.distinct_build_allowed() {
-        return Err(internal(format!(
-            "a distinct build on a {:?} join{}",
-            j.join_type,
-            if j.residual.is_some() {
-                " with a residual condition"
-            } else {
-                ""
-            }
-        )));
-    }
-    let join = HashJoin::try_new(JoinSpec {
-        join_type: j.join_type,
-        probe_schema: Arc::clone(probe),
-        build_schema: Arc::clone(build),
-        probe_keys: j.probe_keys.clone(),
-        build_keys: j.build_keys.clone(),
-        null_safe: j.null_safe.clone(),
-        filter: residual(probe, build, j.residual.as_ref(), env)?,
-        single_match: j.single_match,
-        spill,
-    })?;
-    if j.runtime_filters.is_empty() {
-        return Ok(join);
-    }
-    let filters = j
-        .runtime_filters
-        .iter()
-        .map(|f| {
-            // A planned Bloom size lets several build partitions' filters
-            // OR; one producer sizes its Bloom for the keys it saw, as an
-            // estimate can be far off.
-            let mut options = f.options;
-            if values.producers(ValueId::Filter(f.id)) == 1 {
-                options.bloom_bytes = None;
-            }
-            Ok(JoinRuntimeFilter {
-                key: f.key,
-                filter: values.filter(f.id)?,
-                options,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    join.with_filter_values(filters, Arc::clone(values), producer)
 }
 
 pub(crate) fn sort_merge_join(

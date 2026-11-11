@@ -186,31 +186,98 @@ const BINARY_RESULT: &[&str] = &[
 /// Calls that read the type of their argument: it stays collated.
 const INSPECTS: &[&str] = &["collation", "typeof"];
 
-/// The comparison key of `x` under `c`, as an expression over plain strings.
-fn key_of(x: &Arc<Expr>, c: Collation, origin: crate::Origin) -> Expr {
-    let lit =
-        |t: &str| Expr::new(ExprNode::Literal(Literal::String(t.to_owned()))).with_origin(origin);
-    let mut key = Expr::new(ExprNode::Cast {
-        expr: Arc::clone(x),
-        to: DataType::String,
-        mode: CastMode::Ansi,
+/// Internal calls the collation code builds over collated operands: they read the types as they
+/// are.
+const INTERNAL: &[&str] = &[
+    "__collation_key",
+    "__collation_map_keys",
+    "__collation_greatest",
+    "__collation_least",
+];
+
+/// Calls that build a nested value of their operands.
+const CONSTRUCTORS: &[&str] = &["array", "struct", "named_struct", "map"];
+
+/// Whether the string operands of the constructor `name` take one collation each where they are
+/// merged into one element type: all of `array`'s, each of `map`'s keys and values; a struct's
+/// fields are independent (Spark coerces no `CreateNamedStruct`).
+fn one_collation(kids: &[Bound], name: &str) -> bool {
+    let same = |it: &mut dyn Iterator<Item = &Bound>| {
+        let mut types = it.filter_map(|k| k.ty.data_type.as_ref());
+        types.next().is_none_or(|first| types.all(|t| t == first))
+    };
+    match name {
+        "array" => same(&mut kids.iter()),
+        "map" => same(&mut kids.iter().step_by(2)) && same(&mut kids.iter().skip(1).step_by(2)),
+        _ => true,
+    }
+}
+
+/// A call of `name` over `args` and the literal Spark type `t`.
+fn typed_call(name: &str, x: &Arc<Expr>, t: &DataType, origin: crate::Origin) -> Arc<Expr> {
+    let lit = Expr::new(ExprNode::Literal(Literal::String(t.sql()))).with_origin(origin);
+    Arc::new(Expr::function(name, vec![Expr::clone(x), lit]).with_origin(origin))
+}
+
+/// The comparison key of `x` read as `t` (design 3.3): the bytes of a binary string, else
+/// `__collation_key`, which is `lowerCaseCodePoints` and the right trim.
+fn key_of(x: &Arc<Expr>, t: &DataType, origin: crate::Origin) -> Arc<Expr> {
+    if matches!(t, DataType::String) {
+        return Arc::new(
+            Expr::new(ExprNode::Cast {
+                expr: Arc::clone(x),
+                to: DataType::String,
+                mode: CastMode::Ansi,
+            })
+            .with_origin(origin),
+        );
+    }
+    typed_call("__collation_key", x, t, origin)
+}
+
+/// `t` with a binary collation as `STRING`, else the collated string.
+fn string_of(c: Collation) -> DataType {
+    if c.is_utf8_binary() {
+        DataType::String
+    } else {
+        DataType::collated_string(c)
+    }
+}
+
+/// Whether every collated leaf of `t` has a key here (`UTF8_LCASE`, `_RTRIM`).
+fn has_key(t: &DataType) -> bool {
+    !t.any_type(&|x| {
+        matches!(x, DataType::CollatedString(c) if !matches!(
+            c.family(),
+            CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
+        ) || c.is_indeterminate())
     })
-    .with_origin(origin);
-    if c.rtrim() {
-        key = Expr::function("rtrim", vec![key]).with_origin(origin);
-    }
-    if matches!(c.family(), CollationFamily::Utf8Lcase) {
-        key = Expr::function(
-            "replace",
-            vec![
-                Expr::function("lower", vec![key]).with_origin(origin),
-                lit("\u{3c2}"),
-                lit("\u{3c3}"),
-            ],
-        )
-        .with_origin(origin);
-    }
-    key
+}
+
+/// The collations `e` names explicitly (`COLLATE`, a written cast to a collated string), or
+/// `None` when it carries no collation at all: no column (implicit) and nothing explicit.
+fn carried_collations(e: &Expr) -> Option<Vec<Collation>> {
+    let (mut named, mut column) = (Vec::new(), false);
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        if let crate::walk::Node::Expr(x) = n {
+            match &x.node {
+                // Spark gives a column and a scalar subquery implicit strength.
+                ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_))
+                | ExprNode::Subquery { .. } => {
+                    column = true;
+                }
+                ExprNode::Collate { collation, .. } => named.push(*collation),
+                ExprNode::Cast {
+                    to: DataType::CollatedString(c),
+                    mode,
+                    ..
+                } if *mode != CastMode::Default => named.push(*c),
+                _ => {}
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    (column || !named.is_empty()).then_some(named)
 }
 
 /// How many leading arguments of `name` only select (a null test) and so take no part in the
@@ -357,6 +424,17 @@ fn merge(items: &[(Collation, Strength)]) -> Result<Option<(Collation, Strength)
         .map(|c| (*c, Strength::Default)))
 }
 
+/// A copy of the `i`-th argument of the call `e` (a name for error messages).
+fn arg_of(e: &Expr, i: usize) -> Expr {
+    match &e.node {
+        ExprNode::Function(f) => f.args.get(i).map_or_else(
+            || Expr::new(ExprNode::Literal(Literal::Null(None))),
+            |a| Expr::clone(a),
+        ),
+        _ => Expr::new(ExprNode::Literal(Literal::Null(None))),
+    }
+}
+
 impl Resolver<'_> {
     /// `expr_node_inner`, with the collation rule for a function call over collated strings.
     pub(super) fn expr_node(
@@ -372,15 +450,40 @@ impl Resolver<'_> {
         };
         let n = f.args.len().min(kids.len());
         let name = f.name.to_ascii_lowercase();
+        if INTERNAL.contains(&name.as_str()) {
+            return self.expr_node_inner(e, kids, in_agg, window_fn, cx);
+        }
+        if let Some(bound) = self.collated_call(e, kids, n, &name, in_agg, window_fn, cx)? {
+            return Ok(bound);
+        }
         // Comparisons of `UTF8_LCASE` / `_RTRIM` strings compare their keys (design 3.3, unit 3a).
         if KEYED.contains(&name.as_str())
             && !f.distinct
-            && kids[..n]
-                .iter()
-                .any(|k| is_collated(k.ty.data_type.as_ref()))
+            && kids[..n].iter().any(|k| {
+                k.ty.data_type
+                    .as_ref()
+                    .is_some_and(DataType::contains_collation)
+            })
             && let Some(bound) = self.keyed_comparison(e, kids, n, &name, in_agg, window_fn, cx)?
         {
             return Ok(bound);
+        }
+        // Spark's `CreateArray` / `CreateNamedStruct` / `CreateMap`: a constructor over operands of
+        // one collation keeps it in the result type, which comparisons and keys then read.
+        // A `map` of two or more collated keys stays refused: its duplicate-key check still compares
+        // bytes, where Spark's compares keys (`DUPLICATED_MAP_KEY` for 'a' and 'A' under UTF8_LCASE).
+        let keyed_map_dedupe = name == "map"
+            && n > 2
+            && kids[..n].iter().step_by(2).any(|k| {
+                k.ty.data_type
+                    .as_ref()
+                    .is_some_and(DataType::contains_collation)
+            });
+        if CONSTRUCTORS.contains(&name.as_str())
+            && !keyed_map_dedupe
+            && one_collation(&kids[..n], &name)
+        {
+            return self.expr_node_inner(e, kids, in_agg, window_fn, cx);
         }
         if f.distinct
             || COMPARING.contains(&name.as_str())
@@ -598,6 +701,56 @@ impl Resolver<'_> {
         window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Option<Bound>, AnalysisError> {
+        // Nested operands (`array(c) = array('A')`): the key has the shape of the value. Only
+        // equality: nested ordering stays with the guard.
+        let nested = kids[..n].iter().find_map(|k| {
+            k.ty.data_type
+                .as_ref()
+                .filter(|t| t.contains_collation() && !t.is_string_type())
+        });
+        if let Some(t) = nested {
+            // Spark merges the collations leaf by leaf, by strength (`CollationTypeCoercion.
+            // mergeStructurally`); that merge is not built here, so the operands are keyed with
+            // `t` only where it is the one collation: an operand carrying none (no column, no
+            // `COLLATE`) defers to it, any other must be of type `t` as written (not coerced to
+            // it) and name only collations of `t`.
+            let agrees = |k: &Bound| {
+                let shown = k.shown();
+                let carried = carried_collations(&shown);
+                carried.is_none()
+                    || (k.ty.data_type.as_ref() == Some(t)
+                        && !matches!(
+                            k.expr.node,
+                            ExprNode::Cast {
+                                mode: CastMode::Default,
+                                ..
+                            }
+                        )
+                        && carried.is_some_and(|named| {
+                            named.iter().all(|c| {
+                                t.any_type(&|x| {
+                                    x == &DataType::collated_string(*c)
+                                        || (c.is_utf8_binary() && x == &DataType::String)
+                                })
+                            })
+                        }))
+            };
+            if !matches!(name, "==" | "<=>")
+                || !has_key(t)
+                || !kids[..n].iter().all(|k| {
+                    k.ty.data_type
+                        .as_ref()
+                        .is_none_or(|u| u.collation_key_type() == t.collation_key_type())
+                        && agrees(k)
+                })
+            {
+                return Ok(None);
+            }
+            let t = t.clone();
+            return self
+                .compare_keys(e, kids, n, |_| t.clone(), in_agg, window_fn, cx)
+                .map(Some);
+        }
         // The keys are for string-to-string comparisons. Against a timestamp, a number or a binary
         // the other operand is cast to the string's type, and a lowered or trimmed key would be
         // cast instead of the text (`ts = '2020-01-01T10:00:00' COLLATE UTF8_LCASE`): those stay
@@ -608,41 +761,203 @@ impl Resolver<'_> {
         {
             return Ok(None);
         }
-        // `x BETWEEN lo AND hi` is `x >= lo AND x <= hi` to Spark, each half coerced on its own: with
-        // different collations on the two halves (`x BETWEEN 'A' COLLATE UTF8_BINARY AND 'c'`) one
-        // collation for all three would compare a half in the wrong one. Those stay with the guard.
+        // `x BETWEEN lo AND hi` is `x >= lo AND x <= hi` to Spark, each half coerced on its own.
         if name == "between" && n >= 3 {
-            let lower = [kids[0].clone(), kids[1].clone()];
-            let upper = [kids[0].clone(), kids[2].clone()];
-            if self.choose_collation(e, &lower, 2, name)?.0
-                != self.choose_collation(e, &upper, 2, name)?.0
+            let (l, u) = (
+                [kids[0].clone(), kids[1].clone()],
+                [kids[0].clone(), kids[2].clone()],
+            );
+            if self.choose_collation(e, &l, 2, name)?.0 != self.choose_collation(e, &u, 2, name)?.0
             {
-                return Ok(None);
+                let f = |op: &str, i: usize| {
+                    Arc::new(
+                        Expr::function(op, vec![arg_of(e, 0), arg_of(e, i)]).with_origin(e.origin),
+                    )
+                };
+                let ge = self.expr_node(&f(">=", 1), &l, in_agg, window_fn, cx)?;
+                let le = self.expr_node(&f("<=", 2), &u, in_agg, window_fn, cx)?;
+                let mut both = self.operator_call(Builtin::And, e.origin, &[ge, le])?;
+                both.shown = Some(with_children(
+                    e,
+                    kids[..n].iter().map(Bound::shown).collect(),
+                ));
+                return Ok(Some(both));
             }
         }
         let (chosen, _) = self.choose_collation(e, kids, n, name)?;
         let Some(c) = chosen else {
             return Ok(None);
         };
-        if !matches!(
-            c.family(),
-            CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
-        ) {
+        if !has_key(&string_of(c)) {
             return Ok(None);
         }
+        self.compare_keys(e, kids, n, |_| string_of(c), in_agg, window_fn, cx)
+            .map(Some)
+    }
+
+    /// Replaces each typed operand of the call by its key read as `type_of(i)` and runs it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments of `expr_node`, plus the operand type"
+    )]
+    fn compare_keys(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        n: usize,
+        type_of: impl Fn(usize) -> DataType,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
         let mut keyed = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
-            if i >= n || !is_string(k.ty.data_type.as_ref()) {
+            if i >= n || k.ty.data_type.is_none() {
                 keyed.push(k.clone());
                 continue;
             }
-            let mut b = self.expr(&Arc::new(key_of(&k.expr, c, e.origin)), cx)?;
+            let mut b = self.expr(&key_of(&k.expr, &type_of(i), e.origin), cx)?;
             b.shown = Some(k.shown());
             b.carry_markers(std::slice::from_ref(k));
             keyed.push(b);
         }
         self.expr_node_inner(e, &keyed, in_agg, window_fn, cx)
-            .map(Some)
+    }
+
+    /// `greatest`/`least`/`nullif`/`equal_null` and map lookups over a collated value: `None`
+    /// when `name` is another call or nothing here has a key.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments of `expr_node`, plus the call's"
+    )]
+    fn collated_call(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        n: usize,
+        name: &str,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        let strings = kids[..n]
+            .iter()
+            .all(|k| k.ty.data_type.is_none() || is_string(k.ty.data_type.as_ref()));
+        let any_collated = kids[..n]
+            .iter()
+            .any(|k| is_collated(k.ty.data_type.as_ref()));
+        if matches!(
+            name,
+            "element_at" | "try_element_at" | "__subscript" | "map_contains_key"
+        ) && n == 2
+            && let Some(DataType::Map(m)) = kids[0].ty.data_type.clone()
+            && m.key_type().is_collated_string()
+            && has_key(m.key_type())
+            && kids[1].ty.data_type.as_ref() == Some(m.key_type())
+        {
+            let t = DataType::Map(Arc::clone(&m));
+            let map = typed_call("__collation_map_keys", &kids[0].expr, &t, e.origin);
+            let mut keyed = vec![
+                self.expr(&map, cx)?,
+                self.expr(&key_of(&kids[1].expr, m.key_type(), e.origin), cx)?,
+            ];
+            keyed[0].shown = Some(kids[0].shown());
+            keyed[1].shown = Some(kids[1].shown());
+            return self
+                .expr_node_inner(e, &keyed, in_agg, window_fn, cx)
+                .map(Some);
+        }
+        if !any_collated || !strings {
+            return Ok(None);
+        }
+        match name {
+            "equal_null" if n == 2 => {
+                let f = Arc::new(
+                    Expr::function("<=>", vec![arg_of(e, 0), arg_of(e, 1)]).with_origin(e.origin),
+                );
+                let mut b = self.expr_node(&f, kids, in_agg, window_fn, cx)?;
+                b.shown = Some(with_children(
+                    e,
+                    kids[..n].iter().map(Bound::shown).collect(),
+                ));
+                Ok(Some(b))
+            }
+            // Spark's `NullIf` is `if(a = b, NULL, a)`.
+            "nullif" if n == 2 => {
+                let eq = Arc::new(
+                    Expr::function("==", vec![arg_of(e, 0), arg_of(e, 1)]).with_origin(e.origin),
+                );
+                let Some(cond) =
+                    self.keyed_comparison(&eq, kids, 2, "==", in_agg, window_fn, cx)?
+                else {
+                    return Ok(None);
+                };
+                let null = self.expr(
+                    &Arc::new(
+                        Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(e.origin),
+                    ),
+                    cx,
+                )?;
+                let call = Arc::new(
+                    Expr::function("if", vec![arg_of(e, 0), arg_of(e, 1), arg_of(e, 0)])
+                        .with_origin(e.origin),
+                );
+                let value = Bound {
+                    ty: kids[0].ty.clone(),
+                    ..kids[0].clone()
+                };
+                let mut b =
+                    self.expr_node_inner(&call, &[cond, null, value], in_agg, window_fn, cx)?;
+                b.shown = Some(with_children(
+                    e,
+                    kids[..n].iter().map(Bound::shown).collect(),
+                ));
+                Ok(Some(b))
+            }
+            "greatest" | "least" if n >= 2 => {
+                let (chosen, _) = self.choose_collation(e, kids, n, name)?;
+                let Some(c) = chosen.filter(|c| has_key(&string_of(*c))) else {
+                    return Ok(None);
+                };
+                let func = if name == "greatest" {
+                    "__collation_greatest"
+                } else {
+                    "__collation_least"
+                };
+                let t = Expr::new(ExprNode::Literal(Literal::String(string_of(c).sql())))
+                    .with_origin(e.origin);
+                let plain = |k: &Bound| {
+                    Expr::new(ExprNode::Cast {
+                        expr: Arc::clone(&k.expr),
+                        to: DataType::String,
+                        mode: CastMode::Ansi,
+                    })
+                    .with_origin(e.origin)
+                };
+                let mut acc = plain(&kids[0]);
+                for k in &kids[1..n] {
+                    acc =
+                        Expr::function(func, vec![t.clone(), acc, plain(k)]).with_origin(e.origin);
+                }
+                let mut b = self.expr(&Arc::new(acc), cx)?;
+                let to = string_of(c);
+                b.expr = Arc::new(
+                    Expr::new(ExprNode::Cast {
+                        expr: Arc::clone(&b.expr),
+                        to: to.clone(),
+                        mode: CastMode::Ansi,
+                    })
+                    .with_origin(e.origin),
+                );
+                b.ty.data_type = Some(to);
+                b.shown = Some(with_children(
+                    e,
+                    kids[..n].iter().map(Bound::shown).collect(),
+                ));
+                Ok(Some(b))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// The one collation of the string operands of the call `e` (its first `n` arguments),

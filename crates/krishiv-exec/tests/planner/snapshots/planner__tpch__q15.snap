@@ -1,14 +1,12 @@
 ---
 source: crates/krishiv-exec/tests/planner/tpch.rs
-assertion_line: 630
 expression: tpch.plan(q).to_string()
 ---
 Sort [s_suppkey#18 ASC NULLS FIRST]
 +- Exchange rangepartitioning(s_suppkey#18 ASC NULLS FIRST)
    +- Project [s_suppkey#18, s_name#19, s_address#20, s_phone#22, total_revenue#26]
-      +- HashJoin Inner, [s_suppkey#18] = [supplier_no#25], RuntimeFilter #1: s_suppkey#18 -> spark_catalog.default.supplier.s_suppkey
-         :- Filter isnotnull(s_suppkey#18)
-         :  +- Scan spark_catalog.default.supplier [s_suppkey#18, s_name#19, s_address#20, s_phone#22], PushedFilters: [isnotnull(s_suppkey#18)]
+      +- HashJoin Inner, [s_suppkey#18] = [supplier_no#25], RuntimeFilter #1: s_suppkey#18 -> spark_catalog.default.supplier.s_suppkey, probe filter: isnotnull(s_suppkey#18)
+         :- Scan spark_catalog.default.supplier [s_suppkey#18, s_name#19, s_address#20, s_phone#22], PushedFilters: [isnotnull(s_suppkey#18)]
          +- BroadcastExchange
             +- Filter (total_revenue#26 == scalar-subquery)
                :- Project [supplier_no#46 AS supplier_no#25, total_revenue#47 AS total_revenue#26]

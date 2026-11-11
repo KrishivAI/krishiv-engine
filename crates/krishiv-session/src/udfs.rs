@@ -18,6 +18,8 @@ use krishiv_plan::analyzer::{
     InputType, Inputs, SparkProfile,
 };
 use krishiv_plan::{FunctionId, FunctionKind};
+
+use crate::python_udfs::PythonUdfLibrary;
 use krishiv_udf_sdk::{
     AggregateUdf, ArgField, NullHandling, ScalarUdf, Signature, UdfInputType, UdfLibrary,
     guard_call,
@@ -28,6 +30,9 @@ use krishiv_udf_sdk::{
 pub struct SessionFunctions {
     inner: Arc<dyn FunctionRegistry>,
     udfs: Arc<UdfLibrary>,
+    /// The session's Python UDFs (design P2-T059): a registered name
+    /// resolves here before the native Rust UDFs.
+    python: Arc<PythonUdfLibrary>,
 }
 
 impl std::fmt::Debug for SessionFunctions {
@@ -45,6 +50,7 @@ impl SessionFunctions {
         Self {
             inner: Arc::new(BuiltinFunctions::new()),
             udfs,
+            python: Arc::new(PythonUdfLibrary::new()),
         }
     }
 
@@ -53,7 +59,24 @@ impl SessionFunctions {
     /// case-insensitively.
     #[must_use]
     pub fn with_registry(inner: Arc<dyn FunctionRegistry>, udfs: Arc<UdfLibrary>) -> Self {
-        Self { inner, udfs }
+        Self {
+            inner,
+            udfs,
+            python: Arc::new(PythonUdfLibrary::new()),
+        }
+    }
+
+    /// The same registry resolving the Python UDFs of `python`.
+    #[must_use]
+    pub fn with_python(mut self, python: Arc<PythonUdfLibrary>) -> Self {
+        self.python = python;
+        self
+    }
+
+    /// The session's Python UDF library.
+    #[must_use]
+    pub fn python(&self) -> &Arc<PythonUdfLibrary> {
+        &self.python
     }
 
     /// The session's UDF library.
@@ -70,6 +93,9 @@ impl SessionFunctions {
     /// `return_field` or `version` becomes `FAILED_EXECUTE_UDF` rather
     /// than unwinding the analyzer.
     fn udf_entry(&self, name: &str) -> FunctionLookup {
+        if let Some(entry) = self.python.entry(name) {
+            return FunctionLookup::Found(entry);
+        }
         let Some(udf) = self.udfs.get(name) else {
             return match self.udfs.get_aggregate(name) {
                 Some(udaf) => aggregate_entry(name, &udaf),
@@ -274,6 +300,14 @@ fn same(a: &str, b: &str) -> bool {
 
 impl FunctionRegistry for SessionFunctions {
     fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup {
+        // An unregistered Python UDF's call (`session.<encoded>`), decoded
+        // as written: its definition is case-sensitive.
+        if let [q, f] = name
+            && same(q, "session")
+            && let Some((def, version)) = crate::python_udfs::decode_anonymous(f)
+        {
+            return FunctionLookup::Found(crate::python_udfs::entry_of(&def, version));
+        }
         let lower: Vec<String> = name.iter().map(|p| p.to_lowercase()).collect();
         match lower.as_slice() {
             [f] => match self.inner.lookup(std::slice::from_ref(f), profile) {
@@ -302,6 +336,9 @@ impl FunctionRegistry for SessionFunctions {
         if let Some(known) = self.inner.spark_deterministic(name) {
             return Some(known);
         }
+        if let Some(entry) = self.python.get(name) {
+            return Some(entry.def.deterministic);
+        }
         if let Some(udf) = self.udfs.get(name) {
             return guard_call(name, "properties", || udf.properties())
                 .ok()
@@ -327,6 +364,7 @@ impl FunctionRegistry for SessionFunctions {
         self.inner
             .version()
             .wrapping_add(self.udfs.version().wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .wrapping_add(self.python.version().wrapping_mul(0xC2B2_AE3D_27D4_EB4F))
     }
 }
 
