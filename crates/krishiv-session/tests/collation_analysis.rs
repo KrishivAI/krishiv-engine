@@ -78,30 +78,17 @@ fn collate_checks_its_input_and_its_name() {
     );
 }
 
-/// Until the planner rewrites comparing positions onto collation keys, every one of them
-/// refuses a collated value instead of comparing bytes (the execution guard of unit 2a).
+/// A collated value with no key (ICU, unit 6) is refused in a comparing position instead of being
+/// compared as bytes; `collation_keys.rs` runs every key-bearing operator.
 #[test]
 fn comparing_positions_refuse_a_collated_value() {
-    let c = "('a' COLLATE utf8_lcase)";
-    // ICU collations have no key yet (unit 6): their scalar comparisons and joins are refused.
     let ci = "('a' COLLATE unicode_ci)";
     for sql in [
-        // scalar comparisons
         format!("SELECT {ci} = 'A'"),
         format!("SELECT {ci} <=> 'A'"),
         format!("SELECT {ci} < 'A'"),
         format!("SELECT {ci} BETWEEN 'a' AND 'b'"),
         format!("SELECT {ci} IN ('A', 'b')"),
-        // keys
-        format!("SELECT col1 FROM (SELECT {c} AS col1) GROUP BY col1"),
-        format!("SELECT DISTINCT {c}"),
-        format!("SELECT col1 FROM (SELECT {c} AS col1) ORDER BY col1"),
-        format!("SELECT count(DISTINCT c) FROM (SELECT {c} AS c)"),
-        format!("SELECT max(c) FROM (SELECT {c} AS c)"),
-        format!("SELECT c, row_number() OVER (PARTITION BY c ORDER BY c) FROM (SELECT {c} AS c)"),
-        format!("SELECT {c} UNION SELECT {c}"),
-        format!("SELECT {c} INTERSECT SELECT {c}"),
-        format!("SELECT {c} EXCEPT SELECT {c}"),
         format!("SELECT * FROM (SELECT {ci} AS c) a JOIN (SELECT {ci} AS c) b ON a.c = b.c"),
     ] {
         assert_eq!(
@@ -327,19 +314,6 @@ fn lcase_search_answers_a_pattern_that_could_split_the_dotted_capital_i() {
 }
 
 /// A collated string inside an array, map or struct would lose its collation (or be compared
-/// as bytes), so building or reading one is refused for now; counting and picking are fine.
-#[test]
-fn nested_values_of_collated_strings_are_refused() {
-    for sql in [
-        "SELECT array('a' COLLATE utf8_lcase)",
-        "SELECT map('a' COLLATE utf8_lcase, 1)",
-        "SELECT named_struct('f', 'a' COLLATE utf8_lcase)",
-        "SELECT array('a' COLLATE utf8_lcase) = array('A')",
-    ] {
-        assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
-    }
-}
-
 /// Indeterminate input gives no string result here; a non-string result is still produced.
 #[test]
 fn indeterminate_string_results_are_refused() {
@@ -551,8 +525,11 @@ fn result_boundaries_and_equal_null() {
         "string collate UNICODE_CI"
     );
     assert_eq!(
-        class("SELECT equal_null('a' COLLATE UTF8_LCASE, 'A' COLLATE UTF8_LCASE)"),
-        ErrorClass::KrishivUnsupportedFeature
+        format!(
+            "{:?}",
+            run("SELECT equal_null('a' COLLATE UTF8_LCASE, 'A' COLLATE UTF8_LCASE)").unwrap()
+        ),
+        "[\"BooleanArray\\n[\\n  true,\\n]\"]"
     );
 }
 
@@ -615,7 +592,7 @@ fn lcase_and_rtrim_comparisons_compare_keys() {
 }
 
 /// Filters, joins and projections over collated columns use the keys; ICU collations, which have
-/// no key yet, stay refused, as do `greatest` and the keyed positions of unit 3b.
+/// no key yet, stay refused.
 #[test]
 fn tables_filter_and_join_on_collation_keys() {
     let s = Session::new().unwrap();
@@ -635,16 +612,8 @@ fn tables_filter_and_join_on_collation_keys() {
     assert_eq!(count("c1 where a in ('BBB', 'zzz')"), "2");
     // An explicit `UTF8_BINARY` beats the column's implicit `UTF8_LCASE`: bytes.
     assert_eq!(count("c1 where a = 'AAA' collate utf8_binary"), "1");
-    // `BETWEEN` coerces each half on its own: the same collation on both halves keys, different
-    // ones (the lower bound explicit binary, the upper implicit) stay with the guard.
+    // `BETWEEN` coerces each half on its own (`collation_keys.rs` runs the mixed form).
     assert_eq!(count("c1 where a between 'AAA' and 'bbb'"), "4");
-    assert_eq!(
-        class_of(
-            &s,
-            "select count(*) from c1 where a between 'A' collate utf8_binary and 'c'"
-        ),
-        ErrorClass::KrishivUnsupportedFeature
-    );
     // Two different explicit collations never compare.
     assert_eq!(
         class_of(
@@ -666,16 +635,13 @@ fn tables_filter_and_join_on_collation_keys() {
             "{sql}"
         );
     }
-    for sql in [
-        "select count(*) from c1 where a = 'aaa' collate unicode_ci",
-        "select count(*) from c1 group by a",
-    ] {
-        assert_eq!(
-            class_of(&s, sql),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{sql}"
-        );
-    }
+    assert_eq!(
+        class_of(
+            &s,
+            "select count(*) from c1 where a = 'aaa' collate unicode_ci"
+        ),
+        ErrorClass::KrishivUnsupportedFeature
+    );
 }
 
 /// The first value of the first column of `sql`, as text.

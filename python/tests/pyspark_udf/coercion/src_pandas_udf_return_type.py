@@ -1,0 +1,223 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Adapted from apache/spark tag v4.2.0, python/pyspark/sql/tests/coercion/test_pandas_udf_return_type.py
+# (Licensed to the Apache Software Foundation under the Apache License, Version 2.0; see the NOTICE file at the
+# repository root). The test bodies are Spark's; the imports point at `krishiv` and the test support in
+# `_support.py`. Which tests run is decided by `manifest.toml` (see `conftest.py`).
+#
+import concurrent.futures
+from decimal import Decimal
+import itertools
+import os
+import unittest
+
+from krishiv.sql.functions import pandas_udf
+from krishiv.sql.types import (
+    ArrayType,
+    BinaryType,
+    BooleanType,
+    ByteType,
+    DateType,
+    DecimalType,
+    DoubleType,
+    FloatType,
+    IntegerType,
+    LongType,
+    MapType,
+    ShortType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
+from krishiv._udf.loose_version import LooseVersion
+from pyspark_udf._support import (
+    have_pyarrow,
+    have_pandas,
+    have_numpy,
+    pyarrow_requirement_message,
+    pandas_requirement_message,
+    numpy_requirement_message,
+)
+from pyspark_udf._support import ReusedSQLTestCase
+from pyspark_udf.goldenutils import GoldenFileTestMixin
+
+if have_numpy:
+    import numpy as np
+if have_pandas:
+    import pandas as pd
+
+# If you need to re-generate the golden files, you need to set the
+# SPARK_GENERATE_GOLDEN_FILES=1 environment variable before running this test,
+# e.g.:
+# SPARK_GENERATE_GOLDEN_FILES=1 python/run-tests -k
+# --testnames 'krishiv.sql.tests.coercion.test_pandas_udf_return_type'
+# If package tabulate https://pypi.org/project/tabulate/ is installed,
+# it will also re-generate the Markdown files.
+
+
+@unittest.skipIf(
+    not have_pandas
+    or not have_pyarrow
+    or not have_numpy
+    or LooseVersion(np.__version__) < LooseVersion("2.0.0"),
+    pandas_requirement_message or pyarrow_requirement_message or numpy_requirement_message,
+)
+class PandasUDFReturnTypeTests(GoldenFileTestMixin, ReusedSQLTestCase):
+    @property
+    def prefix(self):
+        return "golden_pandas_udf_return_type_coercion"
+
+    @property
+    def test_data(self):
+        return [
+            [None, None],
+            [True, False],
+            list("ab"),
+            ["12", "34"],
+            [Decimal("1"), Decimal("2")],
+            [{"a": 1}, {"b": 2}],
+            np.arange(1, 3).astype("int8"),
+            np.arange(1, 3).astype("int16"),
+            np.arange(1, 3).astype("int32"),
+            np.arange(1, 3).astype("int64"),
+            np.arange(1, 3).astype("uint8"),
+            np.arange(1, 3).astype("uint16"),
+            np.arange(1, 3).astype("uint32"),
+            np.arange(1, 3).astype("uint64"),
+            np.arange(1, 3).astype("float16"),
+            np.arange(1, 3).astype("float32"),
+            np.arange(1, 3).astype("float64"),
+            # float128 is not supported on macOS
+            # np.arange(1, 3).astype("float128"),
+            np.arange(1, 3).astype("complex64"),
+            np.arange(1, 3).astype("complex128"),
+            [np.array([1, 2, 3], dtype=np.int32), np.array([1, 2, 3], dtype=np.int32)],
+            pd.date_range("19700101", periods=2).values,
+            # Krishiv: "US/Eastern" in Spark 4.2.0; the same zone by its canonical name (the legacy US/* links are
+            # not installed on every system, e.g. Ubuntu without tzdata-legacy).
+            pd.date_range("19700101", periods=2, tz="America/New_York").values,
+            [pd.Timedelta("1 day"), pd.Timedelta("2 days")],
+            pd.Categorical(["A", "B"]),
+            pd.DataFrame({"_1": [1, 2]}),
+        ]
+
+    @property
+    def test_types(self):
+        return [
+            BooleanType(),
+            ByteType(),
+            ShortType(),
+            IntegerType(),
+            LongType(),
+            StringType(),
+            DateType(),
+            TimestampType(),
+            FloatType(),
+            DoubleType(),
+            ArrayType(IntegerType()),
+            BinaryType(),
+            DecimalType(10, 0),
+            MapType(StringType(), IntegerType()),
+            StructType([StructField("_1", IntegerType())]),
+        ]
+
+    def test_str_repr(self):
+        self.assertEqual(
+            len(self.test_types),
+            len(set(self.repr_type(t) for t in self.test_types)),
+            "String representations of types should be different!",
+        )
+        self.assertEqual(
+            len(self.test_data),
+            len(set(self.repr_value(d) for d in self.test_data)),
+            "String representations of values should be different!",
+        )
+
+    def test_pandas_return_type_coercion_vanilla(self):
+        self._run_pandas_udf_return_type_coercion(
+            golden_file=f"{self.prefix}_base",
+            test_name="Pandas UDF",
+        )
+
+    def _run_pandas_udf_return_type_coercion(self, golden_file, test_name):
+        self._compare_or_generate_golden(golden_file, test_name)
+
+    def _compare_or_generate_golden(self, golden_file, test_name):
+        generating = self.is_generating_golden()
+
+        golden_csv = os.path.join(os.path.dirname(__file__), f"{golden_file}.csv")
+        golden_md = os.path.join(os.path.dirname(__file__), f"{golden_file}.md")
+
+        golden = None
+        if not generating:
+            golden = self.load_golden_csv(golden_csv)
+
+        def work(arg):
+            spark_type, value = arg
+            str_t = self.repr_type(spark_type)
+            str_v = self.repr_value(value)
+
+            try:
+
+                @pandas_udf(returnType=spark_type)
+                def pandas_udf_func(series: pd.Series) -> pd.Series:
+                    assert len(series) == 2
+                    if isinstance(value, pd.DataFrame):
+                        return value
+                    else:
+                        return pd.Series(value)
+
+                rows = (
+                    self.spark.range(0, 2, 1, 1)
+                    .select(pandas_udf_func("id").alias("result"))
+                    .collect()
+                )
+                result = repr([row[0] for row in rows])
+                result = result[:40]
+            except Exception:
+                result = "X"
+
+            # Clean up exception message to remove newlines and extra whitespace
+            result = self.clean_result(result)
+
+            err = None
+            if not generating:
+                expected = golden.loc[str_t, str_v]
+                if expected != result:
+                    err = f"{str_v} => {spark_type} expects {expected} but got {result}"
+
+            return (str_t, str_v, result, err)
+
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            results = list(
+                executor.map(
+                    work,
+                    itertools.product(self.test_types, self.test_data),
+                )
+            )
+
+        if not generating:
+            errs = []
+            for _, _, _, err in results:
+                if err is not None:
+                    errs.append(err)
+            self.assertTrue(len(errs) == 0, "\n" + "\n".join(errs) + "\n")
+
+        else:
+            index = pd.Index(
+                [self.repr_type(t) for t in self.test_types],
+                name="SQL Type \\  Value@Type",
+            )
+            new_golden = pd.DataFrame({}, index=index)
+            for v in self.test_data:
+                str_v = self.repr_value(v)
+                new_golden[str_v] = "?"
+
+            for str_t, str_v, res, _ in results:
+                new_golden.loc[str_t, str_v] = res
+
+            self.save_golden(new_golden, golden_csv, golden_md)
+
+
