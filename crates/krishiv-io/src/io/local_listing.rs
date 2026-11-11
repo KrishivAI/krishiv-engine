@@ -294,8 +294,11 @@ async fn run_blocking<T: Send + 'static>(
 }
 
 impl SettledLocalFileSystem {
-    /// The answer to a `get_opts` that asks for one bounded range with at most a modified-since
-    /// condition that holds, or `None` when the inner store should answer.
+    /// The answer to a `get_opts` that asks for one non-empty bounded range, or `None` when the
+    /// inner store should answer (a head, a version, a suffix or open range, a failed
+    /// precondition, a range past the end, any I/O error). The file is opened once: the
+    /// metadata the preconditions are checked against and the bytes come from the same
+    /// descriptor, so a file renamed over in between cannot give old metadata with new bytes.
     async fn bounded_range_fast_path(
         &self,
         location: &Path,
@@ -305,33 +308,35 @@ impl SettledLocalFileSystem {
         let Some(GetRange::Bounded(range)) = options.range.clone() else {
             return None;
         };
-        if options.head
-            || options.version.is_some()
-            || options.if_match.is_some()
-            || options.if_none_match.is_some()
-            || options.if_modified_since.is_some_and(|t| t >= Utc::now())
-        {
+        if options.head || options.version.is_some() || range.start >= range.end {
             return None;
         }
         let path = self.inner.path_to_filesystem(location).ok()?;
-        let meta = object_store::ObjectStoreExt::head(&self.inner, location)
-            .await
-            .ok()?;
-        if options
-            .if_unmodified_since
-            .is_some_and(|t| meta.last_modified > t)
-            || options
-                .if_modified_since
-                .is_some_and(|t| meta.last_modified <= t)
-            || range.end > meta.size
-            || range.start > range.end
-        {
-            return None;
-        }
-        let wanted = vec![range.clone()];
-        let bytes = run_blocking(move || read_ranges_uninit(&path, &wanted))
-            .await?
-            .pop()?;
+        let location = location.clone();
+        let options = options.clone();
+        let wanted = range.clone();
+        let (meta, bytes) = run_blocking(move || {
+            use std::io::{Read, Seek, SeekFrom};
+            let mut file = std::fs::File::open(&path).ok()?;
+            let md = file.metadata().ok()?;
+            if !md.is_file() {
+                return None;
+            }
+            let meta = meta_of(location, &md);
+            options.check_preconditions(&meta).ok()?;
+            if wanted.end > meta.size {
+                return None;
+            }
+            let len = usize::try_from(wanted.end - wanted.start).ok()?;
+            file.seek(SeekFrom::Start(wanted.start)).ok()?;
+            let mut buf = Vec::with_capacity(len);
+            (&mut file)
+                .take(wanted.end - wanted.start)
+                .read_to_end(&mut buf)
+                .ok()?;
+            (buf.len() == len).then(|| (meta, bytes::Bytes::from(buf)))
+        })
+        .await?;
         Some(GetResult {
             payload: GetResultPayload::Stream(
                 futures::stream::once(std::future::ready(Ok(bytes))).boxed(),
@@ -366,8 +371,8 @@ impl ObjectStore for SettledLocalFileSystem {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> StoreResult<GetResult> {
         // A scan reads its bytes through here (`IoContext::get_one`, the block cache), not
         // through `get_ranges`: serve a plain bounded range from a buffer that is never zeroed.
-        // Anything else (a precondition on the tag, a suffix or open range, a head, a version, a
-        // range past the end, an I/O error) goes to the inner store, which answers it as always.
+        // Anything else (a failed precondition, a suffix or open range, an empty range, a head, a
+        // version, a range past the end, an I/O error) goes to the inner store, which answers it as always.
         if let Some(r) = self.bounded_range_fast_path(location, &options).await {
             return Ok(r);
         }
@@ -881,6 +886,42 @@ mod range_read_tests {
         let theirs = LocalFileSystem::new().get_opts(&loc, past).await.unwrap();
         assert_eq!(ours.range, theirs.range);
         assert_eq!(ours.bytes().await.unwrap(), theirs.bytes().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_scan_shaped_read_with_if_match_takes_the_fast_path_and_checks_the_tag() {
+        use object_store::ObjectStoreExt;
+        let (_tmp, loc, data) = range_file();
+        let store = SettledLocalFileSystem::new();
+        // What `IoContext::get_one` sends: a bounded range pinned by the listing's ETag.
+        let tag = store.head(&loc).await.unwrap().e_tag;
+        let pinned = GetOptions {
+            range: Some((5..9).into()),
+            if_match: tag,
+            ..Default::default()
+        };
+        let got = store
+            .bounded_range_fast_path(&loc, &pinned)
+            .await
+            .expect("an ETag-pinned bounded read is the scan's shape");
+        assert_eq!(got.meta.size, 256);
+        assert_eq!(&got.bytes().await.unwrap()[..], &data[5..9]);
+        // A tag that is not the file's is the inner store's precondition error.
+        let wrong = GetOptions {
+            if_match: Some("\"nope\"".to_owned()),
+            ..pinned.clone()
+        };
+        assert!(store.bounded_range_fast_path(&loc, &wrong).await.is_none());
+        assert!(matches!(
+            store.get_opts(&loc, wrong).await,
+            Err(object_store::Error::Precondition { .. })
+        ));
+        // An empty range is the inner store's answer, not an `Ok`.
+        let empty = GetOptions {
+            range: Some((4..4).into()),
+            ..Default::default()
+        };
+        assert!(store.bounded_range_fast_path(&loc, &empty).await.is_none());
     }
 
     #[test]
