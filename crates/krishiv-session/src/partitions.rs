@@ -1055,6 +1055,8 @@ impl Session {
             )));
         }
         let source = found.location.clone();
+        // The files leave the source directory and land in the target.
+        self.authorize_dir_for(&source, Privilege::Modify).await?;
         self.authorize_dir(&target).await?;
         // The log moves first, then the directory: a lost race or a failed commit changes nothing, and a crash in
         // between leaves the log one rename ahead of the files, which a rerun of the statement completes (the
@@ -1276,8 +1278,10 @@ impl Session {
                 p.location.display()
             )));
         }
+        // The files of each dropped partition are deleted.
         for p in &gone {
-            self.authorize_dir(&p.location).await?;
+            self.authorize_dir_for(&p.location, Privilege::Modify)
+                .await?;
         }
         let moves: Vec<(PathBuf, Option<PathBuf>)> =
             gone.iter().map(|p| (p.location.clone(), None)).collect();
@@ -1432,7 +1436,18 @@ impl Session {
         Ok(changed)
     }
 
+    /// `CREATE` on a partition directory the command makes or registers.
     async fn authorize_dir(&self, path: &Path) -> Result<(), KrishivError> {
+        self.authorize_dir_for(path, Privilege::Create).await
+    }
+
+    /// `privilege` on a partition directory: `CREATE` where the command makes or registers one, `MODIFY` where it
+    /// deletes or moves away the files in one (as TRUNCATE and INSERT ask of the paths they change).
+    async fn authorize_dir_for(
+        &self,
+        path: &Path,
+        privilege: Privilege,
+    ) -> Result<(), KrishivError> {
         let securable = Securable::Path(krishiv_common::secret::OptionValue::from_user(
             "path",
             path.display().to_string(),
@@ -1441,7 +1456,7 @@ impl Session {
             &*self.state.policy,
             &self.state.principal,
             &securable,
-            Privilege::Create,
+            privilege,
         )
         .await;
         crate::access::audit(self, StatementClass::Ddl, r)

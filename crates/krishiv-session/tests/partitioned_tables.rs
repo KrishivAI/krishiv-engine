@@ -883,6 +883,72 @@ fn add_partition_outside_the_policy_is_denied() {
     assert!(rows(&s, "SHOW PARTITIONS t").is_empty());
 }
 
+/// Denies `MODIFY` on any path with `p=locked` in it; allows everything else (table DDL, `CREATE` on paths).
+struct LockedPartition;
+
+impl krishiv_session::AccessPolicy for LockedPartition {
+    fn version(&self) -> krishiv_plan::analyzer::PolicyVersion {
+        krishiv_plan::analyzer::PolicyVersion(0)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a krishiv_session::Principal,
+        securable: &'a krishiv_session::Securable,
+        privilege: krishiv_session::Privilege,
+    ) -> krishiv_plan::analyzer::BoxFuture<'a, Result<krishiv_session::AccessDecision, KrishivError>>
+    {
+        let denied = privilege == krishiv_session::Privilege::Modify
+            && matches!(securable, krishiv_session::Securable::Path(p)
+                if p.as_plain().is_some_and(|t| t.contains("p=locked")));
+        Box::pin(std::future::ready(Ok(if denied {
+            krishiv_session::AccessDecision::Deny {
+                reason: "locked".to_owned(),
+            }
+        } else {
+            krishiv_session::AccessDecision::Allow
+        })))
+    }
+}
+
+/// DROP PARTITION deletes the partition's files and RENAME PARTITION moves them out of its directory: both need
+/// `MODIFY` on that directory, as TRUNCATE and INSERT need it on the paths they change. A denial changes nothing.
+#[test]
+fn drop_or_rename_of_a_partition_whose_path_is_not_modifiable_is_denied() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let warehouse = dir.path().join("wh");
+    std::fs::create_dir_all(&warehouse).unwrap();
+    let s = Session::builder()
+        .access_policy(Arc::new(LockedPartition))
+        .config("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+        .build()
+        .unwrap();
+    run(
+        &s,
+        "CREATE TABLE t (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "ALTER TABLE t ADD PARTITION (p = 'locked')");
+    run(&s, "ALTER TABLE t ADD PARTITION (p = 'free')");
+    let locked = warehouse.join("t").join("p=locked");
+    std::fs::write(locked.join("keep.txt"), "x").unwrap();
+    for sql in [
+        "ALTER TABLE t DROP PARTITION (p = 'locked')",
+        "ALTER TABLE t PARTITION (p = 'locked') RENAME TO PARTITION (p = 'moved')",
+    ] {
+        assert_eq!(class(&s, sql), "KRISHIV_INSUFFICIENT_PERMISSIONS", "{sql}");
+        assert!(locked.join("keep.txt").is_file(), "{sql}");
+        assert_eq!(
+            rows(&s, "SHOW PARTITIONS t"),
+            ["p=free", "p=locked"],
+            "{sql}"
+        );
+    }
+    // Other partitions are not affected.
+    run(&s, "ALTER TABLE t DROP PARTITION (p = 'free')");
+    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=locked"]);
+}
+
 #[test]
 fn msck_repair_of_a_denied_partition_directory_is_denied() {
     // MSCK REPAIR registers each partition at its directory, so it asks the policy as ADD PARTITION does.
