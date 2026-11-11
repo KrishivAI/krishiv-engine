@@ -230,9 +230,37 @@ pub(super) fn specs() -> Vec<Spec> {
         string,
     ));
     out.extend(scalar(
-        &["instr", "find_in_set"],
+        &["instr", "find_in_set", "__find_in_set_lcase"],
         &Inputs::Expects(vec![text.clone(), text.clone()]),
         int,
+    ));
+    // `locate` over `UTF8_LCASE` operands: the analyzer rewrites `instr`/`locate`/`position` to it.
+    out.extend(scalar(
+        &["__locate_lcase"],
+        &Inputs::Expects(vec![text.clone(), text.clone(), int_arg.clone()]),
+        locate_result,
+    ));
+    // The analyzer's rewrites of the collation-dependent calls over `UTF8_LCASE` and `_RTRIM`
+    // strings (collations unit 5c); `__trim_collated` takes the mode first.
+    out.extend(scalar(
+        &["__trim_collated"],
+        &Inputs::Expects(vec![int_arg.clone(), text.clone(), text.clone()]),
+        string,
+    ));
+    out.extend(scalar(
+        &["__replace_lcase", "__translate_lcase"],
+        &Inputs::Expects(vec![text.clone(), text.clone(), text.clone()]),
+        string,
+    ));
+    out.extend(scalar(
+        &["__split_part_lcase"],
+        &Inputs::Expects(vec![text.clone(), text.clone(), int_arg.clone()]),
+        nullable_string,
+    ));
+    out.extend(scalar(
+        &["__substring_index_lcase"],
+        &Inputs::Expects(vec![text.clone(), text.clone(), int_arg.clone()]),
+        string,
     ));
     out.extend(scalar(
         &["locate", "position"],
