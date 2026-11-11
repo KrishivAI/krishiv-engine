@@ -334,11 +334,48 @@ fn indeterminate_string_results_carry_the_null_collation() {
     );
     assert_eq!(
         class_of(&s, "select upper(concat(a, b)) from t1"),
+        ErrorClass::IndeterminateCollationInExpression
+    );
+    // Calls Spark carries the type through are not modelled yet.
+    assert_eq!(
+        class_of(&s, "select length(concat(a, b)) from t1"),
         ErrorClass::KrishivUnsupportedFeature
     );
+    // A schema may not hold the indeterminate type.
+    for sql in [
+        "create table ct using parquet as select rpad(a, 8, b) r from t1",
+        "create view cv as select concat(a, b) c from t1",
+        "create temporary view tv as select concat(a, b) c from t1",
+    ] {
+        assert_eq!(
+            class_of(&s, sql),
+            ErrorClass::IndeterminateCollationInSchema,
+            "{sql}"
+        );
+    }
+    // The run-time error fires only for a row with both operands (Spark's string functions ignore NULLs).
+    block_on(
+        block_on(s.sql("insert into t1 values(NULL, 'x'), ('y', NULL)"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(
+        value_of(
+            &s,
+            "select cast(count(split_part(a, b, 1)) as string) from t1 where a is null or b is null"
+        ),
+        "0"
+    );
+    let df = block_on(s.sql("select split_part(a, b, 1) from t1")).unwrap();
+    let e = block_on(df.collect()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::IndeterminateCollation);
     // `levenshtein` is not on Spark's indeterminate list: it just runs ('abc' to 'abcd').
     assert_eq!(
-        value_of(&s, "select cast(levenshtein(a, b) as string) from t1"),
+        value_of(
+            &s,
+            "select cast(levenshtein(a, b) as string) from t1 where length(a) = 3 and length(b) = 4"
+        ),
         "1"
     );
 }
@@ -499,6 +536,23 @@ fn array_functions_over_collated_strings_compare_keys() {
             "array_except({}, {})",
             arr(&["a", "B", "a"]),
             arr(&["b"])
+        )),
+        "[a]"
+    );
+    // `containsNull` of the result: a NULL in the second operand shows in a union, not an intersect.
+    assert_eq!(
+        text(format!(
+            "array_union({}, array({}, NULL))",
+            arr(&["a"]),
+            l("A")
+        )),
+        "[a, null]"
+    );
+    assert_eq!(
+        text(format!(
+            "array_intersect({}, array({}, NULL))",
+            arr(&["a"]),
+            l("A")
         )),
         "[a]"
     );

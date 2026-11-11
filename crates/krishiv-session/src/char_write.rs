@@ -87,6 +87,31 @@ pub(crate) fn output_columns(a: &AnalyzedPlan, nullable: Option<bool>) -> Vec<St
         .collect()
 }
 
+/// A table or view schema may not hold Spark's indeterminate string type
+/// (`INDETERMINATE_COLLATION_IN_SCHEMA`).
+///
+/// # Errors
+/// The class above, naming the columns.
+pub(crate) fn refuse_indeterminate_schema(a: &AnalyzedPlan) -> Result<(), KrishivError> {
+    let bad: Vec<String> = a
+        .output
+        .iter()
+        .filter(|c| {
+            c.data_type.any_type(
+                &|x| matches!(x, krishiv_types::DataType::CollatedString(k) if k.is_indeterminate()),
+            )
+        })
+        .map(|c| format!("`{}`", c.name))
+        .collect();
+    if bad.is_empty() {
+        return Ok(());
+    }
+    Err(krishiv_common::error::IndeterminateCollationInSchema {
+        column_paths: bad.join(", "),
+    }
+    .into())
+}
+
 /// A failed check as `EXCEED_LIMIT_LENGTH`; any other error as it is.
 pub(crate) fn map_error(e: KrishivError) -> KrishivError {
     if e.error_class() != ErrorClass::UserRaisedException {

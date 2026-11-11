@@ -172,8 +172,13 @@ fn raise_error() -> Binding {
 /// `__indeterminate_collation(a, b)`: always `INDETERMINATE_COLLATION` (Spark raises it while
 /// evaluating the first row of a call whose operands have no one collation).
 fn indeterminate_collation() -> Binding {
-    Binding::new(DataType::Null, move |_: &Inputs<'_>| {
-        Err(krishiv_common::error::IndeterminateCollation {}.into())
+    Binding::new(DataType::Null, move |x: &Inputs<'_>| {
+        // The string functions ignore NULL inputs: only a row with both operands raises.
+        let (a, b) = (x.column(0)?, x.column(1)?);
+        if (0..x.rows()).any(|i| a.is_valid(i) && b.is_valid(i)) {
+            return Err(krishiv_common::error::IndeterminateCollation {}.into());
+        }
+        Ok(arrow_array::new_null_array(&DataType::Null, x.rows()))
     })
 }
 

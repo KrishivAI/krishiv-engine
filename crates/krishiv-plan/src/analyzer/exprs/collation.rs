@@ -611,6 +611,15 @@ impl Resolver<'_> {
                 matches!(&k.ty.data_type, Some(DataType::CollatedString(c)) if c.is_indeterminate())
             })
         {
+            if FAILS_INDETERMINATE.contains(&name.as_str()) {
+                let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
+                return Err(AnalysisError::new(
+                    IndeterminateCollationInExpression {
+                        expr: format!("\"{}\"", pretty(&shown, self.ctx.conf.session_zone)),
+                    },
+                    e.origin,
+                ));
+            }
             return Err(unsupported("an indeterminate string operand", e.origin));
         }
         if INTERNAL.contains(&name.as_str()) {

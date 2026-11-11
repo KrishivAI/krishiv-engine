@@ -87,7 +87,11 @@ fn key_at(v: &arrow_array::BinaryViewArray, i: usize) -> Option<&[u8]> {
 /// `__collation_array_set(op, a, keys(a), b, keys(b))`: `array_distinct`, `array_union`,
 /// `array_intersect` or `array_except` where elements are equal when their keys are. The result
 /// keeps the original elements of the first array that has them, in Spark's order.
-fn array_set(op: &str, x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
+fn array_set(
+    op: &str,
+    field: &Arc<arrow_schema::Field>,
+    x: &Inputs<'_>,
+) -> Result<ArrayRef, KrishivError> {
     let bad = || internal("a collation array set over a non-list or non-string key".to_owned());
     let (a, ka, b, kb) = (x.column(1)?, x.column(2)?, x.column(3)?, x.column(4)?);
     let (la, lka, lb, lkb) = (
@@ -145,9 +149,6 @@ fn array_set(op: &str, x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
         arrow_select::interleave::interleave(&[la.values().as_ref(), lb.values().as_ref()], &picks)
             .map_err(|e| internal(e.to_string()))?
     };
-    let DataType::List(field) = a.data_type() else {
-        return Err(bad());
-    };
     let nulls = valid.iter().any(|v| !v).then(|| NullBuffer::from(valid));
     Ok(Arc::new(ListArray::new(
         Arc::clone(field),
@@ -195,8 +196,30 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 return Err(bad_types(listed, args));
             }
             let op = op.value(0).to_owned();
-            Ok(Binding::new(a.data_type(), move |x: &Inputs<'_>| {
-                array_set(&op, x)
+            let (DataType::List(fa), DataType::List(fb)) = (a.data_type(), args[3].data_type())
+            else {
+                return Err(bad_types(listed, args));
+            };
+            if fa.data_type() != fb.data_type() {
+                return Err(internal(format!(
+                    "a collation array set over {} and {}",
+                    fa.data_type(),
+                    fb.data_type()
+                )));
+            }
+            let nullable = match op.as_str() {
+                "union" => fa.is_nullable() || fb.is_nullable(),
+                "intersect" => fa.is_nullable() && fb.is_nullable(),
+                _ => fa.is_nullable(),
+            };
+            let field = Arc::new(arrow_schema::Field::new(
+                fa.name(),
+                fa.data_type().clone(),
+                nullable,
+            ));
+            let ty = DataType::List(Arc::clone(&field));
+            Ok(Binding::new(ty, move |x: &Inputs<'_>| {
+                array_set(&op, &field, x)
             }))
         }
         _ => Err(bad_types(listed, args)),

@@ -17,7 +17,7 @@ use krishiv_types::{DataType, MapType};
 
 use super::defs::{Spec, exact, scalar};
 use super::hof::{call_sql, ordinal, quoted};
-use crate::signature::{ArgType, CallTypes, InputBuilder, InputType, Inputs};
+use crate::signature::{ArgType, CallTypes, Constant, InputBuilder, InputType, Inputs};
 
 fn unexpected(name: &str, c: &CallTypes<'_>, index: usize, required: &str) -> KrishivError {
     DatatypeMismatchUnexpectedInputType {
@@ -209,10 +209,22 @@ fn collation_pick_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 /// `__collation_array_set`: the type of its second argument (the array), NULL-able.
 fn collation_array_set_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    Ok(ArgType::new(
-        c.data_type(1).cloned().unwrap_or(DataType::Null),
-        true,
-    ))
+    let t = c.data_type(1).cloned().unwrap_or(DataType::Null);
+    let t = match (&t, c.data_type(3), c.constant(0)) {
+        (DataType::Array(a), Some(DataType::Array(b)), Some(Constant::String(op))) => {
+            let contains_null = match op.as_str() {
+                "union" => a.contains_null() || b.contains_null(),
+                "intersect" => a.contains_null() && b.contains_null(),
+                _ => a.contains_null(),
+            };
+            DataType::Array(std::sync::Arc::new(krishiv_types::ArrayType::new(
+                a.element_type().clone(),
+                contains_null,
+            )))
+        }
+        _ => t,
+    };
+    Ok(ArgType::new(t, true))
 }
 
 /// The signatures of this family.
