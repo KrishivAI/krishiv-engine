@@ -238,6 +238,7 @@ fn inconsistent_plans_are_internal_errors() {
                 options: KeyFilterOptions::default(),
             }],
             distribution: JoinDistribution::Broadcast,
+            select: None,
         })
     };
     let declared = ScanRuntimeFilter {

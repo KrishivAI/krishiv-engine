@@ -12,7 +12,8 @@ use krishiv_common::error::KrishivError;
 use krishiv_exec::planner::FileTable;
 use krishiv_plan::{LogicalPlan, ReadSource};
 
-use super::{FileScans, FilesKey, QueryCatalog, TempTable, collect_scans, run_on};
+use super::scans::collect_scans;
+use super::{FileScans, FilesKey, QueryCatalog, TempTable, run_on};
 
 /// A scan of files in an analyzed plan: what it reads, the table's columns,
 /// the scan's column ids with their names, and a permanent table's

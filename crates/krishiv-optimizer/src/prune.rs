@@ -31,20 +31,35 @@ pub(crate) fn prune(root: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     pass.node(0)
 }
 
+/// What the plan reads of each node of `root` (by address, valid while
+/// `root` is alive): the columns pruning would keep at the node's output,
+/// the union over its consumers. Join ordering reads it to cost a tree by
+/// the columns read above it (`krishiv.optimizer.joinCost=bytes`).
+pub(crate) fn requirements(root: &Arc<LogicalPlan>) -> HashMap<*const LogicalPlan, Attrs> {
+    let graph = Graph::new(root);
+    let req = graph.requirements();
+    graph
+        .nodes
+        .iter()
+        .zip(req)
+        .map(|(n, r)| (Arc::as_ptr(n), r))
+        .collect()
+}
+
 /// An edge to a child relation, with what the parent reads of it (`None`:
 /// everything).
 type Demand = (usize, Option<Attrs>);
 
 struct Graph {
     nodes: Vec<Arc<LogicalPlan>>,
-    index: HashMap<*const LogicalPlan, usize>,
+    index: crate::expr::AddrMap<LogicalPlan, usize>,
 }
 
 impl Graph {
     fn new(root: &Arc<LogicalPlan>) -> Self {
         let mut g = Self {
             nodes: Vec::new(),
-            index: HashMap::new(),
+            index: Default::default(),
         };
         let mut stack = vec![Arc::clone(root)];
         while let Some(p) = stack.pop() {
@@ -82,7 +97,7 @@ impl Graph {
                 projections,
                 output,
             } => {
-                let mut need = Attrs::new();
+                let mut need = Attrs::default();
                 for j in expand_keep(output, req) {
                     projections
                         .iter()
@@ -98,7 +113,7 @@ impl Graph {
             // Every state column stays: an aggregate above reads a call's
             // states together, or not at all.
             PlanNode::PartialAggregate { input, .. } => {
-                let mut need = Attrs::new();
+                let mut need = Attrs::default();
                 p.for_each_expr(&mut |e| references_into(e, &mut need));
                 child(input, Some(need));
             }
@@ -143,7 +158,7 @@ impl Graph {
         }
         subqueries(p, &mut |kind, s| {
             // `EXISTS` reads no column of its plan.
-            let demand = matches!(kind, SubqueryKind::Exists).then(Attrs::new);
+            let demand = matches!(kind, SubqueryKind::Exists).then(Attrs::default);
             out.push((self.id(s), demand));
         });
         out
@@ -153,14 +168,14 @@ impl Graph {
     /// node sees the union of its consumers' demands.
     fn requirements(&self) -> Vec<Attrs> {
         let n = self.nodes.len();
-        let empty = Attrs::new();
+        let empty = Attrs::default();
         let mut indegree = vec![0_usize; n];
         for i in 0..n {
             for (c, _) in self.demands(i, &empty) {
                 indegree[c] += 1;
             }
         }
-        let mut req = vec![Attrs::new(); n];
+        let mut req = vec![Attrs::default(); n];
         if let Some(root) = self.nodes.first() {
             req[0] = output_ids(root);
         }
@@ -393,6 +408,11 @@ fn narrow(input: &Arc<LogicalPlan>, need: &Attrs) -> Arc<LogicalPlan> {
     if exprs.is_empty() {
         exprs.extend(out.first().map(column));
     }
+    // Nothing read of a one-column input: the projection would keep it whole,
+    // and tidying would collapse it again (a cycle that never settles).
+    if exprs.len() == out.len() {
+        return Arc::clone(input);
+    }
     Arc::new(LogicalPlan::new(PlanNode::Project {
         input: Arc::clone(input),
         exprs,
@@ -467,7 +487,7 @@ fn expand_keep(output: &[BoundColumn], req: &Attrs) -> Vec<usize> {
 }
 
 fn refs(exprs: &[Arc<Expr>]) -> Attrs {
-    let mut out = Attrs::new();
+    let mut out = Attrs::default();
     exprs.iter().for_each(|e| references_into(e, &mut out));
     out
 }

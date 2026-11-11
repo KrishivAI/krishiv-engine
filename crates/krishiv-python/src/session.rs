@@ -28,6 +28,8 @@ fn is_arrow_table(name: &str) -> bool {
 #[derive(Debug)]
 pub struct PySession {
     inner: Session,
+    /// The session's Python UDF runtime, made by the first registration.
+    udfs: std::sync::OnceLock<std::sync::Arc<crate::udf::runtime::PyUdfRuntime>>,
 }
 
 #[pymethods]
@@ -41,7 +43,16 @@ impl PySession {
             builder = builder.config(key, value);
         }
         let inner = builder.build().map_err(|e| to_py(py, &e))?;
-        Ok(Self { inner })
+        let session = Self {
+            inner,
+            udfs: std::sync::OnceLock::new(),
+        };
+        // Every session runs unregistered UDFs (a DataFrame-side `udf(...)`
+        // registers in no session), so it holds its runtime from the start;
+        // the pool itself starts with the first call. After the exit hook
+        // there is none (registration then raises, as before).
+        let _ = session.udf_runtime(py);
+        Ok(session)
     }
 
     /// Runs the SQL query `query` through analysis; its DataFrame.
@@ -49,6 +60,45 @@ impl PySession {
         let (session, owned) = (self.inner.clone(), query.to_owned());
         let inner = block_on_sql(py, query, async move { session.sql(&owned).await })?;
         Ok(PyDataFrame::new(inner))
+    }
+
+    /// Registers a Python UDF (P2-T059): `wrapper` takes one
+    /// `pyarrow.Array` per argument and returns one `pyarrow.Array` of
+    /// `return_type` (a Spark DDL type) with as many values. The
+    /// registration version, which plans name the UDF by.
+    #[pyo3(signature = (name, eval_type, return_type, deterministic, thread_safe, wrapper))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the fields of one registration, as Spark's UDF has them"
+    )]
+    fn register_python_udf(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        eval_type: i32,
+        return_type: &str,
+        deterministic: bool,
+        thread_safe: bool,
+        wrapper: Py<PyAny>,
+    ) -> PyResult<u32> {
+        let eval_type = krishiv_plan::PythonEvalType::from_code(eval_type).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "unsupported Python UDF eval type {eval_type}"
+            ))
+        })?;
+        let return_type = krishiv_types::parse_data_type(return_type).map_err(|e| to_py(py, &e))?;
+        let runtime = self.udf_runtime(py)?;
+        let entry = self
+            .inner
+            .register_python_udf(krishiv_session::PythonUdfDef {
+                name: name.to_owned(),
+                eval_type,
+                return_type,
+                deterministic,
+                thread_safe,
+            });
+        runtime.insert(entry.def.name.clone(), entry.version, wrapper, thread_safe);
+        Ok(entry.version)
     }
 
     fn table(&self, name: &str) -> PyDataFrame {
@@ -197,4 +247,35 @@ fn metric_dict(py: Python<'_>, d: &krishiv_session::MetricDict) -> PyResult<Py<P
         out.set_item("sum", sum)?;
     }
     Ok(out.into_any().unbind())
+}
+
+impl PySession {
+    /// The session's Python UDF runtime, made (and given to the session) on
+    /// first use, its calls on the process's pool.
+    fn udf_runtime(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<std::sync::Arc<crate::udf::runtime::PyUdfRuntime>> {
+        if let Some(r) = self.udfs.get() {
+            return Ok(std::sync::Arc::clone(r));
+        }
+        let threads = self
+            .inner
+            .conf()
+            .get("krishiv.python.udf.threads")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+        let executor_threads =
+            krishiv_exec::Executor::parallelism(self.inner.runtime().executor().as_ref());
+        let size = crate::udf::pool_size(py, threads, executor_threads)?;
+        let made = std::sync::Arc::new(crate::udf::runtime::PyUdfRuntime::new(
+            size,
+            self.inner.conf(),
+        ));
+        let runtime = std::sync::Arc::clone(self.udfs.get_or_init(|| made));
+        self.inner
+            .set_python_udf_runtime(std::sync::Arc::clone(&runtime)
+                as std::sync::Arc<dyn krishiv_exec::python_eval::UdfRuntime>);
+        Ok(runtime)
+    }
 }

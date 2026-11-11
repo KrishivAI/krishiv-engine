@@ -169,13 +169,13 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 20 };
+        let kinds = if depth == 0 { 5 } else { 21 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
                 name: self.many(1, 2, Gen::name),
                 plan_id: self.plan_ref(),
-                by_identifier: false,
+                by_identifier: self.flag(),
             }),
             1 => ExprNode::Literal(self.literal()),
             2 => ExprNode::Star(Star {
@@ -312,6 +312,12 @@ impl Gen<'_> {
                 .unwrap(),
                 name: self.name(),
             },
+            20 => ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi: self.flag(),
+                expr: Arc::new(self.expr(d)),
+                data_type: self.data_type(),
+                nullable: self.flag(),
+            }),
             19 => ExprNode::StoredField {
                 expr: Arc::new(self.expr(d)),
                 comment: self.flag().then(|| self.name()),
@@ -954,6 +960,17 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                         name: name.clone(),
                         version: version.wrapping_add(1),
                     },
+                    FunctionId::PythonUdf {
+                        name,
+                        version,
+                        eval_type,
+                        thread_safe,
+                    } => FunctionId::PythonUdf {
+                        name: name.clone(),
+                        version: version.wrapping_add(1),
+                        eval_type: *eval_type,
+                        thread_safe: *thread_safe,
+                    },
                 };
                 site!(w, *id = other);
                 site!(w, flip(kind, FunctionKind::Scalar, FunctionKind::Window));
@@ -962,6 +979,16 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                 m_type(data_type, w) || m_exprs(args, w) || m_filter(filter, w)
             }
             ResolvedExpr::Alias { expr, output } => m_bound(output, w) || m_expr(expr, w),
+            ResolvedExpr::EvalMode {
+                ansi,
+                expr,
+                data_type,
+                nullable,
+            } => {
+                site!(w, *ansi = !*ansi);
+                site!(w, *nullable = !*nullable);
+                m_type(data_type, w) || m_expr(expr, w)
+            }
             ResolvedExpr::StateInput { columns, raw_type } => {
                 m_exprs(columns, w) || m_type(raw_type, w)
             }

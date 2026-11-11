@@ -1325,3 +1325,101 @@ fn a_lambda_variable_takes_a_field_in_a_function_body() {
     );
     assert!(format!("{e:?}").contains("WithoutSuggestion"), "{e:?}");
 }
+
+/// T184: a SQL function body evaluates in the ANSI mode it was created under, whatever the
+/// caller's mode is (the arguments keep the caller's).
+#[test]
+fn a_body_evaluates_in_the_ansi_mode_it_was_created_under() {
+    let s = session();
+    ok(&s, "SET spark.sql.ansi.enabled=true");
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION on_div(x INT) RETURNS DOUBLE RETURN 1 / x",
+    );
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION on_arg(x INT) RETURNS INT RETURN x + 1",
+    );
+    ok(&s, "SET spark.sql.ansi.enabled=false");
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION off_div(x INT) RETURNS DOUBLE RETURN 1 / x",
+    );
+    // Created under ANSI, called without it: the body still raises.
+    let e = fails(&s, "SELECT on_div(0)");
+    assert_eq!(class_and_params(&e).0, "DIVIDE_BY_ZERO");
+    // Created without ANSI, called under it: the body yields NULL.
+    ok(&s, "SET spark.sql.ansi.enabled=true");
+    assert_eq!(ok(&s, "SELECT off_div(0)"), vec!["NULL".to_owned()]);
+    // An argument keeps the caller's mode: `1 / 0` raises under ANSI even in a lenient body.
+    let e = fails(&s, "SELECT off_div(1 / 0)");
+    assert_eq!(class_and_params(&e).0, "DIVIDE_BY_ZERO");
+    // And the other way round: a lenient caller's `1 / 0` argument is NULL in a strict body.
+    ok(&s, "SET spark.sql.ansi.enabled=false");
+    assert_eq!(ok(&s, "SELECT on_arg(1 / 0)"), vec!["NULL".to_owned()]);
+    // Over columns, in a filter: the body's mode decides whether the row raises.
+    let e = fails(&s, "SELECT id FROM people WHERE on_div(id - 1) > 0");
+    assert_eq!(class_and_params(&e).0, "DIVIDE_BY_ZERO");
+    // A table function body follows the same rule, in its projection and its filter.
+    ok(&s, "SET spark.sql.ansi.enabled=true");
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION on_tab(x INT) RETURNS TABLE (a DOUBLE) RETURN SELECT 1 / x",
+    );
+    ok(&s, "SET spark.sql.ansi.enabled=false");
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION off_tab(x INT) RETURNS TABLE (a DOUBLE) RETURN SELECT 1 / x",
+    );
+    let e = fails(&s, "SELECT * FROM on_tab(0)");
+    assert_eq!(class_and_params(&e).0, "DIVIDE_BY_ZERO");
+    ok(&s, "SET spark.sql.ansi.enabled=true");
+    assert_eq!(ok(&s, "SELECT * FROM off_tab(0)"), vec!["NULL".to_owned()]);
+}
+
+/// T184 review B1-B3: a pinned body is not mixed with the query's mode by common
+/// subexpression elimination, grouping by a flipped call works, and an expression computed over
+/// an aggregate argument keeps the caller's mode.
+#[test]
+fn pinned_bodies_survive_the_optimizer_and_grouping() {
+    let s = session();
+    ok(&s, "SET spark.sql.ansi.enabled=true");
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION on_add(x INT) RETURNS INT RETURN x + 1",
+    );
+    ok(&s, "SET spark.sql.ansi.enabled=false");
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION off_add(x INT) RETURNS INT RETURN x + 1",
+    );
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION off_div2(x INT) RETURNS DOUBLE RETURN 1 / x",
+    );
+    // A plain INT column holding the maximum: the body's `x + 1` and the caller's `z + 1` are
+    // the same expression, which common subexpression elimination would share.
+    let schema = Arc::new(Schema::new(vec![Field::new("z", ArrowType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![i32::MAX]))],
+    )
+    .unwrap();
+    s.register_batches("big", schema, vec![batch]).unwrap();
+    // B1, lenient caller: the strict body raises although the caller's own `z + 1` wraps.
+    let e = fails(&s, "SELECT on_add(z), z + 1 FROM big");
+    assert_eq!(class_and_params(&e).0, "ARITHMETIC_OVERFLOW");
+    // B1, strict caller: two equal calls of a lenient body wrap, they do not raise.
+    ok(&s, "SET spark.sql.ansi.enabled=true");
+    let rows = ok(&s, "SELECT z, off_add(z), off_add(z) FROM big");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    // B2: grouping by a call whose body runs in the other mode.
+    let rows = ok(&s, "SELECT off_div2(id) FROM people GROUP BY off_div2(id)");
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    // B3: an expression over an aggregate in the argument keeps the caller's (strict) mode.
+    let e = fails(
+        &s,
+        "SELECT off_add(cast(max(0 * id + 2147483647) AS INT) + 1) FROM people",
+    );
+    assert_eq!(class_and_params(&e).0, "ARITHMETIC_OVERFLOW");
+}

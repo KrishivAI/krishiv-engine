@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `query_registry` (ADR 0044 S4): two per-query registries on one process-wide `IoScheduler`,
 //! with different credential sources for the same table, each read with their own credentials;
-//! dropping one unregisters its scoped ids and leaves the other working. Runs against a
+//! both share one HTTP client; dropping one unregisters its scoped ids and leaves the other working. Runs against a
 //! loopback S3 stand-in that answers 404 and records each request's `Authorization` header.
 //! `krishiv.io.credentials.refreshSkew` is read from the config.
 #![cfg(feature = "cloud")]
@@ -95,8 +95,18 @@ async fn two_queries_on_one_scheduler_read_with_their_own_credentials() {
 
     let url = "s3://b/warehouse/t/f.parquet";
     let (id_one, key, _) = register(&sched, &one, url).unwrap();
+    let clients = sched.http_clients().len();
+    assert!(
+        clients >= 1,
+        "the first query's store built a shared client"
+    );
     let (id_two, _, _) = register(&sched, &two, url).unwrap();
     assert_ne!(id_one.key(), id_two.key(), "one scheduler entry per query");
+    assert_eq!(
+        sched.http_clients().len(),
+        clients,
+        "the second query's store reuses the first's HTTP client"
+    );
     let io = sched.context();
     assert!(io.head(&id_one, &key).await.unwrap().is_none());
     assert!(io.head(&id_two, &key).await.unwrap().is_none());

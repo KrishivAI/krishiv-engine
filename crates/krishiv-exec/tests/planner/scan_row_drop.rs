@@ -18,12 +18,14 @@
 //! the scan without them, over generated predicates: same rows or the
 //! same error.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringViewArray};
 use arrow_schema::{DataType, Field, Schema};
 use krishiv_common::error::{ErrorClass, KrishivError};
+use krishiv_exec::physical::PhysNode;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{FileFormat as _, FormatOptions};
 use krishiv_memory::{MemoryConfig, TreePool};
@@ -163,18 +165,66 @@ fn run(t: &Tpch, q: &str) -> (Result<Vec<String>, KrishivError>, u64) {
         ..MemoryConfig::default()
     });
     let (out, query) = super::run_in(&plan, &root);
-    let scanned = query
-        .metrics()
-        .operators
+    let ops = &query.metrics().operators;
+    // A scan's runtime-filter row stage under a hash probe runs in the
+    // probe (design P2-E3 U2): a scan the plan hands its stage to a probe
+    // reports the rows before the stage, and the rows it kept are out -
+    // dropped.
+    let handed = handed_scans(&plan);
+    let scanned = ops
         .values()
         .filter(|e| e.name == "FileScan")
-        .map(|e| e.metrics.rows_out)
-        .sum();
+        .map(|e| {
+            let extra = |metric: &str| {
+                e.extra
+                    .iter()
+                    .filter(|(name, _)| name.as_ref() == metric)
+                    .map(|(_, v)| v.value().unwrap_or(0))
+                    .sum::<u64>()
+            };
+            let out = e.metrics.rows_out;
+            if e.node.is_some_and(|n| handed.contains(&n)) {
+                out - extra("runtime_filter_rows_dropped")
+            } else {
+                out
+            }
+        })
+        .sum::<u64>();
     let mut out = out.map(|b| rows(&b));
     if let Ok(r) = out.as_mut() {
         r.sort_unstable();
     }
     (out, scanned)
+}
+
+/// The node ids (pre-order over the plan's roots, as `EXPLAIN ANALYZE`
+/// numbers them) of the scans whose row stage a hash probe evaluates
+/// (`HashJoin.select.row_stage`).
+fn handed_scans(plan: &Runnable) -> HashSet<u32> {
+    let mut handed = HashSet::new();
+    let mut scans = Vec::new();
+    let mut next = 0_u32;
+    for root in plan.roots() {
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            match n {
+                PhysNode::HashJoin(j) => {
+                    if let Some(r) = j.select.as_ref().and_then(|s| s.row_stage.as_ref()) {
+                        handed.insert(r.scan);
+                    }
+                }
+                PhysNode::Scan(s) => scans.push((next, s.id)),
+                _ => {}
+            }
+            next += 1;
+            stack.extend(n.children().into_iter().rev());
+        }
+    }
+    scans
+        .into_iter()
+        .filter(|(_, id)| handed.contains(id))
+        .map(|(n, _)| n)
+        .collect()
 }
 
 fn cast_error(r: &Result<Vec<String>, KrishivError>, value: &str, q: &str) {

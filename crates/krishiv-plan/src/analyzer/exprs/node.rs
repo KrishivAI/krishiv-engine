@@ -952,6 +952,17 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 5)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "overlay" && n == 3 {
+                    // `overlay(input, replace, pos)` is `overlay(input, replace, pos, -1)`: Spark's
+                    // constructor writes the default length into the call, so names show it.
+                    owned = kids.clone();
+                    owned.push(default_argument(
+                        Literal::Integer(-1),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    (&owned[..], 4)
                 } else if is_builtin_entry(&entry)
                     && matches!(entry.id.name(), "st_geomfromwkb" | "st_asbinary")
                     && n == 1
@@ -1716,7 +1727,12 @@ impl Resolver<'_> {
                     ResolvedExpr::Alias { output, .. } => column(output),
                     ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
                     ResolvedExpr::StateInput { raw_type, .. } => arg_type(raw_type.clone(), true),
-                    ResolvedExpr::Field {
+                    ResolvedExpr::EvalMode {
+                        data_type,
+                        nullable,
+                        ..
+                    }
+                    | ResolvedExpr::Field {
                         data_type,
                         nullable,
                         ..

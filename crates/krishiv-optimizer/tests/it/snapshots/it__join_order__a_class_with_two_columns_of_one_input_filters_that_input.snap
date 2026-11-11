@@ -4,8 +4,9 @@ expression: text
 ---
 Project [b#1, b#6]
 +- Join Inner, (a#0 == x#8)
-   :- Scan spark_catalog.default.t [a#0, b#1] (shared #1)
+   :- Filter isnotnull(a#0)
+   :  +- Scan spark_catalog.default.t [a#0, b#1] (shared #1)
    +- Shift +5
       +- Project [a#0 AS x#3, b#1]
-         +- Filter (a#0 == a#0)
+         +- Filter (isnotnull(a#0) and (a#0 == a#0))
             +- Shared #1, printed above

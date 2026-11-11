@@ -231,7 +231,8 @@ fn describe_table_query_namespace_and_column() {
     assert_eq!(ns[0], ["Catalog Name", "spark_catalog"]);
     assert_eq!(ns[1], ["Namespace Name", "d1"]);
     assert_eq!(ns[2], ["Comment", "dc"]);
-    assert_eq!(ns[5], ["Properties", "()"]);
+    // Spark 4.2.0 prints nothing for no properties (`schema-collation/probe1.out`).
+    assert_eq!(ns[5], ["Properties", ""]);
     assert_eq!(rows(&s, "DESCRIBE tv"), [["x", "int", ""]]);
     assert_eq!(class(&s, "DESCRIBE missing"), "TABLE_OR_VIEW_NOT_FOUND");
 }
@@ -329,7 +330,7 @@ fn describe_modes_secrets_and_quoting() {
         .map(|r| r[1].clone())
         .unwrap();
     assert!(
-        !props.contains("hunter2") && props.contains("k=v"),
+        !props.contains("hunter2") && props.contains("(k,v)"),
         "{props}"
     );
     // An external location with a quote reads back as one literal.
@@ -708,4 +709,63 @@ fn column_metadata_follows_renames_keys_and_repeated_columns() {
         wrong.push(format!("vrb: got {got}"));
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// `spark.sql.collation.schemaLevel.enabled` (owner decision 2026-11-07; Spark 4.2.0
+/// `research/spark/schema-collation/probe2.out`): off (the default) a schema's `DEFAULT COLLATION` is refused; on (a
+/// session `SET` too), the schema stores and shows it after its comment, `ALTER` changes it, and a table, view or
+/// function in it is refused, since Krishiv does not apply the default to their strings yet.
+#[test]
+fn schema_level_collations_are_stored_only_when_enabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    assert_eq!(
+        class(&s, "CREATE SCHEMA c DEFAULT COLLATION UNICODE"),
+        "UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS"
+    );
+    run(&s, "SET spark.sql.collation.schemaLevel.enabled = true");
+    run(&s, "CREATE SCHEMA c DEFAULT COLLATION unicode");
+    let shown = rows(&s, "DESCRIBE SCHEMA c");
+    assert_eq!(shown[2][0], "Comment", "{shown:?}");
+    assert_eq!(shown[3], ["Collation", "UNICODE"], "{shown:?}");
+    run(&s, "ALTER SCHEMA c DEFAULT COLLATION UTF8_LCASE");
+    let shown = rows(&s, "DESCRIBE SCHEMA EXTENDED c");
+    assert_eq!(shown[3], ["Collation", "UTF8_LCASE"], "{shown:?}");
+    run(&s, "CREATE TABLE default.src (a STRING) USING parquet");
+    for sql in [
+        "CREATE TABLE c.t (a STRING) USING parquet",
+        "CREATE TABLE c.t2 USING parquet AS SELECT 'x' AS a",
+        "CREATE VIEW c.v AS SELECT 'x' AS a",
+        "CREATE TABLE c.t3 LIKE default.src",
+        "CREATE FUNCTION c.f(x STRING) RETURNS STRING RETURN x",
+    ] {
+        assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
+    }
+    assert_eq!(
+        class(&s, "CREATE SCHEMA d DEFAULT COLLATION nope"),
+        "COLLATION_INVALID_NAME"
+    );
+}
+
+/// `SHOW TABLE EXTENDED` of a temporary view made by `CREATE TEMPORARY VIEW .. AS <query>` prints the query text,
+/// the catalog and namespace and the output columns (Spark 4.2.0 `view-schema-binding-config`); a DataFrame view
+/// has no text and is refused.
+#[test]
+fn show_table_extended_of_a_temporary_view_prints_its_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1");
+    let shown = rows(&s, "SHOW TABLE EXTENDED LIKE 'tv'");
+    let info = shown[0][3].clone();
+    for want in [
+        "Table: tv",
+        "Type: VIEW",
+        "View Text: SELECT 1",
+        "View Catalog and Namespace: spark_catalog.default",
+        "View Query Output Columns: [`1`]",
+        " |-- 1: integer (nullable = false)",
+    ] {
+        assert!(info.contains(want), "{want} not in {info}");
+    }
+    assert_eq!(shown[0][2], "true");
 }

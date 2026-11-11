@@ -73,8 +73,72 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "__subscript",
         "the lowering of `base[index]`; PySpark: `Column.getItem`",
     ),
+    (
+        "__collation_array_set",
+        "internal: array_distinct, union, intersect and except by collation keys",
+    ),
+    (
+        "__collation_key",
+        "internal: the comparison key of a collated value",
+    ),
+    (
+        "__collation_map_keys",
+        "internal: a map's keys as collation keys, for lookups",
+    ),
+    (
+        "__collation_greatest",
+        "internal: `greatest` over a collated string",
+    ),
+    (
+        "__collation_least",
+        "internal: `least` over a collated string",
+    ),
     ("__time_add_interval", "operator: `time + interval`"),
     ("__subtract_times", "operator: `time - time`"),
+    (
+        "__contains_lcase",
+        "the analyzer's `contains` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__startswith_lcase",
+        "the analyzer's `startswith` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__endswith_lcase",
+        "the analyzer's `endswith` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__locate_lcase",
+        "the analyzer's `locate` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__indeterminate_collation",
+        "internal: raises `INDETERMINATE_COLLATION` where Spark does at run time",
+    ),
+    (
+        "__find_in_set_lcase",
+        "the analyzer's `find_in_set` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__trim_collated",
+        "the analyzer's trim family over `UTF8_LCASE` and `_RTRIM` strings",
+    ),
+    (
+        "__replace_lcase",
+        "the analyzer's `replace` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__translate_lcase",
+        "the analyzer's `translate` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__split_part_lcase",
+        "the analyzer's `split_part` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__substring_index_lcase",
+        "the analyzer's `substring_index` over `UTF8_LCASE` strings",
+    ),
     (
         "explode",
         "generator: a `Generate` node, not a DataFrame function yet",

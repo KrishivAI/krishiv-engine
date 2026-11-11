@@ -5,7 +5,9 @@
 //! Rules run in batches, each batch to a fixed point (at most
 //! [`MAX_ITERATIONS`] rounds, as Spark's `spark.sql.optimizer.maxIterations`):
 //!
-//! 0. **Inline CTEs**, once: each reference to a deterministic (or
+//! 0. **Collation keys**, once: the key positions of a collated value compare its key
+//!    (`collation_keys`).
+//!    **Inline CTEs**, once: each reference to a deterministic (or
 //!    singly referenced) `WITH` definition becomes a fresh instance of it
 //!    (Spark's `InlineCTE`), so the rules below see through it.
 //!    **Implied join filters**, once: each input of an inner join is
@@ -47,6 +49,8 @@
 
 #![forbid(unsafe_code)]
 
+mod collation_keys;
+mod constraints;
 mod cse;
 mod dag;
 mod eager;
@@ -71,8 +75,8 @@ mod sum_rewrite;
 use std::sync::Arc;
 
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
-    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+    ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, JOIN_COST, JOIN_DP_LIMIT,
+    JOIN_ENUMERATOR, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -114,8 +118,9 @@ const REWRITE: [(&str, Rule); 7] = [
 #[derive(Debug, Clone)]
 pub struct RuleStep {
     /// The batch it ran in: `ImpliedJoinFilters`, `Rewrite`, `Restrict`,
-    /// `JoinOrder` (join ordering alternating with restriction), `Prune`,
-    /// `Tidy` or `Cse`.
+    /// `JoinOrder` (join ordering alternating with restriction; a `Rewrite`
+    /// batch also runs inside it after an outer join turned inner, its rounds
+    /// counting from 1 each time), `Prune`, `Tidy` or `Cse`.
     pub batch: &'static str,
     /// The round of a fixed-point batch, from 1.
     pub round: usize,
@@ -169,7 +174,11 @@ pub fn optimize(plan: &Plan) -> Result<Plan, KrishivError> {
 /// # Errors
 /// `INTERNAL_ERROR` when `plan` is not resolved or no optimizer thread can
 /// be started. A rewrite nesting deeper than [`krishiv_plan::MAX_DEPTH`] is
-/// not an error: the input plan is returned unoptimised.
+/// not an error: the input plan is returned unoptimised, with only its
+/// collation keys; `FAILED_TO_PARSE_TOO_COMPLEX` when those keys alone nest
+/// past the cap. `KRISHIV_UNSUPPORTED_FEATURE` for a collated value the
+/// engine has no key form for yet, in a plan that did not come through the
+/// analyzer (whose guard refuses it first).
 pub fn optimize_with(plan: &Plan, stats: &dyn Statistics) -> Result<Plan, KrishivError> {
     optimize_with_options(plan, stats, &Options::default())
 }
@@ -327,6 +336,10 @@ impl Trace {
     }
 }
 
+/// What one optimizer run gives: the plan with only its collation keys, the optimized plan and
+/// the rule steps.
+type Ran = (Arc<LogicalPlan>, Arc<LogicalPlan>, Vec<RuleStep>);
+
 fn run(
     plan: &Plan,
     stats: Option<&dyn Statistics>,
@@ -341,11 +354,16 @@ fn run(
         .into());
     }
     let root = Arc::clone(plan.root());
-    let run = move || -> Result<(Arc<LogicalPlan>, Vec<RuleStep>), KrishivError> {
+    let run = move || -> Result<Ran, KrishivError> {
         let mut t = Trace {
             on: tracing,
             steps: Vec::new(),
         };
+        // Collated keys first: every later rule then sees operators that compare bytes.
+        let root = t.once("CollationKeys", &root, |r| {
+            collation_keys::rewrite(Arc::clone(r))
+        })?;
+        let keyed = Arc::clone(&root);
         let root = t.once("InlineCTE", &root, |r| inline_cte::inline(Arc::clone(r)))?;
         let root = t.once("ImpliedJoinFilters", &root, |r| {
             dag::rewrite_up(Arc::clone(r), &mut |p| {
@@ -374,13 +392,19 @@ fn run(
         } else {
             root = batch(root, "Rewrite", &mut t)?;
         }
+        // After the rewrite batch, which moves `WHERE` equalities into the
+        // joins (comma joins are cross joins before it); the batch runs
+        // again to push what the rule added, only when it added something.
+        let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
+        let root = inferred;
         let root = t.once("AlgebraicSum", &root, |r| {
             sum_rewrite::rewrite(Arc::clone(r))
         })?;
         // Restriction and join ordering alternate until neither changes
         // the plan: ordering sees the restricted estimates, and restriction
         // sees every join the ordering forms (which side an aggregate joins
-        // decides its domain), so a second optimization finds nothing new.
+        // decides its domain), and an outer join their filters make inner
+        // is ordered with its tree, so a second optimization finds nothing new.
         let estimates = stats.unwrap_or(&NoStatistics);
         let mut root = t.once("Restrict", &root, |r| {
             restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
@@ -412,6 +436,14 @@ fn run(
                 }
             }
             _ => root,
+        };
+        // Without join ordering, once more after restriction (its semi
+        // joins); with it, `order_and_restrict` already ran the rule on the
+        // final joins. Tidying pushes what it adds.
+        let root = if stats.is_none() {
+            t.once("InferJoinFilters", &root, infer_join_filters)?
+        } else {
+            root
         };
         let pruned = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
         let mut root = batch(Arc::clone(&pruned), "Tidy", &mut t)?;
@@ -472,19 +504,39 @@ fn run(
         } else {
             root
         };
-        Ok((root, t.steps))
+        Ok((keyed, root, t.steps))
     };
     // Passes recurse once per level and nest; rewrites may deepen the plan.
-    let (root, steps) =
+    let (keyed, root, steps) =
         krishiv_common::stack::on_big_stack(run).ok_or_else(|| InternalError {
             message: "cannot start an optimizer thread".to_owned(),
         })??;
-    // A plan the rewrites made deeper than the IR allows runs unoptimised:
-    // the input was valid, and the optimizer never makes a query fail.
     match Plan::try_new(root) {
         Ok(p) => Ok((p, steps)),
-        Err(_) => Ok((plan.clone(), Vec::new())),
+        Err(_) => Ok((unoptimised(plan, keyed)?, Vec::new())),
     }
+}
+
+/// The plan to run when the rewrites made `plan` deeper than the IR allows: the input with only
+/// its collation keys (`keyed`, the first rule's output), so a collated value still compares by
+/// its key. Without collations that is the input itself, which was valid.
+///
+/// # Errors
+/// `FAILED_TO_PARSE_TOO_COMPLEX` when the keys alone nest past the cap: running the unkeyed
+/// input would compare collated values as bytes.
+fn unoptimised(plan: &Plan, keyed: Arc<LogicalPlan>) -> Result<Plan, KrishivError> {
+    if Arc::ptr_eq(&keyed, plan.root()) {
+        return Ok(plan.clone());
+    }
+    Plan::try_new(keyed)
+}
+
+/// [`constraints::infer_join_filters`] at every join, bottom up.
+fn infer_join_filters(root: &Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
+    let mut memo = constraints::Memo::default();
+    dag::rewrite_up(Arc::clone(root), &mut |p| {
+        Ok(constraints::infer_join_filters(p, &mut memo))
+    })
 }
 
 /// The join-ordering settings of a session configuration (defaults
@@ -498,6 +550,9 @@ fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
         if let Some(name) = config.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str) {
             s.enumerator = join_order::Enumerator::parse(name);
         }
+        if let Some(name) = config.get(&JOIN_COST).and_then(ConfigValue::as_str) {
+            s.cost = join_order::JoinCost::parse(name);
+        }
         if let Some(limit) = config.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int) {
             s.dp_limit = usize::try_from(limit)
                 .unwrap_or(join_order::MAX_DP_LIMIT)
@@ -507,9 +562,9 @@ fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
     s
 }
 
-/// Join ordering alternating with restriction, until neither changes the
-/// plan. The trees of the last ordering, the plan's own, are described in
-/// the trace.
+/// Join ordering alternating with restriction and inferred join filters,
+/// until neither changes the plan. The trees of the last ordering, the
+/// plan's own, are described in the trace.
 fn order_and_restrict(
     mut root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
@@ -519,19 +574,75 @@ fn order_and_restrict(
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut notes = Vec::new();
     for round in 1..=MAX_ITERATIONS {
+        let input = Arc::clone(&root);
         let (ordered, trees) = join_order::reorder(&root, stats, propagate, joins);
         notes = trees;
         t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
         let restricted = restrict::restrict(Arc::clone(&ordered), stats, propagate)?;
         t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
-        let done = Arc::ptr_eq(&restricted, &ordered);
-        root = restricted;
+        // A filter ordering or restriction leaves can reject the NULL rows of an outer join's
+        // null-supplied side (an equality implied across two joins, `a = c` from `a = b` and
+        // `b = c`, over the outer join below). Such a join turns inner here, and the rewrite batch
+        // then settles the filters, so the next ordering sees the larger inner-join tree instead of
+        // a second optimization finding it. Nothing else runs, and nothing at all unless a join
+        // turned inner.
+        let narrowed = dag::rewrite_up(Arc::clone(&restricted), &mut |p| {
+            Ok(pushdown::eliminate_outer_joins(p))
+        })?;
+        let rewritten = if Arc::ptr_eq(&narrowed, &restricted) {
+            restricted
+        } else {
+            t.step(
+                "JoinOrder",
+                round,
+                "EliminateOuterJoins",
+                &restricted,
+                &narrowed,
+            );
+            batch(narrowed, "Rewrite", t)?
+        };
+        // The filters of the joins ordering and restriction formed: ordering
+        // keys its canonical input order on them, so they are part of the
+        // loop.
+        let inferred = infer_join_filters(&rewritten)?;
+        t.step(
+            "JoinOrder",
+            round,
+            "InferJoinFilters",
+            &rewritten,
+            &inferred,
+        );
+        let mut done = Arc::ptr_eq(&inferred, &ordered);
+        // Pushed down and merged before ordering reads them again, so the
+        // next round sees the inputs a second `optimize` would see.
+        root = if Arc::ptr_eq(&inferred, &rewritten) {
+            inferred
+        } else {
+            let tidied = batch(inferred, "Tidy", t)?;
+            // Tidying can return the round's input (what the rule added was
+            // already there, spelled another way): nothing to do again.
+            if same_plan(&tidied, &input) {
+                done = true;
+                input
+            } else {
+                tidied
+            }
+        };
         if done {
             break;
         }
     }
     t.notes("JoinOrder", &root, notes);
     Ok(root)
+}
+
+/// Whether two relations are structurally equal (their canonical encodings).
+fn same_plan(a: &Arc<LogicalPlan>, b: &Arc<LogicalPlan>) -> bool {
+    Arc::ptr_eq(a, b)
+        || matches!(
+            (Plan::try_new(LogicalPlan::clone(a)), Plan::try_new(LogicalPlan::clone(b))),
+            (Ok(x), Ok(y)) if x.structurally_eq(&y)
+        )
 }
 
 /// Whether a `Filter` whose predicate is the literal `false` is anywhere in
@@ -673,4 +784,35 @@ pub(crate) fn groups_by_columns(g: &Grouping) -> bool {
 #[must_use]
 pub fn plan_is_deterministic(plan: &Arc<LogicalPlan>) -> bool {
     inline_cte::deterministic(plan)
+}
+
+#[cfg(test)]
+mod tests {
+    use krishiv_common::error::ErrorClass;
+    use krishiv_plan::{Expr, MAX_DEPTH};
+
+    use super::*;
+
+    fn filters(n: usize) -> Arc<LogicalPlan> {
+        Arc::new((0..n).fold(LogicalPlan::table(["t"]), |p, _| {
+            p.filter(Expr::column(["a"]))
+        }))
+    }
+
+    /// Past the depth cap the plan runs with its keys, or fails: never as the unkeyed input,
+    /// which would compare collated values as bytes.
+    #[test]
+    fn an_unoptimised_plan_keeps_its_collation_keys() {
+        let input = Plan::try_new(filters(3)).unwrap();
+        // No collations: the keyed plan is the input.
+        let same = unoptimised(&input, Arc::clone(input.root())).unwrap();
+        assert!(Arc::ptr_eq(same.root(), input.root()));
+        // Keys added: the keyed plan, not the input.
+        let keyed = filters(4);
+        let out = unoptimised(&input, Arc::clone(&keyed)).unwrap();
+        assert!(Arc::ptr_eq(out.root(), &keyed));
+        // Keys that nest past the cap: the error.
+        let err = unoptimised(&input, filters(MAX_DEPTH + 1)).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::FailedToParseTooComplex);
+    }
 }

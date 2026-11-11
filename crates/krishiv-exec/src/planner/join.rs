@@ -33,6 +33,7 @@ use krishiv_plan::{
 };
 
 use super::build::{Planned, Planner, internal, unsupported};
+use super::build_project::Request;
 use super::eval::canonical_carrier;
 use super::explain::ExplainNode;
 use super::orient::{InputStats, StatsSource, builds_left, orient};
@@ -53,15 +54,40 @@ impl Planner<'_> {
         kind: JoinKind,
         condition: &JoinCondition,
     ) -> Result<Planned> {
+        // Taken first: every path below either uses it or drops it.
+        let request = self.take_request(left, right);
         let on = match condition {
             JoinCondition::On(e) => Some(e),
             JoinCondition::None => None,
             _ => return Err(unsupported("JOIN ... USING in physical plans")),
         };
+        if let Some(on) = on
+            && super::python_udf::has_python_udf(on)
+        {
+            return self.join_with_python_udfs(left, right, kind, on);
+        }
         let hints = (self.side_hint(left), self.side_hint(right));
-        let logical = (Arc::clone(left), Arc::clone(right));
-        let left = self.plan(left)?;
-        let right = self.plan(right)?;
+        let planned = (self.plan(left)?, self.plan(right)?);
+        self.join_planned((left, right), planned, hints, kind, on, request)
+    }
+
+    /// [`Self::join`] over inputs already planned: `logical` are the inputs
+    /// as written (their statistics decide the build side), `planned` what
+    /// they were planned to (a side may hold more columns than its logical
+    /// input, such as a `PythonEval`'s), `hints` their join hints, `request`
+    /// what the consumer above may compute on the build side (S4'; `None`
+    /// drops it, which is always safe).
+    pub(super) fn join_planned(
+        &mut self,
+        logical: (&Arc<LogicalPlan>, &Arc<LogicalPlan>),
+        planned: (Planned, Planned),
+        hints: (Option<JoinStrategy>, Option<JoinStrategy>),
+        kind: JoinKind,
+        on: Option<&Arc<Expr>>,
+        request: Option<Request>,
+    ) -> Result<Planned> {
+        let logical = (Arc::clone(logical.0), Arc::clone(logical.1));
+        let (left, right) = planned;
         let left_ids: HashSet<AttrId> = left.layout.iter().copied().collect();
         let right_ids: HashSet<AttrId> = right.layout.iter().copied().collect();
         let mut conjuncts = Vec::new();
@@ -149,6 +175,18 @@ impl Planner<'_> {
         }
         let probe_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.0)).collect();
         let build_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.1)).collect();
+        // What the consumer above may compute on the build side (S4').
+        let (build, computed) = if kind == JoinKind::Inner {
+            let built = if build_left { &logical.0 } else { &logical.1 };
+            let fixed: Vec<&Expr> = build_exprs
+                .iter()
+                .map(AsRef::as_ref)
+                .chain(residual.iter().copied())
+                .collect();
+            self.project_build(request, built, build, &fixed)?
+        } else {
+            (build, None)
+        };
         let (probe, probe_keys) = self.with_columns(probe, &probe_exprs)?;
         let (build, build_keys) = self.with_columns(build, &build_exprs)?;
         // Keys of one Spark `STRING`/`BINARY` in different Arrow encodings
@@ -335,6 +373,9 @@ impl Planner<'_> {
         for p in published {
             detail.push_str(&format!(", {p}"));
         }
+        if let Some(c) = &computed {
+            detail.push_str(&format!(", {c}"));
+        }
         if let Some((_, probe_stats, build_stats)) = preferred {
             // The statistics that chose to build the left input, labelled
             // by the logical inputs: `probe_stats` is the left input's and
@@ -378,6 +419,12 @@ impl Planner<'_> {
                 placement,
             });
         }
+        let mut probe = probe;
+        let fused = self.fuse_probe_filter(&mut probe, &probe_exprs, &residual);
+        let select = fused.map(|(select, predicate)| {
+            detail.push_str(&format!(", probe filter: {predicate}"));
+            select
+        });
         let plan = HashJoinPlan {
             probe: Box::new(probe.node),
             build: Box::new(build.node),
@@ -390,6 +437,7 @@ impl Planner<'_> {
             distinct_build: false,
             runtime_filters,
             distribution,
+            select: None,
         };
         // Validates the join and gives its schema, over placeholder cells.
         let schema = hash_join(
@@ -402,6 +450,9 @@ impl Planner<'_> {
             Producer::default(),
         )?
         .schema();
+        // Validated without the selection: the probe's input is now the
+        // fused filter's, whose columns the probe reads as `probe_schema`.
+        let plan = HashJoinPlan { select, ..plan };
         Ok(Planned {
             ordering: Vec::new(),
             schema,
@@ -645,7 +696,7 @@ pub(crate) fn estimated_bytes(rows: f64, schema: &arrow_schema::Schema) -> f64 {
 
 /// Spark's `DataType.defaultSize` (Spark 4.0 source) for the Arrow
 /// carriers of Spark's types.
-fn default_size(t: &arrow_schema::DataType) -> u64 {
+pub(super) fn default_size(t: &arrow_schema::DataType) -> u64 {
     use arrow_schema::DataType as T;
     match t {
         T::Null | T::Boolean | T::Int8 => 1,
@@ -705,7 +756,7 @@ impl Planner<'_> {
     /// The strategy hint of one join side: the first hint above its
     /// relation through single-input nodes (Spark's `EliminateResolvedHint`),
     /// a later different one overridden. The hints seen are consumed.
-    fn side_hint(&mut self, p: &Arc<LogicalPlan>) -> Option<JoinStrategy> {
+    pub(super) fn side_hint(&mut self, p: &Arc<LogicalPlan>) -> Option<JoinStrategy> {
         let mut found: Option<JoinStrategy> = None;
         let mut cur = p;
         loop {
@@ -844,6 +895,17 @@ fn builtin(e: &Expr) -> Option<(Builtin, &[Arc<Expr>])> {
     }
 }
 
+/// The conjuncts of `e`, shared.
+pub(super) fn conjuncts_of(e: &Arc<Expr>, out: &mut Vec<Arc<Expr>>) {
+    match builtin(e) {
+        Some((Builtin::And, [l, r])) => {
+            conjuncts_of(l, out);
+            conjuncts_of(r, out);
+        }
+        _ => out.push(Arc::clone(e)),
+    }
+}
+
 fn split_and<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
     match builtin(e) {
         Some((Builtin::And, [l, r])) => {
@@ -915,7 +977,7 @@ fn null_aware_key(e: &Expr) -> Option<(&Arc<Expr>, &Arc<Expr>)> {
 }
 
 /// The attributes `e` reads.
-fn reads(e: &Expr, out: &mut HashSet<AttrId>) {
+pub(super) fn reads(e: &Expr, out: &mut HashSet<AttrId>) {
     if let ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) = &e.node {
         out.insert(c.id);
     }

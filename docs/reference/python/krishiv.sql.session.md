@@ -94,6 +94,14 @@ def refreshTable(self, tableName: str) -> DataFrame
 Drops the cached relations reading `tableName`, so the next action reads the
 table again, and returns the table.
 
+### `registerFunction`
+
+```python
+def registerFunction(self, name: str, f: Any, returnType: Any=None) -> Any
+```
+
+An alias for `spark.udf.register` (deprecated since 2.3.0, `pyspark/sql/catalog.py:1272`).
+
 ### `tableExists`
 
 ```python
@@ -282,6 +290,15 @@ Ends this session; the next `getOrCreate` makes a new one.
 ```python
 def table(self, tableName: str) -> DataFrame
 ```
+
+### `udf`
+
+```python
+@property
+def udf(self) -> UDFRegistration
+```
+
+The `UDFRegistration` of this session (`spark.udf.register(name, f, returnType)`).
 
 ### `version`
 

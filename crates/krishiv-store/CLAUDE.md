@@ -15,6 +15,7 @@ Paths are relative to this crate.
 - `src/settings.rs` `StoreSettings` (raw `fs.*` text by key, exact then ASCII case-insensitive; implemented for the engine's `Config`, `BTreeMap<String, String>`, `HashMap<String, String>` and `Arc<T>`); `src/id.rs` `StoreId` (redacting `Display`); `src/policy.rs` `StorePolicy` (pacing budgets per scheme); `src/error.rs` the `Result` alias and the two error helpers
 - `src/credentials.rs` (S3) `CredentialScope`, `ScopedCredential`, `CredentialSource`, `RefreshingProvider<C>` over a shared `CredentialCache` (single flight, skew, never serves expired); `src/refreshing.rs` `RefreshingStore` (one forced refresh + one retry on an expired-token answer)
 - `StoreRegistry::with_source` (S4, in `src/stores.rs`): longest-prefix scopes, `#scope:<nonce>` ids, `on_release` on drop; `tests/scopes.rs`, `tests/refresh_http.rs` (loopback S3 stand-in)
+- `src/http_clients.rs` `SharedHttpClients`: an object_store `HttpConnector` caching one HTTP client per client-options fingerprint (`ClientConfigKey` values; never for default headers or a DNS resolver), bounded at 64; `StoreRegistry::with_http_clients` makes S3/GCS/Azure/https stores connect through it (not `hf://`, whose token is a default header). One per runtime (the engine's `IoScheduler` owns it), never per process (design `design/P2-store-shared-http-client.md`)
 - `tests/settings.rs` (S2): every key resolves the same from a `Config` and from maps, case-insensitively
 
 ## Invariants
