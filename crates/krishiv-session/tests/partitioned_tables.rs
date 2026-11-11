@@ -1343,6 +1343,53 @@ fn reads_follow_the_registered_partitions() {
     assert_eq!(class(&s, "SELECT a FROM f"), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 
+/// A table over files Krishiv did not write (no commit log: the listing reads its directory) reads its registered
+/// partitions only, as Spark's `CatalogFileIndex` (Spark 4.2.0, krishiv-internal
+/// `research/spark/partition-followups/probe.out`, table `e`: a `p=1` directory on disk but not registered is not
+/// read): a partition directory the catalog does not know, and a directory that is no partition at all, are skipped,
+/// not refused.
+#[test]
+fn a_table_over_foreign_files_skips_directories_the_catalog_does_not_know() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    // Parquet files written by Krishiv elsewhere; only the data files are copied, without its commit log.
+    run(
+        &s,
+        "CREATE TABLE src (x INT, p INT) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO src VALUES (1, 1), (2, 2)");
+    let part = |sub: &str| {
+        std::fs::read_dir(dir.path().join("src").join(sub))
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|e| e.file_name().to_string_lossy().starts_with("part-"))
+            .unwrap()
+            .path()
+    };
+    let loc = tempfile::tempdir().unwrap();
+    for (from, to) in [("p=1", "p=1"), ("p=2", "p=2"), ("p=2", "tmp_x")] {
+        let file = part(from);
+        std::fs::create_dir_all(loc.path().join(to)).unwrap();
+        std::fs::copy(&file, loc.path().join(to).join(file.file_name().unwrap())).unwrap();
+    }
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE e (x INT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{}'",
+            loc.path().display()
+        ),
+    );
+    run(&s, "ALTER TABLE e ADD PARTITION (p = 2)");
+    assert_eq!(rows(&s, "SHOW PARTITIONS e"), ["p=2"]);
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(x AS STRING), CAST(p AS STRING) FROM e ORDER BY x"
+        ),
+        ["2\t2"]
+    );
+}
+
 /// A table partitioned by a BINARY column, as Spark 4.2.0 writes and reads it (krishiv-internal
 /// `research/spark/binary-partition/probe1.out`, `probe2.out`): the directory is the value's bytes as text,
 /// escaped like any value; NULL and the empty value are the default partition; the column stays `binary`.
