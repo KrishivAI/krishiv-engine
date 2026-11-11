@@ -414,7 +414,16 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     // Spark reports the expression it serves, so the enclosing site applies.
     let implicit_cast =
         matches!(&e.node, ExprNode::Cast { expr, .. } if expr.origin.sql == e.origin.sql);
+    // Spark gives no context to `try_*` functions' errors or to `split_part`'s
+    // (`try_element_at.sql.out`, `string-functions.sql.out`).
+    let context_free = matches!(
+        &e.node,
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if matches!(&f.id, FunctionId::Registry { name, .. }
+                if name.starts_with("try_") || name == "split_part")
+    );
     let can_raise = !implicit_cast
+        && !context_free
         && matches!(
             &e.node,
             ExprNode::Cast { .. } | ExprNode::Resolved(ResolvedExpr::Function(_))
@@ -486,7 +495,7 @@ fn has_spark_context(class: &str) -> bool {
             | "INVALID_INDEX_OF_ZERO"
             | "MAP_KEY_DOES_NOT_EXIST"
     ) || class.starts_with("INVALID_ARRAY_INDEX")
-        || class.starts_with("INTERVAL_")
+        || class == "INTERVAL_DIVIDED_BY_ZERO"
         || class.starts_with("NUMERIC_VALUE_OUT_OF_RANGE")
 }
 

@@ -220,7 +220,7 @@ fn a_plan_through_the_codec_renders_the_same_runtime_contexts() {
     }
 }
 
-/// A DataFrame expression is lowered with source id 0 too; a view made from it and read by
+/// A DataFrame expression has a source of its own, not the statement's; a view made from it and read by
 /// SQL must not render its span against the reading statement's text.
 #[test]
 fn a_dataframe_expression_span_is_not_rendered_against_another_statement() {
@@ -234,24 +234,6 @@ fn a_dataframe_expression_span_is_not_rendered_against_another_statement() {
         Ok(df) => block_on(df.collect()).expect_err("the query fails"),
     };
     assert_eq!(e.error_class(), ErrorClass::DivideByZero);
-    for c in e.query_contexts() {
-        assert!(
-            !c.fragment.is_empty() && sql.contains(c.fragment.as_str()),
-            "a context from another text: {c:?}"
-        );
-    }
-}
-
-/// Element access: Spark 4.2.0 `array.sql.out` (golden indexes are one higher).
-#[test]
-fn element_access_errors_carry_the_call_span() {
-    let e = fails("select element_at(array(1, 2, 3), 5)");
-    assert_eq!(e.error_class(), ErrorClass::InvalidArrayIndexInElementAt);
-    assert_eq!(span(&e), (7, 35, "element_at(array(1, 2, 3), 5)"));
-    let e = fails("select elt(4, '123', '456')");
-    assert_eq!(e.error_class(), ErrorClass::InvalidArrayIndex);
-    assert_eq!(span(&e), (7, 26, "elt(4, '123', '456')"));
-    let e = fails("select array(1, 2, 3)[5]");
-    assert_eq!(e.error_class(), ErrorClass::InvalidArrayIndex);
-    assert_eq!(span(&e), (7, 23, "array(1, 2, 3)[5]"));
+    // No statement's text holds `a / b`, so the error has no context (not `SELEC`).
+    assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
 }

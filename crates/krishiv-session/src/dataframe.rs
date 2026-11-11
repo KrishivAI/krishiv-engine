@@ -20,13 +20,13 @@ use krishiv_plan::analyzer::{AnalyzedPlan, TableColumn};
 use krishiv_plan::cache::CacheKey;
 use krishiv_plan::{
     Expr, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode,
-    ReadSource, SetOperation, SourceId,
+    ReadSource, SetOperation,
 };
 
-use crate::cache::RelationCache;
 use crate::catalog::TempTable;
 use crate::column::Column;
 use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_files, typed_paths};
+use crate::{cache::RelationCache, run_site::DF_SOURCE};
 
 mod fill_stream;
 mod geo_gate;
@@ -354,7 +354,7 @@ impl DataFrame {
         let mut lowered = Vec::new();
         for text in exprs {
             lowered.push(
-                krishiv_sql::parse_and_lower_named_expression(text.as_ref(), &options, SourceId(0))
+                krishiv_sql::parse_and_lower_named_expression(text.as_ref(), &options, DF_SOURCE)
                     .map_err(|e| e.error)?,
             );
         }
@@ -410,7 +410,7 @@ impl DataFrame {
         let predicate = krishiv_sql::parse_and_lower_named_expression(
             condition,
             &self.session.parser_options(),
-            SourceId(0),
+            DF_SOURCE,
         )
         .map_err(|e| e.error)?;
         Ok(self.derive(PlanNode::Filter {
@@ -1014,8 +1014,7 @@ impl DataFrame {
         // A fresh analysis is still the same statement: keep what
         // `system.queries` shows of it.
         if let Some(a) = &cached {
-            env.text.clone_from(&a.env.text);
-            env.redacted.clone_from(&a.env.redacted);
+            env.copy_text_from(&a.env);
             env.statement_class = a.env.statement_class;
             env.row = Arc::clone(&a.env.row);
         }
@@ -1077,8 +1076,7 @@ impl DataFrame {
         let analyzed = self.session.analyze_in(&self.plan, &env, text).await?;
         let mut env = env;
         if let Some(t) = text {
-            env.text = Some(Arc::from(t.as_str()));
-            env.redacted = Some(Arc::new(t.clone()));
+            env.set_text(t);
         }
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
@@ -1100,8 +1098,7 @@ impl DataFrame {
             && a.env.text.is_none()
         {
             let mut env = QueryEnv::clone(&a.env);
-            env.text = Some(Arc::from(text.as_str()));
-            env.redacted = Some(Arc::new(text.clone()));
+            env.set_text(text);
             env.statement_class = Some(class);
             *cached = Some(Arc::new(Analysis {
                 env: Arc::new(env),
