@@ -74,6 +74,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "the lowering of `base[index]`; PySpark: `Column.getItem`",
     ),
     (
+        "__collation_array_set",
+        "internal: array_distinct, union, intersect and except by collation keys",
+    ),
+    (
         "__collation_key",
         "internal: the comparison key of a collated value",
     ),

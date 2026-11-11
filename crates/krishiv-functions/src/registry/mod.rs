@@ -294,6 +294,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__collation_map_keys" => "__collation_map_keys",
         "__collation_greatest" => "__collation_greatest",
         "__collation_least" => "__collation_least",
+        "__collation_array_set" => "__collation_array_set",
         // `time + interval` and `time - time`: Spark's `TimeAddInterval` and `SubtractTimes`, which the analyzer
         // builds for the operators (the third argument of `__time_add_interval` is the interval's end field).
         "__time_add_interval" => "__time_add_interval",
@@ -313,7 +314,9 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__indeterminate_collation" => "__indeterminate_collation",
         _ => return None,
     };
-    let arity = if matches!(
+    let arity = if name == "__collation_array_set" {
+        Arity::new([false, false, false, false, false, true, false], "5")
+    } else if matches!(
         name,
         "__subscript"
             | "__subtract_times"

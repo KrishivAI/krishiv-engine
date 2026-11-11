@@ -439,6 +439,78 @@ fn unusual_operands_and_array_functions_do_not_compare_bytes() {
     );
 }
 
+/// The array functions over arrays of `UTF8_LCASE` strings compare keys and keep the original
+/// elements (`collations-basic` 37-45).
+#[test]
+fn array_functions_over_collated_strings_compare_keys() {
+    let l = |x: &str| format!("'{x}' COLLATE utf8_lcase");
+    let arr = |xs: &[&str]| {
+        format!(
+            "array({})",
+            xs.iter().map(|x| l(x)).collect::<Vec<_>>().join(", ")
+        )
+    };
+    let text = |call: String| one(&format!("SELECT CAST({call} AS STRING)"));
+    assert_eq!(
+        text(format!("array_contains({}, {})", arr(&["aaa"]), l("AAA"))),
+        "true"
+    );
+    assert_eq!(
+        text(format!(
+            "array_position({}, {})",
+            arr(&["x", "bB"]),
+            l("BB")
+        )),
+        "2"
+    );
+    assert_eq!(
+        text(format!(
+            "arrays_overlap({}, {})",
+            arr(&["a"]),
+            arr(&["B", "A"])
+        )),
+        "true"
+    );
+    assert_eq!(
+        text(format!("array_distinct({})", arr(&["a", "A", "b"]))),
+        "[a, b]"
+    );
+    assert_eq!(
+        text(format!(
+            "array_union({}, {})",
+            arr(&["a", "B"]),
+            arr(&["A", "c"])
+        )),
+        "[a, B, c]"
+    );
+    assert_eq!(
+        text(format!(
+            "array_intersect({}, {})",
+            arr(&["a", "B", "b"]),
+            arr(&["b"])
+        )),
+        "[B]"
+    );
+    assert_eq!(
+        text(format!(
+            "array_except({}, {})",
+            arr(&["a", "B", "a"]),
+            arr(&["b"])
+        )),
+        "[a]"
+    );
+    // A NULL array gives NULL; NULL elements are equal to each other.
+    let null = "CAST(NULL AS ARRAY<STRING COLLATE utf8_lcase>)";
+    assert_eq!(
+        text(format!("array_union({null}, {})", arr(&["a"]))),
+        "NULL"
+    );
+    assert_eq!(
+        text(format!("array_distinct(array({}, NULL, NULL))", l("a"))),
+        "[a, null]"
+    );
+}
+
 /// A value window function over a collated column is refused with the engine's class (the
 /// re-tag cast would otherwise hide the window from the binder).
 #[test]

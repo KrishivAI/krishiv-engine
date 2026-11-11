@@ -207,6 +207,14 @@ fn collation_pick_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::String, nullable))
 }
 
+/// `__collation_array_set`: the type of its second argument (the array), NULL-able.
+fn collation_array_set_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        c.data_type(1).cloned().unwrap_or(DataType::Null),
+        true,
+    ))
+}
+
 /// The signatures of this family.
 pub(super) fn specs() -> Vec<Spec> {
     let mut out = scalar(
@@ -240,6 +248,17 @@ pub(super) fn specs() -> Vec<Spec> {
             exact(DataType::String),
         ]),
         collation_pick_result,
+    ));
+    out.extend(scalar(
+        &["__collation_array_set"],
+        &Inputs::Expects(vec![
+            exact(DataType::String),
+            InputType::Any,
+            InputType::Any,
+            InputType::Any,
+            InputType::Any,
+        ]),
+        collation_array_set_result,
     ));
     out.extend(scalar(&["element_at"], &built, element_at));
     out.extend(scalar(&["try_element_at"], &built, try_element_at));

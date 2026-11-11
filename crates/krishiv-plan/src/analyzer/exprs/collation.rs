@@ -1139,6 +1139,81 @@ impl Resolver<'_> {
                 .expr_node_inner(e, &keyed, in_agg, window_fn, cx)
                 .map(Some);
         }
+        // `array_contains`, `array_position` and `arrays_overlap` over arrays of collated strings
+        // compare the keys of the elements; the answers are booleans and positions, so nothing
+        // of the original strings is lost.
+        if matches!(name, "array_contains" | "array_position" | "arrays_overlap")
+            && n == 2
+            && let Some(DataType::Array(a)) = kids[0].ty.data_type.clone()
+            && a.element_type().is_collated_string()
+            && has_key(a.element_type())
+        {
+            let arr_t = DataType::Array(Arc::clone(&a));
+            let overlap = name == "arrays_overlap";
+            let want = if overlap { &arr_t } else { a.element_type() };
+            let same = match (&kids[1].ty.data_type, overlap) {
+                (Some(DataType::Array(b)), true) => b.element_type() == a.element_type(),
+                (t, _) => t.as_ref() == Some(want),
+            };
+            if same {
+                let second = if overlap {
+                    typed_call("__collation_key", &kids[1].expr, &arr_t, e.origin)
+                } else {
+                    key_of(&kids[1].expr, a.element_type(), e.origin)
+                };
+                let first = typed_call("__collation_key", &kids[0].expr, &arr_t, e.origin);
+                let mut keyed = vec![self.expr(&first, cx)?, self.expr(&second, cx)?];
+                keyed[0].shown = Some(kids[0].shown());
+                keyed[1].shown = Some(kids[1].shown());
+                return self
+                    .expr_node_inner(e, &keyed, in_agg, window_fn, cx)
+                    .map(Some);
+            }
+        }
+        // `array_distinct`, `array_union`, `array_intersect` and `array_except` over arrays of
+        // collated strings: elements are equal when their keys are, and the result keeps the
+        // original elements (`__collation_array_set`).
+        if matches!(
+            name,
+            "array_distinct" | "array_union" | "array_intersect" | "array_except"
+        ) && n == if name == "array_distinct" { 1 } else { 2 }
+            && let Some(DataType::Array(a)) = kids[0].ty.data_type.clone()
+            && a.element_type().is_collated_string()
+            && has_key(a.element_type())
+            && matches!(&kids[n - 1].ty.data_type, Some(DataType::Array(b)) if b.element_type() == a.element_type())
+        {
+            let arr_t = DataType::Array(Arc::clone(&a));
+            let op = name.trim_start_matches("array_");
+            let second = &kids[n - 1];
+            let lit =
+                Expr::new(ExprNode::Literal(Literal::String(op.to_owned()))).with_origin(e.origin);
+            let mut keyed = vec![
+                self.expr(&Arc::new(lit), cx)?,
+                kids[0].clone(),
+                self.expr(
+                    &typed_call("__collation_key", &kids[0].expr, &arr_t, e.origin),
+                    cx,
+                )?,
+                second.clone(),
+                self.expr(
+                    &typed_call("__collation_key", &second.expr, &arr_t, e.origin),
+                    cx,
+                )?,
+            ];
+            keyed[2].shown = Some(kids[0].shown());
+            keyed[4].shown = Some(second.shown());
+            let call = Expr::function(
+                "__collation_array_set",
+                keyed.iter().map(|k| (*k.expr).clone()).collect(),
+            )
+            .with_origin(e.origin);
+            let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
+            b.shown = Some(with_children(
+                e,
+                kids[..n].iter().map(Bound::shown).collect(),
+            ));
+            return Ok(Some(b));
+        }
         if !any_collated || !strings {
             return Ok(None);
         }
