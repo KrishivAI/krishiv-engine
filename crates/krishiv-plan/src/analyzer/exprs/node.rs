@@ -952,6 +952,17 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 5)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "overlay" && n == 3 {
+                    // `overlay(input, replace, pos)` is `overlay(input, replace, pos, -1)`: Spark's
+                    // constructor writes the default length into the call, so names show it.
+                    owned = kids.clone();
+                    owned.push(default_argument(
+                        Literal::Integer(-1),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    (&owned[..], 4)
                 } else if is_builtin_entry(&entry)
                     && matches!(entry.id.name(), "st_geomfromwkb" | "st_asbinary")
                     && n == 1
