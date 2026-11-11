@@ -56,6 +56,18 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for Ca
     }
 
     /// Fields recorded after the span was created (the query attributes are).
+    fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(&id) else { return };
+        let Some(Slot(slot)) = span.extensions().get::<Slot>().copied() else {
+            return;
+        };
+        if let Ok(mut spans) = self.0.lock()
+            && let Some((_, fields)) = spans.get_mut(slot)
+        {
+            fields.insert("closed".to_owned(), "true".to_owned());
+        }
+    }
+
     fn on_record(
         &self,
         id: &tracing::span::Id,
@@ -236,17 +248,30 @@ fn analysis_planning_and_execution_are_child_spans() {
     }
 }
 
-/// The profile names the trace the query ran in (`trace` member, profile minor 4).
+/// The execution span lasts while the result stream is alive, not only until the stream is handed
+/// back.
 #[test]
-fn the_profile_json_carries_the_callers_trace_id() {
-    let s = Session::new().unwrap();
-    let before = block_on(block_on(s.sql("SELECT 1 AS a")).unwrap().explain_analyze()).unwrap();
-    assert!(before.to_json_value().get("trace").is_none());
-    s.set_trace_context("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
-        .unwrap();
-    let p = block_on(block_on(s.sql("SELECT 1 AS a")).unwrap().explain_analyze()).unwrap();
-    let doc = p.to_json_value();
-    assert_eq!(doc["trace"]["trace_id"], "4bf92f3577b34da6a3ce929d0e0e4736");
-    let back = krishiv_exec::profile::QueryProfile::from_json(&p.to_json()).unwrap();
-    assert_eq!(back.trace, p.trace);
+fn the_execution_span_stays_open_while_the_results_are_consumed() {
+    use futures::StreamExt as _;
+    spans();
+    let s = session("orders_open");
+    let df = block_on(s.sql("SELECT a FROM orders_open")).expect("plans");
+    let mut stream = block_on(df.execute_stream()).expect("starts");
+    let exec = || {
+        spans()
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(n, _)| n == "krishiv.execute")
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(exec().len(), 1);
+    assert!(
+        !exec()[0].1.contains_key("closed"),
+        "closed before the rows were read"
+    );
+    while block_on(stream.next()).is_some() {}
+    drop(stream);
+    assert!(exec()[0].1.contains_key("closed"), "still open after drop");
 }

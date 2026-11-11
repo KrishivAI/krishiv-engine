@@ -32,9 +32,9 @@ pub const PROFILE_VERSION: u64 = 1;
 /// The minor version this build writes: it counts additive changes within
 /// [`PROFILE_VERSION`] (0 or absent: the first v1; 1: `usage`; 2: the scan read
 /// costs, `query.scan_reads_in_flight_mean` and the `scan_read*` operator
-/// extras; 3: each pipeline's `max_slice_ns` and `stalls`). A reader ignores
+/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`). A reader ignores
 /// members it does not know, so a later minor still loads.
-pub const PROFILE_MINOR: u64 = 4;
+pub const PROFILE_MINOR: u64 = 5;
 
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -219,9 +219,23 @@ pub struct QueryProfile {
     /// `optimized` and `physical` the session fills; `None` when not asked
     /// for. Kept as data: this crate does not plan.
     pub planning: Option<serde_json::Value>,
-    /// The trace the query ran in (added in minor 4): an object of optional `trace_id` (32 hex digits)
-    /// and `span_id` (16 hex digits), set by the session; `None` when no trace was active.
+    /// The ids that tie the profile to the query's log records and exported span (minor 4):
+    /// the `trace` member, an object of `trace_id` (the session's traceparent trace id, when it
+    /// has one) and `session_id`; the session fills it, `None` for a profile built elsewhere.
     pub trace: Option<serde_json::Value>,
+    /// Who ran the query (minor 5): the `usage.principal` and `usage.tags` members, from the
+    /// session's context (T136). `None` outside a session. A shared profile drops them
+    /// ([`QueryProfile::shareable`]).
+    pub identity: Option<ProfileIdentity>,
+}
+
+/// The principal and tags a profile's `usage` names (T136), opaque ids, never credentials.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProfileIdentity {
+    /// The principal's name.
+    pub principal: String,
+    /// The session's tags, by key.
+    pub tags: std::collections::BTreeMap<String, String>,
 }
 
 impl QueryProfile {
@@ -234,6 +248,19 @@ impl QueryProfile {
             detailed,
             planning: None,
             trace: None,
+            identity: None,
+        }
+    }
+
+    /// The profile for sharing outside the deployment (`--share`, a viewer download): without
+    /// the principal and tags, and without the session and trace ids, which name who ran the
+    /// query. Every number and the plan are kept, including its literals and paths (not scrubbed).
+    #[must_use]
+    pub fn shareable(&self) -> Self {
+        Self {
+            trace: None,
+            identity: None,
+            ..self.clone()
         }
     }
 

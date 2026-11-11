@@ -1478,7 +1478,7 @@ impl Session {
         // Spark logs what analysis and planning ignore (hints) as
         // warnings; `DataFrame::warnings` returns them too.
         for w in analyzed.warnings.iter().chain(physical.warnings()) {
-            tracing::warn!(target: "krishiv::session", "{w}");
+            tracing::warn!(target: "krishiv::session::warnings", "{w}");
         }
         Ok((optimized, physical, steps))
     }

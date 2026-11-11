@@ -153,31 +153,6 @@ impl QueryTrace {
     }
 }
 
-/// The trace the running action belongs to, for the query profile (`trace` member): the caller's
-/// trace id and, with the `telemetry-otlp` feature and an active exporter, the OpenTelemetry span id of
-/// the current span, when the action runs inside one (profiled actions run on an executor task that
-/// does not carry the query span yet, so in practice only `trace_id` is written; T116 follow-up).
-/// `None` when neither is known.
-pub(crate) fn profile_trace(state: &crate::session::SessionState) -> Option<serde_json::Value> {
-    let mut o = serde_json::Map::new();
-    if let Some(t) = Who::of(state).trace_id {
-        o.insert("trace_id".to_owned(), t.into());
-    }
-    #[cfg(feature = "telemetry-otlp")]
-    {
-        use opentelemetry::trace::TraceContextExt as _;
-        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-        let cx = tracing::Span::current().context();
-        let sc = cx.span().span_context().clone();
-        if sc.is_valid() {
-            o.insert("span_id".to_owned(), sc.span_id().to_string().into());
-            o.entry("trace_id")
-                .or_insert_with(|| sc.trace_id().to_string().into());
-        }
-    }
-    (!o.is_empty()).then_some(serde_json::Value::Object(o))
-}
-
 /// The span of an action of a frame without a statement (a DataFrame
 /// transformation chain): the session and the engine, no query text.
 pub(crate) fn plain_span(who: &Who) -> Span {
@@ -198,16 +173,10 @@ pub(crate) fn plain_span(who: &Who) -> Span {
 /// span lasts as long as the result is being produced and read, not only the
 /// planning. A disabled span adds nothing.
 pub(crate) fn in_span(stream: RecordBatchStream, span: Span) -> RecordBatchStream {
-    wrap_span(stream, span, false)
+    wrap_span(stream, span)
 }
 
-/// As [`in_span`], but keeps only the span alive: no "query finished" / "query failed"
-/// record (the statement's outer wrapper writes the one record of the query).
-pub(crate) fn retain_span(stream: RecordBatchStream, span: Span) -> RecordBatchStream {
-    wrap_span(stream, span, true)
-}
-
-fn wrap_span(stream: RecordBatchStream, span: Span, quiet: bool) -> RecordBatchStream {
+fn wrap_span(stream: RecordBatchStream, span: Span) -> RecordBatchStream {
     if span.is_disabled() {
         return stream;
     }
@@ -217,9 +186,36 @@ fn wrap_span(stream: RecordBatchStream, span: Span, quiet: bool) -> RecordBatchS
         started: std::time::Instant::now(),
         rows: 0,
         batches: 0,
-        // A quiet wrapper never logs the end.
-        done: quiet,
+        done: false,
     })
+}
+
+/// `stream` kept open inside `span`: the span closes when the stream is dropped, so a child
+/// stage (`krishiv.execute`) lasts while the rows are produced, not only until `run` returns.
+/// A disabled span adds nothing.
+pub(crate) fn hold_span(stream: RecordBatchStream, span: Span) -> RecordBatchStream {
+    if span.is_disabled() {
+        return stream;
+    }
+    Box::pin(HeldSpan {
+        inner: stream,
+        span,
+    })
+}
+
+struct HeldSpan {
+    inner: RecordBatchStream,
+    span: Span,
+}
+
+impl Stream for HeldSpan {
+    type Item = <RecordBatchStream as Stream>::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+        let _entered = this.span.enter();
+        this.inner.as_mut().poll_next(cx)
+    }
 }
 
 struct SpanStream {
