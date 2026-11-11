@@ -568,6 +568,24 @@ fn array_functions_over_collated_strings_compare_keys() {
     );
 }
 
+/// `str_to_map` over explicit `UTF8_BINARY` operands keeps the display marker in the map's type
+/// (`collations-basic` 61).
+#[test]
+fn str_to_map_keeps_the_binary_marker() {
+    assert_eq!(
+        one(
+            "SELECT typeof(str_to_map('a:1,b:2' COLLATE utf8_binary, ',' COLLATE utf8_binary, ':' COLLATE utf8_binary))"
+        ),
+        "map<string collate UTF8_BINARY,string collate UTF8_BINARY>"
+    );
+    assert_eq!(
+        one(
+            "SELECT CAST(str_to_map('a:1,b:2' COLLATE utf8_binary, ',' COLLATE utf8_binary, ':' COLLATE utf8_binary) AS STRING)"
+        ),
+        "{a -> 1, b -> 2}"
+    );
+}
+
 /// A value window function over a collated column is refused with the engine's class (the
 /// re-tag cast would otherwise hide the window from the binder).
 #[test]

@@ -916,6 +916,32 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        // `str_to_map` over explicit `UTF8_BINARY` operands keeps the display marker in its map.
+        if name == "str_to_map"
+            && marked
+            && !window_fn
+            && chosen.is_some_and(Collation::is_utf8_binary)
+            && matches!(&bound.ty.data_type, Some(DataType::Map(m))
+                if matches!(m.key_type(), DataType::String) && matches!(m.value_type(), DataType::String))
+        {
+            let mark = DataType::collated_string(Collation::UTF8_BINARY);
+            let to = DataType::Map(Arc::new(krishiv_types::MapType::new(
+                mark.clone(),
+                mark,
+                true,
+            )));
+            let shown = bound.shown();
+            bound.expr = Arc::new(
+                Expr::new(ExprNode::Cast {
+                    expr: Arc::clone(&bound.expr),
+                    to: to.clone(),
+                    mode: CastMode::Ansi,
+                })
+                .with_origin(e.origin),
+            );
+            bound.shown = Some(shown);
+            bound.ty.data_type = Some(to);
+        }
         // The result is re-tagged with the chosen collation. For `UTF8_BINARY` that is the
         // display-only marker (Spark prints `upper(c)` of a `STRING COLLATE UTF8_BINARY` column
         // that way), kept only when `marked` and outside windows and the inspecting functions.
