@@ -1638,6 +1638,13 @@ impl Session {
         crate::admission::Permit::unlimited()
     }
 
+    /// Whether `parts`, the name after `USE NAMESPACE|DATABASE|SCHEMA`, is a namespace of the current `system`
+    /// catalog (which has none): any name while it is current, except one qualified with the session catalog.
+    pub(crate) fn names_a_system_namespace(&self, parts: &[String]) -> bool {
+        is_system(&self.state.catalog.current_catalog())
+            && !(parts.len() == 2 && parts[0].eq_ignore_ascii_case(crate::catalog::CATALOG))
+    }
+
     /// A namespace named on its own (`SHOW TABLES IN ns`, `DESCRIBE SCHEMA ns`): `system` itself stays
     /// nameable (it lists the system tables), any other is refused under `system`.
     pub(crate) fn namespace_arg(&self, ns: &str) -> Result<String, KrishivError> {

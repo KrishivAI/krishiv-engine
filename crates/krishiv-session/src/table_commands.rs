@@ -475,7 +475,7 @@ impl Session {
                     .into());
                 }
             }
-        } else if crate::system::is_system(&self.state.catalog.current_catalog()) {
+        } else if self.names_a_system_namespace(&parts) {
             return Err(SchemaNotFound {
                 schema_name: quoted(&[vec!["system".to_owned()], parts].concat()),
             }

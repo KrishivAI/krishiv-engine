@@ -1255,3 +1255,20 @@ fn a_view_over_a_system_table_and_global_temp_views_work_under_system() {
         ["1"]
     );
 }
+
+#[test]
+fn show_databases_lists_nothing_under_system_and_use_namespace_can_name_the_session_catalog() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE DATABASE other_db").unwrap();
+    run(&s, "USE system").unwrap();
+    assert!(column_of(&s, "SHOW DATABASES", 0).is_empty());
+    assert!(column_of(&s, "SHOW SCHEMAS", 0).is_empty());
+    assert!(run(&s, "USE NAMESPACE x").is_err());
+    run(&s, "USE NAMESPACE spark_catalog.other_db").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT current_catalog()", 0),
+        ["spark_catalog"]
+    );
+    assert_eq!(column_of(&s, "SELECT current_schema()", 0), ["other_db"]);
+    assert!(column_of(&s, "SHOW DATABASES", 0).contains(&"other_db".to_owned()));
+}

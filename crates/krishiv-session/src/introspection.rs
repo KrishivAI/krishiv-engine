@@ -537,10 +537,12 @@ impl Session {
                 self.frame_with_order(&["col_name"], &[], rows, false).await
             }
             ShowKind::Namespaces { pattern, .. } => {
+                // `system` has no namespaces; never list the session catalog's under it.
+                let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
                 let rows = store
                     .namespaces()
                     .into_iter()
-                    .filter(|(n, _)| keep(pattern.as_ref(), n))
+                    .filter(|(n, _)| !in_system && keep(pattern.as_ref(), n))
                     .map(|(n, _)| vec![s(n)])
                     .collect();
                 self.ordered_frame(&["namespace"], &[], rows).await
