@@ -128,28 +128,38 @@ pub(super) fn mask_quoted(message: &str) -> String {
 /// `message` with each backquoted run that is not a plain name replaced by `` `?` ``: some messages print an
 /// offending value (a variant rendered as JSON, say) between backquotes, while names (`db`.`t`) stay.
 pub(super) fn mask_backquoted(message: &str) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let chars: Vec<(usize, char)> = message.char_indices().collect();
     let mut out = String::with_capacity(message.len());
-    let mut rest = message;
-    while let Some(open) = rest.find('`') {
-        let after = &rest[open + 1..];
-        let Some(close) = after.find('`') else {
-            break;
+    let mut copied = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        let (at, c) = chars[i];
+        // A backquote opens after a non-word character and closes before one, so a backquote inside a rendered
+        // value (`"x`secret"`) is part of the value.
+        let opens = c == '`' && (i == 0 || !word(chars[i - 1].1));
+        let close = opens
+            .then(|| {
+                (i + 1..chars.len())
+                    .find(|&j| chars[j].1 == '`' && chars.get(j + 1).is_none_or(|n| !word(n.1)))
+            })
+            .flatten();
+        let Some(j) = close else {
+            i += 1;
+            continue;
         };
-        let inner = &after[..close];
-        out.push_str(&rest[..open]);
+        let inner = &message[chars[i + 1].0..chars[j].0];
         let plain = inner
             .chars()
             .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '-'));
-        if plain {
-            out.push('`');
-            out.push_str(inner);
-            out.push('`');
-        } else {
+        if !plain {
+            out.push_str(&message[copied..at]);
             out.push_str("`?`");
+            copied = chars.get(j + 1).map_or(message.len(), |n| n.0);
         }
-        rest = &after[close + 1..];
+        i = j + 1;
     }
-    out.push_str(rest);
+    out.push_str(&message[copied..]);
     out
 }
 

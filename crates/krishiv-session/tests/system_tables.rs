@@ -1405,3 +1405,40 @@ fn a_missing_table_inside_a_view_is_named_as_written_unless_system_is_current() 
         "{e}"
     );
 }
+
+#[test]
+fn listings_overrides_and_dataframe_writes_with_an_explicit_catalog_work_under_system() {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a BIGINT)").unwrap();
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1 AS x").unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv5 AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    // Temporary views stay listed.
+    assert!(column_of(&s, "SHOW TABLES LIKE 'tv'", 1).contains(&"tv".to_owned()));
+    // SHOW COLUMNS with a FROM namespace reaches the named table.
+    assert_eq!(
+        column_of(&s, "SHOW COLUMNS IN t FROM spark_catalog.default", 0),
+        ["a"]
+    );
+    assert_eq!(
+        column_of(&s, "SHOW COLUMNS IN gv5 FROM global_temp", 0),
+        ["x"]
+    );
+    // A DataFrame write that names the catalog works; a bare or namespace-only name does not.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![4]))],
+    )
+    .unwrap();
+    s.register_batches("src", schema, vec![batch]).unwrap();
+    let write = |name: &str| block_on(async { s.table("src").write().insert_into(name).await });
+    assert!(write("spark_catalog.default.t").is_ok());
+    assert!(write("t").is_err());
+    assert!(write("default.t").is_err());
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(column_of(&s, "SELECT CAST(a AS STRING) FROM t", 0), ["4"]);
+}

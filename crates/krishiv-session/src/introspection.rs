@@ -436,11 +436,17 @@ impl Session {
                     None => crate::system::is_system(&self.state.catalog.current_catalog()),
                 };
                 if in_system {
-                    let rows = crate::system::table_names()
+                    let mut rows: Vec<Vec<Cell>> = crate::system::table_names()
                         .iter()
                         .filter(|t| keep(pattern.as_ref(), t))
                         .map(|t| vec![s(""), s(*t), s("false")])
                         .collect();
+                    // The session's temporary views stay listed.
+                    rows.extend(
+                        self.temp_view_names(pattern.as_ref())
+                            .into_iter()
+                            .map(|n| vec![s(""), s(n), s("true")]),
+                    );
                     return self
                         .ordered_frame(
                             &["namespace", "tableName", "isTemporary"],
@@ -519,7 +525,13 @@ impl Session {
                 table, namespace, ..
             } => {
                 let env = self.query_env();
-                let mut name = self.table_name(table, &env)?;
+                // With `FROM ns` the table is named by that namespace: no guard on the bare name first.
+                let mut name = if namespace.is_some() {
+                    let parts = crate::access::ddl_parts(table, &env)?;
+                    TableName::resolve(&parts, &self.state.catalog.current_namespace(), &env)?
+                } else {
+                    self.table_name(table, &env)?
+                };
                 if let Some(ns) = namespace {
                     let from = self.namespace_name(ns, &env)?;
                     if !name.bare && !name.namespace.eq_ignore_ascii_case(&from) {

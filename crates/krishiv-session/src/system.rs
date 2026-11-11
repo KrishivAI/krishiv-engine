@@ -1474,6 +1474,19 @@ impl QueryRow {
     }
 }
 
+impl crate::table_commands::TableName {
+    /// The name as an authorization statement writes it: ``spark_catalog`.`ns`.`name` ``. A `TableName` is always
+    /// in the session catalog, whatever catalog is current.
+    pub(crate) fn quoted_in_session_catalog(&self) -> String {
+        format!(
+            "`{}`.`{}`.`{}`",
+            crate::catalog::CATALOG,
+            self.namespace.replace('`', "``"),
+            self.name.replace('`', "``")
+        )
+    }
+}
+
 /// Resolution of bare names while the current catalog is `system`, which holds no stored objects:
 /// a bare name must not fall through to `spark_catalog.default`, which authorization did not check.
 impl Session {
@@ -1593,6 +1606,18 @@ mod tests {
         );
         assert!(!got.contains("secret_canary"), "{got}");
         assert!(got.contains("`db`.`t_1`"), "{got}");
+    }
+
+    #[test]
+    fn an_embedded_backquote_does_not_end_a_masked_value() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let got =
+            mask.apply_message("The variant value `\"x`secret_canary\"` cannot be cast to `INT`.");
+        assert!(!got.contains("secret_canary"), "{got}");
+        assert!(got.contains("`INT`"), "{got}");
     }
 
     #[test]
