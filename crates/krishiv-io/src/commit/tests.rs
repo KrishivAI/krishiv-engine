@@ -437,6 +437,42 @@ fn a_failed_overwrite_keeps_the_old_data() {
 }
 
 #[test]
+fn a_stopped_writer_opens_no_more_files() {
+    let env = Env::memory();
+    let w = env
+        .begin("s", SaveMode::ErrorIfExists, "u")
+        .unwrap()
+        .unwrap();
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let mut options = w.write_options(0);
+    options.max_records_per_file = 1;
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pool: Arc<dyn krishiv_memory::MemoryPool> =
+        krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+    let id = pool.register("write", None);
+    let mut writer = FileWriter::new(
+        &env.io,
+        Arc::new(ParquetFormat),
+        &schema(),
+        o,
+        options,
+        krishiv_memory::Reservation::new(pool, id),
+    )
+    .unwrap()
+    .stopping_on(Arc::clone(&stop));
+    env.rt.block_on(writer.write(&batch(3))).unwrap();
+    assert_eq!(env.names("s").len(), 3);
+    // The query is abandoned: the next batch opens no file.
+    stop.store(true, std::sync::atomic::Ordering::Release);
+    let r = env.rt.block_on(writer.write(&batch(1000)));
+    assert_eq!(r.unwrap_err().error_class(), ErrorClass::OperationCanceled);
+    assert_eq!(env.names("s").len(), 3, "no file opened after the stop");
+    env.rt.block_on(writer.abort());
+    drop(w);
+    assert!(env.names("s").is_empty(), "{:?}", env.names("s"));
+}
+
+#[test]
 fn an_empty_output_still_has_a_file_with_the_schema() {
     let env = Env::memory();
     let files = env.write("e", SaveMode::ErrorIfExists, "u", 0).unwrap();

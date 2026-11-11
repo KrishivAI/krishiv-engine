@@ -799,14 +799,22 @@ fn a_cancelled_write_removes_the_files_it_made() {
     });
     watcher.join().unwrap();
     assert!(cancelled, "the write was still running when it was dropped");
-    // The detached writers finish aborting on their own.
+    // The detached writers finish aborting on their own, without first
+    // writing their queued rows (one file per row here): before they stopped
+    // at the cancel, thousands of files appeared and the cleanup took seconds.
     let start = std::time::Instant::now();
+    let mut peak = 0;
     loop {
         let left = std::fs::read_dir(&out).map_or(0, |d| {
             d.filter_map(Result::ok)
                 .filter(|e| e.file_name().to_string_lossy().starts_with("part-"))
                 .count()
         });
+        peak = peak.max(left);
+        assert!(
+            peak < 1000,
+            "{peak} part files after the cancel: the writers kept writing"
+        );
         if left == 0 {
             break;
         }
