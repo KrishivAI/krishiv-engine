@@ -1955,6 +1955,18 @@ impl Session {
             }
             .into());
         }
+        // Its deletes do not interleave with a rename's moves or a write's registration.
+        let _ddl = if table.is_partitioned() {
+            Some(
+                self.state
+                    .catalog
+                    .store
+                    .partition_ddl(&table.location)
+                    .await,
+            )
+        } else {
+            None
+        };
         self.forget_cached(&name);
         let deleted = self.delete_table_files(&table, true).await;
         // Data may have changed even when the cleanup failed part way.
@@ -2398,7 +2410,13 @@ impl Session {
         // A RENAME or DROP PARTITION waits until these rows are written and their partitions registered (it could
         // otherwise move or drop a partition between this write's log commit and its registration).
         let _partitions = if table.is_partitioned() {
-            Some(self.state.catalog.store.partition_write().await)
+            Some(
+                self.state
+                    .catalog
+                    .store
+                    .partition_write(&table.location)
+                    .await,
+            )
         } else {
             None
         };

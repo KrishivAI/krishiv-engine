@@ -644,6 +644,14 @@ impl Session {
             .into());
         }
         require_partition_provider(&table, "MSCK REPAIR TABLE")?;
+        // Its log entries and registrations do not interleave with a rename's or a drop's.
+        let _ddl = self
+            .state
+            .catalog
+            .store
+            .partition_ddl(&table.location)
+            .await;
+        let table = self.fresh_entry(&table, &name)?;
         if matches!(r.action, Some(RepairAction::Drop | RepairAction::Sync)) {
             // A logged root still lists the files of a directory that is gone: they leave the log too, or every
             // read of the table would see them missing.
@@ -989,7 +997,12 @@ impl Session {
         original: &str,
     ) -> Result<(), KrishivError> {
         // One partition command that moves or deletes directories at a time; the entry is read again under it.
-        let _ddl = self.state.catalog.store.partition_ddl().await;
+        let _ddl = self
+            .state
+            .catalog
+            .store
+            .partition_ddl(&table.location)
+            .await;
         let fresh = self.fresh_entry(table, name)?;
         let table = &fresh;
         require_partition_provider(table, "ALTER TABLE RENAME PARTITION")?;
@@ -1183,7 +1196,12 @@ impl Session {
         original: &str,
     ) -> Result<(), KrishivError> {
         // One partition command that moves or deletes directories at a time; the entry is read again under it.
-        let _ddl = self.state.catalog.store.partition_ddl().await;
+        let _ddl = self
+            .state
+            .catalog
+            .store
+            .partition_ddl(&table.location)
+            .await;
         let fresh = self.fresh_entry(table, name)?;
         let table = &fresh;
         require_partition_provider(table, "ALTER TABLE DROP PARTITION")?;
@@ -1731,8 +1749,8 @@ mod tests {
         vec![("p".to_owned(), p.to_owned())]
     }
 
-    /// A RENAME PARTITION waits for a write into the table that holds the partition lock (an INSERT holds it
-    /// from its write to its partition registration), then runs.
+    /// A RENAME PARTITION waits for a write into its table that holds the table's partition lock (an INSERT holds
+    /// it from its write to its partition registration), then runs; a write into another table does not hold it.
     #[test]
     fn a_rename_waits_for_a_write_in_progress() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -1748,13 +1766,36 @@ mod tests {
             "create table r (a int, p int) using parquet partitioned by (p)",
         );
         run(&s, "insert into r values (1, 1)");
+        run(
+            &s,
+            "create table o (a int, p int) using parquet partitioned by (p)",
+        );
+        run(&s, "insert into o values (1, 1)");
         let store = Arc::clone(&s.state.catalog.store);
+        let location = |t: &str| {
+            store
+                .table("default", t)
+                .unwrap_or_else(|| panic!("no table {t}"))
+                .location
+                .clone()
+        };
         let renamed = |p: &str| {
             store
                 .table("default", "r")
                 .is_some_and(|t| find_partition(&t, &spec(p)).is_some())
         };
-        let write = futures::executor::block_on(store.partition_write());
+        // A write held on another table never holds a rename back.
+        let other = futures::executor::block_on(store.partition_write(&location("o")));
+        run(
+            &s,
+            "alter table r partition (p=1) rename to partition (p=2)",
+        );
+        drop(other);
+        run(
+            &s,
+            "alter table r partition (p=2) rename to partition (p=1)",
+        );
+        let write = futures::executor::block_on(store.partition_write(&location("r")));
         std::thread::scope(|scope| {
             let rename = scope.spawn(|| {
                 run(

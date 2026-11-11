@@ -409,12 +409,14 @@ pub(crate) struct InMemoryCatalogStore {
     /// Where a table change reaches every cache of the runtime: its result
     /// cache and each session's relation cache.
     hub: Arc<crate::cache::Invalidation>,
-    /// Held exclusively by a partition command that moves or deletes partition directories (`RENAME PARTITION`,
-    /// `DROP PARTITION`) from before it reads the entry to after its catalog swap, and shared by an `INSERT`
-    /// into a partitioned table from its write to its partition registration: no two such commands, and no
-    /// such command and a write, interleave their directory moves, log entries and catalog swaps. One lock for
-    /// the runtime (such commands are rare); writes never wait for each other.
-    partition_ddl: tokio::sync::RwLock<()>,
+    /// One read/write lock per partitioned table's location, held exclusively by a command that moves or deletes
+    /// its partition directories or log entries (`RENAME` / `DROP PARTITION`, `MSCK REPAIR`, `TRUNCATE`) from
+    /// before it reads the entry to after its catalog swap, and shared by an `INSERT` into it from its write to
+    /// its partition registration: no two such commands, and no such command and a write, interleave their
+    /// directory moves, log entries and catalog swaps on one table. Writes never wait for each other, and other
+    /// tables never wait (entries are weak: a lock lives while a statement holds it).
+    partition_locks:
+        Mutex<std::collections::HashMap<PathBuf, std::sync::Weak<tokio::sync::RwLock<()>>>>,
 }
 
 #[derive(Debug)]
@@ -446,18 +448,41 @@ impl InMemoryCatalogStore {
                 functions: Arc::new(StoredFunctions::default()),
             }),
             epoch: AtomicU64::new(0),
-            partition_ddl: tokio::sync::RwLock::new(()),
+            partition_locks: Mutex::default(),
         }
     }
 
-    /// The exclusive hold of a partition command that moves or deletes directories (see the field).
-    pub(crate) async fn partition_ddl(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
-        self.partition_ddl.write().await
+    /// The partition lock of the table at `location` (see the field).
+    fn partition_lock(&self, location: &Path) -> Arc<tokio::sync::RwLock<()>> {
+        let mut locks = self
+            .partition_locks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(location).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(tokio::sync::RwLock::new(()));
+        locks.insert(location.to_path_buf(), Arc::downgrade(&lock));
+        lock
     }
 
-    /// The shared hold of a write into a partitioned table (see the field).
-    pub(crate) async fn partition_write(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
-        self.partition_ddl.read().await
+    /// The exclusive hold of a command that moves or deletes the partition directories of the table at
+    /// `location` (see the field).
+    pub(crate) async fn partition_ddl(
+        &self,
+        location: &Path,
+    ) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        self.partition_lock(location).write_owned().await
+    }
+
+    /// The shared hold of a write into the partitioned table at `location` (see the field). Taken before the
+    /// write's admission: admission never takes this lock, so the order cannot deadlock.
+    pub(crate) async fn partition_write(
+        &self,
+        location: &Path,
+    ) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        self.partition_lock(location).read_owned().await
     }
 
     /// Marks a change to a table's data (an `INSERT`, a `TRUNCATE`): cached
