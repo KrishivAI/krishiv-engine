@@ -249,7 +249,8 @@ fn key_pairs(pred: &Arc<Expr>, l: &RelStats, r: &RelStats) -> Vec<(AttrId, AttrI
 /// the selectivity is `1 / min(prod ndv left, prod ndv right)` (each product
 /// over the distinct key columns, at most the side's rows before its filters: a filtered key
 /// side keeps its fraction of the join), the rule the
-/// join orderer's `composite_keys` applies. Never below 1: the independent
+/// join orderer's `composite_keys` applies, except that the cap is the side's rows before its
+/// filters (the orderer caps by the leaf's filtered rows). Never below 1: the independent
 /// product is already the smaller estimate then.
 fn composite_factor(pairs: &[(AttrId, AttrId)], l: &RelStats, r: &RelStats) -> f64 {
     let (mut lc, mut rc): (Vec<AttrId>, Vec<AttrId>) = pairs.iter().copied().unzip();
@@ -260,14 +261,18 @@ fn composite_factor(pairs: &[(AttrId, AttrId)], l: &RelStats, r: &RelStats) -> f
     if lc.len().min(rc.len()) < 2 {
         return 1.0;
     }
-    let tuples = |ids: &[AttrId], s: &RelStats| {
-        ids.iter()
-            .filter_map(|i| s.cols.get(i))
-            .map(|c| c.ndv.max(1.0))
-            .product::<f64>()
-            .min(s.base_rows().max(1.0))
+    // A key column without statistics makes the tuple count unknown: no factor.
+    let tuples = |ids: &[AttrId], s: &RelStats| -> Option<f64> {
+        let product = ids
+            .iter()
+            .map(|i| s.cols.get(i).map(|c| c.ndv.max(1.0)))
+            .product::<Option<f64>>()?;
+        Some(product.min(s.base_rows().max(1.0)))
     };
-    let composite = 1.0 / tuples(&lc, l).min(tuples(&rc, r)).max(1.0);
+    let (Some(lt), Some(rt)) = (tuples(&lc, l), tuples(&rc, r)) else {
+        return 1.0;
+    };
+    let composite = 1.0 / lt.min(rt).max(1.0);
     let independent: f64 = pairs
         .iter()
         .filter_map(|(a, b)| Some(1.0 / l.cols.get(a)?.ndv.max(r.cols.get(b)?.ndv).max(1.0)))
