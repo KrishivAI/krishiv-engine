@@ -1555,12 +1555,32 @@ impl Session {
         parts: &[String],
         env: &crate::session::QueryEnv,
     ) -> Result<String, KrishivError> {
+        self.namespace_with(parts, env, true)
+    }
+
+    /// [`namespace_for`](Self::namespace_for) for the target a writer creates or appends to: a stored table,
+    /// so a temporary relation of the same bare name is no exemption under `system`.
+    pub(crate) fn namespace_for_stored(
+        &self,
+        parts: &[String],
+        env: &crate::session::QueryEnv,
+    ) -> Result<String, KrishivError> {
+        self.namespace_with(parts, env, false)
+    }
+
+    fn namespace_with(
+        &self,
+        parts: &[String],
+        env: &crate::session::QueryEnv,
+        temp_exempt: bool,
+    ) -> Result<String, KrishivError> {
         // A bare name is the session's temporary view or nothing; a two-part name is a namespace of the
         // CURRENT catalog, and `system` has none.
         let global =
             parts.len() == 2 && parts[0].eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE);
         if !global
-            && (parts.len() == 2 || (parts.len() == 1 && !self.is_temp_name(&parts[0], env)))
+            && (parts.len() == 2
+                || (parts.len() == 1 && !(temp_exempt && self.is_temp_name(&parts[0], env))))
             && env.catalog.in_system()
         {
             return Err(krishiv_common::error::TableOrViewNotFound {

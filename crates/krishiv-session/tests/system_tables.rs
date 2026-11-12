@@ -1583,3 +1583,23 @@ fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() 
         "{messages:?}"
     );
 }
+
+#[test]
+fn a_dataframe_writer_never_creates_a_stored_table_through_a_temporary_name_under_system() {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    let s = Session::builder().build().unwrap();
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![1]))],
+    )
+    .unwrap();
+    s.register_batches("src", schema, vec![batch]).unwrap();
+    assert!(block_on(async { s.table("src").write_to_table("tv").create().await }).is_err());
+    run(&s, "USE spark_catalog").unwrap();
+    assert!(run(&s, "DESCRIBE spark_catalog.default.tv").is_err());
+}

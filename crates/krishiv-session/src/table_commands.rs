@@ -2461,7 +2461,7 @@ impl Session {
         let parsed = krishiv_sql::parse_multipart_identifier(table, &self.parser_options())
             .map_err(|e| e.error)?;
         let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
-        TableName::resolve(&parts, &self.namespace_for(&parts, env)?, env)
+        TableName::resolve(&parts, &self.namespace_for_stored(&parts, env)?, env)
     }
 
     /// `DataFrameWriter.saveAsTable`: Spark's V1 save modes over a table. The
