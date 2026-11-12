@@ -17,6 +17,10 @@ PKG = ROOT / "python" / "krishiv"
 SNAPSHOT = ROOT / "python" / "public-api.txt"
 
 
+# `_generated_functions` is re-exported by `krishiv.sql.functions`, so its names are public API.
+_KEEP = {"__init__.py", "_native.pyi", "_generated_functions.py", "_generated_functions.pyi"}
+
+
 def _public(name: str) -> bool:
     return not name.startswith("_") or (name.startswith("__") and name.endswith("__") and name == "__all__")
 
@@ -40,6 +44,9 @@ def _walk(body: list[ast.stmt], prefix: str, out: list[str]) -> None:
             for t in node.targets:
                 if isinstance(t, ast.Name) and _public(t.id) and prefix == "":
                     out.append(f"{prefix}{t.id}")
+                    if t.id == "__all__" and isinstance(node.value, (ast.List, ast.Tuple)):
+                        names = sorted(ast.unparse(e) for e in node.value.elts)
+                        out.append(f"{prefix}__all__ = [{', '.join(names)}]")
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and _public(node.target.id):
             out.append(f"{prefix}{node.target.id}: {ast.unparse(node.annotation)}")
 
@@ -49,7 +56,7 @@ def render() -> str:
     files = sorted(p for p in PKG.rglob("*") if p.suffix in {".py", ".pyi"})
     for path in files:
         rel = path.relative_to(PKG)
-        if any(part.startswith("_") and part not in {"__init__.py", "_native.pyi"} for part in rel.parts):
+        if any(part.startswith("_") and part not in _KEEP for part in rel.parts):
             continue
         if "testing" in rel.parts:
             continue

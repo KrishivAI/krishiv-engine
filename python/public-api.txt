@@ -1,5 +1,6 @@
 ## __init__.py
 __all__
+__all__ = ['ProfileView', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'ui']
 def build_info() -> dict[str, str]
 def metrics() -> list[dict[str, Any]]
 def session() -> SparkSession
@@ -95,6 +96,7 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
+__all__ = ['ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Session', 'WindowSpec', '__allocator__', '__version__', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lit', 'map_literal']
 class ArrowStream()
 class Column()
 class DataFrame()
@@ -176,6 +178,725 @@ def not_implemented(feature: str) -> PySparkNotImplementedError
 def unsupported_feature(feature: str) -> UnsupportedOperationException
 ## sql/__init__.py
 __all__
+__all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Row', 'RuntimeConfig', 'SparkSession', 'Window', 'WindowSpec', 'functions', 'types']
+## sql/_generated_functions.py
+__all__
+__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'approx_count_distinct', 'approx_percentile', 'array', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'coalesce', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'get', 'get_json_object', 'getbit', 'greatest', 'hash', 'hex', 'hour', 'hypot', 'ifnull', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'json_array_length', 'json_object_keys', 'json_tuple', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'md5', 'mean', 'median', 'min', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'randstr', 'rank', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_json', 'schema_of_variant', 'sec', 'second', 'sequence', 'session_user', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'time_bucket', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xxhash64', 'year', 'zeroifnull']
+def abs(col: ColumnOrName) -> Column
+def acos(col: ColumnOrName) -> Column
+def acosh(col: ColumnOrName) -> Column
+def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column
+def aes_decrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def aes_encrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, iv: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None=None) -> Column
+def approx_percentile(col: ColumnOrName, percentage: Column | float, accuracy: Column | int=10000) -> Column
+def array(*cols: ColumnOrName) -> Column
+def array_append(col: ColumnOrName, value: Any) -> Column
+def array_compact(col: ColumnOrName) -> Column
+def array_contains(col: ColumnOrName, value: Any) -> Column
+def array_distinct(col: ColumnOrName) -> Column
+def array_except(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Column
+def array_intersect(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def array_join(col: ColumnOrName, delimiter: str, null_replacement: str | None=None) -> Column
+def array_max(col: ColumnOrName) -> Column
+def array_min(col: ColumnOrName) -> Column
+def array_position(col: ColumnOrName, value: Any) -> Column
+def array_prepend(col: ColumnOrName, value: Any) -> Column
+def array_remove(col: ColumnOrName, element: Any) -> Column
+def array_repeat(col: ColumnOrName, count: ColumnOrName | int) -> Column
+def array_size(col: ColumnOrName) -> Column
+def array_union(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def arrays_overlap(a1: ColumnOrName, a2: ColumnOrName) -> Column
+def arrays_zip(*cols: ColumnOrName) -> Column
+def ascii(col: ColumnOrName) -> Column
+def asin(col: ColumnOrName) -> Column
+def asinh(col: ColumnOrName) -> Column
+def assert_true(col: ColumnOrName, errMsg: Column | str | None=None) -> Column
+def atan(col: ColumnOrName) -> Column
+def atan2(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def atanh(col: ColumnOrName) -> Column
+def avg(col: ColumnOrName) -> Column
+def base64(col: ColumnOrName) -> Column
+def bin(col: ColumnOrName) -> Column
+def bit_and(col: ColumnOrName) -> Column
+def bit_count(col: ColumnOrName) -> Column
+def bit_get(col: ColumnOrName, pos: ColumnOrName) -> Column
+def bit_length(col: ColumnOrName) -> Column
+def bit_or(col: ColumnOrName) -> Column
+def bit_xor(col: ColumnOrName) -> Column
+def bitwiseNOT(col: ColumnOrName) -> Column
+def bitwise_not(col: ColumnOrName) -> Column
+def bool_and(col: ColumnOrName) -> Column
+def bool_or(col: ColumnOrName) -> Column
+def bround(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def btrim(str: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def cardinality(col: ColumnOrName) -> Column
+def cbrt(col: ColumnOrName) -> Column
+def ceil(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def ceiling(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def char(col: ColumnOrName) -> Column
+def char_length(str: ColumnOrName) -> Column
+def character_length(str: ColumnOrName) -> Column
+def coalesce(*cols: ColumnOrName) -> Column
+def collation(col: ColumnOrName) -> Column
+def collect_list(col: ColumnOrName) -> Column
+def collect_set(col: ColumnOrName) -> Column
+def concat_ws(sep: str, *cols: ColumnOrName) -> Column
+def contains(left: ColumnOrName, right: ColumnOrName) -> Column
+def conv(col: ColumnOrName, fromBase: int, toBase: int) -> Column
+def corr(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def cos(col: ColumnOrName) -> Column
+def cosh(col: ColumnOrName) -> Column
+def cot(col: ColumnOrName) -> Column
+def count_if(col: ColumnOrName) -> Column
+def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def crc32(col: ColumnOrName) -> Column
+def create_map(*cols: ColumnOrName) -> Column
+def csc(col: ColumnOrName) -> Column
+def cume_dist() -> Column
+def curdate() -> Column
+def current_catalog() -> Column
+def current_database() -> Column
+def current_date() -> Column
+def current_path() -> Column
+def current_schema() -> Column
+def current_timestamp() -> Column
+def current_timezone() -> Column
+def current_user() -> Column
+def date_add(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def date_diff(end: ColumnOrName, start: ColumnOrName) -> Column
+def date_format(date: ColumnOrName, format: str) -> Column
+def date_from_unix_date(days: ColumnOrName) -> Column
+def date_part(field: Column, source: ColumnOrName) -> Column
+def date_sub(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def date_trunc(format: str, timestamp: ColumnOrName) -> Column
+def dateadd(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def datediff(end: ColumnOrName, start: ColumnOrName) -> Column
+def datepart(field: Column, source: ColumnOrName) -> Column
+def day(col: ColumnOrName) -> Column
+def dayname(col: ColumnOrName) -> Column
+def dayofmonth(col: ColumnOrName) -> Column
+def dayofweek(col: ColumnOrName) -> Column
+def dayofyear(col: ColumnOrName) -> Column
+def decode(col: ColumnOrName, charset: str) -> Column
+def degrees(col: ColumnOrName) -> Column
+def dense_rank() -> Column
+def e() -> Column
+def element_at(col: ColumnOrName, extraction: Any) -> Column
+def elt(*inputs: ColumnOrName) -> Column
+def encode(col: ColumnOrName, charset: str) -> Column
+def endswith(str: ColumnOrName, suffix: ColumnOrName) -> Column
+def equal_null(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def exp(col: ColumnOrName) -> Column
+def expm1(col: ColumnOrName) -> Column
+def extract(field: Column, source: ColumnOrName) -> Column
+def factorial(col: ColumnOrName) -> Column
+def find_in_set(str: ColumnOrName, str_array: ColumnOrName) -> Column
+def first(col: ColumnOrName, ignorenulls: bool=False) -> Column
+def first_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+def flatten(col: ColumnOrName) -> Column
+def floor(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def format_number(col: ColumnOrName, d: int) -> Column
+def format_string(format: str, *cols: ColumnOrName) -> Column
+def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
+def from_unixtime(timestamp: ColumnOrName, format: str='yyyy-MM-dd HH:mm:ss') -> Column
+def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
+def get(col: ColumnOrName, index: ColumnOrName | int) -> Column
+def get_json_object(col: ColumnOrName, path: str) -> Column
+def getbit(col: ColumnOrName, pos: ColumnOrName) -> Column
+def greatest(*cols: ColumnOrName) -> Column
+def hash(*cols: ColumnOrName) -> Column
+def hex(col: ColumnOrName) -> Column
+def hour(col: ColumnOrName) -> Column
+def hypot(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def initcap(col: ColumnOrName) -> Column
+def input_file_block_length() -> Column
+def input_file_block_start() -> Column
+def input_file_name() -> Column
+def instr(str: ColumnOrName, substr: str | Column) -> Column
+def is_valid_utf8(str: ColumnOrName) -> Column
+def is_variant_null(v: ColumnOrName) -> Column
+def isnan(col: ColumnOrName) -> Column
+def isnotnull(col: ColumnOrName) -> Column
+def isnull(col: ColumnOrName) -> Column
+def json_array_length(col: ColumnOrName) -> Column
+def json_object_keys(col: ColumnOrName) -> Column
+def json_tuple(col: ColumnOrName, *fields: str) -> Column
+def kurtosis(col: ColumnOrName) -> Column
+def lag(col: ColumnOrName, offset: int=1, default: Any | None=None) -> Column
+def last(col: ColumnOrName, ignorenulls: bool=False) -> Column
+def last_day(date: ColumnOrName) -> Column
+def last_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+def lcase(str: ColumnOrName) -> Column
+def lead(col: ColumnOrName, offset: int=1, default: Any | None=None) -> Column
+def least(*cols: ColumnOrName) -> Column
+def left(str: ColumnOrName, len: ColumnOrName) -> Column
+def length(col: ColumnOrName) -> Column
+def levenshtein(left: ColumnOrName, right: ColumnOrName, threshold: int | Column | None=None) -> Column
+def listagg(col: ColumnOrName, delimiter: Column | str | None=None) -> Column
+def ln(col: ColumnOrName) -> Column
+def localtimestamp() -> Column
+def locate(substr: str, str: ColumnOrName, pos: int=1) -> Column
+def log10(col: ColumnOrName) -> Column
+def log1p(col: ColumnOrName) -> Column
+def log2(col: ColumnOrName) -> Column
+def lower(col: ColumnOrName) -> Column
+def lpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column
+def ltrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def make_date(year: ColumnOrName, month: ColumnOrName, day: ColumnOrName) -> Column
+def make_timestamp(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def make_timestamp_ltz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def make_timestamp_ntz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName) -> Column
+def make_valid_utf8(str: ColumnOrName) -> Column
+def map_concat(*cols: ColumnOrName) -> Column
+def map_contains_key(col: ColumnOrName, value: Any) -> Column
+def map_entries(col: ColumnOrName) -> Column
+def map_from_arrays(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def map_from_entries(col: ColumnOrName) -> Column
+def map_keys(col: ColumnOrName) -> Column
+def map_values(col: ColumnOrName) -> Column
+def mask(col: ColumnOrName, upperChar: ColumnOrName | None=None, lowerChar: ColumnOrName | None=None, digitChar: ColumnOrName | None=None, otherChar: ColumnOrName | None=None) -> Column
+def max(col: ColumnOrName) -> Column
+def md5(col: ColumnOrName) -> Column
+def mean(col: ColumnOrName) -> Column
+def median(col: ColumnOrName) -> Column
+def min(col: ColumnOrName) -> Column
+def minute(col: ColumnOrName) -> Column
+def mode(col: ColumnOrName, deterministic: bool=False) -> Column
+def monotonically_increasing_id() -> Column
+def month(col: ColumnOrName) -> Column
+def monthname(col: ColumnOrName) -> Column
+def months_between(date1: ColumnOrName, date2: ColumnOrName, roundOff: bool=True) -> Column
+def named_struct(*cols: ColumnOrName) -> Column
+def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def negative(col: ColumnOrName) -> Column
+def next_day(date: ColumnOrName, dayOfWeek: str) -> Column
+def now() -> Column
+def nth_value(col: ColumnOrName, offset: int, ignoreNulls: bool=False) -> Column
+def ntile(n: int) -> Column
+def nullif(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def nullifzero(col: ColumnOrName) -> Column
+def nvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def nvl2(col1: ColumnOrName, col2: ColumnOrName, col3: ColumnOrName) -> Column
+def octet_length(col: ColumnOrName) -> Column
+def overlay(src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int=-1) -> Column
+def parse_json(col: ColumnOrName) -> Column
+def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None=None) -> Column
+def percent_rank() -> Column
+def percentile(col: ColumnOrName, percentage: Column | float, frequency: Column | int=1) -> Column
+def percentile_approx(col: ColumnOrName, percentage: Column | float, accuracy: Column | int=10000) -> Column
+def pi() -> Column
+def pmod(dividend: ColumnOrName | float, divisor: ColumnOrName | float) -> Column
+def position(substr: ColumnOrName, str: ColumnOrName, start: ColumnOrName | None=None) -> Column
+def positive(col: ColumnOrName) -> Column
+def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def printf(format: ColumnOrName, *cols: ColumnOrName) -> Column
+def quarter(col: ColumnOrName) -> Column
+def quote(col: ColumnOrName) -> Column
+def radians(col: ColumnOrName) -> Column
+def raise_error(errMsg: Column | str) -> Column
+def rand(seed: int | None=None) -> Column
+def randn(seed: int | None=None) -> Column
+def randstr(length: int | Column, seed: int | Column | None=None) -> Column
+def rank() -> Column
+def regexp(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_count(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_extract(str: ColumnOrName, pattern: str, idx: int) -> Column
+def regexp_extract_all(str: ColumnOrName, regexp: ColumnOrName, idx: int | Column | None=None) -> Column
+def regexp_instr(str: ColumnOrName, regexp: ColumnOrName, idx: int | Column | None=None) -> Column
+def regexp_like(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_replace(string: ColumnOrName, pattern: str | Column, replacement: str | Column) -> Column
+def regexp_substr(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regr_avgx(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_avgy(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_count(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_intercept(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_r2(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_slope(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_sxx(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_sxy(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_syy(y: ColumnOrName, x: ColumnOrName) -> Column
+def repeat(col: ColumnOrName, n: ColumnOrName | int) -> Column
+def replace(src: ColumnOrName, search: ColumnOrName, replace: ColumnOrName | None=None) -> Column
+def reverse(col: ColumnOrName) -> Column
+def right(str: ColumnOrName, len: ColumnOrName) -> Column
+def rint(col: ColumnOrName) -> Column
+def round(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def row_number() -> Column
+def rpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column
+def rtrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def schema_of_json(json: Column | str, options: dict[str, str] | None=None) -> Column
+def schema_of_variant(v: ColumnOrName) -> Column
+def sec(col: ColumnOrName) -> Column
+def second(col: ColumnOrName) -> Column
+def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None=None) -> Column
+def session_user() -> Column
+def sha(col: ColumnOrName) -> Column
+def sha1(col: ColumnOrName) -> Column
+def sha2(col: ColumnOrName, numBits: int) -> Column
+def shiftLeft(col: ColumnOrName, numBits: int) -> Column
+def shiftRight(col: ColumnOrName, numBits: int) -> Column
+def shiftRightUnsigned(col: ColumnOrName, numBits: int) -> Column
+def shiftleft(col: ColumnOrName, numBits: int) -> Column
+def shiftright(col: ColumnOrName, numBits: int) -> Column
+def shiftrightunsigned(col: ColumnOrName, numBits: int) -> Column
+def shuffle(col: ColumnOrName, seed: int | Column | None=None) -> Column
+def sign(col: ColumnOrName) -> Column
+def signum(col: ColumnOrName) -> Column
+def sin(col: ColumnOrName) -> Column
+def sinh(col: ColumnOrName) -> Column
+def size(col: ColumnOrName) -> Column
+def skewness(col: ColumnOrName) -> Column
+def slice(x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int) -> Column
+def sort_array(col: ColumnOrName, asc: bool=True) -> Column
+def soundex(col: ColumnOrName) -> Column
+def spark_partition_id() -> Column
+def split(str: ColumnOrName, pattern: str | Column, limit: int | Column=-1) -> Column
+def split_part(src: ColumnOrName, delimiter: ColumnOrName, partNum: ColumnOrName) -> Column
+def sqrt(col: ColumnOrName) -> Column
+def startswith(str: ColumnOrName, prefix: ColumnOrName) -> Column
+def std(col: ColumnOrName) -> Column
+def stddev(col: ColumnOrName) -> Column
+def stddev_pop(col: ColumnOrName) -> Column
+def stddev_samp(col: ColumnOrName) -> Column
+def str_to_map(text: ColumnOrName, pairDelim: ColumnOrName | None=None, keyValueDelim: ColumnOrName | None=None) -> Column
+def struct(*cols: ColumnOrName) -> Column
+def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None=None) -> Column
+def substring(str: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int) -> Column
+def substring_index(str: ColumnOrName, delim: str, count: int) -> Column
+def sum(col: ColumnOrName) -> Column
+def tan(col: ColumnOrName) -> Column
+def tanh(col: ColumnOrName) -> Column
+def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None=None) -> Column
+def timestamp_micros(col: ColumnOrName) -> Column
+def timestamp_millis(col: ColumnOrName) -> Column
+def timestamp_seconds(col: ColumnOrName) -> Column
+def toDegrees(col: ColumnOrName) -> Column
+def toRadians(col: ColumnOrName) -> Column
+def to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_char(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_date(col: ColumnOrName, format: str | None=None) -> Column
+def to_json(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
+def to_number(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_timestamp(col: ColumnOrName, format: str | None=None) -> Column
+def to_timestamp_ltz(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_timestamp_ntz(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_unix_timestamp(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
+def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_variant_object(col: ColumnOrName) -> Column
+def translate(srcCol: ColumnOrName, matching: str, replace: str) -> Column
+def trim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def trunc(date: ColumnOrName, format: str) -> Column
+def try_add(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_aes_decrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def try_avg(col: ColumnOrName) -> Column
+def try_divide(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_element_at(col: ColumnOrName, extraction: ColumnOrName) -> Column
+def try_make_timestamp(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def try_make_timestamp_ltz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def try_make_timestamp_ntz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName) -> Column
+def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_parse_json(col: ColumnOrName) -> Column
+def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None=None) -> Column
+def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_sum(col: ColumnOrName) -> Column
+def try_to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def try_to_date(col: ColumnOrName, format: str | None=None) -> Column
+def try_to_number(col: ColumnOrName, format: ColumnOrName) -> Column
+def try_to_timestamp(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def try_url_decode(str: ColumnOrName) -> Column
+def try_validate_utf8(str: ColumnOrName) -> Column
+def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def typeof(col: ColumnOrName) -> Column
+def ucase(str: ColumnOrName) -> Column
+def unbase64(col: ColumnOrName) -> Column
+def unhex(col: ColumnOrName) -> Column
+def uniform(min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column | None=None) -> Column
+def unix_date(col: ColumnOrName) -> Column
+def unix_micros(col: ColumnOrName) -> Column
+def unix_millis(col: ColumnOrName) -> Column
+def unix_seconds(col: ColumnOrName) -> Column
+def upper(col: ColumnOrName) -> Column
+def url_decode(str: ColumnOrName) -> Column
+def url_encode(str: ColumnOrName) -> Column
+def user() -> Column
+def uuid(seed: int | Column | None=None) -> Column
+def validate_utf8(str: ColumnOrName) -> Column
+def var_pop(col: ColumnOrName) -> Column
+def var_samp(col: ColumnOrName) -> Column
+def variance(col: ColumnOrName) -> Column
+def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def version() -> Column
+def weekday(col: ColumnOrName) -> Column
+def weekofyear(col: ColumnOrName) -> Column
+def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int) -> Column
+def xxhash64(*cols: ColumnOrName) -> Column
+def year(col: ColumnOrName) -> Column
+def zeroifnull(col: ColumnOrName) -> Column
+## sql/_generated_functions.pyi
+__all__
+__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'approx_count_distinct', 'approx_percentile', 'array', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'coalesce', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'get', 'get_json_object', 'getbit', 'greatest', 'hash', 'hex', 'hour', 'hypot', 'ifnull', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'json_array_length', 'json_object_keys', 'json_tuple', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'md5', 'mean', 'median', 'min', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'randstr', 'rank', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_json', 'schema_of_variant', 'sec', 'second', 'sequence', 'session_user', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'time_bucket', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xxhash64', 'year', 'zeroifnull']
+def abs(col: ColumnOrName) -> Column
+def acos(col: ColumnOrName) -> Column
+def acosh(col: ColumnOrName) -> Column
+def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column
+def aes_decrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def aes_encrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, iv: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None=None) -> Column
+def approx_percentile(col: ColumnOrName, percentage: Column | float, accuracy: Column | int=10000) -> Column
+def array(*cols: ColumnOrName) -> Column
+def array_append(col: ColumnOrName, value: Any) -> Column
+def array_compact(col: ColumnOrName) -> Column
+def array_contains(col: ColumnOrName, value: Any) -> Column
+def array_distinct(col: ColumnOrName) -> Column
+def array_except(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Column
+def array_intersect(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def array_join(col: ColumnOrName, delimiter: str, null_replacement: str | None=None) -> Column
+def array_max(col: ColumnOrName) -> Column
+def array_min(col: ColumnOrName) -> Column
+def array_position(col: ColumnOrName, value: Any) -> Column
+def array_prepend(col: ColumnOrName, value: Any) -> Column
+def array_remove(col: ColumnOrName, element: Any) -> Column
+def array_repeat(col: ColumnOrName, count: ColumnOrName | int) -> Column
+def array_size(col: ColumnOrName) -> Column
+def array_union(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def arrays_overlap(a1: ColumnOrName, a2: ColumnOrName) -> Column
+def arrays_zip(*cols: ColumnOrName) -> Column
+def ascii(col: ColumnOrName) -> Column
+def asin(col: ColumnOrName) -> Column
+def asinh(col: ColumnOrName) -> Column
+def assert_true(col: ColumnOrName, errMsg: Column | str | None=None) -> Column
+def atan(col: ColumnOrName) -> Column
+def atan2(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def atanh(col: ColumnOrName) -> Column
+def avg(col: ColumnOrName) -> Column
+def base64(col: ColumnOrName) -> Column
+def bin(col: ColumnOrName) -> Column
+def bit_and(col: ColumnOrName) -> Column
+def bit_count(col: ColumnOrName) -> Column
+def bit_get(col: ColumnOrName, pos: ColumnOrName) -> Column
+def bit_length(col: ColumnOrName) -> Column
+def bit_or(col: ColumnOrName) -> Column
+def bit_xor(col: ColumnOrName) -> Column
+def bitwiseNOT(col: ColumnOrName) -> Column
+def bitwise_not(col: ColumnOrName) -> Column
+def bool_and(col: ColumnOrName) -> Column
+def bool_or(col: ColumnOrName) -> Column
+def bround(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def btrim(str: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def cardinality(col: ColumnOrName) -> Column
+def cbrt(col: ColumnOrName) -> Column
+def ceil(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def ceiling(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def char(col: ColumnOrName) -> Column
+def char_length(str: ColumnOrName) -> Column
+def character_length(str: ColumnOrName) -> Column
+def coalesce(*cols: ColumnOrName) -> Column
+def collation(col: ColumnOrName) -> Column
+def collect_list(col: ColumnOrName) -> Column
+def collect_set(col: ColumnOrName) -> Column
+def concat_ws(sep: str, *cols: ColumnOrName) -> Column
+def contains(left: ColumnOrName, right: ColumnOrName) -> Column
+def conv(col: ColumnOrName, fromBase: int, toBase: int) -> Column
+def corr(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def cos(col: ColumnOrName) -> Column
+def cosh(col: ColumnOrName) -> Column
+def cot(col: ColumnOrName) -> Column
+def count_if(col: ColumnOrName) -> Column
+def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def crc32(col: ColumnOrName) -> Column
+def create_map(*cols: ColumnOrName) -> Column
+def csc(col: ColumnOrName) -> Column
+def cume_dist() -> Column
+def curdate() -> Column
+def current_catalog() -> Column
+def current_database() -> Column
+def current_date() -> Column
+def current_path() -> Column
+def current_schema() -> Column
+def current_timestamp() -> Column
+def current_timezone() -> Column
+def current_user() -> Column
+def date_add(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def date_diff(end: ColumnOrName, start: ColumnOrName) -> Column
+def date_format(date: ColumnOrName, format: str) -> Column
+def date_from_unix_date(days: ColumnOrName) -> Column
+def date_part(field: Column, source: ColumnOrName) -> Column
+def date_sub(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def date_trunc(format: str, timestamp: ColumnOrName) -> Column
+def dateadd(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def datediff(end: ColumnOrName, start: ColumnOrName) -> Column
+def datepart(field: Column, source: ColumnOrName) -> Column
+def day(col: ColumnOrName) -> Column
+def dayname(col: ColumnOrName) -> Column
+def dayofmonth(col: ColumnOrName) -> Column
+def dayofweek(col: ColumnOrName) -> Column
+def dayofyear(col: ColumnOrName) -> Column
+def decode(col: ColumnOrName, charset: str) -> Column
+def degrees(col: ColumnOrName) -> Column
+def dense_rank() -> Column
+def e() -> Column
+def element_at(col: ColumnOrName, extraction: Any) -> Column
+def elt(*inputs: ColumnOrName) -> Column
+def encode(col: ColumnOrName, charset: str) -> Column
+def endswith(str: ColumnOrName, suffix: ColumnOrName) -> Column
+def equal_null(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def exp(col: ColumnOrName) -> Column
+def expm1(col: ColumnOrName) -> Column
+def extract(field: Column, source: ColumnOrName) -> Column
+def factorial(col: ColumnOrName) -> Column
+def find_in_set(str: ColumnOrName, str_array: ColumnOrName) -> Column
+def first(col: ColumnOrName, ignorenulls: bool=False) -> Column
+def first_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+def flatten(col: ColumnOrName) -> Column
+def floor(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def format_number(col: ColumnOrName, d: int) -> Column
+def format_string(format: str, *cols: ColumnOrName) -> Column
+def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
+def from_unixtime(timestamp: ColumnOrName, format: str='yyyy-MM-dd HH:mm:ss') -> Column
+def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
+def get(col: ColumnOrName, index: ColumnOrName | int) -> Column
+def get_json_object(col: ColumnOrName, path: str) -> Column
+def getbit(col: ColumnOrName, pos: ColumnOrName) -> Column
+def greatest(*cols: ColumnOrName) -> Column
+def hash(*cols: ColumnOrName) -> Column
+def hex(col: ColumnOrName) -> Column
+def hour(col: ColumnOrName) -> Column
+def hypot(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def initcap(col: ColumnOrName) -> Column
+def input_file_block_length() -> Column
+def input_file_block_start() -> Column
+def input_file_name() -> Column
+def instr(str: ColumnOrName, substr: str | Column) -> Column
+def is_valid_utf8(str: ColumnOrName) -> Column
+def is_variant_null(v: ColumnOrName) -> Column
+def isnan(col: ColumnOrName) -> Column
+def isnotnull(col: ColumnOrName) -> Column
+def isnull(col: ColumnOrName) -> Column
+def json_array_length(col: ColumnOrName) -> Column
+def json_object_keys(col: ColumnOrName) -> Column
+def json_tuple(col: ColumnOrName, *fields: str) -> Column
+def kurtosis(col: ColumnOrName) -> Column
+def lag(col: ColumnOrName, offset: int=1, default: Any | None=None) -> Column
+def last(col: ColumnOrName, ignorenulls: bool=False) -> Column
+def last_day(date: ColumnOrName) -> Column
+def last_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+def lcase(str: ColumnOrName) -> Column
+def lead(col: ColumnOrName, offset: int=1, default: Any | None=None) -> Column
+def least(*cols: ColumnOrName) -> Column
+def left(str: ColumnOrName, len: ColumnOrName) -> Column
+def length(col: ColumnOrName) -> Column
+def levenshtein(left: ColumnOrName, right: ColumnOrName, threshold: int | Column | None=None) -> Column
+def listagg(col: ColumnOrName, delimiter: Column | str | None=None) -> Column
+def ln(col: ColumnOrName) -> Column
+def localtimestamp() -> Column
+def locate(substr: str, str: ColumnOrName, pos: int=1) -> Column
+def log10(col: ColumnOrName) -> Column
+def log1p(col: ColumnOrName) -> Column
+def log2(col: ColumnOrName) -> Column
+def lower(col: ColumnOrName) -> Column
+def lpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column
+def ltrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def make_date(year: ColumnOrName, month: ColumnOrName, day: ColumnOrName) -> Column
+def make_timestamp(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def make_timestamp_ltz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def make_timestamp_ntz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName) -> Column
+def make_valid_utf8(str: ColumnOrName) -> Column
+def map_concat(*cols: ColumnOrName) -> Column
+def map_contains_key(col: ColumnOrName, value: Any) -> Column
+def map_entries(col: ColumnOrName) -> Column
+def map_from_arrays(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def map_from_entries(col: ColumnOrName) -> Column
+def map_keys(col: ColumnOrName) -> Column
+def map_values(col: ColumnOrName) -> Column
+def mask(col: ColumnOrName, upperChar: ColumnOrName | None=None, lowerChar: ColumnOrName | None=None, digitChar: ColumnOrName | None=None, otherChar: ColumnOrName | None=None) -> Column
+def max(col: ColumnOrName) -> Column
+def md5(col: ColumnOrName) -> Column
+def mean(col: ColumnOrName) -> Column
+def median(col: ColumnOrName) -> Column
+def min(col: ColumnOrName) -> Column
+def minute(col: ColumnOrName) -> Column
+def mode(col: ColumnOrName, deterministic: bool=False) -> Column
+def monotonically_increasing_id() -> Column
+def month(col: ColumnOrName) -> Column
+def monthname(col: ColumnOrName) -> Column
+def months_between(date1: ColumnOrName, date2: ColumnOrName, roundOff: bool=True) -> Column
+def named_struct(*cols: ColumnOrName) -> Column
+def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def negative(col: ColumnOrName) -> Column
+def next_day(date: ColumnOrName, dayOfWeek: str) -> Column
+def now() -> Column
+def nth_value(col: ColumnOrName, offset: int, ignoreNulls: bool=False) -> Column
+def ntile(n: int) -> Column
+def nullif(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def nullifzero(col: ColumnOrName) -> Column
+def nvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def nvl2(col1: ColumnOrName, col2: ColumnOrName, col3: ColumnOrName) -> Column
+def octet_length(col: ColumnOrName) -> Column
+def overlay(src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int=-1) -> Column
+def parse_json(col: ColumnOrName) -> Column
+def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None=None) -> Column
+def percent_rank() -> Column
+def percentile(col: ColumnOrName, percentage: Column | float, frequency: Column | int=1) -> Column
+def percentile_approx(col: ColumnOrName, percentage: Column | float, accuracy: Column | int=10000) -> Column
+def pi() -> Column
+def pmod(dividend: ColumnOrName | float, divisor: ColumnOrName | float) -> Column
+def position(substr: ColumnOrName, str: ColumnOrName, start: ColumnOrName | None=None) -> Column
+def positive(col: ColumnOrName) -> Column
+def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def printf(format: ColumnOrName, *cols: ColumnOrName) -> Column
+def quarter(col: ColumnOrName) -> Column
+def quote(col: ColumnOrName) -> Column
+def radians(col: ColumnOrName) -> Column
+def raise_error(errMsg: Column | str) -> Column
+def rand(seed: int | None=None) -> Column
+def randn(seed: int | None=None) -> Column
+def randstr(length: int | Column, seed: int | Column | None=None) -> Column
+def rank() -> Column
+def regexp(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_count(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_extract(str: ColumnOrName, pattern: str, idx: int) -> Column
+def regexp_extract_all(str: ColumnOrName, regexp: ColumnOrName, idx: int | Column | None=None) -> Column
+def regexp_instr(str: ColumnOrName, regexp: ColumnOrName, idx: int | Column | None=None) -> Column
+def regexp_like(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_replace(string: ColumnOrName, pattern: str | Column, replacement: str | Column) -> Column
+def regexp_substr(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regr_avgx(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_avgy(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_count(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_intercept(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_r2(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_slope(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_sxx(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_sxy(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_syy(y: ColumnOrName, x: ColumnOrName) -> Column
+def repeat(col: ColumnOrName, n: ColumnOrName | int) -> Column
+def replace(src: ColumnOrName, search: ColumnOrName, replace: ColumnOrName | None=None) -> Column
+def reverse(col: ColumnOrName) -> Column
+def right(str: ColumnOrName, len: ColumnOrName) -> Column
+def rint(col: ColumnOrName) -> Column
+def round(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def row_number() -> Column
+def rpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column
+def rtrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def schema_of_json(json: Column | str, options: dict[str, str] | None=None) -> Column
+def schema_of_variant(v: ColumnOrName) -> Column
+def sec(col: ColumnOrName) -> Column
+def second(col: ColumnOrName) -> Column
+def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None=None) -> Column
+def session_user() -> Column
+def sha(col: ColumnOrName) -> Column
+def sha1(col: ColumnOrName) -> Column
+def sha2(col: ColumnOrName, numBits: int) -> Column
+def shiftLeft(col: ColumnOrName, numBits: int) -> Column
+def shiftRight(col: ColumnOrName, numBits: int) -> Column
+def shiftRightUnsigned(col: ColumnOrName, numBits: int) -> Column
+def shiftleft(col: ColumnOrName, numBits: int) -> Column
+def shiftright(col: ColumnOrName, numBits: int) -> Column
+def shiftrightunsigned(col: ColumnOrName, numBits: int) -> Column
+def shuffle(col: ColumnOrName, seed: int | Column | None=None) -> Column
+def sign(col: ColumnOrName) -> Column
+def signum(col: ColumnOrName) -> Column
+def sin(col: ColumnOrName) -> Column
+def sinh(col: ColumnOrName) -> Column
+def size(col: ColumnOrName) -> Column
+def skewness(col: ColumnOrName) -> Column
+def slice(x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int) -> Column
+def sort_array(col: ColumnOrName, asc: bool=True) -> Column
+def soundex(col: ColumnOrName) -> Column
+def spark_partition_id() -> Column
+def split(str: ColumnOrName, pattern: str | Column, limit: int | Column=-1) -> Column
+def split_part(src: ColumnOrName, delimiter: ColumnOrName, partNum: ColumnOrName) -> Column
+def sqrt(col: ColumnOrName) -> Column
+def startswith(str: ColumnOrName, prefix: ColumnOrName) -> Column
+def std(col: ColumnOrName) -> Column
+def stddev(col: ColumnOrName) -> Column
+def stddev_pop(col: ColumnOrName) -> Column
+def stddev_samp(col: ColumnOrName) -> Column
+def str_to_map(text: ColumnOrName, pairDelim: ColumnOrName | None=None, keyValueDelim: ColumnOrName | None=None) -> Column
+def struct(*cols: ColumnOrName) -> Column
+def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None=None) -> Column
+def substring(str: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int) -> Column
+def substring_index(str: ColumnOrName, delim: str, count: int) -> Column
+def sum(col: ColumnOrName) -> Column
+def tan(col: ColumnOrName) -> Column
+def tanh(col: ColumnOrName) -> Column
+def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None=None) -> Column
+def timestamp_micros(col: ColumnOrName) -> Column
+def timestamp_millis(col: ColumnOrName) -> Column
+def timestamp_seconds(col: ColumnOrName) -> Column
+def toDegrees(col: ColumnOrName) -> Column
+def toRadians(col: ColumnOrName) -> Column
+def to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_char(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_date(col: ColumnOrName, format: str | None=None) -> Column
+def to_json(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
+def to_number(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_timestamp(col: ColumnOrName, format: str | None=None) -> Column
+def to_timestamp_ltz(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_timestamp_ntz(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_unix_timestamp(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
+def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_variant_object(col: ColumnOrName) -> Column
+def translate(srcCol: ColumnOrName, matching: str, replace: str) -> Column
+def trim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def trunc(date: ColumnOrName, format: str) -> Column
+def try_add(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_aes_decrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def try_avg(col: ColumnOrName) -> Column
+def try_divide(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_element_at(col: ColumnOrName, extraction: ColumnOrName) -> Column
+def try_make_timestamp(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def try_make_timestamp_ltz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def try_make_timestamp_ntz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName) -> Column
+def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_parse_json(col: ColumnOrName) -> Column
+def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None=None) -> Column
+def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_sum(col: ColumnOrName) -> Column
+def try_to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def try_to_date(col: ColumnOrName, format: str | None=None) -> Column
+def try_to_number(col: ColumnOrName, format: ColumnOrName) -> Column
+def try_to_timestamp(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def try_url_decode(str: ColumnOrName) -> Column
+def try_validate_utf8(str: ColumnOrName) -> Column
+def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def typeof(col: ColumnOrName) -> Column
+def ucase(str: ColumnOrName) -> Column
+def unbase64(col: ColumnOrName) -> Column
+def unhex(col: ColumnOrName) -> Column
+def uniform(min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column | None=None) -> Column
+def unix_date(col: ColumnOrName) -> Column
+def unix_micros(col: ColumnOrName) -> Column
+def unix_millis(col: ColumnOrName) -> Column
+def unix_seconds(col: ColumnOrName) -> Column
+def upper(col: ColumnOrName) -> Column
+def url_decode(str: ColumnOrName) -> Column
+def url_encode(str: ColumnOrName) -> Column
+def user() -> Column
+def uuid(seed: int | Column | None=None) -> Column
+def validate_utf8(str: ColumnOrName) -> Column
+def var_pop(col: ColumnOrName) -> Column
+def var_samp(col: ColumnOrName) -> Column
+def variance(col: ColumnOrName) -> Column
+def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def version() -> Column
+def weekday(col: ColumnOrName) -> Column
+def weekofyear(col: ColumnOrName) -> Column
+def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int) -> Column
+def xxhash64(*cols: ColumnOrName) -> Column
+def year(col: ColumnOrName) -> Column
+def zeroifnull(col: ColumnOrName) -> Column
 ## sql/column.py
 Column.def __init__(self, native: _native.Column) -> None
 Column.def alias(self, *alias: str, **kwargs: Any) -> Column
@@ -298,6 +1019,7 @@ EAGER_MAX_ROWS_KEY
 class DataFrame()
 ## sql/functions.py
 __all__
+__all__ = [*_HAND_WRITTEN, *_generated_functions.__all__]
 column
 countDistinct
 def asc(col: ColumnOrName) -> Column
@@ -338,6 +1060,7 @@ ProfileView.def __init__(self, document: dict[str, Any] | str) -> None
 ProfileView.def save(self, path: str | Path, title: str='Krishiv query profile') -> Path
 ProfileView.def to_html(self, title: str='Krishiv query profile') -> str
 __all__
+__all__ = ['ProfileView', 'ui']
 class ProfileView()
 def ui(source: Any, *, path: str | Path | None=None) -> ProfileView
 ## sql/readwriter.py
@@ -542,4 +1265,5 @@ StorageLevel.MEMORY_ONLY_2: StorageLevel
 StorageLevel.OFF_HEAP: StorageLevel
 StorageLevel.def __init__(self, useDisk: bool, useMemory: bool, useOffHeap: bool, deserialized: bool, replication: int=1) -> None
 __all__
+__all__ = ['StorageLevel']
 class StorageLevel()
