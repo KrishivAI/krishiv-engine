@@ -2,13 +2,12 @@
 //! The interactive REPL: `krishiv sql` with no `-e`/`-f` and a terminal on
 //! stdin.
 //!
-//! The loop is deliberately line-based (no line-editor dependency): it
-//! prints a `krishiv>` prompt, reads lines, runs dot-commands
-//! (`.timer`, `.format`, `.help`, ...) and SQL statements, and persists
-//! history through [`crate::history`]. Completion ([`crate::complete`])
-//! and highlighting ([`crate::highlight`]) are pure functions over the
-//! current line so that a line editor can adopt them later without
-//! changing their behavior or tests.
+//! On a terminal the line editor ([`crate::editor`], `reedline`) reads: cursor
+//! editing, history search, a Tab menu fed by [`crate::complete`] and
+//! multi-line statements. Piped input uses the plain loop below, which prints
+//! a `krishiv>` prompt per line. Both run dot-commands (`.timer`, `.format`,
+//! `.help`, ...) and SQL statements and persist history through
+//! [`crate::history`].
 
 use std::io::{self, BufRead, Write};
 
@@ -179,33 +178,68 @@ pub(crate) fn run_repl(session: &krishiv::Session, args: &SqlArgs) -> i32 {
     let mut stdout = io::stdout().lock();
     let mut buffer = String::new();
     let history_file = crate::history::history_path();
+    // On a terminal the line editor reads (cursor editing, history, Tab);
+    // piped input, or an editor that cannot start, uses the plain loop.
+    let mut editor = {
+        use std::io::IsTerminal;
+        if stdin.is_terminal() && io::stdout().is_terminal() {
+            let past = history_file
+                .as_deref()
+                .map(crate::history::load)
+                .unwrap_or_default();
+            crate::editor::Editor::new(ctx.clone(), &past)
+        } else {
+            None
+        }
+    };
     let mut history_failed = false;
     let mut failures = 0;
-    loop {
-        if buffer.trim().is_empty() {
-            let _ = write!(stdout, "krishiv> ");
-        } else {
-            let _ = write!(stdout, "     ...> ");
-        }
-        let _ = stdout.flush();
-        let next = lines.next();
-        let Some(read) = next else {
-            break;
-        };
-        let Ok(line) = read else {
-            break;
-        };
-        if buffer.trim().is_empty() {
-            if let Some(quit) = repl.handle_dot(&line, &ctx, &mut stdout) {
-                if quit {
-                    break;
+    'repl: loop {
+        let read = editor.as_mut().map(crate::editor::Editor::read);
+        let line = match read {
+            Some(crate::editor::Read::Text(t)) => t,
+            Some(crate::editor::Read::Interrupt) => {
+                buffer.clear();
+                continue;
+            }
+            Some(crate::editor::Read::Eof) => break,
+            Some(crate::editor::Read::Error(e)) => {
+                // The terminal could not be driven: say so, and go on with the plain loop.
+                let _ = writeln!(
+                    io::stderr(),
+                    "line editor stopped: {e}; reading plain lines"
+                );
+                editor = None;
+                continue;
+            }
+            None => {
+                if buffer.trim().is_empty() {
+                    let _ = write!(stdout, "krishiv> ");
+                } else {
+                    let _ = write!(stdout, "     ...> ");
                 }
+                let _ = stdout.flush();
+                match lines.next() {
+                    Some(Ok(line)) => line,
+                    _ => break,
+                }
+            }
+        };
+        // Dot-commands first, line by line (a pasted `.timer on` followed by SQL runs both); the rest is SQL.
+        let line = if buffer.trim().is_empty() {
+            let (dots, rest) = leading_dot_lines(&line);
+            for dot in dots {
+                if repl.handle_dot(dot, &ctx, &mut stdout) == Some(true) {
+                    break 'repl;
+                }
+            }
+            if rest.trim().is_empty() {
                 continue;
             }
-            if line.trim().is_empty() {
-                continue;
-            }
-        }
+            rest.to_owned()
+        } else {
+            line
+        };
         buffer.push_str(&line);
         buffer.push('\n');
         if !statement_complete(&buffer) {
@@ -247,8 +281,29 @@ pub(crate) fn run_repl(session: &krishiv::Session, args: &SqlArgs) -> i32 {
                 failures += 1;
             }
         }
+        // Statements may have created or dropped views and tables: Tab sees the current catalog.
+        if let Some(ed) = editor.as_mut() {
+            ed.refresh(CompletionContext::gather(session));
+        }
     }
     i32::from(failures > 0)
+}
+
+/// Splits `text` into its leading dot-command lines (blank lines between them are skipped) and the rest.
+pub(crate) fn leading_dot_lines(text: &str) -> (Vec<&str>, &str) {
+    let mut dots = Vec::new();
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        if line.trim().is_empty() {
+            at += line.len();
+        } else if line.trim_start().starts_with('.') {
+            dots.push(line.trim_end_matches(['\r', '\n']));
+            at += line.len();
+        } else {
+            break;
+        }
+    }
+    (dots, &text[at..])
 }
 
 /// Runs one statement with the REPL's state and the command-line flags; prints a failure on stderr and the
@@ -288,7 +343,7 @@ fn run_statement(
 
 /// Whether `buffer` holds a complete statement: a `;` outside quotes and
 /// comments, or a dot-command line.
-fn statement_complete(buffer: &str) -> bool {
+pub(crate) fn statement_complete(buffer: &str) -> bool {
     if buffer.trim_start().starts_with('.') && !buffer.contains('\n') {
         return true;
     }
@@ -338,6 +393,63 @@ fn statement_complete(buffer: &str) -> bool {
         }
     }
     false
+}
+
+/// Whether `buffer` holds code after its last top-level `;` (or an unclosed quote or comment): a pasted
+/// `SELECT 1;\nINSERT INTO t SELECT * FROM s` is not yet whole.
+pub(crate) fn has_unfinished_tail(buffer: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut tail = false;
+    let mut chars = buffer.chars().peekable();
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            if c == '\\' && q != '`' {
+                chars.next();
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' | '`' => {
+                tail = true;
+                quote = Some(c);
+            }
+            '-' if chars.peek() == Some(&'-') => {
+                for n in chars.by_ref() {
+                    if n == '\n' {
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let (mut depth, mut prev, mut closed) = (1_usize, '\0', false);
+                for n in chars.by_ref() {
+                    if prev == '*' && n == '/' {
+                        depth -= 1;
+                        if depth == 0 {
+                            closed = true;
+                            break;
+                        }
+                        prev = '\0';
+                    } else if prev == '/' && n == '*' {
+                        depth += 1;
+                        prev = '\0';
+                    } else {
+                        prev = n;
+                    }
+                }
+                if !closed {
+                    tail = true;
+                }
+            }
+            ';' => tail = false,
+            c if !c.is_whitespace() => tail = true,
+            _ => {}
+        }
+    }
+    tail || quote.is_some()
 }
 
 #[cfg(test)]
@@ -400,6 +512,30 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("SELECT"), "{text}");
+    }
+
+    #[test]
+    fn a_buffer_with_code_after_its_last_semicolon_is_unfinished() {
+        assert!(!has_unfinished_tail("SELECT 1;"));
+        assert!(!has_unfinished_tail("SELECT 1; -- done\n"));
+        assert!(!has_unfinished_tail("SELECT 1; /* note */ "));
+        assert!(has_unfinished_tail(
+            "SELECT 1;\nINSERT INTO dst SELECT * FROM src"
+        ));
+        assert!(has_unfinished_tail("SELECT 1; SELECT 'open"));
+        assert!(has_unfinished_tail("SELECT 1; /* open"));
+        assert!(!has_unfinished_tail("SELECT ';' ;"));
+    }
+
+    #[test]
+    fn leading_dot_commands_split_from_the_sql_after_them() {
+        assert_eq!(
+            leading_dot_lines(".timer on\n\n.format csv\nSELECT 1;\n"),
+            (vec![".timer on", ".format csv"], "SELECT 1;\n")
+        );
+        assert_eq!(leading_dot_lines("SELECT 1;"), (vec![], "SELECT 1;"));
+        assert_eq!(leading_dot_lines(".quit"), (vec![".quit"], ""));
+        assert_eq!(leading_dot_lines("  \n"), (vec![], ""));
     }
 
     #[test]

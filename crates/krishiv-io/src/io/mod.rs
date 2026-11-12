@@ -340,6 +340,8 @@ pub struct IoCounters {
     pub bytes_read: AtomicU64,
     /// Bytes written.
     pub bytes_written: AtomicU64,
+    /// Files written to completion (a single put or a completed upload).
+    pub files_written: AtomicU64,
     /// Retried attempts.
     pub retries: AtomicU64,
     /// Speculative tail reads.

@@ -406,8 +406,129 @@ fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
     }))
 }
 
-/// Compiles `e` over `input`.
+/// Compiles `e` over `input`. An expression that can raise at run time and
+/// came from SQL text carries its span (see [`Sited`]).
 pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
+    let compiled = compile_node(e, input)?;
+    // A cast the analyzer inserted (implicit coercion) has its operand's span:
+    // Spark reports the expression it serves, so the enclosing site applies.
+    let implicit_cast =
+        matches!(&e.node, ExprNode::Cast { expr, .. } if expr.origin.sql == e.origin.sql);
+    // Spark gives no context to `try_*` functions' errors or to `split_part`'s
+    // (`try_element_at.sql.out`, `string-functions.sql.out`).
+    let context_free = matches!(
+        &e.node,
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if matches!(&f.id, FunctionId::Registry { name, .. }
+                if name.starts_with("try_") || name == "split_part")
+    ) || (!input.env.ansi && no_context_without_ansi(e));
+    let can_raise = !implicit_cast
+        && matches!(
+            &e.node,
+            ExprNode::Cast { .. } | ExprNode::Resolved(ResolvedExpr::Function(_))
+        );
+    if context_free && can_raise {
+        // The error keeps no context even when an enclosing call would give one
+        // (`abs(try_element_at(array(1, 2, 3), 0))`): the innermost site wins, and
+        // a site of no statement's text renders as none.
+        return Ok(Arc::new(Sited {
+            inner: compiled,
+            site: krishiv_common::error::ErrorSite {
+                source: NO_CONTEXT_SOURCE,
+                start: 0,
+                end: 0,
+            },
+        }));
+    }
+    Ok(match e.origin.sql {
+        Some((source, span)) if can_raise => Arc::new(Sited {
+            inner: compiled,
+            site: krishiv_common::error::ErrorSite {
+                source: source.0,
+                start: span.start,
+                end: span.end,
+            },
+        }),
+        _ => compiled,
+    })
+}
+
+/// Whether Spark 4.2.0 gives the errors of `e` no `queryContext` when `spark.sql.ansi.enabled` is
+/// off, though it does with it on: a cast's range errors and `element_at`'s zero index
+/// (`results/nonansi/cast.sql.out`, `array.sql.out`).
+fn no_context_without_ansi(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Cast { .. } => true,
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            matches!(&f.id, FunctionId::Registry { name, .. } if name == "element_at")
+        }
+        _ => false,
+    }
+}
+
+/// The source of the site a context-free expression marks its errors with: no
+/// statement's text has it, so the session renders no context for it.
+const NO_CONTEXT_SOURCE: u32 = u32::MAX;
+
+/// An expression that can raise, with the span of SQL text it came from: its
+/// error is marked with that site (the innermost expression's wins), and the
+/// session renders the span as Spark's `== SQL ==` context. The Ok path is the
+/// inner expression's; no text enters the plan.
+struct Sited {
+    inner: Arc<dyn PhysExpr>,
+    site: krishiv_common::error::ErrorSite,
+}
+
+impl fmt::Debug for Sited {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl PhysExpr for Sited {
+    fn data_type(&self) -> &ArrowType {
+        self.inner.data_type()
+    }
+    fn nullable(&self) -> bool {
+        self.inner.nullable()
+    }
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        self.inner.eval(batch, partition).map_err(|e| {
+            if has_spark_context(e.error_class().name()) {
+                e.with_pending_site(self.site)
+            } else {
+                e
+            }
+        })
+    }
+    fn is_constant(&self) -> bool {
+        self.inner.is_constant()
+    }
+    fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
+        self.inner.null_on_overflow()
+    }
+}
+
+/// Whether Spark 4.2.0 gives an error of this class a `queryContext`. Only the classes its
+/// expressions raise through `SupportQueryContext` do; others (`CAST_OVERFLOW`,
+/// `CANNOT_PARSE_TIMESTAMP`, `USER_RAISED_EXCEPTION`, `INVALID_PARAMETER_VALUE.*`, ...)
+/// carry none, and adding one would diverge from Spark (ADR 0008).
+fn has_spark_context(class: &str) -> bool {
+    matches!(
+        class,
+        "CAST_INVALID_INPUT"
+            | "ARITHMETIC_OVERFLOW"
+            | "NUMERIC_VALUE_OUT_OF_RANGE"
+            | "DIVIDE_BY_ZERO"
+            | "REMAINDER_BY_ZERO"
+            | "INVALID_INDEX_OF_ZERO"
+            | "MAP_KEY_DOES_NOT_EXIST"
+    ) || class.starts_with("INVALID_ARRAY_INDEX")
+        || class == "INTERVAL_DIVIDED_BY_ZERO"
+        || class.starts_with("NUMERIC_VALUE_OUT_OF_RANGE")
+}
+
+fn compile_node(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     match &e.node {
         ExprNode::Literal(l) => Ok(Arc::new(Lit::new(l)?)),
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {

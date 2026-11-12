@@ -659,8 +659,12 @@ impl Resolver<'_> {
         if let Some(bound) = self.collated_call(e, kids, n, &name, in_agg, window_fn, cx)? {
             return Ok(bound);
         }
+        // A call qualified by anything but the built-in catalog is resolved (or refused) by
+        // `expr_node_inner`; the rewrites below would replace it with the built-in.
+        let rewritable =
+            f.qualifier.is_empty() || super::super::bind::is_builtin_qualifier(&f.qualifier);
         // Comparisons of `UTF8_LCASE` / `_RTRIM` strings compare their keys (design 3.3, unit 3a).
-        if (KEYED.contains(&name.as_str()) || KEYED_SEARCH.contains(&name.as_str()))
+        if (KEYED.contains(&name.as_str()) || (rewritable && KEYED_SEARCH.contains(&name.as_str())))
             && !f.distinct
             && kids[..n].iter().any(|k| {
                 k.ty.data_type
@@ -1200,7 +1204,8 @@ impl Resolver<'_> {
                 keyed.push(k.clone());
                 continue;
             }
-            let mut b = self.expr(&key_of(&k.expr, &type_of(i), e.origin), cx)?;
+            let target = type_of(i);
+            let mut b = self.expr(&key_of(&k.expr, &target, e.origin), cx)?;
             b.shown = Some(k.shown());
             // A literal of another collation is shown cast to the call's, as in the plain path.
             if let Some(c) = search
@@ -1558,6 +1563,8 @@ impl Resolver<'_> {
             })
             .with_origin(e.origin);
             let mut b = self.expr(&Arc::new(cast), cx)?;
+            // The re-bound operand keeps the aggregate, window and outer markers of the original.
+            b.carry_markers(std::slice::from_ref(k));
             b.shown = Some(k.shown());
             plain.push(b);
         }
@@ -1633,6 +1640,7 @@ impl Resolver<'_> {
         })
         .with_origin(origin);
         let mut b = self.expr(&Arc::new(cast), cx)?;
+        b.carry_markers(std::slice::from_ref(k));
         b.shown = Some(k.shown());
         Ok(b)
     }

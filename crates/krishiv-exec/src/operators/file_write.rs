@@ -23,7 +23,7 @@
 //! - Files land under the write's staging directory; publishing them is
 //!   the commit protocol's job, never a rename.
 
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringViewArray};
@@ -85,6 +85,17 @@ struct WriteLocal {
     writer: Option<Writer>,
     /// The writer's error, once it failed (it then closes the channel).
     failed: Arc<Mutex<Option<KrishivError>>>,
+    /// Set when the driver ends without `combine` (cancelled or failed): the
+    /// writer stops before its next file instead of writing the queued rows.
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for WriteLocal {
+    fn drop(&mut self) {
+        if self.commit.is_some() {
+            self.stop.store(true, Ordering::Release);
+        }
+    }
 }
 
 /// The channels of one writer task.
@@ -258,6 +269,8 @@ impl Sink for FileWriteSink {
             ctx.consumer().reservation(),
         )?
         .sharing_file_numbers(Arc::clone(&g.file_numbers));
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = writer.stopping_on(Arc::clone(&stop));
         let (batches_tx, batches_rx) = mpsc::channel(QUEUED_BATCHES);
         let (commit_tx, commit_rx) = oneshot::channel();
         let (done_tx, done_rx) = oneshot::channel();
@@ -291,6 +304,7 @@ impl Sink for FileWriteSink {
                 keep: keep_tx,
             }),
             failed,
+            stop,
         }))
     }
 

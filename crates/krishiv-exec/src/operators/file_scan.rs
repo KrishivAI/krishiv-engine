@@ -323,6 +323,8 @@ impl ScanPushdown for FileScan {
 pub struct FileScanMetrics {
     /// Splits opened.
     pub splits: u64,
+    /// Files opened (each counts once, with the first piece of it that is opened).
+    pub files: u64,
     /// Units (row groups) decoders were opened with, after statistics pruning.
     pub units: u64,
     /// Units skipped by dynamic filters or dictionaries.
@@ -371,6 +373,7 @@ impl FileScanMetrics {
         if self.splits > 0 {
             out = crate::metrics::counts([
                 ("scan_splits", self.splits),
+                ("scan_files", self.files),
                 ("scan_units", self.units),
                 ("scan_units_pruned", self.units_pruned),
                 ("scan_rows_decoded", self.rows),
@@ -468,6 +471,9 @@ pub struct FileScanSource {
     layout: Vec<Slot>,
     runtime: super::RuntimeFilters,
     metrics: Arc<Mutex<FileScanMetrics>>,
+    /// The files a piece was opened for, so `FileScanMetrics::files` counts each once however many pieces
+    /// (of one split, or of splits that do not start at byte 0) are read.
+    opened_files: Arc<Mutex<std::collections::HashSet<usize>>>,
     /// Whether the row id ends the output.
     row_id: bool,
 }
@@ -812,6 +818,7 @@ impl FileScanSource {
             mapped,
             runtime: p.dynamic,
             metrics: Arc::new(Mutex::new(FileScanMetrics::default())),
+            opened_files: Arc::default(),
             row_id: p.row_id,
         })
     }
@@ -1089,6 +1096,17 @@ impl FileScanSource {
         )
         .await?
         .with_gate(Arc::clone(&local.gate));
+        if self
+            .opened_files
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(file)
+        {
+            self.metrics
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .files += 1;
+        }
         local.current = Some(Current {
             stream,
             file,

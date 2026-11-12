@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use super::{
     ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
-    build_projection::EXEC_JOIN_BUILD_PROJECTION, join_cost::JOIN_COST,
+    build_projection::EXEC_JOIN_BUILD_PROJECTION, direct_keys::EXEC_AGG_DIRECT_KEYS,
+    join_cost::JOIN_COST, partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
 };
 
 mod python;
@@ -33,6 +34,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
+    &EXEC_AGG_DIRECT_KEYS,
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
@@ -56,6 +58,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
     &UI_ENABLED,
+    &SYSTEM_QUERY_TEXT_MAX_BYTES,
+    &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
     &QUERY_MAX_QUEUED_TIME,
     &CACHE_MAX_BYTES,
@@ -116,6 +120,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CTE_RECURSION_ROW_LIMIT,
     &LEGACY_CODING_ERROR_ACTION,
     &LEGACY_JAVA_CHARSETS,
+    &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
     &LEGACY_STATISTICAL_AGGREGATE,
     &BINARY_OUTPUT_STYLE,
     &LEGACY_TIME_PARSER_POLICY,
@@ -182,6 +187,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.joinCost", &JOIN_COST),
     ("krishiv.python.udf.threads", &PYTHON_UDF_THREADS),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
+    ("krishiv.exec.agg.directKeys", &EXEC_AGG_DIRECT_KEYS),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
@@ -276,6 +282,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.storeAssignmentPolicy",
         &STORE_ASSIGNMENT_POLICY,
+    ),
+    (
+        "krishiv.system.queryText.literals",
+        &SYSTEM_QUERY_TEXT_LITERALS,
+    ),
+    (
+        "krishiv.system.queryText.maxBytes",
+        &SYSTEM_QUERY_TEXT_MAX_BYTES,
     ),
     (
         "spark.sql.files.maxPartitionBytes",
@@ -498,6 +512,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
         &RUNTIME_FILTER_BLOOM_ENABLED,
+    ),
+    (
+        "spark.sql.legacy.skipTypeValidationOnAlterPartition",
+        &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    ),
+    (
+        "krishiv.sql.legacy.skipTypeValidationOnAlterPartition",
+        &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
     ),
 ];
 
@@ -931,6 +953,33 @@ pub static UI_ENABLED: ConfigEntry = ConfigEntry {
     version_added: "0.2.0",
     spark_alias: None,
     settable_by: SettableBy::Startup,
+};
+
+/// Most bytes of a statement's text `system.queries` shows.
+pub static SYSTEM_QUERY_TEXT_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.system.queryText.maxBytes",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(4096)),
+    doc: "Most bytes of a statement's redacted text `system.queries.query_text` shows; a longer \
+          text is cut at a character boundary and `query_text_truncated` is true.",
+    scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
+};
+
+/// Whether `system.queries` shows a statement's literals or masks them.
+pub static SYSTEM_QUERY_TEXT_LITERALS: ConfigEntry = ConfigEntry {
+    key: "krishiv.system.queryText.literals",
+    value_type: ValueType::Enum(&["keep", "mask"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("keep"))),
+    doc: "`keep` shows the literals of a statement in `system.queries.query_text` (credentials \
+          are redacted either way); `mask` replaces every string and number literal with `?`, so \
+          a server can hide data values from the text without waiting for tracing.",
+    scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
 };
 
 /// The longest a query may run before it is cancelled (design P2-E1 §4).

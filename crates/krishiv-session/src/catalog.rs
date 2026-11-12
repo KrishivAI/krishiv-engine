@@ -154,8 +154,10 @@ pub(crate) struct SessionCatalog {
     pub(crate) store: Arc<InMemoryCatalogStore>,
     /// Where managed tables live (the runtime's).
     pub(crate) warehouse: Arc<Warehouse>,
-    /// The namespace bare table names resolve in (`USE`).
-    current_namespace: RwLock<String>,
+    /// The current catalog (`USE system`; empty is `spark_catalog`) and the namespace bare
+    /// table names resolve in (`USE`; empty is the default), under one lock so a reader never
+    /// sees half of a `USE`.
+    position: RwLock<(String, String)>,
     /// The entries `SET PATH` stored; `None` is the default path.
     path: RwLock<Option<Vec<crate::sql_path::Entry>>>,
 }
@@ -170,7 +172,7 @@ impl SessionCatalog {
             hidden: AtomicU64::new(0),
             store,
             warehouse,
-            current_namespace: RwLock::default(),
+            position: RwLock::default(),
             path: RwLock::default(),
         }
     }
@@ -279,15 +281,15 @@ impl SessionCatalog {
 
     /// The namespace bare table names resolve in.
     pub(crate) fn current_namespace(&self) -> String {
-        let ns = self
-            .current_namespace
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        if ns.is_empty() {
-            NAMESPACE.to_owned()
-        } else {
-            ns.clone()
-        }
+        self.position_pair().1
+    }
+
+    /// The current catalog's canonical name and namespace, read together.
+    pub(crate) fn position_pair(&self) -> (String, String) {
+        let p = self.position.read().unwrap_or_else(PoisonError::into_inner);
+        let catalog = if p.0.is_empty() { CATALOG } else { &p.0 };
+        let namespace = if p.1.is_empty() { NAMESPACE } else { &p.1 };
+        (catalog.to_owned(), namespace.to_owned())
     }
 
     /// The stored path entries, `None` for the default.
@@ -310,17 +312,55 @@ impl SessionCatalog {
         let entries = self
             .stored_path()
             .unwrap_or_else(|| crate::sql_path::default_entries(default_conf));
-        let namespace = self.current_namespace();
-        entries.iter().map(|e| e.parts(&namespace)).collect()
+        let current = self.current_position();
+        entries.iter().map(|e| e.parts(&current)).collect()
+    }
+
+    /// The current catalog and namespace as path parts: `[spark_catalog,
+    /// db]`, or `[system]`.
+    pub(crate) fn current_position(&self) -> Vec<String> {
+        let (catalog, namespace) = self.position_pair();
+        if crate::system::is_system(&catalog) {
+            vec![catalog]
+        } else {
+            vec![catalog, namespace]
+        }
+    }
+
+    /// The current catalog's canonical name.
+    pub(crate) fn current_catalog(&self) -> String {
+        self.position_pair().0
+    }
+
+    /// `USE <catalog>`: a no-op when `catalog` is current, else its default
+    /// namespace (the default database for `spark_catalog`, none for `system`).
+    pub(crate) fn use_catalog(&self, catalog: &str) {
+        {
+            let mut p = self
+                .position
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            let current = if p.0.is_empty() {
+                CATALOG
+            } else {
+                p.0.as_str()
+            };
+            if current == catalog {
+                return;
+            }
+            *p = (catalog.to_owned(), String::new());
+        }
+        self.epoch.fetch_add(1, Ordering::AcqRel);
     }
 
     /// `USE namespace`.
     pub(crate) fn use_namespace(&self, namespace: &str) {
         namespace.clone_into(
             &mut self
-                .current_namespace
+                .position
                 .write()
-                .unwrap_or_else(PoisonError::into_inner),
+                .unwrap_or_else(PoisonError::into_inner)
+                .1,
         );
         self.epoch.fetch_add(1, Ordering::AcqRel);
     }
@@ -416,6 +456,8 @@ pub(crate) struct QueryCatalog {
     epoch: u64,
     /// The current namespace (`USE`) as this query sees it.
     namespace: Vec<String>,
+    /// The current catalog (`USE system`) as this query sees it.
+    catalog: String,
     /// The SQL path (`SET PATH`) as this query sees it.
     path: Vec<Vec<String>>,
     /// What the `system` tables read.
@@ -465,8 +507,14 @@ impl QueryCatalog {
         system: crate::system::Sources,
     ) -> Self {
         let epoch = session.epoch();
-        let namespace = vec![session.current_namespace()];
-        let path = session.sql_path(default_path);
+        // One read of the position, so the snapshot never mixes two `USE`s.
+        let (catalog, current_namespace) = session.position_pair();
+        let namespace = if crate::system::is_system(&catalog) {
+            Vec::new()
+        } else {
+            vec![current_namespace]
+        };
+        let path = session.sql_path_in(default_path, &catalog, &namespace);
         Self {
             session,
             cache,
@@ -477,6 +525,7 @@ impl QueryCatalog {
             opened: Mutex::new(Vec::new()),
             epoch,
             namespace,
+            catalog,
             path,
             system,
             scanned: Scanned::default(),
@@ -1071,7 +1120,7 @@ pub(crate) struct QueryCatalogs(pub(crate) Arc<QueryCatalog>);
 
 impl CatalogResolver for QueryCatalogs {
     fn current_catalog(&self) -> &str {
-        CATALOG
+        &self.0.catalog
     }
 
     fn current_namespace(&self) -> &[String] {
@@ -1084,7 +1133,7 @@ impl CatalogResolver for QueryCatalogs {
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
         if crate::system::is_system(name) {
-            return Some(Arc::new(crate::system::SystemCatalog::of(&self.0.system)));
+            return Some(Arc::new(self.0.system_catalog()));
         }
         name.eq_ignore_ascii_case(CATALOG)
             .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)
@@ -1204,6 +1253,8 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) path: Vec<Vec<String>>,
     /// `spark.sql.legacy.viewSchemaBindingMode` of the query's snapshot: views read by their schema binding mode.
     pub(crate) binding_enabled: bool,
+    /// Whether `system` was the current catalog as the query snapshot saw it.
+    pub(crate) in_system: bool,
     /// Qualifies the bare routine calls of an expression written in a namespace under a frozen path
     /// (`None` when nothing changed): the calls of a stored view's query resolve where the view was
     /// created, not where it is read.
@@ -1336,10 +1387,10 @@ impl Expander<'_> {
                 .iter()
                 .any(|c| same_name(c, bare, self.case_sensitive))
         {
-            // The first schema of the view's frozen path holding the name. A name no schema of a
-            // non-empty frozen path holds stays missing (the first schema reports it), never
-            // read from a namespace the path left out; a view without a catalog schema in its
-            // path reads its own namespace.
+            if let Some(system) = self.system_table_in_path(&plan) {
+                return Ok(system);
+            }
+            // First schema of the frozen path holding the name (none held: the first reports it).
             let namespace = self
                 .view_path
                 .as_deref()
@@ -1353,7 +1404,7 @@ impl Expander<'_> {
                 })
                 .unwrap_or_else(|| namespace.clone());
             let qualified = ReadSource::Table {
-                name: vec![namespace, bare.clone()],
+                name: self.view_read_name(namespace, bare.clone()),
                 options: options.clone(),
             };
             let plan =
@@ -1430,21 +1481,6 @@ impl Expander<'_> {
         self.expand_stored(plan, scope)
     }
 
-    /// The first schema of `path` (in the catalog store) holding the table or view `table`.
-    fn path_schema_of(&self, path: &[Vec<String>], table: &str) -> Option<String> {
-        path.iter().find_map(|entry| match entry.as_slice() {
-            [c, n] if c.eq_ignore_ascii_case(CATALOG) => {
-                let (n_key, t_key) = if self.case_sensitive {
-                    (n.clone(), table.to_owned())
-                } else {
-                    (n.to_lowercase(), table.to_lowercase())
-                };
-                self.catalog.store.table(&n_key, &t_key).map(|_| n.clone())
-            }
-            _ => None,
-        })
-    }
-
     /// `plan`, or when it reads a stored view, that view's query as a subquery named for the view.
     fn expand_stored(
         &mut self,
@@ -1454,6 +1490,7 @@ impl Expander<'_> {
         let Some(stored) = self.stored else {
             return Ok(plan);
         };
+        let plan = self.anchored(plan);
         let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node else {
             return Ok(plan);
         };
@@ -1476,6 +1513,7 @@ impl Expander<'_> {
                 // Outside a stored view, the first schema of the path holding the name; inside one,
                 // the view's own namespace.
                 let path = self.view_path.as_deref().unwrap_or(&stored.path);
+                let path = Self::before_system(path, table);
                 let from_path = (self.view_namespace.is_none() || self.view_path.is_some())
                     .then(|| self.path_schema_of(path, table))
                     .flatten();
@@ -1486,7 +1524,7 @@ impl Expander<'_> {
                     (None, None) => return Ok(plan),
                 }
             }
-            [namespace, table] => (namespace.clone(), table),
+            [namespace, table] if self.names_a_stored_namespace() => (namespace.clone(), table),
             [catalog, namespace, table] if catalog.eq_ignore_ascii_case(CATALOG) => {
                 (namespace.clone(), table)
             }
@@ -1499,7 +1537,7 @@ impl Expander<'_> {
         };
         let entry = self.catalog.store.table(&namespace, &table_key);
         let candidate = ReadCandidate {
-            written: name.clone(),
+            written: self.read_name(name, &namespace, &table_key),
             view: entry
                 .as_ref()
                 .filter(|e| e.view.is_some())
@@ -1508,13 +1546,10 @@ impl Expander<'_> {
         if !self.reads.contains(&candidate) {
             self.reads.push(candidate);
         }
-        let Some(entry) = entry else {
+        let Some((entry, view)) = entry.as_ref().and_then(|e| Some((e, e.view.as_ref()?))) else {
             return Ok(plan);
         };
-        let Some(view) = &entry.view else {
-            return Ok(plan);
-        };
-        match self.inline_stored(&plan, &entry, view, &namespace, &table_key, scope) {
+        match self.inline_stored(&plan, entry, view, &namespace, &table_key, scope) {
             Ok(done) => Ok(done),
             Err(e) => {
                 // Keep the read as it is; the failure is raised once the reads are authorized.
@@ -1931,7 +1966,7 @@ pub(crate) fn pin_temp_tables(
         owned: BTreeSet::new(),
         new_pins: Vec::new(),
     };
-    let plan = pinner.run(plan)?;
+    let plan = crate::run_site::detach_sources(pinner.run(plan)?);
     Ok((plan, pinner.owned.into_iter().collect(), pinner.new_pins))
 }
 

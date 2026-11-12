@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
 use tracing::Instrument as _;
 
+pub(crate) use crate::run_site::sql_context;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
@@ -501,6 +502,7 @@ impl Session {
             && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
         {
             self.state.queries.record_refused(
+                crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
                 Some(krishiv_sql::redact_sql(query).as_str()),
                 None,
                 error,
@@ -613,7 +615,7 @@ impl Session {
                 self.exec_create_view(&v, query, &env.identifier_spans)
                     .await
             }
-            Statement::DropView(v) => self.exec_drop_view(&v).await,
+            Statement::DropView(v) => self.exec_drop_view(&v, &env).await,
             Statement::Cache(c) => {
                 Box::pin(self.exec_cache(&c, query, &env.identifier_spans)).await
             }
@@ -1205,7 +1207,8 @@ impl Session {
                     },
                 }),
             )
-            .with_path(catalog.sql_path_snapshot()),
+            .with_path(catalog.sql_path_snapshot())
+            .in_system(catalog.in_system()),
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
@@ -1235,6 +1238,7 @@ impl Session {
             variables_version: variables.version,
             policy_version: self.state.policy.version().0,
             text: None,
+            redacted: None,
             statement_class: None,
             row: Arc::default(),
             identifier_spans: Arc::default(),
@@ -1273,6 +1277,7 @@ impl Session {
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
                 path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
+                in_system: env.catalog.in_system(),
                 qualify: Some(&|e, namespace, path| {
                     env.sql_functions
                         .qualify_calls(e, namespace, path, self.state.profile, true)
@@ -1532,7 +1537,7 @@ impl Session {
         let (stream, query, _) = self
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
-        Ok((stream, query))
+        Ok((crate::run_site::resolve_sites(stream, env), query))
     }
 
     /// Asks the admission controller for a permit for the query whose
@@ -1548,7 +1553,7 @@ impl Session {
     ) -> Result<crate::admission::Permit, KrishivError> {
         // A query that reads only `system.*` is never queued behind the load it inspects.
         if exempt {
-            return Ok(crate::admission::Permit::unlimited());
+            return Ok(self.exempt_permit(log_id));
         }
         let request = QueryRequest {
             principal: Arc::clone(&self.state.principal),
@@ -1576,7 +1581,10 @@ impl Session {
         };
         queued.open = false;
         match admitted {
-            Ok(permit) => Ok(permit),
+            Ok(permit) => {
+                self.state.queries.mark_started(log_id);
+                Ok(permit)
+            }
             Err(error) => {
                 self.state.queries.record_failed_row(log_id, &error);
                 Err(error)
@@ -1592,7 +1600,9 @@ impl Session {
         env: &QueryEnv,
         exempt: bool,
     ) -> Result<Admitted, KrishivError> {
+        // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
         let log_id = self.state.queries.begin_as(
+            crate::system::TextPolicy::from_config(&env.config),
             env.text.as_deref(),
             env.statement_class,
             self.operation_id(),
@@ -1970,9 +1980,10 @@ impl Session {
                 column_types,
             })?;
             let worker = self.worker(env);
-            let (mut rows, _, row_id) = self
+            let (rows, _, row_id) = self
                 .run_on_query_logged(&plan, worker, env, false, admitted.take())
                 .await?;
+            let mut rows = crate::run_site::resolve_sites(rows, env);
             let mut batches = Vec::new();
             while let Some(batch) = rows.next().await {
                 batches.push(batch?);
@@ -2487,7 +2498,7 @@ pub(crate) struct WriteTarget {
 /// UUID form. Its bits come from the standard library's per-process
 /// random hash keys, a clock reading and a counter, so two writes never
 /// share one, within or across processes.
-fn job_uuid() -> String {
+pub(crate) fn job_uuid() -> String {
     use std::hash::{BuildHasher, Hasher};
     static WRITES: AtomicU64 = AtomicU64::new(0);
     let n = WRITES.fetch_add(1, Ordering::Relaxed);
@@ -2547,21 +2558,6 @@ pub(crate) fn unsupported_statement(what: &str) -> KrishivError {
 /// carry a DataFrame context, which needs no text).
 fn empty_redacted() -> RedactedSql {
     RedactedSql::opaque("")
-}
-
-/// `error` with the SQL span `start..end` of `text` attached as its
-/// query context (`stop` is inclusive, as Spark reports it).
-pub(crate) fn sql_context(
-    error: KrishivError,
-    text: &RedactedSql,
-    start: usize,
-    end: usize,
-) -> KrishivError {
-    error.with_query_context(ErrorQueryContext::sql(
-        text.fragment(start..end),
-        start,
-        end.saturating_sub(1),
-    ))
 }
 
 /// An analysis error with its query context attached: the SQL span of
@@ -2637,6 +2633,9 @@ pub(crate) struct QueryEnv {
     /// The statement as the session may show it (redacted), for
     /// `system.queries`; `None` for a query no SQL text started.
     pub(crate) text: Option<Arc<str>>,
+    /// The same text with the map from original offsets, to render the span of a run-time
+    /// error ([`crate::run_site::resolve_site`]).
+    pub(crate) redacted: Option<Arc<RedactedSql>>,
     /// The statement's class (`StatementClass::name`), for `system.queries`.
     pub(crate) statement_class: Option<&'static str>,
     /// The id of the `system.queries` row the statement's latest query began, if any: `sql`

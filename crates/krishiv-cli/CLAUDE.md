@@ -1,7 +1,7 @@
 # krishiv-cli
 
 **Layer:** L7 (may depend only on crates in L7 or lower; `cargo xtask layering`).  
-`krishiv sql` (P2-T092): `-e`/`-f`/stdin, `-o table|csv|json`, `--conf`, `--table name=path`, `--timing`; exit 0 ok, 1 query/I/O error, 2 usage. REPL polish is P2-T132.
+`krishiv sql` (P2-T092): `-e`/`-f`/stdin, `-o table|csv|json`, `--conf`, `--table name=path`, `--timing`; exit 0 ok, 1 query/I/O error, 2 usage. The REPL on a terminal is a `reedline` editor (`src/editor.rs`: Tab menu from `complete.rs`, history, multi-line statements); piped stdin uses the plain loop (P2-T132).
 
 ## Purpose
 The `krishiv` binary: sql, server, coordinator, worker, mcp, ui, doctor, migrate subcommands.

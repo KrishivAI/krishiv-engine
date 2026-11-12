@@ -15,11 +15,12 @@ pub(crate) enum Entry {
 }
 
 impl Entry {
-    /// The entry's parts; the current schema is `spark_catalog.<namespace>`.
-    pub(crate) fn parts(&self, namespace: &str) -> Vec<String> {
+    /// The entry's parts; the current schema is `current`, the session's
+    /// catalog and namespace (`[system]` under `USE system`).
+    pub(crate) fn parts(&self, current: &[String]) -> Vec<String> {
         match self {
             Self::Schema(parts) => parts.clone(),
-            Self::CurrentSchema => vec![crate::catalog::CATALOG.to_owned(), namespace.to_owned()],
+            Self::CurrentSchema => current.to_vec(),
         }
     }
 }
@@ -56,16 +57,13 @@ pub(crate) fn expand(
     elements: &[PathElement],
     live: &[Entry],
     default_conf: &str,
-    namespace: &str,
+    current: &[String],
 ) -> Result<Vec<Entry>, KrishivError> {
     let mut out: Vec<Entry> = Vec::new();
     for element in elements {
         for entry in one(element, live, default_conf) {
             let key = |e: &Entry| -> Vec<String> {
-                e.parts(namespace)
-                    .iter()
-                    .map(|p| p.to_lowercase())
-                    .collect()
+                e.parts(current).iter().map(|p| p.to_lowercase()).collect()
             };
             if out.iter().any(|e| key(e) == key(&entry)) {
                 let path_entry = match (&entry, element) {
