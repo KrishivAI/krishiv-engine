@@ -247,3 +247,15 @@ fn a_raising_expression_around_the_call_is_refused() {
     );
     assert!(!windowed(&sql));
 }
+
+#[test]
+fn min_and_max_of_a_double_are_refused() {
+    // NaN and -0.0 make the extreme depend on the order the rows arrive in.
+    for agg in [
+        "min(CAST(l_quantity AS DOUBLE))",
+        "max(CAST(l_quantity AS DOUBLE))",
+    ] {
+        let sql = q17(agg, "", "", "l_partkey = p_partkey");
+        assert!(!windowed(&sql), "{agg}");
+    }
+}
