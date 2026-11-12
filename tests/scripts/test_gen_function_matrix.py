@@ -188,5 +188,7 @@ def test_self_check_rejects_local_paths(tmp_path):
 
 
 def test_default_out_is_per_tag():
-    assert g.default_out("4.3.0") == "tests/fixtures/spark-4.3.0/function-matrix"
-    assert g.default_out("4.2.1") == "tests/fixtures/spark-4.2.1/function-matrix"
+    # Anchored at the repo root, so the directory is the same whatever the working directory is.
+    assert g.default_out("4.3.0").endswith("/tests/fixtures/spark-4.3.0/function-matrix")
+    assert g.default_out("4.2.1").endswith("/tests/fixtures/spark-4.2.1/function-matrix")
+    assert Path(g.default_out("4.3.0")).is_absolute()

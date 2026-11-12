@@ -876,7 +876,7 @@ def classify_nondeterministic(container: str, keys: list[tuple[str, dict]]) -> s
 
 def default_out(version: str) -> str:
     """Per-tag fixture directory (P3-T018): the version comes from the running Spark, never from a flag."""
-    return f"tests/fixtures/spark-{version}/function-matrix"
+    return str(Path(__file__).resolve().parents[2] / "tests" / "fixtures" / f"spark-{version}" / "function-matrix")
 
 
 def container_image(container: str) -> str:
