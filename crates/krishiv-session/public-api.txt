@@ -429,9 +429,12 @@ impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::builder() -> krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntime::cancel(&self, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
 pub fn krishiv_session::EngineRuntime::executor(&self) -> &alloc::sync::Arc<dyn krishiv_exec::executor::Executor>
+pub fn krishiv_session::EngineRuntime::expire_session(&self, &str) -> core::option::Option<usize>
 pub fn krishiv_session::EngineRuntime::io_totals(&self) -> &krishiv_io::io::IoCounters
+pub fn krishiv_session::EngineRuntime::kill_session(&self, &str, krishiv_session::CancelReason) -> core::option::Option<usize>
 pub fn krishiv_session::EngineRuntime::memory(&self) -> alloc::sync::Arc<dyn krishiv_memory::MemoryPool>
 pub fn krishiv_session::EngineRuntime::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
+pub fn krishiv_session::EngineRuntime::session_ended(&self, &str) -> bool
 impl core::fmt::Debug for krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::EngineRuntimeBuilder
@@ -636,6 +639,8 @@ pub fn krishiv_session::Session::close(&self) -> usize
 pub fn krishiv_session::Session::interrupt_all(&self) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::Session::new_session(&self) -> Self
 pub fn krishiv_session::Session::runtime(&self) -> &alloc::sync::Arc<krishiv_session::EngineRuntime>
+pub fn krishiv_session::Session::set_client_info(&self, krishiv_session::Transport, core::option::Option<&str>, core::option::Option<&str>, core::option::Option<&str>)
+pub fn krishiv_session::Session::set_idle_timeout_ms(&self, core::option::Option<i64>)
 pub async fn krishiv_session::Session::sql_with(&self, &str, krishiv_session::QueryOptions) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 impl krishiv_session::Session
 pub fn krishiv_session::Session::baggage(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
@@ -719,6 +724,23 @@ impl core::fmt::Debug for krishiv_session::StorageLevel
 pub fn krishiv_session::StorageLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::StorageLevel
 impl core::marker::StructuralPartialEq for krishiv_session::StorageLevel
+#[non_exhaustive] pub enum krishiv_session::Transport
+pub krishiv_session::Transport::Connect
+pub krishiv_session::Transport::Embedded
+pub krishiv_session::Transport::FlightSql
+pub krishiv_session::Transport::Mcp
+pub krishiv_session::Transport::Ui
+impl core::clone::Clone for krishiv_session::Transport
+pub fn krishiv_session::Transport::clone(&self) -> krishiv_session::Transport
+impl core::cmp::Eq for krishiv_session::Transport
+impl core::cmp::PartialEq for krishiv_session::Transport
+pub fn krishiv_session::Transport::eq(&self, &krishiv_session::Transport) -> bool
+impl core::default::Default for krishiv_session::Transport
+pub fn krishiv_session::Transport::default() -> krishiv_session::Transport
+impl core::fmt::Debug for krishiv_session::Transport
+pub fn krishiv_session::Transport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::Transport
+impl core::marker::StructuralPartialEq for krishiv_session::Transport
 pub struct krishiv_session::Unlimited
 impl core::clone::Clone for krishiv_session::Unlimited
 pub fn krishiv_session::Unlimited::clone(&self) -> krishiv_session::Unlimited

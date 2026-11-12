@@ -25,8 +25,7 @@ use krishiv_exec::planner::MemoryTable;
 use krishiv_memory::MemoryPool;
 use krishiv_plan::TableVersion;
 use krishiv_plan::analyzer::{
-    AccessDecision, AccessPolicy, BoxFuture, Catalog, NameForm, Principal, Privilege, Securable,
-    TableColumn, TableIdent, TableKind, TableMeta,
+    BoxFuture, Catalog, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
 };
 
 use crate::history::QueryHistory;
@@ -44,13 +43,14 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 6] = [
+const TABLES: [&str; 7] = [
     "capabilities",
     "caches",
     "memory",
     "metrics",
     "operators",
     "queries",
+    "sessions",
 ];
 
 /// The names of the tables of the catalog.
@@ -147,7 +147,7 @@ fn capability_rows() -> Vec<[String; 4]> {
 
 /// What a column holds.
 #[derive(Clone, Copy)]
-enum Kind {
+pub(crate) enum Kind {
     Text,
     Long,
     /// `INT`.
@@ -271,6 +271,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("error_message", Text, true),
             ("partial", Flag, false),
         ],
+        "sessions" => crate::sessions::layout(),
         _ => return None,
     })
 }
@@ -337,7 +338,7 @@ fn int_list_column(rows: &[&[i32]]) -> ArrayRef {
 }
 
 /// A `MAP<STRING, STRING>` column of `rows` label sets.
-fn labels_column(rows: &[&[(String, String)]]) -> ArrayRef {
+pub(crate) fn labels_column(rows: &[&[(String, String)]]) -> ArrayRef {
     use arrow_array::{MapArray, StringViewArray, StructArray};
     use arrow_buffer::OffsetBuffer;
     let ArrowType::Map(entries, _) = labels_type().to_arrow() else {
@@ -383,11 +384,11 @@ fn buckets_column(rows: &[Option<&[(f64, i64)]>]) -> ArrayRef {
 }
 
 /// Rows of text cells, column by column.
-fn text<'a>(cells: impl Iterator<Item = Option<&'a str>>) -> ArrayRef {
+pub(crate) fn text<'a>(cells: impl Iterator<Item = Option<&'a str>>) -> ArrayRef {
     Arc::new(StringArray::from_iter(cells))
 }
 
-fn long(cells: impl Iterator<Item = Option<i64>>) -> ArrayRef {
+pub(crate) fn long(cells: impl Iterator<Item = Option<i64>>) -> ArrayRef {
     Arc::new(Int64Array::from_iter(cells))
 }
 
@@ -396,72 +397,11 @@ fn bytes(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
-/// The remote span a W3C `traceparent` names: the trace, the caller's span
-/// (the parent of the spans the engine starts) and the trace flags.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RemoteParent {
-    pub(crate) trace_id: String,
-    pub(crate) span_id: String,
-    pub(crate) flags: u8,
-}
-
-/// [`RemoteParent`] of `header`, `None` for a malformed one (version `ff`, an all-zero id or wrong lengths).
-pub(crate) fn parse_remote_parent(header: &str) -> Option<RemoteParent> {
-    let hex = |s: &str, n: usize| {
-        s.len() == n && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-    };
-    let parts: Vec<&str> = header.trim().split('-').collect();
-    let [version, trace, parent, flags, ..] = parts.as_slice() else {
-        return None;
-    };
-    let zero = |s: &str| s.bytes().all(|b| b == b'0');
-    // Version 00 has exactly four fields; later versions may add more.
-    let shape = hex(version, 2) && *version != "ff" && (*version != "00" || parts.len() == 4);
-    if !(shape
-        && hex(trace, 32)
-        && !zero(trace)
-        && hex(parent, 16)
-        && !zero(parent)
-        && hex(flags, 2))
-    {
-        return None;
-    }
-    Some(RemoteParent {
-        trace_id: (*trace).to_owned(),
-        span_id: (*parent).to_owned(),
-        flags: u8::from_str_radix(flags, 16).ok()?,
-    })
-}
-
-/// Most `baggage` entries and bytes a session keeps from an inbound header.
-/// The header is untrusted input: what is over either bound is dropped.
-pub(crate) const MAX_BAGGAGE_ENTRIES: usize = 32;
-pub(crate) const MAX_BAGGAGE_BYTES: usize = 4096;
-
-/// The `key=value` entries of a W3C `baggage` header (properties after `;` are
-/// dropped), at most [`MAX_BAGGAGE_ENTRIES`] within [`MAX_BAGGAGE_BYTES`]
-/// bytes of header; a malformed entry (no `=`, empty key, control character)
-/// is skipped.
-pub(crate) fn parse_baggage(header: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut budget = MAX_BAGGAGE_BYTES;
-    for entry in header.split(',') {
-        if out.len() >= MAX_BAGGAGE_ENTRIES || entry.len() > budget {
-            break;
-        }
-        budget -= entry.len() + 1.min(budget - entry.len());
-        let pair = entry.split(';').next().unwrap_or_default();
-        let Some((k, v)) = pair.split_once('=') else {
-            continue;
-        };
-        let (k, v) = (k.trim(), v.trim());
-        if k.is_empty() || k.chars().chain(v.chars()).any(char::is_control) {
-            continue;
-        }
-        out.push((k.to_owned(), v.to_owned()));
-    }
-    out
-}
+#[cfg(test)]
+use crate::trace_context::{MAX_BAGGAGE_BYTES, MAX_BAGGAGE_ENTRIES};
+pub(crate) use crate::trace_context::{RemoteParent, parse_baggage, parse_remote_parent};
+#[cfg(test)]
+use krishiv_plan::analyzer::Principal;
 
 /// The name of the memory pool of the query whose `system.queries` row is `query_id`.
 pub(crate) fn pool_name(query_id: &str) -> String {
@@ -637,6 +577,9 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             Arc::new(Int32Array::from_iter(rows.iter().map(|r| Some(r.workers)))),
         ];
     }
+    if table.eq_ignore_ascii_case("sessions") {
+        return crate::sessions::columns(sources);
+    }
     if table.eq_ignore_ascii_case("queries") {
         let rows = sources.queries.snapshot(sources.monitor.sees_all());
         let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
@@ -771,56 +714,11 @@ pub(crate) struct Sources {
     pub(crate) metrics: Arc<krishiv_exec::MetricsRegistry>,
     /// Whether the query's principal sees every principal's queries.
     pub(crate) monitor: Arc<Monitor>,
+    /// The runtime's sessions.
+    pub(crate) sessions: Arc<crate::sessions::SessionView>,
 }
 
-/// Whether one query's principal holds `MONITOR` on the `system` securable,
-/// which shows every principal's rows in `system.queries` and
-/// `system.operators` (ADR 0036 update 2026-11-05). Asked once per query,
-/// when analysis loads one of those tables; until then, and when the policy
-/// says anything but a plain allow, the principal sees its own rows only.
-pub(crate) struct Monitor {
-    principal: Arc<Principal>,
-    policy: Arc<dyn AccessPolicy>,
-    decided: OnceLock<bool>,
-}
-
-impl std::fmt::Debug for Monitor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Monitor")
-            .field("decided", &self.decided.get())
-            .finish_non_exhaustive()
-    }
-}
-
-impl Monitor {
-    pub(crate) fn new(principal: Arc<Principal>, policy: Arc<dyn AccessPolicy>) -> Self {
-        Self {
-            principal,
-            policy,
-            decided: OnceLock::new(),
-        }
-    }
-
-    /// Asks the policy, once.
-    async fn decide(&self) {
-        if self.decided.get().is_some() {
-            return;
-        }
-        let securable = Securable::System(SYSTEM.to_owned());
-        let allowed = matches!(
-            self.policy
-                .check(&self.principal, &securable, Privilege::Monitor)
-                .await,
-            Ok(AccessDecision::Allow)
-        );
-        let _ = self.decided.set(allowed);
-    }
-
-    /// Whether every principal's rows show.
-    pub(crate) fn sees_all(&self) -> bool {
-        self.decided.get().copied().unwrap_or(false)
-    }
-}
+pub(crate) use crate::monitor::Monitor;
 
 /// Most tags a session carries, and the longest key and value.
 pub(crate) const MAX_TAGS: usize = 32;
@@ -1044,6 +942,11 @@ impl QueryLog {
             history,
             ..Self::default()
         }
+    }
+
+    /// The session's principal.
+    pub(crate) fn principal(&self) -> &str {
+        &self.principal
     }
 
     /// The session's id (UUIDv7).
@@ -1487,7 +1390,7 @@ impl Catalog for SystemCatalog {
             if !id.namespace.is_empty() {
                 return Ok(None);
             }
-            if ["queries", "operators"]
+            if ["queries", "operators", "sessions"]
                 .iter()
                 .any(|t| id.name.eq_ignore_ascii_case(t))
             {
@@ -1808,6 +1711,7 @@ mod tests {
                 Arc::new(Principal::local_user()),
                 Arc::new(krishiv_plan::analyzer::AllowAll),
             )),
+            sessions: Arc::default(),
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
         assert!(provider("nope", &sources).unwrap().is_none());
