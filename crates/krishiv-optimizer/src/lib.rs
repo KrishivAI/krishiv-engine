@@ -420,7 +420,11 @@ fn run(
             });
         let root = if window {
             t.once("SubqueryAsWindow", &root, |r| {
-                win_magic::rewrite(Arc::clone(r))
+                win_magic::rewrite(
+                    Arc::clone(r),
+                    stats.unwrap_or(&NoStatistics),
+                    options.stats_propagation,
+                )
             })?
         } else {
             root

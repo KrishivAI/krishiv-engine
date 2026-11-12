@@ -32,23 +32,31 @@ use krishiv_types::DataType;
 
 use crate::dag;
 use crate::eager::refusal_of_call;
+use crate::estimate::Estimator;
 use crate::expr::{
     Classes, and_all, builtin, column, conjuncts, data_type, equality, equality_classes,
     has_outer_reference, has_subquery, is_deterministic, references, same, strip_alias, substitute,
 };
+use crate::plan_stats::default_size;
 use crate::restrict::{MAX_ID, max_id};
-use crate::stats::RelStats;
+use crate::stats::{RelStats, Statistics};
 
 /// Rewrites the joins of `root` that are a subquery-as-window (see the module docs).
-pub(crate) fn rewrite(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
+pub(crate) fn rewrite(
+    root: Arc<LogicalPlan>,
+    stats: &dyn Statistics,
+    propagate: bool,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut r = Rule {
+        est: Estimator::with_propagation(stats, propagate),
         root: Arc::clone(&root),
         next: None,
     };
     dag::rewrite_up(root, &mut |p| Ok(r.join(&p).unwrap_or(p)))
 }
 
-struct Rule {
+struct Rule<'a> {
+    est: Estimator<'a>,
     root: Arc<LogicalPlan>,
     /// The next unused attribute id, computed at the first firing.
     next: Option<u64>,
@@ -67,7 +75,7 @@ struct Block {
     conjuncts: Vec<Arc<Expr>>,
 }
 
-impl Rule {
+impl Rule<'_> {
     fn join(&mut self, p: &Arc<LogicalPlan>) -> Option<Arc<LogicalPlan>> {
         let PlanNode::Join {
             left,
@@ -318,8 +326,42 @@ impl Rule {
             }
         }
         let _ = only_d;
-        // The plan.
+        // The guard (design 2.4): the bytes the window sorts must not exceed the bytes the second
+        // scan reads. An estimate without statistics is no basis: no firing.
         let outs = join.resolved_output()?;
+        let x_est = self.est.plan(x);
+        if !x_est.from_statistics {
+            return None;
+        }
+        let window_bytes = x_est.rows_for_costing()
+            * outs
+                .iter()
+                .map(|c| default_size(&c.data_type) as f64)
+                .sum::<f64>();
+        let mut used: HashSet<AttrId> = HashSet::new();
+        for c in &sb.conjuncts {
+            used.extend(references(c));
+        }
+        used.extend(keys.iter().map(|k| k.id));
+        for c in &calls {
+            used.extend(references(c));
+        }
+        let mut scan_bytes = 0.0;
+        for sl in &sb.leaves {
+            let est = self.est.plan(&sl.body);
+            let width: f64 = sl
+                .body
+                .resolved_output()?
+                .iter()
+                .filter(|c| used.contains(&AttrId(c.id.0 + sl.offset)))
+                .map(|c| default_size(&c.data_type) as f64)
+                .sum();
+            scan_bytes += est.rows_for_costing() * width;
+        }
+        if window_bytes > scan_bytes {
+            return None;
+        }
+        // The plan.
         let first = match self.next {
             Some(n) => n,
             None => max_id(&self.root, &mut Default::default()).checked_add(1)?,

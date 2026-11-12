@@ -52,6 +52,27 @@ fn env_tp() -> Env {
     }
 }
 
+/// Row counts for the two tables (the rule fires only on estimates from statistics).
+#[derive(Debug)]
+struct Counts;
+
+impl krishiv_optimizer::Statistics for Counts {
+    fn table(&self, scan: &krishiv_plan::Scan) -> Option<krishiv_optimizer::TableStats> {
+        let krishiv_plan::ReadSource::Table { name, .. } = &scan.source else {
+            return None;
+        };
+        let rows = match name.last()?.as_str() {
+            "t" => 40,
+            "p" => 7,
+            _ => return None,
+        };
+        Some(krishiv_optimizer::TableStats {
+            rows,
+            columns: std::collections::HashMap::new(),
+        })
+    }
+}
+
 fn rows_under(env: &Env, sql: &str, on: bool) -> (Vec<String>, bool) {
     let mut config = Config::new();
     if on {
@@ -62,7 +83,7 @@ fn rows_under(env: &Env, sql: &str, on: bool) -> (Vec<String>, bool) {
     let analyzed = env.analyze(sql);
     let plan = krishiv_optimizer::optimize_with_udfs(
         &analyzed,
-        &krishiv_optimizer::NoStatistics,
+        &Counts,
         &krishiv_udf_sdk::UdfLibrary::new(),
         &config,
     )

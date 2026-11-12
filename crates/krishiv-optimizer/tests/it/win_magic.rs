@@ -134,3 +134,20 @@ fn a_limit_in_the_subquery_is_refused() {
                WHERE l_partkey = p_partkey LIMIT 5))";
     assert!(!windowed(sql));
 }
+
+#[test]
+fn without_statistics_the_guard_does_not_fire() {
+    let plan = support::resolve(&support::tpch_sql(17), &support::ctx());
+    let mut config = Config::new();
+    config
+        .set("krishiv.optimizer.subqueryAsWindow", "true")
+        .unwrap();
+    let out = optimize_with_udfs(
+        &plan,
+        &krishiv_optimizer::NoStatistics,
+        &UdfLibrary::new(),
+        &config,
+    )
+    .unwrap();
+    assert!(!out.root().to_string().contains("Window ["));
+}
