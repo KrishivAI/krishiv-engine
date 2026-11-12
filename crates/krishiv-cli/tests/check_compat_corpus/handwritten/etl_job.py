@@ -32,3 +32,5 @@ def main(path):
 
 if __name__ == "__main__":
     main(sys.argv[1])  # F.xpath_float('x') is not a call
+
+# ruff: noqa

@@ -15,3 +15,5 @@ df = spark.table("t").select(col("a"), lc("b"), trim("c"))
 df = df.select(count_min_sketch("a", 0.1, 0.1, 1), histogram_numeric("a", 3))
 df = df.select(expr("cast(a as int)"), nope_fn("a"), row_number())
 result = df.collect()
+
+# ruff: noqa

@@ -11,3 +11,6 @@ def run(x, items):
     z = sf.when(sf.col("a") > 1, 1).otherwise(0)
     w = sf.col("a").cast("decimal(10, 2)").alias("b")
     return y, z, w, msg, sf.lit("#"), sf.sum_distinct("a"), sf.create_map("a", "b")
+
+
+# ruff: noqa
