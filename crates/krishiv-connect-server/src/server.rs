@@ -32,6 +32,7 @@ use tonic::transport::Server;
 use tonic::transport::server::{Connected, TcpConnectInfo};
 
 use crate::manager::SessionManager;
+use crate::operation::ExecuteLimits;
 use crate::service::{ConnectService, SparkConnectServiceServer};
 
 /// The listener's settings. The defaults are Spark 4.3.0's where Spark has
@@ -71,6 +72,8 @@ pub struct ConnectServerConfig {
     /// How long running queries may finish after shutdown starts
     /// (`krishiv.server.shutdownTimeout`, 30 s).
     pub shutdown_timeout: Duration,
+    /// The limits of `ExecutePlan`.
+    pub execute: ExecuteLimits,
 }
 
 impl Default for ConnectServerConfig {
@@ -86,6 +89,7 @@ impl Default for ConnectServerConfig {
             handshake_timeout: Duration::from_secs(10),
             maintenance_interval: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
+            execute: ExecuteLimits::default(),
         }
     }
 }
@@ -136,6 +140,7 @@ impl ConnectServerConfig {
             maintenance_interval: duration(&CONNECT_SESSION_MAINTENANCE_INTERVAL)
                 .unwrap_or(d.maintenance_interval),
             shutdown_timeout: duration(&SERVER_SHUTDOWN_TIMEOUT).unwrap_or(d.shutdown_timeout),
+            execute: ExecuteLimits::from_config(config),
         }
     }
 }
@@ -206,7 +211,8 @@ impl ConnectServer {
             draining,
             config,
         } = self;
-        let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining));
+        let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining))
+            .with_limits(config.execute.clone());
         let service = SparkConnectServiceServer::from_arc(Arc::new(service))
             .max_decoding_message_size(config.max_inbound_message_size)
             .max_encoding_message_size(config.max_inbound_message_size);

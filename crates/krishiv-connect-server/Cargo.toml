@@ -12,18 +12,27 @@ publish = false
 workspace = true
 
 [dependencies]
+arrow-array.workspace = true
+arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
+arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-connect = { path = "../krishiv-connect" }
-krishiv-session = { path = "../krishiv-session" }
+krishiv-memory = { path = "../krishiv-memory" }
+krishiv-plan = { path = "../krishiv-plan" }
+krishiv-session = { path = "../krishiv-session", features = ["unstable-ir"] }
+krishiv-types = { path = "../krishiv-types" }
+getrandom.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
 prost-types = { workspace = true, features = ["std"] }
 rustix.workspace = true
 serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "time", "macros"] }
 tonic = { workspace = true, features = ["server", "router", "codegen"] }
 tracing.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

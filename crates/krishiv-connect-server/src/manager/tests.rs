@@ -310,3 +310,29 @@ fn zero_tombstones_keeps_no_released_id() {
     assert!(debug.starts_with("SessionManager"), "{debug}");
     assert!(debug.contains("live: 1"), "{debug}");
 }
+
+#[test]
+fn release_and_close_all_cancel_the_operations() {
+    use crate::operation::{Operation, plan_digest};
+    let op = |id: &str| {
+        Arc::new(Operation::new(
+            krishiv_session::QueryId::parse(id).expect("id"),
+            plan_digest(b"p"),
+            Arc::from(Vec::new()),
+            false,
+        ))
+    };
+    let m = manager(SessionLimits::default());
+    let entry = m.get_or_create(&alice(), ID, None, "u").expect("create");
+    let first = op(ID);
+    entry.operations().register(&first, 10).expect("register");
+    m.release(&alice(), ID, false).expect("released");
+    assert!(first.is_cancelled());
+    assert!(entry.operations().is_empty());
+
+    let entry = m.get_or_create(&alice(), ID2, None, "u").expect("create");
+    let second = op(ID2);
+    entry.operations().register(&second, 10).expect("register");
+    assert_eq!(m.close_all(), 1);
+    assert!(second.is_cancelled());
+}

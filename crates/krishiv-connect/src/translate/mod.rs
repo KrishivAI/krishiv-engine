@@ -154,6 +154,26 @@ pub fn translate_plan(plan: &pb::Plan, conf: &TranslateConf) -> Result<Plan> {
     }
 }
 
+/// The refusal of a command (`Plan.command`) until the server translates
+/// commands (P3-T012): Spark's `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED`
+/// naming the command's case (`SQL_COMMAND`, 56K00), or
+/// `INVALID_ONE_OF_FIELD_NOT_SET` (`COMMANDTYPE_NOT_SET`) for an empty one.
+#[must_use]
+pub fn command_not_supported(command: &pb::Command) -> KrishivError {
+    match &command.command_type {
+        None => not_set("spark.connect.Command", "COMMANDTYPE_NOT_SET"),
+        Some(c) => {
+            let v = c.variant();
+            krishiv_common::error::ConnectInvalidPlanInvalidOneOfFieldNotSupported {
+                full_name: "spark.connect.Command".to_owned(),
+                name: v.field.to_ascii_uppercase(),
+                number: v.number.to_string(),
+            }
+            .into()
+        }
+    }
+}
+
 /// Translates a relation and everything below it.
 ///
 /// # Errors

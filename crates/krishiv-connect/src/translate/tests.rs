@@ -81,6 +81,34 @@ fn commands_compressed_plans_and_empty_plans_are_not_relations() {
 }
 
 #[test]
+fn commands_are_refused_with_their_case_name() {
+    let e = command_not_supported(&pb::Command::default());
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
+    );
+    assert!(
+        e.message().contains("COMMANDTYPE_NOT_SET"),
+        "{}",
+        e.message()
+    );
+    let sql = pb::Command {
+        command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),
+    };
+    let e = command_not_supported(&sql);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
+    assert_eq!(e.sql_state(), Some("56K00"));
+    assert_eq!(
+        e.message(),
+        "The Spark Connect plan is invalid. This oneOf field message in spark.connect.Command \
+         is not supported: SQL_COMMAND(5)"
+    );
+}
+
+#[test]
 fn relations_and_expressions_translate_from_bytes() {
     let r = filter_chain(2);
     let plan = relation_from_bytes(&r.encode_to_vec(), &conf()).unwrap();
