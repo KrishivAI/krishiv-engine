@@ -86,6 +86,7 @@ impl PrincipalFrom {
 /// The `krishiv.auth.clientCertificates`, `krishiv.auth.clientCa` and `krishiv.auth.mtls.*`
 /// settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MtlsConfig {
     /// Whether a client certificate is asked for.
     pub client_certificates: ClientCertificates,
@@ -157,6 +158,8 @@ impl MtlsConfig {
         let values = match self.principal_from {
             PrincipalFrom::SanUri => names.uris,
             PrincipalFrom::SanDns => names.dns,
+            // A common name that is not valid text could be the second one: refuse.
+            PrincipalFrom::Cn if names.undecodable_common_names > 0 => return None,
             PrincipalFrom::Cn => names.common_names,
         };
         let [name] = <[String; 1]>::try_from(values).ok()?;

@@ -317,6 +317,7 @@ impl core::marker::StructuralPartialEq for krishiv_session::auth::Authenticated
 #[non_exhaustive] pub struct krishiv_session::auth::CertNames
 pub krishiv_session::auth::CertNames::common_names: alloc::vec::Vec<alloc::string::String>
 pub krishiv_session::auth::CertNames::dns: alloc::vec::Vec<alloc::string::String>
+pub krishiv_session::auth::CertNames::undecodable_common_names: usize
 pub krishiv_session::auth::CertNames::uris: alloc::vec::Vec<alloc::string::String>
 impl krishiv_session::auth::CertNames
 pub fn krishiv_session::auth::CertNames::from_der(&[u8]) -> core::result::Result<Self, krishiv_session::auth::DerError>
@@ -365,7 +366,7 @@ pub fn krishiv_session::auth::FailureThrottle::new(krishiv_session::auth::Thrott
 pub fn krishiv_session::auth::FailureThrottle::record_failure(&self, core::net::ip_addr::IpAddr, std::time::Instant) -> bool
 impl core::fmt::Debug for krishiv_session::auth::FailureThrottle
 pub fn krishiv_session::auth::FailureThrottle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub struct krishiv_session::auth::MtlsConfig
+#[non_exhaustive] pub struct krishiv_session::auth::MtlsConfig
 pub krishiv_session::auth::MtlsConfig::client_ca: core::option::Option<std::path::PathBuf>
 pub krishiv_session::auth::MtlsConfig::client_certificates: krishiv_session::auth::ClientCertificates
 pub krishiv_session::auth::MtlsConfig::principal_from: krishiv_session::auth::PrincipalFrom
@@ -451,7 +452,7 @@ impl core::fmt::Debug for krishiv_session::auth::ThrottleConfig
 pub fn krishiv_session::auth::ThrottleConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::auth::ThrottleConfig
 impl core::marker::StructuralPartialEq for krishiv_session::auth::ThrottleConfig
-pub struct krishiv_session::auth::TlsConfig
+#[non_exhaustive] pub struct krishiv_session::auth::TlsConfig
 pub krishiv_session::auth::TlsConfig::cert_file: core::option::Option<std::path::PathBuf>
 pub krishiv_session::auth::TlsConfig::key_file: core::option::Option<std::path::PathBuf>
 pub krishiv_session::auth::TlsConfig::tls13_only: bool

@@ -127,6 +127,42 @@ pub(crate) fn read_private_file(
     Ok(SecretString::new(text))
 }
 
+/// The contents of the public file `path` (a certificate chain or CA file), at most `most`
+/// bytes: a regular file (checked before it is opened, so a FIFO cannot block startup).
+#[cfg(feature = "tls")]
+pub(crate) fn read_public_file(
+    key: &str,
+    path: &std::path::Path,
+    most: usize,
+) -> Result<Vec<u8>, KrishivError> {
+    use std::io::Read as _;
+    let shown = format!("file:{}", path.display());
+    let unreadable =
+        |e: std::io::Error| invalid(key, &shown, &format!("cannot be read: {}", e.kind()));
+    let regular = |m: &std::fs::Metadata| {
+        if m.is_file() {
+            Ok(())
+        } else {
+            Err(invalid(key, &shown, "not a regular file"))
+        }
+    };
+    regular(&std::fs::metadata(path).map_err(unreadable)?)?;
+    let file = std::fs::File::open(path).map_err(unreadable)?;
+    regular(&file.metadata().map_err(unreadable)?)?;
+    let mut bytes = Vec::new();
+    file.take(most as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if bytes.len() > most {
+        return Err(invalid(
+            key,
+            &shown,
+            &format!("the file is longer than {most} bytes"),
+        ));
+    }
+    Ok(bytes)
+}
+
 /// Refuses a secret file that group or others may read.
 #[cfg(unix)]
 fn check_private(key: &str, shown: &str, meta: &std::fs::Metadata) -> Result<(), KrishivError> {

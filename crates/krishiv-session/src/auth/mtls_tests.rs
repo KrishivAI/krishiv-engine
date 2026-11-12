@@ -105,6 +105,136 @@ fn der_refuses_a_non_minimal_length() {
     );
 }
 
+/// One DER element.
+fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    let n = contents.len();
+    if n < 0x80 {
+        out.push(u8::try_from(n).unwrap());
+    } else {
+        let bytes: Vec<u8> = n
+            .to_be_bytes()
+            .into_iter()
+            .skip_while(|b| *b == 0)
+            .collect();
+        out.push(0x80 | u8::try_from(bytes.len()).unwrap());
+        out.extend(bytes);
+    }
+    out.extend_from_slice(contents);
+    out
+}
+
+/// A `commonName` attribute with value tag `tag`.
+fn cn_attr(tag: u8, value: &[u8]) -> Vec<u8> {
+    tlv(
+        0x30,
+        &[tlv(0x06, &[0x55, 0x04, 0x03]), tlv(tag, value)].concat(),
+    )
+}
+
+/// A certificate shell (unsigned) with `subject` (the contents of the `Name`) and, if given, a
+/// subjectAltName extension holding `alt` (the contents of `GeneralNames`).
+fn shell(subject: &[u8], alt: Option<&[u8]>) -> Vec<u8> {
+    let mut tbs = [
+        tlv(0xa0, &tlv(0x02, &[2])),
+        tlv(0x02, &[1]),
+        tlv(0x30, &[]),
+        tlv(0x30, &[]),
+        tlv(0x30, &[]),
+        tlv(0x30, subject),
+        tlv(0x30, &[]),
+    ]
+    .concat();
+    if let Some(alt) = alt {
+        let ext = tlv(
+            0x30,
+            &[tlv(0x06, &[0x55, 0x1d, 0x11]), tlv(0x04, &tlv(0x30, alt))].concat(),
+        );
+        tbs.extend(tlv(0xa3, &tlv(0x30, &ext)));
+    }
+    tlv(
+        0x30,
+        &[tlv(0x30, &tbs), tlv(0x30, &[]), tlv(0x03, &[0])].concat(),
+    )
+}
+
+#[test]
+fn der_reads_a_multi_valued_rdn() {
+    // One SET holding two common names: both are read, so the `cn` rule refuses.
+    let rdn = tlv(0x31, &[cn_attr(0x0c, b"a"), cn_attr(0x13, b"b")].concat());
+    let cert = shell(&rdn, None);
+    assert_eq!(CertNames::from_der(&cert).unwrap().common_names, ["a", "b"]);
+    let c = mtls("required", "cn");
+    assert!(c.mtls.principal_of(&cert).is_none());
+}
+
+#[test]
+fn der_refuses_constructed_and_invisible_names() {
+    let subject = tlv(0x31, &cn_attr(0x0c, b"svc"));
+    // A constructed [6] next to a primitive URI would hide a second name.
+    let alt = [
+        tlv(0x86, b"spiffe://x/a"),
+        tlv(0xa6, &tlv(0x16, b"spiffe://x/b")),
+    ]
+    .concat();
+    assert_eq!(
+        CertNames::from_der(&shell(&subject, Some(&alt))),
+        Err(DerError::Unexpected)
+    );
+    let alt = tlv(0xa2, &tlv(0x16, b"b.test"));
+    assert_eq!(
+        CertNames::from_der(&shell(&subject, Some(&alt))),
+        Err(DerError::Unexpected)
+    );
+    // A right-to-left override in a common name (UTF8String).
+    let bidi = tlv(0x31, &cn_attr(0x0c, "svc\u{202e}cba".as_bytes()));
+    let names = CertNames::from_der(&shell(&bidi, None)).unwrap();
+    assert_eq!(names.undecodable_common_names, 1);
+    // Other kinds (an IP address, a directory name) are skipped.
+    let alt = [
+        tlv(0x87, &[127, 0, 0, 1]),
+        tlv(0xa4, &tlv(0x30, &[])),
+        tlv(0x86, b"u"),
+    ]
+    .concat();
+    assert_eq!(
+        CertNames::from_der(&shell(&subject, Some(&alt)))
+            .unwrap()
+            .uris,
+        ["u"]
+    );
+}
+
+#[test]
+fn an_undecodable_common_name_matters_only_to_the_cn_rule() {
+    // A BMPString common name next to one URI SAN.
+    let subject = tlv(0x31, &cn_attr(0x1e, &[0, b'x']));
+    let cert = shell(&subject, Some(&tlv(0x86, b"spiffe://x/svc")));
+    let names = CertNames::from_der(&cert).unwrap();
+    assert_eq!(names.undecodable_common_names, 1);
+    assert_eq!(
+        mtls("required", "san-uri")
+            .mtls
+            .principal_of(&cert)
+            .unwrap()
+            .0,
+        "spiffe://x/svc"
+    );
+    assert!(mtls("required", "cn").mtls.principal_of(&cert).is_none());
+    // With a decodable common name as well, `cn` still refuses: the other could be the second.
+    let subject = [
+        tlv(0x31, &cn_attr(0x0c, b"svc")),
+        tlv(0x31, &cn_attr(0x1e, &[0, b'x'])),
+    ]
+    .concat();
+    assert!(
+        mtls("required", "cn")
+            .mtls
+            .principal_of(&shell(&subject, None))
+            .is_none()
+    );
+}
+
 #[test]
 fn mtls_principal_rule() {
     // ADR 0046 §6: exactly one value of the configured kind, no fallback to another kind.
@@ -317,14 +447,12 @@ fn startup_incoherent_configs() {
     ])
     .unwrap();
     let none = config(&[]).unwrap();
-    let tls = TlsConfig::from_settings([
-        (
-            "krishiv.server.tls.certFile",
-            fixture("server.pem").as_str(),
-        ),
-        ("krishiv.server.tls.keyFile", fixture("server.key").as_str()),
-    ])
-    .unwrap();
+    // Built directly: a build without the `tls` feature refuses these settings.
+    let tls = TlsConfig {
+        cert_file: Some(fixture("server.pem").into()),
+        key_file: Some(fixture("server.key").into()),
+        tls13_only: false,
+    };
     let plain = TlsConfig::default();
     let public: SocketAddr = "0.0.0.0:15002".parse().unwrap();
     let local: SocketAddr = "127.0.0.1:15002".parse().unwrap();
@@ -352,14 +480,34 @@ fn startup_incoherent_configs() {
 
 #[test]
 fn tls_settings_are_checked() {
-    let e = TlsConfig::from_settings([("krishiv.server.tls.certFile", "/x.pem")]).unwrap_err();
-    assert!(e.to_string().contains("keyFile"), "{e}");
-    let e = TlsConfig::from_settings([("krishiv.server.tls.keyFile", "/x.key")]).unwrap_err();
-    assert!(e.to_string().contains("certFile"), "{e}");
+    #[cfg(feature = "tls")]
+    {
+        let e = TlsConfig::from_settings([("krishiv.server.tls.certFile", "/x.pem")]).unwrap_err();
+        assert!(e.to_string().contains("keyFile"), "{e}");
+        let e = TlsConfig::from_settings([("krishiv.server.tls.keyFile", "/x.key")]).unwrap_err();
+        assert!(e.to_string().contains("certFile"), "{e}");
+    }
     let e = TlsConfig::from_settings([("krishiv.server.tls.minVersion", "1.1")]).unwrap_err();
     assert!(invalid_config(&e), "{e}");
     let e = TlsConfig::from_settings([("krishiv.server.tls.ciphers", "x")]).unwrap_err();
     assert!(invalid_config(&e), "{e}");
+    let only = TlsConfig::from_settings([("krishiv.server.tls.minVersion", "1.3")]).unwrap();
+    assert!(!only.is_on() && only.tls13_only);
+}
+
+#[cfg(not(feature = "tls"))]
+#[test]
+fn tls_settings_need_the_tls_feature() {
+    // S1: a build that cannot serve TLS refuses a configuration asking for it.
+    for key in ["krishiv.server.tls.certFile", "krishiv.server.tls.keyFile"] {
+        let e = TlsConfig::from_settings([(key, "/a.pem")]).unwrap_err();
+        assert!(e.to_string().contains("no TLS"), "{e}");
+    }
+}
+
+#[cfg(feature = "tls")]
+#[test]
+fn tls_settings_with_files() {
     let c = TlsConfig::from_settings([
         ("krishiv.server.tls.certFile", "file:/a.pem"),
         ("krishiv.server.tls.keyFile", "/a.key"),
@@ -477,7 +625,7 @@ mod tls {
     }
 
     #[test]
-    fn tls_serves_and_reloads_the_certificate() {
+    fn tls_reload() {
         let dir = tempfile::tempdir().unwrap();
         let (cert, key) = server_files(dir.path(), "server");
         let server = ServerTls::new(&tls_config(&cert, &key), &MtlsConfig::default())
@@ -555,6 +703,15 @@ mod tls {
         std::fs::copy(fixture("server2.key"), &key).unwrap();
         let e = ServerTls::new(&tls_config(&cert, &key), &MtlsConfig::default()).unwrap_err();
         assert!(e.to_string().contains("does not match"), "{e}");
+        // Client certificates asked for with no CA: never served without the verifier.
+        server_files(dir.path(), "server");
+        let no_ca = MtlsConfig {
+            client_certificates: super::super::ClientCertificates::Required,
+            ..MtlsConfig::default()
+        };
+        let e = ServerTls::new(&tls_config(&cert, &key), &no_ca).unwrap_err();
+        assert!(e.to_string().contains("clientCa"), "{e}");
+        std::fs::copy(fixture("server2.key"), &key).unwrap();
         // TLS off.
         assert!(
             ServerTls::new(&TlsConfig::default(), &MtlsConfig::default())

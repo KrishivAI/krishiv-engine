@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The `krishiv.server.tls.*` settings (design §3.5) and the startup check that a listener's
 //! address, authentication and TLS make sense together (threat model §6 item 9). Read without
-//! the `tls` feature, so a build without TLS still refuses a TLS configuration it cannot serve.
+//! the `tls` feature too: a build without it refuses `certFile`/`keyFile`, so a configuration
+//! asking for TLS never starts a server that would serve tokens in clear.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -17,6 +18,7 @@ pub(crate) const MIN_VERSION_KEY: &str = "krishiv.server.tls.minVersion";
 
 /// The `krishiv.server.tls.*` settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TlsConfig {
     /// The PEM certificate chain, leaf first.
     pub cert_file: Option<PathBuf>,
@@ -31,13 +33,21 @@ impl TlsConfig {
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` for an unknown `krishiv.server.tls.*` key, a bad
-    /// `minVersion`, or a certificate without a key (or a key without a certificate).
+    /// `minVersion`, a certificate without a key (or a key without a certificate), or a
+    /// certificate or key in a build without the `tls` feature.
     pub fn from_settings<'a>(
         settings: impl IntoIterator<Item = (&'a str, &'a str)>,
     ) -> Result<Self, KrishivError> {
         let mut out = Self::default();
         for (key, raw) in settings {
             match key {
+                CERT_KEY | KEY_KEY if !cfg!(feature = "tls") => {
+                    return Err(invalid(
+                        key,
+                        raw,
+                        "this build has no TLS (the `tls` feature of krishiv-session is off)",
+                    ));
+                }
                 CERT_KEY => out.cert_file = Some(path(key, raw)?),
                 KEY_KEY => out.key_file = Some(path(key, raw)?),
                 MIN_VERSION_KEY => {

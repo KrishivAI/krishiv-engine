@@ -49,6 +49,10 @@ pub struct CertNames {
     pub dns: Vec<String>,
     /// Every `uniformResourceIdentifier` of the `subjectAltName` extension, in order.
     pub uris: Vec<String>,
+    /// Subject `commonName` attributes that are not valid text (a `BMPString`, a control
+    /// character...). Counted, not refused: they matter only to the `cn` rule, which refuses a
+    /// certificate with any.
+    pub undecodable_common_names: usize,
 }
 
 // Universal tags.
@@ -68,6 +72,10 @@ const SUBJECT_UID: u8 = 0x82;
 const EXTENSIONS: u8 = 0xa3;
 const DNS_NAME: u8 = 0x82;
 const URI: u8 = 0x86;
+/// The constructed forms of the same two tags: not valid for `IA5String` names, refused rather
+/// than skipped, so no second name hides from the exactly-one rule.
+const DNS_NAME_CONSTRUCTED: u8 = 0xa2;
+const URI_CONSTRUCTED: u8 = 0xa6;
 
 /// `id-at-commonName`, 2.5.4.3.
 const OID_COMMON_NAME: &[u8] = &[0x55, 0x04, 0x03];
@@ -179,10 +187,8 @@ impl CertNames {
         let extensions = tbs.optional(EXTENSIONS)?;
         tbs.finish()?;
 
-        let mut names = Self {
-            common_names: common_names(subject)?,
-            ..Self::default()
-        };
+        let mut names = Self::default();
+        common_names(subject, &mut names)?;
         if let Some(extensions) = extensions {
             let mut explicit = Reader::new(extensions);
             let list = explicit.expect(SEQUENCE)?;
@@ -210,8 +216,7 @@ impl CertNames {
 
 /// The `commonName` values of the `Name` whose contents are `subject`
 /// (`RDNSequence`: a sequence of sets of attribute type and value).
-fn common_names(subject: &[u8]) -> Result<Vec<String>, DerError> {
-    let mut out = Vec::new();
+fn common_names(subject: &[u8], names: &mut CertNames) -> Result<(), DerError> {
     let mut rdns = Reader::new(subject);
     while !rdns.is_empty() {
         let mut set = Reader::new(rdns.expect(SET)?);
@@ -221,11 +226,14 @@ fn common_names(subject: &[u8]) -> Result<Vec<String>, DerError> {
             let (tag, value) = attr.any()?;
             attr.finish()?;
             if id == OID_COMMON_NAME {
-                out.push(text(tag, value)?);
+                match text(tag, value) {
+                    Ok(cn) => names.common_names.push(cn),
+                    Err(_) => names.undecodable_common_names += 1,
+                }
             }
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 /// The DNS and URI names of the `GeneralNames` whose DER is `value`; other kinds are skipped.
@@ -238,6 +246,7 @@ fn alt_names(value: &[u8], names: &mut CertNames) -> Result<(), DerError> {
         match list.any()? {
             (DNS_NAME, v) => names.dns.push(text(IA5_STRING, v)?),
             (URI, v) => names.uris.push(text(IA5_STRING, v)?),
+            (DNS_NAME_CONSTRUCTED | URI_CONSTRUCTED, _) => return Err(DerError::Unexpected),
             _ => {}
         }
     }
@@ -255,8 +264,27 @@ fn text(tag: u8, bytes: &[u8]) -> Result<String, DerError> {
         }
         _ => return Err(DerError::BadText),
     };
-    if s.chars().any(char::is_control) {
+    if s.chars().any(|c| c.is_control() || is_format(c)) {
         return Err(DerError::BadText);
     }
     Ok(s.to_owned())
+}
+
+/// Invisible format characters that make two names look alike or reorder text in logs and
+/// tables (the Unicode `Cf` code points a name could plausibly carry): soft hyphen, zero-width
+/// and joiner characters, bidirectional marks, embeddings, overrides and isolates, invisible
+/// operators and the byte order mark.
+fn is_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}'
+            | '\u{061c}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+    )
 }

@@ -290,6 +290,8 @@ jobs:
           KRISHIV_SIM_TPCH_DIR: ${{ runner.temp }}/tpch-sf0.1
       - run: cargo test --workspace --doc --locked
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
+      # Server TLS (feature `tls`, off by default): the in-memory rustls handshakes.
+      - run: cargo nextest run -p krishiv-session --features tls --lib -E 'test(/auth::mtls_tests::tls/)' --locked
       - name: Disk left
         if: always()
         run: df -h / "$RUNNER_TEMP"

@@ -22,8 +22,11 @@ use rustls::sign::CertifiedKey;
 use rustls::{RootCertStore, ServerConfig};
 
 use super::mtls::{ClientCertificates, MtlsConfig};
-use super::secret_ref::{invalid, read_private_file};
+use super::secret_ref::{invalid, read_private_file, read_public_file};
 use super::tls_config::{CERT_KEY, KEY_KEY, MIN_VERSION_KEY, TlsConfig};
+
+/// The longest certificate chain or CA file read.
+const MAX_CERT_FILE_BYTES: usize = 1024 * 1024;
 
 /// The longest private key file read (a PEM RSA-8192 key is about 6.3 KiB).
 const MAX_KEY_FILE_BYTES: usize = 64 * 1024;
@@ -80,7 +83,15 @@ impl ServerTls {
             .with_protocol_versions(versions)
             .map_err(|e| invalid(MIN_VERSION_KEY, "", &e.to_string()))?;
         let builder = match (mtls.client_certificates, &mtls.client_ca) {
-            (ClientCertificates::Off, _) | (_, None) => builder.with_no_client_auth(),
+            (ClientCertificates::Off, _) => builder.with_no_client_auth(),
+            (_, None) => {
+                // `MtlsConfig::validate` refuses this; never serve without the verifier asked for.
+                return Err(invalid(
+                    "krishiv.auth.clientCa",
+                    "",
+                    "required when krishiv.auth.clientCertificates is optional or required",
+                ));
+            }
             (mode, Some(ca)) => {
                 let roots = Arc::new(client_roots(ca)?);
                 let verifier =
@@ -116,7 +127,8 @@ impl ServerTls {
     }
 
     /// Re-reads the certificate and key files. New handshakes get the new material; on an
-    /// error the old material keeps serving.
+    /// error the old material keeps serving. Blocking file I/O: an async caller (the `SIGHUP`
+    /// handler) runs it on a blocking thread.
     ///
     /// # Errors
     /// As [`ServerTls::new`] for the certificate and key.
@@ -142,13 +154,7 @@ fn load_key(
     key_file: &Path,
     provider: &CryptoProvider,
 ) -> Result<CertifiedKey, KrishivError> {
-    let pem = std::fs::read(cert_file).map_err(|e| {
-        invalid(
-            CERT_KEY,
-            &shown(cert_file),
-            &format!("cannot be read: {}", e.kind()),
-        )
-    })?;
+    let pem = read_public_file(CERT_KEY, cert_file, MAX_CERT_FILE_BYTES)?;
     let chain = CertificateDer::pem_slice_iter(&pem)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| invalid(CERT_KEY, &shown(cert_file), "not a PEM certificate chain"))?;
@@ -170,8 +176,7 @@ fn load_key(
 /// The client CA certificates.
 fn client_roots(ca: &Path) -> Result<RootCertStore, KrishivError> {
     let key = "krishiv.auth.clientCa";
-    let pem = std::fs::read(ca)
-        .map_err(|e| invalid(key, &shown(ca), &format!("cannot be read: {}", e.kind())))?;
+    let pem = read_public_file(key, ca, MAX_CERT_FILE_BYTES)?;
     let mut roots = RootCertStore::empty();
     for cert in CertificateDer::pem_slice_iter(&pem) {
         let cert = cert.map_err(|_| invalid(key, &shown(ca), "not a PEM certificate file"))?;
