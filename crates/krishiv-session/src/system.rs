@@ -1277,9 +1277,11 @@ impl QueryLog {
         if outcome_state(error.error_class().name()) == "cancelled" {
             return;
         }
-        let message = error.for_client().error().to_string();
+        let client = error.for_client();
+        let message = client.error().to_string();
+        let parameters = client.error().message_parameters();
         self.history.update(&self.session_id, id, |row| {
-            row.error_message = Some(row.policy.apply_message(&message));
+            row.error_message = Some(row.policy.apply_message_with(&message, parameters));
         });
     }
 
@@ -1633,6 +1635,25 @@ mod tests {
         let got = mask
             .apply_message("The variant value `\"x\\\"` secret_canary\"` cannot be cast to `INT`.");
         assert_eq!(got, "The variant value `?` cannot be cast to `INT`.");
+    }
+
+    #[test]
+    fn a_raw_value_parameter_is_masked_and_a_long_value_is_linear() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let got = mask.apply_message_with(
+            "Malformed records: {\"a\":\"secret_canary\", in parsing.",
+            &[("bad_record", "{\"a\":\"secret_canary\",".to_owned())],
+        );
+        assert_eq!(got, "Malformed records: ? in parsing.");
+        // 40,000 backquote-space pairs inside one open JSON string: one pass, not a rescan per backquote.
+        let long = format!("The value `\"{}` cannot be cast.", "x` ".repeat(40_000));
+        let started = std::time::Instant::now();
+        let got = mask.apply_message(&long);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(!got.contains("x` x`"));
     }
 
     #[test]

@@ -1517,6 +1517,46 @@ fn show_columns_and_drop_table_reach_what_their_names_stand_for_under_system() {
     assert!(!columns.is_empty());
     assert_eq!(columns, described);
     // A temporary view resolves before the catalog: DROP TABLE reaches it, a system table stays reserved.
-    assert!(run(&s, "DROP TABLE system.queries").is_err());
+    assert_eq!(
+        block_on(async { s.sql("DROP TABLE system.queries").await.err() })
+            .map(|e| e.error_class().name().to_owned())
+            .as_deref(),
+        Some("KRISHIV_RESERVED_NAME")
+    );
     run(&s, "DROP TABLE tv").unwrap();
+    let after = block_on(async { s.sql("SELECT * FROM tv").await?.collect().await.map(|_| ()) });
+    assert_eq!(
+        after
+            .err()
+            .map(|e| e.error_class().name().to_owned())
+            .as_deref(),
+        Some("TABLE_OR_VIEW_NOT_FOUND")
+    );
+}
+
+#[test]
+fn a_v2_write_target_is_checked_in_the_current_catalog() {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    let s = Session::builder().build().unwrap();
+    run(&s, "CREATE TABLE t (a BIGINT)").unwrap();
+    run(&s, "USE system").unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![1]))],
+    )
+    .unwrap();
+    s.register_batches("src", schema, vec![batch]).unwrap();
+    // A bare or namespace-only target is not a stored table under `system`; a qualified one is.
+    assert!(block_on(async { s.table("src").write_to_table("t").append().await }).is_err());
+    assert!(block_on(async { s.table("src").write_to_table("default.t").append().await }).is_err());
+    block_on(async {
+        s.table("src")
+            .write_to_table("spark_catalog.default.t")
+            .append()
+            .await
+    })
+    .unwrap();
 }

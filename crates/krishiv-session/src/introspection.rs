@@ -913,7 +913,7 @@ impl Session {
         env: &crate::session::QueryEnv,
     ) -> Result<Option<String>, KrishivError> {
         let parts = crate::access::ddl_parts(table, env)?;
-        let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
+        let in_system = env.catalog.in_system();
         Ok(match parts.as_slice() {
             [t] if in_system && !self.is_temp_name(t, env) => Some(t.clone()),
             [c, t] if crate::system::is_system(c) => Some(t.clone()),

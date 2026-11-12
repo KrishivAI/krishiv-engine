@@ -59,8 +59,30 @@ impl TextPolicy {
     /// SQL tokenizer never reads it (an apostrophe or `--` in prose would
     /// hide the rest). Credentials are redacted; under `mask` every closed
     /// `'...'` or backquoted run (where Spark quotes values) becomes `?`.
+    #[cfg(test)]
     pub(super) fn apply_message(self, message: &str) -> String {
-        let redacted = krishiv_common::redact::redact(message);
+        self.apply_message_with(message, &[])
+    }
+
+    /// [`apply_message`](Self::apply_message), and under `mask` the error parameters that carry a raw value
+    /// (a malformed record, printed without quotes) replaced by `?` wherever the message shows them.
+    pub(super) fn apply_message_with(
+        self,
+        message: &str,
+        parameters: &[(&'static str, String)],
+    ) -> String {
+        let message = if self.mask {
+            let mut masked = message.to_owned();
+            for (name, value) in parameters {
+                if VALUE_PARAMETERS.contains(name) && !value.is_empty() {
+                    masked = masked.replace(value.as_str(), "?");
+                }
+            }
+            std::borrow::Cow::Owned(masked)
+        } else {
+            std::borrow::Cow::Borrowed(message)
+        };
+        let redacted = krishiv_common::redact::redact(&message);
         let shown = if self.mask {
             mask_numbers(&mask_backquoted(&mask_quoted(&redacted)))
         } else {
@@ -125,60 +147,63 @@ pub(super) fn mask_quoted(message: &str) -> String {
     out
 }
 
-/// Whether `text` ends inside a JSON string: an unescaped double quote opens it, a backslash escapes the next character.
-fn open_json_string(text: &str) -> bool {
-    let (mut open, mut escaped) = (false, false);
-    for c in text.chars() {
-        match c {
-            _ if escaped => escaped = false,
-            '\\' if open => escaped = true,
-            '"' => open = !open,
-            _ => {}
-        }
+/// The error parameters that hold a raw input value, which the message prints unquoted.
+const VALUE_PARAMETERS: &[&str] = &["bad_record", "value"];
+
+/// The state of a JSON string after `c`: an unescaped double quote opens or closes it, a backslash inside it
+/// escapes the next character.
+fn step_json((open, escaped): (bool, bool), c: char) -> (bool, bool) {
+    match c {
+        _ if escaped => (open, false),
+        '\\' if open => (open, true),
+        '"' => (!open, false),
+        _ => (open, escaped),
     }
-    open
 }
 
 /// `message` with each backquoted run that is not a plain name replaced by `` `?` ``: some messages print an
 /// offending value (a variant rendered as JSON, say) between backquotes, while names (`db`.`t`) stay.
+///
+/// A backquote opens after a non-word character and closes before one, so a backquote inside a rendered value
+/// (`"x`secret"`) is part of the value; one before whitespace is not told apart by that rule, so while the span
+/// has an open JSON string it runs on to the next closing backquote. One pass: each character is read once.
 pub(super) fn mask_backquoted(message: &str) -> String {
     let word = |c: char| c.is_alphanumeric() || c == '_';
     let chars: Vec<(usize, char)> = message.char_indices().collect();
+    let closers: Vec<usize> = (0..chars.len())
+        .filter(|&k| chars[k].1 == '`' && chars.get(k + 1).is_none_or(|n| !word(n.1)))
+        .collect();
     let mut out = String::with_capacity(message.len());
     let mut copied = 0;
     let mut i = 0;
     while i < chars.len() {
-        let (at, c) = chars[i];
-        // A backquote opens after a non-word character and closes before one, so a backquote inside a rendered
-        // value (`"x`secret"`) is part of the value.
-        let opens = c == '`' && (i == 0 || !word(chars[i - 1].1));
-        let close = opens
-            .then(|| {
-                (i + 1..chars.len())
-                    .find(|&j| chars[j].1 == '`' && chars.get(j + 1).is_none_or(|n| !word(n.1)))
-            })
-            .flatten();
-        let Some(j) = close else {
+        let opens = chars[i].1 == '`' && (i == 0 || !word(chars[i - 1].1));
+        let first = closers.partition_point(|&k| k <= i);
+        if !opens || first == closers.len() {
+            if opens {
+                // No closing backquote is left, so no later one opens a span either.
+                break;
+            }
             i += 1;
             continue;
-        };
-        // A value rendered as JSON may hold backquotes of its own (`"x` secret"`): while the span has an open
-        // double quote, it runs on to the next closing backquote.
-        let mut j = j;
-        while open_json_string(&message[chars[i + 1].0..chars[j].0]) {
-            let next = (j + 1..chars.len())
-                .find(|&k| chars[k].1 == '`' && chars.get(k + 1).is_none_or(|n| !word(n.1)));
-            match next {
-                Some(k) => j = k,
-                None => break,
-            }
         }
-        let inner = &message[chars[i + 1].0..chars[j].0];
-        let plain = inner
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '-'));
-        if !plain {
-            out.push_str(&message[copied..at]);
+        let (mut at, mut state, mut plain) = (first, (false, false), true);
+        let mut from = i + 1;
+        loop {
+            let end = closers[at];
+            for &(_, c) in &chars[from..end] {
+                state = step_json(state, c);
+                plain &= c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '-');
+            }
+            from = end;
+            if !state.0 || at + 1 == closers.len() {
+                break;
+            }
+            at += 1;
+        }
+        let j = closers[at];
+        if !plain || state.0 {
+            out.push_str(&message[copied..chars[i].0]);
             out.push_str("`?`");
             copied = chars.get(j + 1).map_or(message.len(), |n| n.0);
         }
