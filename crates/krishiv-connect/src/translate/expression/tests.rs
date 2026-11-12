@@ -193,13 +193,42 @@ fn qualified_and_internal_functions_are_unsupported() {
         text(&expr(ExprType::UnresolvedFunction(not_internal))),
         "product()"
     );
-    let call = expr(ExprType::CallFunction(Default::default()));
-    let e = err(&call);
+}
+
+#[test]
+fn call_function_splits_the_qualifier_and_named_arguments_name_parameters() {
+    let call = |name: &str, args: Vec<Expression>| {
+        expr(ExprType::CallFunction(crate::proto::v4_2::CallFunction {
+            function_name: name.into(),
+            arguments: args,
+        }))
+    };
+    let e = translate_expression(&call("upper", vec![attr("a")]), &conf()).unwrap();
+    let f = function(&e);
     assert_eq!(
-        e.error_class(),
-        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+        (f.name.as_str(), f.qualifier.len(), f.args.len()),
+        ("upper", 0, 1)
     );
-    assert!(e.message().contains("CALL_FUNCTION(16)"), "{}", e.message());
+    assert!(f.arg_names.is_empty() && !f.distinct);
+    let e = translate_expression(&call("session.f", vec![]), &conf()).unwrap();
+    assert_eq!(function(&e).qualifier, ["session"]);
+    let named = expr(ExprType::NamedArgumentExpression(Box::new(
+        crate::proto::v4_2::NamedArgumentExpression {
+            key: "n".into(),
+            value: Some(Box::new(attr("b"))),
+        },
+    )));
+    let e = translate_expression(&call("f", vec![attr("a"), named.clone()]), &conf()).unwrap();
+    assert_eq!(function(&e).arg_names, [None, Some("n".to_owned())]);
+    // A named argument outside a call is refused, a name that does not parse is a syntax error.
+    assert_eq!(
+        err(&named).error_class(),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(
+        err(&call("", vec![])).error_class(),
+        ErrorClass::ParseSyntaxError
+    );
 }
 
 fn alias(names: &[&str], metadata: Option<&str>) -> Expression {
@@ -455,10 +484,6 @@ fn unsupported_expression_kinds_are_named() {
         (
             ExprType::SubqueryExpression(Default::default()),
             "subquery_expression",
-        ),
-        (
-            ExprType::NamedArgumentExpression(Box::default()),
-            "named_argument_expression",
         ),
     ] {
         let e = err(&expr(kind));

@@ -21,7 +21,7 @@ use super::errors::{
     expression_not_set, field_empty, not_set, unsupported, unsupported_field, unsupported_variant,
 };
 use super::literal::literal;
-use super::names::parse_attribute_name;
+use super::names::{parse_attribute_name, parse_multipart_identifier};
 use super::types::data_type;
 use super::{Result, Translator};
 use crate::proto::v4_2::Expression;
@@ -78,6 +78,16 @@ impl Translator<'_> {
                 })
             }
             ExprType::UnresolvedFunction(f) => self.function(f)?,
+            ExprType::CallFunction(c) => self.call_function(c)?,
+            ExprType::NamedArgumentExpression(_) => {
+                // Only as an argument of a function call (`call_args`); Spark's analyzer
+                // refuses it anywhere else.
+                return Err(unsupported_field(
+                    "Expression.NamedArgumentExpression",
+                    "key",
+                    "named arguments outside a function call's arguments",
+                ));
+            }
             ExprType::UnresolvedStar(s) => ExprNode::Star(star(s)?),
             ExprType::Alias(a) => {
                 if a.metadata.as_deref().is_some_and(|m| !m.is_empty()) {
@@ -163,15 +173,11 @@ impl Translator<'_> {
                 "calls of internal functions",
             ));
         }
-        let args = f
-            .arguments
-            .iter()
-            .map(|a| self.expression(a))
-            .collect::<Result<Vec<_>>>()?;
+        let (args, arg_names) = self.call_args(&f.arguments)?;
         let call = |name: &str, args: Vec<Arc<Expr>>, distinct: bool| FunctionCall {
             name: name.to_owned(),
             qualifier: Vec::new(),
-            arg_names: Vec::new(),
+            arg_names: arg_names.clone(),
             args,
             distinct,
             filter: None,
@@ -208,6 +214,43 @@ impl Translator<'_> {
         })
     }
 
+    /// `CallFunction`: Spark's `UnresolvedFunction(parseMultipartIdentifier(name), args, false)`.
+    /// The last part of the name is the function, the parts before it its qualifier.
+    fn call_function(&mut self, c: &crate::proto::v4_2::CallFunction) -> Result<ExprNode> {
+        let mut parts = parse_multipart_identifier(&c.function_name)?;
+        let name = parts.pop().unwrap_or_default();
+        let (args, arg_names) = self.call_args(&c.arguments)?;
+        Ok(ExprNode::Function(FunctionCall {
+            name,
+            qualifier: parts,
+            arg_names,
+            args,
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+        }))
+    }
+
+    /// The arguments of a call and their parameter names: a `NamedArgumentExpression` is
+    /// `name => value`. The names are empty when every argument is positional.
+    fn call_args(&mut self, arguments: &[Expression]) -> Result<CallArgs> {
+        let mut args = Vec::with_capacity(arguments.len());
+        let mut names = Vec::with_capacity(arguments.len());
+        for a in arguments {
+            if let Some(ExprType::NamedArgumentExpression(n)) = &a.expr_type {
+                args.push(self.required_expression(n.value.as_deref())?);
+                names.push(Some(n.key.clone()));
+            } else {
+                args.push(self.expression(a)?);
+                names.push(None);
+            }
+        }
+        if names.iter().all(Option::is_none) {
+            names.clear();
+        }
+        Ok((args, names))
+    }
+
     /// A sort key. As in Spark, anything but `SORT_DIRECTION_ASCENDING` is
     /// descending and anything but `SORT_NULLS_FIRST` is nulls last, so a
     /// key that leaves them unspecified sorts `DESC NULLS LAST`.
@@ -227,6 +270,9 @@ impl Translator<'_> {
         })
     }
 }
+
+/// The arguments of a call and the parameter name of each (empty when all are positional).
+type CallArgs = (Vec<Arc<Expr>>, Vec<Option<String>>);
 
 /// `*`, `t.*` (the target ends in `.*`) or the star of one DataFrame
 /// (`plan_id`); not both, as in Spark.

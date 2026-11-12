@@ -73,7 +73,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Expression.expr_type
 
-22 arms: 2 done, 5 partial, 14 missing, 1 out of scope.
+22 arms: 3 done, 6 partial, 12 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -92,8 +92,8 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 13 | update_fields | missing |  | UpdateFields | P3-T012 | 2 |
 | 14 | unresolved_named_lambda_variable | missing |  | lambda-scoped Column (UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART) | P3-T012 | 2 |
 | 15 | common_inline_user_defined_function | missing |  | Python UDF call (T014); Scala/Java → UNSUPPORTED_USER_DEFINED_FUNCTION_IMPLEMENTATION (T081) | P3-T014 | 6 |
-| 16 | call_function | missing |  | Function (as #3, by name) | P3-T012 | 1 |
-| 17 | named_argument_expression | missing |  | FunctionCall.arg_names | P3-T012 | 1 |
+| 16 | call_function | done |  | Function (as #3, by name) | P3-T012 | 1 |
+| 17 | named_argument_expression | partial | outside a function call's arguments | FunctionCall.arg_names | P3-T012 | 1 |
 | 19 | merge_action | missing |  | MERGE actions for merge_into_table_command (T023, T021, T027) | P3-T023 | 11 |
 | 20 | typed_aggregate_expression | out of scope |  | Scala typed Dataset aggregation; unsupported row |  | 0 |
 | 21 | subquery_expression | missing |  | Subquery (scalar, EXISTS, IN) referencing with_relations | P3-T012 | 4 |
