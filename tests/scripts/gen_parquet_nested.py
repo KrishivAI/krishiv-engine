@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Writes tests/fixtures/parquet/pyarrow_deep_nested.parquet (read by krishiv-testkit parquet_interop).
+"""Writes tests/fixtures/parquet/nested/pyarrow_deep_nested.parquet (read by krishiv-testkit parquet_interop).
 
     uv run --python 3.12 --with pyarrow==21.0.0 \\
-        python tests/scripts/gen_parquet_nested.py tests/fixtures/parquet/pyarrow_deep_nested.parquet
+        python tests/scripts/gen_parquet_nested.py tests/fixtures/parquet/nested/pyarrow_deep_nested.parquet
 """
 
 import sys

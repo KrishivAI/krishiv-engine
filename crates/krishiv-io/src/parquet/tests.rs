@@ -1718,6 +1718,10 @@ fn nested_path_predicates_keep_every_matching_row() {
             let b = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
             let ids = b.column(0).as_primitive::<Int32Type>();
             let got: std::collections::BTreeSet<i32> = ids.values().iter().copied().collect();
+            assert!(
+                ids.values().windows(2).all(|w| w[0] < w[1]),
+                "{policy:?} {name}: ids repeat or leave file order"
+            );
             let want: Vec<i32> = (0..n).filter(|i| keeps(*i)).collect();
             assert!(
                 want.iter().all(|i| got.contains(i)),
@@ -1784,15 +1788,27 @@ fn dictionary_encoded_nested_leaves_round_trip() {
     ]));
     let batch =
         RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(lst), Arc::new(st)]).unwrap();
-    let file = env.put(
-        "dict_nested.parquet",
-        write(
-            std::slice::from_ref(&batch),
-            WriterProperties::builder()
-                .set_dictionary_enabled(true)
-                .build(),
-        ),
+    let bytes = write(
+        std::slice::from_ref(&batch),
+        WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build(),
     );
+    {
+        let reader =
+            parquet::file::reader::SerializedFileReader::new(bytes::Bytes::from(bytes.clone()))
+                .unwrap();
+        let rg = parquet::file::reader::FileReader::metadata(&reader).row_group(0);
+        assert!(rg.num_columns() >= 2);
+        for c in rg.columns() {
+            assert!(
+                c.dictionary_page_offset().is_some(),
+                "leaf {} is not dictionary-encoded",
+                c.column_path()
+            );
+        }
+    }
+    let file = env.put("dict_nested.parquet", bytes);
     let o = env.options(&[]);
     let meta = env
         .rt

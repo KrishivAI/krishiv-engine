@@ -224,12 +224,12 @@ fn spark_nested_columns() {
     }
 }
 
-/// pyarrow's deeply nested columns, null by null (`pyarrow_deep_nested.parquet`,
+/// pyarrow's deeply nested columns, null by null (`nested/pyarrow_deep_nested.parquet`,
 /// written by `tests/scripts/gen_parquet_nested.py`): a list of structs holding
 /// lists, a struct in a struct, a map of lists; nulls at every level.
 #[test]
 fn pyarrow_deep_nested_nulls() {
-    let (rows, _, b) = read(&fixtures(), "pyarrow_deep_nested.parquet");
+    let (rows, _, b) = read(&fixtures().join("nested"), "pyarrow_deep_nested.parquet");
     assert_eq!(rows, 4);
     let l = b.column_by_name("l").unwrap().as_list::<i32>();
     assert_eq!(
@@ -245,6 +245,7 @@ fn pyarrow_deep_nested_nulls() {
     assert!(a.is_null(1) && a.value(2) == 1 && a.value(3) == 2);
     let bl = r2.column(1).as_list::<i32>();
     assert!(bl.is_null(1), "{{a: null, b: null}} keeps its null list");
+    assert!(!bl.is_null(2), "an empty list is not null");
     assert_eq!(bl.value(2).len(), 0, "an empty list stays empty");
     let tail = bl.value(3);
     let tail = tail.as_primitive::<Int32Type>();
@@ -273,7 +274,7 @@ fn pyarrow_deep_nested_nulls() {
     let i = s.column(0).as_primitive::<Int32Type>();
     assert!(i.is_null(2) && !i.is_null(3) && i.value(3) == 5);
     let m = b.column_by_name("m").unwrap().as_map();
-    assert!(m.is_null(0) && !m.is_null(1) && !m.is_null(3));
+    assert!(m.is_null(0) && !m.is_null(1) && !m.is_null(2) && !m.is_null(3));
     assert_eq!(m.value(3).len(), 0);
     let m1 = m.value(1);
     assert_eq!(m1.column(0).as_primitive::<Int32Type>().values(), &[1]);
@@ -284,6 +285,7 @@ fn pyarrow_deep_nested_nulls() {
     let v0 = v.value(0);
     let v0 = v0.as_primitive::<Int32Type>();
     assert!(v0.is_null(0) && v0.value(1) == 9);
+    assert!(!v.is_null(1), "an empty list is not null");
     assert_eq!(v.value(1).len(), 0);
 }
 
