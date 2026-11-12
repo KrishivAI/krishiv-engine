@@ -9,6 +9,8 @@ on:
       - "docs/**"
       - "xtask/src/docs_*.rs"
       - "tests/scripts/gen_python_docs.py"
+      - "tests/scripts/gen_compat_matrix.py"
+      - "crates/krishiv-cli/src/check_compat/functions.json"
       - "crates/krishiv-functions/**"
       - "crates/krishiv-common/**"
       - "crates/krishiv-testkit/src/bin/doc-examples.rs"

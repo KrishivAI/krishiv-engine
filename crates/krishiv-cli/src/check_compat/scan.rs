@@ -104,8 +104,13 @@ const SQL_WORDS: &[&str] = &[
     "cluster",
     "distribute",
     "sort",
-    "window",
     "returns",
+    "div",
+    "qualify",
+    "outer",
+    "rlike",
+    "ilike",
+    "regexp",
     "tblproperties",
     "options",
     "comment",
@@ -281,6 +286,7 @@ pub(crate) fn scan_sql(file: &str, text: &str, first_line: usize) -> Vec<Finding
     let mut i = 0;
     let mut line = first_line;
     let mut prev_word = String::new();
+    let mut prev2_word = String::new();
     while i < bytes.len() {
         let c = bytes[i];
         match c {
@@ -335,6 +341,8 @@ pub(crate) fn scan_sql(file: &str, text: &str, first_line: usize) -> Vec<Finding
                         // `AS v(a, b)` alias list, `CAST(x AS DECIMAL(10, 2))` type, CTE
                         // names, `SHOW TBLPROPERTIES t(..)`, and DDL / DML targets such
                         // as `INSERT INTO t(a, b)`.
+                        // `LATERAL VIEW explode(..)` is a generator call, not a view name.
+                        "view" if prev2_word == "lateral" => true,
                         "as" | "recursive" | "with" | "tblproperties" | "into" | "table"
                         | "view" | "function" | "exists" => false,
                         // `FROM t(1)` is a table or a table function: only a name the
@@ -352,10 +360,12 @@ pub(crate) fn scan_sql(file: &str, text: &str, first_line: usize) -> Vec<Finding
                 if let Some(f) = is_call.then(|| judge(file, line, &word)).flatten() {
                     out.push(f);
                 }
-                prev_word = word;
+                prev2_word = std::mem::replace(&mut prev_word, word);
             }
             _ => {
-                if !c.is_ascii_whitespace() && c != b'(' {
+                // After `(` an argument starts: the word before it says nothing about
+                // the next one (`upper(sentences(x))`).
+                if !c.is_ascii_whitespace() {
                     prev_word.clear();
                 }
                 i += 1;

@@ -96,5 +96,41 @@
   "name": "legacy_score",
   "status": "unknown",
   "cell": 3
+ },
+ {
+  "file": "nested_calls.sql",
+  "line": 1,
+  "name": "sentences",
+  "status": "not yet"
+ },
+ {
+  "file": "nested_calls.sql",
+  "line": 2,
+  "name": "xpath_float",
+  "status": "not yet"
+ },
+ {
+  "file": "nested_calls.sql",
+  "line": 3,
+  "name": "try_reflect",
+  "status": "not yet"
+ },
+ {
+  "file": "nested_calls.sql",
+  "line": 4,
+  "name": "hll_sketch_agg",
+  "status": "not yet"
+ },
+ {
+  "file": "nested_calls.sql",
+  "line": 6,
+  "name": "java_method",
+  "status": "not yet"
+ },
+ {
+  "file": "nested_calls.sql",
+  "line": 7,
+  "name": "window",
+  "status": "not yet"
  }
 ]

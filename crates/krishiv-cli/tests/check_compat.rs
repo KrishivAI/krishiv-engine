@@ -248,3 +248,66 @@ fn non_spark_python_gives_no_findings() {
         assert_eq!(rep["findings"], serde_json::json!([]), "{rel}: {rep}");
     }
 }
+
+/// Recall over Spark's own SQL inputs: every call of a function the matrix lists as
+/// "not yet" (found by a plain `name(` token scan) is reported, at least 95% of them.
+#[test]
+fn vendored_spark_sql_inputs_report_at_least_95_percent_of_not_yet_calls() {
+    let matrix: Value = serde_json::from_str(include_str!("../src/check_compat/functions.json"))
+        .expect("matrix json");
+    let dir = repo_root().join("tests/spark-golden/v4.2.0/inputs");
+    let (_, rep) = report(&dir);
+    let reported: BTreeSet<(String, u64, String)> = rep["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .filter(|f| f["status"] == "not yet")
+        .map(|f| {
+            (
+                f["file"].as_str().expect("file").to_string(),
+                f["line"].as_u64().expect("line"),
+                f["name"].as_str().expect("name").to_string(),
+            )
+        })
+        .collect();
+    let mut want = BTreeSet::new();
+    let mut stack = vec![dir];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).expect("read_dir") {
+            let path = e.expect("entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|x| x == "sql") {
+                let text = std::fs::read_to_string(&path).expect("read");
+                let file = path.to_string_lossy().to_string();
+                for (n, line) in text.lines().enumerate() {
+                    if line.trim_start().starts_with("--") {
+                        continue;
+                    }
+                    let b = line.as_bytes();
+                    let mut i = 0;
+                    while i < b.len() {
+                        if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+                            let s = i;
+                            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                                i += 1;
+                            }
+                            let dotted = s > 0 && b[s - 1] == b'.';
+                            let word = line[s..i].to_ascii_lowercase();
+                            let next = line[i..].trim_start().as_bytes().first().copied();
+                            if next == Some(b'(') && !dotted && matrix[&word] == "not yet" {
+                                want.insert((file.clone(), n as u64 + 1, word));
+                            }
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(want.len() > 100, "only {} expected calls", want.len());
+    let hit = want.iter().filter(|w| reported.contains(*w)).count();
+    let pct = hit * 100 / want.len();
+    assert!(pct >= 95, "recall {pct}% ({hit}/{})", want.len());
+}
