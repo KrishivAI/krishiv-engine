@@ -824,3 +824,18 @@ fn a_nondeterministic_filter_keeps_the_outer_join_under_it() {
             .contains("LeftOuter")
     );
 }
+
+/// Seed 5211661776127910118 of `random_queries_reach_the_lowest_operator`
+/// (failed #688's merge-queue run on main 2d6054309): the second
+/// optimization swapped the inputs of the inner join under the left join's
+/// right-hand projection, so the plan was not a fixed point.
+#[test]
+fn an_inner_join_below_a_left_join_keeps_its_input_order() {
+    fixed_point_with_rows(
+        5_211_661_776_127_910_118,
+        "SELECT x4.a AS c0, x1.c2 AS c1, x1.c0 AS c2 FROM (SELECT x2.a AS c0, x2.a AS c1, \
+         x2.d AS c2 FROM u AS x2 FULL JOIN u AS x3 ON x2.a = x3.a WHERE x3.d <= x3.d) AS x1 \
+         LEFT JOIN u AS x4 ON x1.c1 = x4.a AND x4.d <> x1.c2 \
+         WHERE (x1.c1 IS NOT NULL AND NOT (x1.c0 <> x4.a))",
+    );
+}
