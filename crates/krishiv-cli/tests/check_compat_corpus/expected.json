@@ -1,0 +1,788 @@
+[
+ {
+  "file": "job00.py",
+  "line": 6,
+  "name": "xpath_float",
+  "status": "not yet"
+ },
+ {
+  "file": "job02.py",
+  "line": 4,
+  "name": "kll_sketch_get_quantile_float",
+  "status": "not yet"
+ },
+ {
+  "file": "job02.py",
+  "line": 5,
+  "name": "kll_sketch_get_quantile_bigint",
+  "status": "not yet"
+ },
+ {
+  "file": "job03.py",
+  "line": 3,
+  "name": "kll_merge_agg_float",
+  "status": "not yet"
+ },
+ {
+  "file": "job03.py",
+  "line": 6,
+  "name": "approx_top_k_combine",
+  "status": "not yet"
+ },
+ {
+  "file": "job03.py",
+  "line": 8,
+  "name": "xpath_number",
+  "status": "not yet"
+ },
+ {
+  "file": "job04.py",
+  "line": 3,
+  "name": "kll_sketch_to_string_double",
+  "status": "not yet"
+ },
+ {
+  "file": "job04.py",
+  "line": 5,
+  "name": "approx_top_k",
+  "status": "not yet"
+ },
+ {
+  "file": "job04.py",
+  "line": 6,
+  "name": "legacy_fn_38",
+  "status": "unknown"
+ },
+ {
+  "file": "job05.py",
+  "line": 3,
+  "name": "legacy_fn_9",
+  "status": "unknown"
+ },
+ {
+  "file": "job05.py",
+  "line": 4,
+  "name": "tuple_sketch_agg_double",
+  "status": "not yet"
+ },
+ {
+  "file": "job05.py",
+  "line": 5,
+  "name": "legacy_fn_15",
+  "status": "unknown"
+ },
+ {
+  "file": "job06.py",
+  "line": 4,
+  "name": "kll_sketch_agg_double",
+  "status": "not yet"
+ },
+ {
+  "file": "job06.py",
+  "line": 6,
+  "name": "to_protobuf",
+  "status": "not yet"
+ },
+ {
+  "file": "job06.py",
+  "line": 7,
+  "name": "tuple_sketch_estimate_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "job07.py",
+  "line": 6,
+  "name": "tuple_difference_theta_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "job07.py",
+  "line": 7,
+  "name": "kll_merge_agg_bigint",
+  "status": "not yet"
+ },
+ {
+  "file": "job08.py",
+  "line": 3,
+  "name": "legacy_fn_1",
+  "status": "unknown"
+ },
+ {
+  "file": "job08.py",
+  "line": 4,
+  "name": "approx_top_k_estimate",
+  "status": "not yet"
+ },
+ {
+  "file": "job08.py",
+  "line": 5,
+  "name": "tuple_intersection_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "job08.py",
+  "line": 6,
+  "name": "kll_merge_agg_float",
+  "status": "not yet"
+ },
+ {
+  "file": "job09.py",
+  "line": 3,
+  "name": "tuple_difference_theta_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "job09.py",
+  "line": 4,
+  "name": "session_window",
+  "status": "not yet"
+ },
+ {
+  "file": "job09.py",
+  "line": 6,
+  "name": "tuple_sketch_agg_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "job09.py",
+  "line": 7,
+  "name": "legacy_fn_35",
+  "status": "unknown"
+ },
+ {
+  "file": "job10.py",
+  "line": 4,
+  "name": "legacy_fn_28",
+  "status": "unknown"
+ },
+ {
+  "file": "job10.py",
+  "line": 6,
+  "name": "legacy_fn_39",
+  "status": "unknown"
+ },
+ {
+  "file": "job10.py",
+  "line": 7,
+  "name": "legacy_fn_34",
+  "status": "unknown"
+ },
+ {
+  "file": "job11.py",
+  "line": 4,
+  "name": "legacy_fn_4",
+  "status": "unknown"
+ },
+ {
+  "file": "job12.py",
+  "line": 3,
+  "name": "legacy_fn_9",
+  "status": "unknown"
+ },
+ {
+  "file": "job12.py",
+  "line": 7,
+  "name": "kll_sketch_to_string_bigint",
+  "status": "not yet"
+ },
+ {
+  "file": "job12.py",
+  "line": 8,
+  "name": "legacy_fn_36",
+  "status": "unknown"
+ },
+ {
+  "file": "job13.py",
+  "line": 7,
+  "name": "tuple_intersection_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "job14.py",
+  "line": 3,
+  "name": "legacy_fn_35",
+  "status": "unknown"
+ },
+ {
+  "file": "job14.py",
+  "line": 4,
+  "name": "legacy_fn_22",
+  "status": "unknown"
+ },
+ {
+  "file": "job14.py",
+  "line": 6,
+  "name": "sentences",
+  "status": "not yet"
+ },
+ {
+  "file": "job15.py",
+  "line": 3,
+  "name": "approx_top_k",
+  "status": "not yet"
+ },
+ {
+  "file": "job15.py",
+  "line": 5,
+  "name": "tuple_sketch_estimate_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "job16.py",
+  "line": 3,
+  "name": "kll_sketch_to_string_float",
+  "status": "not yet"
+ },
+ {
+  "file": "job16.py",
+  "line": 5,
+  "name": "kll_sketch_get_quantile_float",
+  "status": "not yet"
+ },
+ {
+  "file": "job17.py",
+  "line": 3,
+  "name": "theta_sketch_agg",
+  "status": "not yet"
+ },
+ {
+  "file": "job18.py",
+  "line": 3,
+  "name": "legacy_fn_36",
+  "status": "unknown"
+ },
+ {
+  "file": "job18.py",
+  "line": 5,
+  "name": "kll_sketch_merge_double",
+  "status": "not yet"
+ },
+ {
+  "file": "job18.py",
+  "line": 6,
+  "name": "kll_sketch_to_string_float",
+  "status": "not yet"
+ },
+ {
+  "file": "job18.py",
+  "line": 7,
+  "name": "legacy_fn_37",
+  "status": "unknown"
+ },
+ {
+  "file": "job19.py",
+  "line": 3,
+  "name": "approx_top_k",
+  "status": "not yet"
+ },
+ {
+  "file": "job19.py",
+  "line": 4,
+  "name": "approx_top_k_accumulate",
+  "status": "not yet"
+ },
+ {
+  "file": "job20.py",
+  "line": 3,
+  "name": "tuple_difference_theta_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "job20.py",
+  "line": 5,
+  "name": "kll_sketch_to_string_float",
+  "status": "not yet"
+ },
+ {
+  "file": "job21.py",
+  "line": 4,
+  "name": "bitmap_bucket_number",
+  "status": "not yet"
+ },
+ {
+  "file": "job21.py",
+  "line": 6,
+  "name": "bitmap_construct_agg",
+  "status": "not yet"
+ },
+ {
+  "file": "job21.py",
+  "line": 7,
+  "name": "kll_sketch_get_rank_bigint",
+  "status": "not yet"
+ },
+ {
+  "file": "job22.py",
+  "line": 3,
+  "name": "collations",
+  "status": "not yet"
+ },
+ {
+  "file": "job22.py",
+  "line": 5,
+  "name": "legacy_fn_35",
+  "status": "unknown"
+ },
+ {
+  "file": "job23.py",
+  "line": 4,
+  "name": "xpath_int",
+  "status": "not yet"
+ },
+ {
+  "file": "job23.py",
+  "line": 6,
+  "name": "legacy_fn_24",
+  "status": "unknown"
+ },
+ {
+  "file": "job24.py",
+  "line": 3,
+  "name": "kll_sketch_agg_float",
+  "status": "not yet"
+ },
+ {
+  "file": "job26.py",
+  "line": 4,
+  "name": "kll_sketch_merge_double",
+  "status": "not yet"
+ },
+ {
+  "file": "job26.py",
+  "line": 6,
+  "name": "legacy_fn_4",
+  "status": "unknown"
+ },
+ {
+  "file": "job27.py",
+  "line": 6,
+  "name": "approx_top_k_estimate",
+  "status": "not yet"
+ },
+ {
+  "file": "job28.py",
+  "line": 5,
+  "name": "tuple_intersection_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "job29.py",
+  "line": 3,
+  "name": "legacy_fn_25",
+  "status": "unknown"
+ },
+ {
+  "file": "job29.py",
+  "line": 6,
+  "name": "bitmap_bit_position",
+  "status": "not yet"
+ },
+ {
+  "file": "q00.sql",
+  "line": 4,
+  "name": "legacy_fn_25",
+  "status": "unknown"
+ },
+ {
+  "file": "q01.sql",
+  "line": 4,
+  "name": "reflect",
+  "status": "not yet"
+ },
+ {
+  "file": "q01.sql",
+  "line": 7,
+  "name": "xpath_string",
+  "status": "not yet"
+ },
+ {
+  "file": "q02.sql",
+  "line": 5,
+  "name": "tuple_intersection_theta_double",
+  "status": "not yet"
+ },
+ {
+  "file": "q03.sql",
+  "line": 2,
+  "name": "theta_union",
+  "status": "not yet"
+ },
+ {
+  "file": "q03.sql",
+  "line": 4,
+  "name": "theta_sketch_agg",
+  "status": "not yet"
+ },
+ {
+  "file": "q03.sql",
+  "line": 5,
+  "name": "legacy_fn_30",
+  "status": "unknown"
+ },
+ {
+  "file": "q04.sql",
+  "line": 2,
+  "name": "kll_sketch_merge_float",
+  "status": "not yet"
+ },
+ {
+  "file": "q04.sql",
+  "line": 3,
+  "name": "tuple_union_theta_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "q04.sql",
+  "line": 5,
+  "name": "from_avro",
+  "status": "not yet"
+ },
+ {
+  "file": "q05.sql",
+  "line": 2,
+  "name": "legacy_fn_16",
+  "status": "unknown"
+ },
+ {
+  "file": "q05.sql",
+  "line": 4,
+  "name": "legacy_fn_35",
+  "status": "unknown"
+ },
+ {
+  "file": "q05.sql",
+  "line": 6,
+  "name": "theta_union",
+  "status": "not yet"
+ },
+ {
+  "file": "q06.sql",
+  "line": 3,
+  "name": "kll_sketch_to_string_float",
+  "status": "not yet"
+ },
+ {
+  "file": "q06.sql",
+  "line": 4,
+  "name": "xpath_int",
+  "status": "not yet"
+ },
+ {
+  "file": "q06.sql",
+  "line": 5,
+  "name": "legacy_fn_13",
+  "status": "unknown"
+ },
+ {
+  "file": "q06.sql",
+  "line": 6,
+  "name": "approx_top_k_accumulate",
+  "status": "not yet"
+ },
+ {
+  "file": "q06.sql",
+  "line": 7,
+  "name": "legacy_fn_1",
+  "status": "unknown"
+ },
+ {
+  "file": "q07.sql",
+  "line": 2,
+  "name": "legacy_fn_35",
+  "status": "unknown"
+ },
+ {
+  "file": "q07.sql",
+  "line": 5,
+  "name": "legacy_fn_3",
+  "status": "unknown"
+ },
+ {
+  "file": "q07.sql",
+  "line": 6,
+  "name": "tuple_union_theta_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "q08.sql",
+  "line": 2,
+  "name": "legacy_fn_32",
+  "status": "unknown"
+ },
+ {
+  "file": "q08.sql",
+  "line": 3,
+  "name": "is_valid_variant",
+  "status": "not yet"
+ },
+ {
+  "file": "q09.sql",
+  "line": 3,
+  "name": "kll_sketch_get_quantile_float",
+  "status": "not yet"
+ },
+ {
+  "file": "q10.sql",
+  "line": 2,
+  "name": "legacy_fn_12",
+  "status": "unknown"
+ },
+ {
+  "file": "q10.sql",
+  "line": 6,
+  "name": "tuple_union_double",
+  "status": "not yet"
+ },
+ {
+  "file": "q11.sql",
+  "line": 4,
+  "name": "legacy_fn_26",
+  "status": "unknown"
+ },
+ {
+  "file": "q12.sql",
+  "line": 4,
+  "name": "legacy_fn_20",
+  "status": "unknown"
+ },
+ {
+  "file": "q13.sql",
+  "line": 5,
+  "name": "legacy_fn_20",
+  "status": "unknown"
+ },
+ {
+  "file": "q13.sql",
+  "line": 7,
+  "name": "legacy_fn_28",
+  "status": "unknown"
+ },
+ {
+  "file": "q14.sql",
+  "line": 2,
+  "name": "to_protobuf",
+  "status": "not yet"
+ },
+ {
+  "file": "q14.sql",
+  "line": 4,
+  "name": "python_worker_logs",
+  "status": "not yet"
+ },
+ {
+  "file": "q15.sql",
+  "line": 3,
+  "name": "legacy_fn_29",
+  "status": "unknown"
+ },
+ {
+  "file": "q15.sql",
+  "line": 4,
+  "name": "bitmap_bucket_number",
+  "status": "not yet"
+ },
+ {
+  "file": "q16.sql",
+  "line": 2,
+  "name": "from_protobuf",
+  "status": "not yet"
+ },
+ {
+  "file": "q16.sql",
+  "line": 3,
+  "name": "kll_sketch_to_string_double",
+  "status": "not yet"
+ },
+ {
+  "file": "q16.sql",
+  "line": 4,
+  "name": "legacy_fn_0",
+  "status": "unknown"
+ },
+ {
+  "file": "q18.sql",
+  "line": 2,
+  "name": "tuple_sketch_theta_double",
+  "status": "not yet"
+ },
+ {
+  "file": "q18.sql",
+  "line": 3,
+  "name": "legacy_fn_4",
+  "status": "unknown"
+ },
+ {
+  "file": "q18.sql",
+  "line": 4,
+  "name": "bitmap_or_agg",
+  "status": "not yet"
+ },
+ {
+  "file": "q19.sql",
+  "line": 2,
+  "name": "kll_sketch_get_n_double",
+  "status": "not yet"
+ },
+ {
+  "file": "q20.sql",
+  "line": 2,
+  "name": "kll_sketch_to_string_double",
+  "status": "not yet"
+ },
+ {
+  "file": "q20.sql",
+  "line": 3,
+  "name": "kll_sketch_merge_bigint",
+  "status": "not yet"
+ },
+ {
+  "file": "q20.sql",
+  "line": 4,
+  "name": "tuple_union_theta_double",
+  "status": "not yet"
+ },
+ {
+  "file": "q20.sql",
+  "line": 5,
+  "name": "legacy_fn_21",
+  "status": "unknown"
+ },
+ {
+  "file": "q20.sql",
+  "line": 6,
+  "name": "legacy_fn_26",
+  "status": "unknown"
+ },
+ {
+  "file": "q21.sql",
+  "line": 4,
+  "name": "tuple_intersection_theta_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "q21.sql",
+  "line": 6,
+  "name": "legacy_fn_11",
+  "status": "unknown"
+ },
+ {
+  "file": "q22.sql",
+  "line": 3,
+  "name": "legacy_fn_27",
+  "status": "unknown"
+ },
+ {
+  "file": "q22.sql",
+  "line": 4,
+  "name": "kll_sketch_agg_float",
+  "status": "not yet"
+ },
+ {
+  "file": "q23.sql",
+  "line": 3,
+  "name": "tuple_union_agg_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "q23.sql",
+  "line": 4,
+  "name": "legacy_fn_12",
+  "status": "unknown"
+ },
+ {
+  "file": "q23.sql",
+  "line": 5,
+  "name": "legacy_fn_15",
+  "status": "unknown"
+ },
+ {
+  "file": "q24.sql",
+  "line": 2,
+  "name": "kll_sketch_to_string_double",
+  "status": "not yet"
+ },
+ {
+  "file": "q24.sql",
+  "line": 3,
+  "name": "tuple_intersection_theta_double",
+  "status": "not yet"
+ },
+ {
+  "file": "q24.sql",
+  "line": 4,
+  "name": "legacy_fn_13",
+  "status": "unknown"
+ },
+ {
+  "file": "q24.sql",
+  "line": 6,
+  "name": "legacy_fn_14",
+  "status": "unknown"
+ },
+ {
+  "file": "q24.sql",
+  "line": 7,
+  "name": "kll_sketch_get_quantile_double",
+  "status": "not yet"
+ },
+ {
+  "file": "q25.sql",
+  "line": 2,
+  "name": "tuple_difference_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "q25.sql",
+  "line": 3,
+  "name": "bitmap_bit_position",
+  "status": "not yet"
+ },
+ {
+  "file": "q25.sql",
+  "line": 4,
+  "name": "theta_union",
+  "status": "not yet"
+ },
+ {
+  "file": "q25.sql",
+  "line": 5,
+  "name": "approx_top_k_accumulate",
+  "status": "not yet"
+ },
+ {
+  "file": "q26.sql",
+  "line": 2,
+  "name": "legacy_fn_37",
+  "status": "unknown"
+ },
+ {
+  "file": "q26.sql",
+  "line": 3,
+  "name": "tuple_union_theta_integer",
+  "status": "not yet"
+ },
+ {
+  "file": "q26.sql",
+  "line": 5,
+  "name": "bitmap_count",
+  "status": "not yet"
+ },
+ {
+  "file": "q27.sql",
+  "line": 3,
+  "name": "legacy_fn_11",
+  "status": "unknown"
+ },
+ {
+  "file": "q28.sql",
+  "line": 2,
+  "name": "legacy_fn_34",
+  "status": "unknown"
+ },
+ {
+  "file": "q29.sql",
+  "line": 3,
+  "name": "xpath_long",
+  "status": "not yet"
+ }
+]

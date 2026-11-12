@@ -68,6 +68,7 @@ pub(crate) fn matrix() -> &'static BTreeMap<String, Status> {
 
 /// Collects the scannable files under `path`, sorted.
 fn collect(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    std::fs::metadata(path)?;
     if path.is_dir() {
         let mut entries: Vec<_> = std::fs::read_dir(path)?
             .collect::<Result<Vec<_>, _>>()?
