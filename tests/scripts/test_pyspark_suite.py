@@ -155,3 +155,13 @@ def test_static_refuses_missing_checkout(tmp_path: Path) -> None:
 
     with pytest.raises(SystemExit):
         cmd_static(argparse.Namespace(version="9.9.9", checkout=tmp_path / "nope"))
+
+
+def test_collection_error_is_a_file_failure() -> None:
+    from pyspark_suite.denominator import Denominator
+    from pyspark_suite.junit import Record
+
+    den = Denominator("4.3.0", 1, 0, 0, 0, 1, 0, {})
+    rec = Record("4.3.0", "a.py", "", "a", "error", 0)
+    out = summarize(den, {"a.py::A::t"}, [rec], source="run")
+    assert out["file_failures"] == ["a.py"]

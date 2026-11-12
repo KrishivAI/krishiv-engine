@@ -24,7 +24,14 @@ def summarize(den: Denominator, remaining: set[str], records: list[Record], *, s
     status = {r.test_id: r.status for r in records if r.test_id in remaining}
     passed = {t for t, s in status.items() if s == "pass"}
     # A whole-file timeout, crash or missing XML is a `<file>` record; keep it visible, not just in `not_run`.
-    file_failures = sorted({r.file for r in records if r.test == "<file>"})
+    # Also a collection error (pytest reports it as an error testcase that matches no census id).
+    file_failures = sorted(
+        {
+            r.file
+            for r in records
+            if r.test == "<file>" or (r.status in ("error", "timeout") and r.test_id not in remaining)
+        }
+    )
     client_only = {t for t in remaining if t.split("::", 1)[0] in CLIENT_ONLY_FILES}
 
     def rate(num: int, dnm: int) -> float:
