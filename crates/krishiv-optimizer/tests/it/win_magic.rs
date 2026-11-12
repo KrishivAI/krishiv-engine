@@ -43,6 +43,9 @@ fn plain_q17() -> String {
 
 #[test]
 fn q17_and_q02_become_windows_only_with_the_key() {
+    // q02's snapshot is the plan the cost guard leaves since #686: SubqueryAsWindow runs before join
+    // ordering, so q02's outer block is still a cross join the estimator prices at 160M rows
+    // (window ~66 GB against a ~190 MB second scan). Moving the guard after ordering is the fix.
     for q in [17, 2] {
         let sql = support::tpch_sql(q);
         assert!(
@@ -258,4 +261,13 @@ fn min_and_max_of_a_double_are_refused() {
         let sql = q17(agg, "", "", "l_partkey = p_partkey");
         assert!(!windowed(&sql), "{agg}");
     }
+}
+
+#[test]
+fn an_argument_the_outer_projection_drops_is_refused() {
+    // `d` exposes `l_partkey` only: `min(l_quantity)` is not a column of the window's input.
+    let sql = "SELECT d.l_partkey FROM (SELECT l_partkey FROM lineitem) d \
+               WHERE d.l_partkey < (SELECT min(l2.l_quantity) FROM lineitem l2 \
+               WHERE l2.l_partkey = d.l_partkey)";
+    assert!(!windowed(sql));
 }

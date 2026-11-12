@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for geometry and geography values: WKB byte order, spatial kinds and the rewrite of stored values.
 use serde_json::Value;
 
 use super::{ByteOrder, SpatialKind, rewrite};

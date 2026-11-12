@@ -6,26 +6,27 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+publish = true
 
 [dependencies]
 arrow-array.workspace = true
 arrow-buffer.workspace = true
 arrow-schema.workspace = true
+thiserror = { workspace = true, optional = true }
 # `executor`: file footers are read on a thread of their own (catalog.rs).
 futures = { workspace = true, features = ["alloc", "executor"] }
-krishiv-common = { path = "../krishiv-common" }
-krishiv-exec = { path = "../krishiv-exec" }
-krishiv-functions = { path = "../krishiv-functions" }
-krishiv-io = { path = "../krishiv-io" }
-krishiv-kernels = { path = "../krishiv-kernels" }
-krishiv-memory = { path = "../krishiv-memory" }
-krishiv-optimizer = { path = "../krishiv-optimizer" }
-krishiv-plan = { path = "../krishiv-plan" }
-krishiv-plan-codec = { path = "../krishiv-plan-codec" }
-krishiv-sql = { path = "../krishiv-sql" }
-krishiv-types = { path = "../krishiv-types" }
-krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.0" }
+krishiv-functions = { path = "../krishiv-functions", version = "=0.2.0" }
+krishiv-io = { path = "../krishiv-io", version = "=0.2.0" }
+krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.0" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.0" }
+krishiv-optimizer = { path = "../krishiv-optimizer", version = "=0.2.0" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0" }
+krishiv-plan-codec = { path = "../krishiv-plan-codec", version = "=0.2.0" }
+krishiv-sql = { path = "../krishiv-sql", version = "=0.2.0" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.0" }
 # The `EXPLAIN VERBOSE` JSON document.
 serde_json = { workspace = true, features = ["std"] }
 # Row hashes for the agent table (`xxhash3_128`, v1 frozen in `agent.rs`).
@@ -57,7 +58,7 @@ insta.workspace = true
 parquet = { workspace = true, features = ["arrow"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
-tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+tracing-subscriber = { workspace = true, features = ["registry", "std", "fmt", "json"] }
 
 [features]
 # Cloud object stores (S3, GCS, Azure) via `krishiv-io/cloud`. Opt-in so the
@@ -81,9 +82,21 @@ telemetry-otlp = [
     "dep:tracing-subscriber",
 ]
 
+# Structured JSON logs with the query's ids and a per-callsite rate limit (`logging.rs`).
+telemetry-logs = [
+    "dep:thiserror",
+    "dep:tracing-subscriber",
+    "tracing-subscriber/fmt",
+    "tracing-subscriber/json",
+]
+
 [[test]]
 name = "otlp_collector"
 required-features = ["telemetry-otlp"]
+
+[[test]]
+name = "log_records"
+required-features = ["telemetry-logs"]
 
 [lints]
 workspace = true

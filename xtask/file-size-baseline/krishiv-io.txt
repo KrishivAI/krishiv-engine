@@ -1,4 +1,0 @@
-# Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
-# (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
-# +2 lines over main: WriteOptions.zone_name (region session zones for timestamp partitions, row 36)
-4188 crates/krishiv-io/src/avro/tests.rs

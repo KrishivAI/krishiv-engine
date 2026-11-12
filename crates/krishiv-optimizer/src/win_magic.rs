@@ -262,6 +262,20 @@ impl Rule<'_> {
                 return None;
             }
         }
+        // The window reads `X`'s output: a key or call argument that a projection between the
+        // leaves and `X` dropped is not an input column of the window.
+        let exposed = |e: &Arc<Expr>| {
+            references(&substitute(e, &to_x))
+                .iter()
+                .all(|id| x_ids.contains(id))
+        };
+        if !p_cols.iter().all(|p| x_ids.contains(&p.id))
+            || !calls
+                .iter()
+                .all(|c| function(c).is_some_and(|f| f.args.iter().all(exposed)))
+        {
+            return None;
+        }
         // Each `e` is `P_k` or equal to it within `X`.
         let mut x_classes = equality_classes(&xb.conjuncts);
         for (k, p) in keys.iter().zip(&p_cols) {

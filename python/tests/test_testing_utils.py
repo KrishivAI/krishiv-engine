@@ -536,9 +536,11 @@ def test_divide_by_zero_accessors(spark: SparkSession) -> None:
     assert e.getMessageParameters() == {"config": '"spark.sql.ansi.enabled"'}
     assert e.getMessage() == str(e)
     assert "[DIVIDE_BY_ZERO]" in e.getMessage()
-    # Divergence from Spark 4.2: the engine attaches no query context to
-    # execution errors, so this is [] here (Spark would carry the failed node).
-    assert e.getQueryContext() == []
+    # As Spark 4.2: the failed expression's span in the statement.
+    (qc,) = e.getQueryContext()
+    assert qc.contextType() == QueryContextType.SQL
+    assert qc.fragment() == "1 / 0"
+    assert (qc.startIndex(), qc.stopIndex()) == (7, 11)
 
 
 def test_unresolved_column_sql_context(spark: SparkSession) -> None:

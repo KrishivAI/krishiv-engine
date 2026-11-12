@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for secret strings and URLs: redaction in `Debug`/`Display`, constant-time equality and sensitive-key detection.
 
 use super::{
     OptionValue, SecretString, SecretUrl, SecretValue, UrlPart, ct_eq, is_sensitive_key, zero,
