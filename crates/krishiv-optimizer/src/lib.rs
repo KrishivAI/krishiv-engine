@@ -71,12 +71,14 @@ mod restrict;
 mod share_cte;
 mod stats;
 mod sum_rewrite;
+mod win_magic;
 
 use std::sync::Arc;
 
 use krishiv_common::config::{
     ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, JOIN_COST, JOIN_DP_LIMIT,
     JOIN_ENUMERATOR, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES,
+    SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -407,6 +409,22 @@ fn run(
         } else {
             root = batch(root, "Rewrite", &mut t)?;
         }
+        // P3 W1 shape (a): a correlated aggregate subquery over the outer block's own
+        // relations becomes a window (`krishiv.optimizer.subqueryAsWindow`, off by default).
+        let window = options.subquery_as_window
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SUBQUERY_AS_WINDOW)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
+        let root = if window {
+            t.once("SubqueryAsWindow", &root, |r| {
+                win_magic::rewrite(Arc::clone(r))
+            })?
+        } else {
+            root
+        };
         // After the rewrite batch, which moves `WHERE` equalities into the
         // joins (comma joins are cross joins before it); the batch runs
         // again to push what the rule added, only when it added something.

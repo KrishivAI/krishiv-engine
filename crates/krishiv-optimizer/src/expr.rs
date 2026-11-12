@@ -578,10 +578,6 @@ pub(crate) fn equality(e: &Expr) -> Option<[&BoundColumn; 2]> {
 }
 
 /// The classes of the column equalities `a = b` (same type) among `preds`.
-#[expect(
-    dead_code,
-    reason = "the subquery-as-window rule (P3 W1 unit 4) reads Cls(P)"
-)]
 pub(crate) fn equality_classes<'a>(preds: impl IntoIterator<Item = &'a Arc<Expr>>) -> Classes {
     let mut classes = Classes::default();
     for p in preds {

@@ -97,3 +97,16 @@ fn different_subtrees_are_not_shared() {
     let text = run(sql, true).root().to_string();
     assert!(!text.contains("CteRef"), "{text}");
 }
+
+#[test]
+fn zz_dump_q17() {
+    for q in [17, 2] {
+        let plan = support::resolve(&support::tpch_sql(q), &support::ctx());
+        let mut config = Config::new();
+        config
+            .set("krishiv.optimizer.subqueryAsWindow", "true")
+            .unwrap();
+        let out = optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &config).unwrap();
+        eprintln!("== q{q}\n{}", out.root());
+    }
+}

@@ -23,3 +23,4 @@ mod support;
 mod tpcds;
 mod tpch;
 mod udf;
+mod win_magic;
