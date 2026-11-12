@@ -56,18 +56,18 @@ python = ["krishiv/python"]
 wasm-udf = ["krishiv/wasm-udf"]
 # `krishiv server`: Spark Connect (gRPC) and the admin server (healthz, readyz, metrics).
 server = [
-  "dep:krishiv-server",
-  "krishiv-server/session",
-  "krishiv-server/metrics-prometheus",
-  "dep:krishiv-session",
-  "dep:krishiv-connect-server",
-  "dep:axum",
-  "dep:tokio",
-  "tokio/net",
-  "tokio/signal",
-  "tokio/sync",
-  "tokio/macros",
-  "tokio/time",
+    "dep:krishiv-server",
+    "krishiv-server/session",
+    "krishiv-server/metrics-prometheus",
+    "dep:krishiv-session",
+    "dep:krishiv-connect-server",
+    "dep:axum",
+    "dep:tokio",
+    "tokio/net",
+    "tokio/signal",
+    "tokio/sync",
+    "tokio/macros",
+    "tokio/time",
 ]
 # The web UI on the admin server.
 ui = ["krishiv/ui", "server"]

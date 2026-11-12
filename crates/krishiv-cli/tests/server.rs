@@ -88,6 +88,20 @@ fn non_loopback_requires_auth() {
         .output()
         .expect("run krishiv server");
     assert_eq!(out.status.code(), Some(1));
+    let out = krishiv()
+        .args([
+            "server",
+            "--port",
+            "0",
+            "--connect-port",
+            "0",
+            "--conf",
+            "krishiv.connect.address=0.0.0.0",
+        ])
+        .output()
+        .expect("run krishiv server");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("without authentication"));
 }
 
 /// A running server and the addresses it printed; killed and reaped on

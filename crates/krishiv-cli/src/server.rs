@@ -281,3 +281,38 @@ async fn signal() {
         let _ = tokio::signal::ctrl_c().await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(pairs: &[(&str, &str)]) -> Config {
+        let mut c = Config::new();
+        for (k, v) in pairs {
+            c.set(k, v).unwrap();
+        }
+        c
+    }
+
+    #[test]
+    fn core_dumps_stay_off_unless_allowed() {
+        assert!(!flag(&config(&[]), &SERVER_ALLOW_CORE_DUMPS, false));
+        let c = config(&[("krishiv.server.allowCoreDumps", "true")]);
+        assert!(flag(&c, &SERVER_ALLOW_CORE_DUMPS, false));
+    }
+
+    #[test]
+    fn public_metrics_skip_the_token_only_on_loopback() {
+        let lo: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let any: SocketAddr = "0.0.0.0:8080".parse().unwrap();
+        let on = config(&[("krishiv.metrics.enabled", "true")]);
+        assert!(metrics_need_token(&on, lo));
+        let public = config(&[
+            ("krishiv.metrics.enabled", "true"),
+            ("krishiv.server.metrics.public", "true"),
+        ]);
+        assert!(!metrics_need_token(&public, lo));
+        assert!(metrics_need_token(&public, any));
+        assert!(!metrics_need_token(&config(&[]), lo));
+    }
+}

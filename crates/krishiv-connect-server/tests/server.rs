@@ -497,3 +497,37 @@ async fn a_silent_socket_loses_its_slot_after_the_handshake_deadline() {
     stop.send(()).expect("stop");
     done.await.expect("join").expect("serve");
 }
+
+#[test]
+fn every_krishiv_key_sets_its_setting() {
+    let mut c = krishiv_common::config::Config::new();
+    for (k, v) in [
+        ("krishiv.connect.maxInboundMessageSize", "2MB"),
+        ("krishiv.connect.keepAlive.time", "7s"),
+        ("krishiv.connect.keepAlive.timeout", "3s"),
+        ("krishiv.connect.session.maintenanceInterval", "5s"),
+        ("krishiv.connect.session.closedTombstones", "7"),
+        ("krishiv.connect.maxConnections", "9"),
+        ("krishiv.connect.handshakeTimeout", "4s"),
+        ("krishiv.connect.http2.maxConcurrentStreams", "11"),
+        ("krishiv.connect.http2.maxHeaderListBytes", "8KB"),
+        ("krishiv.connect.http2.maxPendingAcceptResets", "13"),
+    ] {
+        c.set(k, v).unwrap_or_else(|e| panic!("{k}: {e}"));
+    }
+    let s = ConnectServerConfig::from_config(&c);
+    assert_eq!(s.max_inbound_message_size, 2 << 20);
+    assert_eq!(
+        s.keepalive,
+        Some((Duration::from_secs(7), Duration::from_secs(3)))
+    );
+    assert_eq!(s.maintenance_interval, Duration::from_secs(5));
+    assert_eq!(s.max_connections, 9);
+    assert_eq!(s.handshake_timeout, Duration::from_secs(4));
+    assert_eq!(s.max_concurrent_streams, 11);
+    assert_eq!(s.max_header_list_bytes, 8 << 10);
+    assert_eq!(s.max_pending_accept_resets, 13);
+    assert_eq!(SessionLimits::from_config(&c).tombstones, 7);
+    c.set("krishiv.connect.keepAlive.enabled", "false").unwrap();
+    assert_eq!(ConnectServerConfig::from_config(&c).keepalive, None);
+}
