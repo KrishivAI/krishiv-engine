@@ -151,6 +151,7 @@ const fn limits(bytes: usize, messages: usize, nesting: usize) -> Limits {
         messages,
         decoded: usize::MAX,
         nesting,
+        version: ClientVersion::V4_3,
     }
 }
 
@@ -160,6 +161,7 @@ const fn decoded(decoded: usize) -> Limits {
         messages: usize::MAX,
         decoded,
         nesting: usize::MAX,
+        version: ClientVersion::V4_3,
     }
 }
 
@@ -487,4 +489,75 @@ fn the_4_3_additions_decode_in_the_superset() {
         "{}",
         err.message()
     );
+}
+
+#[test]
+fn client_version_comes_from_the_client_type() {
+    for (client_type, want) in [
+        (
+            "_SPARK_CONNECT_PYTHON spark/3.5.0",
+            Some(ClientVersion::V3_5),
+        ),
+        (
+            "_SPARK_CONNECT_PYTHON spark/4.0.0",
+            Some(ClientVersion::V4_0),
+        ),
+        ("spark/4.1.1", Some(ClientVersion::V4_1)),
+        (
+            "_SPARK_CONNECT_PYTHON spark/4.2.1 os/linux",
+            Some(ClientVersion::V4_2),
+        ),
+        (
+            "_SPARK_CONNECT_SCALA spark/4.3.0-SNAPSHOT",
+            Some(ClientVersion::V4_3),
+        ),
+        ("spark/5.0.0", Some(ClientVersion::V4_3)),
+        ("something-else", None),
+        ("spark/x.y", None),
+    ] {
+        assert_eq!(
+            ClientVersion::from_client_type(client_type),
+            want,
+            "{client_type}"
+        );
+    }
+}
+
+#[test]
+fn a_field_newer_than_the_declared_version_is_56k00() {
+    let zip = field(48, &[field(1, &sql_leaf()), field(2, &sql_leaf())].concat());
+    let nanos_literal = field(1, &field(29, &[0x08, 0x01]));
+    for version in [
+        ClientVersion::V3_5,
+        ClientVersion::V4_0,
+        ClientVersion::V4_1,
+        ClientVersion::V4_2,
+    ] {
+        let err = decode_relation_for(&zip, version).expect_err("zip");
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+        );
+        assert!(
+            err.message().contains("spark.connect.Relation") && err.message().contains("(48)"),
+            "{}",
+            err.message()
+        );
+        let err = decode_expression_for(&nanos_literal, version).expect_err("literal");
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+        );
+        assert!(
+            err.message().contains("spark.connect.Expression.Literal")
+                && err.message().contains("(29)"),
+            "{}",
+            err.message()
+        );
+    }
+    // A 4.3 client, and the default profile, are accepted.
+    decode_relation_for(&zip, ClientVersion::V4_3).expect("4.3 zip");
+    decode_relation(&zip).expect("default profile");
+    // A field every version has is not gated.
+    decode_relation_for(&sql_leaf(), ClientVersion::V3_5).expect("sql");
 }

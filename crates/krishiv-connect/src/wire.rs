@@ -35,8 +35,9 @@
 use std::ops::Deref;
 
 use krishiv_common::error::{
-    ConnectInvalidPlanCannotParse, ConnectInvalidPlanPlanSizeLargerThanMax,
-    FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature,
+    ConnectInvalidPlanCannotParse, ConnectInvalidPlanInvalidOneOfFieldNotSupported,
+    ConnectInvalidPlanPlanSizeLargerThanMax, FailedToParseTooComplex, KrishivError,
+    KrishivUnsupportedFeature,
 };
 use prost::Message;
 
@@ -122,6 +123,59 @@ impl<M: Message + Default + Send + Scrub> Drop for Decoded<M> {
     }
 }
 
+/// The Spark Connect protocol version a client speaks. Fields a version does not define are
+/// refused for a client that declares it ([`FIELDS_SINCE_4_3`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum ClientVersion {
+    /// Spark 3.5.x.
+    V3_5,
+    /// Spark 4.0.x.
+    V4_0,
+    /// Spark 4.1.x.
+    V4_1,
+    /// Spark 4.2.x.
+    V4_2,
+    /// Spark 4.3.x and newer: every field the superset decoder knows. The default profile.
+    #[default]
+    V4_3,
+}
+
+impl ClientVersion {
+    /// The version in a request's `client_type` (`... spark/4.2.1`): the `spark/<major>.<minor>`
+    /// token. Versions past 4.3 map to 4.3. `None` when there is no such token, so the caller
+    /// can fall back to the fields present, then to the default profile.
+    #[must_use]
+    pub fn from_client_type(client_type: &str) -> Option<Self> {
+        let rest = client_type.split("spark/").nth(1)?;
+        let mut parts = rest.split(['.', ' ', '-']);
+        let major: u32 = parts.next()?.parse().ok()?;
+        let minor: u32 = parts.next()?.parse().ok()?;
+        match (major, minor) {
+            (0..=3, _) => Some(Self::V3_5),
+            (4, 0) => Some(Self::V4_0),
+            (4, 1) => Some(Self::V4_1),
+            (4, 2) => Some(Self::V4_2),
+            _ => Some(Self::V4_3),
+        }
+    }
+}
+
+/// Fields the 4.3 protos added to messages that exist in 4.2 (message name, field number): a
+/// client declaring 4.2 or older that sends one gets
+/// `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` (SQLSTATE 56K00), as Spark does for
+/// a oneof arm it does not define. `Relation.zip`, the nanosecond timestamp literals and types,
+/// and the SCD2 track-history lists. The manifest check pins the 4.2.1 -> 4.3 delta to exactly
+/// these.
+const FIELDS_SINCE_4_3: &[(&str, u32)] = &[
+    ("Relation", 48),
+    ("Expression.Literal", 29),
+    ("Expression.Literal", 30),
+    ("DataType", 29),
+    ("DataType", 30),
+    ("PipelineCommand.DefineFlow.AutoCdcFlowDetails", 11),
+    ("PipelineCommand.DefineFlow.AutoCdcFlowDetails", 12),
+];
+
 /// Decodes a [`Plan`].
 ///
 /// # Errors
@@ -131,7 +185,19 @@ impl<M: Message + Default + Send + Scrub> Drop for Decoded<M> {
 /// Spark Connect 4.3 does not define, `CONNECT_INVALID_PLAN.CANNOT_PARSE` for
 /// malformed bytes.
 pub fn decode_plan(bytes: &[u8]) -> Result<Decoded<Plan>, KrishivError> {
-    decode(layout::PLAN, bytes)
+    decode_plan_for(bytes, ClientVersion::default())
+}
+
+/// Decodes a [`Plan`] from a client that declares `version`.
+///
+/// # Errors
+/// As [`decode_plan`], and `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` for a field
+/// `version` does not define.
+pub fn decode_plan_for(
+    bytes: &[u8],
+    version: ClientVersion,
+) -> Result<Decoded<Plan>, KrishivError> {
+    decode(layout::PLAN, bytes, version)
 }
 
 /// Decodes a [`Relation`]; see [`decode_plan`] for the errors.
@@ -139,7 +205,18 @@ pub fn decode_plan(bytes: &[u8]) -> Result<Decoded<Plan>, KrishivError> {
 /// # Errors
 /// As [`decode_plan`].
 pub fn decode_relation(bytes: &[u8]) -> Result<Decoded<Relation>, KrishivError> {
-    decode(layout::RELATION, bytes)
+    decode_relation_for(bytes, ClientVersion::default())
+}
+
+/// Decodes a [`Relation`] from a client that declares `version`; see [`decode_plan_for`].
+///
+/// # Errors
+/// As [`decode_plan_for`].
+pub fn decode_relation_for(
+    bytes: &[u8],
+    version: ClientVersion,
+) -> Result<Decoded<Relation>, KrishivError> {
+    decode(layout::RELATION, bytes, version)
 }
 
 /// Decodes an [`Expression`]; see [`decode_plan`] for the errors.
@@ -147,14 +224,26 @@ pub fn decode_relation(bytes: &[u8]) -> Result<Decoded<Relation>, KrishivError> 
 /// # Errors
 /// As [`decode_plan`].
 pub fn decode_expression(bytes: &[u8]) -> Result<Decoded<Expression>, KrishivError> {
-    decode(layout::EXPRESSION, bytes)
+    decode_expression_for(bytes, ClientVersion::default())
+}
+
+/// Decodes an [`Expression`] from a client that declares `version`; see [`decode_plan_for`].
+///
+/// # Errors
+/// As [`decode_plan_for`].
+pub fn decode_expression_for(
+    bytes: &[u8],
+    version: ClientVersion,
+) -> Result<Decoded<Expression>, KrishivError> {
+    decode(layout::EXPRESSION, bytes, version)
 }
 
 fn decode<M: Message + Default + Send + Scrub>(
     root: u16,
     bytes: &[u8],
+    version: ClientVersion,
 ) -> Result<Decoded<M>, KrishivError> {
-    let deep = check(root, bytes)? > INLINE_LEVELS;
+    let deep = check(root, bytes, version)? > INLINE_LEVELS;
     // The one call of prost's decoder: the walk above bounded it.
     #[expect(
         clippy::disallowed_methods,
@@ -180,6 +269,11 @@ enum Reject {
     TooDeep,
     /// A field number message `message` (an id) does not define.
     UnknownField {
+        message: u16,
+        number: u32,
+    },
+    /// A field newer than the version the client declared.
+    NotInVersion {
         message: u16,
         number: u32,
     },
@@ -215,6 +309,17 @@ impl From<Reject> for KrishivError {
                 ),
             }
             .into(),
+            Reject::NotInVersion { message, number } => {
+                let name = layout::MESSAGES
+                    .get(usize::from(message))
+                    .map_or("?", |m| m.name);
+                ConnectInvalidPlanInvalidOneOfFieldNotSupported {
+                    full_name: format!("spark.connect.{name}"),
+                    name: format!("field {number}"),
+                    number: number.to_string(),
+                }
+                .into()
+            }
             Reject::Malformed(why) => malformed(why),
         }
     }
@@ -233,7 +338,7 @@ fn malformed(why: &str) -> KrishivError {
 }
 
 /// Walks `bytes`; returns the deepest nesting.
-fn check(root: u16, bytes: &[u8]) -> Result<usize, KrishivError> {
+fn check(root: u16, bytes: &[u8], version: ClientVersion) -> Result<usize, KrishivError> {
     scan(
         &layout::MESSAGES,
         root,
@@ -243,6 +348,7 @@ fn check(root: u16, bytes: &[u8]) -> Result<usize, KrishivError> {
             messages: MAX_MESSAGES,
             decoded: MAX_DECODED_BYTES,
             nesting: MAX_NESTING,
+            version,
         },
     )
     .map_err(KrishivError::from)
@@ -254,6 +360,7 @@ struct Limits {
     messages: usize,
     decoded: usize,
     nesting: usize,
+    version: ClientVersion,
 }
 
 /// A message being walked: its id and where its bytes end.
@@ -305,6 +412,9 @@ fn scan(table: &[Layout], root: u16, buf: &[u8], limits: &Limits) -> Result<usiz
                     .map(|i| m.fields[i].1)
             })
             .ok_or(Reject::UnknownField { message, number })?;
+        if limits.version < ClientVersion::V4_3 && is_newer_than_declared(table, message, number) {
+            return Err(Reject::NotInVersion { message, number });
+        }
         let cost = match wire_type {
             0 => {
                 varint(field, &mut pos)?;
@@ -396,6 +506,15 @@ fn skip(buf: &[u8], pos: usize, n: usize) -> Result<usize, Reject> {
         .ok_or(Reject::Malformed(
             "a field runs past the end of its message",
         ))
+}
+
+/// Whether field `number` of message `message` is one of [`FIELDS_SINCE_4_3`].
+fn is_newer_than_declared(table: &[Layout], message: u16, number: u32) -> bool {
+    table.get(usize::from(message)).is_some_and(|m| {
+        FIELDS_SINCE_4_3
+            .iter()
+            .any(|&(name, n)| n == number && name == m.name)
+    })
 }
 
 /// Reads a varint of at most 10 bytes at `*pos` and advances past it.
