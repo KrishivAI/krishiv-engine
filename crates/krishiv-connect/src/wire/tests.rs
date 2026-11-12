@@ -6,7 +6,7 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 
 use super::*;
 use crate::proto::layout::{EXPRESSION, MESSAGES, PLAN, RELATION};
-use crate::proto::v4_2::{expression, relation};
+use crate::proto::v4_3::{expression, relation};
 
 // Protobuf wire builders: raw bytes, so a hostile depth needs no recursion.
 
@@ -362,7 +362,7 @@ fn flat_hostile_messages_hit_the_decoded_size_cap() {
     // Two million empty expressions in a Project: two wire bytes each, about
     // 300 decoded, so the decoded-size cap is reached first.
     let one = field(3, &[]);
-    let n = MAX_DECODED_BYTES / size_of::<crate::proto::v4_2::Expression>() + 1;
+    let n = MAX_DECODED_BYTES / size_of::<crate::proto::v4_3::Expression>() + 1;
     assert!(n < MAX_MESSAGES);
     let mut project = Vec::with_capacity(one.len() * n);
     for _ in 0..n {
@@ -410,7 +410,7 @@ fn layout_table_matches_the_generated_types() {
     assert_eq!(MESSAGES[usize::from(EXPRESSION)].name, "Expression");
     assert_eq!(
         MESSAGES[usize::from(RELATION)].size,
-        size_of::<crate::proto::v4_2::Relation>()
+        size_of::<crate::proto::v4_3::Relation>()
     );
     for (id, m) in MESSAGES.iter().enumerate() {
         // The walk binary-searches each row, and descends only to ids it has.
