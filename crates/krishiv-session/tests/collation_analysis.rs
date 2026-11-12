@@ -1429,3 +1429,16 @@ fn icu_keys_group_distinct_and_order() {
         vec!["2".to_owned()]
     );
 }
+
+/// `greatest`/`least` pick by the ICU key (array and map constructors of collated strings are a
+/// known gap for every collation, UTF8_LCASE included).
+#[cfg(feature = "collations-icu")]
+#[test]
+fn icu_keys_reach_greatest_and_least() {
+    // Under UNICODE_CI 'a' and 'A' are equal, so the first of equal candidates wins.
+    assert_eq!(
+        one("select greatest('a' collate unicode_ci, 'B', 'A')"),
+        "B"
+    );
+    assert_eq!(one("select least('b' collate unicode_ci, 'A', 'a')"), "A");
+}
