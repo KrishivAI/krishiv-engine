@@ -8,9 +8,9 @@ use krishiv_types::{DataType, DecimalType};
 
 use super::super::testing::proto_type;
 use super::*;
-use crate::proto::v4_2::DataType as DataTypeProto;
-use crate::proto::v4_2::data_type as dt;
-use crate::proto::v4_2::expression::literal as pl;
+use crate::proto::v4_3::DataType as DataTypeProto;
+use crate::proto::v4_3::data_type as dt;
+use crate::proto::v4_3::expression::literal as pl;
 
 fn literal_of(value: LiteralType) -> expression::Literal {
     expression::Literal {
