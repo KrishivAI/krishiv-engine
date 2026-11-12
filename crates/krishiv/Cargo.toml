@@ -46,4 +46,7 @@ unstable-ir = ["krishiv-session/unstable-ir"]
 # Live async-task diagnostics over `tokio-console` (P2-T129): off by default;
 # needs `RUSTFLAGS="--cfg tokio_unstable"` for the task names.
 tokio-console = ["dep:krishiv-exec", "krishiv-exec/tokio-console"]
+# JSON log records with query, session and trace ids (T116), installed by the CLI
+# when `KRISHIV_LOG=json`; embedders call `krishiv_session::logging` themselves.
+telemetry-logs = ["krishiv-session/telemetry-logs"]
 full = ["kafka", "iceberg", "delta", "cdc", "connect", "flight-sql", "mcp", "python", "wasm-udf", "ui", "celeborn", "mimalloc", "cloud"]

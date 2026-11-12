@@ -148,7 +148,7 @@ fn always_null(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// `startswith`/`endswith`/`contains`: the binary predicates may be null
 /// whatever their arguments (Spark's `BinaryPredicate` is a nullable
 /// static invocation).
-fn matches(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn matches(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let binary = is_binary(c, 0) && is_binary(c, 1);
     Ok(ArgType::new(DataType::Boolean, binary || c.any_nullable()))
 }
@@ -318,7 +318,7 @@ pub(super) fn is_binary(c: &CallTypes<'_>, i: usize) -> bool {
 
 /// `startswith`/`endswith`/`contains`: the binary predicate when both
 /// arguments are binary, else the string one.
-fn match_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+pub(super) fn match_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     let t = if is_binary(c, 0) && is_binary(c, 1) {
         DataType::Binary
     } else {
@@ -354,7 +354,7 @@ fn strings() -> Vec<Spec> {
         string,
     ));
     out.extend(scalar(
-        &["startswith", "endswith", "contains"],
+        &super::text::MATCH_NAMES,
         &Inputs::Built(InputBuilder(match_inputs)),
         matches,
     ));
