@@ -28,7 +28,10 @@ impl DataFrame {
             // Before the query is analyzed, so an invalidation that runs while it executes keeps
             // its rows out of the result cache.
             let generation = self.session.state.runtime.results.generation();
-            let a = self.action_analysis().await?;
+            let a = self
+                .action_analysis()
+                .instrument(tracing::info_span!("krishiv.analyze"))
+                .await?;
             // The reads were authorized by the analysis: a hit serves only what this principal's
             // own run of the query would return.
             // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
@@ -66,8 +69,19 @@ impl DataFrame {
                     replayed
                 });
             }
-            let (physical, fill) = self.physical_cached(&a).await?;
-            let stream = self.session.run(&physical, &a.env).await?;
+            let (physical, fill) = self
+                .physical_cached(&a)
+                .instrument(tracing::info_span!("krishiv.plan"))
+                .await?;
+            // The execution span stays open while the rows are produced and read: it closes when
+            // the result stream is dropped, not when `run` returns the stream.
+            let exec = tracing::info_span!("krishiv.execute");
+            let stream = self
+                .session
+                .run(&physical, &a.env)
+                .instrument(exec.clone())
+                .await?;
+            let stream = crate::telemetry::hold_span(stream, exec);
             let stream = fill.fill(stream, &self.session.state.cache);
             let stream = match result {
                 Some((settings, key)) => crate::result_cache::fill(
@@ -92,11 +106,10 @@ impl DataFrame {
 
     /// The span of one action: the statement's, or the engine's alone.
     fn span(&self) -> tracing::Span {
-        let session_id = &self.session.state.session_id;
-        self.trace.as_ref().map_or_else(
-            || crate::telemetry::plain_span(session_id),
-            |t| t.span(session_id),
-        )
+        let who = crate::telemetry::Who::of(&self.session.state);
+        self.trace
+            .as_ref()
+            .map_or_else(|| crate::telemetry::plain_span(&who), |t| t.span(&who))
     }
 
     /// `self` with the statement's trace.

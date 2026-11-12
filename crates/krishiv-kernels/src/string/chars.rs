@@ -451,12 +451,19 @@ pub fn locate<O: OffsetSizeTrait>(
 
 /// The code points Spark's `UTF8_LCASE` compares for `c` (`lowerCaseCodePoint`): `İ` is `i` and
 /// U+0307, final sigma is `σ`, anything else its simple lower case.
-pub(super) fn lcase_points(c: char, out: &mut Vec<char>) {
+fn lcase_pair(c: char) -> (char, Option<char>) {
     match c {
-        '\u{130}' => out.extend(['i', '\u{307}']),
-        '\u{3c2}' => out.push('\u{3c3}'),
-        _ => out.push(c.to_lowercase().next().unwrap_or(c)),
+        '\u{130}' => ('i', Some('\u{307}')),
+        '\u{3c2}' => ('\u{3c3}', None),
+        _ => (c.to_lowercase().next().unwrap_or(c), None),
     }
+}
+
+/// [`lcase_pair`] appended to `out`.
+pub(super) fn lcase_points(c: char, out: &mut Vec<char>) {
+    let (a, b) = lcase_pair(c);
+    out.push(a);
+    out.extend(b);
 }
 
 /// How many characters of `text` from `from` the lower-cased `pattern` covers, as Spark's
@@ -464,13 +471,12 @@ pub(super) fn lcase_points(c: char, out: &mut Vec<char>) {
 /// lower-cases to.
 pub(super) fn lcase_match_from(text: &[char], from: usize, pattern: &[char]) -> Option<usize> {
     let (mut p, mut t) = (0_usize, from);
-    let mut buf = Vec::with_capacity(2);
     while p < pattern.len() {
         let c = *text.get(t)?;
-        buf.clear();
-        lcase_points(c, &mut buf);
-        for l in &buf {
-            if pattern.get(p) != Some(l) {
+        // At most two code points per character, so no buffer is needed.
+        let (first, second) = lcase_pair(c);
+        for l in std::iter::once(first).chain(second) {
+            if pattern.get(p) != Some(&l) {
                 return None;
             }
             p = p.saturating_add(1);
@@ -688,6 +694,22 @@ pub enum LcaseSearch {
     End,
 }
 
+/// The one start whose lower-cased suffix of `chars` has exactly `points` code points (every
+/// character has one or two, so at most one start qualifies): a match that ends the text can
+/// begin nowhere else, which keeps `endswith` linear.
+fn suffix_start(chars: &[char], points: usize) -> Option<usize> {
+    let mut seen = 0_usize;
+    let mut buf = Vec::with_capacity(2);
+    let mut at = chars.len();
+    while seen < points {
+        at = at.checked_sub(1)?;
+        buf.clear();
+        lcase_points(chars[at], &mut buf);
+        seen = seen.saturating_add(buf.len());
+    }
+    (seen == points).then_some(at)
+}
+
 /// `contains` / `startswith` / `endswith` over `UTF8_LCASE` operands: the pattern's lower-cased
 /// code points must match the text's, and a match may not start or end between the two code
 /// points `İ` lower-cases to (Spark's `lowercaseMatchLengthFrom` / `lowercaseMatchUntil`).
@@ -717,28 +739,7 @@ pub fn search_lcase<O: OffsetSizeTrait>(
                 LcaseSearch::Start => hit(0).is_some(),
                 LcaseSearch::Anywhere => (0..=chars.len()).any(|at| hit(at).is_some()),
                 LcaseSearch::End => {
-                    // A match ending at the end consumes the lower-cased points of `chars[at..]`
-                    // exactly: scan back from the end, and try the one start (every character
-                    // gives at least one point, so the count only grows) where the count is the
-                    // pattern's.
-                    let mut points = 0usize;
-                    let mut scratch = Vec::new();
-                    let mut at = chars.len();
-                    loop {
-                        if points == pat.len() {
-                            break hit(at) == Some(chars.len());
-                        }
-                        if points > pat.len() {
-                            break false;
-                        }
-                        let Some(prev) = at.checked_sub(1) else {
-                            break false;
-                        };
-                        at = prev;
-                        scratch.clear();
-                        lcase_points(chars[at], &mut scratch);
-                        points = points.saturating_add(scratch.len());
-                    }
+                    suffix_start(&chars, pat.len()).is_some_and(|at| hit(at) == Some(chars.len()))
                 }
             })
         })
