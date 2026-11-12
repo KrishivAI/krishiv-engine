@@ -423,11 +423,23 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 if name.starts_with("try_") || name == "split_part")
     );
     let can_raise = !implicit_cast
-        && !context_free
         && matches!(
             &e.node,
             ExprNode::Cast { .. } | ExprNode::Resolved(ResolvedExpr::Function(_))
         );
+    if context_free && can_raise {
+        // The error keeps no context even when an enclosing call would give one
+        // (`abs(try_element_at(array(1, 2, 3), 0))`): the innermost site wins, and
+        // a site of no statement's text renders as none.
+        return Ok(Arc::new(Sited {
+            inner: compiled,
+            site: krishiv_common::error::ErrorSite {
+                source: NO_CONTEXT_SOURCE,
+                start: 0,
+                end: 0,
+            },
+        }));
+    }
     Ok(match e.origin.sql {
         Some((source, span)) if can_raise => Arc::new(Sited {
             inner: compiled,
@@ -440,6 +452,10 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         _ => compiled,
     })
 }
+
+/// The source of the site a context-free expression marks its errors with: no
+/// statement's text has it, so the session renders no context for it.
+const NO_CONTEXT_SOURCE: u32 = u32::MAX;
 
 /// An expression that can raise, with the span of SQL text it came from: its
 /// error is marked with that site (the innermost expression's wins), and the

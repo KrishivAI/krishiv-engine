@@ -9,7 +9,7 @@ use std::sync::Arc;
 use futures::StreamExt as _;
 use krishiv_common::error::{ErrorQueryContext, KrishivError};
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::{Expr, LogicalPlan};
+use krishiv_plan::{Expr, ExprNode, LogicalPlan};
 
 use crate::session::{QueryEnv, RecordBatchStream};
 
@@ -72,16 +72,34 @@ pub(crate) const DF_SOURCE: krishiv_plan::SourceId = krishiv_plan::SourceId(u32:
 
 /// `plan` with the SQL spans of source 0 dropped from its expressions: a stored view's plan was
 /// lowered from another text than the statements that will read it, so a run-time error in it
-/// has no span of theirs to render. Subquery plans are not entered.
+/// has no span of theirs to render. Subquery plans are entered too.
 pub(crate) fn detach_sources(plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     let strip = |e: Arc<Expr>| -> Result<Arc<Expr>, std::convert::Infallible> {
         e.transform_up(&mut |e| {
-            Ok(if e.origin.sql.is_some_and(|(s, _)| s.0 == 0) {
+            let e = if e.origin.sql.is_some_and(|(s, _)| s.0 == 0) {
                 let mut own = Expr::clone(&e);
                 own.origin.sql = None;
                 Arc::new(own)
             } else {
                 e
+            };
+            // `transform_up` does not visit a subquery's plan: detach it here.
+            Ok(match &e.node {
+                ExprNode::Subquery { kind, plan } => {
+                    let inner = detach_sources(Arc::clone(plan));
+                    if Arc::ptr_eq(&inner, plan) {
+                        e
+                    } else {
+                        Arc::new(Expr {
+                            node: ExprNode::Subquery {
+                                kind: kind.clone(),
+                                plan: inner,
+                            },
+                            origin: e.origin,
+                        })
+                    }
+                }
+                _ => e,
             })
         })
     };

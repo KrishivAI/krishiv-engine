@@ -252,6 +252,20 @@ fn a_sql_view_expression_span_is_not_rendered_against_the_reading_statement() {
     assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
 }
 
+/// A scalar subquery in a stored view keeps no span of the view's text either.
+#[test]
+fn a_view_subquery_expression_span_is_not_rendered_against_the_reading_statement() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT (SELECT a / b FROM VALUES (1, 0) t(a, b)) AS q")).unwrap();
+    block_on(df.create_or_replace_temp_view("v_sub_ctx")).unwrap();
+    let e = match block_on(s.sql("SELECT q FROM v_sub_ctx")) {
+        Err(e) => e,
+        Ok(df) => block_on(df.collect()).expect_err("the query fails"),
+    };
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+}
+
 /// Element access: Spark 4.2.0 `array.sql.out` (golden indexes are one higher).
 #[test]
 fn element_access_errors_carry_the_call_span() {
@@ -273,6 +287,8 @@ fn context_free_errors_stay_context_free() {
     for sql in [
         "SELECT try_element_at(array(1, 2, 3), 0)",
         "SELECT split_part('11.12.13', '.', 0)",
+        // An enclosing call must not give the context-free error its own span.
+        "SELECT abs(try_element_at(array(1, 2, 3), 0))",
         "select b + interval '1 month' from values (interval '-2147483648 months', interval '2147483647 months') t(a, b)",
     ] {
         let e = fails(sql);
