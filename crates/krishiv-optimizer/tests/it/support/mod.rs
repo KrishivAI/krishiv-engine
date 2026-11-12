@@ -18,6 +18,15 @@ use krishiv_plan::{FunctionId, FunctionKind, Plan, SourceId};
 use krishiv_types::DataType;
 use serde_json::Value;
 
+/// The default optimizer options with `change` applied (`Options` is `#[non_exhaustive]`).
+pub(crate) fn options(
+    change: impl FnOnce(&mut krishiv_optimizer::Options),
+) -> krishiv_optimizer::Options {
+    let mut o = krishiv_optimizer::Options::default();
+    change(&mut o);
+    o
+}
+
 /// The workspace root.
 pub(crate) fn root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")

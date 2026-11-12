@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-optimizer/tests/it/win_magic.rs
+expression: on.root().to_string()
+---
+Aggregate [], [(sum(l_extendedprice#5) / 7.0) AS avg_yearly#42]
++- Project [l_extendedprice#5]
+   +- Filter (CAST(l_quantity#4 AS DECIMAL(21,7)) < (0.2 * avg#43))
+      +- Window [avg(l_quantity#4) OVER (PARTITION BY l_partkey#1 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS avg#43], [l_partkey#1], []
+         +- Project [l_partkey#1, l_quantity#4, l_extendedprice#5]
+            +- Join Inner, (p_partkey#16 == l_partkey#1)
+               :- Filter isnotnull(l_partkey#1)
+               :  +- Scan spark_catalog.default.lineitem [l_partkey#1, l_quantity#4, l_extendedprice#5]
+               +- Project [p_partkey#16]
+                  +- Filter (((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX')) and isnotnull(p_partkey#16))
+                     +- Scan spark_catalog.default.part [p_partkey#16, p_brand#19, p_container#22]
