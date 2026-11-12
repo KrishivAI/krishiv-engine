@@ -531,15 +531,15 @@ impl Session {
                         let from = self.namespace_name(ns, &env)?;
                         let parts = crate::access::ddl_parts(table, &env)?;
                         match parts.as_slice() {
-                            [t] | [_, t] if crate::system::is_system(&from) => Some(t.clone())
-                                .filter(|t| {
-                                    crate::system::is_system_table(&[
-                                        "system".to_owned(),
-                                        t.to_lowercase(),
-                                    ])
-                                }),
+                            [t] => Some(t),
+                            [q, t] if crate::system::is_system(q) => Some(t),
                             _ => None,
                         }
+                        .filter(|_| crate::system::is_system(&from))
+                        .filter(|t| {
+                            crate::system::is_system_table(&["system".to_owned(), t.to_lowercase()])
+                        })
+                        .cloned()
                     }
                 };
                 if let Some(t) = system_table {

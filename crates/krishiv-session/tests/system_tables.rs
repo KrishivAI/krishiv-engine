@@ -1615,3 +1615,9 @@ fn show_columns_with_a_from_namespace_reaches_a_system_table() {
         assert!(!strings_in(&s, sql).is_empty(), "{sql}");
     }
 }
+
+#[test]
+fn show_columns_with_a_conflicting_qualifier_and_from_system_is_refused() {
+    let s = Session::new().unwrap();
+    assert!(run_all(&s, "SHOW COLUMNS IN default.queries FROM system").is_err());
+}
