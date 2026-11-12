@@ -1852,7 +1852,12 @@ fn only_the_system_namespace(securable: &Securable, _: Privilege) -> AccessDecis
 #[test]
 fn show_tables_in_system_is_authorized_against_the_system_catalog() {
     let s = session(Policy::new(only_the_system_namespace));
-    assert_eq!(class(rows(&s, "SHOW TABLES IN system")), "OK");
+    for sql in [
+        "SHOW TABLES IN system",
+        "SHOW TABLES IN spark_catalog.system",
+    ] {
+        assert_eq!(class(rows(&s, sql)), "OK", "{sql}");
+    }
 }
 
 #[test]

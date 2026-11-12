@@ -452,7 +452,11 @@ impl Session {
                 let written = parts(name)?;
                 // `SHOW TABLES IN system` lists the system catalog (the introspection handler reads the
                 // argument that way), so it is checked as the catalog, as `USE system; SHOW TABLES` is.
-                if written.len() == 1 && crate::system::is_system(&written[0]) {
+                if crate::system::is_system(written.last().map_or("", String::as_str))
+                    && (written.len() == 1
+                        || (written.len() == 2
+                            && written[0].eq_ignore_ascii_case(crate::catalog::CATALOG)))
+                {
                     return Ok(namespaces(vec![crate::system::SYSTEM.to_owned()]));
                 }
                 let mut p = namespace_parts(catalogs, &written);
