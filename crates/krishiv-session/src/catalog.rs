@@ -1537,7 +1537,7 @@ impl Expander<'_> {
         };
         let entry = self.catalog.store.table(&namespace, &table_key);
         let candidate = ReadCandidate {
-            written: name.clone(),
+            written: self.read_name(name, &namespace, &table_key),
             view: entry
                 .as_ref()
                 .filter(|e| e.view.is_some())

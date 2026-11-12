@@ -1880,3 +1880,43 @@ fn a_stored_view_and_its_tables_are_authorized_in_their_defining_catalog_under_s
     // Reading the stored table by a name that would be system.* is refused, as before.
     assert_eq!(class(rows(&s, "SELECT * FROM default.t_stored")), DENIED);
 }
+
+/// Denies reads of the `system` catalog's names that are really stored tables (`capabilities` is only a system table).
+fn no_system_t_path(securable: &Securable, _: Privilege) -> AccessDecision {
+    match securable {
+        Securable::Table(t) | Securable::View(t)
+            if t.catalog.eq_ignore_ascii_case("system") && t.name == "t_path" =>
+        {
+            deny()
+        }
+        _ => AccessDecision::Allow,
+    }
+}
+
+/// A bare name the SQL path places in a stored schema is authorized where it is read (`spark_catalog.default`),
+/// not as a `system.*` name.
+#[test]
+fn a_bare_read_placed_by_the_path_in_a_stored_schema_is_authorized_in_that_schema() {
+    let s = session(Policy::new(no_system_t_path));
+    block_on(async {
+        s.sql("SET spark.sql.path.enabled=true")
+            .await?
+            .collect()
+            .await?;
+        s.sql("CREATE TABLE t_path (a INT)")
+            .await?
+            .collect()
+            .await?;
+        s.sql("INSERT INTO t_path VALUES (1)")
+            .await?
+            .collect()
+            .await?;
+        s.sql("USE system").await?.collect().await?;
+        s.sql("SET PATH = spark_catalog.default, CURRENT_SCHEMA")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM t_path").unwrap(), 1);
+}

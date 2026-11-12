@@ -60,6 +60,25 @@ fn collect_scans_in<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>, seen: &m
 }
 
 impl super::Expander<'_> {
+    /// The name a read is asked about: a bare name that the path placed in a stored schema while `system` is
+    /// current is `spark_catalog.<schema>.<name>`, where it is read, not `system.<name>`.
+    pub(super) fn read_name(
+        &self,
+        written: &[String],
+        namespace: &str,
+        table: &str,
+    ) -> Vec<String> {
+        if written.len() == 1 && self.view_namespace.is_none() && self.in_system() {
+            vec![
+                super::CATALOG.to_owned(),
+                namespace.to_owned(),
+                table.to_owned(),
+            ]
+        } else {
+            written.to_vec()
+        }
+    }
+
     /// Whether `system` was current as the query snapshot saw it (the live catalog outside a query's expansion).
     fn in_system(&self) -> bool {
         self.stored.map_or_else(

@@ -72,12 +72,17 @@ impl TextPolicy {
         parameters: &[(&'static str, String)],
     ) -> String {
         let message = if self.mask {
-            let mut masked = message.to_owned();
+            // Not the SQLSTATE at the end: a short value must not garble it.
+            let (body, tail) = message
+                .rfind("SQLSTATE:")
+                .map_or((message, ""), |at| message.split_at(at));
+            let mut masked = body.to_owned();
             for (name, value) in parameters {
                 if VALUE_PARAMETERS.contains(name) && !value.is_empty() {
                     masked = masked.replace(value.as_str(), "?");
                 }
             }
+            masked.push_str(tail);
             std::borrow::Cow::Owned(masked)
         } else {
             std::borrow::Cow::Borrowed(message)
@@ -148,7 +153,15 @@ pub(super) fn mask_quoted(message: &str) -> String {
 }
 
 /// The error parameters that hold a raw input value, which the message prints unquoted.
-const VALUE_PARAMETERS: &[&str] = &["bad_record", "value"];
+const VALUE_PARAMETERS: &[&str] = &[
+    "badRecord",
+    "bad_record",
+    "url",
+    "fieldValue",
+    "str",
+    "source",
+    "value",
+];
 
 /// The state of a JSON string after `c`: an unescaped double quote opens or closes it, a backslash inside it
 /// escapes the next character.

@@ -1560,3 +1560,26 @@ fn a_v2_write_target_is_checked_in_the_current_catalog() {
     })
     .unwrap();
 }
+
+#[test]
+fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    for sql in [
+        "SELECT from_json('{\"a\":\"canarysecret\",', 'a STRING', map('mode', 'FAILFAST'))",
+        "SELECT parse_url('http://canarysecret host/x', 'HOST')",
+    ] {
+        assert!(run_all(&s, sql).is_err(), "{sql}");
+    }
+    let messages = strings_in(
+        &s,
+        "SELECT COALESCE(error_message, '') FROM system.queries WHERE error_class IS NOT NULL",
+    );
+    assert!(messages.len() >= 2, "{messages:?}");
+    assert!(
+        messages.iter().all(|m| !m.contains("canarysecret")),
+        "{messages:?}"
+    );
+}
