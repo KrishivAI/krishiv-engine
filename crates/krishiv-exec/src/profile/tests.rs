@@ -706,6 +706,7 @@ fn schema_matches_the_writer() {
         &doc["query"]["memory"],
     );
     check(&schema["$defs"]["planning"], &doc["planning"]);
+    check(&props["trace"], &doc["trace"]);
     check(&props["environment"], &doc["environment"]);
     check(&props["usage"], &doc["usage"]);
     check(
