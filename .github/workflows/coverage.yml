@@ -144,6 +144,11 @@ jobs:
         if: steps.scope.outputs.rust == 'true'
         env:
           PACKAGES: ${{ steps.scope.outputs.packages }}
+          # cargo-llvm-cov's default name has `%p`, so nextest's one process per test leaves one
+          # profile per test (~7,300 for the whole workspace) and filled the runner's disk
+          # (2026-11-12, #688: "No space left on device" three times). Without `%p`, `%8m` merges
+          # every process's counters online into at most 8 files per binary.
+          LLVM_PROFILE_FILE_NAME: krishiv-%8m.profraw
         run: |
           # `PACKAGES` is `-p a -p b`, or empty for the whole workspace; the
           # word splitting is intended.

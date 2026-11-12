@@ -1195,6 +1195,16 @@ fn build_side_projection_defaults_on_and_parses_booleans() {
 }
 
 #[test]
+fn direct_agg_keys_default_on_and_parse_booleans() {
+    let mut c = Config::new();
+    let get = |c: &Config| c.get(&EXEC_AGG_DIRECT_KEYS).and_then(ConfigValue::as_bool);
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.agg.directKeys", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(c.set("krishiv.exec.agg.directKeys", "sometimes").is_err());
+}
+
+#[test]
 fn join_idle_spill_after_parses_and_defaults() {
     let mut c = Config::new();
     let get = |c: &Config| {
