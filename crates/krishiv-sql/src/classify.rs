@@ -552,12 +552,16 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
             ShowKind::CurrentNamespace { .. } | ShowKind::Catalogs { .. } => Vec::new(),
         },
         Statement::Describe(d) => match &d.kind {
-            // `EXTENDED`/`FORMATTED` print statistics (a column's min and max), which are data.
-            DescribeKind::Table { table, mode, .. } => {
-                vec![t(
-                    O::Table(table),
-                    if mode.is_some() { Select } else { Browse },
-                )]
+            // `EXTENDED`/`FORMATTED` print statistics (a column's min and max), and a partition
+            // spec answers whether that partition exists: both are data.
+            DescribeKind::Table {
+                table,
+                mode,
+                partition,
+                ..
+            } => {
+                let data = mode.is_some() || partition.is_some();
+                vec![t(O::Table(table), if data { Select } else { Browse })]
             }
             DescribeKind::Namespace { name, .. } => vec![t(O::Namespace(name), Browse)],
             // Built-in functions are public; a query's reads are analyzed.

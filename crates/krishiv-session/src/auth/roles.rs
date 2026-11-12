@@ -10,7 +10,8 @@
 //! | Privilege | viewer | operator | admin |
 //! |---|---|---|---|
 //! | `Browse` (metadata) | yes | yes | yes |
-//! | `Select` on a `system.*` table (own rows; others' need `Monitor`) | yes | yes | yes |
+//! | `Select` on `system.queries` (own rows; others' need `Monitor`), `capabilities`, `metrics` | yes | yes | yes |
+//! | `Select` on the other `system.*` tables (`memory`, `operators`, `caches`) | no | yes | yes |
 //! | `Select` on anything else (tables, views, functions, paths) | no (T062 grants) | yes | yes |
 //! | `Usage` on a secret or connection | no | yes | yes |
 //! | `Usage` on `System("udf")` (client code) | `udf_min_role` | `udf_min_role` | yes |
@@ -36,6 +37,10 @@ pub(crate) const SYSTEM_UDF: &str = "udf";
 pub(crate) const SYSTEM_METRICS: &str = "metrics";
 /// The reserved `system` catalog.
 const SYSTEM_CATALOG: &str = "system";
+/// The `system` tables a viewer reads: `queries` shows only the principal's own rows without
+/// `Monitor`, `capabilities` and `metrics` hold no principal's data (ADR 0046 §3, §3c). The
+/// others (`memory`, `operators`, `caches`) name other principals' work: operator.
+const VIEWER_SYSTEM_TABLES: [&str; 3] = ["queries", "capabilities", "metrics"];
 
 /// The ADR 0046 role matrix for one session's principal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,7 +92,12 @@ fn required(securable: &Securable, privilege: Privilege, udf_min_role: Role) -> 
     match privilege {
         Privilege::Browse => Some(Role::Viewer),
         Privilege::Select => match securable {
-            Securable::Table(t) | Securable::View(t) if t.catalog == SYSTEM_CATALOG => {
+            Securable::Table(t)
+                if t.catalog.eq_ignore_ascii_case(SYSTEM_CATALOG)
+                    && VIEWER_SYSTEM_TABLES
+                        .iter()
+                        .any(|n| t.name.eq_ignore_ascii_case(n)) =>
+            {
                 Some(Role::Viewer)
             }
             _ => Some(Role::Operator),

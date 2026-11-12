@@ -594,6 +594,14 @@ mod roles {
         })
     }
 
+    fn system_table(name: &str) -> Securable {
+        Securable::Table(TableIdent {
+            catalog: "SYSTEM".to_owned(),
+            namespace: Vec::new(),
+            name: name.to_owned(),
+        })
+    }
+
     fn sys(name: &str) -> Securable {
         Securable::System(name.to_owned())
     }
@@ -612,7 +620,27 @@ mod roles {
                 Privilege::Select,
                 Some(Role::Operator),
             ),
-            (table("system"), Privilege::Select, Some(Role::Viewer)),
+            (table("system"), Privilege::Select, Some(Role::Operator)),
+            (
+                system_table("queries"),
+                Privilege::Select,
+                Some(Role::Viewer),
+            ),
+            (
+                system_table("CAPABILITIES"),
+                Privilege::Select,
+                Some(Role::Viewer),
+            ),
+            (
+                system_table("metrics"),
+                Privilege::Select,
+                Some(Role::Viewer),
+            ),
+            (
+                system_table("memory"),
+                Privilege::Select,
+                Some(Role::Operator),
+            ),
             (sys("udf"), Privilege::Usage, Some(Role::Admin)),
             (
                 Securable::Secret {

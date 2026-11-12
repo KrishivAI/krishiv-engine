@@ -1957,3 +1957,44 @@ fn a_bare_read_placed_by_the_path_in_a_stored_schema_is_authorized_in_that_schem
     .unwrap();
     assert_eq!(rows(&s, "SELECT * FROM t_path").unwrap(), 1);
 }
+
+fn deny_view_rows(securable: &Securable, p: Privilege) -> AccessDecision {
+    if p == Privilege::Select && matches!(securable, Securable::View(_)) {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// ADR 0046 §4: `Browse` on a view shows that it exists and its columns; its text (the query
+/// and its literals), statistics and rows need `Select`.
+#[test]
+fn browse_on_a_view_shows_its_schema_not_its_text_or_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(deny_view_rows));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE pt (a INT) USING parquet",
+        "CREATE VIEW pv AS SELECT a, 42 AS secret_literal FROM pt",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    for sql in [
+        "DESCRIBE TABLE pv",
+        "SHOW COLUMNS IN pv",
+        "SHOW TBLPROPERTIES pv",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    for sql in [
+        "SHOW CREATE TABLE pv",
+        "DESCRIBE TABLE EXTENDED pv",
+        "SHOW TABLE EXTENDED LIKE 'pv'",
+        "SELECT * FROM pv",
+    ] {
+        assert_eq!(class(block_on(s.sql(sql))), DENIED, "{sql}");
+    }
+}

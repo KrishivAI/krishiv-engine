@@ -25,6 +25,7 @@ fn runtime(dir: &std::path::Path) -> Arc<EngineRuntime> {
     let admin = session(&rt, Some(Role::Admin));
     run(&admin, "CREATE TABLE t (a INT) USING parquet").unwrap();
     run(&admin, "INSERT INTO t VALUES (1), (2)").unwrap();
+    run(&admin, "CREATE VIEW v AS SELECT a, 7 AS literal FROM t").unwrap();
     rt
 }
 
@@ -67,19 +68,34 @@ const MATRIX: &[(&str, Role)] = &[
     ("SHOW CREATE TABLE t", Role::Viewer),
     ("SHOW TBLPROPERTIES t", Role::Viewer),
     ("SHOW DATABASES", Role::Viewer),
-    // Own rows of system tables.
+    // Own rows of system tables, and tables that hold no principal's data.
     ("SELECT count(*) FROM system.queries", Role::Viewer),
+    ("SELECT count(*) FROM SYSTEM.QUERIES", Role::Viewer),
+    ("SELECT count(*) FROM system.capabilities", Role::Viewer),
+    // Tables that name other principals' work.
+    ("SELECT count(*) FROM system.memory", Role::Operator),
+    ("SELECT count(*) FROM system.operators", Role::Operator),
+    // A view: its schema is metadata; its text, statistics and rows are data.
+    ("DESCRIBE v", Role::Viewer),
+    ("SHOW COLUMNS IN v", Role::Viewer),
+    ("SHOW CREATE TABLE v", Role::Operator),
+    ("SELECT * FROM v", Role::Operator),
+    ("SHOW TABLE EXTENDED LIKE 'v'", Role::Operator),
     // Reads of data and statistics.
     ("SELECT * FROM t", Role::Operator),
     ("SELECT count(*) FROM t", Role::Operator),
     ("DESCRIBE EXTENDED t", Role::Operator),
     ("EXPLAIN ANALYZE SELECT * FROM t", Role::Operator),
+    // Non-durable side effects that read the table.
+    ("CACHE TABLE t", Role::Operator),
+    ("UNCACHE TABLE t", Role::Operator),
     // Durable writes and DDL.
     ("INSERT INTO t VALUES (3)", Role::Admin),
     ("CREATE TABLE u (b INT) USING parquet", Role::Admin),
     ("CREATE DATABASE d2", Role::Admin),
-    // Cluster scope.
+    // Cluster scope (REFRESH is stricter than ADR 0046 §3's operator row; recorded in the ADR).
     ("CLEAR CACHE", Role::Admin),
+    ("REFRESH TABLE t", Role::Admin),
 ];
 
 #[test]
@@ -126,4 +142,15 @@ fn a_denial_reveals_no_reason_or_existence() {
     );
     let missing = run(&s, "SELECT * FROM no_such_table").unwrap_err();
     assert!(missing.contains(DENIED), "{missing}");
+}
+
+#[test]
+fn path_reads_need_operator() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path());
+    let path = dir.path().join("t");
+    let sql = format!("SELECT * FROM parquet.`{}`", path.display());
+    let viewer = run(&session(&rt, Some(Role::Viewer)), &sql).unwrap_err();
+    assert!(viewer.contains(DENIED), "{viewer}");
+    run(&session(&rt, Some(Role::Operator)), &sql).unwrap();
 }

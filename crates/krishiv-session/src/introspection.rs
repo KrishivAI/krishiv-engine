@@ -582,7 +582,7 @@ impl Session {
                     name.namespace = from;
                     name.bare = false;
                 }
-                let columns = self.columns_of_relation(&name).await?;
+                let columns = self.columns_of_relation(&name, Privilege::Browse).await?;
                 let rows = columns.into_iter().map(|c| vec![s(c.0)]).collect();
                 self.frame_with_order(&["col_name"], &[], rows, false).await
             }
@@ -648,7 +648,7 @@ impl Session {
                     return Err(unsupported("SHOW CREATE TABLE ... AS SERDE on a table"));
                 }
                 if table.view.is_some() {
-                    self.authorize_view(&name.namespace, &name.name, Privilege::Browse, &env)
+                    self.authorize_view(&name.namespace, &name.name, Privilege::Select, &env)
                         .await?;
                 }
                 self.ordered_frame(
@@ -870,10 +870,13 @@ impl Session {
             .ok_or_else(|| name.not_found())
     }
 
-    /// The (name, type, comment) of the columns of a table, view or temporary view.
+    /// The (name, type, comment) of the columns of a table, view or temporary view. A permanent
+    /// view is checked for `privilege`: `Browse` for its schema, `Select` when the statement also
+    /// shows statistics or partitions (ADR 0046 §4).
     async fn columns_of_relation(
         &self,
         name: &TableName,
+        privilege: Privilege,
     ) -> Result<Vec<(String, DataType, Option<String>)>, KrishivError> {
         let env = self.query_env();
         if !name.bare
@@ -911,7 +914,7 @@ impl Session {
         }
         let table = self.stored_relation(name)?;
         if table.view.is_some() {
-            self.authorize_view(&name.namespace, &name.name, Privilege::Browse, &env)
+            self.authorize_view(&name.namespace, &name.name, privilege, &env)
                 .await?;
         }
         Ok(table
@@ -1001,7 +1004,12 @@ impl Session {
                         .await;
                 }
                 let name = self.table_name(table, &env)?;
-                let columns = self.columns_of_relation(&name).await?;
+                let privilege = if mode.is_some() || partition.is_some() {
+                    Privilege::Select
+                } else {
+                    Privilege::Browse
+                };
+                let columns = self.columns_of_relation(&name, privilege).await?;
                 let temp = self.temp_entry_of(&name, &env)
                     || (!name.bare
                         && name
