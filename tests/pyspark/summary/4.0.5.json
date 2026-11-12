@@ -4,26 +4,26 @@
  "denominator": {
   "by_reason": {
    "LOCAL_SERVER": 5,
-   "OPTIONAL_DEP": 1,
-   "STREAMING_P4": 52,
+   "OPTIONAL_DEP": 5,
+   "STREAMING_P4": 54,
    "UNVERIFIED": 49
   },
-  "cap": 325,
-  "collected": 1686,
-  "denominator": 1519,
-  "excluded_share": 0.0658,
-  "manifest": 107,
+  "cap": 327,
+  "collected": 1696,
+  "denominator": 1523,
+  "excluded_share": 0.0691,
+  "manifest": 113,
   "oracle_env": 0,
   "spark_skips": 60,
-  "version": "4.0.1",
+  "version": "4.0.5",
   "within_cap": true
  },
  "file_failures": [],
- "not_run": 1519,
+ "not_run": 1523,
  "pass_rate": 0.0,
  "pass_rate_without_client_only": 0.0,
  "passed": 0,
  "passed_ids": [],
  "source": "static",
- "version": "4.0.1"
+ "version": "4.0.5"
 }
