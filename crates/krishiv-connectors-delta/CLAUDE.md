@@ -8,6 +8,7 @@ Delta Lake connector on `delta_kernel` (no default features) with our own Engine
 
 ## Key files
 - `src/error.rs` kernel errors as Krishiv errors (`from_kernel`; design `P3-T021-delta.md` §3.7)
+- `src/engine/data.rs`, `get_data.rs` `EngineData`/`GetData` over Arrow 60 (one `Getter` enum; orphan rule); `schema.rs` kernel types to Arrow, scalars to arrays
 
 ## Invariants
 - `delta_kernel` with `default-features = false`; never `deltalake`.

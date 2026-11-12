@@ -2227,8 +2227,13 @@ version = "0.2.0"
 name = "krishiv-connectors-delta"
 version = "0.2.0"
 dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-schema",
+ "arrow-select",
  "delta_kernel",
  "krishiv-common",
+ "serde_json",
 ]
 
 [[package]]
