@@ -53,6 +53,7 @@ impl Session {
             relations: RelationStore::new(),
             plan_ids: 0,
             sql_sources: 1,
+            cwd: None,
         };
         Self::seeded(runtime, parts, seed)
     }
@@ -78,10 +79,12 @@ impl Session {
         };
         let cache = RelationCache::on(&memory, &runtime.invalidation);
         let io = Arc::clone(&runtime.io);
-        let cwd = std::env::current_dir()
-            .ok()
-            .and_then(|d| d.to_str().map(str::to_owned))
-            .unwrap_or_else(|| "/".to_owned());
+        let cwd = seed.cwd.unwrap_or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|d| d.to_str().map(str::to_owned))
+                .unwrap_or_else(|| "/".to_owned())
+        });
         let udfs = seed.udfs;
         let python_udfs = Arc::new(seed.python_udfs);
         let base_functions = parts.functions;
@@ -238,6 +241,9 @@ impl Session {
             // never hands out one of them again.
             plan_ids: state.plan_ids.load(Ordering::Acquire),
             sql_sources: state.sql_sources.load(Ordering::Acquire),
+            // Relative paths of copied views resolve as they do in the
+            // source, wherever the process is now.
+            cwd: Some(state.cwd.clone()),
         };
         // A `close` that ran while the copy was made wins: no live clone of
         // a closed session.
@@ -457,6 +463,9 @@ struct Seed {
     plan_ids: i64,
     /// The first SQL source id the session hands out.
     sql_sources: u32,
+    /// The working directory relative paths resolve against; `None` takes
+    /// the process's.
+    cwd: Option<String>,
 }
 
 #[cfg(test)]

@@ -321,8 +321,10 @@ fn python_udfs_are_copied_at_the_clone_point() {
     assert!(block_on(c.sql("SELECT py_before(1)")).is_ok());
     assert!(block_on(c.sql("SELECT py_source(1)")).is_err());
     assert!(block_on(s.sql("SELECT py_clone(1)")).is_err());
+    // One version allocator: the two sessions share a Python runtime keyed
+    // by (name, version), so a name never gets one version twice.
     assert_eq!(c.register_python_udf(py_def("py_before")).version, 2);
-    assert_eq!(s.register_python_udf(py_def("py_before")).version, 2);
+    assert_eq!(s.register_python_udf(py_def("py_before")).version, 3);
 }
 
 /// The current catalog and the path are copied; a global temporary view
