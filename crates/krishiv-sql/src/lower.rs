@@ -48,6 +48,7 @@ use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
 mod generator_order;
 mod identified;
 mod pipe;
+mod unit_call;
 mod variant;
 
 pub use identified::lower_identified;
@@ -2288,25 +2289,12 @@ impl Lowerer {
                     }
                     _ => name.value.clone(),
                 };
-                // Only the bare keyword form is Spark's grammar: a qualified or
-                // backquoted name (`system.builtin.timestampadd(..)`) is a call
-                // Spark's catalog lacks. Its string unit is wrapped in a cast so
-                // the analyzer, which accepts a bare string-literal unit, refuses
-                // it as UNRESOLVED_ROUTINE.
-                if (!qualifier.is_empty() || name.quoted)
-                    && matches!(lname.as_str(), "timestampadd" | "timestampdiff")
-                    && let Some(first) = args.first_mut()
-                    && matches!(first.node, ExprNode::Literal(IrLiteral::String(_)))
-                {
-                    *first = arc(self.ex(
-                        ExprNode::Cast {
-                            expr: Arc::clone(first),
-                            to: krishiv_types::DataType::String,
-                            mode: CastMode::Default,
-                        },
-                        sp,
-                    ));
-                }
+                self.mark_non_keyword_unit(
+                    qualifier.is_empty() && !name.quoted,
+                    &lname,
+                    &mut args,
+                    sp,
+                );
                 let within_group = f
                     .within_group
                     .iter()
