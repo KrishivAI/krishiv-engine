@@ -420,8 +420,22 @@ impl Rule<'_> {
         for (k, p) in keys.iter().zip(&p_cols) {
             value.insert(k.id, column(p));
         }
+        // The join dropped the rows whose key is null (`k = e` is never true): so does the window's
+        // input (design 2.3), or the null partition would be aggregated and kept.
+        let non_null: Vec<Arc<Expr>> = p_cols
+            .iter()
+            .filter(|p| p.nullable)
+            .map(crate::constraints::is_not_null_of)
+            .collect();
+        let window_input = match and_all(non_null) {
+            Some(predicate) => Arc::new(LogicalPlan::new(PlanNode::Filter {
+                input: Arc::clone(x),
+                predicate,
+            })),
+            None => Arc::clone(x),
+        };
         let windowed = Arc::new(LogicalPlan::new(PlanNode::Window {
-            input: Arc::clone(x),
+            input: window_input,
             exprs: window_exprs,
             partition_by: spec_partition,
             order_by: Vec::new(),
@@ -578,9 +592,8 @@ fn walk(p: &Arc<LogicalPlan>, ctx: u64, out: &mut Block) -> Option<()> {
         PlanNode::Limit { .. } | PlanNode::Aggregate { .. } | PlanNode::Window { .. } => None,
         _ => {
             // A leaf: a scan or another relation the block reads whole.
-            let mut det = true;
-            p.for_each_expr(&mut |e| det &= is_deterministic(e));
-            det.then(|| {
+            // Everything below it too (a `rand()` or a limit under a union is not one value).
+            crate::inline_cte::deterministic(p).then(|| {
                 out.leaves.push(Leaf {
                     body: Arc::clone(p),
                     offset: ctx,

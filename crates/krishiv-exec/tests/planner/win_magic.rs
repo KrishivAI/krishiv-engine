@@ -8,10 +8,10 @@ use super::*;
 
 fn env_tp() -> Env {
     let t_schema = Arc::new(Schema::new(vec![
-        Field::new("a", ArrowType::Int32, false),
+        Field::new("a", ArrowType::Int32, true),
         Field::new("b", ArrowType::Int64, false),
     ]));
-    let a: Int32Array = (0..40).map(|i| i % 5).collect();
+    let a: Int32Array = (0..40).map(|i| (i % 9 != 0).then_some(i % 5)).collect();
     let b: Int64Array = (0..40).map(|i| i64::from(i * 7 % 11)).collect();
     let t = RecordBatch::try_new(Arc::clone(&t_schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
     let p_schema = Arc::new(Schema::new(vec![
@@ -126,5 +126,13 @@ fn max_keeps_the_rows() {
     same_rows(
         "SELECT t.a, t.b FROM t, p WHERE p.pk = t.a AND p.flag = 1 \
          AND t.b >= (SELECT max(t2.b) - 2 FROM t t2 WHERE t2.a = p.pk)",
+    );
+}
+
+#[test]
+fn null_keys_of_a_self_correlated_subquery_are_dropped() {
+    // The null partition must not be aggregated and kept (design 2.3).
+    same_rows(
+        "SELECT t.a, t.b FROM t WHERE t.b > 5 AND t.b <= (SELECT min(t2.b) + 3 FROM t t2 WHERE t2.a = t.a AND t2.b > 5)",
     );
 }
