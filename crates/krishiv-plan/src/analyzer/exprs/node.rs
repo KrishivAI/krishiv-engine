@@ -1420,6 +1420,7 @@ impl Resolver<'_> {
                         "current_schema" | "current_database" => {
                             Some(self.ctx.catalogs.current_namespace().join("."))
                         }
+                        "current_catalog" => Some(self.ctx.catalogs.current_catalog().to_owned()),
                         "current_path" => Some(super::super::current_path(&*self.ctx.catalogs)),
                         _ => None,
                     }

@@ -960,6 +960,13 @@ impl<'s> Parser<'s> {
                 span: self.span_from(start),
             });
         }
+        if self.eat_kw("CATALOGS") {
+            let pattern = self.show_pattern_opt()?;
+            return Ok(ShowKind::Catalogs {
+                pattern,
+                span: self.span_from(start),
+            });
+        }
         if self.eat_kw("CURRENT") {
             let kind = self.namespace_kind()?;
             return Ok(ShowKind::CurrentNamespace {

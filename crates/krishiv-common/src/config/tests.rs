@@ -1179,6 +1179,31 @@ fn ui_enabled_defaults_on_and_parses() {
 }
 
 #[test]
+fn system_query_text_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&SYSTEM_QUERY_TEXT_MAX_BYTES)
+            .and_then(ConfigValue::as_int),
+        Some(4096)
+    );
+    assert_eq!(
+        c.get(&SYSTEM_QUERY_TEXT_LITERALS)
+            .and_then(ConfigValue::as_str),
+        Some("keep")
+    );
+    c.set("krishiv.system.queryText.maxBytes", "64").unwrap();
+    c.set("krishiv.system.queryText.literals", "mask").unwrap();
+    assert_eq!(
+        c.get(&SYSTEM_QUERY_TEXT_MAX_BYTES)
+            .and_then(ConfigValue::as_int),
+        Some(64)
+    );
+    assert!(c.set("krishiv.system.queryText.maxBytes", "0").is_err());
+    assert!(c.set("krishiv.system.queryText.literals", "hide").is_err());
+    assert_eq!(SYSTEM_QUERY_TEXT_MAX_BYTES.scope, Scope::Session);
+}
+
+#[test]
 fn build_side_projection_defaults_on_and_parses_booleans() {
     let mut c = Config::new();
     let get = |c: &Config| {
