@@ -24,22 +24,40 @@ use prost_reflect::{DescriptorPool, DynamicMessage};
 const UNSUPPORTED: &[(&str, ErrorClass)] = &[
     ("alias_multi", ErrorClass::KrishivUnsupportedFeature),
     ("aggregate_pivot", ErrorClass::KrishivUnsupportedFeature),
-    ("distinct", ErrorClass::KrishivUnsupportedFeature),
+    (
+        "distinct",
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
+    ),
     (
         "filter_expression_string",
         ErrorClass::KrishivUnsupportedFeature,
     ),
-    ("literals_array", ErrorClass::KrishivUnsupportedFeature),
+    (
+        "literals_array",
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
+    ),
     ("read_schema_string", ErrorClass::KrishivUnsupportedFeature),
     ("select_expr", ErrorClass::KrishivUnsupportedFeature),
-    ("show_string", ErrorClass::KrishivUnsupportedFeature),
-    ("to_df", ErrorClass::KrishivUnsupportedFeature),
-    ("union", ErrorClass::KrishivUnsupportedFeature),
+    (
+        "show_string",
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
+    ),
+    (
+        "to_df",
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
+    ),
+    (
+        "union",
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
+    ),
     (
         "user_defined_function_call",
-        ErrorClass::KrishivUnsupportedFeature,
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
     ),
-    ("with_column_renamed", ErrorClass::KrishivUnsupportedFeature),
+    (
+        "with_column_renamed",
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
+    ),
 ];
 
 #[cfg(test)]

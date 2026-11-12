@@ -194,7 +194,12 @@ fn qualified_and_internal_functions_are_unsupported() {
         "product()"
     );
     let call = expr(ExprType::CallFunction(Default::default()));
-    assert!(err(&call).message().contains("CallFunction"));
+    let e = err(&call);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
+    assert!(e.message().contains("CALL_FUNCTION(16)"), "{}", e.message());
 }
 
 fn alias(names: &[&str], metadata: Option<&str>) -> Expression {
@@ -310,7 +315,10 @@ fn cast_errors() {
         )))),
         0,
     ));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
     let no_input = expr(ExprType::Cast(Box::new(expression::Cast {
         cast_to_type: Some(CastToType::TypeStr("int".into())),
         ..expression::Cast::default()
@@ -456,12 +464,13 @@ fn unsupported_expression_kinds_are_named() {
         let e = err(&expr(kind));
         assert_eq!(
             e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
             "{name}"
         );
+        assert_eq!(e.sql_state(), Some("56K00"));
         assert!(
-            e.message()
-                .contains(&format!("spark.connect.Expression.{name}")),
+            e.message().contains("spark.connect.Expression")
+                && e.message().contains(&name.to_ascii_uppercase()),
             "{name}: {}",
             e.message()
         );

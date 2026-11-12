@@ -47,8 +47,12 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 - SQL expression strings (`selectExpr`, `where("...")`, `expr()`) are unsupported until the analyzer lowers the SQL
   parser's syntax tree into the IR (P2-T071a); `ToDF`, `OneRowRelation` (a `Project` without input), set
   operations, pivots, user schemas and nested-type literals wait for IR nodes that do not exist yet.
-- Anything outside the supported subset fails with `KRISHIV_UNSUPPORTED_FEATURE` naming the proto message and field,
-  or with Spark's own `CONNECT_INVALID_PLAN.*` class for an invalid plan; never a silent approximation.
+- A `oneof` arm that is not translated (`Relation`, `Expression`, `Literal`, `DataType`, later `Command` and `Catalog`)
+  fails with Spark's `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` (SQLSTATE 56K00; parameters fullName,
+  the upper-cased field name and the field number, as `InvalidInputErrors.invalidOneOfField`; owner decision 6,
+  `design/P3-connect-mapping.md` s6). A supported arm with an unsupported **field** fails with
+  `KRISHIV_UNSUPPORTED_FEATURE` naming the message and field, and an invalid plan with Spark's other
+  `CONNECT_INVALID_PLAN.*` classes; never a silent approximation.
 - Krishiv extensions only in `google.protobuf.Any` slots, package `krishiv.v1`.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.

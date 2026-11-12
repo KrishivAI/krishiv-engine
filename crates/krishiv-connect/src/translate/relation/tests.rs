@@ -693,32 +693,31 @@ fn a_relations_plan_id_becomes_its_origin() {
 #[test]
 fn unsupported_relations_are_named() {
     for (kind, name) in [
+        (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
+        (RelType::ToDf(Box::default()), "TO_DF(18)"),
+        (RelType::SetOp(Box::default()), "SET_OP(6)"),
+        (RelType::Deduplicate(Box::default()), "DEDUPLICATE(14)"),
         (
-            RelType::ShowString(Box::default()),
-            "ShowString (spark.connect.Relation.show_string)",
+            RelType::LocalRelation(Default::default()),
+            "LOCAL_RELATION(11)",
         ),
-        (
-            RelType::ToDf(Box::default()),
-            "ToDF (spark.connect.Relation.to_df)",
-        ),
-        (
-            RelType::SetOp(Box::default()),
-            "SetOperation (spark.connect.Relation.set_op)",
-        ),
-        (RelType::Deduplicate(Box::default()), "Deduplicate"),
-        (RelType::LocalRelation(Default::default()), "LocalRelation"),
-        (RelType::Drop(Box::default()), "Drop"),
-        (RelType::WithRelations(Box::default()), "WithRelations"),
+        (RelType::Drop(Box::default()), "DROP(21)"),
+        (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
         let r = relation(kind);
         let e = fails(translate(&r));
         assert_eq!(
             e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
             "{name}"
         );
-        assert_eq!(e.sql_state(), Some("0A000"));
-        assert!(e.message().contains(name), "{name}: {}", e.message());
+        assert_eq!(e.sql_state(), Some("56K00"));
+        assert!(
+            e.message()
+                .contains(&format!("spark.connect.Relation is not supported: {name}")),
+            "{name}: {}",
+            e.message()
+        );
     }
 }
 

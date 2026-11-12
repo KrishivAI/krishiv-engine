@@ -148,7 +148,10 @@ fn nulls_carry_their_type() {
         dt::Char::default(),
     )))))
     .expect_err("char");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
 }
 
 #[test]
@@ -520,12 +523,12 @@ fn literals_the_ir_has_no_value_for_are_unsupported() {
         let e = literal(&literal_of(value)).expect_err(name);
         assert_eq!(
             e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
             "{name}"
         );
         assert!(
-            e.message()
-                .contains(&format!("spark.connect.Expression.Literal.{name}")),
+            e.message().contains("spark.connect.Expression.Literal")
+                && e.message().contains(&name.to_ascii_uppercase()),
             "{name}: {}",
             e.message()
         );
