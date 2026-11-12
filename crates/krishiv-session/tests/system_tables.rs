@@ -1573,6 +1573,7 @@ fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() 
         "SELECT parse_url('http://canarysecret host/x', 'HOST')",
         "SELECT raise_error('canarysecret')",
         "SELECT next_day(DATE '2024-01-01', 'canarysecret')",
+        "SELECT map('canarysecret', 1, 'canarysecret', 2)",
     ] {
         assert!(run_all(&s, sql).is_err(), "{sql}");
     }
@@ -1580,7 +1581,7 @@ fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() 
         &s,
         "SELECT COALESCE(error_message, '') FROM system.queries WHERE error_class IS NOT NULL",
     );
-    assert!(messages.len() >= 3, "{messages:?}");
+    assert!(messages.len() >= 4, "{messages:?}");
     assert!(
         messages.iter().all(|m| !m.contains("canarysecret")),
         "{messages:?}"

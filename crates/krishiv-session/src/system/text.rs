@@ -78,7 +78,7 @@ impl TextPolicy {
                 .map_or((message, ""), |at| message.split_at(at));
             let mut masked = body.to_owned();
             for (name, value) in parameters {
-                if VALUE_PARAMETERS.contains(name) && !value.is_empty() {
+                if !is_structural(name) && value.chars().count() >= 3 {
                     masked = masked.replace(value.as_str(), "?");
                 }
             }
@@ -151,40 +151,40 @@ pub(super) fn mask_quoted(message: &str) -> String {
     out
 }
 
-/// The error parameters that hold a raw input value, which the message prints unquoted.
-const VALUE_PARAMETERS: &[&str] = &[
-    "badRecord",
-    "errorMessage",
-    "bad_record",
-    "url",
-    "fieldValue",
-    "str",
-    "source",
-    "value",
-    "string",
-    "invalidValue",
-    "inputValue",
-    "rawValue",
-    "originalValue",
-    "actualValue",
-    "argValue",
-    "indexValue",
-    "negativeValue",
-    "firstValue",
-    "secondValue",
-    "literal",
-    "input",
-    "message",
-    "text",
-    "content",
-    "pattern",
-    "invalidFormat",
-    "intervalStr",
-    "intervalString",
-    "targetString",
-    "timeString",
-    "enumString",
-];
+/// Whether an error parameter names part of the statement (an object, a type, a function, a position) rather
+/// than carrying a value that came from the data or a literal. Every other parameter is masked: a list of
+/// the value-bearing ones would miss the next one Spark prints without quotes.
+fn is_structural(name: &str) -> bool {
+    const SUFFIXES: &[&str] = &[
+        "Name",
+        "Names",
+        "Type",
+        "Types",
+        "Class",
+        "Id",
+        "Index",
+        "Size",
+        "Count",
+        "Num",
+        "Mode",
+        "Conf",
+        "Config",
+        "Expr",
+        "Expression",
+        "Expressions",
+        "Sql",
+        "Function",
+        "Operator",
+        "Clause",
+        "Status",
+        "Version",
+        "Level",
+        "Kind",
+        "Scope",
+        "Path",
+    ];
+    SUFFIXES.iter().any(|s| name.ends_with(s)) || name == "sqlState"
+}
 
 /// The state of a JSON string after `c`: an unescaped double quote opens or closes it, a backslash inside it
 /// escapes the next character.
