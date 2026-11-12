@@ -25,6 +25,11 @@ def _public(name: str) -> bool:
     return not name.startswith("_") or (name.startswith("__") and name.endswith("__") and name == "__all__")
 
 
+def _dunder(name: str) -> bool:
+    """Protocol methods (`__getitem__`, `__eq__`, `__add__`, ...) are public surface;"""
+    return name.startswith("__") and name.endswith("__")
+
+
 def _sig(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     args = ast.unparse(fn.args)
     ret = f" -> {ast.unparse(fn.returns)}" if fn.returns else ""
@@ -34,7 +39,7 @@ def _sig(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
 def _walk(body: list[ast.stmt], prefix: str, out: list[str]) -> None:
     for node in body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if _public(node.name) or node.name in {"__init__", "__call__"}:
+            if _public(node.name) or _dunder(node.name):
                 out.append(f"{prefix}{_sig(node)}")
         elif isinstance(node, ast.ClassDef) and _public(node.name):
             bases = ", ".join(ast.unparse(b) for b in node.bases)
@@ -42,9 +47,9 @@ def _walk(body: list[ast.stmt], prefix: str, out: list[str]) -> None:
             _walk(node.body, f"{prefix}{node.name}.", out)
         elif isinstance(node, ast.Assign):
             for t in node.targets:
-                if isinstance(t, ast.Name) and _public(t.id) and prefix == "":
+                if isinstance(t, ast.Name) and _public(t.id):
                     out.append(f"{prefix}{t.id}")
-                    if t.id == "__all__" and isinstance(node.value, (ast.List, ast.Tuple)):
+                    if t.id == "__all__" and prefix == "" and isinstance(node.value, (ast.List, ast.Tuple)):
                         names = sorted(ast.unparse(e) for e in node.value.elts)
                         out.append(f"{prefix}__all__ = [{', '.join(names)}]")
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and _public(node.target.id):

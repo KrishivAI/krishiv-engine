@@ -5,8 +5,11 @@ def build_info() -> dict[str, str]
 def metrics() -> list[dict[str, Any]]
 def session() -> SparkSession
 ## _native.pyi
+AnonymousPythonUdf.def __new__(cls, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> AnonymousPythonUdf
 AnonymousPythonUdf.def call(self, args: list[Column]) -> Column
 AnonymousPythonUdf.def version(self) -> int
+ArrowStream.def __arrow_c_schema__(self) -> object
+ArrowStream.def __arrow_c_stream__(self, requested_schema: object | None=...) -> object
 ArrowStream.def check_error(self) -> None
 ArrowStream.def consumed(self) -> bool
 ArrowStream.def from_arrow(data: object) -> ArrowStream
@@ -76,6 +79,7 @@ DataFrame.def write(self, format: str, mode: str, path: str, options: list[tuple
 DataFrame.def write_table(self, insert_into: bool, table: str, format: str | None, mode: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
 DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
 GroupedData.def agg(self, cols: list[Column]) -> DataFrame
+Session.def __new__(cls, config: list[tuple[str, str]] | None=...) -> Session
 Session.def cache_reserved(self) -> int
 Session.def clear_cache(self) -> None
 Session.def conf_get(self, key: str) -> str | None
@@ -94,6 +98,7 @@ Session.def sql(self, query: str) -> DataFrame
 Session.def table(self, name: str) -> DataFrame
 Session.def temp_table_names(self) -> list[str]
 Session.def uncache_table(self, name: str) -> None
+WindowSpec.def __new__(cls) -> WindowSpec
 WindowSpec.def order_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
@@ -127,6 +132,7 @@ DataFrameQueryContext.def summary(self) -> str
 KrishivException
 PySparkAssertionError.def __init__(self, message: str | None=None, errorClass: str | None=None, messageParameters: dict[str, Any] | None=None, data: Iterable[Any] | None=None) -> None
 PySparkException.def __init__(self, message: str | None=None, errorClass: str | None=None, messageParameters: dict[str, Any] | None=None, contexts: list[QueryContext] | list[tuple[Any, ...]] | None=None, sqlState: str | None=None, rendered: str | None=None) -> None
+PySparkException.def __str__(self) -> str
 PySparkException.def getCondition(self) -> str | None
 PySparkException.def getErrorClass(self) -> str | None
 PySparkException.def getMessage(self) -> str
@@ -141,6 +147,8 @@ QueryContext.def objectType(self) -> str
 QueryContext.def startIndex(self) -> int
 QueryContext.def stopIndex(self) -> int
 QueryContext.def summary(self) -> str
+QueryContextType.DataFrame
+QueryContextType.SQL
 SqlQueryContext.def __init__(self, fragment: str='', start: int=0, stop: int=0, objectType: str='', objectName: str='', callSite: str='', summary: str='') -> None
 SqlQueryContext.def callSite(self) -> str
 SqlQueryContext.def contextType(self) -> QueryContextType
@@ -902,7 +910,35 @@ def xxhash64(*cols: ColumnOrName) -> Column
 def year(col: ColumnOrName) -> Column
 def zeroifnull(col: ColumnOrName) -> Column
 ## sql/column.py
+Column.astype
+Column.def __add__(self, other: Any) -> Column
+Column.def __and__(self, other: Any) -> Column
+Column.def __bool__(self) -> bool
+Column.def __eq__(self, other: object) -> Column
+Column.def __ge__(self, other: Any) -> Column
+Column.def __getattr__(self, item: Any) -> Column
+Column.def __getitem__(self, k: Any) -> Column
+Column.def __gt__(self, other: Any) -> Column
 Column.def __init__(self, native: _native.Column) -> None
+Column.def __invert__(self) -> Column
+Column.def __iter__(self) -> Any
+Column.def __le__(self, other: Any) -> Column
+Column.def __lt__(self, other: Any) -> Column
+Column.def __mod__(self, other: Any) -> Column
+Column.def __mul__(self, other: Any) -> Column
+Column.def __ne__(self, other: object) -> Column
+Column.def __neg__(self) -> Column
+Column.def __or__(self, other: Any) -> Column
+Column.def __radd__(self, other: Any) -> Column
+Column.def __rand__(self, other: Any) -> Column
+Column.def __repr__(self) -> str
+Column.def __rmod__(self, other: Any) -> Column
+Column.def __rmul__(self, other: Any) -> Column
+Column.def __ror__(self, other: Any) -> Column
+Column.def __rsub__(self, other: Any) -> Column
+Column.def __rtruediv__(self, other: Any) -> Column
+Column.def __sub__(self, other: Any) -> Column
+Column.def __truediv__(self, other: Any) -> Column
 Column.def alias(self, *alias: str, **kwargs: Any) -> Column
 Column.def asc(self) -> Column
 Column.def asc_nulls_first(self) -> Column
@@ -935,6 +971,7 @@ Column.def substr(self, startPos: Any, length: Any) -> Column
 Column.def try_cast(self, dataType: DataType | str) -> Column
 Column.def when(self, condition: Column, value: Any) -> Column
 Column.def withField(self, fieldName: str, col: Column) -> Column
+Column.name
 class Column()
 ## sql/conf.py
 RuntimeConfig.def __init__(self, session: _native.Session) -> None
@@ -945,7 +982,11 @@ class RuntimeConfig()
 ## sql/dataframe.py
 ColumnOrName
 ColumnsOrNames
+DataFrame.def __arrow_c_stream__(self, requested_schema: object=None) -> object
+DataFrame.def __getattr__(self, name: str) -> Column
+DataFrame.def __getitem__(self, item: Any) -> Any
 DataFrame.def __init__(self, native: _native.DataFrame, session: SparkSession) -> None
+DataFrame.def __repr__(self) -> str
 DataFrame.def agg(self, *exprs: Column) -> DataFrame
 DataFrame.def alias(self, alias: str) -> DataFrame
 DataFrame.def approxQuantile(self, col: str | list[str] | tuple[str, ...], probabilities: list[float] | tuple[float, ...], relativeError: float) -> list[Any]
@@ -1018,6 +1059,10 @@ DataFrame.def withColumnRenamed(self, existing: str, new: str) -> DataFrame
 DataFrame.def withColumnsRenamed(self, colsMap: dict[str, str]) -> DataFrame
 DataFrame.def write(self) -> DataFrameWriter
 DataFrame.def writeTo(self, table: str) -> DataFrameWriterV2
+DataFrame.drop_duplicates
+DataFrame.groupby
+DataFrame.sort
+DataFrame.where
 EAGER_DEFAULT_MAX_ROWS
 EAGER_MAX_ROWS_KEY
 class DataFrame()
@@ -1053,6 +1098,7 @@ GroupedData.def max(self, *cols: str) -> DataFrame
 GroupedData.def min(self, *cols: str) -> DataFrame
 GroupedData.def pivot(self, pivot_col: str, values: list[Any] | None=None) -> GroupedData
 GroupedData.def sum(self, *cols: str) -> DataFrame
+GroupedData.mean
 class GroupedData()
 ## sql/na.py
 DataFrameNaFunctions.def __init__(self, df: DataFrame) -> None
@@ -1061,6 +1107,15 @@ DataFrameNaFunctions.def fill(self, value: Any, subset: Any=None) -> DataFrame
 DataFrameNaFunctions.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: Any=None) -> DataFrame
 class DataFrameNaFunctions()
 ## sql/pandas/functions.py
+ArrowUDFType.GROUPED_AGG
+ArrowUDFType.GROUPED_AGG_ITER
+ArrowUDFType.SCALAR
+ArrowUDFType.SCALAR_ITER
+PandasUDFType.GROUPED_AGG
+PandasUDFType.GROUPED_AGG_ITER
+PandasUDFType.GROUPED_MAP
+PandasUDFType.SCALAR
+PandasUDFType.SCALAR_ITER
 __all__
 __all__ = ['ArrowUDFType', 'PandasUDFType', 'arrow_udf', 'pandas_udf']
 class ArrowUDFType()
@@ -1070,6 +1125,7 @@ def pandas_udf(f: Any=None, returnType: Any=None, functionType: Any=None) -> Any
 def vectorized_udf(f: Any=None, returnType: Any=None, functionType: Any=None, kind: str='pandas') -> Any
 ## sql/profile_view.py
 ProfileView.def __init__(self, document: dict[str, Any] | str) -> None
+ProfileView.def __repr__(self) -> str
 ProfileView.def save(self, path: str | Path, title: str='Krishiv query profile') -> Path
 ProfileView.def to_html(self, title: str='Krishiv query profile') -> str
 __all__
@@ -1117,6 +1173,12 @@ class DataFrameReader()
 class DataFrameWriter()
 class DataFrameWriterV2()
 ## sql/row.py
+Row.def __contains__(self, item: object) -> bool
+Row.def __getattr__(self, name: str) -> Any
+Row.def __getitem__(self, item: Any) -> Any
+Row.def __new__(cls, *args: Any, **kwargs: Any) -> Row
+Row.def __reduce__(self) -> tuple[Any, ...]
+Row.def __repr__(self) -> str
 Row.def asDict(self) -> dict[str, Any]
 class Row(tuple[Any, ...])
 ## sql/session.py
@@ -1171,6 +1233,7 @@ PIVOT_MAX_VALUES_KEY
 class DataFrameStatFunctions()
 ## sql/types.py
 ArrayType.def __init__(self, elementType: DataType, containsNull: bool=True) -> None
+ArrayType.def __repr__(self) -> str
 ArrayType.def fromJson(cls, json: dict[str, Any]) -> ArrayType
 ArrayType.def jsonValue(self) -> dict[str, Any]
 ArrayType.def simpleString(self) -> str
@@ -1178,15 +1241,27 @@ ByteType.def simpleString(self) -> str
 ByteType.def typeName(cls) -> str
 CalendarIntervalType.def typeName(cls) -> str
 CharType.def __init__(self, length: int) -> None
+CharType.def __repr__(self) -> str
 CharType.def jsonValue(self) -> str
 CharType.def simpleString(self) -> str
+DataType.def __eq__(self, other: object) -> bool
+DataType.def __hash__(self) -> int
+DataType.def __repr__(self) -> str
 DataType.def fromDDL(cls, ddl: str) -> DataType
 DataType.def json(self) -> str
 DataType.def jsonValue(self) -> str | dict[str, Any]
 DataType.def simpleString(self) -> str
 DataType.def typeName(cls) -> str
+DayTimeIntervalType.DAY
+DayTimeIntervalType.HOUR
+DayTimeIntervalType.MINUTE
+DayTimeIntervalType.SECOND
 DayTimeIntervalType.def __init__(self, startField: int | None=None, endField: int | None=None) -> None
+DayTimeIntervalType.def __repr__(self) -> str
+DayTimeIntervalType.jsonValue
+DayTimeIntervalType.simpleString
 DecimalType.def __init__(self, precision: int=10, scale: int=0) -> None
+DecimalType.def __repr__(self) -> str
 DecimalType.def jsonValue(self) -> str
 DecimalType.def simpleString(self) -> str
 IntegerType.def simpleString(self) -> str
@@ -1194,6 +1269,7 @@ IntegerType.def typeName(cls) -> str
 LongType.def simpleString(self) -> str
 LongType.def typeName(cls) -> str
 MapType.def __init__(self, keyType: DataType, valueType: DataType, valueContainsNull: bool=True) -> None
+MapType.def __repr__(self) -> str
 MapType.def fromJson(cls, json: dict[str, Any]) -> MapType
 MapType.def jsonValue(self) -> dict[str, Any]
 MapType.def simpleString(self) -> str
@@ -1201,14 +1277,24 @@ NullType.def typeName(cls) -> str
 ShortType.def simpleString(self) -> str
 ShortType.def typeName(cls) -> str
 StringType.def __init__(self, collation: str='UTF8_BINARY') -> None
+StringType.def __repr__(self) -> str
 StringType.def jsonValue(self) -> str
 StringType.def simpleString(self) -> str
+StructField.def __hash__(self) -> int
 StructField.def __init__(self, name: str, dataType: DataType, nullable: bool=True, metadata: dict[str, Any] | None=None) -> None
+StructField.def __repr__(self) -> str
 StructField.def fromJson(cls, json: dict[str, Any]) -> StructField
 StructField.def jsonValue(self) -> dict[str, Any]
 StructField.def simpleString(self) -> str
 StructField.def typeName(self) -> str
+StructType.def __getitem__(self, key: int | str | slice) -> StructField | StructType
+StructType.def __getitem__(self, key: slice) -> StructType
+StructType.def __getitem__(self, key: str | int) -> StructField
+StructType.def __hash__(self) -> int
 StructType.def __init__(self, fields: Iterable[StructField] | None=None) -> None
+StructType.def __iter__(self) -> Iterator[StructField]
+StructType.def __len__(self) -> int
+StructType.def __repr__(self) -> str
 StructType.def add(self, field: str | StructField, data_type: str | DataType | None=None, nullable: bool=True, metadata: dict[str, Any] | None=None) -> StructType
 StructType.def fieldNames(self) -> list[str]
 StructType.def fromJson(cls, json: dict[str, Any]) -> StructType
@@ -1217,9 +1303,15 @@ StructType.def simpleString(self) -> str
 StructType.def typeName(cls) -> str
 TimestampNTZType.def typeName(cls) -> str
 VarcharType.def __init__(self, length: int) -> None
+VarcharType.def __repr__(self) -> str
 VarcharType.def jsonValue(self) -> str
 VarcharType.def simpleString(self) -> str
+YearMonthIntervalType.MONTH
+YearMonthIntervalType.YEAR
 YearMonthIntervalType.def __init__(self, startField: int | None=None, endField: int | None=None) -> None
+YearMonthIntervalType.def __repr__(self) -> str
+YearMonthIntervalType.jsonValue
+YearMonthIntervalType.simpleString
 class ArrayType(DataType)
 class AtomicType(DataType)
 class BinaryType(AtomicType)
@@ -1250,6 +1342,35 @@ class VarcharType(AtomicType)
 class VariantType(AtomicType)
 class YearMonthIntervalType(AtomicType)
 ## sql/udf.py
+PythonEvalType.NON_UDF
+PythonEvalType.SQL_ARROW_BATCHED_UDF
+PythonEvalType.SQL_ARROW_TABLE_UDF
+PythonEvalType.SQL_ARROW_UDTF
+PythonEvalType.SQL_BATCHED_UDF
+PythonEvalType.SQL_COGROUPED_MAP_ARROW_UDF
+PythonEvalType.SQL_COGROUPED_MAP_PANDAS_UDF
+PythonEvalType.SQL_GROUPED_AGG_ARROW_ITER_UDF
+PythonEvalType.SQL_GROUPED_AGG_ARROW_UDF
+PythonEvalType.SQL_GROUPED_AGG_PANDAS_ITER_UDF
+PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF
+PythonEvalType.SQL_GROUPED_MAP_ARROW_ITER_UDF
+PythonEvalType.SQL_GROUPED_MAP_ARROW_UDF
+PythonEvalType.SQL_GROUPED_MAP_PANDAS_ITER_UDF
+PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF
+PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE
+PythonEvalType.SQL_MAP_ARROW_ITER_UDF
+PythonEvalType.SQL_MAP_PANDAS_ITER_UDF
+PythonEvalType.SQL_SCALAR_ARROW_ITER_UDF
+PythonEvalType.SQL_SCALAR_ARROW_UDF
+PythonEvalType.SQL_SCALAR_PANDAS_ITER_UDF
+PythonEvalType.SQL_SCALAR_PANDAS_UDF
+PythonEvalType.SQL_TABLE_UDF
+PythonEvalType.SQL_TRANSFORM_WITH_STATE_PANDAS_INIT_STATE_UDF
+PythonEvalType.SQL_TRANSFORM_WITH_STATE_PANDAS_UDF
+PythonEvalType.SQL_TRANSFORM_WITH_STATE_PYTHON_ROW_INIT_STATE_UDF
+PythonEvalType.SQL_TRANSFORM_WITH_STATE_PYTHON_ROW_UDF
+PythonEvalType.SQL_WINDOW_AGG_ARROW_UDF
+PythonEvalType.SQL_WINDOW_AGG_PANDAS_UDF
 UDFRegistration.def __init__(self, sparkSession: SparkSession)
 UDFRegistration.def register(self, name: str, f: Callable[..., Any], returnType: DataType | str | None=None) -> Any
 UserDefinedFunction.def __call__(self, *args: Any, **kwargs: Any) -> Column
@@ -1262,7 +1383,11 @@ class PythonEvalType()
 class UDFRegistration()
 class UserDefinedFunction()
 ## sql/variant.py
+VariantVal.def __eq__(self, other: object) -> bool
+VariantVal.def __hash__(self) -> int
 VariantVal.def __init__(self, value: bytes, metadata: bytes) -> None
+VariantVal.def __repr__(self) -> str
+VariantVal.def __str__(self) -> str
 VariantVal.def toJson(self, zone_id: str='UTC') -> str
 VariantVal.def toPython(self) -> Any
 class VariantVal()
@@ -1290,7 +1415,10 @@ StorageLevel.MEMORY_AND_DISK_2: StorageLevel
 StorageLevel.MEMORY_ONLY: StorageLevel
 StorageLevel.MEMORY_ONLY_2: StorageLevel
 StorageLevel.OFF_HEAP: StorageLevel
+StorageLevel.def __eq__(self, other: object) -> bool
 StorageLevel.def __init__(self, useDisk: bool, useMemory: bool, useOffHeap: bool, deserialized: bool, replication: int=1) -> None
+StorageLevel.def __repr__(self) -> str
+StorageLevel.def __str__(self) -> str
 __all__
 __all__ = ['StorageLevel']
 class StorageLevel()
