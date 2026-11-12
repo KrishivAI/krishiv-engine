@@ -3,6 +3,7 @@
 Reads the batch from the loader and calls prepare(x) with defaults; see the
 wiki page for select the rows from orders (and friends).
 """
+
 import logging
 import sys
 

@@ -31,19 +31,19 @@
  },
  {
   "file": "etl_job.py",
-  "line": 20,
+  "line": 21,
   "name": "sentences",
   "status": "not yet"
  },
  {
   "file": "etl_job.py",
-  "line": 24,
+  "line": 25,
   "name": "legacy_score",
   "status": "unknown"
  },
  {
   "file": "etl_job.py",
-  "line": 25,
+  "line": 26,
   "name": "kll_sketch_agg_bigint",
   "status": "not yet"
  },
@@ -67,35 +67,35 @@
  },
  {
   "file": "direct_imports.py",
-  "line": 8,
+  "line": 15,
   "name": "count_min_sketch",
   "status": "not yet"
  },
  {
   "file": "direct_imports.py",
-  "line": 8,
+  "line": 15,
   "name": "histogram_numeric",
   "status": "not yet"
  },
  {
   "file": "direct_imports.py",
-  "line": 9,
+  "line": 16,
   "name": "nope_fn",
   "status": "unknown"
  },
  {
+  "cell": 2,
   "file": "notebook.ipynb",
   "line": 27,
   "name": "xpath_float",
-  "status": "not yet",
-  "cell": 2
+  "status": "not yet"
  },
  {
+  "cell": 3,
   "file": "notebook.ipynb",
   "line": 37,
   "name": "legacy_score",
-  "status": "unknown",
-  "cell": 3
+  "status": "unknown"
  },
  {
   "file": "nested_calls.sql",
