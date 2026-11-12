@@ -6,6 +6,7 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 
 use super::*;
 use crate::proto::layout::{EXPRESSION, MESSAGES, PLAN, RELATION};
+use crate::proto::v4_3::expression::literal;
 use crate::proto::v4_3::{expression, relation};
 
 // Protobuf wire builders: raw bytes, so a hostile depth needs no recursion.
@@ -450,15 +451,35 @@ fn the_4_3_additions_decode_in_the_superset() {
         decoded.message.rel_type,
         Some(relation::RelType::Zip(_))
     ));
-    // Literal fields 29 and 30 are the nanosecond timestamps: epoch_micros = 1.
-    for number in [29, 30] {
+    // Literal fields 29 and 30 are the nanosecond timestamps: epoch_micros = 1, the rest default.
+    let literal_of = |number| {
         let e = field(1, &field(number, &[0x08, 0x01]));
         let decoded = decode_expression(&e).expect("nanosecond literal is defined in the superset");
-        assert!(matches!(
-            decoded.message.expr_type,
-            Some(expression::ExprType::Literal(_))
-        ));
-    }
+        match &decoded.message.expr_type {
+            Some(expression::ExprType::Literal(l)) => l.literal_type.clone(),
+            other => panic!("not a literal: {other:?}"),
+        }
+    };
+    assert_eq!(
+        literal_of(29),
+        Some(literal::LiteralType::TimestampNtzNanos(
+            literal::TimestampNtzNanos {
+                epoch_micros: 1,
+                nanos_within_micro: 0,
+                precision: None
+            }
+        ))
+    );
+    assert_eq!(
+        literal_of(30),
+        Some(literal::LiteralType::TimestampLtzNanos(
+            literal::TimestampLtzNanos {
+                epoch_micros: 1,
+                nanos_within_micro: 0,
+                precision: None
+            }
+        ))
+    );
     // Still undefined in 4.3: a new relation number past Zip.
     let err = decode_relation(&[sql_leaf(), field(49, b"x")].concat()).expect_err("field 49");
     assert!(

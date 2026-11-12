@@ -29,32 +29,43 @@ def _scratch(tmp_path, monkeypatch):
     return tmp_path / "4.3" / "spark" / "connect"
 
 
+def _edit_once(path, old, new):
+    text = path.read_text()
+    assert text.count(old) == 1, old
+    path.write_text(text.replace(old, new))
+
+
 def test_delta_rejects_an_added_field(tmp_path, monkeypatch):
     d = _scratch(tmp_path, monkeypatch)
-    f = d / "relations.proto"
-    f.write_text(f.read_text().replace("  Relation right = 2;\n", "  Relation right = 2;\n  Relation extra = 3;\n"))
-    assert any("Relation extra = 3;" in p for p in m.delta_problems())
+    _edit_once(d / "relations.proto", "message Zip {\n", "message Zip {\n  Relation extra = 3;\n")
+    assert m.delta_problems() == ["relations.proto: unexpected added line 'Relation extra = 3;' (x1)"]
 
 
 def test_delta_rejects_an_added_literal_variant(tmp_path, monkeypatch):
     d = _scratch(tmp_path, monkeypatch)
-    f = d / "expressions.proto"
-    f.write_text(
-        f.read_text().replace(
-            "TimestampLTZNanos timestamp_ltz_nanos = 30;\n",
-            "TimestampLTZNanos timestamp_ltz_nanos = 30;\n      Bogus bogus = 31;\n",
-            1,
-        )
+    _edit_once(
+        d / "expressions.proto",
+        "TimestampLTZNanos timestamp_ltz_nanos = 30;\n",
+        "TimestampLTZNanos timestamp_ltz_nanos = 30;\n      Bogus bogus = 31;\n",
     )
-    assert any("Bogus bogus = 31;" in p for p in m.delta_problems())
+    assert m.delta_problems() == ["expressions.proto: unexpected added line 'Bogus bogus = 31;' (x1)"]
 
 
 def test_delta_rejects_a_removed_line(tmp_path, monkeypatch):
     d = _scratch(tmp_path, monkeypatch)
-    g = d / "pipelines.proto"
-    old = (m.PROTO / "4.2.1" / "spark" / "connect" / "pipelines.proto").read_text().splitlines(keepends=True)
-    victim = next(i for i, ln in enumerate(old) if " = 1;" in ln)
-    cur = g.read_text().splitlines(keepends=True)
-    cur = [ln for ln in cur if ln != old[victim]]
-    g.write_text("".join(cur))
-    assert any("removed or changed" in p for p in m.delta_problems())
+    base = m.PROTO / "4.2.1" / "spark" / "connect" / "pipelines.proto"
+    victim = next(ln for ln in base.read_text().splitlines() if ln.strip().endswith(" = 1;"))
+    _edit_once(d / "pipelines.proto", victim + "\n", "")
+    assert m.delta_problems() == [f"pipelines.proto: removed or changed line {victim.strip()!r}"]
+
+
+def test_delta_rejects_a_missing_addition(tmp_path, monkeypatch):
+    d = _scratch(tmp_path, monkeypatch)
+    # The 4.3 relations.proto reverted to 4.2.1: the file is identical to the baseline, so the Zip addition is missing.
+    (d / "relations.proto").write_text((m.PROTO / "4.2.1" / "spark" / "connect" / "relations.proto").read_text())
+    assert m.delta_problems() == [
+        "relations.proto: missing added line 'Relation left = 1;' (x1)",
+        "relations.proto: missing added line 'Relation right = 2;' (x1)",
+        "relations.proto: missing added line 'Zip zip = 48;' (x1)",
+        "relations.proto: missing added line 'message Zip {' (x1)",
+    ]
