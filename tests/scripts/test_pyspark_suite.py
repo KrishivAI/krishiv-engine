@@ -4,6 +4,7 @@
 Run: (cd tests/scripts && uv run --project ../../python pytest test_pyspark_suite.py)
 """
 
+import json
 import sys
 import textwrap
 from pathlib import Path
@@ -15,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pyspark_suite import manifest as mf
 from pyspark_suite.denominator import compute
 from pyspark_suite.junit import oracle_skips, parse
-from pyspark_suite.report import dashboard, ratchet_regressions, summarize
+from pyspark_suite.report import dashboard, gate, ratchet_regressions, summarize
 from pyspark_suite.static_count import census
 
 
@@ -190,3 +191,14 @@ def test_conditional_skips_leave_the_denominator_outside_the_cap(tmp_path):
 def test_no_oracle_run_means_no_conditional_skips():
     den, _ = compute("4.3.0", {"a.py::T::t"}, set(), set(), [])
     assert den.conditional_skips == 0
+
+
+def test_gate_only_compares_against_a_committed_run_summary(tmp_path: Path) -> None:
+    prev = {"version": "4.3.0", "source": "run", "passed_ids": ["a.py::T::t1", "a.py::T::t2"]}
+    now = {"version": "4.3.0", "source": "run", "passed_ids": ["a.py::T::t2", "a.py::T::t3"]}
+    assert gate(now, tmp_path) == []  # nothing committed yet
+    (tmp_path / "4.3.0.json").write_text(json.dumps(prev))
+    assert gate(now, tmp_path) == ["a.py::T::t1"]  # a new pass never offsets a lost one
+    (tmp_path / "4.3.0.json").write_text(json.dumps({**prev, "source": "static"}))
+    assert gate(now, tmp_path) == []  # a static census records no passes, so it cannot gate
+    assert gate({**now, "version": "4.2.1"}, tmp_path) == []  # another version's file is not consulted
