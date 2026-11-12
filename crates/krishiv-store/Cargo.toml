@@ -7,14 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 # Meant to be published (ADR 0044); stays unpublished until the owner's first release of it.
-publish = false
+publish = true
 
 [lints]
 workspace = true
 
 # krishiv-common and object_store only (layer L1, ADR 0044).
 [dependencies]
-krishiv-common = { path = "../krishiv-common" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
 # Bearer header of `hf://` reads; only with `cloud`.
 http = { workspace = true, optional = true }
 object_store.workspace = true

@@ -795,10 +795,11 @@ const PUBLISH_MARKERS: [&str; 10] = [
     "pnpm publish",
 ];
 
-/// Nothing publishes on merge or on a tag (P2-T147, RELEASING.md): the only
-/// publishing path is the TestPyPI workflow, which runs on manual dispatch
-/// alone and waits for an approved environment; the release switches stay off
-/// and every crate stays unpublishable.
+/// Publishing (owner 2026-11-11, the 0.2 release): three workflows may publish, each on manual
+/// dispatch only and each behind its own GitHub environment: TestPyPI and PyPI by trusted
+/// publishing (no token), crates.io with the `crates-io` environment's token. Nothing publishes on
+/// push, merge, tag or schedule; release-plz stays a dry run; exactly the crates listed in
+/// `.github/scripts/publish-crates.txt` are publishable.
 #[test]
 fn release_publishing_is_manual_and_gated() {
     let dir = root().join(".github");
@@ -818,12 +819,16 @@ fn release_publishing_is_manual_and_gated() {
             .filter(|l| !l.trim_start().starts_with('#'))
             .collect();
         for line in &code {
-            // A dry run packages and verifies and never uploads.
             if line.contains("cargo publish") {
+                let dry = line.contains("--dry-run") && name == "publish-dry-run.sh";
+                let real = name == "publish-crates.yml";
                 assert!(
-                    line.contains("--dry-run") && name == "publish-dry-run.sh",
-                    "{name}: `cargo publish` outside the dry-run script or without --dry-run: {line}"
+                    dry || real,
+                    "{name}: `cargo publish` outside publish-crates.yml or the dry-run script: {line}"
                 );
+                if real {
+                    publishers.push(name.clone());
+                }
             }
             if PUBLISH_MARKERS.iter().any(|m| line.contains(m)) {
                 publishers.push(name.clone());
@@ -834,75 +839,98 @@ fn release_publishing_is_manual_and_gated() {
     publishers.dedup();
     assert_eq!(
         publishers,
-        ["publish-testpypi.yml"],
-        "only the gated TestPyPI workflow may publish"
+        [
+            "publish-crates.yml",
+            "publish-pypi.yml",
+            "publish-testpypi.yml"
+        ],
+        "only the three gated publishing workflows may publish"
     );
 
-    let wf = read(".github/workflows/publish-testpypi.yml");
-    let triggers: Vec<&str> = wf
-        .lines()
-        .skip_while(|l| *l != "on:")
-        .skip(1)
-        .take_while(|l| l.starts_with(' '))
-        .map(str::trim)
-        .collect();
-    assert_eq!(
-        triggers,
-        ["workflow_dispatch:"],
-        "the TestPyPI workflow must run on manual dispatch only"
-    );
-    // Scope the gate assertions to the `publish` job: a match anywhere else
-    // in the file (another job, a comment) must not satisfy them.
-    let publish = wf
-        .find("\n  publish:\n")
-        .map(|i| &wf[i..])
-        .expect("publish-testpypi.yml has a `publish` job");
-    let env = publish
-        .find("environment:\n      name: testpypi")
-        .expect("the publish job must declare the testpypi environment");
-    let upload = publish
-        .find("uses: pypa/gh-action-pypi-publish@")
-        .expect("the publish job must upload via gh-action-pypi-publish");
-    assert!(
-        env < upload,
-        "the publish job must declare the testpypi environment before the upload step"
-    );
-    assert!(wf.contains("github.ref == 'refs/heads/main'") && wf.contains("refs/tags/v"));
-    // The upload step's effective `repository-url` must be TestPyPI: scoping
-    // to the step's `with:` block keeps a production URL anywhere else (or
-    // next to the TestPyPI one) from passing.
-    let after_upload = &publish[upload..];
-    let with_off = after_upload
-        .find("\n        with:\n")
-        .expect("the upload step must have a `with:` block");
-    let with_block: Vec<&str> = after_upload[with_off..]
-        .lines()
-        .skip_while(|l| l.trim() != "with:")
-        .skip(1)
-        .take_while(|l| l.trim().is_empty() || l.starts_with("          "))
-        .collect();
-    let urls: Vec<&&str> = with_block
-        .iter()
-        .filter(|l| l.contains("repository-url:"))
-        .collect();
-    assert_eq!(
-        urls.len(),
-        1,
-        "the upload step must set exactly one repository-url, got: {with_block:?}"
-    );
-    assert_eq!(
-        urls[0].trim(),
-        "repository-url: https://test.pypi.org/legacy/",
-        "the upload step must target TestPyPI"
-    );
-    assert!(
-        !publish.contains("//pypi.org/legacy/") && !publish.contains("upload.pypi.org"),
-        "the publish job must not reference production PyPI"
-    );
-    assert!(
-        !wf.contains("secrets."),
-        "upload is by trusted publishing, no token"
-    );
+    for (file, env) in [
+        ("publish-testpypi.yml", "testpypi"),
+        ("publish-pypi.yml", "pypi"),
+        ("publish-crates.yml", "crates-io"),
+    ] {
+        let wf = read(&format!(".github/workflows/{file}"));
+        let triggers: Vec<&str> = wf
+            .lines()
+            .skip_while(|l| *l != "on:")
+            .skip(1)
+            .take_while(|l| l.starts_with(' '))
+            .map(str::trim)
+            .collect();
+        assert_eq!(
+            triggers,
+            ["workflow_dispatch:"],
+            "{file} must run on manual dispatch only"
+        );
+        let publish = wf
+            .find("\n  publish:\n")
+            .map(|i| &wf[i..])
+            .unwrap_or_else(|| panic!("{file} has a `publish` job"));
+        let env_at = publish
+            .find(&format!("environment:\n      name: {env}\n"))
+            .unwrap_or_else(|| {
+                panic!("{file}: the publish job must declare the {env} environment")
+            });
+        let upload_at = publish
+            .find("uses: pypa/gh-action-pypi-publish@")
+            .or_else(|| publish.find("cargo publish -p"))
+            .unwrap_or_else(|| panic!("{file}: the publish job has no upload step"));
+        assert!(
+            env_at < upload_at,
+            "{file}: the environment must be declared before the upload"
+        );
+        assert!(
+            wf.contains("github.ref == 'refs/heads/main'") && wf.contains("refs/tags/v"),
+            "{file}: only main or a v* tag may publish"
+        );
+        // Each upload goes where its file says, and only the crates.io job holds a token.
+        match file {
+            "publish-testpypi.yml" => {
+                assert!(publish.contains("repository-url: https://test.pypi.org/legacy/"));
+                assert!(
+                    !publish.contains("upload.pypi.org"),
+                    "{file} must target TestPyPI"
+                );
+                assert!(
+                    !wf.contains("secrets."),
+                    "{file}: trusted publishing, no token"
+                );
+            }
+            "publish-pypi.yml" => {
+                assert!(
+                    !publish.contains("test.pypi.org"),
+                    "{file} must target production PyPI"
+                );
+                assert!(
+                    !publish.contains("repository-url:"),
+                    "{file} uploads to the default PyPI"
+                );
+                assert!(
+                    !wf.contains("secrets."),
+                    "{file}: trusted publishing, no token"
+                );
+            }
+            _ => {
+                let before_publish = &wf[..wf.find("\n  publish:\n").unwrap()];
+                assert!(
+                    !before_publish.contains("secrets."),
+                    "{file}: only the publish job may read a secret"
+                );
+                assert!(
+                    publish.contains("secrets.CARGO_REGISTRY_TOKEN")
+                        && publish.matches("secrets.").count() == 1,
+                    "{file}: the publish job reads exactly CARGO_REGISTRY_TOKEN"
+                );
+                assert!(
+                    publish.contains("publish-crates.txt"),
+                    "{file} publishes the listed crates"
+                );
+            }
+        }
+    }
 
     // release-plz stays a dry run until the owner changes it.
     let plz = read("release-plz.toml");
@@ -935,19 +963,45 @@ fn release_publishing_is_manual_and_gated() {
         );
     }
 
-    // No crate can be published from this repository.
+    // Exactly the crates in publish-crates.txt are publishable; every other manifest keeps
+    // `publish = false`.
+    let listed: Vec<String> = read(".github/scripts/publish-crates.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+    assert_eq!(listed.len(), 20, "the 0.2 release publishes 20 crates");
     let mut manifests = vec![root().join("xtask/Cargo.toml")];
     for entry in std::fs::read_dir(root().join("crates")).unwrap() {
         manifests.push(entry.unwrap().path().join("Cargo.toml"));
     }
+    let mut publishable = Vec::new();
     for m in manifests.iter().filter(|m| m.exists()) {
         let text = std::fs::read_to_string(m).unwrap();
+        let name = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("name = "))
+            .map(|v| v.trim_matches('"').to_string())
+            .unwrap_or_default();
+        let on = text.lines().any(|l| l.trim() == "publish = true");
+        let off = text.lines().any(|l| l.trim() == "publish = false");
         assert!(
-            text.lines().any(|l| l.trim() == "publish = false"),
-            "{} must keep `publish = false`",
+            on != off,
+            "{} must say exactly one of publish = true / false",
             m.display()
         );
+        if on {
+            publishable.push(name);
+        }
     }
+    publishable.sort();
+    let mut want = listed;
+    want.sort();
+    assert_eq!(
+        publishable, want,
+        "publishable crates must match publish-crates.txt"
+    );
 
     // The dry run and the quickstart are wired into CI.
     let ci = read(".github/workflows/ci.yml");
