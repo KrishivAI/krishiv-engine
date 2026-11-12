@@ -232,6 +232,33 @@ fn a_store_that_lists_whole_has_no_listing_timeout() {
 }
 
 #[test]
+fn list_from_returns_only_the_paths_after_the_offset() {
+    rt().block_on(async {
+        let s = setup(IoConfig::default());
+        for name in [
+            "d/_log/00.json",
+            "d/_log/01.json",
+            "d/_log/02.json",
+            "d/x/03.json",
+        ] {
+            put(&s, name, 1).await;
+        }
+        let dir = Path::from("d");
+        let offset = Path::from("d/_log/01.json");
+        let mut got: Vec<String> =
+            s.io.list_from(&s.id, &dir, &offset)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|m| m.location.to_string())
+                .collect();
+        got.sort();
+        assert_eq!(got, ["d/_log/02.json", "d/x/03.json"]);
+        assert_eq!(s.io.list(&s.id, &dir).await.unwrap().len(), 4);
+    });
+}
+
+#[test]
 fn a_slow_listing_still_fails_when_told_to() {
     rt().block_on(async {
         let s = setup(IoConfig::default());

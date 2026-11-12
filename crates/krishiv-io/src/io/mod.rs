@@ -1477,6 +1477,31 @@ impl IoContext {
     /// # Errors
     /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
     pub async fn list(&self, store: &StoreId, prefix: &Path) -> Result<Vec<ObjectMeta>> {
+        self.list_after(store, prefix, None).await
+    }
+
+    /// Every object under the directory `prefix` of `store` whose path sorts
+    /// strictly after `offset` (UTF-8 order, as the stores define it), at any
+    /// depth. With `offset` `None` it is [`IoContext::list`]. A Delta log
+    /// reader lists from the last checkpoint this way.
+    ///
+    /// # Errors
+    /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
+    pub async fn list_from(
+        &self,
+        store: &StoreId,
+        prefix: &Path,
+        offset: &Path,
+    ) -> Result<Vec<ObjectMeta>> {
+        self.list_after(store, prefix, Some(offset)).await
+    }
+
+    async fn list_after(
+        &self,
+        store: &StoreId,
+        prefix: &Path,
+        offset: Option<&Path>,
+    ) -> Result<Vec<ObjectMeta>> {
         let (s, lane) = self.sched.store(store)?;
         let cfg = &self.sched.config;
         let display = format!("{store}/{prefix}");
@@ -1494,7 +1519,10 @@ impl IoContext {
             let (retry_after, reason) = {
                 let _permit = lane.admit(Direction::Read, prefix).await?;
                 self.count(|c| &c.requests, 1);
-                let mut listed = s.list(Some(prefix));
+                let mut listed = match offset {
+                    Some(o) => s.list_with_offset(Some(prefix), o),
+                    None => s.list(Some(prefix)),
+                };
                 let mut out = Vec::new();
                 loop {
                     match tokio::time::timeout(object_wait, futures::StreamExt::next(&mut listed))
