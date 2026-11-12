@@ -65,3 +65,7 @@ Paths are relative to this crate.
 
 ## Tests
 `cargo nextest run -p krishiv-session --all-features` · `cargo clippy -p krishiv-session --all-targets --all-features -- -D warnings`
+
+## Split modules (T193)
+Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
+- `session/` `env.rs` (`QueryEnv`, parser options), `spill.rs` (per-query spill scopes, `WriteTarget`), `writes.rs` (write helpers), `ops.rs` (more `impl Session`); `catalog/expand.rs` (view expansion), `command/tests.rs`; `dataframe/writer.rs` (`DataFrameWriter`, `DataFrameWriterV2`); `table_commands/` `create.rs` (create, drop, truncate, analyze, row-level changes), `writes.rs` (INSERT, saveAsTable, v2 writes).

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the typed configuration registry: keys, defaults, parsing, aliases and the snapshot.
 use std::collections::BTreeSet;
 use std::time::Duration;
 

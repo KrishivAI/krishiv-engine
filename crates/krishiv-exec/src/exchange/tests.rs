@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the exchange: hash and round-robin routing, gather, broadcast and range writes, and splitting batches by partition.
 use std::sync::Arc;
 
 use arrow_array::{Array, Int64Array, RecordBatch, StringArray};
