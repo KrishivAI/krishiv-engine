@@ -62,6 +62,9 @@ The first release is the embedded core: the engine runs in your process, from Py
   samples of Parquet columns, and inferred join filters.
 - A local web console (`krishiv.ui.enabled`), a bearer-token guard for `/metrics`, per-scan I/O fields in the profile, JSON
   logs, and a `--share` profile that drops identity and trace ids.
+- `krishiv sql` has a line editor (history, cursor movement, multi-line input), `USE system` and the `system.queries`
+  table of recent queries and their columns.
+- Parquet writes are checked for interop with other readers: nulls at every nesting level and column statistics.
 
 ### Known limits
 

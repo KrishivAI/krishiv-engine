@@ -195,6 +195,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ),
     ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
+    ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
     (
         "krishiv.sql.avro.compression.codec",
         &AVRO_COMPRESSION_CODEC,
@@ -315,6 +316,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.maxSessionsPerPrincipal",
         &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
+    ),
+    (
+        "krishiv.optimizer.shareRepeatedSubtrees",
+        &SHARE_REPEATED_SUBTREES,
     ),
     (
         "krishiv.sql.legacy.statisticalAggregate",

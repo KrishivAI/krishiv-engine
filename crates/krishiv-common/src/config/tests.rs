@@ -862,6 +862,22 @@ fn join_enumerator_entries_default_and_parse() {
 }
 
 #[test]
+fn the_w1_rule_keys_default_off_and_are_user_settable() {
+    let mut c = Config::new();
+    for (key, entry) in [
+        ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
+        (
+            "krishiv.optimizer.shareRepeatedSubtrees",
+            &SHARE_REPEATED_SUBTREES,
+        ),
+    ] {
+        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(false));
+        c.set(key, "true").unwrap();
+        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(true));
+    }
+}
+
+#[test]
 fn eager_aggregation_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
