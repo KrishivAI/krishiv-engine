@@ -310,6 +310,7 @@ pub(crate) fn scan_sql(file: &str, text: &str, first_line: usize) -> Vec<Finding
                 i = (i + 2).min(bytes.len());
             }
             b'\'' | b'"' | b'`' => {
+                let (open, mut quoted_call) = (i, None);
                 i += 1;
                 while i < bytes.len() && bytes[i] != c {
                     if bytes[i] == b'\\' {
@@ -319,6 +320,36 @@ pub(crate) fn scan_sql(file: &str, text: &str, first_line: usize) -> Vec<Finding
                         line += 1;
                     }
                     i += 1;
+                }
+                // A backtick-quoted name followed by `(` is a call (`sentences`(x)).
+                if c == b'`' && i > open + 1 && i < bytes.len() {
+                    let dotted = open > 0 && bytes[open - 1] == b'.';
+                    let after = skip_sql_blank(bytes, i + 1);
+                    if !dotted
+                        && bytes.get(after) == Some(&b'(')
+                        && !matches!(
+                            prev_word.as_str(),
+                            "as" | "into"
+                                | "table"
+                                | "view"
+                                | "function"
+                                | "exists"
+                                | "recursive"
+                                | "with"
+                                | "from"
+                                | "join"
+                                | "tblproperties"
+                        )
+                    {
+                        // `IDENTIFIER('abs')(c1)` is the identifier clause, not a call.
+                        quoted_call = text
+                            .get(open + 1..i)
+                            .map(str::to_ascii_lowercase)
+                            .filter(|w| w != "identifier");
+                    }
+                }
+                if let Some(f) = quoted_call.and_then(|w| judge(file, line, &w)) {
+                    out.push(f);
                 }
                 i += 1;
                 prev_word.clear();
@@ -1199,5 +1230,12 @@ mod tests {
         let f = scan_python("a.py", src, 1);
         assert_eq!(names(&f), [("sentences", "not yet")]);
         assert_eq!(f[0].line, 2);
+    }
+
+    #[test]
+    fn backtick_quoted_function_names_are_calls() {
+        let f = scan_sql("t.sql", "SELECT `sentences`(x), `t`.`c` FROM `db`.`tbl`", 1);
+        assert_eq!(names(&f), [("sentences", "not yet")]);
+        assert!(scan_sql("t.sql", "INSERT INTO `t`(a, b) SELECT 1", 1).is_empty());
     }
 }

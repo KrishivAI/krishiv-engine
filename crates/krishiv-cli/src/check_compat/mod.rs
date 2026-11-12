@@ -118,10 +118,13 @@ fn collect(path: &Path, top: bool, out: &mut Vec<PathBuf>, errors: &mut Vec<(Str
         }
         entries.sort();
         for e in entries {
-            let skipped = e.is_dir()
-                && e.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| SKIP_DIRS.contains(&n));
+            // A directory symlink can point at an ancestor and loop: never followed.
+            let linked_dir = e.is_dir() && e.is_symlink();
+            let skipped = linked_dir
+                || e.is_dir()
+                    && e.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| SKIP_DIRS.contains(&n));
             if !skipped {
                 collect(&e, false, out, errors);
             }

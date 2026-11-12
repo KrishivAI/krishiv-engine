@@ -311,3 +311,14 @@ fn vendored_spark_sql_inputs_report_at_least_95_percent_of_not_yet_calls() {
     let pct = hit * 100 / want.len();
     assert!(pct >= 95, "recall {pct}% ({hit}/{})", want.len());
 }
+
+#[cfg(unix)]
+#[test]
+fn directory_symlink_cycles_are_not_followed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.sql"), "SELECT abs(1)\n").expect("write");
+    std::os::unix::fs::symlink(".", dir.path().join("again")).expect("symlink");
+    let (code, rep) = report(dir.path());
+    assert_eq!(code, Some(0), "{rep}");
+    assert_eq!(rep["files_scanned"], 1, "{rep}");
+}
