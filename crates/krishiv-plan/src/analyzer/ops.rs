@@ -867,7 +867,11 @@ impl Resolver<'_> {
         pass: &[Attr],
     ) -> Rel {
         if pass.is_empty() && items.iter().all(|b| b.lateral.is_empty()) {
-            let out = items.iter().map(|b| out_attr(b, &base.out)).collect();
+            let out = items
+                .iter()
+                .enumerate()
+                .map(|(i, b)| out_attr_at(b, &base.out, i))
+                .collect();
             let exprs = items.iter().map(|b| Arc::clone(&b.expr)).collect();
             return self.projection(origin, base, exprs, out);
         }
