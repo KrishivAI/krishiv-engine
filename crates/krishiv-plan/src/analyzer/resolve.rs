@@ -190,9 +190,9 @@ pub(super) struct Resolver<'a> {
     /// (`encode::identity_keys`): resolution does not depend on how the
     /// input shares subtrees, so equal input keys give equal plans.
     canon: HashMap<usize, Arc<LogicalPlan>>,
-    /// The expression that reads each column without an origin, shared by every projection that passes
-    /// the column through: a chain of `withColumn` steps then holds one such expression per column, not
-    /// one per column per step, and the passes that skip an expression already seen skip it.
+    /// One shared expression per column id, used wherever a projection passes that column through
+    /// unchanged. A chain of `withColumn` steps then holds one expression per column instead of one per
+    /// column per step, and passes that skip an expression already seen skip it.
     pass_exprs: HashMap<AttrId, Arc<crate::Expr>>,
     pub(super) columns: Vec<BTreeSet<String>>,
     /// The lambda scopes pushed by the higher-order calls whose bodies

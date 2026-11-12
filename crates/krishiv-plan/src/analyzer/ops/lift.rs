@@ -66,7 +66,8 @@ pub(in crate::analyzer) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
 }
 
 /// [`out_attr`] for the item at `position` of a select list: a column read from the same position of the
-/// scope (what a projection that passes columns through does) is found without a scan.
+/// scope (what a projection that passes columns through does) is found without a scan. Relies on one
+/// `AttrId` meaning one attribute (same qualifier, source, duplicate flag) within a scope.
 pub(in crate::analyzer) fn out_attr_at(b: &Bound, scope: &[Attr], position: usize) -> Attr {
     match &b.expr.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {

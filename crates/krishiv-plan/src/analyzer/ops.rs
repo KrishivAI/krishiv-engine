@@ -27,7 +27,8 @@ use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
 use super::exprs::{
-    Bound, Cx, WindowUse, names, pretty, semantic_key, synth_call, synth_call_of, unresolved,
+    Bound, Cx, WindowUse, arg_type, names, pretty, semantic_key, synth_call, synth_call_of,
+    unresolved,
 };
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, FileMetadata, TableKind};
@@ -622,10 +623,8 @@ impl Resolver<'_> {
             {
                 items.push(Bound {
                     expr: Arc::clone(e),
-                    ty: ArgType {
-                        data_type: Some(col.data_type.clone()),
-                        nullable: col.nullable,
-                    },
+                    // As `bind` types a column: an untyped NULL is `None`.
+                    ty: arg_type(col.data_type.clone(), col.nullable),
                     agg: None,
                     win: None,
                     outer: None,

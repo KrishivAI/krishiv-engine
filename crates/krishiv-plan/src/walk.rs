@@ -77,13 +77,16 @@ pub(crate) fn children<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
 
 /// A hasher for keys that are addresses: one multiply, not SipHash. The walks hash every node of a plan
 /// (and, for a plan that shares its columns, the same node once per use), so the hash is on the hot path of
-/// every analyzer pass; addresses are not attacker-chosen, so a keyed hash buys nothing.
+/// every analyzer pass; addresses are not attacker-chosen, so a keyed hash buys nothing. Same idea as the
+/// optimizer's `AddrHasher` (a lower layer-peer crate, so not shared).
 #[derive(Default)]
 pub(crate) struct PtrHasher(u64);
 
 impl Hasher for PtrHasher {
     fn finish(&self) -> u64 {
-        self.0
+        // The multiply leaves the entropy in the high bits and aligned addresses have zero low bits, but
+        // the table indexes by the low bits: rotate them down.
+        self.0.rotate_left(26)
     }
 
     fn write(&mut self, bytes: &[u8]) {
