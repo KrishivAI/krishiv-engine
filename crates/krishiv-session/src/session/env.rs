@@ -36,21 +36,6 @@ pub(super) fn empty_redacted() -> RedactedSql {
     RedactedSql::opaque("")
 }
 
-/// `error` with the SQL span `start..end` of `text` attached as its
-/// query context (`stop` is inclusive, as Spark reports it).
-pub(crate) fn sql_context(
-    error: KrishivError,
-    text: &RedactedSql,
-    start: usize,
-    end: usize,
-) -> KrishivError {
-    error.with_query_context(ErrorQueryContext::sql(
-        text.fragment(start..end),
-        start,
-        end.saturating_sub(1),
-    ))
-}
-
 /// An analysis error with its query context attached: the SQL span of
 /// `text`, or the DataFrame operation that raised it. With no text, a
 /// SQL span has no fragment to attach, so only DataFrame contexts cross.
@@ -124,6 +109,9 @@ pub(crate) struct QueryEnv {
     /// The statement as the session may show it (redacted), for
     /// `system.queries`; `None` for a query no SQL text started.
     pub(crate) text: Option<Arc<str>>,
+    /// The same text with the map from original offsets, to render the span of a run-time
+    /// error ([`crate::run_site::resolve_site`]).
+    pub(crate) redacted: Option<Arc<RedactedSql>>,
     /// The statement's class (`StatementClass::name`), for `system.queries`.
     pub(crate) statement_class: Option<&'static str>,
     /// The id of the `system.queries` row the statement's latest query began, if any: `sql`

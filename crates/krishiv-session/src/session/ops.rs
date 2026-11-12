@@ -228,9 +228,10 @@ impl Session {
                 column_types,
             })?;
             let worker = self.worker(env);
-            let (mut rows, _, row_id) = self
+            let (rows, _, row_id) = self
                 .run_on_query_logged(&plan, worker, env, false, admitted.take())
                 .await?;
+            let mut rows = crate::run_site::resolve_sites(rows, env);
             let mut batches = Vec::new();
             while let Some(batch) = rows.next().await {
                 batches.push(batch?);

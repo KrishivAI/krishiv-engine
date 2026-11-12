@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
 use tracing::Instrument as _;
 
+pub(crate) use crate::run_site::sql_context;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
@@ -1235,6 +1236,7 @@ impl Session {
             variables_version: variables.version,
             policy_version: self.state.policy.version().0,
             text: None,
+            redacted: None,
             statement_class: None,
             row: Arc::default(),
             identifier_spans: Arc::default(),
@@ -1532,7 +1534,7 @@ impl Session {
         let (stream, query, _) = self
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
-        Ok((stream, query))
+        Ok((crate::run_site::resolve_sites(stream, env), query))
     }
 
     /// Asks the admission controller for a permit for the query whose
