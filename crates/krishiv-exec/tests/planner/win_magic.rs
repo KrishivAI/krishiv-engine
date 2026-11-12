@@ -136,3 +136,22 @@ fn null_keys_of_a_self_correlated_subquery_are_dropped() {
         "SELECT t.a, t.b FROM t WHERE t.b > 5 AND t.b <= (SELECT min(t2.b) + 3 FROM t t2 WHERE t2.a = t.a AND t2.b > 5)",
     );
 }
+
+#[test]
+fn decimal_avg_keeps_the_rows() {
+    // The q17 path: a decimal average, compared in the outer block.
+    same_rows(
+        "SELECT t.a, t.b FROM t, p WHERE p.pk = t.a AND p.flag = 1 \
+         AND CAST(t.b AS DECIMAL(22,2)) < (SELECT avg(CAST(t2.b AS DECIMAL(22,2))) / 3 + 3 \
+         FROM t t2 WHERE t2.a = p.pk)",
+    );
+}
+
+#[test]
+fn near_the_decimal_precision_limit_keeps_the_rows() {
+    same_rows(
+        "SELECT t.a, t.b FROM t, p WHERE p.pk = t.a AND p.flag = 1 \
+         AND CAST(t.b AS DECIMAL(26,2)) >= \
+         (SELECT avg(CAST(t2.b AS DECIMAL(26,2))) FROM t t2 WHERE t2.a = p.pk)",
+    );
+}

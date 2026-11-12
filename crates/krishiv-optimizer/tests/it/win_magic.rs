@@ -53,7 +53,11 @@ fn q17_and_q02_become_windows_only_with_the_key() {
         insta::assert_snapshot!(format!("win_magic_q{q}"), on.root().to_string());
         Plan::try_new(std::sync::Arc::clone(on.root())).unwrap();
         // A fixed point.
-        let again = run(&sql, true);
+        let mut config = Config::new();
+        config
+            .set("krishiv.optimizer.subqueryAsWindow", "true")
+            .unwrap();
+        let again = optimize_with_udfs(&on, &fixture(), &UdfLibrary::new(), &config).unwrap();
         assert!(again.structurally_eq(&on), "q{q}: {}", again.root());
     }
 }
@@ -219,4 +223,15 @@ fn a_second_instance_of_the_table_in_the_outer_block_is_refused() {
                AND a.l_quantity < (SELECT avg(l_quantity) FROM lineitem \
                WHERE l_partkey = p_partkey)";
     assert!(!windowed(sql));
+}
+
+#[test]
+fn a_raising_or_nondeterministic_call_is_refused() {
+    for agg in [
+        "min(CAST(l_comment AS INT))",
+        "max(l_quantity / (l_linenumber - 1))",
+    ] {
+        let sql = q17(agg, "", "", "l_partkey = p_partkey");
+        assert!(!windowed(&sql), "{agg}");
+    }
 }
