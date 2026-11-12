@@ -68,14 +68,80 @@ pub fn push_collation_key(
                 s.chars().for_each(|c| push_lower(c, out));
             }
         }
-        CollationFamily::Icu { .. } => {
-            return Err(KernelError::internal(format!(
-                "no collation key for {}",
-                collation.name()
-            )));
-        }
+        CollationFamily::Icu { ci, ai } => icu_key(collation, ci, ai, s, out)?,
     }
     Ok(())
+}
+
+/// The ICU sort key of `s`: the collator of the collation's locale at Spark's strength (`_CI`
+/// secondary, `_AI` primary, `_CS_AI` primary with the case level on), kept per thread.
+#[cfg(feature = "collations-icu")]
+fn icu_key(
+    collation: Collation,
+    ci: bool,
+    ai: bool,
+    s: &str,
+    out: &mut Vec<u8>,
+) -> Result<(), KernelError> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use icu_collator::options::{CaseLevel, CollatorOptions, Strength};
+    use icu_collator::{Collator, CollatorBorrowed, CollatorPreferences};
+    use icu_locale_core::Locale;
+
+    thread_local! {
+        static COLLATORS: RefCell<HashMap<u32, Option<CollatorBorrowed<'static>>>> = RefCell::new(HashMap::new());
+    }
+    COLLATORS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let collator = cache.entry(collation.id()).or_insert_with(|| {
+            let name = collation.icu_locale()?;
+            // The collation data depends on the language and script, never the country.
+            let mut parts = name.split('_');
+            let language = parts.next()?;
+            let locale = if name == "UNICODE" {
+                Locale::UNKNOWN
+            } else {
+                let tag = match parts.next() {
+                    Some(script) if script.len() == 4 => format!("{language}-{script}"),
+                    _ => language.to_owned(),
+                };
+                tag.parse::<Locale>().ok()?
+            };
+            let mut options = CollatorOptions::default();
+            let (strength, case_level) = match (ci, ai) {
+                (false, false) => (Strength::Tertiary, CaseLevel::Off),
+                (true, false) => (Strength::Secondary, CaseLevel::Off),
+                (true, true) => (Strength::Primary, CaseLevel::Off),
+                (false, true) => (Strength::Primary, CaseLevel::On),
+            };
+            options.strength = Some(strength);
+            options.case_level = Some(case_level);
+            Collator::try_new(CollatorPreferences::from(&locale), options).ok()
+        });
+        let collator = collator.as_ref().ok_or_else(|| {
+            KernelError::internal(format!("no ICU data for {}", collation.name()))
+        })?;
+        collator
+            .write_sort_key_to(s, out)
+            .map_err(|_| KernelError::internal("ICU sort key".to_owned()))
+    })
+}
+
+/// Without the `collations-icu` feature an ICU collation has no key.
+#[cfg(not(feature = "collations-icu"))]
+fn icu_key(
+    collation: Collation,
+    _ci: bool,
+    _ai: bool,
+    _s: &str,
+    _out: &mut Vec<u8>,
+) -> Result<(), KernelError> {
+    Err(KernelError::internal(format!(
+        "no collation key for {}",
+        collation.name()
+    )))
 }
 
 /// The Arrow type of the key of a value of Arrow type `t`: strings become `BinaryView` (the engine's binary carrier), inside
@@ -437,5 +503,23 @@ mod tests {
         let ints: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![Some(1)]));
         let out = collation_key(&DataType::Integer, &ints).unwrap();
         assert_eq!(out.data_type(), &ArrowType::Int32);
+    }
+    /// The `collations-basic` ICU statements of Spark 4.2 (`'a' collate unicode < 'A'` ...): each
+    /// comparison is true, here by the sort key.
+    #[cfg(feature = "collations-icu")]
+    #[test]
+    #[cfg_attr(miri, ignore = "the ICU data is large for miri")]
+    fn icu_keys_order_as_the_spark_goldens_say() {
+        assert!(key("unicode", "a") < key("unicode", "A"));
+        assert_eq!(key("unicode_ci", "a"), key("unicode_ci", "A"));
+        assert_eq!(key("unicode_ai", "a"), key("unicode_ai", "\u{e5}"));
+        assert_eq!(key("unicode_ci_ai", "a"), key("unicode_ci_ai", "\u{c5}"));
+        assert!(key("en", "a") < key("en", "A"));
+        assert_eq!(key("en_ci", "a"), key("en_ci", "A"));
+        assert_eq!(key("en_ai", "a"), key("en_ai", "\u{e5}"));
+        assert_eq!(key("en_ci_ai", "a"), key("en_ci_ai", "\u{c5}"));
+        assert!(key("sv", "Kypper") < key("sv", "K\u{f6}pfe"));
+        assert!(key("de", "Kypper") > key("de", "K\u{f6}pfe"));
+        assert_eq!(key("tr_ci", "I"), key("tr_ci", "\u{131}"));
     }
 }

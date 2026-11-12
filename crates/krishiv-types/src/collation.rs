@@ -232,6 +232,19 @@ impl Collation {
         out
     }
 
+    /// The ICU locale as Spark spells it (`UNICODE`, `en`, `sr_Cyrl`, `de_AUT`), or `None` for
+    /// a `UTF8_*` collation.
+    #[must_use]
+    pub fn icu_locale(self) -> Option<&'static str> {
+        match self.family() {
+            CollationFamily::Icu { .. } => usize::try_from(self.0 & LOCALE_MASK)
+                .ok()
+                .and_then(|i| LOCALES.get(i))
+                .copied(),
+            _ => None,
+        }
+    }
+
     /// `SYSTEM.BUILTIN.<name>`: what `collation(x)` returns.
     #[must_use]
     pub fn qualified_name(self) -> String {
