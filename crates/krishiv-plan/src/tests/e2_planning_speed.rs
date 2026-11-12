@@ -104,3 +104,41 @@ fn e2_planning_speed() {
             .trim()
     );
 }
+
+#[test]
+#[ignore = "timed spike"]
+fn e2_cause_identity_keys() {
+    for depth in [50, 100, 200, 400] {
+        let plan = chain(depth);
+        let t = Instant::now();
+        for _ in 0..20 {
+            std::hint::black_box(crate::encode::identity_keys(&plan));
+        }
+        println!(
+            "depth {depth}: identity_keys {:.3} ms",
+            t.elapsed().as_secs_f64() * 1e3 / 20.0
+        );
+    }
+}
+
+#[test]
+#[ignore = "timed spike"]
+fn e2_cause_output_size() {
+    use crate::walk::{Node, visit_distinct};
+    let c = ctx();
+    for depth in [25, 50, 100, 200, 400] {
+        let p = Plan::try_new(chain(depth)).unwrap();
+        let a = block_on(DefaultAnalyzer.analyze(&p, &c)).unwrap();
+        let (mut plans, mut exprs) = (0_usize, 0_usize);
+        let _ = visit_distinct(Node::Plan(a.plan.root()), |n| {
+            match n {
+                Node::Plan(_) => plans += 1,
+                Node::Expr(_) => exprs += 1,
+            }
+            std::ops::ControlFlow::<()>::Continue(())
+        });
+        println!(
+            "depth {depth}: resolved plan has {plans} relations and {exprs} distinct expression nodes"
+        );
+    }
+}
