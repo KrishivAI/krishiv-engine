@@ -301,3 +301,46 @@ oneof! { data_kind, DATA_KIND_ROWS, data_type::Kind, "DataType.kind";
     Unparsed => ("unparsed", 24, Missing, "", "a type string parsed by the SQL type parser", "P3-T012", 1),
     Time => ("time", 28, Done, "", "DataType", "P2-T091a", 1),
 }
+
+fn quote(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The rows as the JSON `cargo xtask connect-coverage` writes to `tests/connect/coverage.json`.
+#[must_use]
+pub fn to_json() -> String {
+    use std::fmt::Write as _;
+    let rows = all();
+    let mut out = String::from("[\n");
+    for (i, r) in rows.iter().enumerate() {
+        let _ = write!(
+            out,
+            "  {{\"oneof\": {}, \"field\": {}, \"number\": {}, \"status\": {}, \"refused\": {}, \"target\": {}, \"task\": {}, \"group\": {}}}",
+            quote(r.oneof),
+            quote(r.field),
+            r.number,
+            quote(r.status.word()),
+            quote(r.refused),
+            quote(r.target),
+            quote(r.task),
+            r.group
+        );
+        out.push_str(if i + 1 < rows.len() { ",\n" } else { "\n" });
+    }
+    out.push_str("]\n");
+    out
+}

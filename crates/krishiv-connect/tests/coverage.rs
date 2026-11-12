@@ -191,3 +191,30 @@ fn every_arm_has_one_row_and_a_reason() {
     names.dedup();
     assert_eq!(names.len(), 6, "{names:?}");
 }
+
+#[test]
+fn the_committed_json_is_the_table() {
+    let committed = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/connect/coverage.json"),
+    )
+    .expect("tests/connect/coverage.json");
+    assert_eq!(
+        krishiv_connect::coverage::to_json(),
+        committed,
+        "run `cargo xtask connect-coverage`"
+    );
+}
+
+#[test]
+fn status_words() {
+    let words: Vec<&str> = [
+        Status::Done,
+        Status::Partial,
+        Status::Missing,
+        Status::OutOfScope,
+    ]
+    .into_iter()
+    .map(Status::word)
+    .collect();
+    assert_eq!(words, ["done", "partial", "missing", "out of scope"]);
+}

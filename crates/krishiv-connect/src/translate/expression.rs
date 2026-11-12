@@ -187,17 +187,7 @@ impl Translator<'_> {
                 ExprNode::Function(not)
             }
             // `F.collate(col, "name")` / `Column.collate`: the function form of `expr COLLATE name`.
-            _ if name.eq_ignore_ascii_case("collate")
-                && !f.is_distinct
-                && let [value, collation] = args.as_slice()
-                && let ExprNode::Literal(Literal::String(text)) = &collation.node =>
-            {
-                ExprNode::Collate {
-                    expr: Arc::clone(value),
-                    collation: krishiv_types::Collation::parse(text)?,
-                    name: text.clone(),
-                }
-            }
+            _ if let Some(collate) = collate_call(name, f.is_distinct, &args)? => collate,
             _ => {
                 let canonical = Builtin::from_name(name)
                     .map_or_else(|| name.to_owned(), |b| b.name().to_owned());
@@ -212,6 +202,12 @@ impl Translator<'_> {
         let mut parts = parse_multipart_identifier(&c.function_name)?;
         let name = parts.pop().unwrap_or_default();
         let (args, arg_names) = self.call_args(&c.arguments)?;
+        if parts.is_empty()
+            && arg_names.iter().all(Option::is_none)
+            && let Some(collate) = collate_call(&name, false, &args)?
+        {
+            return Ok(collate);
+        }
         Ok(ExprNode::Function(FunctionCall {
             name,
             qualifier: parts,
@@ -303,3 +299,22 @@ fn star(s: &expression::UnresolvedStar) -> Result<Star> {
 
 #[cfg(test)]
 mod tests;
+
+/// `collate(value, 'name')` as the `expr COLLATE name` node, for an unqualified call of two arguments
+/// whose second is a string literal (`F.collate`, `Column.collate`, `call_function("collate", ...)`).
+fn collate_call(name: &str, distinct: bool, args: &[Arc<Expr>]) -> Result<Option<ExprNode>> {
+    if !name.eq_ignore_ascii_case("collate") || distinct {
+        return Ok(None);
+    }
+    let [value, collation] = args else {
+        return Ok(None);
+    };
+    let ExprNode::Literal(Literal::String(text)) = &collation.node else {
+        return Ok(None);
+    };
+    Ok(Some(ExprNode::Collate {
+        expr: Arc::clone(value),
+        collation: krishiv_types::Collation::parse(text)?,
+        name: text.clone(),
+    }))
+}

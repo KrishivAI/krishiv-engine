@@ -210,6 +210,16 @@ fn call_function_splits_the_qualifier_and_named_arguments_name_parameters() {
         ("upper", 0, 1)
     );
     assert!(f.arg_names.is_empty() && !f.distinct);
+    // `collate(value, 'name')` lowers to the COLLATE node, as the unresolved-function form does.
+    let e = translate_expression(
+        &call(
+            "collate",
+            vec![attr("a"), lit(LiteralType::String("utf8_lcase".into()))],
+        ),
+        &conf(),
+    )
+    .unwrap();
+    assert!(matches!(e.node, ExprNode::Collate { .. }));
     let e = translate_expression(&call("session.f", vec![]), &conf()).unwrap();
     assert_eq!(function(&e).qualifier, ["session"]);
     let named = expr(ExprType::NamedArgumentExpression(Box::new(

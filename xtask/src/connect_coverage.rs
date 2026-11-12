@@ -117,7 +117,7 @@ fn render(json: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::{render, run};
 
     #[test]
     fn renders_a_section_per_oneof() {
@@ -127,5 +127,16 @@ mod tests {
         assert!(md.contains("## A.b"));
         assert!(md.contains("2 arms: 1 done, 0 partial, 1 missing, 0 out of scope."));
         assert!(md.contains("T\\|U"));
+    }
+
+    #[test]
+    fn the_committed_files_are_current() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        run(&root, true).unwrap();
+    }
+
+    #[test]
+    fn a_bad_dump_is_an_error() {
+        assert!(render("not json").is_err());
     }
 }
