@@ -1179,7 +1179,11 @@ impl Resolver<'_> {
         {
             return self.search_lcase(e, kids, name, in_agg, window_fn, cx);
         }
-        let search = KEYED_SEARCH.contains(&name).then_some(c);
+        // Spark's column name shows the implicit cast of a default-strength operand to an ICU
+        // collation (`collate(a, unicode_ci) = 'A' collate UNICODE_CI`, `collations-basic` 46-56).
+        let search = (KEYED_SEARCH.contains(&name)
+            || matches!(c.family(), CollationFamily::Icu { .. }))
+        .then_some(c);
         self.compare_keys(e, kids, n, |_| string_of(c), search, in_agg, window_fn, cx)
             .map(Some)
     }

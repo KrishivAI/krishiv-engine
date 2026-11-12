@@ -39,6 +39,11 @@ thiserror.workspace = true
 # Paused time and a current-thread runtime for the file-format suite.
 tokio = { workspace = true, features = ["rt", "time", "test-util"] }
 
+[features]
+# Runs the ICU collation goldens (`tests/golden_icu.rs`) and leaves the default ratchet, whose
+# baseline lists the ICU rows as failures, to the default-feature build (ADR 0043).
+collations-icu = ["krishiv-session/collations-icu"]
+
 [dev-dependencies]
 insta = { workspace = true }
 # The built-in function registry, for its function-matrix coverage test.

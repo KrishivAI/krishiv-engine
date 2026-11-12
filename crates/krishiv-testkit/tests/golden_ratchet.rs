@@ -8,6 +8,9 @@
 //! --ratchet update`. The nightly serialize-through job runs the same ratchet with every plan
 //! encoded to `krishiv.plan.v1` and decoded before it runs (P2-T173).
 #![forbid(unsafe_code)]
+// Under `collations-icu` the ICU rows of `collations-basic` pass but the baseline lists them as
+// failures, so this ratchet is compiled out there; `tests/golden_icu.rs` covers that build.
+#![cfg(not(feature = "collations-icu"))]
 
 use krishiv_testkit::golden::known_failures::KnownFailures;
 use krishiv_testkit::golden::manifest::ExclusionManifest;
