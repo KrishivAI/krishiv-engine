@@ -21,7 +21,11 @@ def _connect_dir(checkout: Path) -> Path:
 
 
 def cmd_static(a: argparse.Namespace) -> None:
+    if not _connect_dir(a.checkout).is_dir():
+        raise SystemExit(f"static: {_connect_dir(a.checkout)} is not a directory (wrong --checkout?)")
     collected, skipped = census(_connect_dir(a.checkout))
+    if not collected:
+        raise SystemExit("static: no tests found; not overwriting the summary")
     den, remaining = compute(a.version, collected, skipped, set(), mf.load(DATA / "manifest.toml"))
     path = write_summary(summarize(den, remaining, [], source="static"), DATA / "summary")
     print(json.dumps(den.as_dict(), indent=1))

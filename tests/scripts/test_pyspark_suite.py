@@ -146,3 +146,12 @@ def test_server_fails_fast_when_process_exits() -> None:
 
     with pytest.raises(RuntimeError, match="exited early"), server(["true"], 1):
         pass
+
+
+def test_static_refuses_missing_checkout(tmp_path: Path) -> None:
+    import argparse
+
+    from pyspark_suite.__main__ import cmd_static
+
+    with pytest.raises(SystemExit):
+        cmd_static(argparse.Namespace(version="9.9.9", checkout=tmp_path / "nope"))

@@ -55,11 +55,11 @@ def server(cmd: list[str], port: int) -> Generator[None]:
         yield
     finally:
         _killpg(proc, signal.SIGTERM)
-        try:
+        with suppress(subprocess.TimeoutExpired):
             proc.wait(10)
-        except subprocess.TimeoutExpired:
-            _killpg(proc, signal.SIGKILL)
-            proc.wait()
+        # The leader may have exited while a child ignored SIGTERM: always finish the group off.
+        _killpg(proc, signal.SIGKILL)
+        proc.wait()
 
 
 def _killpg(proc: subprocess.Popen, sig: int) -> None:
@@ -88,6 +88,7 @@ def run_file(version: str, checkout: Path, rel: str, out_dir: Path, server_cmd: 
         f"--timeout={TEST_TIMEOUT_S}",
     ]
     out_dir.mkdir(parents=True, exist_ok=True)
+    xml.unlink(missing_ok=True)  # a crash that writes nothing must not pick up the last run's results
     with server(server_cmd, port):
         try:
             subprocess.run(cmd, env=env, timeout=FILE_TIMEOUT_S, check=False)
