@@ -19,7 +19,7 @@
 //! bit set ([`ANONYMOUS_VERSION_BIT`]), so it never equals a registration's.
 
 use std::collections::HashMap;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::analyzer::{ArgType, Arity, CallTypes, FunctionEntry, Inputs};
@@ -56,17 +56,30 @@ pub struct PythonUdfLibrary {
     inner: RwLock<Inner>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Inner {
     udfs: HashMap<String, PythonUdfEntry>,
     /// The last version given to each name, kept after a replacement so a
-    /// version is never reused.
-    versions: HashMap<String, u32>,
+    /// version is never reused. Shared with the libraries copied from this
+    /// one ([`PythonUdfLibrary::copy`]): a clone shares its source's Python
+    /// runtime, which keys callables by `(name, version)`, so two sessions
+    /// must never give one name the same version.
+    versions: Arc<Mutex<HashMap<String, u32>>>,
     /// Bumped on every registration; part of the analysis fingerprint.
     epoch: u64,
 }
 
 impl PythonUdfLibrary {
+    /// A library holding this one's registrations; later registrations to
+    /// either do not reach the other, but both draw versions from one
+    /// allocator.
+    pub(crate) fn copy(&self) -> Self {
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        Self {
+            inner: RwLock::new(inner.clone()),
+        }
+    }
+
     /// An empty library.
     #[must_use]
     pub fn new() -> Self {
@@ -79,13 +92,15 @@ impl PythonUdfLibrary {
     pub fn register(&self, def: PythonUdfDef) -> PythonUdfEntry {
         let key = def.name.to_lowercase();
         let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
-        let version = inner
-            .versions
-            .get(&key)
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(1);
-        inner.versions.insert(key.clone(), version);
+        let version = {
+            let mut versions = inner
+                .versions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let version = versions.get(&key).copied().unwrap_or(0).saturating_add(1);
+            versions.insert(key.clone(), version);
+            version
+        };
         let entry = PythonUdfEntry { def, version };
         inner.udfs.insert(key, entry.clone());
         inner.epoch = inner.epoch.wrapping_add(1);
