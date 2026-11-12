@@ -1570,6 +1570,7 @@ fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() 
     for sql in [
         "SELECT from_json('{\"a\":\"canarysecret\",', 'a STRING', map('mode', 'FAILFAST'))",
         "SELECT parse_url('http://canarysecret host/x', 'HOST')",
+        "SELECT raise_error('canarysecret')",
     ] {
         assert!(run_all(&s, sql).is_err(), "{sql}");
     }
@@ -1577,7 +1578,7 @@ fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() 
         &s,
         "SELECT COALESCE(error_message, '') FROM system.queries WHERE error_class IS NOT NULL",
     );
-    assert!(messages.len() >= 2, "{messages:?}");
+    assert!(messages.len() >= 3, "{messages:?}");
     assert!(
         messages.iter().all(|m| !m.contains("canarysecret")),
         "{messages:?}"
@@ -1602,4 +1603,15 @@ fn a_dataframe_writer_never_creates_a_stored_table_through_a_temporary_name_unde
     assert!(block_on(async { s.table("src").write_to_table("tv").create().await }).is_err());
     run(&s, "USE spark_catalog").unwrap();
     assert!(run(&s, "DESCRIBE spark_catalog.default.tv").is_err());
+}
+
+#[test]
+fn show_columns_with_a_from_namespace_reaches_a_system_table() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "SHOW COLUMNS IN queries FROM system",
+        "SHOW COLUMNS IN system.queries FROM system",
+    ] {
+        assert!(!strings_in(&s, sql).is_empty(), "{sql}");
+    }
 }

@@ -155,6 +155,7 @@ pub(super) fn mask_quoted(message: &str) -> String {
 /// The error parameters that hold a raw input value, which the message prints unquoted.
 const VALUE_PARAMETERS: &[&str] = &[
     "badRecord",
+    "errorMessage",
     "bad_record",
     "url",
     "fieldValue",

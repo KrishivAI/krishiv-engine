@@ -525,9 +525,24 @@ impl Session {
                 table, namespace, ..
             } => {
                 let env = self.query_env();
-                if namespace.is_none()
-                    && let Some(t) = self.system_table_of(table, &env)?
-                {
+                let system_table = match namespace {
+                    None => self.system_table_of(table, &env)?,
+                    Some(ns) => {
+                        let from = self.namespace_name(ns, &env)?;
+                        let parts = crate::access::ddl_parts(table, &env)?;
+                        match parts.as_slice() {
+                            [t] | [_, t] if crate::system::is_system(&from) => Some(t.clone())
+                                .filter(|t| {
+                                    crate::system::is_system_table(&[
+                                        "system".to_owned(),
+                                        t.to_lowercase(),
+                                    ])
+                                }),
+                            _ => None,
+                        }
+                    }
+                };
+                if let Some(t) = system_table {
                     let analysis = DataFrame::new(
                         self.clone(),
                         Arc::new(krishiv_plan::LogicalPlan::table([
