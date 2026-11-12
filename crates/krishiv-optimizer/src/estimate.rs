@@ -372,7 +372,7 @@ impl<'a> Estimator<'a> {
                     let defs = cse_definitions(input);
                     filtered(&est, &resolve_cse(predicate, &defs), self.propagate)
                 } else {
-                    filtered(&est, predicate, self.propagate)
+                    filtered(&est, &same_renames(predicate, input), self.propagate)
                 }
             }
             PlanNode::Project { input, exprs } => {
@@ -935,4 +935,54 @@ fn unfiltered_distinct(ndv: f64, kept: f64, rows: f64) -> f64 {
         }
     }
     hi
+}
+
+/// `predicate` over the projection `input` with every output that renames
+/// an input column read as the first output renaming that column: over
+/// `Project [a AS c0, a AS c1]`, `c0 = c1` is `c0 = c0`, which keeps every
+/// non-NULL row (`narrow`), as `a = a` does below the projection once
+/// pushdown moves it there. Estimated as two columns, the conjunct join
+/// ordering derives for the equal pair made its input look one row large on
+/// the first optimization and a million on the next.
+pub(crate) fn same_renames(predicate: &Arc<Expr>, input: &LogicalPlan) -> Arc<Expr> {
+    // Filters keep their input's columns: the projection may sit below them.
+    let mut input = input;
+    while let PlanNode::Filter { input: below, .. } = &input.node {
+        input = below;
+    }
+    let PlanNode::Project { exprs, .. } = &input.node else {
+        return Arc::clone(predicate);
+    };
+    let mut first: HashMap<AttrId, BoundColumn> = HashMap::new();
+    let mut to: HashMap<AttrId, BoundColumn> = HashMap::new();
+    for e in exprs {
+        if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &e.node
+            && let ExprNode::Resolved(ResolvedExpr::Column(c)) = &expr.node
+        {
+            let canon = first.entry(c.id).or_insert_with(|| output.clone());
+            if canon.id != output.id {
+                to.insert(output.id, canon.clone());
+            }
+        }
+    }
+    if to.is_empty() {
+        return Arc::clone(predicate);
+    }
+    let out: Result<Arc<Expr>, std::convert::Infallible> =
+        Arc::clone(predicate).transform_up(&mut |n| {
+            Ok(match &n.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => match to.get(&c.id) {
+                    Some(canon) => Arc::new(
+                        Expr::new(ExprNode::Resolved(ResolvedExpr::Column(canon.clone())))
+                            .with_origin(n.origin),
+                    ),
+                    None => n,
+                },
+                _ => n,
+            })
+        });
+    match out {
+        Ok(p) => p,
+        Err(never) => match never {},
+    }
 }

@@ -262,6 +262,24 @@ fn selection(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
 /// one the filter pushdown does not cross (a nondeterministic expression, a
 /// common-subexpression output): a conjunct over it stays above, so it is
 /// estimated as written.
+/// The outputs of a projection `p` that rename an input column
+/// (`a AS c`), by output attribute: the input column's attribute.
+fn renamed_columns(p: &LogicalPlan) -> HashMap<AttrId, AttrId> {
+    let PlanNode::Project { exprs, .. } = &p.node else {
+        return HashMap::new();
+    };
+    exprs
+        .iter()
+        .filter_map(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => match &expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => Some((output.id, c.id)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 fn computed_outputs(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
     let PlanNode::Project { exprs, .. } = &p.node else {
         return HashMap::new();
@@ -828,6 +846,12 @@ impl Graph {
             preds.sort_by_cached_key(ToString::to_string);
         }
         for (i, preds) in local.iter().enumerate() {
+            // Read through the input's renames, as the estimate of a filter
+            // over it does (`estimate::same_renames`).
+            let preds: Vec<Arc<Expr>> = preds
+                .iter()
+                .map(|p| crate::estimate::same_renames(p, &sorted[i]))
+                .collect();
             for sel in
                 conjunct_selectivities(preds.iter().map(AsRef::as_ref), &ests[order[i]], narrow)
             {
@@ -891,26 +915,40 @@ impl Graph {
                     read_by.entry(id).or_default().push(k);
                 }
             }
+            // Columns of one input that rename the same input column count
+            // once: `Project [a AS c0, a AS c1]` carries `a`'s bytes once,
+            // and pruning one of the names later must not change the width
+            // (and with it a tie-break) when the plan is optimized again.
             order
                 .iter()
                 .map(|&i| {
-                    leaves[i]
-                        .resolved_output()
-                        .unwrap_or_default()
-                        .iter()
-                        .filter_map(|c| {
-                            let preds: Vec<usize> = read_by.get(&c.id).cloned().unwrap_or_default();
-                            let above = above.contains(&c.id);
-                            (above || !preds.is_empty()).then(|| ColumnUse {
+                    let sources = renamed_columns(&leaves[i]);
+                    let mut uses: Vec<(AttrId, ColumnUse)> = Vec::new();
+                    for c in leaves[i].resolved_output().unwrap_or_default().iter() {
+                        let preds: Vec<usize> = read_by.get(&c.id).cloned().unwrap_or_default();
+                        let above = above.contains(&c.id);
+                        if !above && preds.is_empty() {
+                            continue;
+                        }
+                        let source = sources.get(&c.id).copied().unwrap_or(c.id);
+                        if let Some((_, u)) = uses.iter_mut().find(|(s, _)| *s == source) {
+                            u.above |= above;
+                            u.preds.extend(preds);
+                            continue;
+                        }
+                        uses.push((
+                            source,
+                            ColumnUse {
                                 width: f64::from(
                                     u32::try_from(crate::plan_stats::default_size(&c.data_type))
                                         .unwrap_or(u32::MAX),
                                 ),
                                 above,
                                 preds,
-                            })
-                        })
-                        .collect()
+                            },
+                        ));
+                    }
+                    uses.into_iter().map(|(_, u)| u).collect()
                 })
                 .collect()
         });
