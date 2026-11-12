@@ -18,8 +18,8 @@ use super::throttle::FailureThrottle;
 use super::tokens::StaticTokens;
 use super::{AuthFailure, Authenticated, Authenticator, Credentials, Method, Surface};
 
-/// The longest bearer token hashed (design §3.3's JWT cap; static tokens are far shorter).
-const MAX_TOKEN_BYTES: usize = 16 * 1024;
+/// The longest bearer token hashed (design §3.3's JWT cap); configured secrets share the cap.
+const MAX_TOKEN_BYTES: usize = super::tokens::MAX_SECRET_BYTES;
 
 /// One failure counter (`krishiv_auth_failed_total{surface, method}`, ADR 0046 §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

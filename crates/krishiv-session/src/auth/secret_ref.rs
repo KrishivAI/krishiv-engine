@@ -75,11 +75,18 @@ impl SecretRef {
                 let unreadable = |e: std::io::Error| {
                     invalid(key, &shown, &format!("cannot be read: {}", e.kind()))
                 };
-                // One handle for the check and the read, so the file checked is the file read.
-                let mut file = std::fs::File::open(path).map_err(unreadable)?;
+                // The path is checked before it is opened, so a FIFO or device is refused
+                // instead of blocking startup in `open`; the handle is checked again, so the file
+                // checked is the file read.
+                check_private(key, &shown, &std::fs::metadata(path).map_err(unreadable)?)?;
+                let file = std::fs::File::open(path).map_err(unreadable)?;
                 check_private(key, &shown, &file.metadata().map_err(unreadable)?)?;
+                // One byte past the token cap is enough to refuse an oversized secret.
+                let cap = super::tokens::MAX_SECRET_BYTES as u64 + 2;
                 let mut text = String::new();
-                file.read_to_string(&mut text).map_err(unreadable)?;
+                file.take(cap)
+                    .read_to_string(&mut text)
+                    .map_err(unreadable)?;
                 if text.ends_with('\n') {
                     text.pop();
                     if text.ends_with('\r') {
