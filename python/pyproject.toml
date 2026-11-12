@@ -9,7 +9,6 @@ requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 dynamic = ["version"]
 classifiers = [
-    "Private :: Do Not Upload",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
