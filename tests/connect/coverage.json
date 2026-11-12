@@ -3,7 +3,7 @@
   {"oneof": "Relation.rel_type", "field": "project", "number": 3, "status": "partial", "refused": "a missing input", "target": "Project; missing input → OneRowRelation (exists now)", "task": "P3-T012", "group": 1},
   {"oneof": "Relation.rel_type", "field": "filter", "number": 4, "status": "done", "refused": "", "target": "Filter", "task": "P2-T091a", "group": 0},
   {"oneof": "Relation.rel_type", "field": "join", "number": 5, "status": "partial", "refused": "join_data_type (joinWith, typed)", "target": "Join; join_data_type is Scala joinWith only → unsupported row", "task": "P3-T012", "group": 1},
-  {"oneof": "Relation.rel_type", "field": "set_op", "number": 6, "status": "missing", "refused": "", "target": "SetOp / Union (by name, allow missing) / Distinct", "task": "P3-T012", "group": 1},
+  {"oneof": "Relation.rel_type", "field": "set_op", "number": 6, "status": "done", "refused": "", "target": "SetOp / Union (by name, allow missing) / Distinct", "task": "P3-T012", "group": 1},
   {"oneof": "Relation.rel_type", "field": "sort", "number": 7, "status": "done", "refused": "", "target": "Sort", "task": "P2-T091a", "group": 0},
   {"oneof": "Relation.rel_type", "field": "limit", "number": 8, "status": "done", "refused": "", "target": "Limit", "task": "P2-T091a", "group": 0},
   {"oneof": "Relation.rel_type", "field": "aggregate", "number": 9, "status": "partial", "refused": "GROUP_TYPE_PIVOT", "target": "Aggregate; pivot → Pivot (exists)", "task": "P3-T012", "group": 2},

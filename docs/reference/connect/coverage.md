@@ -5,7 +5,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-61 arms: 5 done, 7 partial, 45 missing, 4 out of scope.
+61 arms: 6 done, 7 partial, 44 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -13,7 +13,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 3 | project | partial | a missing input | Project; missing input → OneRowRelation (exists now) | P3-T012 | 1 |
 | 4 | filter | done |  | Filter | P2-T091a | 0 |
 | 5 | join | partial | join_data_type (joinWith, typed) | Join; join_data_type is Scala joinWith only → unsupported row | P3-T012 | 1 |
-| 6 | set_op | missing |  | SetOp / Union (by name, allow missing) / Distinct | P3-T012 | 1 |
+| 6 | set_op | done |  | SetOp / Union (by name, allow missing) / Distinct | P3-T012 | 1 |
 | 7 | sort | done |  | Sort | P2-T091a | 0 |
 | 8 | limit | done |  | Limit | P2-T091a | 0 |
 | 9 | aggregate | partial | GROUP_TYPE_PIVOT | Aggregate; pivot → Pivot (exists) | P3-T012 | 2 |

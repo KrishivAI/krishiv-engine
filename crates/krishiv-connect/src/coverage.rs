@@ -97,7 +97,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     Project => ("project", 3, Partial, "a missing input", "Project; missing input → OneRowRelation (exists now)", "P3-T012", 1),
     Filter => ("filter", 4, Done, "", "Filter", "P2-T091a", 0),
     Join => ("join", 5, Partial, "join_data_type (joinWith, typed)", "Join; join_data_type is Scala joinWith only → unsupported row", "P3-T012", 1),
-    SetOp => ("set_op", 6, Missing, "", "SetOp / Union (by name, allow missing) / Distinct", "P3-T012", 1),
+    SetOp => ("set_op", 6, Done, "", "SetOp / Union (by name, allow missing) / Distinct", "P3-T012", 1),
     Sort => ("sort", 7, Done, "", "Sort", "P2-T091a", 0),
     Limit => ("limit", 8, Done, "", "Limit", "P2-T091a", 0),
     Aggregate => ("aggregate", 9, Partial, "GROUP_TYPE_PIVOT", "Aggregate; pivot → Pivot (exists)", "P3-T012", 2),

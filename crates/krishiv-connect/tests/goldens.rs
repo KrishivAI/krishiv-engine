@@ -47,10 +47,6 @@ const UNSUPPORTED: &[(&str, ErrorClass)] = &[
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
     ),
     (
-        "union",
-        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
-    ),
-    (
         "user_defined_function_call",
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
     ),
