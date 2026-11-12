@@ -15,9 +15,9 @@
 //!   write to one fails with `KRISHIV_UNSUPPORTED_FEATURE` before anything is written.
 //! - Reading a partitioned table's rows (`catalog.rs` `known_partitions`, `krishiv_exec::files::KnownPartitions`):
 //!   its registered partitions at their default directories, values typed as declared (strings, integers and dates
-//!   so far). A table with a partition registered elsewhere, a directory the catalog does not know, or another
-//!   partition column type is `KRISHIV_UNSUPPORTED_FEATURE`, never read differently from Spark's
-//!   `CatalogFileIndex`.
+//!   so far). A directory the catalog does not know is not read, as Spark's `CatalogFileIndex` lists only the
+//!   registered partitions' locations. A table with a partition registered elsewhere, or another partition column
+//!   type, is `KRISHIV_UNSUPPORTED_FEATURE`, never read differently from Spark.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

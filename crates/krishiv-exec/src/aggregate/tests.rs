@@ -50,6 +50,8 @@ struct Opts {
     seed: Option<u64>,
     /// Collect a detailed profile's counters (`ExecConfig::detailed_metrics`).
     detailed: bool,
+    /// `krishiv.exec.agg.directKeys`.
+    direct: bool,
 }
 
 impl Default for Opts {
@@ -60,6 +62,7 @@ impl Default for Opts {
             both_layouts: true,
             seed: Some(7),
             detailed: false,
+            direct: true,
         }
     }
 }
@@ -130,6 +133,7 @@ async fn exec_with(
         seed: o.seed,
         agg_row_layout: rows,
         detailed_metrics: o.detailed,
+        agg_direct_keys: o.direct,
         ..ExecConfig::default()
     };
     let q = QueryContext::new(
@@ -912,6 +916,29 @@ async fn spill_matches_in_memory() {
         let policy = BypassPolicy::default();
         let (plan, _) = two_phase(scan(&s, b.clone()), &s, policy, Some(scope));
         assert_eq!(rows(&exec(plan, o).await.unwrap().0), expected);
+    }
+}
+
+/// `krishiv.exec.agg.directKeys` on and off give the same rows through the
+/// operator, in memory and spilling (five Int64 keys take the direct path).
+#[tokio::test]
+async fn direct_keys_on_and_off_give_the_same_rows() {
+    let (s, b) = grouped_input(60_000, 5);
+    for limit in [1 << 30, 2 << 20] {
+        let (_m, scope) = spill_dir();
+        let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+        sp.spill = Some(scope);
+        let run = |direct| {
+            let o = Opts {
+                limit,
+                direct,
+                ..Opts::default()
+            };
+            exec_with(node(scan(&s, b.clone()), sp.clone()), o, true)
+        };
+        let (on, off) = (run(true).await.unwrap().0, run(false).await.unwrap().0);
+        assert_eq!(rows(&on), rows(&off), "limit {limit}");
+        assert_eq!(rows(&on).len(), 5);
     }
 }
 

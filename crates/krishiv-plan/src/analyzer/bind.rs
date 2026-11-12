@@ -446,9 +446,28 @@ fn check_function(
             .first()
             .is_some_and(|a| matches!(a.node, crate::ExprNode::Literal(crate::Literal::String(_))))
     {
+        // Written with a qualifier, as Spark names it: `system.builtin.f` is looked up in the
+        // session catalog (a namespace of two parts), `builtin.f` is not found as written.
+        let mut written = f.qualifier.clone();
+        written.push(f.name.clone());
+        if f.qualifier.len() >= 2
+            && let Some((catalog, _)) = locate(ctx, &written)
+        {
+            return Err(AnalysisError::new(
+                RequiresSinglePartNamespace {
+                    session_catalog: catalog.name().to_owned(),
+                    identifier: quoted(&written),
+                },
+                origin,
+            ));
+        }
         return Err(AnalysisError::new(
             UnresolvedRoutine {
-                routine_name: quoted(&parts),
+                routine_name: quoted(if f.qualifier.is_empty() {
+                    &parts
+                } else {
+                    &written
+                }),
                 search_path: search_path(ctx),
             },
             origin,

@@ -2478,6 +2478,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "tempfile",
+ "thiserror",
  "tokio",
  "tracing",
  "tracing-opentelemetry",
