@@ -123,8 +123,8 @@ impl<M: Message + Default + Send + Scrub> Drop for Decoded<M> {
     }
 }
 
-/// The Spark Connect protocol version a client speaks. Fields a version does not define are
-/// refused for a client that declares it ([`FIELDS_SINCE_4_3`]).
+/// The Spark Connect protocol version a client speaks. A client declaring 4.2 or older is refused
+/// the fields 4.3 added ([`FIELDS_SINCE_4_3`]); the other version steps are not gated yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum ClientVersion {
     /// Spark 3.5.x.
@@ -141,12 +141,15 @@ pub enum ClientVersion {
 }
 
 impl ClientVersion {
-    /// The version in a request's `client_type` (`... spark/4.2.1`): the `spark/<major>.<minor>`
-    /// token. Versions past 4.3 map to 4.3. `None` when there is no such token, so the caller
+    /// The version in a request's `client_type` (`... spark/4.2.1`): the last whitespace-separated
+    /// token that starts with `spark/`, read as `<major>.<minor>`. Versions past 4.3 map to 4.3. `None` when there is no such token, so the caller
     /// can fall back to the fields present, then to the default profile.
     #[must_use]
     pub fn from_client_type(client_type: &str) -> Option<Self> {
-        let rest = client_type.split("spark/").nth(1)?;
+        let rest = client_type
+            .split_whitespace()
+            .rev()
+            .find_map(|t| t.strip_prefix("spark/"))?;
         let mut parts = rest.split(['.', ' ', '-']);
         let major: u32 = parts.next()?.parse().ok()?;
         let minor: u32 = parts.next()?.parse().ok()?;
@@ -160,20 +163,30 @@ impl ClientVersion {
     }
 }
 
-/// Fields the 4.3 protos added to messages that exist in 4.2 (message name, field number): a
-/// client declaring 4.2 or older that sends one gets
-/// `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` (SQLSTATE 56K00), as Spark does for
-/// a oneof arm it does not define. `Relation.zip`, the nanosecond timestamp literals and types,
-/// and the SCD2 track-history lists. The manifest check pins the 4.2.1 -> 4.3 delta to exactly
-/// these.
-const FIELDS_SINCE_4_3: &[(&str, u32)] = &[
-    ("Relation", 48),
-    ("Expression.Literal", 29),
-    ("Expression.Literal", 30),
-    ("DataType", 29),
-    ("DataType", 30),
-    ("PipelineCommand.DefineFlow.AutoCdcFlowDetails", 11),
-    ("PipelineCommand.DefineFlow.AutoCdcFlowDetails", 12),
+/// Fields the 4.3 protos added to messages that exist in 4.2 (message name, field number, the
+/// field's name upper-cased, as Spark prints a oneof arm): a client declaring 4.2 or older that
+/// sends one gets `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` (SQLSTATE 56K00).
+/// `Relation.zip`, the nanosecond timestamp literals and types, and the SCD2 track-history lists;
+/// the manifest check pins the 4.2.1 -> 4.3 delta to exactly these. The `SCD_TYPE_2` enum value is
+/// not detectable by this walk; it only appears inside `pipeline_command`, which translation
+/// refuses whole. Only 4.3 additions are gated so far: a per-field first-version table for the
+/// 3.5 -> 4.2 steps (and the 3.5 against 4.0 additivity diff) is still to do.
+const FIELDS_SINCE_4_3: &[(&str, u32, &str)] = &[
+    ("Relation", 48, "ZIP"),
+    ("Expression.Literal", 29, "TIMESTAMP_NTZ_NANOS"),
+    ("Expression.Literal", 30, "TIMESTAMP_LTZ_NANOS"),
+    ("DataType", 29, "TIMESTAMP_NTZ_NANOS"),
+    ("DataType", 30, "TIMESTAMP_LTZ_NANOS"),
+    (
+        "PipelineCommand.DefineFlow.AutoCdcFlowDetails",
+        11,
+        "TRACK_HISTORY_COLUMN_LIST",
+    ),
+    (
+        "PipelineCommand.DefineFlow.AutoCdcFlowDetails",
+        12,
+        "TRACK_HISTORY_EXCEPT_COLUMN_LIST",
+    ),
 ];
 
 /// Decodes a [`Plan`].
@@ -315,7 +328,14 @@ impl From<Reject> for KrishivError {
                     .map_or("?", |m| m.name);
                 ConnectInvalidPlanInvalidOneOfFieldNotSupported {
                     full_name: format!("spark.connect.{name}"),
-                    name: format!("field {number}"),
+                    name: FIELDS_SINCE_4_3
+                        .iter()
+                        .find(|&&(n, num, _)| {
+                            num == number
+                                && Some(n)
+                                    == layout::MESSAGES.get(usize::from(message)).map(|m| m.name)
+                        })
+                        .map_or_else(|| format!("field {number}"), |&(_, _, f)| f.to_owned()),
                     number: number.to_string(),
                 }
                 .into()
@@ -513,7 +533,7 @@ fn is_newer_than_declared(table: &[Layout], message: u16, number: u32) -> bool {
     table.get(usize::from(message)).is_some_and(|m| {
         FIELDS_SINCE_4_3
             .iter()
-            .any(|&(name, n)| n == number && name == m.name)
+            .any(|&(name, n, _)| n == number && name == m.name)
     })
 }
 
