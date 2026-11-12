@@ -57,7 +57,19 @@ pub async fn authorize(
             Ok(AccessDecision::AllowWith(_)) | Err(_) => return Err(denied()),
         }
     }
-    match policy.check(principal, securable, privilege).await {
+    let decision = match policy.check(principal, securable, privilege).await {
+        // `Select` implies `Browse` (ADR 0046 §4): a provider that knows only `Select` keeps
+        // answering metadata commands as it did before `Browse` existed.
+        Ok(AccessDecision::Allow) => Ok(AccessDecision::Allow),
+        Ok(_) | Err(_) if privilege == Privilege::Browse => {
+            match policy.check(principal, securable, Privilege::Select).await {
+                Ok(AccessDecision::Allow) => Ok(AccessDecision::Allow),
+                _ => return Err(denied()),
+            }
+        }
+        other => other,
+    };
+    match decision {
         Ok(AccessDecision::Allow) => Ok(()),
         Ok(AccessDecision::AllowWith(_)) if privilege == Privilege::Select => {
             Err(KrishivUnsupportedFeature {

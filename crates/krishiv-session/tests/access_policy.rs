@@ -473,7 +473,7 @@ fn names_are_checked_as_written_and_folded() {
     );
     assert_eq!(
         asked("SHOW TABLES"),
-        ["SELECT namespace `spark_catalog`.`default`"]
+        ["BROWSE namespace `spark_catalog`.`default`"]
     );
     assert_eq!(
         asked("CREATE GLOBAL TEMPORARY VIEW g AS SELECT 1"),
@@ -487,7 +487,7 @@ fn names_are_checked_as_written_and_folded() {
         asked("REFRESH TABLE t"),
         [
             "SELECT table `spark_catalog`.`default`.`t`",
-            "MONITOR system `cluster`"
+            "MANAGE system `cluster`"
         ]
     );
     assert_eq!(asked("SET a = b"), Vec::<String>::new());
@@ -1164,8 +1164,10 @@ fn a_stored_function_cannot_read_a_temporary_table() {
 static DENY_VIEWS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn deny_view_selects(securable: &Securable, p: Privilege) -> AccessDecision {
+    // Metadata of a view needs `Browse` on it, its data and statistics `Select` (ADR 0046 §4):
+    // denying both hides it from every statement below.
     if DENY_VIEWS.load(std::sync::atomic::Ordering::SeqCst)
-        && p == Privilege::Select
+        && matches!(p, Privilege::Select | Privilege::Browse)
         && matches!(securable, Securable::View(_))
     {
         deny()

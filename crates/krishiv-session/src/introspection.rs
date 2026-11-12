@@ -10,6 +10,7 @@ use krishiv_common::error::{
     ExpectPermanentViewNotTemp, KrishivError, KrishivUnsupportedFeature, SchemaNotFound,
     ShowColumnsWithConflictNamespace, UnresolvedColumnWithSuggestion,
 };
+use krishiv_plan::analyzer::Privilege;
 use krishiv_sql::ast::{
     DdlName, Describe, DescribeKind, PartitionSpec, Show, ShowKind, ShowPattern,
 };
@@ -605,7 +606,7 @@ impl Session {
                 }
                 let table = self.stored_relation(&name)?;
                 if table.view.is_some() {
-                    self.authorize_view_select(&name.namespace, &name.name, &env)
+                    self.authorize_view(&name.namespace, &name.name, Privilege::Browse, &env)
                         .await?;
                 }
                 let rows = match key {
@@ -647,7 +648,7 @@ impl Session {
                     return Err(unsupported("SHOW CREATE TABLE ... AS SERDE on a table"));
                 }
                 if table.view.is_some() {
-                    self.authorize_view_select(&name.namespace, &name.name, &env)
+                    self.authorize_view(&name.namespace, &name.name, Privilege::Browse, &env)
                         .await?;
                 }
                 self.ordered_frame(
@@ -746,7 +747,7 @@ impl Session {
             }
             if t.view.is_some() {
                 // The information holds the view's text, as SHOW CREATE TABLE does.
-                self.authorize_view_select(&ns, &t.name, &self.query_env())
+                self.authorize_view(&ns, &t.name, Privilege::Select, &self.query_env())
                     .await?;
             }
             let mut entries = self.table_information(&t);
@@ -910,7 +911,7 @@ impl Session {
         }
         let table = self.stored_relation(name)?;
         if table.view.is_some() {
-            self.authorize_view_select(&name.namespace, &name.name, &env)
+            self.authorize_view(&name.namespace, &name.name, Privilege::Browse, &env)
                 .await?;
         }
         Ok(table

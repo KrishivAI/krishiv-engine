@@ -580,3 +580,81 @@ fn failure_logs_never_contain_the_token() {
         assert!(!logged.contains(secret), "{logged}");
     }
 }
+
+mod roles {
+    use krishiv_plan::analyzer::{PolicyVersion, Privilege, Securable, TableIdent};
+
+    use super::super::{Role, RolePolicy};
+
+    fn table(catalog: &str) -> Securable {
+        Securable::Table(TableIdent {
+            catalog: catalog.to_owned(),
+            namespace: vec!["default".to_owned()],
+            name: "t".to_owned(),
+        })
+    }
+
+    fn sys(name: &str) -> Securable {
+        Securable::System(name.to_owned())
+    }
+
+    #[test]
+    fn required_roles_follow_adr_0046() {
+        let p = RolePolicy::new(Some(Role::Viewer), Role::Admin, PolicyVersion(1));
+        let cases = [
+            (
+                table("spark_catalog"),
+                Privilege::Browse,
+                Some(Role::Viewer),
+            ),
+            (
+                table("spark_catalog"),
+                Privilege::Select,
+                Some(Role::Operator),
+            ),
+            (table("system"), Privilege::Select, Some(Role::Viewer)),
+            (sys("udf"), Privilege::Usage, Some(Role::Admin)),
+            (
+                Securable::Secret {
+                    scope: "s".to_owned(),
+                },
+                Privilege::Usage,
+                Some(Role::Operator),
+            ),
+            (sys("metrics"), Privilege::Monitor, Some(Role::Viewer)),
+            (sys("system"), Privilege::Monitor, Some(Role::Operator)),
+            (sys("queries"), Privilege::Operate, Some(Role::Operator)),
+            (sys("sessions"), Privilege::Operate, Some(Role::Operator)),
+            (table("spark_catalog"), Privilege::Modify, Some(Role::Admin)),
+            (table("spark_catalog"), Privilege::Create, Some(Role::Admin)),
+            (table("spark_catalog"), Privilege::Drop, Some(Role::Admin)),
+            (sys("cluster"), Privilege::Manage, Some(Role::Admin)),
+            (sys("principals"), Privilege::Impersonate, None),
+        ];
+        for (securable, privilege, need) in cases {
+            assert_eq!(
+                p.required(&securable, privilege),
+                need,
+                "{privilege} on {securable}"
+            );
+        }
+    }
+
+    #[test]
+    fn udf_min_role_lowers_client_code_only() {
+        let p = RolePolicy::new(Some(Role::Operator), Role::Operator, PolicyVersion(1));
+        assert!(p.allows(&sys("udf"), Privilege::Usage));
+        let strict = RolePolicy::new(Some(Role::Operator), Role::Admin, PolicyVersion(1));
+        assert!(!strict.allows(&sys("udf"), Privilege::Usage));
+        assert!(!p.allows(&sys("cluster"), Privilege::Manage));
+    }
+
+    #[test]
+    fn admin_never_impersonates_and_no_role_holds_nothing() {
+        let admin = RolePolicy::new(Some(Role::Admin), Role::Admin, PolicyVersion(1));
+        assert!(!admin.allows(&sys("principals"), Privilege::Impersonate));
+        let none = RolePolicy::new(None, Role::Admin, PolicyVersion(1));
+        assert!(!none.allows(&table("spark_catalog"), Privilege::Browse));
+        assert_eq!(none.role(), None);
+    }
+}

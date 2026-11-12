@@ -174,7 +174,7 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
 impl Session {
     /// Checks what `statement` (of `class`) writes, creates or drops, and
     /// what it reads without a query, before it runs; an `ADMIN` statement
-    /// needs `Monitor` on the cluster. Names are located as analysis locates
+    /// needs `Manage` on the cluster (ADR 0046 §4). Names are located as analysis locates
     /// them and asked about as written and, unless analysis is
     /// case-sensitive, folded; paths in their qualified form.
     pub(crate) async fn authorize_statement(
@@ -188,12 +188,16 @@ impl Session {
             return Err(e);
         }
         let mut targets = statement_targets(statement);
+        // Every cluster-scope statement needs `Manage` on the cluster (ADR 0046 §4), whatever
+        // else it names.
         if class == StatementClass::Admin
-            && !targets.iter().any(|t| t.object == TargetObject::Cluster)
+            && !targets
+                .iter()
+                .any(|t| t.object == TargetObject::Cluster && t.privilege == Privilege::Manage)
         {
             targets.push(Target {
                 object: TargetObject::Cluster,
-                privilege: Privilege::Monitor,
+                privilege: Privilege::Manage,
             });
         }
         let mut checked: Vec<(Securable, Privilege)> = Vec::new();
@@ -284,13 +288,14 @@ impl Session {
         Ok(views)
     }
 
-    /// `SELECT` on the permanent view `namespace.name`: the statements that
-    /// show a view's definition, columns or properties need it as a query of
-    /// the view does, besides the table-named check made before dispatch.
-    pub(crate) async fn authorize_view_select(
+    /// `privilege` on the permanent view `namespace.name`, besides the table-named check made
+    /// before dispatch: the statements that show a view's definition, columns or properties
+    /// need `Browse` on it (ADR 0046 §4), `SHOW TABLE EXTENDED` `Select`.
+    pub(crate) async fn authorize_view(
         &self,
         namespace: &str,
         name: &str,
+        privilege: Privilege,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
         let parts = [
@@ -304,7 +309,7 @@ impl Session {
             &*self.state.policy,
             &self.state.principal,
             &Securable::View(ident),
-            Privilege::Select,
+            privilege,
         )
         .await;
         audit(self, StatementClass::Read, r)
