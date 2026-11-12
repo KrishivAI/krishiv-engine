@@ -62,4 +62,20 @@ pub(super) fn leave_out(tables: &mut BTreeMap<String, (String, Arc<TempTable>)>)
         }
     }
     tables.retain(|key, _| !key.starts_with(SCRIPT_RESULT_PREFIX) || live.contains(key));
+    // A kept result gets a handle of the copy's own (the batches stay shared): `retain` counts
+    // handles, so a handle shared with the source would keep the entry in both catalogs after each
+    // drops the view that pins it.
+    for (key, (_, table)) in tables.iter_mut() {
+        if key.starts_with(SCRIPT_RESULT_PREFIX)
+            && let TempTable::Memory {
+                columns,
+                table: data,
+            } = &**table
+        {
+            *table = Arc::new(TempTable::Memory {
+                columns: columns.clone(),
+                table: Arc::clone(data),
+            });
+        }
+    }
 }

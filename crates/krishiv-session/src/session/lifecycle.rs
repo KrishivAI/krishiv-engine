@@ -187,7 +187,7 @@ impl Session {
     /// functions, variables) is copied consistently on its own, but a
     /// concurrent DDL statement may land in some pieces and not others.
     /// Callers that need one snapshot serialise the session's statements
-    /// around the call (the Connect server runs a session's RPCs in order).
+    /// around the call (the Connect server's `CloneSession` must do so).
     ///
     /// ```
     /// let s = krishiv_session::Session::new()?;

@@ -968,6 +968,33 @@ fn a_copied_catalog_leaves_out_script_results() {
     assert_eq!(c.state.catalog.entry_count(), base + 1);
 }
 
+/// A script result a copied view pins is kept, under a handle of the
+/// clone's own: once each session drops its view, each collects its entry
+/// (a shared handle would keep both alive while the other session lives).
+#[test]
+fn a_pinned_script_result_is_collected_in_each_session_after_its_view_goes() {
+    let s = int_session(vec![1]);
+    let base = s.state.catalog.entry_count();
+    let df = block_on(s.sql("BEGIN SELECT id FROM range(5); END")).unwrap();
+    block_on(df.create_or_replace_temp_view("pinned_v")).unwrap();
+    drop(df);
+    // The view and the result it pins.
+    assert_eq!(s.state.catalog.entry_count(), base + 2);
+    let c = s.clone_session().unwrap();
+    assert_eq!(c.state.catalog.entry_count(), base + 2);
+    let rows: usize = block_on(block_on(c.sql("SELECT * FROM pinned_v")).unwrap().collect())
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 5);
+    for session in [&s, &c] {
+        block_on(session.sql("DROP VIEW pinned_v")).unwrap();
+        block_on(session.sql("CREATE TEMP VIEW gc_v AS SELECT 1 AS a")).unwrap();
+        assert_eq!(session.state.catalog.entry_count(), base + 1);
+    }
+}
+
 /// A clone shares the relation store its copied memory tables' leases live
 /// in: the batch splits of a copied table resolve through the clone's
 /// store, and its tasks read the table.
