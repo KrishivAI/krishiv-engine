@@ -339,3 +339,139 @@ fn region_zone_names_use_historical_and_out_of_range_daylight_time() {
         "Central Africa Time"
     );
 }
+
+#[test]
+fn every_field_prints_its_value_at_the_edges() {
+    // (micros, expected `D Q F` / `H k K h a` / `MMM MMMM EEE EEEE` / `u yyyy`)
+    let cases: [(i64, &str, &str, &str); 5] = [
+        // 2020-03-05 13:07:09.123456, a Thursday.
+        (
+            1_583_413_629_123_456,
+            "65 1 1 | 13 13 1 1 PM 7 9 | Mar March Thu Thursday",
+            "|",
+            "2020",
+        ),
+        // 2021-11-30 00:07:09, a Tuesday.
+        (
+            1_638_230_829_000_000,
+            "334 4 5 | 0 24 0 12 AM 7 9 | Nov November Tue Tuesday",
+            "|",
+            "2021",
+        ),
+        // 2021-12-31 12:00:00, a Friday.
+        (
+            1_640_952_000_000_000,
+            "365 4 5 | 12 12 0 12 PM 0 0 | Dec December Fri Friday",
+            "|",
+            "2021",
+        ),
+        // 2021-12-31 23:59:59.
+        (
+            1_640_995_199_000_000,
+            "365 4 5 | 23 23 11 11 PM 59 59 | Dec December Fri Friday",
+            "|",
+            "2021",
+        ),
+        // 2020-01-05 00:00:00, a Sunday.
+        (
+            1_578_182_400_000_000,
+            "5 1 1 | 0 24 0 12 AM 0 0 | Jan January Sun Sunday",
+            "|",
+            "2020",
+        ),
+    ];
+    for (micros, want, _, year) in cases {
+        let got = fmt(
+            "D Q F | H k K h a m s | MMM MMMM EEE EEEE",
+            micros,
+            "UTC",
+            0,
+        );
+        assert_eq!(got, want, "{micros}");
+        assert_eq!(fmt("yyyy", micros, "UTC", 0), year);
+    }
+    // Quarter and day names in full, the day of year padded.
+    assert_eq!(
+        fmt("QQQ QQQQ DDD", 1_638_230_829_000_000, "UTC", 0),
+        "Q4 4th quarter 334"
+    );
+    assert_eq!(fmt("DDD", 1_578_182_400_000_000, "UTC", 0), "005");
+    // The year of era counts back from 1 BC (year 0 is 1 BC, year -1 is 2 BC).
+    let y0 = -62_167_219_200_000_000; // 0000-01-01 00:00:00 -> year 0
+    assert_eq!(fmt("G yyyy", y0, "UTC", 0), "BC 0001");
+    assert_eq!(
+        fmt("GGGG yyyy", y0 - 365 * 86_400_000_000, "UTC", 0),
+        "Before Christ 0002"
+    );
+    assert_eq!(fmt("G yyyy", 0, "UTC", 0), "AD 1970");
+}
+
+#[test]
+fn offsets_print_only_the_parts_the_style_asks_for() {
+    assert_eq!(fmt("X", 0, "+05:00", 18_000), "+05");
+    assert_eq!(fmt("X", 0, "+05:30", 19_800), "+0530");
+    assert_eq!(fmt("XX", 0, "+05:00", 18_000), "+0500");
+    assert_eq!(fmt("XXX", 0, "+05:30", 19_800), "+05:30");
+    assert_eq!(fmt("XXXX", 0, "+05:30", 19_800), "+0530");
+    assert_eq!(fmt("XXXX", 0, "+05:30:15", 19_815), "+053015");
+    assert_eq!(fmt("XXXXX", 0, "+05:30", 19_800), "+05:30");
+    assert_eq!(fmt("XXXXX", 0, "-05:30:15", -19_815), "-05:30:15");
+    assert_eq!(fmt("xxx", 0, "+00:00", 0), "+00:00");
+    assert_eq!(fmt("XXX", 0, "Z", 0), "Z");
+    assert_eq!(fmt("ZZZZZ", 0, "+05:30", 19_800), "+05:30");
+}
+
+#[test]
+fn utc_and_gmt_zone_names() {
+    for id in ["UTC", "Etc/UTC"] {
+        assert_eq!(fmt("z", 0, id, 0), "UTC");
+        assert_eq!(fmt("zzzz", 0, id, 0), "Coordinated Universal Time");
+    }
+    assert_eq!(fmt("z", 0, "Etc/GMT", 0), "GMT");
+    assert_eq!(fmt("z", 0, "+05:30", 19_800), "+05:30");
+    assert_eq!(fmt("z", 0, "-08:00", -28_800), "-08:00");
+    assert_eq!(
+        fmt("z", 1_705_320_000_000_000, "Europe/Berlin", 3600),
+        "CET"
+    );
+}
+
+#[test]
+fn aligned_week_of_month_and_quarter_change_on_the_right_day_and_month() {
+    let day = |d: i64| 1_577_836_800_000_000 + (d - 1) * 86_400_000_000; // 2020-01-d
+    for (d, want) in [
+        (1, 1),
+        (6, 1),
+        (7, 1),
+        (8, 2),
+        (14, 2),
+        (15, 3),
+        (28, 4),
+        (29, 5),
+    ] {
+        assert_eq!(fmt("F", day(d), "UTC", 0), want.to_string(), "day {d}");
+    }
+    // Quarters change after March, June and September.
+    let first_of = |m: i64| {
+        let days = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+            [usize::try_from(m - 1).unwrap()];
+        1_577_836_800_000_000 + days * 86_400_000_000
+    };
+    for m in 1..=12 {
+        assert_eq!(
+            fmt("Q", first_of(m), "UTC", 0),
+            ((m - 1) / 3 + 1).to_string(),
+            "month {m}"
+        );
+    }
+}
+
+#[test]
+fn localized_offsets_print_minutes_and_seconds_only_when_set() {
+    assert_eq!(fmt("O", 0, "+05:30", 19_800), "GMT+5:30");
+    assert_eq!(fmt("O", 0, "+05:00", 18_000), "GMT+5");
+    assert_eq!(fmt("O", 0, "+00:00:15", 15), "GMT+0:00:15");
+    assert_eq!(fmt("OOOO", 0, "+05:30", 19_800), "GMT+05:30");
+    assert_eq!(fmt("OOOO", 0, "-08:00", -28_800), "GMT-08:00");
+    assert_eq!(fmt("OOOO", 0, "Z", 0), "GMT");
+}
