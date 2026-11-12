@@ -13,7 +13,7 @@ rows = {}
 for page in sorted(root.glob("*.md")):
     if page.name == "index.md":
         continue
-    text = page.read_text()
+    text = page.read_text(encoding="utf-8")
     m = re.search(r"^\| Krishiv \| (.+?) \|$", text, re.M)
     if not m:
         continue
@@ -30,7 +30,7 @@ for page in sorted(root.glob("*.md")):
     rows[(title.group(1) if title else page.stem).lower()] = status
 data = json.dumps(dict(sorted(rows.items())), indent=1) + "\n"
 if "--check" in sys.argv:
-    sys.exit(0 if out.exists() and out.read_text() == data else 1)
+    sys.exit(0 if out.exists() and out.read_text(encoding="utf-8") == data else 1)
 out.parent.mkdir(parents=True, exist_ok=True)
-out.write_text(data)
+out.write_text(data, encoding="utf-8")
 print(len(rows), "functions")

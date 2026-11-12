@@ -456,6 +456,9 @@ struct Literal {
     text: String,
     /// The name before the `(` the literal sits in (`expr` in `e("..")`), if any.
     callee: Option<String>,
+    /// First name of the call's dotted path (`duckdb` in `duckdb.sql(..)`; the callee
+    /// itself for a bare call).
+    root: Option<String>,
     /// The character before the literal (`(` when it is the first argument).
     prev: Option<char>,
     /// Whether the text itself starts like a SQL statement.
@@ -539,7 +542,7 @@ fn lex_python(text: &str) -> (String, Vec<Literal>) {
     let b: Vec<char> = text.chars().collect();
     let mut code = String::new();
     let mut literals = Vec::new();
-    let mut stack: Vec<String> = Vec::new();
+    let mut stack: Vec<(String, String)> = Vec::new();
     let (mut i, mut line) = (0, 0);
     while i < b.len() {
         match b[i] {
@@ -554,16 +557,18 @@ fn lex_python(text: &str) -> (String, Vec<Literal>) {
                 }
             }
             '(' => {
-                let ident: String = code
+                let chain: String = code
                     .chars()
                     .rev()
                     .skip_while(|c| *c == ' ' || *c == '\t')
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
                     .collect::<Vec<_>>()
                     .into_iter()
                     .rev()
                     .collect();
-                stack.push(ident);
+                let ident = chain.rsplit('.').next().unwrap_or_default().to_string();
+                let root = chain.split('.').next().unwrap_or_default().to_string();
+                stack.push((ident, root));
                 code.push('(');
                 i += 1;
             }
@@ -634,7 +639,8 @@ fn lex_python(text: &str) -> (String, Vec<Literal>) {
                 literals.push(Literal {
                     line: start_line,
                     text: s,
-                    callee: stack.last().cloned(),
+                    callee: stack.last().map(|(c, _)| c.clone()),
+                    root: stack.last().map(|(_, r)| r.clone()),
                     prev,
                     statement,
                 });
@@ -657,6 +663,10 @@ pub(crate) struct Imports {
     direct: BTreeMap<String, String>,
     /// Whether the code imports `pyspark`, so its SQL strings are Spark SQL.
     pyspark: bool,
+    /// Local names bound to something other than PySpark: imported modules and names,
+    /// and variables assigned from them (`con = duckdb.connect()`). SQL called on one of
+    /// these is not Spark SQL.
+    foreign: BTreeSet<String>,
 }
 
 /// Splits an import list (`a, b as c, (d)`) into (name, local) pairs.
@@ -701,16 +711,34 @@ impl Imports {
             if is_import && stmt.contains("pyspark") {
                 self.pyspark = true;
             }
+            if !is_import {
+                self.note_foreign_assignment(t);
+            }
             if let Some(rest) = stmt.strip_prefix("import ") {
                 for (name, local) in import_items(rest) {
                     if FN_MODS.contains(&name.as_str()) {
                         self.modules.insert(local);
+                    } else if !name.starts_with("pyspark") {
+                        // `import a.b` binds `a`; `import a.b as c` binds `c`.
+                        let bound = if local == name {
+                            name.split('.').next().unwrap_or(&name).to_string()
+                        } else {
+                            local
+                        };
+                        self.foreign.insert(bound);
                     }
                 }
             } else if let Some(rest) = stmt.strip_prefix("from ")
                 && let Some((module, list)) = rest.split_once(" import ")
             {
                 let module = module.trim();
+                if !module.starts_with("pyspark") && !module.starts_with('.') {
+                    for (name, local) in import_items(list) {
+                        if name != "*" {
+                            self.foreign.insert(local);
+                        }
+                    }
+                }
                 if SQL_MODS.contains(&module) {
                     for (name, local) in import_items(list) {
                         if name == "functions" {
@@ -728,6 +756,26 @@ impl Imports {
             n += 1;
         }
         import_lines
+    }
+}
+
+impl Imports {
+    /// `con = duckdb.connect(..)` where `duckdb` is a foreign name: `con` is foreign too.
+    fn note_foreign_assignment(&mut self, line: &str) {
+        let Some((lhs, rhs)) = line.split_once('=') else {
+            return;
+        };
+        let (lhs, rhs) = (lhs.trim(), rhs.trim_start());
+        if lhs.is_empty() || !lhs.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return;
+        }
+        let root: String = rhs
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if self.foreign.contains(&root) {
+            self.foreign.insert(lhs.to_string());
+        }
     }
 }
 
@@ -815,6 +863,10 @@ pub(crate) fn scan_python_with(
             .any(|w| matches!(w, "spark" | "SparkSession" | "sqlContext"));
     // An aliased import (`expr as e`) is judged by what it is imported as.
     let is_sql = |l: &Literal| {
+        // SQL called on a name bound to something other than PySpark is not ours.
+        if l.root.as_ref().is_some_and(|r| imports.foreign.contains(r)) {
+            return false;
+        }
         l.statement
             || l.callee.as_deref().is_some_and(|c| {
                 sql_signal(imports.direct.get(c).map_or(c, String::as_str), l.prev)
@@ -822,6 +874,25 @@ pub(crate) fn scan_python_with(
     };
     for lit in literals.iter().filter(|l| spark_code && is_sql(l)) {
         out.extend(scan_sql(file, &lit.text, first_line + lit.line));
+    }
+    // `F.call_function("name", ..)` calls the SQL function named by its first argument
+    // (pyspark.sql.functions.call_function in Spark 4.2).
+    for lit in literals.iter().filter(|l| {
+        l.prev == Some('(')
+            && l.callee.as_deref().is_some_and(|c| {
+                imports
+                    .direct
+                    .get(c)
+                    .map_or(c, String::as_str)
+                    .eq_ignore_ascii_case("call_function")
+            })
+            && !l.root.as_ref().is_some_and(|r| imports.foreign.contains(r))
+    }) {
+        let name = lit.text.trim().to_ascii_lowercase();
+        // Only an unqualified name: `catalog.db.f` is a user function.
+        if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            out.extend(judge(file, first_line + lit.line, &name));
+        }
     }
     out.sort_by(|a, b| (a.line, &a.name).cmp(&(b.line, &b.name)));
     dedup(&mut out);
@@ -1266,5 +1337,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn call_function_names_the_function_in_its_first_argument() {
+        let src = "import pyspark.sql.functions as F\ndf.select(F.call_function(\"xpath_float\", F.col(\"x\")))\n";
+        assert_eq!(
+            names(&scan_python("a.py", src, 1)),
+            [("xpath_float", "not yet")]
+        );
+        let ok = "import pyspark.sql.functions as F\ndf.select(F.call_function(\"abs\", F.col(\"x\")), F.call_function(\"cat.db.f\"))\n";
+        assert!(scan_python("a.py", ok, 1).is_empty());
+    }
+
+    #[test]
+    fn sql_on_a_non_spark_receiver_is_not_spark_sql() {
+        let src = "import pyspark\nimport duckdb\nimport duckdb as dd\nfrom duckdb import sql\ncon = duckdb.connect()\n\
+                   duckdb.sql(\"SELECT xpath_float(x) FROM t\")\ndd.sql(\"SELECT xpath_float(x) FROM t\")\n\
+                   sql(\"SELECT xpath_float(x) FROM t\")\ncon.sql(\"SELECT xpath_float(x) FROM t\")\n";
+        assert!(
+            scan_python("a.py", src, 1).is_empty(),
+            "{:?}",
+            scan_python("a.py", src, 1)
+        );
+        let spark = "import pyspark\nimport duckdb\nspark.sql(\"SELECT xpath_float(x) FROM t\")\n";
+        assert_eq!(
+            names(&scan_python("a.py", spark, 1)),
+            [("xpath_float", "not yet")]
+        );
     }
 }

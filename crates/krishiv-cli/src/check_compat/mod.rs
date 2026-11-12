@@ -166,13 +166,12 @@ pub(crate) fn run(args: &CheckArgs) -> i32 {
     for (path, e) in &errors {
         let _ = writeln!(std::io::stderr(), "check-compat: {path}: {e}");
     }
-    let mut out = std::io::stdout().lock();
-    match args.format {
-        ReportFormat::Text => {
-            for f in &findings {
-                let _ = writeln!(out, "{}", f.text());
-            }
-        }
+    let report = match args.format {
+        ReportFormat::Text => findings.iter().fold(String::new(), |mut acc, f| {
+            acc.push_str(&f.text());
+            acc.push('\n');
+            acc
+        }),
         ReportFormat::Json => {
             let report = serde_json::json!({
                 "schema_version": SCHEMA_VERSION,
@@ -183,8 +182,17 @@ pub(crate) fn run(args: &CheckArgs) -> i32 {
                     .map(|(p, m)| serde_json::json!({"path": p, "message": m}))
                     .collect::<Vec<_>>(),
             });
-            let _ = writeln!(out, "{report}");
+            format!("{report}\n")
         }
+    };
+    // A report that did not get written is a failure, never a clean run.
+    let mut out = std::io::stdout().lock();
+    if let Err(e) = out.write_all(report.as_bytes()).and_then(|()| out.flush()) {
+        let _ = writeln!(
+            std::io::stderr(),
+            "check-compat: cannot write the report: {e}"
+        );
+        return 2;
     }
     if errors.is_empty() {
         i32::from(!findings.is_empty())

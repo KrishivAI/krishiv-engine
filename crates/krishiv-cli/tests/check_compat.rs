@@ -95,6 +95,13 @@ fn check_part(part: &str) {
     let want = keys(&want);
     score(&format!("{part} sql"), &got, &want, is_sql);
     score(&format!("{part} python"), &got, &want, |k| !is_sql(k));
+    // The expected files are complete (planted or hand-checked), so any miss or extra fails.
+    let missed: Vec<_> = want.difference(&got).collect();
+    let extra: Vec<_> = got.difference(&want).collect();
+    assert!(
+        missed.is_empty() && extra.is_empty(),
+        "{part}: missed {missed:?}; extra {extra:?}"
+    );
 }
 
 #[test]
@@ -204,9 +211,30 @@ fn walk_skips_environments_and_rejects_other_named_files() {
 #[test]
 fn vendored_spark_sql_inputs_give_no_false_positives() {
     let dir = repo_root().join("tests/spark-golden/v4.2.0/inputs");
-    let (_, rep) = report(&dir);
+    let (code, rep) = report(&dir);
+    assert_eq!(code, Some(1), "{rep}");
+    assert_eq!(rep["errors"], serde_json::json!([]));
     let findings = rep["findings"].as_array().expect("findings");
     assert!(findings.len() > 100, "scanned {}", findings.len());
+    // Precision against the source text: every finding sits on a line that has the
+    // reported name as a whole word (independent of the scanner's own state).
+    let mut lines_of: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for f in findings {
+        let file = f["file"].as_str().expect("file");
+        let text = lines_of.entry(file.to_string()).or_insert_with(|| {
+            let t = std::fs::read_to_string(file).expect("read");
+            t.lines().map(str::to_ascii_lowercase).collect()
+        });
+        let line = usize::try_from(f["line"].as_u64().expect("line")).expect("line fits");
+        let name = f["name"].as_str().expect("name");
+        let has_word = text.get(line - 1).is_some_and(|l| {
+            l.match_indices(name).any(|(i, _)| {
+                let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+                !word(l[..i].chars().next_back()) && !word(l[i + name.len()..].chars().next())
+            })
+        });
+        assert!(has_word, "{file}:{line}: `{name}` not on that line");
+    }
     let names: BTreeSet<_> = findings
         .iter()
         .filter(|f| f["status"] == "unknown")
@@ -244,7 +272,16 @@ fn vendored_spark_sql_inputs_give_no_false_positives() {
 fn non_spark_python_gives_no_findings() {
     for rel in ["bench/src", "xtask"] {
         let dir = repo_root().join(rel);
-        let (_, rep) = report(&dir);
+        let (code, rep) = report(&dir);
+        assert_eq!(code, Some(0), "{rel}: {rep}");
+        assert_eq!(rep["errors"], serde_json::json!([]), "{rel}");
+        // `xtask` is Rust; only the Python trees must actually have been read.
+        if rel != "xtask" {
+            assert!(
+                rep["files_scanned"].as_u64() > Some(0),
+                "{rel}: nothing scanned"
+            );
+        }
         assert_eq!(rep["findings"], serde_json::json!([]), "{rel}: {rep}");
     }
 }
@@ -379,4 +416,28 @@ fn a_thousand_files_scan_in_under_ten_seconds() {
     assert_eq!(code, Some(1));
     assert_eq!(rep["files_scanned"], 1000);
     assert!(took.as_secs_f64() < 10.0, "took {took:?}");
+}
+
+/// A report that cannot be written is a failure, not a clean run.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_unwritable_report_exits_2() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.sql"), "SELECT abs(1)\n").expect("write");
+    for args in [&["--format", "json"][..], &[][..]] {
+        let full = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .expect("/dev/full");
+        // Findings make the text report non-empty; the JSON report is always written.
+        std::fs::write(dir.path().join("b.sql"), "SELECT sentences(x)\n").expect("write");
+        let out = Command::new(env!("CARGO_BIN_EXE_krishiv"))
+            .arg("check-compat")
+            .args(args)
+            .arg(dir.path())
+            .stdout(full)
+            .output()
+            .expect("run");
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+    }
 }
