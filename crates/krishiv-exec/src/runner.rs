@@ -142,15 +142,20 @@ impl QueryRunner {
         };
         let executor = Arc::clone(&self.executor);
         let q = Arc::clone(&query);
+        // The pipeline task runs inside the span that submitted it (the caller's `krishiv.execute`).
+        let span = tracing::Span::current();
         drop(self.executor.spawn(
             query.class(),
-            Box::pin(async move {
-                if let Err(e) = run_pipelines(&executor, &q, pipelines).await {
-                    q.fail(e);
-                }
-                q.blocking_done().await;
-                finish.complete();
-            }),
+            Box::pin(tracing::Instrument::instrument(
+                async move {
+                    if let Err(e) = run_pipelines(&executor, &q, pipelines).await {
+                        q.fail(e);
+                    }
+                    q.blocking_done().await;
+                    finish.complete();
+                },
+                span,
+            )),
         ));
         Ok(Box::pin(ResultStream { channel, query }))
     }

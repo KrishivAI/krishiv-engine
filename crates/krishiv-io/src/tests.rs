@@ -1852,3 +1852,31 @@ fn conf_fallbacks_are_written_into_the_options_for_a_worker() {
         ["level"]
     );
 }
+
+#[test]
+fn a_projector_reuses_its_plan_across_batches_and_follows_a_schema_change() {
+    use crate::request::Projector;
+    let batch = |names: &[&str]| {
+        let fields: Vec<Field> = names
+            .iter()
+            .map(|n| Field::new(*n, DataType::Int32, false))
+            .collect();
+        let cols: Vec<ArrayRef> = names
+            .iter()
+            .map(|_| Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef)
+            .collect();
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), cols).unwrap()
+    };
+    let mut p = Projector::new(&[col("b")]);
+    let first = p.project(&batch(&["a", "b"])).unwrap();
+    // A second batch with an equal (not the same) schema gives the same result.
+    let again = p.project(&batch(&["a", "b"])).unwrap();
+    assert_eq!(first, again);
+    assert_eq!(first.schema().field(0).name(), "b");
+    // A different schema re-plans: `b` is now column 0.
+    let moved = p.project(&batch(&["b", "a"])).unwrap();
+    assert_eq!(moved.num_columns(), 1);
+    assert_eq!(moved.schema().field(0).name(), "b");
+    // A missing column is still an error, not a stale answer.
+    assert!(p.project(&batch(&["a", "c"])).is_err());
+}

@@ -348,3 +348,13 @@ pub(super) fn specs() -> Vec<Spec> {
     ));
     out
 }
+
+/// The match functions (and the hidden UTF8_LCASE forms the analyzer rewrites to) sharing one signature.
+pub(super) const MATCH_NAMES: [&str; 6] = [
+    "startswith",
+    "endswith",
+    "contains",
+    "__contains_lcase",
+    "__startswith_lcase",
+    "__endswith_lcase",
+];
