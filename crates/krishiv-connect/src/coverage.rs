@@ -344,3 +344,13 @@ pub fn to_json() -> String {
     out.push_str("]\n");
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::quote;
+
+    #[test]
+    fn json_strings_escape_quotes_backslashes_and_control_characters() {
+        assert_eq!(quote("a\"b\\c\nd\u{1}"), "\"a\\\"b\\\\c\\nd\\u0001\"");
+    }
+}
