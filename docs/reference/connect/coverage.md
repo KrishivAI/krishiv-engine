@@ -5,12 +5,12 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-61 arms: 6 done, 7 partial, 44 missing, 4 out of scope.
+61 arms: 7 done, 6 partial, 44 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
 | 2 | read | partial | DataSource.schema, predicates (JDBC) and is_streaming | Read(ReadSource::{Table,Files}); user schema on ReadSource::Files; predicates → JDBC partitions (refuse as Spark does for non-JDBC formats: PREDICATES_NOT_SUPPORTED_FOR_DATA_SOURCE) | P3-T012 | 1 |
-| 3 | project | partial | a missing input | Project; missing input → OneRowRelation (exists now) | P3-T012 | 1 |
+| 3 | project | done |  | Project; missing input → OneRowRelation | P3-T012 | 1 |
 | 4 | filter | done |  | Filter | P2-T091a | 0 |
 | 5 | join | partial | join_data_type (joinWith, typed) | Join; join_data_type is Scala joinWith only → unsupported row | P3-T012 | 1 |
 | 6 | set_op | done |  | SetOp / Union (by name, allow missing) / Distinct | P3-T012 | 1 |

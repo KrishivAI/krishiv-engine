@@ -42,20 +42,14 @@ impl Translator<'_> {
         let node = match kind {
             RelType::Read(r) => self.read(r)?,
             RelType::Sql(s) => self.sql(s)?,
-            RelType::Project(p) => {
-                let Some(input) = &p.input else {
-                    // Spark reads a missing input as `OneRowRelation`.
-                    return Err(unsupported_field(
-                        "Project",
-                        "input",
-                        "projections without an input relation",
-                    ));
-                };
-                PlanNode::Project {
-                    input: self.relation(input)?,
-                    exprs: self.expressions(&p.expressions)?,
-                }
-            }
+            RelType::Project(p) => PlanNode::Project {
+                // Spark reads a missing input as `OneRowRelation`.
+                input: match &p.input {
+                    Some(input) => self.relation(input)?,
+                    None => Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+                },
+                exprs: self.expressions(&p.expressions)?,
+            },
             RelType::Filter(f) => PlanNode::Filter {
                 input: self.input("Filter", f.input.as_deref())?,
                 predicate: self.required_expression(f.condition.as_ref())?,

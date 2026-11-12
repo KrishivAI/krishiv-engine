@@ -350,11 +350,15 @@ fn range_builds_the_range_leaf() {
 }
 
 #[test]
-fn project_without_input_and_qualified_alias_are_unsupported() {
+fn a_project_without_input_reads_one_row_and_a_qualified_alias_is_unsupported() {
     let no_input = relation(RelType::Project(Box::default()));
-    let e = fails(translate(&no_input));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("Project.input"), "{}", e.message());
+    match node(&no_input) {
+        PlanNode::Project { input, exprs } => {
+            assert!(matches!(input.node, PlanNode::OneRowRelation));
+            assert!(exprs.is_empty());
+        }
+        other => panic!("{other:?}"),
+    }
     let qualified = relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
         input: input(),
         alias: "x".into(),
