@@ -1442,3 +1442,38 @@ fn icu_keys_reach_greatest_and_least() {
     );
     assert_eq!(one("select least('b' collate unicode_ci, 'A', 'a')"), "A");
 }
+
+/// ADR 0043 Decision 6: `approx_count_distinct` of an ICU collation stays refused with the feature.
+#[cfg(feature = "collations-icu")]
+#[test]
+fn icu_approx_count_distinct_stays_refused() {
+    assert_eq!(
+        class("select approx_count_distinct(c) from (select 'a' collate unicode_ci c)"),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+}
+
+/// ICU keys order, join, aggregate and count(DISTINCT) (review M1). Ties keep input order.
+#[cfg(feature = "collations-icu")]
+#[test]
+fn icu_keys_in_the_other_key_positions() {
+    let t = "(select cast(x as string) collate unicode_ci c from values ('b'), ('A'), ('a'), ('B') t(x))";
+    assert_eq!(
+        run(&format!("select c from {t} order by c")).unwrap(),
+        ["A", "a", "b", "B"]
+    );
+    assert_eq!(
+        run(&format!(
+            "select cast(count(distinct c) as string) from {t}"
+        ))
+        .unwrap(),
+        ["2"]
+    );
+    assert_eq!(
+        run(&format!(
+            "select cast(count(*) as string) from {t} x join {t} y on x.c = y.c"
+        ))
+        .unwrap(),
+        ["8"]
+    );
+}

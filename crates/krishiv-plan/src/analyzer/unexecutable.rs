@@ -76,6 +76,16 @@ fn no_key(t: Option<&DataType>) -> bool {
     })
 }
 
+/// Whether a collated leaf of `t` is an ICU collation.
+fn has_icu(t: Option<&DataType>) -> bool {
+    t.is_some_and(|t| {
+        t.any_type(&|x| {
+            matches!(x, DataType::CollatedString(c)
+                if matches!(c.family(), krishiv_types::CollationFamily::Icu { .. }))
+        })
+    })
+}
+
 /// A collated string inside an array, map or struct: it has an equality key but no ordering yet.
 fn nested_order(t: Option<&DataType>) -> bool {
     t.is_some_and(|t| t.contains_collation() && !t.is_collated_string())
@@ -212,9 +222,13 @@ fn collated_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
                 "mode" => is_collated(arg(0)),
                 "min" | "max" => order_refused(arg(0)),
                 "min_by" | "max_by" => order_refused(arg(1)),
-                "listagg" | "approx_count_distinct" => {
-                    f.args.iter().any(|a| no_key(peeled(a).as_ref()))
-                }
+                "listagg" => f.args.iter().any(|a| no_key(peeled(a).as_ref())),
+                // ADR 0043 Decision 6: a sketch over an ICU collation is refused even where the
+                // feature gives ICU a key.
+                "approx_count_distinct" => f
+                    .args
+                    .iter()
+                    .any(|a| no_key(peeled(a).as_ref()) || has_icu(peeled(a).as_ref())),
                 _ => f.distinct && f.args.iter().any(|a| no_key(expr_type(a))),
             };
             bad.then_some((KEY, e.origin))
