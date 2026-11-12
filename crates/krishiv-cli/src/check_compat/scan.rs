@@ -329,10 +329,7 @@ pub(crate) fn scan_sql(file: &str, text: &str, first_line: usize) -> Vec<Finding
                     i += 1;
                 }
                 let word = text[start..i].to_ascii_lowercase();
-                let mut j = i;
-                while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                    j += 1;
-                }
+                let j = skip_sql_blank(bytes, i);
                 let dotted = start > 0 && bytes[start - 1] == b'.';
                 let is_call = bytes.get(j) == Some(&b'(')
                     && !dotted
@@ -376,6 +373,29 @@ pub(crate) fn scan_sql(file: &str, text: &str, first_line: usize) -> Vec<Finding
     out
 }
 
+/// The index of the next byte after `i` that is not whitespace or a comment, so a call's
+/// opening parenthesis is found across newlines and `/* */` / `--` comments.
+fn skip_sql_blank(bytes: &[u8], mut j: usize) -> usize {
+    loop {
+        match bytes.get(j) {
+            Some(b) if b.is_ascii_whitespace() => j += 1,
+            Some(b'-') if bytes.get(j + 1) == Some(&b'-') => {
+                while j < bytes.len() && bytes[j] != b'\n' {
+                    j += 1;
+                }
+            }
+            Some(b'/') if bytes.get(j + 1) == Some(&b'*') => {
+                j += 2;
+                while j < bytes.len() && !(bytes[j] == b'*' && bytes.get(j + 1) == Some(&b'/')) {
+                    j += 1;
+                }
+                j = (j + 2).min(bytes.len());
+            }
+            _ => return j,
+        }
+    }
+}
+
 /// A finding for `name` unless the matrix lists it as supported.
 fn judge(file: &str, line: usize, name: &str) -> Option<Finding> {
     let status = match matrix().get(name) {
@@ -397,7 +417,12 @@ fn judge(file: &str, line: usize, name: &str) -> Option<Finding> {
 struct Literal {
     line: usize,
     text: String,
-    sql: bool,
+    /// The name before the `(` the literal sits in (`expr` in `e("..")`), if any.
+    callee: Option<String>,
+    /// The character before the literal (`(` when it is the first argument).
+    prev: Option<char>,
+    /// Whether the text itself starts like a SQL statement.
+    statement: bool,
 }
 
 /// Prefix letters of a Python string literal (`f"..."`, `rb'...'`).
@@ -476,7 +501,7 @@ fn blank_fstring_fields(s: &str) -> String {
 fn lex_python(text: &str) -> (String, Vec<Literal>) {
     let b: Vec<char> = text.chars().collect();
     let mut code = String::new();
-    let mut lits = Vec::new();
+    let mut literals = Vec::new();
     let mut stack: Vec<String> = Vec::new();
     let (mut i, mut line) = (0, 0);
     while i < b.len() {
@@ -535,7 +560,13 @@ fn lex_python(text: &str) -> (String, Vec<Literal>) {
                             code.push('\n');
                             line += 1;
                         } else {
-                            s.push(' ');
+                            // Decoded: an escaped quote or backslash stays in the SQL
+                            // text (it still delimits a SQL string); other escapes are
+                            // blanked. `code` keeps its layout either way.
+                            s.push(match b.get(i + 1) {
+                                Some(c @ ('\'' | '"' | '\\')) => *c,
+                                _ => ' ',
+                            });
                             code.push(' ');
                         }
                         i += 2;
@@ -562,12 +593,13 @@ fn lex_python(text: &str) -> (String, Vec<Literal>) {
                 if is_f {
                     s = blank_fstring_fields(&s);
                 }
-                let sql =
-                    stack.last().is_some_and(|c| sql_signal(c, prev)) || starts_like_statement(&s);
-                lits.push(Literal {
+                let statement = starts_like_statement(&s);
+                literals.push(Literal {
                     line: start_line,
                     text: s,
-                    sql,
+                    callee: stack.last().cloned(),
+                    prev,
+                    statement,
                 });
             }
             c => {
@@ -576,7 +608,7 @@ fn lex_python(text: &str) -> (String, Vec<Literal>) {
             }
         }
     }
-    (code, lits)
+    (code, literals)
 }
 
 /// How `pyspark.sql.functions` is reachable in a Python file or notebook.
@@ -730,7 +762,7 @@ pub(crate) fn scan_python_with(
     first_line: usize,
     imports: &mut Imports,
 ) -> Vec<Finding> {
-    let (code, lits) = lex_python(text);
+    let (code, literals) = lex_python(text);
     let import_lines = imports.read(&code);
     let mut out = Vec::new();
     for (n, l) in code.lines().enumerate() {
@@ -744,7 +776,14 @@ pub(crate) fn scan_python_with(
         || code
             .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
             .any(|w| matches!(w, "spark" | "SparkSession" | "sqlContext"));
-    for lit in lits.iter().filter(|l| l.sql && spark_code) {
+    // An aliased import (`expr as e`) is judged by what it is imported as.
+    let is_sql = |l: &Literal| {
+        l.statement
+            || l.callee.as_deref().is_some_and(|c| {
+                sql_signal(imports.direct.get(c).map_or(c, String::as_str), l.prev)
+            })
+    };
+    for lit in literals.iter().filter(|l| spark_code && is_sql(l)) {
         out.extend(scan_sql(file, &lit.text, first_line + lit.line));
     }
     out.sort_by(|a, b| (a.line, &a.name).cmp(&(b.line, &b.name)));
@@ -1127,5 +1166,38 @@ mod tests {
             names(&scan_python("a.py", stmt, 1)),
             [("other_fn", "unknown")]
         );
+    }
+
+    #[test]
+    fn sql_call_paren_may_follow_newlines_and_comments() {
+        for sql in [
+            "SELECT sentences\n(x)",
+            "SELECT sentences /* c */ (x)",
+            "SELECT sentences -- c\n (x)",
+        ] {
+            let f = scan_sql("t.sql", sql, 1);
+            assert_eq!(names(&f), [("sentences", "not yet")], "{sql}");
+        }
+        // The paren after the comment must not turn a bare column into a call.
+        assert!(scan_sql("t.sql", "SELECT sentences -- (x)\n FROM t", 1).is_empty());
+    }
+
+    #[test]
+    fn escaped_quotes_in_python_sql_stay_string_delimiters() {
+        let src = "import pyspark\nspark.sql('SELECT \\'sentences(x)\\'')\n";
+        assert!(scan_python("a.py", src, 1).is_empty());
+        let src = "import pyspark\nspark.sql('SELECT \\'a\\', sentences(x)')\n";
+        assert_eq!(
+            names(&scan_python("a.py", src, 1)),
+            [("sentences", "not yet")]
+        );
+    }
+
+    #[test]
+    fn aliased_expr_import_scans_its_sql_argument() {
+        let src = "from pyspark.sql.functions import expr as e\ndf.select(e(\"sentences(x)\"))\n";
+        let f = scan_python("a.py", src, 1);
+        assert_eq!(names(&f), [("sentences", "not yet")]);
+        assert_eq!(f[0].line, 2);
     }
 }
