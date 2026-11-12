@@ -16,7 +16,9 @@ use arrow_array::builder::{
 };
 use arrow_schema::{DataType as ArrowType, Field, Schema, TimeUnit};
 use delta_kernel::expressions::{ArrayData, Scalar};
-use delta_kernel::schema::{DataType, PrimitiveType, StructField, StructType};
+use delta_kernel::schema::{
+    ArrayType, DataType, MapType, MetadataValue, PrimitiveType, StructField, StructType,
+};
 use delta_kernel::{KernelError, KernelResult};
 
 const LIST_ELEMENT: &str = "element";
@@ -37,7 +39,7 @@ fn arrow_field(f: &StructField) -> KernelResult<Field> {
         .iter()
         .map(|(k, v)| {
             let value = match v {
-                delta_kernel::schema::MetadataValue::String(s) => s.clone(),
+                MetadataValue::String(s) => s.clone(),
                 other => serde_json::to_string(other)
                     .map_err(|e| KernelError::generic(format!("field metadata {k}: {e}")))?,
             };
@@ -99,6 +101,95 @@ pub fn arrow_type(t: &DataType) -> KernelResult<ArrowType> {
                 )));
             }
             ArrowType::Struct(arrow_fields(s)?.into())
+        }
+    })
+}
+
+/// The kernel struct type of an Arrow schema.
+pub fn kernel_schema(s: &Schema) -> KernelResult<StructType> {
+    StructType::try_new(
+        s.fields()
+            .iter()
+            .map(|f| kernel_field(f))
+            .collect::<KernelResult<Vec<_>>>()?,
+    )
+    .map_err(|e| KernelError::schema(e.to_string()))
+}
+
+fn kernel_field(f: &Field) -> KernelResult<StructField> {
+    let metadata: std::collections::HashMap<String, MetadataValue> = f
+        .metadata()
+        .iter()
+        .map(|(k, v)| (k.clone(), MetadataValue::from(v)))
+        .collect();
+    Ok(StructField::new(
+        f.name().clone(),
+        kernel_type(f.data_type())?,
+        f.is_nullable(),
+    )
+    .with_metadata(metadata))
+}
+
+/// The kernel data type of an Arrow type. Wider-than-Delta layouts (large, view, dictionary) fold onto
+/// their logical type; millisecond and nanosecond timestamps map to the microsecond logical type.
+pub fn kernel_type(t: &ArrowType) -> KernelResult<DataType> {
+    let utc = |tz: &Option<Arc<str>>| tz.as_deref().is_some_and(|z| z.eq_ignore_ascii_case("utc"));
+    Ok(match t {
+        ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View => DataType::STRING,
+        ArrowType::Int64 | ArrowType::UInt64 => DataType::LONG,
+        ArrowType::Int32 | ArrowType::UInt32 => DataType::INTEGER,
+        ArrowType::Int16 | ArrowType::UInt16 => DataType::SHORT,
+        ArrowType::Int8 | ArrowType::UInt8 => DataType::BYTE,
+        ArrowType::Null => DataType::VOID,
+        ArrowType::Float32 => DataType::FLOAT,
+        ArrowType::Float64 => DataType::DOUBLE,
+        ArrowType::Boolean => DataType::BOOLEAN,
+        ArrowType::Binary
+        | ArrowType::LargeBinary
+        | ArrowType::BinaryView
+        | ArrowType::FixedSizeBinary(_) => DataType::BINARY,
+        ArrowType::Decimal128(p, sc) => {
+            let scale = u8::try_from(*sc).map_err(|_| {
+                KernelError::invalid_decimal("Negative scales are not supported in Delta")
+            })?;
+            DataType::decimal(*p, scale)?
+        }
+        ArrowType::Date32 | ArrowType::Date64 => DataType::DATE,
+        ArrowType::Timestamp(_, tz) if utc(tz) => DataType::TIMESTAMP,
+        ArrowType::Timestamp(_, None) => DataType::TIMESTAMP_NTZ,
+        ArrowType::Struct(fields) => {
+            DataType::try_struct_type_from_results(fields.iter().map(|f| kernel_field(f)))?
+        }
+        ArrowType::List(f)
+        | ArrowType::LargeList(f)
+        | ArrowType::ListView(f)
+        | ArrowType::LargeListView(f)
+        | ArrowType::FixedSizeList(f, _) => {
+            ArrayType::new(kernel_type(f.data_type())?, f.is_nullable()).into()
+        }
+        ArrowType::Map(entries, _) => {
+            let ArrowType::Struct(kv) = entries.data_type() else {
+                return Err(KernelError::schema(
+                    "a map type must have a struct entries field",
+                ));
+            };
+            let [key, value] = kv.as_ref() else {
+                return Err(KernelError::schema(
+                    "a map entries struct must have a key and a value",
+                ));
+            };
+            MapType::new(
+                kernel_type(key.data_type())?,
+                kernel_type(value.data_type())?,
+                value.is_nullable(),
+            )
+            .into()
+        }
+        ArrowType::Dictionary(_, v) => kernel_type(v)?,
+        other => {
+            return Err(KernelError::schema(format!(
+                "Invalid data type for Delta Lake: {other}"
+            )));
         }
     })
 }
@@ -233,4 +324,63 @@ fn append_scalar(b: &mut dyn ArrayBuilder, s: &Scalar) -> KernelResult<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_kernel_schema_round_trips_through_arrow() {
+        let schema = StructType::new_unchecked([
+            StructField::not_null("id", DataType::LONG),
+            StructField::nullable("ts", DataType::TIMESTAMP),
+            StructField::nullable("ntz", DataType::TIMESTAMP_NTZ),
+            StructField::nullable("d", DataType::decimal(10, 2).unwrap()),
+            StructField::nullable("tags", ArrayType::new(DataType::STRING, true)),
+            StructField::nullable("m", MapType::new(DataType::STRING, DataType::INTEGER, true)),
+        ]);
+        let arrow = arrow_schema(&schema).unwrap();
+        assert_eq!(
+            arrow.field(1).data_type(),
+            &ArrowType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
+        assert_eq!(kernel_schema(&arrow).unwrap(), schema);
+    }
+
+    #[test]
+    fn a_variant_reads_back_as_its_struct() {
+        let arrow = ArrowType::Struct(
+            arrow_fields(&StructType::new_unchecked([
+                StructField::not_null("metadata", DataType::BINARY),
+                StructField::not_null("value", DataType::BINARY),
+            ]))
+            .unwrap()
+            .into(),
+        );
+        assert_eq!(arrow_type(&DataType::unshredded_variant()).unwrap(), arrow);
+        assert!(matches!(kernel_type(&arrow).unwrap(), DataType::Struct(_)));
+    }
+
+    #[test]
+    fn wide_arrow_layouts_fold_onto_the_logical_type() {
+        assert_eq!(
+            kernel_type(&ArrowType::LargeUtf8).unwrap(),
+            DataType::STRING
+        );
+        assert_eq!(
+            kernel_type(&ArrowType::Timestamp(TimeUnit::Millisecond, None)).unwrap(),
+            DataType::TIMESTAMP_NTZ
+        );
+        assert_eq!(
+            kernel_type(&ArrowType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("utc".into())
+            ))
+            .unwrap(),
+            DataType::TIMESTAMP
+        );
+        assert!(kernel_type(&ArrowType::Decimal128(10, -1)).is_err());
+        assert!(kernel_type(&ArrowType::Float16).is_err());
+    }
 }
