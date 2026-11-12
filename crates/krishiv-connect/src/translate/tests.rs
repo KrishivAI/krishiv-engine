@@ -61,8 +61,21 @@ fn commands_compressed_plans_and_empty_plans_are_not_relations() {
         op_type: Some(OpType::Command(Box::default())),
     };
     let e = fails(translate_plan(&command, &conf()));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("Plan.command"), "{}", e.message());
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
+    );
+    let command = pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),
+        }))),
+    };
+    let e = fails(translate_plan(&command, &conf()));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
+    assert!(e.message().contains("SQL_COMMAND(5)"), "{}", e.message());
     let compressed = pb::Plan {
         op_type: Some(OpType::CompressedOperation(Box::default())),
     };

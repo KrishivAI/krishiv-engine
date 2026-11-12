@@ -124,7 +124,6 @@ fn data_type_at(proto: &Proto, depth: usize) -> Result<DataType, KrishivError> {
         }
         other => {
             return Err(unsupported_variant(
-                "data type",
                 "spark.connect.DataType",
                 other.variant(),
             ));

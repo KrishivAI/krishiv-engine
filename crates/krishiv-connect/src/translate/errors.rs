@@ -25,8 +25,8 @@ pub(crate) fn unsupported(feature: impl Into<String>) -> KrishivError {
 /// A `oneof` variant that is not translated: Spark's `INVALID_ONE_OF_FIELD_NOT_SUPPORTED`
 /// (SQLSTATE 56K00, decision 6), built as `InvalidInputErrors.invalidOneOfField` does: `parent`
 /// is the message's full name (`spark.connect.Relation`), the name is the field name upper-cased
-/// (`ZIP`) and the number is the field number. `_kind` is kept for the callers' readability.
-pub(crate) fn unsupported_variant(_kind: &str, parent: &str, variant: Variant) -> KrishivError {
+/// (`ZIP`) and the number is the field number.
+pub(crate) fn unsupported_variant(parent: &str, variant: Variant) -> KrishivError {
     ConnectInvalidPlanInvalidOneOfFieldNotSupported {
         full_name: parent.to_owned(),
         name: variant.field.to_ascii_uppercase(),

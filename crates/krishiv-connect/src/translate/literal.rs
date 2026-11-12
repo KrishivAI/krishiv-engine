@@ -125,7 +125,6 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
         | LiteralType::SpecializedArray(_)
         | LiteralType::Time(_) => {
             return Err(unsupported_variant(
-                "literal",
                 "spark.connect.Expression.Literal",
                 value.variant(),
             ));

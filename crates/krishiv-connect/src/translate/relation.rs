@@ -97,7 +97,6 @@ impl Translator<'_> {
             RelType::SetOp(s) => self.set_op(s, origin_of(rel))?,
             other => {
                 return Err(unsupported_variant(
-                    "relation",
                     "spark.connect.Relation",
                     other.variant(),
                 ));

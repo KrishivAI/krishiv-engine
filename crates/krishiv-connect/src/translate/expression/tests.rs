@@ -461,8 +461,15 @@ fn sql_expression_strings_are_unsupported_for_now() {
         expression: "a > 1".into(),
     }));
     let e = err(&sql);
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("expression_string"), "{}", e.message());
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
+    assert!(
+        e.message().contains("EXPRESSION_STRING(4)"),
+        "{}",
+        e.message()
+    );
     // The expression text is not echoed into the error.
     assert!(!e.message().contains("a > 1"));
 }

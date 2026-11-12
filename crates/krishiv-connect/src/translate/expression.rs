@@ -18,7 +18,7 @@ use krishiv_plan::{
 };
 
 use super::errors::{
-    expression_not_set, field_empty, not_set, unsupported, unsupported_field, unsupported_variant,
+    expression_not_set, field_empty, not_set, unsupported_field, unsupported_variant,
 };
 use super::literal::literal;
 use super::names::{parse_attribute_name, parse_multipart_identifier};
@@ -138,15 +138,8 @@ impl Translator<'_> {
                     mode,
                 }
             }
-            ExprType::ExpressionString(_) => {
-                return Err(unsupported(
-                    "SQL expression strings (spark.connect.Expression.expression_string, sent by \
-                     selectExpr, where(\"...\") and expr())",
-                ));
-            }
             other => {
                 return Err(unsupported_variant(
-                    "expression",
                     "spark.connect.Expression",
                     other.variant(),
                 ));
@@ -188,11 +181,10 @@ impl Translator<'_> {
             "=" | "==" => ExprNode::Function(call(Builtin::Eq.name(), args, f.is_distinct)),
             "!=" | "<>" => {
                 let equal = Expr::new(ExprNode::Function(call(Builtin::Eq.name(), args, false)));
-                ExprNode::Function(call(
-                    Builtin::Not.name(),
-                    vec![Arc::new(equal)],
-                    f.is_distinct,
-                ))
+                // `not` has one argument, so it carries none of the call's argument names.
+                let mut not = call(Builtin::Not.name(), vec![Arc::new(equal)], f.is_distinct);
+                not.arg_names = Vec::new();
+                ExprNode::Function(not)
             }
             // `F.collate(col, "name")` / `Column.collate`: the function form of `expr COLLATE name`.
             _ if name.eq_ignore_ascii_case("collate")
