@@ -221,6 +221,19 @@ fn a_fifo_secret_is_refused_without_blocking() {
 }
 
 #[test]
+fn an_oversized_secret_file_is_never_cut_to_fit() {
+    // A full-length token, CRLF, then more: refused, not read as the first 16 KiB.
+    let dir = tempfile::tempdir().unwrap();
+    let text = format!("{}\r\nmore", "z".repeat(16 * 1024));
+    let r = secret_file(dir.path(), "s", &text, 0o600);
+    let e = SecretRef::parse("k", &r, false)
+        .unwrap()
+        .resolve("k")
+        .unwrap_err();
+    assert!(e.to_string().contains("longer than"), "{e}");
+}
+
+#[test]
 fn an_oversized_secret_refuses_startup() {
     let dir = tempfile::tempdir().unwrap();
     let long = "x".repeat(16 * 1024 + 1);
