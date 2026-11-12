@@ -1966,7 +1966,7 @@ pub(crate) fn pin_temp_tables(
         owned: BTreeSet::new(),
         new_pins: Vec::new(),
     };
-    let plan = pinner.run(plan)?;
+    let plan = crate::run_site::detach_sources(pinner.run(plan)?);
     Ok((plan, pinner.owned.into_iter().collect(), pinner.new_pins))
 }
 

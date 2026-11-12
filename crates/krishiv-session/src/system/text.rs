@@ -78,8 +78,8 @@ impl TextPolicy {
                 .map_or((message, ""), |at| message.split_at(at));
             let mut masked = body.to_owned();
             for (name, value) in parameters {
-                if !is_structural(name) && value.chars().count() >= 3 {
-                    masked = masked.replace(value.as_str(), "?");
+                if !is_structural(name) && !value.is_empty() {
+                    masked = replace_value(&masked, value);
                 }
             }
             masked.push_str(tail);
@@ -155,12 +155,56 @@ pub(super) fn mask_quoted(message: &str) -> String {
 /// than carrying a value that came from the data or a literal. Every other parameter is masked: a list of
 /// the value-bearing ones would miss the next one Spark prints without quotes.
 fn is_structural(name: &str) -> bool {
-    const SUFFIXES: &[&str] = &[
-        "Name", "Names", "Type", "Types", "Class", "Id", "Index", "Size", "Count", "Num", "Mode",
-        "Conf", "Config", "Function", "Operator", "Clause", "Status", "Version", "Level", "Kind",
-        "Scope", "Path",
+    // Names of catalog objects are exact, not a `*Name` suffix: `funcName` of a window call holds the whole
+    // rendered call, argument literals included.
+    const OBJECTS: &[&str] = &[
+        "objectName",
+        "relationName",
+        "tableName",
+        "viewName",
+        "columnName",
+        "colName",
+        "schemaName",
+        "databaseName",
+        "catalogName",
+        "functionName",
+        "routineName",
+        "variableName",
+        "className",
+        "name",
     ];
-    SUFFIXES.iter().any(|s| name.ends_with(s)) || name == "sqlState"
+    const SUFFIXES: &[&str] = &[
+        "Type", "Types", "Class", "Id", "Index", "Size", "Count", "Num", "Mode", "Conf", "Config",
+        "Function", "Operator", "Clause", "Status", "Version", "Level", "Kind", "Scope", "Path",
+    ];
+    OBJECTS.contains(&name) || SUFFIXES.iter().any(|s| name.ends_with(s)) || name == "sqlState"
+}
+
+/// `text` with each occurrence of `value` replaced by `?`. A value of three or more characters is replaced
+/// wherever it appears; a shorter one only as a whole token, so `xy` does not eat the middle of a word.
+fn replace_value(text: &str, value: &str) -> String {
+    if value.chars().count() >= 3 {
+        return text.replace(value, "?");
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut before: Option<char> = None;
+    while let Some(at) = rest.find(value) {
+        let head = &rest[..at];
+        let prev = head.chars().last().or(before);
+        let after = rest[at + value.len()..].chars().next();
+        out.push_str(head);
+        if prev.is_none_or(|c| !word(c)) && after.is_none_or(|c| !word(c)) {
+            out.push('?');
+        } else {
+            out.push_str(value);
+        }
+        before = value.chars().last();
+        rest = &rest[at + value.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The state of a JSON string after `c`: an unescaped double quote opens or closes it, a backslash inside it

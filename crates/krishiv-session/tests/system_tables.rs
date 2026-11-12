@@ -1586,6 +1586,7 @@ fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() 
         "SELECT next_day(DATE '2024-01-01', 'canarysecret')",
         "SELECT map('canarysecret', 1, 'canarysecret', 2)",
         "SELECT mask('canarysecret', 'XX')",
+        "SELECT lag('canarysecret')",
     ] {
         assert!(run_all(&s, sql).is_err(), "{sql}");
     }
@@ -1593,7 +1594,7 @@ fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() 
         &s,
         "SELECT COALESCE(error_message, '') FROM system.queries WHERE error_class IS NOT NULL",
     );
-    assert_eq!(messages.len(), 6, "{messages:?}");
+    assert_eq!(messages.len(), 7, "{messages:?}");
     assert!(
         messages.iter().all(|m| !m.contains("canarysecret")),
         "{messages:?}"
@@ -1658,5 +1659,25 @@ fn a_message_with_many_unmatched_apostrophes_is_masked() {
     assert!(
         !messages[0].contains(" 'x"),
         "an unmatched quote run was left unmasked"
+    );
+}
+
+#[test]
+fn a_short_raw_value_is_masked_as_a_whole_token() {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    assert!(run_all(&s, "SELECT raise_error('xy')").is_err());
+    let m = strings_in(
+        &s,
+        "SELECT COALESCE(error_message, '') FROM system.queries WHERE error_class IS NOT NULL",
+    );
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert!(
+        !m[0]
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|w| w == "xy"),
+        "{m:?}"
     );
 }

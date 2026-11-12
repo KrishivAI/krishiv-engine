@@ -96,6 +96,29 @@ pub struct ErrorQueryContext {
     pub summary: String,
 }
 
+/// What few errors carry, boxed so `KrishivError` (inside every analysis error) stays small: the
+/// query contexts, and the site of a run-time error not yet rendered as one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Extra {
+    contexts: Vec<ErrorQueryContext>,
+    /// Where in a statement's text a run-time error arose (see [`ErrorSite`]); the session turns
+    /// it into a context.
+    site: Option<ErrorSite>,
+}
+
+/// A span of a statement's SQL text, as byte offsets (`start..end`, `end`
+/// exclusive), named by the front end's source id. Carried by a run-time error
+/// from the expression that raised it to the session, which owns the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ErrorSite {
+    /// The front end's id of the SQL text the span indexes (0: the statement).
+    pub source: u32,
+    /// First byte.
+    pub start: u32,
+    /// One past the last byte.
+    pub end: u32,
+}
+
 impl ErrorQueryContext {
     /// A SQL context: the redacted `fragment` at bytes `start..=stop`.
     #[must_use]
@@ -170,7 +193,7 @@ pub struct KrishivError {
     message: String,
     #[source]
     cause: Option<Arc<KrishivError>>,
-    contexts: Vec<ErrorQueryContext>,
+    extra: Option<Box<Extra>>,
 }
 
 fn class_prefix(class: ErrorClass) -> String {
@@ -197,7 +220,7 @@ impl KrishivError {
             parameters,
             message,
             cause: None,
-            contexts: Vec::new(),
+            extra: None,
         }
     }
 
@@ -289,14 +312,42 @@ impl KrishivError {
     /// query context); replaces no context already attached.
     #[must_use]
     pub fn with_query_context(mut self, context: ErrorQueryContext) -> Self {
-        self.contexts.push(context);
+        self.extra
+            .get_or_insert_with(Box::default)
+            .contexts
+            .push(context);
+        self
+    }
+
+    /// This error marked as raised at `site`, unless it already has a site or a
+    /// query context (the innermost expression's site wins). No text enters the
+    /// error: the session that owns the statement's text renders it.
+    #[must_use]
+    pub fn with_pending_site(mut self, site: ErrorSite) -> Self {
+        if self.pending_site().is_none() && self.query_contexts().is_empty() {
+            self.extra.get_or_insert_with(Box::default).site = Some(site);
+        }
+        self
+    }
+
+    /// The not yet rendered site of a run-time error, if any.
+    pub fn pending_site(&self) -> Option<ErrorSite> {
+        self.extra.as_ref().and_then(|e| e.site)
+    }
+
+    /// This error without its pending site.
+    #[must_use]
+    pub fn without_pending_site(mut self) -> Self {
+        if let Some(e) = &mut self.extra {
+            e.site = None;
+        }
         self
     }
 
     /// The attached query contexts, oldest first (empty when the error
     /// carries none, e.g. an execution error like division by zero).
     pub fn query_contexts(&self) -> &[ErrorQueryContext] {
-        &self.contexts
+        self.extra.as_ref().map_or(&[], |e| &e.contexts)
     }
 
     /// The same error with every message parameter replaced by
@@ -312,7 +363,7 @@ impl KrishivError {
             .collect();
         let mut out = Self::from_parts(self.class, parameters);
         out.cause = self.cause.as_ref().map(|c| Arc::new(c.redacted()));
-        out.contexts = self.contexts.clone();
+        out.extra.clone_from(&self.extra);
         out
     }
 }

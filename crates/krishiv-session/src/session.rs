@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
 use tracing::Instrument as _;
 
+pub(crate) use crate::run_site::sql_context;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
@@ -1237,6 +1238,7 @@ impl Session {
             variables_version: variables.version,
             policy_version: self.state.policy.version().0,
             text: None,
+            redacted: None,
             statement_class: None,
             row: Arc::default(),
             identifier_spans: Arc::default(),
@@ -1535,7 +1537,7 @@ impl Session {
         let (stream, query, _) = self
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
-        Ok((stream, query))
+        Ok((crate::run_site::resolve_sites(stream, env), query))
     }
 
     /// Asks the admission controller for a permit for the query whose
@@ -1978,9 +1980,10 @@ impl Session {
                 column_types,
             })?;
             let worker = self.worker(env);
-            let (mut rows, _, row_id) = self
+            let (rows, _, row_id) = self
                 .run_on_query_logged(&plan, worker, env, false, admitted.take())
                 .await?;
+            let mut rows = crate::run_site::resolve_sites(rows, env);
             let mut batches = Vec::new();
             while let Some(batch) = rows.next().await {
                 batches.push(batch?);
@@ -2557,21 +2560,6 @@ fn empty_redacted() -> RedactedSql {
     RedactedSql::opaque("")
 }
 
-/// `error` with the SQL span `start..end` of `text` attached as its
-/// query context (`stop` is inclusive, as Spark reports it).
-pub(crate) fn sql_context(
-    error: KrishivError,
-    text: &RedactedSql,
-    start: usize,
-    end: usize,
-) -> KrishivError {
-    error.with_query_context(ErrorQueryContext::sql(
-        text.fragment(start..end),
-        start,
-        end.saturating_sub(1),
-    ))
-}
-
 /// An analysis error with its query context attached: the SQL span of
 /// `text`, or the DataFrame operation that raised it. With no text, a
 /// SQL span has no fragment to attach, so only DataFrame contexts cross.
@@ -2645,6 +2633,9 @@ pub(crate) struct QueryEnv {
     /// The statement as the session may show it (redacted), for
     /// `system.queries`; `None` for a query no SQL text started.
     pub(crate) text: Option<Arc<str>>,
+    /// The same text with the map from original offsets, to render the span of a run-time
+    /// error ([`crate::run_site::resolve_site`]).
+    pub(crate) redacted: Option<Arc<RedactedSql>>,
     /// The statement's class (`StatementClass::name`), for `system.queries`.
     pub(crate) statement_class: Option<&'static str>,
     /// The id of the `system.queries` row the statement's latest query began, if any: `sql`
