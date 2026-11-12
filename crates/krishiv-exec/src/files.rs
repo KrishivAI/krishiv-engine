@@ -476,6 +476,24 @@ impl FileReads {
         if let Some((_, declared)) = &known
             && partitioned
         {
+            // With a `basePath` above the location, directories that are not
+            // the table's partition columns sit above its files (`q=1/p=2`
+            // for a table partitioned by `p`): refused, as before, rather
+            // than read as an empty table.
+            if mode.base.is_some()
+                && let Some((f, segs)) = listed.iter().find(|(_, segs)| {
+                    segs.len() != declared.columns.len()
+                        || segs.iter().zip(&declared.columns).any(|((n, _), c)| n != c)
+                })
+            {
+                let found: Vec<&str> = segs.iter().map(|(n, _)| n.as_str()).collect();
+                return Err(unsupported(format!(
+                    "reading {} with basePath: its partition directories ({}) are not the table's partition columns ({})",
+                    f.display_path(),
+                    found.join(", "),
+                    declared.columns.join(", ")
+                )));
+            }
             let registered: HashSet<&[Option<String>]> =
                 declared.registered.iter().map(Vec::as_slice).collect();
             listed.retain(|(_, segs)| is_registered(&declared.columns, &registered, segs));

@@ -1398,6 +1398,41 @@ fn a_table_over_foreign_files_skips_directories_the_catalog_does_not_know() {
     assert_eq!(rows(&s, read), ["2\t2"]);
 }
 
+/// A `basePath` above a partitioned table's location puts directories that are not partition columns of the table
+/// above its files (`q=1` over `p=2`): the read is refused, as before registered partitions, never an empty table
+/// (#690 review).
+#[test]
+fn a_base_path_above_the_location_of_a_partitioned_table_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE src (x INT, p INT) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO src VALUES (2, 2)");
+    let file = std::fs::read_dir(dir.path().join("src").join("p=2"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with("part-"))
+        .unwrap()
+        .path();
+    let data = tempfile::tempdir().unwrap();
+    let at = data.path().join("q=1").join("p=2");
+    std::fs::create_dir_all(&at).unwrap();
+    std::fs::copy(&file, at.join(file.file_name().unwrap())).unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE e (x INT, p INT) USING parquet OPTIONS (basePath '{}') PARTITIONED BY (p) LOCATION '{}'",
+            data.path().display(),
+            data.path().join("q=1").display()
+        ),
+    );
+    run(&s, "ALTER TABLE e ADD PARTITION (p = 2)");
+    let e = err(&s, "SELECT x FROM e");
+    assert!(e.to_string().contains("basePath"), "{e}");
+}
+
 /// An unpartitioned table over foreign files reads its root's files only: a subdirectory is not read (Spark 4.2.0,
 /// krishiv-internal `research/spark/registered-partitions/probe.out`, table `u`: one row, `tmp_x/b.parquet` unread).
 #[test]
