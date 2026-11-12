@@ -1,0 +1,29 @@
+{
+ "client_only": 71,
+ "counts": {},
+ "denominator": {
+  "by_reason": {
+   "LOCAL_SERVER": 5,
+   "OPTIONAL_DEP": 1,
+   "STREAMING_P4": 52,
+   "UNVERIFIED": 49
+  },
+  "cap": 325,
+  "collected": 1686,
+  "denominator": 1519,
+  "excluded_share": 0.0658,
+  "manifest": 107,
+  "oracle_env": 0,
+  "spark_skips": 60,
+  "version": "4.0.1",
+  "within_cap": true
+ },
+ "file_failures": [],
+ "not_run": 1519,
+ "pass_rate": 0.0,
+ "pass_rate_without_client_only": 0.0,
+ "passed": 0,
+ "passed_ids": [],
+ "source": "static",
+ "version": "4.0.1"
+}
