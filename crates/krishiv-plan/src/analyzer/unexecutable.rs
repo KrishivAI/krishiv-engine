@@ -60,8 +60,8 @@ fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
     )
 }
 
-/// Whether a collated leaf of `t` has no key here: ICU collations (unit 6) and an indeterminate
-/// one.
+/// Whether a collated leaf of `t` has no key here: ICU collations without the `collations-icu`
+/// feature, and an indeterminate one.
 fn no_key(t: Option<&DataType>) -> bool {
     t.is_some_and(|t| {
         t.any_type(&|x| {
@@ -69,7 +69,9 @@ fn no_key(t: Option<&DataType>) -> bool {
                 c.family(),
                 krishiv_types::CollationFamily::Utf8Binary
                     | krishiv_types::CollationFamily::Utf8Lcase
-            ) || c.is_indeterminate())
+            ) && !(cfg!(feature = "collations-icu")
+                && matches!(c.family(), krishiv_types::CollationFamily::Icu { .. }))
+                || c.is_indeterminate())
         })
     })
 }

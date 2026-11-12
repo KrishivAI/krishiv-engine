@@ -1388,3 +1388,44 @@ fn icu_comparisons_follow_the_golden() {
         assert!(one(sql).contains("true"), "{sql}");
     }
 }
+
+/// Set operations over ICU collations (`collations-basic` golden, statements 57 to 61): two
+/// different collations are `INCOMPATIBLE_COLUMN_TYPE`; one ICU collation on both sides keeps it.
+#[cfg(feature = "collations-icu")]
+#[test]
+fn icu_set_operations_follow_the_golden() {
+    for op in ["except", "except all", "union", "union all", "intersect"] {
+        let sql = format!(
+            "select col1 collate utf8_lcase from values ('aaa'), ('bbb') {op} \
+             select col1 collate unicode_ci from values ('aaa'), ('bbb')"
+        );
+        assert_eq!(class(&sql), ErrorClass::IncompatibleColumnType, "{op}");
+    }
+    let same = run(
+        "select col1 collate unicode_ci from values ('aaa'), ('AAA'), ('zzz') except \
+         select col1 collate unicode_ci from values ('aaa')",
+    )
+    .unwrap();
+    assert_eq!(same, vec!["zzz".to_owned()]);
+}
+
+/// Grouping, distinct and ordering over an ICU collation run on its sort key.
+#[cfg(feature = "collations-icu")]
+#[test]
+fn icu_keys_group_distinct_and_order() {
+    let v = "from values ('b'), ('B'), ('a'), ('A'), ('b')";
+    assert_eq!(
+        run(&format!(
+            "select cast(count(*) as string) c {v} t(x) group by x collate unicode_ci order by c"
+        ))
+        .unwrap(),
+        vec!["2".to_owned(), "3".to_owned()]
+    );
+    assert_eq!(
+        run(&format!(
+            "select cast(count(*) as string) from (select distinct x collate unicode_ci {v} t(x))"
+        ))
+        .unwrap(),
+        vec!["2".to_owned()]
+    );
+}
