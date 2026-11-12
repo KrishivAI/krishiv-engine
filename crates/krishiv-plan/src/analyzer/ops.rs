@@ -867,7 +867,11 @@ impl Resolver<'_> {
         pass: &[Attr],
     ) -> Rel {
         if pass.is_empty() && items.iter().all(|b| b.lateral.is_empty()) {
-            let out = items.iter().map(|b| out_attr(b, &base.out)).collect();
+            let out = items
+                .iter()
+                .enumerate()
+                .map(|(i, b)| out_attr_at(b, &base.out, i))
+                .collect();
             let exprs = items.iter().map(|b| Arc::clone(&b.expr)).collect();
             return self.projection(origin, base, exprs, out);
         }
@@ -4256,9 +4260,19 @@ fn subst_distinct(
 }
 
 pub(super) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
+    out_attr_at(b, scope, usize::MAX)
+}
+
+/// [`out_attr`] for the item at `position` of a select list: a column read from the same position of the
+/// scope (what a projection that passes columns through does) is found without a scan.
+pub(super) fn out_attr_at(b: &Bound, scope: &[Attr], position: usize) -> Attr {
     match &b.expr.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {
-            match scope.iter().find(|a| a.col.id == c.id) {
+            let hit = scope
+                .get(position)
+                .filter(|a| a.col.id == c.id)
+                .or_else(|| scope.iter().find(|a| a.col.id == c.id));
+            match hit {
                 Some(a) => Attr {
                     col: c.clone(),
                     ..a.clone()
