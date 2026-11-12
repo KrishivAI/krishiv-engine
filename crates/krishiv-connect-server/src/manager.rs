@@ -416,9 +416,9 @@ impl SessionManager {
         Some(id)
     }
 
-    /// Releases every session idle past the timeout and running no query
-    /// (Spark's periodic maintenance; Krishiv also keeps a session whose
-    /// query is still running). Returns how many it released.
+    /// Releases every session idle past the timeout, running no query and
+    /// holding no live operation (Spark's periodic maintenance; Krishiv also
+    /// keeps a session whose query or response stream is still live). Returns how many it released.
     pub fn sweep(&self) -> usize {
         let Some(timeout) = self.limits.idle_timeout else {
             return 0;
@@ -436,6 +436,7 @@ impl SessionManager {
                         .saturating_add(timeout)
                         <= now
                         && e.session.running_queries() == 0
+                        && e.operations.is_empty()
                 })
                 .map(|(k, _)| k.clone())
                 .collect();
@@ -474,6 +475,17 @@ impl SessionManager {
             entry.close();
         }
         entries.len()
+    }
+
+    /// The running queries plus the live operations of all live sessions:
+    /// zero once nothing is left to finish (shutdown waits for it).
+    #[must_use]
+    pub fn busy(&self) -> usize {
+        let entries: Vec<Arc<SessionEntry>> = self.lock().live.values().map(Arc::clone).collect();
+        entries
+            .iter()
+            .map(|e| e.session.running_queries() + e.operations.len())
+            .sum()
     }
 
     /// The running queries of all live sessions.

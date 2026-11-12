@@ -336,3 +336,26 @@ fn release_and_close_all_cancel_the_operations() {
     assert_eq!(m.close_all(), 1);
     assert!(second.is_cancelled());
 }
+
+#[test]
+fn a_session_with_a_live_operation_is_busy_and_never_swept() {
+    use crate::operation::{Operation, plan_digest};
+    let m = manager(SessionLimits {
+        idle_timeout: Some(Duration::ZERO),
+        ..SessionLimits::default()
+    });
+    let entry = m.get_or_create(&alice(), ID, None, "u").expect("create");
+    let op = Arc::new(Operation::new(
+        krishiv_session::QueryId::parse(ID).expect("id"),
+        plan_digest(b"p"),
+        Arc::from(Vec::new()),
+        true,
+    ));
+    entry.operations().register(&op, 10).expect("register");
+    assert_eq!(m.busy(), 1, "a live operation keeps shutdown waiting");
+    assert_eq!(m.sweep(), 0, "a session streaming responses is not idle");
+    assert!(!op.is_cancelled());
+    entry.operations().remove(&op);
+    assert_eq!(m.busy(), 0);
+    assert_eq!(m.sweep(), 1);
+}

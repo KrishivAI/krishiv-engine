@@ -440,6 +440,17 @@ async fn compressed_plans_decode_and_a_bomb_fails_before_it_expands() {
         "CONNECT_INVALID_PLAN.PLAN_SIZE_LARGER_THAN_MAX"
     );
     assert!(e.message().contains("1048576 vs. 4096"), "{}", e.message());
+    // Exactly the maximum: refused, as Spark's bounded stream refuses it
+    // (the parser asks for more once `max` bytes were read).
+    let exact = zstd::bulk::compress(&[0_u8; 4096], 3).expect("zstd");
+    let e = collect(&run.channel, compressed(exact, rel, zstd_codec))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error_class(&e),
+        "CONNECT_INVALID_PLAN.PLAN_SIZE_LARGER_THAN_MAX"
+    );
+    assert!(e.message().contains("unknown vs. 4096"), "{}", e.message());
     // A streamed frame without a declared size: refused at the bound.
     let streamed = {
         let mut enc = zstd::stream::write::Encoder::new(Vec::new(), 3).expect("encoder");
@@ -814,6 +825,11 @@ async fn a_dropped_stream_cancels_the_query_and_frees_its_memory() {
     // 64 KiB of budget plus the HTTP/2 windows and tonic's buffer, far from
     // the 100 million rows the query would produce.
     assert!(ahead < 2_000, "{ahead} responses produced ahead");
+    // backpressure_no_materialise: the responses waiting for the client
+    // never hold more than the budget plus one response (about 8 KB here).
+    let peak = op.buffered_peak();
+    assert!(peak > 0);
+    assert!(peak <= 64 * 1024 + 16 * 1024, "{peak} bytes buffered");
     drop(live);
     eventually("the operation is removed", || entry.operations().is_empty()).await;
     eventually("the query stops", || session.running_queries() == 0).await;
@@ -821,4 +837,144 @@ async fn a_dropped_stream_cancels_the_query_and_frees_its_memory() {
         memory.reserved() == before
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_stream_cancels_a_query_that_has_not_produced_yet() {
+    let run = start().await;
+    let entry = run
+        .manager
+        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .expect("session");
+    let session = entry.session().clone();
+    // An aggregate sends nothing until it has read its whole input.
+    let mut live = stream(
+        &run.channel,
+        "ExecutePlan",
+        with_id(
+            request(root(sql(
+                "SELECT count(*) FROM range(0, 100000000000, 1, 4)",
+            ))),
+            OP,
+        ),
+    )
+    .await
+    .expect("execute");
+    live.message().await.expect("ok").expect("schema");
+    eventually("the query runs", || session.running_queries() == 1).await;
+    drop(live);
+    eventually("the query is cancelled", || session.running_queries() == 0).await;
+    eventually("the operation leaves the map", || {
+        entry.operations().is_empty()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_operation_does_not_wait_forever_for_a_client_that_reads_nothing() {
+    let run = start_with(ExecuteLimits {
+        ahead_bytes: 1 << 30,
+        ..ExecuteLimits::default()
+    })
+    .await;
+    let entry = run
+        .manager
+        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .expect("session");
+    entry
+        .session()
+        .conf()
+        .set("spark.sql.execution.arrow.maxRecordsPerBatch", "1")
+        .expect("conf");
+    let mut live = stream(
+        &run.channel,
+        "ExecutePlan",
+        with_id(reattachable(request(endless())), OP),
+    )
+    .await
+    .expect("execute");
+    live.message().await.expect("ok").expect("schema");
+    let op = entry.operations().get(OP).expect("live");
+    // Tiny responses fill the channel's slots and the transport.
+    let mut last = 0;
+    loop {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let now = op.sent_count();
+        if now == last {
+            break;
+        }
+        last = now;
+    }
+    let _: pb::ReleaseExecuteResponse = unary(
+        &run.channel,
+        "ReleaseExecute",
+        pb::ReleaseExecuteRequest {
+            session_id: SESSION.to_owned(),
+            operation_id: OP.to_owned(),
+            release: Some(pb::release_execute_request::Release::ReleaseAll(
+                pb::release_execute_request::ReleaseAll {},
+            )),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("release all");
+    // The encoder gives up sending its error and ends, dropping its handle.
+    eventually("the encoder ends", || Arc::strong_count(&op) == 1).await;
+    drop(live);
+}
+
+/// large_row_result, scaled down: a row larger than the batch limit (here
+/// 2 KiB instead of 128 MiB) is sent as one batch of one row without
+/// chunking, and in chunks of the session's maximum with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn large_row_result() {
+    let run = start_with(ExecuteLimits {
+        max_batch_size: 2048,
+        ..ExecuteLimits::default()
+    })
+    .await;
+    let query = || request(root(sql("SELECT repeat('x', 65536) AS s FROM range(2)")));
+    let responses = collect(&run.channel, query()).await.expect("execute");
+    let b = batches(&responses);
+    assert_eq!(b.len(), 2, "one row per batch: the first row always goes");
+    for batch in &b {
+        assert_eq!(batch.row_count, 1);
+        assert!(batch.data.len() > 65_536);
+        assert_eq!(batch.num_chunks_in_batch, None);
+    }
+    run.manager
+        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .expect("session")
+        .session()
+        .conf()
+        .set("spark.connect.session.resultChunking.maxChunkSize", "4096")
+        .expect("conf");
+    let mut chunked = query();
+    chunked.request_options.push(ReqOpt {
+        request_option: Some(RequestOption::ResultChunkingOptions(
+            pb::ResultChunkingOptions {
+                allow_arrow_batch_chunking: true,
+                preferred_arrow_chunk_size: None,
+            },
+        )),
+    });
+    let responses = collect(&run.channel, chunked).await.expect("execute");
+    let first: Vec<_> = batches(&responses)
+        .into_iter()
+        .filter(|b| b.start_offset == Some(0))
+        .collect();
+    assert!(first.len() > 16, "{}", first.len());
+    let mut data = Vec::new();
+    for chunk in &first {
+        assert!(chunk.data.len() <= 4096);
+        data.extend_from_slice(&chunk.data);
+    }
+    let read = read_ipc(&data);
+    let s = read[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .expect("utf8");
+    assert_eq!(s.value(0).len(), 65_536);
 }

@@ -65,6 +65,9 @@ use crate::status::status_of;
 /// (`(0.9 × 128 MiB).toInt`, Spark 4.1+).
 const DEFAULT_MAX_CHUNK_SIZE: i64 = 120_795_955;
 
+/// How long a failed operation waits for room to send its error.
+const FAIL_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The smallest preferred chunk size Spark honours.
 const MIN_PREFERRED_CHUNK: i64 = 1024;
 
@@ -151,7 +154,25 @@ pub async fn execute_plan(
             .get("spark.sql.sources.default")
             .unwrap_or_else(|| TranslateConf::default().default_data_source),
     };
-    let logical = translate_plan(&plan, &translate, limits.max_plan_size)?;
+    // Decompression (up to `maxPlanSize`) runs off the async workers.
+    let decompressed = match &plan.op_type {
+        Some(OpType::CompressedOperation(c)) => {
+            let c = (**c).clone();
+            let max = limits.max_plan_size;
+            Some(
+                tokio::task::spawn_blocking(move || decompress(&c, max))
+                    .await
+                    .map_err(|e| -> KrishivError {
+                        krishiv_common::error::InternalError {
+                            message: format!("decompressing a plan: {e}"),
+                        }
+                        .into()
+                    })??,
+            )
+        }
+        _ => None,
+    };
+    let logical = translate_plan(&plan, decompressed.as_deref(), &translate)?;
     let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
     let schema = df.schema().await?;
     let schema_response = schema::proto_schema(&schema)?;
@@ -161,6 +182,7 @@ pub async fn execute_plan(
         limits.ahead_bytes.clamp(1, Semaphore::MAX_PERMITS),
     ));
     let consumer = ConsumerHandle::register(session.runtime().memory(), "connect_responses", None);
+    op.set_responses_consumer(&consumer);
     let (tx, rx) = mpsc::channel::<Item>(1024);
     let sender = Sender {
         tx,
@@ -190,17 +212,17 @@ pub async fn execute_plan(
 /// one decompressed first; commands refused until P3-T012.
 fn translate_plan(
     plan: &pb::Plan,
+    decompressed: Option<&[u8]>,
     conf: &TranslateConf,
-    max_plan_size: usize,
 ) -> Result<krishiv_plan::Plan, KrishivError> {
     match &plan.op_type {
         Some(OpType::Root(relation)) => translate_relation(relation, conf),
         Some(OpType::Command(command)) => Err(command_not_supported(command)),
         Some(OpType::CompressedOperation(c)) => {
-            let bytes = decompress(c, max_plan_size)?;
+            let bytes = decompressed.unwrap_or_default();
             match CompressedOpType::try_from(c.op_type) {
                 Ok(CompressedOpType::Relation) => {
-                    translate_relation(&*wire::decode_relation(&bytes)?, conf)
+                    translate_relation(&*wire::decode_relation(bytes)?, conf)
                 }
                 Ok(CompressedOpType::Command) => {
                     // Decoded through the bounded decoder as the `command`
@@ -212,7 +234,7 @@ fn translate_plan(
                         &mut wrapped,
                     );
                     prost::encoding::encode_varint(bytes.len() as u64, &mut wrapped);
-                    wrapped.extend_from_slice(&bytes);
+                    wrapped.extend_from_slice(bytes);
                     match &wire::decode_plan(&wrapped)?.op_type {
                         Some(OpType::Command(command)) => Err(command_not_supported(command)),
                         _ => Err(command_not_supported(&pb::Command::default())),
@@ -271,11 +293,13 @@ fn decompress(c: &pb::plan::CompressedOperation, max: usize) -> Result<Vec<u8>, 
     let decoder =
         zstd::stream::read::Decoder::with_buffer(c.data.as_slice()).map_err(cannot_parse)?;
     let mut out = Vec::new();
+    // Spark's `BoundedInputStream` fires once `max` bytes were read and the
+    // parser asks for more, so a plan of exactly `max` bytes is refused too.
     decoder
-        .take(max as u64 + 1)
+        .take(max as u64)
         .read_to_end(&mut out)
         .map_err(cannot_parse)?;
-    if out.len() > max {
+    if out.len() >= max {
         return Err(too_large("unknown".to_owned()));
     }
     Ok(out)
@@ -391,16 +415,15 @@ impl Sender {
             .map_err(|_| Stop::Gone)
     }
 
-    /// Ends the stream with `error`.
+    /// Ends the stream with `error`, waiting at most [`FAIL_WAIT`] for room
+    /// in the channel: a client that reads nothing must not keep the task.
     async fn fail(&self, error: &KrishivError) {
-        let _ = self
-            .tx
-            .send(Item {
-                response: Err(status_of(error)),
-                _permit: None,
-                _reservation: None,
-            })
-            .await;
+        let send = self.tx.send(Item {
+            response: Err(status_of(error)),
+            _permit: None,
+            _reservation: None,
+        });
+        let _ = tokio::time::timeout(FAIL_WAIT, send).await;
     }
 }
 
@@ -413,9 +436,12 @@ async fn encode(
     registered: Registered,
 ) {
     let op = Arc::clone(&sender.op);
+    // The client going away is seen at once, also while the encoder waits
+    // for the query's first batch or for memory rather than sending.
     let outcome = tokio::select! {
         biased;
         () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
+        () = sender.tx.closed() => Err(Stop::Gone),
         r = produce(&sender, &df, &schema, schema_response, &settings) => r,
     };
     // The query's stream is gone by now (dropped with `produce`).

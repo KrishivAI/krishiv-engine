@@ -306,9 +306,10 @@ fn transport_error(e: &dyn std::fmt::Display) -> KrishivError {
     .into()
 }
 
-/// Waits until no session runs a query, or `deadline` passed.
+/// Waits until no session runs a query or holds a live operation (a stream
+/// still sending its last responses), or `deadline` passed.
 async fn queries_done(manager: &SessionManager, deadline: tokio::time::Instant) {
-    while manager.running_queries() > 0 && tokio::time::Instant::now() < deadline {
+    while manager.busy() > 0 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

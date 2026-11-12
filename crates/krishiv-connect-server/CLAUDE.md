@@ -32,8 +32,9 @@ Paths are relative to this crate.
   classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT` and `KRISHIV_OPERATION_LIMIT`
   are `RESOURCE_EXHAUSTED`
 - `src/manager.rs` `SessionManager` (Spark's `SparkConnectSessionManager`): get-or-create / lookup / release, tombstones
-  (LRU, no expiry), `SESSION_CHANGED` on a changed server-side id, the idle sweep (skips a session running a query),
-  `krishiv.connect.maxSessions` / `maxSessionsPerPrincipal`
+  (LRU, no expiry), `SESSION_CHANGED` on a changed server-side id, the idle sweep (skips a session running a query or
+  holding a live operation; `busy()` is what shutdown waits for), `krishiv.connect.maxSessions` /
+  `maxSessionsPerPrincipal`
 - `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper task, shutdown order
 - `tests/server.rs`, `tests/execute.rs` end to end over a raw tonic client
 
@@ -52,7 +53,8 @@ Paths are relative to this crate.
 - **Operations live in their session**: an operation id is looked up only in the caller's session (another
   principal's id is `OPERATION_NOT_FOUND`); a released or swept session cancels its operations first.
 - **The result is never held in full**: the encoder waits for `aheadBytes` of room; dropping the response stream
-  cancels the query and removes the operation (no tombstone until PR-15a).
+  (seen at once, also before the first batch) cancels the query and removes the operation (no tombstone until
+  PR-15a).
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)

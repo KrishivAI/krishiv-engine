@@ -256,6 +256,24 @@ fn sc_localhost_runs_spark_range_collect() {
     );
 }
 
+/// Design P3-T011a §5 `pyspark_minimal_reattach`: the stock client asks
+/// for a reattachable execution, gets `ResultComplete`, sends
+/// `ReleaseExecute` after the responses, and logs no error.
+#[test]
+#[ignore = "needs pyspark-client 4.3.0 / 4.2.1 on the host (not installed) and Config (PR-11b)"]
+fn pyspark_minimal_reattach() {
+    pyspark(
+        "import io, logging\n\
+         from pyspark.sql import SparkSession\n\
+         log = io.StringIO()\n\
+         logging.getLogger('pyspark').addHandler(logging.StreamHandler(log))\n\
+         s = SparkSession.builder.getOrCreate()\n\
+         assert [r.id for r in s.range(10).collect()] == list(range(10))\n\
+         s.stop()\n\
+         assert 'ERROR' not in log.getvalue() and 'Traceback' not in log.getvalue(), log.getvalue()\n",
+    );
+}
+
 #[test]
 #[ignore = "needs PR-11 (ExecutePlan, Config: P3-T011a)"]
 fn server_sessions_are_isolated() {

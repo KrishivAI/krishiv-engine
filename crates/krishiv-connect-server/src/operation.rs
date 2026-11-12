@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use krishiv_common::config::{
     CONNECT_EXECUTE_AHEAD_BYTES, CONNECT_MAX_OPERATIONS_PER_SESSION, Config, ConfigValue,
@@ -24,6 +24,7 @@ use krishiv_common::error::{
     InternalError, InvalidCursorDisconnected, InvalidHandleOperationAlreadyExists, KrishivError,
     KrishivInvalidOperationTag, KrishivOperationLimit,
 };
+use krishiv_memory::ConsumerHandle;
 use krishiv_session::QueryId;
 use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
@@ -165,6 +166,8 @@ pub struct Operation {
     sent: Mutex<HashSet<String>>,
     cancelled: AtomicBool,
     cancel: Notify,
+    /// The memory consumer its buffered responses are reserved from.
+    responses: OnceLock<Arc<ConsumerHandle>>,
 }
 
 impl Operation {
@@ -184,6 +187,7 @@ impl Operation {
             sent: Mutex::new(HashSet::new()),
             cancelled: AtomicBool::new(false),
             cancel: Notify::new(),
+            responses: OnceLock::new(),
         }
     }
 
@@ -226,6 +230,18 @@ impl Operation {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .contains(response_id)
+    }
+
+    /// Sets the memory consumer of the operation's buffered responses (once).
+    pub fn set_responses_consumer(&self, consumer: &Arc<ConsumerHandle>) {
+        let _ = self.responses.set(Arc::clone(consumer));
+    }
+
+    /// The most bytes of responses the operation held at once, waiting for
+    /// its client (`connect_responses`); 0 before it produced any.
+    #[must_use]
+    pub fn buffered_peak(&self) -> usize {
+        self.responses.get().map_or(0, |c| c.peak())
     }
 
     /// How many responses this operation produced so far.
