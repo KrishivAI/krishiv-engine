@@ -9,7 +9,7 @@
 //! Only the client-safe form of an error leaves ([`KrishivError::for_client`]).
 //! The exception classes are the ones Spark raises where the Connect server
 //! itself throws (`SparkSQLException`, `InvalidPlanInput`), and otherwise
-//! chosen from the error class and SQLSTATE ([`exception_classes`]) so that
+//! chosen from the error class and SQLSTATE (`exception_classes`) so that
 //! PySpark raises the Python exception Spark's would. `errorId` and
 //! `stackTrace` (Spark's enriched errors and `FetchErrorDetails`) are
 //! PR-15b's (design P3-T011a §3.3, §3.10).

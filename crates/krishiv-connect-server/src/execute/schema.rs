@@ -4,7 +4,7 @@
 //! of each result field.
 
 use arrow_schema::Schema;
-use krishiv_common::error::{ConnectInvalidPlanDataTypeUnsupportedCatalystToProto, KrishivError};
+use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::data_type::{self as dt, Kind};
 use krishiv_types::{DataType, DayTimeField, StructField, YearMonthField};
@@ -51,9 +51,8 @@ fn day_time(f: DayTimeField) -> i32 {
 /// One Spark type as a Connect type.
 ///
 /// # Errors
-/// `CONNECT_INVALID_PLAN.DATA_TYPE_UNSUPPORTED_CATALYST_TO_PROTO` for a type
-/// Spark cannot send (none today; the match is exhaustive over Krishiv's
-/// types).
+/// `INTERNAL_ERROR` for a type this mapping does not know (none today: a
+/// type added to `krishiv-types` later must be added here).
 pub fn proto_type(t: &DataType) -> Result<pb::DataType, KrishivError> {
     let v = 0;
     Ok(match t {
@@ -172,11 +171,10 @@ pub fn proto_type(t: &DataType) -> Result<pb::DataType, KrishivError> {
                 type_variation_reference: v,
             }))
         }
-        // A type added to krishiv-types later is refused, as Spark refuses
-        // one it cannot send.
+        // A type added to krishiv-types later (the enum is non-exhaustive).
         other => {
-            return Err(ConnectInvalidPlanDataTypeUnsupportedCatalystToProto {
-                type_name: other.sql(),
+            return Err(InternalError {
+                message: format!("no Spark Connect type for {}", other.sql()),
             }
             .into());
         }
