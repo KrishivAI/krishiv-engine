@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use krishiv_common::principal::Principal;
-use krishiv_connect::proto::v4_2 as pb;
+use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect_server::{ConnectServer, ConnectServerConfig, SessionLimits, SessionManager};
 use krishiv_session::Session;
 use tokio::net::TcpListener;
@@ -215,7 +215,7 @@ async fn a_field_the_version_does_not_define_is_refused_by_the_codec() {
     assert_eq!(
         e.message(),
         "[KRISHIV_UNSUPPORTED_FEATURE] The feature field 99 of \
-         spark.connect.ReleaseSessionRequest, which Spark Connect 4.2 does not define \
+         spark.connect.ReleaseSessionRequest, which Spark Connect 4.3 does not define \
          (sent by a newer client?) is not supported by Krishiv yet. SQLSTATE: 0A000"
     );
 }

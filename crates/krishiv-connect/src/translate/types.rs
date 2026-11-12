@@ -8,7 +8,7 @@ use krishiv_types::{
 
 use super::errors::{assertion, not_set, unsupported_variant};
 use super::literal;
-use crate::proto::v4_2::{DataType as Proto, data_type::Kind};
+use crate::proto::v4_3::{DataType as Proto, data_type::Kind};
 
 /// Maps a Connect data type, following Spark's `DataTypeProtoConverter`:
 /// a decimal with no precision is `decimal(10,0)`, one with a precision but

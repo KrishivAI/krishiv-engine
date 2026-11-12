@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The Spark Connect service: the generated tonic stub
-//! (`service/v4_2.pb.rs`, from `tools/connect-protogen`) and Krishiv's
+//! (`service/v4_3.pb.rs`, from `tools/connect-protogen`) and Krishiv's
 //! implementation of it, [`ConnectService`].
 //!
 //! T001 implements the session RPCs (`ReleaseSession`) and what every RPC
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use krishiv_common::principal::Principal;
-use krishiv_connect::proto::v4_2 as pb;
+use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::wire::Decoded;
 use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
@@ -27,7 +27,7 @@ use crate::manager::SessionManager;
 )]
 mod generated {
     use super::{Decoded, WireCodec, pb};
-    include!("service/v4_2.pb.rs");
+    include!("service/v4_3.pb.rs");
 }
 
 pub use generated::{SparkConnectService, SparkConnectServiceServer};

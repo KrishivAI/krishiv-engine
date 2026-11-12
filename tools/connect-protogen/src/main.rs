@@ -7,7 +7,7 @@
 //! ```
 //!
 //! Run it from the repository root. `VERSION` is the vendored Spark minor
-//! (default `4.2`; `v<VERSION>` is `v4_2`). These files come out, all under
+//! (default `4.3`, the one `krishiv-connect` compiles; `v<VERSION>` is `v4_3`). These files come out, all under
 //! `crates/krishiv-connect`:
 //!
 //! - `src/proto/v<VERSION>/spark.connect.pb.rs`: the `prost` message types;
@@ -82,7 +82,7 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     let mut mode = None;
-    let mut version = "4.2".to_owned();
+    let mut version = "4.3".to_owned();
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--write" | "--check" => mode = Some(arg),

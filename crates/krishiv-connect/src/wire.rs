@@ -40,7 +40,7 @@ use krishiv_common::error::{
 };
 use prost::Message;
 
-use crate::proto::v4_2::{Expression, Plan, Relation};
+use crate::proto::v4_3::{Expression, Plan, Relation};
 use crate::proto::{Field, Layout, Scrub, layout};
 use crate::stack::{INLINE_LEVELS, on_deep_stack};
 
@@ -128,7 +128,7 @@ impl<M: Message + Default + Send + Scrub> Drop for Decoded<M> {
 /// `CONNECT_INVALID_PLAN.PLAN_SIZE_LARGER_THAN_MAX` for input over the size,
 /// message or decoded-size limit, `FAILED_TO_PARSE_TOO_COMPLEX` for nesting
 /// deeper than [`MAX_NESTING`], `KRISHIV_UNSUPPORTED_FEATURE` for a field
-/// Spark Connect 4.2 does not define, `CONNECT_INVALID_PLAN.CANNOT_PARSE` for
+/// Spark Connect 4.3 does not define, `CONNECT_INVALID_PLAN.CANNOT_PARSE` for
 /// malformed bytes.
 pub fn decode_plan(bytes: &[u8]) -> Result<Decoded<Plan>, KrishivError> {
     decode(layout::PLAN, bytes)
@@ -231,7 +231,7 @@ impl From<Reject> for KrishivError {
             Reject::TooDeep => FailedToParseTooComplex {}.into(),
             Reject::UnknownField { message, number } => KrishivUnsupportedFeature {
                 feature: format!(
-                    "field {number} of spark.connect.{}, which Spark Connect 4.2 does not \
+                    "field {number} of spark.connect.{}, which Spark Connect 4.3 does not \
                      define (sent by a newer client?)",
                     layout::MESSAGES
                         .get(usize::from(message))

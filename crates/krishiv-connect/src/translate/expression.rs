@@ -24,8 +24,8 @@ use super::literal::literal;
 use super::names::parse_attribute_name;
 use super::types::data_type;
 use super::{Result, Translator};
-use crate::proto::v4_2::Expression;
-use crate::proto::v4_2::expression::{
+use crate::proto::v4_3::Expression;
+use crate::proto::v4_3::expression::{
     self, ExprType, cast::CastToType, cast::EvalMode, sort_order::NullOrdering as ProtoNulls,
     sort_order::SortDirection as ProtoDirection,
 };

@@ -11,7 +11,7 @@ the admin HTTP server (`/healthz`, `/readyz`, `/metrics`, UI) is `krishiv-server
 
 ## Key files
 Paths are relative to this crate.
-- `src/service/v4_2.pb.rs` **generated** by `tools/connect-protogen` (do not edit): the `SparkConnectService` trait
+- `src/service/v4_3.pb.rs` **generated** by `tools/connect-protogen` (do not edit): the `SparkConnectService` trait
   (one method per RPC, requests arrive as `krishiv_connect::wire::Decoded<_>`) and the tonic router
 - `src/service.rs` `ConnectService`, Krishiv's implementation: `ReleaseSession`; every other RPC is `UNIMPLEMENTED`
   until T011a; a draining server answers `UNAVAILABLE` ("server shutting down")
