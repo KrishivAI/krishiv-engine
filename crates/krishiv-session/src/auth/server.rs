@@ -1,0 +1,152 @@
+// SPDX-License-Identifier: Apache-2.0
+//! [`ServerAuth`], the one authenticator of a server (design §3.1).
+//!
+//! The chain, in a fixed order: a throttled peer is refused first; then the bearer token goes to
+//! the static tokens (OIDC and client certificates join in later units, ahead of it as the
+//! design orders them); no credential is [`AuthFailure::Missing`]. Every failure writes one log
+//! record (target `krishiv::auth`: surface, method, peer, failure; never the credential) and
+//! counts once per `(surface, method)`.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
+use futures::future::BoxFuture;
+use krishiv_common::error::KrishivError;
+
+use super::config::{AuthConfig, SPARK_TOKEN_NAME};
+use super::throttle::FailureThrottle;
+use super::tokens::StaticTokens;
+use super::{AuthFailure, Authenticated, Authenticator, Credentials, Method, Surface};
+
+/// One failure counter (`krishiv_auth_failed_total{surface, method}`, ADR 0046 §8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FailureCount {
+    /// The listener.
+    pub surface: Surface,
+    /// The method tried.
+    pub method: Method,
+    /// Failures so far.
+    pub count: u64,
+}
+
+/// The authenticator a server builds once from its settings.
+#[derive(Debug)]
+pub struct ServerAuth {
+    tokens: StaticTokens,
+    throttle: FailureThrottle,
+    /// Indexed by `surface * Method::ALL.len() + method`.
+    failures: [AtomicU64; Surface::ALL.len() * Method::ALL.len()],
+}
+
+impl ServerAuth {
+    /// Builds the authenticator: resolves and hashes every token. Logs a warning when Spark's
+    /// all-powerful `spark.connect.authenticate.token` is in use.
+    ///
+    /// # Errors
+    /// `KRISHIV_INVALID_CONFIG_VALUE` from [`StaticTokens::build`].
+    pub fn new(config: &AuthConfig) -> Result<Self, KrishivError> {
+        let tokens = StaticTokens::build(&config.tokens)?;
+        if config.tokens.iter().any(|t| t.name == SPARK_TOKEN_NAME) {
+            tracing::warn!(
+                target: "krishiv::auth",
+                "spark.connect.authenticate.token is set: it is one shared token with the admin \
+                 role; prefer krishiv.auth.tokens.<name> with one principal and role per token"
+            );
+        }
+        Ok(Self {
+            tokens,
+            throttle: FailureThrottle::new(config.throttle),
+            failures: std::array::from_fn(|_| AtomicU64::new(0)),
+        })
+    }
+
+    /// Whether any method is configured. A server with none runs with authentication off
+    /// (loopback only; the listener enforces that).
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        !self.tokens.is_empty()
+    }
+
+    /// Authenticates `credentials` at `now` (the clock is a parameter for tests).
+    ///
+    /// # Errors
+    /// The [`AuthFailure`], after its log record and counter.
+    pub fn authenticate_at(
+        &self,
+        credentials: &Credentials<'_>,
+        now: Instant,
+    ) -> Result<Authenticated, AuthFailure> {
+        let ip = credentials.peer.ip();
+        if self.throttle.is_blocked(ip, now) {
+            return Err(self.fail(credentials, Method::None, AuthFailure::Throttled));
+        }
+        let Some(token) = credentials.bearer else {
+            return Err(self.fail(credentials, Method::None, AuthFailure::Missing));
+        };
+        match self.tokens.lookup(token) {
+            Some((principal, role)) => Ok(Authenticated::new(
+                principal.clone(),
+                Some(role),
+                Method::Token,
+            )),
+            None => {
+                if self.throttle.record_failure(ip, now) {
+                    tracing::warn!(
+                        target: "krishiv::auth",
+                        peer = %ip,
+                        "authentication failures from this address are throttled"
+                    );
+                }
+                Err(self.fail(credentials, Method::Token, AuthFailure::Invalid))
+            }
+        }
+    }
+
+    /// The failure counters, every `(surface, method)` pair in order.
+    #[must_use]
+    pub fn failure_counts(&self) -> Vec<FailureCount> {
+        let mut out = Vec::with_capacity(self.failures.len());
+        for surface in Surface::ALL {
+            for method in Method::ALL {
+                out.push(FailureCount {
+                    surface,
+                    method,
+                    count: self.failures[index(surface, method)].load(Ordering::Relaxed),
+                });
+            }
+        }
+        out
+    }
+
+    /// Logs and counts `failure`, and returns it.
+    fn fail(&self, c: &Credentials<'_>, method: Method, failure: AuthFailure) -> AuthFailure {
+        self.failures[index(c.surface, method)].fetch_add(1, Ordering::Relaxed);
+        tracing::warn!(
+            target: "krishiv::auth",
+            surface = c.surface.as_str(),
+            method = method.as_str(),
+            peer = %c.peer,
+            failure = failure.as_str(),
+            "authentication failed"
+        );
+        failure
+    }
+}
+
+impl Authenticator for ServerAuth {
+    fn authenticate<'a>(
+        &'a self,
+        credentials: &'a Credentials<'a>,
+    ) -> BoxFuture<'a, Result<Authenticated, AuthFailure>> {
+        let result = self.authenticate_at(credentials, Instant::now());
+        Box::pin(std::future::ready(result))
+    }
+}
+
+/// The counter slot of `(surface, method)`.
+fn index(surface: Surface, method: Method) -> usize {
+    let s = Surface::ALL.iter().position(|x| *x == surface).unwrap_or(0);
+    let m = Method::ALL.iter().position(|x| *x == method).unwrap_or(0);
+    s * Method::ALL.len() + m
+}
