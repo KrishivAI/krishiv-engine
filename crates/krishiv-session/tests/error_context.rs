@@ -312,3 +312,31 @@ fn a_run_time_error_in_a_dataframe_write_has_its_span() {
     assert_eq!(span(&e), (7, 11, "a / b"));
     drop(std::fs::remove_dir_all(&dir));
 }
+
+// With ANSI mode off, Spark 4.2.0 gives a cast's range error and `element_at`'s zero index no
+// context (`results/nonansi/cast.sql.out`, `array.sql.out`); with it on they carry one.
+#[test]
+fn non_ansi_mode_drops_the_context_of_a_cast_and_element_at() {
+    for (sql, with_context) in [
+        (
+            "select cast(interval '10.123' second as decimal(1, 0))",
+            true,
+        ),
+        ("select element_at(array(1, 2, 3), 0)", true),
+    ] {
+        for ansi in [false, true] {
+            let s = Session::new().unwrap();
+            block_on(s.sql(&format!("SET spark.sql.ansi.enabled = {ansi}"))).unwrap();
+            let e = match block_on(s.sql(sql)) {
+                Err(e) => e,
+                Ok(df) => block_on(df.collect()).expect_err("the query fails"),
+            };
+            assert_eq!(
+                !e.query_contexts().is_empty(),
+                ansi && with_context,
+                "{sql} (ansi {ansi}): {:?}",
+                e.query_contexts()
+            );
+        }
+    }
+}

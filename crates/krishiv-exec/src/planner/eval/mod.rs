@@ -421,7 +421,7 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         ExprNode::Resolved(ResolvedExpr::Function(f))
             if matches!(&f.id, FunctionId::Registry { name, .. }
                 if name.starts_with("try_") || name == "split_part")
-    );
+    ) || (!input.env.ansi && no_context_without_ansi(e));
     let can_raise = !implicit_cast
         && matches!(
             &e.node,
@@ -451,6 +451,19 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         }),
         _ => compiled,
     })
+}
+
+/// Whether Spark 4.2.0 gives the errors of `e` no `queryContext` when `spark.sql.ansi.enabled` is
+/// off, though it does with it on: a cast's range errors and `element_at`'s zero index
+/// (`results/nonansi/cast.sql.out`, `array.sql.out`).
+fn no_context_without_ansi(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Cast { .. } => true,
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            matches!(&f.id, FunctionId::Registry { name, .. } if name == "element_at")
+        }
+        _ => false,
+    }
 }
 
 /// The source of the site a context-free expression marks its errors with: no
