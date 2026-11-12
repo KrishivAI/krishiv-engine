@@ -26,7 +26,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, FrameUnits, FunctionKind, Grouping,
     JoinCondition, JoinKind, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, WindowExpr,
-    WindowFrame, WindowSpec, WindowSpecRef,
+    WindowFrame, WindowSpec, WindowSpecRef, runs_on_any_row,
 };
 use krishiv_types::DataType;
 
@@ -161,6 +161,19 @@ impl Rule<'_> {
                 _ => false,
             };
             if !ok || refusal_of_call(f, &none, false).is_err() {
+                return None;
+            }
+        }
+        // The expressions around the calls run on every outer row after the rewrite, not once per
+        // group: one that can raise (`10 / (max(x) - 9)`) stays below the join.
+        for (out, inner) in &outputs {
+            let mut stand_in: Vec<(Arc<Expr>, Arc<Expr>)> = Vec::new();
+            for c in &calls {
+                let mut col = out.clone();
+                col.data_type = data_type(c)?;
+                stand_in.push((Arc::clone(c), column(&col)));
+            }
+            if !runs_on_any_row(&replace_calls(inner, &stand_in), true) {
                 return None;
             }
         }

@@ -235,3 +235,15 @@ fn a_raising_or_nondeterministic_call_is_refused() {
         assert!(!windowed(&sql), "{agg}");
     }
 }
+
+#[test]
+fn a_raising_expression_around_the_call_is_refused() {
+    // The window evaluates it on every outer row, the aggregate once per group.
+    let sql = q17(
+        "(10 / (max(l_quantity) - 9))",
+        "",
+        "",
+        "l_partkey = p_partkey",
+    );
+    assert!(!windowed(&sql));
+}
