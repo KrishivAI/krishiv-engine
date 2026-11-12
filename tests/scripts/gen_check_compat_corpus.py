@@ -54,11 +54,16 @@ for i in range(30):
     (out / f).write_text("\n".join(lines) + "\n")
 for i in range(30):
     f = f"job{i:02}.py"
-    lines = ["import pyspark.sql.functions as F", "# F.nope('x')"]
+    lines = [
+        "# ruff: noqa",
+        "import pyspark.sql.functions as F",
+        "",
+        "# F.nope('x')",
+    ]
     for _ in range(rnd.randint(3, 6)):
         n, _s = pick(f, len(lines) + 1)
         if rnd.random() < 0.5:
-            lines.append(f"df = df.select(F.{n}('a'), F.col('b'))")
+            lines.append(f'df = df.select(F.{n}("a"), F.col("b"))')
         else:
             lines.append(f'df = spark.sql("SELECT {n}(a) FROM t{i}")')
     (out / f).write_text("\n".join(lines) + "\n")

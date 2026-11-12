@@ -1,4 +1,6 @@
+# ruff: noqa
 import pyspark.sql.functions as F
+
 # F.nope('x')
 df = spark.sql("SELECT last(a) FROM t7")
 df = spark.sql("SELECT time_to_seconds(a) FROM t7")

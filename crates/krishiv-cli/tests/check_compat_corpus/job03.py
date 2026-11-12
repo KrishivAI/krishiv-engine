@@ -1,8 +1,10 @@
+# ruff: noqa
 import pyspark.sql.functions as F
+
 # F.nope('x')
 df = spark.sql("SELECT kll_merge_agg_float(a) FROM t3")
 df = spark.sql("SELECT log(a) FROM t3")
 df = spark.sql("SELECT day(a) FROM t3")
-df = df.select(F.approx_top_k_combine('a'), F.col('b'))
+df = df.select(F.approx_top_k_combine("a"), F.col("b"))
 df = spark.sql("SELECT repeat(a) FROM t3")
-df = df.select(F.xpath_number('a'), F.col('b'))
+df = df.select(F.xpath_number("a"), F.col("b"))
