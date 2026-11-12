@@ -638,8 +638,10 @@ pub fn krishiv_session::Session::new_session(&self) -> Self
 pub fn krishiv_session::Session::runtime(&self) -> &alloc::sync::Arc<krishiv_session::EngineRuntime>
 pub async fn krishiv_session::Session::sql_with(&self, &str, krishiv_session::QueryOptions) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 impl krishiv_session::Session
+pub fn krishiv_session::Session::baggage(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub fn krishiv_session::Session::clear_trace_context(&self)
 pub fn krishiv_session::Session::remove_tag(&self, &str)
+pub fn krishiv_session::Session::set_inbound_trace(&self, core::option::Option<&str>, core::option::Option<&str>) -> bool
 pub fn krishiv_session::Session::set_tag(&self, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::set_trace_context(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::tags(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>

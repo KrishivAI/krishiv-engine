@@ -396,10 +396,17 @@ fn bytes(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
-/// The trace id of a W3C `traceparent` (`version-trace_id-parent_id-flags`,
-/// lower-case hex), `None` if the header is malformed: version `ff`, an
-/// all-zero id, or the wrong lengths.
-pub(crate) fn parse_traceparent(header: &str) -> Option<String> {
+/// The remote span a W3C `traceparent` names: the trace, the caller's span
+/// (the parent of the spans the engine starts) and the trace flags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoteParent {
+    pub(crate) trace_id: String,
+    pub(crate) span_id: String,
+    pub(crate) flags: u8,
+}
+
+/// [`RemoteParent`] of `header`, `None` for a malformed one (version `ff`, an all-zero id or wrong lengths).
+pub(crate) fn parse_remote_parent(header: &str) -> Option<RemoteParent> {
     let hex = |s: &str, n: usize| {
         s.len() == n && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
     };
@@ -410,8 +417,50 @@ pub(crate) fn parse_traceparent(header: &str) -> Option<String> {
     let zero = |s: &str| s.bytes().all(|b| b == b'0');
     // Version 00 has exactly four fields; later versions may add more.
     let shape = hex(version, 2) && *version != "ff" && (*version != "00" || parts.len() == 4);
-    (shape && hex(trace, 32) && !zero(trace) && hex(parent, 16) && !zero(parent) && hex(flags, 2))
-        .then(|| (*trace).to_owned())
+    if !(shape
+        && hex(trace, 32)
+        && !zero(trace)
+        && hex(parent, 16)
+        && !zero(parent)
+        && hex(flags, 2))
+    {
+        return None;
+    }
+    Some(RemoteParent {
+        trace_id: (*trace).to_owned(),
+        span_id: (*parent).to_owned(),
+        flags: u8::from_str_radix(flags, 16).ok()?,
+    })
+}
+
+/// Most `baggage` entries and bytes a session keeps from an inbound header.
+/// The header is untrusted input: what is over either bound is dropped.
+pub(crate) const MAX_BAGGAGE_ENTRIES: usize = 32;
+pub(crate) const MAX_BAGGAGE_BYTES: usize = 4096;
+
+/// The `key=value` entries of a W3C `baggage` header (properties after `;` are
+/// dropped), at most [`MAX_BAGGAGE_ENTRIES`] within [`MAX_BAGGAGE_BYTES`]
+/// bytes of header; a malformed entry (no `=`, empty key, control character)
+/// is skipped.
+pub(crate) fn parse_baggage(header: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut budget = MAX_BAGGAGE_BYTES;
+    for entry in header.split(',') {
+        if out.len() >= MAX_BAGGAGE_ENTRIES || entry.len() > budget {
+            break;
+        }
+        budget -= entry.len() + 1.min(budget - entry.len());
+        let pair = entry.split(';').next().unwrap_or_default();
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        let (k, v) = (k.trim(), v.trim());
+        if k.is_empty() || k.chars().chain(v.chars()).any(char::is_control) {
+            continue;
+        }
+        out.push((k.to_owned(), v.to_owned()));
+    }
+    out
 }
 
 /// The name of the memory pool of the query whose `system.queries` row is `query_id`.
@@ -970,8 +1019,11 @@ pub(crate) struct QueryLog {
     /// The session this log belongs to, and its principal (fixed for life).
     session_id: String,
     principal: String,
-    /// The W3C trace the session's next queries belong to.
-    trace_id: Mutex<Option<String>>,
+    /// The W3C trace the session's next queries belong to, and the caller's
+    /// span they are children of.
+    trace: Mutex<Option<RemoteParent>>,
+    /// The `baggage` of the inbound request (untrusted, bounded).
+    baggage: Mutex<Vec<(String, String)>>,
     /// The session's tags, by key.
     tags: Mutex<std::collections::BTreeMap<String, String>>,
 }
@@ -1029,14 +1081,32 @@ impl QueryLog {
             .collect()
     }
 
-    /// Sets (or clears) the trace id the session's next queries record.
-    pub(crate) fn set_trace_id(&self, trace_id: Option<String>) {
-        *self.trace_id.lock().unwrap_or_else(PoisonError::into_inner) = trace_id;
+    /// Sets (or clears) the trace the session's next queries record.
+    pub(crate) fn set_trace(&self, trace: Option<RemoteParent>) {
+        *self.trace.lock().unwrap_or_else(PoisonError::into_inner) = trace;
+    }
+
+    /// The trace now in effect.
+    pub(crate) fn trace(&self) -> Option<RemoteParent> {
+        self.trace
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The trace id now in effect.
     pub(crate) fn trace_id(&self) -> Option<String> {
-        self.trace_id
+        self.trace().map(|t| t.trace_id)
+    }
+
+    /// Replaces the inbound baggage.
+    pub(crate) fn set_baggage(&self, baggage: Vec<(String, String)>) {
+        *self.baggage.lock().unwrap_or_else(PoisonError::into_inner) = baggage;
+    }
+
+    /// The inbound baggage now.
+    pub(crate) fn baggage(&self) -> Vec<(String, String)> {
+        self.baggage
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -1804,7 +1874,11 @@ mod tests {
     #[test]
     fn a_replayed_query_is_a_finished_row() {
         let log = QueryLog::default();
-        log.set_trace_id(Some("trace".to_owned()));
+        log.set_trace(Some(RemoteParent {
+            trace_id: "trace".to_owned(),
+            span_id: "span".to_owned(),
+            flags: 1,
+        }));
         assert!(log.try_set_tag("team", "etl"));
         let id = log.record_replayed(TextPolicy::default(), Some("SELECT 1"), Some("READ"), None);
         let row = &log.snapshot(false)[0];
@@ -1957,10 +2031,32 @@ mod tests {
     }
 
     #[test]
+    fn baggage_is_bounded_and_malformed_entries_are_skipped() {
+        let got = parse_baggage("a=1;prop=x, nokey, =v, k = v2 ,c\u{7}=1");
+        assert_eq!(
+            got,
+            [
+                ("a".to_owned(), "1".to_owned()),
+                ("k".to_owned(), "v2".to_owned())
+            ]
+        );
+        let many = (0..100)
+            .map(|i| format!("k{i}=v"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(parse_baggage(&many).len(), MAX_BAGGAGE_ENTRIES);
+        let big = format!("a={}", "x".repeat(MAX_BAGGAGE_BYTES));
+        assert!(parse_baggage(&big).is_empty());
+        let p = parse_remote_parent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+            .expect("valid");
+        assert_eq!((p.span_id.as_str(), p.flags), ("00f067aa0ba902b7", 1));
+    }
+
+    #[test]
     fn traceparent_is_checked_as_w3c_says() {
         let ok = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
         assert_eq!(
-            parse_traceparent(ok).as_deref(),
+            parse_remote_parent(ok).map(|p| p.trace_id).as_deref(),
             Some("4bf92f3577b34da6a3ce929d0e0e4736")
         );
         for bad in [
@@ -1972,10 +2068,10 @@ mod tests {
             "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
             "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra",
         ] {
-            assert!(parse_traceparent(bad).is_none(), "{bad}");
+            assert!(parse_remote_parent(bad).is_none(), "{bad}");
         }
         assert!(
-            parse_traceparent(&format!("01-{}-00f067aa0ba902b7-01-more", &ok[3..35])).is_some()
+            parse_remote_parent(&format!("01-{}-00f067aa0ba902b7-01-more", &ok[3..35])).is_some()
         );
     }
 
