@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# DRAFT exclusion manifest for the PySpark Connect suite (P3-T030). NOT frozen: the owner freezes
+# it at the first run. Source: krishiv-internal design/P3-pyspark-suite-runner.md §4.
+# Targets are paths relative to python/pyspark/sql/tests/connect/ (a file, a directory ending in
+# "/", or one id `file::Class::test`). reason_class is the enum in pyspark_suite/manifest.py.
+# Cap: excluded <= 20% of (collected - Spark's own skips). Fix causes; never widen the cap.
+
+# ---- firm ----
+[[exclude]]
+target = "streaming/"
+reason_class = "STREAMING_P4"
+note = "Structured Streaming queries, foreachBatch, listeners"
+
+[[exclude]]
+target = "pandas/streaming/"
+reason_class = "STREAMING_P4"
+note = "stateful streaming UDFs"
+
+[[exclude]]
+target = "test_parity_python_streaming_datasource.py"
+reason_class = "STREAMING_P4"
+note = "streaming Python data sources (T040 leaves them to P4)"
+
+[[exclude]]
+target = "test_connect_local_server.py"
+reason_class = "LOCAL_SERVER"
+note = "spawns its own local Connect server (decision 10: no remote('local') takeover)"
+versions = ["4.3.0"]
+
+[[exclude]]
+target = "client/test_artifact_localcluster.py"
+reason_class = "LOCAL_SERVER"
+note = "artifact tests on a local cluster"
+
+[[exclude]]
+target = "test_parity_resources.py"
+reason_class = "LOCAL_SERVER"
+note = "default master local-cluster[1, 4, 1024]; ResourceProfile needs a cluster manager"
+
+[[exclude]]
+target = "test_parity_geometrytype.py"
+reason_class = "DEFERRED_TYPE"
+note = "GEOMETRY: no Krishiv type planned in P3"
+
+[[exclude]]
+target = "test_parity_geographytype.py"
+reason_class = "DEFERRED_TYPE"
+note = "GEOGRAPHY: no Krishiv type planned in P3"
+
+[[exclude]]
+target = "test_parity_memory_profiler.py"
+reason_class = "OPTIONAL_DEP"
+note = "needs memory_profiler (inferred from imports, content not read)"
+
+# ---- candidates, undecided: owner decides at the freeze ----
+[[exclude]]
+target = "test_connect_context.py"
+reason_class = "UNVERIFIED"
+note = "SQLContext/HiveContext under Connect; may terminate the shared local server"
+versions = ["4.3.0"]
+
+[[exclude]]
+target = "test_parity_sql_context.py"
+reason_class = "UNVERIFIED"
+note = "same API family as test_connect_context.py"
+versions = ["4.3.0"]
+
+[[exclude]]
+target = "test_parity_frame_plot.py"
+reason_class = "UNVERIFIED"
+note = "needs plotly; keep in if the environment installs it"
+
+[[exclude]]
+target = "test_parity_frame_plot_plotly.py"
+reason_class = "UNVERIFIED"
+note = "needs plotly; keep in if the environment installs it"
+
+[[exclude]]
+target = "test_parity_udf_profiler.py"
+reason_class = "UNVERIFIED"
+note = "Python-worker profilers; depends on T014 worker design"
+
+[[exclude]]
+target = "test_parity_job_cancellation.py"
+reason_class = "UNVERIFIED"
+note = "job groups (setJobGroup) may be modelled differently by the server"
