@@ -400,6 +400,73 @@ fn file_write_writes_and_returns_files_through_the_executor() {
     assert_eq!(env.root.reserved(), 0);
 }
 
+/// A cancelled write opens no file after the cancel and leaves nothing (#690): the store holds the
+/// writer at its 4th file (one row per file), the query is cancelled and every task settles (paused
+/// time on one thread), then the store lets the held upload go. Exactly 4 uploads ever happen: the
+/// held one finishes, then the writer stops before its next file. Before the stop flag it went on
+/// opening a file per queued row.
+#[test]
+fn a_cancelled_write_opens_no_file_after_the_cancel() {
+    let env = Env::new(None).unwrap();
+    let fx = MockFixture::default();
+    let input = MemoryScan::try_new(
+        schema(),
+        (0..20).map(|k| Batch::new(sorted(50, k * 50))).collect(),
+    )
+    .unwrap();
+    let sink = Arc::new(
+        FileWriteSink::try_new(
+            fx.format(),
+            env.io.clone(),
+            schema(),
+            env.options(&fx, &fx.unit_rows(100)).unwrap(),
+            write_options("cancelled", 3, 1),
+        )
+        .unwrap(),
+    );
+    let plan = Arc::new(FileWrite {
+        input: Arc::new(Leaf(Arc::new(input))),
+        sink,
+    });
+    env.store.hold_uploads_after(3);
+    let started = |s: krishiv_io::io::FaultStats| s.uploads_started + s.puts;
+    env.block_on(async {
+        let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+        let query = QueryContext::new(
+            QueryId(8),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            Arc::clone(&env.query),
+        );
+        let stream = runner.execute(plan, Arc::clone(&query)).await.unwrap();
+        while env.store.stats().uploads_waiting == 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        // A file this small is one PUT when it closes, counted as it reaches the hold.
+        assert_eq!(started(env.store.stats()), 4, "held at the 4th file");
+        query.cancel();
+        drop(stream);
+        // Every task runs until it waits: the drivers end, so the writer's stop flag is set.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        env.store.release_uploads();
+        query.finished().await;
+    });
+    let stats = env.store.stats();
+    assert_eq!(
+        started(stats),
+        4,
+        "files written after the cancel: {stats:?}"
+    );
+    assert_eq!(stats.uploads_waiting, 0);
+    let left = env.block_on(
+        env.inner
+            .list(Some(&Path::from("cancelled")))
+            .collect::<Vec<_>>(),
+    );
+    assert!(left.is_empty(), "{left:?}");
+    assert_eq!(env.root.reserved(), 0);
+}
+
 #[test]
 fn a_failed_write_reports_the_writer_error_and_leaves_nothing() {
     let env = Env::new(None).unwrap();

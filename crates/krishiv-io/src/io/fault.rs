@@ -64,6 +64,9 @@ pub struct FaultStats {
     pub unscheduled: u64,
     /// Parts that completed after their upload was aborted (leaked storage).
     pub parts_after_abort: u64,
+    /// Uploads (multipart or single PUT) waiting now at a hold
+    /// ([`FaultStore::hold_uploads_after`]).
+    pub uploads_waiting: u64,
 }
 
 #[derive(Debug, Default)]
@@ -79,10 +82,20 @@ struct FaultState {
     get_threads: Vec<Option<String>>,
 }
 
+/// A hold on uploads: those after the first `after` wait on `gate` until it
+/// is closed ([`FaultStore::release_uploads`]).
+#[derive(Debug)]
+struct Hold {
+    after: u64,
+    seen: u64,
+    gate: Arc<tokio::sync::Semaphore>,
+}
+
 /// Wraps a store with injected faults and request accounting.
 pub struct FaultStore {
     inner: Arc<dyn ObjectStore>,
     state: Arc<Mutex<FaultState>>,
+    hold: Mutex<Option<Hold>>,
 }
 
 impl fmt::Debug for FaultStore {
@@ -116,6 +129,7 @@ impl FaultStore {
         Arc::new(Self {
             inner,
             state: Arc::new(Mutex::new(FaultState::default())),
+            hold: Mutex::new(None),
         })
     }
 
@@ -163,6 +177,47 @@ impl FaultStore {
         std::mem::take(&mut lock(&self.state).get_threads)
     }
 
+    /// From now on, the uploads (multipart or single PUT) after the first
+    /// `after` wait before reaching the store until
+    /// [`FaultStore::release_uploads`]: a test pauses a writer at a known
+    /// file. [`FaultStats::uploads_waiting`] counts the waiting ones.
+    pub fn hold_uploads_after(&self, after: u64) {
+        *self.hold.lock().unwrap_or_else(PoisonError::into_inner) = Some(Hold {
+            after,
+            seen: 0,
+            gate: Arc::new(tokio::sync::Semaphore::new(0)),
+        });
+    }
+
+    /// Ends a hold: waiting uploads go on, and later ones do not wait.
+    pub fn release_uploads(&self) {
+        if let Some(h) = self
+            .hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            h.gate.close();
+        }
+    }
+
+    /// Waits at the hold, if this upload is past it.
+    async fn held(&self) {
+        let gate = {
+            let mut hold = self.hold.lock().unwrap_or_else(PoisonError::into_inner);
+            hold.as_mut().and_then(|h| {
+                h.seen += 1;
+                (h.seen > h.after).then(|| Arc::clone(&h.gate))
+            })
+        };
+        if let Some(gate) = gate {
+            lock(&self.state).stats.uploads_waiting += 1;
+            // Closed by `release_uploads`: the error is the release.
+            drop(gate.acquire().await);
+            lock(&self.state).stats.uploads_waiting -= 1;
+        }
+    }
+
     fn check_scheduled(&self, scheduled: bool) {
         if !scheduled {
             lock(&self.state).stats.unscheduled += 1;
@@ -195,6 +250,7 @@ impl ObjectStore for FaultStore {
                 return Err(transient(None));
             }
         }
+        self.held().await;
         self.inner.put_opts(location, payload, opts).await
     }
 
@@ -204,6 +260,7 @@ impl ObjectStore for FaultStore {
         opts: PutMultipartOptions,
     ) -> StoreResult<Box<dyn MultipartUpload>> {
         self.check_scheduled(opts.extensions.get::<ScheduledRequest>().is_some());
+        self.held().await;
         let inner = self.inner.put_multipart_opts(location, opts).await?;
         lock(&self.state).stats.uploads_started += 1;
         Ok(Box::new(FaultUpload {
