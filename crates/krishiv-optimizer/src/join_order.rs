@@ -257,11 +257,6 @@ fn selection(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
     }
 }
 
-/// The outputs of `p`'s projection that compute an expression rather than
-/// pass a column through, by attribute. Empty when `p` is no projection, or
-/// one the filter pushdown does not cross (a nondeterministic expression, a
-/// common-subexpression output): a conjunct over it stays above, so it is
-/// estimated as written.
 /// The outputs of a projection `p` that rename an input column
 /// (`a AS c`), by output attribute: the input column's attribute.
 fn renamed_columns(p: &LogicalPlan) -> HashMap<AttrId, AttrId> {
@@ -280,6 +275,11 @@ fn renamed_columns(p: &LogicalPlan) -> HashMap<AttrId, AttrId> {
         .collect()
 }
 
+/// The outputs of `p`'s projection that compute an expression rather than
+/// pass a column through, by attribute. Empty when `p` is no projection, or
+/// one the filter pushdown does not cross (a nondeterministic expression, a
+/// common-subexpression output): a conjunct over it stays above, so it is
+/// estimated as written.
 fn computed_outputs(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
     let PlanNode::Project { exprs, .. } = &p.node else {
         return HashMap::new();

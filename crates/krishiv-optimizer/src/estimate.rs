@@ -956,13 +956,19 @@ pub(crate) fn same_renames(predicate: &Arc<Expr>, input: &LogicalPlan) -> Arc<Ex
     let mut first: HashMap<AttrId, BoundColumn> = HashMap::new();
     let mut to: HashMap<AttrId, BoundColumn> = HashMap::new();
     for e in exprs {
-        if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &e.node
-            && let ExprNode::Resolved(ResolvedExpr::Column(c)) = &expr.node
-        {
-            let canon = first.entry(c.id).or_insert_with(|| output.clone());
-            if canon.id != output.id {
-                to.insert(output.id, canon.clone());
-            }
+        // `a AS c` renames `a`; a bare `a` passes it through under its own
+        // name (`Project [a, a AS c0]`: `a = c0` is `a = a`).
+        let (source, output) = match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => match &expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => (c.id, output),
+                _ => continue,
+            },
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => (c.id, c),
+            _ => continue,
+        };
+        let canon = first.entry(source).or_insert_with(|| output.clone());
+        if canon.id != output.id {
+            to.insert(output.id, canon.clone());
         }
     }
     if to.is_empty() {
