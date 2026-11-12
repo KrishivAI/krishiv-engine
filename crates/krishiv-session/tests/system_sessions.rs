@@ -103,18 +103,19 @@ fn a_session_lists_itself_with_what_the_front_end_said() {
     );
     a.set_client_info(Transport::Connect, Some("other"), None, None);
     a.set_tag("team", "etl").unwrap();
+    let catalog = texts(&a, "SELECT current_catalog()").remove(0);
+    let namespace = texts(&a, "SELECT current_schema()").remove(0);
     let rows = texts(
         &a,
         "SELECT concat_ws('|', transport, client_type, client_user_id, server_session_id, state, \
-         current_catalog, tags['team']) FROM system.sessions",
+         current_catalog, current_namespace, tags['team']) FROM system.sessions",
     );
-    assert_eq!(rows.len(), 1);
-    assert!(
-        rows[0].starts_with("connect|spark/4.3.0|u1|srv-1|active|"),
-        "{}",
-        rows[0]
+    assert_eq!(
+        rows,
+        [format!(
+            "connect|spark/4.3.0|u1|srv-1|active|{catalog}|{namespace}|etl"
+        )]
     );
-    assert!(rows[0].ends_with("|etl"), "{}", rows[0]);
 }
 
 #[test]
@@ -181,7 +182,23 @@ fn a_running_query_is_counted_and_cancelled_by_kill() {
         ["1"]
     );
     assert_eq!(rt.kill_session(&id, CancelReason::Admin), Some(1));
-    drop(stream);
+    // A second kill finds the session ended.
+    assert_eq!(rt.kill_session(&id, CancelReason::Admin), None);
+    assert_eq!(rt.expire_session(&id), None);
+    // The query itself ends with the admin's reason, not merely with its dropped stream.
+    let mut stream = stream;
+    let err = block_on(async {
+        use futures::StreamExt as _;
+        loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(e)) => break Some(e),
+                None => break None,
+            }
+        }
+    })
+    .expect("the killed query ends with an error");
+    assert_eq!(err.error_class().name(), "KRISHIV_QUERY_KILLED");
 }
 
 #[test]
@@ -217,17 +234,37 @@ fn queries_running_counts_live_queries_only_and_activity_moves() {
     let rt = EngineRuntime::builder().build().unwrap();
     let admin = session_of(&rt, "admin");
     let s = session_of(&rt, "runner");
-    let q = "SELECT concat_ws('|', CAST(queries_running AS STRING), CAST(queries_started AS STRING), \
-             CAST(last_active_at >= created_at AS STRING), CAST(idle_timeout_ms AS STRING)) \
-             FROM system.sessions WHERE principal = 'runner'";
+    let counts = "SELECT concat_ws('|', CAST(queries_running AS STRING), CAST(queries_started AS STRING), \
+                  CAST(idle_timeout_ms AS STRING)) FROM system.sessions WHERE principal = 'runner'";
+    let active = "SELECT CAST(unix_micros(last_active_at) AS STRING) FROM system.sessions \
+                  WHERE principal = 'runner'";
     s.set_idle_timeout_ms(Some(60_000));
     let df = block_on(s.sql("SELECT id FROM range(0, 2000000000)")).unwrap();
     let stream = block_on(df.execute_stream()).unwrap();
-    assert_eq!(texts(&admin, q), ["1|1|true|60000"]);
+    assert_eq!(texts(&admin, counts), ["1|1|60000"]);
     drop(stream);
+    let before: i64 = texts(&admin, active)[0].parse().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
     block_on(block_on(s.sql("SELECT 1")).unwrap().collect()).unwrap();
-    let r = &texts(&admin, q)[0];
-    assert!(r.starts_with("0|"), "{r}");
+    let after: i64 = texts(&admin, active)[0].parse().unwrap();
+    assert!(
+        after > before,
+        "last_active_at did not move: {before} -> {after}"
+    );
+    assert_eq!(texts(&admin, counts), ["0|2|60000"]);
+}
+
+#[test]
+fn client_strings_are_capped_at_a_character_boundary() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = session_of(&rt, "capper");
+    let long = "\u{e9}".repeat(400);
+    s.set_client_info(Transport::Ui, Some(&long), None, None);
+    let n = texts(
+        &s,
+        "SELECT CAST(length(client_type) AS STRING) FROM system.sessions",
+    );
+    assert_eq!(n, ["128"]);
 }
 
 #[test]

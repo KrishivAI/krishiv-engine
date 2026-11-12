@@ -42,11 +42,13 @@ impl Who {
     /// The identity of `state`'s session at this moment (the trace context can change between
     /// statements).
     pub(crate) fn of(state: &crate::session::SessionState) -> Self {
+        // One read: the trace id and the remote parent come from the same trace.
+        let trace = state.queries.trace();
         Self {
             session_id: state.session_id.clone(),
-            trace_id: state.queries.trace_id(),
+            trace_id: trace.as_ref().map(|t| t.trace_id.clone()),
             #[cfg(feature = "telemetry-otlp")]
-            remote: state.queries.trace(),
+            remote: trace,
             principal: state.principal.name.clone(),
             tenant: state.principal.tenant.clone(),
         }

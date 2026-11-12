@@ -466,20 +466,18 @@ impl EngineRuntime {
         self.cancel_where(reason, |s, _| s == session).len()
     }
 
-    /// The queries session `session` is running now.
-    pub(crate) fn running_of(&self, session: u64) -> i64 {
+    /// The queries each session is running now, counted in one pass.
+    pub(crate) fn running_counts(&self) -> HashMap<u64, i64> {
         let live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
-        let n = live
-            .queries
-            .values()
-            .filter(|l| l.session == session)
-            .filter(|l| {
-                l.query
-                    .as_ref()
-                    .is_none_or(|q| q.upgrade().is_some_and(|q| !q.is_finished()))
-            })
-            .count();
-        i64::try_from(n).unwrap_or(i64::MAX)
+        let mut counts = HashMap::new();
+        for l in live.queries.values().filter(|l| {
+            l.query
+                .as_ref()
+                .is_none_or(|q| q.upgrade().is_some_and(|q| !q.is_finished()))
+        }) {
+            *counts.entry(l.session).or_insert(0) += 1;
+        }
+        counts
     }
 
     /// The registry as `system.sessions` reads it.
@@ -487,7 +485,7 @@ impl EngineRuntime {
         let runtime = Arc::clone(self);
         Arc::new(crate::sessions::SessionView {
             registry: Arc::clone(&self.sessions),
-            running: Box::new(move |n| runtime.running_of(n)),
+            running: Box::new(move || runtime.running_counts()),
         })
     }
 
@@ -502,9 +500,10 @@ impl EngineRuntime {
         end: crate::sessions::End,
     ) -> Option<usize> {
         let (number, state) = self.sessions.find(session_id)?;
-        state
-            .closed
-            .store(true, std::sync::atomic::Ordering::Release);
+        // One caller ends it: a second kill, expire or `close` finds the flag set.
+        if state.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return None;
+        }
         let n = self.cancel_session(number, reason);
         self.sessions.retire(number, || {
             crate::sessions::SessionRow::of(&state, Some(end), 0)

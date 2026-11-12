@@ -103,6 +103,18 @@ pub(crate) struct Activity {
     client: Mutex<ClientInfo>,
 }
 
+/// The longest client-asserted string kept (bytes, cut at a character boundary): the values are
+/// shown in `system.sessions` and stay in the ended ring.
+pub(crate) const MAX_CLIENT_STRING: usize = 256;
+
+fn capped(v: &str) -> String {
+    let mut end = v.len().min(MAX_CLIENT_STRING);
+    while !v.is_char_boundary(end) {
+        end -= 1;
+    }
+    v[..end].to_owned()
+}
+
 /// What a front end says about its client (all client-asserted, shown, never trusted).
 #[derive(Debug, Default, Clone)]
 struct ClientInfo {
@@ -131,7 +143,7 @@ impl Default for Activity {
 impl Activity {
     /// A call arrived on the session.
     pub(crate) fn touch(&self) {
-        self.last_active_ms.store(now_ms(), Ordering::Relaxed);
+        self.last_active_ms.fetch_max(now_ms(), Ordering::Relaxed);
     }
 
     /// A query started.
@@ -161,13 +173,13 @@ impl Activity {
             if slot.is_none()
                 && let Some(v) = v.filter(|v| !v.is_empty())
             {
-                *slot = Some(v.to_owned());
+                *slot = Some(capped(v));
             }
         };
         keep(&mut c.client_type, client_type);
         keep(&mut c.client_user_id, user);
         if let Some(s) = server.filter(|s| !s.is_empty()) {
-            c.server_session_id = Some(s.to_owned());
+            c.server_session_id = Some(capped(s));
         }
     }
 }
@@ -307,14 +319,19 @@ impl SessionRegistry {
     }
 
     /// Every session, live ones first by creation time, then the ended ones oldest first;
-    /// `running` gives a live session's running queries.
-    pub(crate) fn snapshot(&self, running: impl Fn(u64) -> i64) -> Vec<SessionRow> {
+    /// `running` counts every live session's running queries at once.
+    pub(crate) fn snapshot(&self, running: impl FnOnce() -> HashMap<u64, i64>) -> Vec<SessionRow> {
+        let counts = running();
         let mut live: Vec<SessionRow> = self
             .live_handles()
             .into_iter()
             .filter_map(|(n, w)| {
                 let s = w.upgrade()?;
-                Some(SessionRow::of(&s, None, running(n)))
+                Some(SessionRow::of(
+                    &s,
+                    None,
+                    counts.get(&n).copied().unwrap_or(0),
+                ))
             })
             .collect();
         live.sort_by_key(|r| (r.created_ms, r.session_id.clone()));
@@ -329,14 +346,15 @@ impl SessionRegistry {
 /// The runtime's session registry and how many queries each session runs, for `system.sessions`.
 pub(crate) struct SessionView {
     pub(crate) registry: Arc<crate::sessions::SessionRegistry>,
-    pub(crate) running: Box<dyn Fn(u64) -> i64 + Send + Sync>,
+    /// The running queries per session number, counted in one pass.
+    pub(crate) running: Box<dyn Fn() -> HashMap<u64, i64> + Send + Sync>,
 }
 
 impl Default for SessionView {
     fn default() -> Self {
         Self {
             registry: Arc::default(),
-            running: Box::new(|_| 0),
+            running: Box::new(HashMap::new),
         }
     }
 }
