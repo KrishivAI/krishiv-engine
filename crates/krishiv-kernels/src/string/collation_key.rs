@@ -6,7 +6,7 @@
 //! `UTF8_LCASE` is Spark's `CollationAwareUTF8String.lowerCaseCodePoints`: the simple lower case
 //! of each code point (ICU's, not the JDK's; generated from Spark, `case_table.rs`), `U+0130` to
 //! `i` + `U+0307`, final sigma to sigma, with a byte path for ASCII. `_RTRIM` first drops the trailing
-//! spaces (`U+0020` only). `UTF8_BINARY` is the bytes. ICU collations have no key here (unit 6): the
+//! spaces (`U+0020` only). `UTF8_BINARY` is the bytes. ICU collations have a key here only with `collations-icu`; without it the
 //! analyzer refuses them before a key is asked for.
 
 use std::sync::Arc;
@@ -48,7 +48,7 @@ fn push_lower(c: char, out: &mut Vec<u8>) {
 /// Appends the key of `s` under `collation`.
 ///
 /// # Errors
-/// `INTERNAL_ERROR` for an ICU collation, which has no key here (the analyzer refuses it first).
+/// `INTERNAL_ERROR` for an ICU collation without `collations-icu` (the analyzer refuses it first).
 pub fn push_collation_key(
     collation: Collation,
     s: &str,

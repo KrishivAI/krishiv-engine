@@ -78,7 +78,7 @@ fn collate_checks_its_input_and_its_name() {
     );
 }
 
-/// A collated value with no key (ICU, unit 6) is refused in a comparing position instead of being
+/// A collated value with no key (ICU without `collations-icu`) is refused in a comparing position instead of being
 /// compared as bytes; `collation_keys.rs` runs every key-bearing operator. With `collations-icu`
 /// ICU has a key, so this holds only without it.
 #[cfg(not(feature = "collations-icu"))]
