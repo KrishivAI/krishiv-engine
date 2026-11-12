@@ -799,14 +799,22 @@ fn a_cancelled_write_removes_the_files_it_made() {
     });
     watcher.join().unwrap();
     assert!(cancelled, "the write was still running when it was dropped");
-    // The detached writers finish aborting on their own.
+    // The detached writers finish aborting on their own, without first
+    // writing their queued rows (one file per row here): before they stopped
+    // at the cancel, thousands of files appeared and the cleanup took seconds.
     let start = std::time::Instant::now();
+    let mut peak = 0;
     loop {
         let left = std::fs::read_dir(&out).map_or(0, |d| {
             d.filter_map(Result::ok)
                 .filter(|e| e.file_name().to_string_lossy().starts_with("part-"))
                 .count()
         });
+        peak = peak.max(left);
+        assert!(
+            peak < 1000,
+            "{peak} part files after the cancel: the writers kept writing"
+        );
         if left == 0 {
             break;
         }
@@ -1813,4 +1821,137 @@ fn a_multi_table_insert_denied_in_a_later_clause_writes_nothing() {
         0,
         "the first clause wrote nothing"
     );
+}
+
+#[test]
+fn use_system_and_show_catalogs_need_no_privilege() {
+    let policy = Policy::new(allow);
+    let s = session(Arc::clone(&policy) as Arc<dyn AccessPolicy>);
+    policy.deny_everything();
+    assert_eq!(rows(&s, "SHOW CATALOGS").unwrap(), 2);
+    assert_eq!(class(rows(&s, "USE system")), "OK");
+    assert_eq!(rows(&s, "SHOW CATALOGS").unwrap(), 2);
+    assert_eq!(
+        rows(&s, "SELECT 1 WHERE current_catalog() = 'system'").unwrap(),
+        1,
+        "USE system changed the current catalog"
+    );
+}
+
+/// Allows only `Select` on the `system` catalog's namespace.
+fn only_the_system_namespace(securable: &Securable, _: Privilege) -> AccessDecision {
+    match securable {
+        Securable::Namespace(p) if p.len() == 1 && p[0].eq_ignore_ascii_case("system") => {
+            AccessDecision::Allow
+        }
+        _ => deny(),
+    }
+}
+
+/// `SHOW TABLES IN system` is checked as the system catalog, the same securable `USE system; SHOW TABLES` gets.
+#[test]
+fn show_tables_in_system_is_authorized_against_the_system_catalog() {
+    let s = session(Policy::new(only_the_system_namespace));
+    for sql in [
+        "SHOW TABLES IN system",
+        "SHOW TABLES IN spark_catalog.system",
+    ] {
+        assert_eq!(class(rows(&s, sql)), "OK", "{sql}");
+    }
+}
+
+#[test]
+fn bare_ddl_under_system_is_a_reserved_name() {
+    let s = session(Policy::new(allow) as Arc<dyn AccessPolicy>);
+    block_on(s.sql("USE system")).unwrap();
+    for sql in [
+        "CREATE TABLE x (a INT) USING parquet",
+        "CREATE VIEW x AS SELECT 1",
+        "DROP TABLE IF EXISTS x",
+    ] {
+        assert_eq!(class(rows(&s, sql)), "KRISHIV_RESERVED_NAME", "{sql}");
+    }
+}
+
+/// Denies a table or view read that names the `system` catalog but a stored table (`t_stored`, `v_stored`).
+fn no_system_stored(securable: &Securable, _: Privilege) -> AccessDecision {
+    match securable {
+        Securable::Table(t) | Securable::View(t)
+            if t.catalog.eq_ignore_ascii_case("system")
+                && (t.name == "t_stored" || t.name == "v_stored") =>
+        {
+            deny()
+        }
+        _ => AccessDecision::Allow,
+    }
+}
+
+/// After `USE system`, a stored view's own tables and the view are authorized in `spark_catalog`, where they
+/// live, never as `system.*` names that do not exist.
+#[test]
+fn a_stored_view_and_its_tables_are_authorized_in_their_defining_catalog_under_system() {
+    let s = session(Policy::new(no_system_stored));
+    block_on(async {
+        s.sql("CREATE TABLE t_stored (a INT)")
+            .await?
+            .collect()
+            .await?;
+        s.sql("INSERT INTO t_stored VALUES (1)")
+            .await?
+            .collect()
+            .await?;
+        s.sql("CREATE VIEW v_stored AS SELECT a FROM default.t_stored")
+            .await?
+            .collect()
+            .await?;
+        s.sql("USE system").await?.collect().await
+    })
+    .unwrap();
+    // Read through the catalog-qualified view: its body's table is checked as spark_catalog.default.t_stored.
+    assert_eq!(
+        rows(&s, "SELECT * FROM spark_catalog.default.v_stored").unwrap(),
+        1
+    );
+    // Reading the stored table by a name that would be system.* is refused, as before.
+    assert_eq!(class(rows(&s, "SELECT * FROM default.t_stored")), DENIED);
+}
+
+/// Denies reads of the `system` catalog's names that are really stored tables (`capabilities` is only a system table).
+fn no_system_t_path(securable: &Securable, _: Privilege) -> AccessDecision {
+    match securable {
+        Securable::Table(t) | Securable::View(t)
+            if t.catalog.eq_ignore_ascii_case("system") && t.name == "t_path" =>
+        {
+            deny()
+        }
+        _ => AccessDecision::Allow,
+    }
+}
+
+/// A bare name the SQL path places in a stored schema is authorized where it is read (`spark_catalog.default`),
+/// not as a `system.*` name.
+#[test]
+fn a_bare_read_placed_by_the_path_in_a_stored_schema_is_authorized_in_that_schema() {
+    let s = session(Policy::new(no_system_t_path));
+    block_on(async {
+        s.sql("SET spark.sql.path.enabled=true")
+            .await?
+            .collect()
+            .await?;
+        s.sql("CREATE TABLE t_path (a INT)")
+            .await?
+            .collect()
+            .await?;
+        s.sql("INSERT INTO t_path VALUES (1)")
+            .await?
+            .collect()
+            .await?;
+        s.sql("USE system").await?.collect().await?;
+        s.sql("SET PATH = spark_catalog.default, CURRENT_SCHEMA")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM t_path").unwrap(), 1);
 }

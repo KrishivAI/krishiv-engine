@@ -25,15 +25,15 @@ steps below.
 Enabling a release is therefore always a reviewed change that edits those
 guards, made by the maintainer.
 
-## Current state: `0.2.0-alpha`
+## Current state: `0.2.0`
 
-- The version is `[workspace.package] version = "0.2.0-alpha"` in `Cargo.toml`,
-  inherited by every crate. Python gets the PEP 440 form (`0.2.0a0`) from
+- The version is `[workspace.package] version = "0.2.0"` in `Cargo.toml`,
+  inherited by every crate. Python gets the same version from
   maturin.
 - `CHANGELOG.md` holds the notes. Later entries come from
   `release-plz update` (Conventional Commits; edits a local checkout only) and
   are edited by hand.
-- The first alpha has not been published anywhere.
+- The first release has not been published anywhere.
 
 ## Dry runs (safe, run in CI)
 
@@ -71,7 +71,7 @@ To publish after the owner's go: confirm `CHANGELOG.md` and the version, then
 Actions, "Publish to TestPyPI", "Run workflow" on `main` (or the tag), and
 approve the `testpypi` deployment. Verify the install from TestPyPI in a clean
 venv: `pip install --index-url https://test.pypi.org/simple/ --extra-index-url
-https://pypi.org/simple/ "krishiv[pyarrow]==0.2.0a0"`.
+https://pypi.org/simple/ "krishiv[pyarrow]==0.2.0"`.
 
 ## Release artifacts (manual, publishes nothing)
 
@@ -80,14 +80,71 @@ https://pypi.org/simple/ "krishiv[pyarrow]==0.2.0a0"`.
 `release-bundle` workflow artifact. It has no publish step, tag or GitHub Release; the gated publish jobs are a
 later change by the maintainer.
 
-## crates.io and PyPI (not set up)
+## Release channels for 0.2.0 (owner decision 2026-11-07)
 
-Publishing to crates.io or PyPI proper is not wired up at all. It needs, in
-one reviewed change by the maintainer: dropping `publish = false` and adding
-versions to the path dependencies of the crates that ship (what
-`publish-dry-run.sh` simulates), the licence decision in ADR 0033, registry
-credentials or trusted publishers, and a new gated workflow like the TestPyPI
-one. Until then there is nothing to run.
+
+0.2.0 goes to three channels. Docker and Helm are **not** part of it; they move to P3 with the server and Spark
+Connect work. Every channel stays a hard stop: tag and publish only on the owner's explicit go.
+
+| Channel | What ships | Dry run today |
+|---|---|---|
+| PyPI `krishiv` | abi3 (cp311+) and free-threaded cp314t wheels: manylinux x86_64/aarch64, musllinux, macOS arm64 | `wheels.yml` builds and tests every wheel; `publish-testpypi.yml` (manual) uploads them to TestPyPI |
+| crates.io `krishiv` | the facade plus the internal crates at the same version (ADR 0026) | `publish-dry-run` job of `ci.yml` (`.github/scripts/publish-dry-run.sh`) |
+| GitHub Release `v0.2.0` | changelog, quickstart, `krishiv` CLI binaries for Linux x86_64, Linux aarch64 and macOS arm64, SBOM, signatures | `binaries.yml` builds and smoke-tests the three binaries (and the `krishiv-compat` x86-64 baseline); the SBOM, the signatures and the release upload are **not wired yet** |
+
+Not wired yet (each is a reviewed change by the maintainer, because it edits the guards in
+`release_publishing_is_manual_and_gated`):
+
+- dropping `publish = false` and adding versions to the path dependencies of the crates that ship (what
+  `publish-dry-run.sh` simulates), and the PyPI and crates.io credentials (a PyPI trusted publisher over OIDC and a
+  scoped crates.io token) behind `environment:` gates with required reviewers;
+- a gated release workflow (`workflow_dispatch` only) that downloads the `binaries.yml` artifacts, writes checksums
+  and an SBOM, signs them and drafts the GitHub Release. Its dry-run mode must stop before any upload or tag.
+
+Owner actions before the gate are listed in `ops/needs-owner.md` ("Release 0.2.0 channels and pre-publish setup"):
+crates.io keywords and description (drop `datafusion`), the PyPI classifier, the credentials, and the go/no-go.
+
+## The 0.2.0 release, step by step (owner only)
+
+Each step is a hard stop for agents; the maintainer runs it and approves its environment.
+
+1. **Merge** the release PR on a green main, after the P2b gate is approved. Then tag `v0.2.0` on that commit and push the tag.
+2. **TestPyPI:** in Actions, run "Publish to TestPyPI" on the tag. Approve the `testpypi` environment, then install from TestPyPI in a clean virtualenv: `pip install -i https://test.pypi.org/simple/ krishiv==0.2.0` (and `krishiv-compat`), and run the quickstart.
+3. **PyPI:** run "Publish to PyPI" (`publish-pypi.yml`) on the tag and approve the `pypi` environment. Check <https://pypi.org/p/krishiv> and `pip install krishiv==0.2.0`.
+4. **crates.io:** run "Publish to crates.io" (`publish-crates.yml`) on the tag and approve the `crates-io` environment. It publishes the 20 crates of `.github/scripts/publish-crates.txt` in that order. A crate already at 0.2.0 is skipped, so a failed run can be dispatched again. Check `cargo add krishiv@0.2.0` in a scratch project.
+5. **Yank the old 0.1 releases** once 0.2.0 is verified: PyPI `krishiv` 0.1.0; crates.io `krishiv` 0.1.0-nightly.202607030148 and `krishiv-common` 0.1.0 (`cargo yank --version <v> <crate>`). See below.
+6. **GitHub Release** for `v0.2.0`, with the CHANGELOG 0.2.0 section as its notes.
+
+## Yanking a bad release (owner only)
+
+Every step is a hard stop for agents; the maintainer runs them. Yanking hides a version from new resolves and
+deletes nothing, so exact pins keep working.
+
+1. **PyPI**: project `krishiv` (and `krishiv-compat`), Manage, Releases, the version, Options, Yank, with a reason.
+   There is no token in the repository, so the web UI is the way.
+2. **crates.io**: `cargo yank --version 0.2.0 <crate>` for every published crate (the facade and the internal
+   crates at that version, ADR 0026). `cargo yank --undo` reverses it.
+3. **GitHub Release**: mark `v0.2.0` as a pre-release and say in its notes that it is yanked. Keep the tag; never
+   delete or move a published tag.
+4. **Record it**: retitle the CHANGELOG entry `## 0.2.0 (yanked)` with the reason and the fixed version.
+5. **Fix forward**: land the fix on `main`, bump the patch version and release `0.2.1` through the same gates.
+   A yanked version number is never reused.
+
+## Release train
+
+Owner decision 2026-11-07 (default adopted): a minor release every **6 weeks**.
+
+- **Cut:** one week before the release date, branch `release-X.Y` from `main`. That starts the one-week
+  **RC freeze**: only fixes for regressions, doc corrections and version bumps go onto the branch (cherry-picked
+  from `main`, or fixed there and merged back). `main` stays open for the next minor.
+- **RC:** tag `vX.Y.0-rc.N` from the branch; it publishes nowhere until the owner says go (see above).
+- **Release:** on the date, tag `vX.Y.0` from `release-X.Y`. Patch releases (`X.Y.Z`) are cut from the same branch.
+  Support covers the latest minor only while the major is 0.
+- **Dates:** every date is 6 weeks (42 days) after the previous minor's release date. 0.3 is planned as
+  *0.2 release date + 42 days*, its branch cut 7 days before that; the 0.2 date is set by the owner's publish go, so
+  record the 0.3 dates in `STATUS.md` the day 0.2 ships. A slipped release does not move the next one: the train
+  keeps its dates and the next minor takes what is ready.
+- Breaking changes (docs/concepts/stability.md) go into a minor only, with the changelog "Breaking" heading.
 
 ## Before any release
 

@@ -164,6 +164,12 @@ fn outputs(input: &RelStats, exprs: &[Arc<Expr>], rows: f64, propagate: bool) ->
         rows,
         cols,
         from_statistics: input.from_statistics,
+        // A projection keeps the rows; an aggregate does not.
+        unfiltered_rows: if rows == input.rows {
+            input.unfiltered_rows
+        } else {
+            0.0
+        },
     }
     .with_rows(rows)
 }
@@ -207,6 +213,7 @@ fn filtered(est: &RelStats, pred: &Expr, propagate: bool) -> RelStats {
         rows,
         cols,
         from_statistics: est.from_statistics,
+        unfiltered_rows: est.base_rows(),
     }
 }
 
@@ -233,6 +240,60 @@ fn key_pairs(pred: &Arc<Expr>, l: &RelStats, r: &RelStats) -> Vec<(AttrId, AttrI
             }
         })
         .collect()
+}
+
+/// The factor that turns the product of independent key selectivities
+/// (`prod 1 / max(ndv)` over the equalities, what `narrow::apply` gives) into
+/// the composite-key selectivity: several equalities between the same two
+/// sides are a foreign key into the side with fewer distinct key tuples, so
+/// the selectivity is `1 / min(prod ndv left, prod ndv right)` (each product
+/// over the distinct key columns, at most the side's rows before its filters: a filtered key
+/// side keeps its fraction of the join), the rule the
+/// join orderer's `composite_keys` applies, except that the cap is the side's rows before its
+/// filters (the orderer caps by the leaf's filtered rows). Never below 1: the independent
+/// product is already the smaller estimate then.
+fn composite_factor(pairs: &[(AttrId, AttrId)], l: &RelStats, r: &RelStats) -> f64 {
+    let (mut lc, mut rc): (Vec<AttrId>, Vec<AttrId>) = pairs.iter().copied().unzip();
+    lc.sort_unstable();
+    lc.dedup();
+    rc.sort_unstable();
+    rc.dedup();
+    // A column in two equalities narrows sequentially in `narrow::apply`; the product of original
+    // distinct counts below would not match it, so such keys get no factor.
+    if lc.len().min(rc.len()) < 2 || lc.len() != pairs.len() || rc.len() != pairs.len() {
+        return 1.0;
+    }
+    // A key column without known distinct counts (a guess) makes the tuple count unknown: no
+    // factor. A filtered side's key domain is that of the unfiltered side: each column's count
+    // is taken back through the filter's shrink (`unfiltered_distinct`), so a filter on a key
+    // keeps its reduction in the join's rows and one on another column leaves the domain alone.
+    let tuples = |ids: &[AttrId], s: &RelStats| -> Option<f64> {
+        let base = s.base_rows().max(1.0);
+        let kept = s.rows.max(1.0) / base;
+        let product = ids
+            .iter()
+            .map(|i| {
+                s.cols
+                    .get(i)
+                    .filter(|c| c.ndv_known())
+                    .map(|c| unfiltered_distinct(c.ndv.max(1.0), kept, base))
+            })
+            .product::<Option<f64>>()?;
+        Some(product.min(base))
+    };
+    let (Some(lt), Some(rt)) = (tuples(&lc, l), tuples(&rc, r)) else {
+        return 1.0;
+    };
+    let composite = 1.0 / lt.min(rt).max(1.0);
+    let independent: f64 = pairs
+        .iter()
+        .filter_map(|(a, b)| Some(1.0 / l.cols.get(a)?.ndv.max(r.cols.get(b)?.ndv).max(1.0)))
+        .product();
+    if independent > 0.0 && composite > independent {
+        composite / independent
+    } else {
+        1.0
+    }
 }
 
 /// Estimates relations, memoised per relation.
@@ -311,7 +372,15 @@ impl<'a> Estimator<'a> {
                     let defs = cse_definitions(input);
                     filtered(&est, &resolve_cse(predicate, &defs), self.propagate)
                 } else {
-                    filtered(&est, predicate, self.propagate)
+                    let mut out = filtered(&est, &same_renames(predicate, input), self.propagate);
+                    // Every rename of a column holds the same values: the
+                    // narrowing the canonical one got is theirs too.
+                    for (renamed, canon) in renames_to_canonical(input) {
+                        if let Some(c) = out.cols.get(&canon.id).cloned() {
+                            out.cols.insert(renamed, c);
+                        }
+                    }
+                    out
                 }
             }
             PlanNode::Project { input, exprs } => {
@@ -431,6 +500,7 @@ impl<'a> Estimator<'a> {
                         })
                         .collect(),
                     from_statistics: est.from_statistics,
+                    unfiltered_rows: est.unfiltered_rows,
                 }
             }
             PlanNode::Shift { input, offset } => {
@@ -443,6 +513,7 @@ impl<'a> Estimator<'a> {
                         .map(|(id, c)| (AttrId(id.0.saturating_add(*offset)), c.clone()))
                         .collect(),
                     from_statistics: est.from_statistics,
+                    unfiltered_rows: est.unfiltered_rows,
                 }
             }
             PlanNode::PartialAggregate {
@@ -489,7 +560,14 @@ impl<'a> Estimator<'a> {
             _ => None,
         };
         let mut v = View::new(&cols, self.propagate);
-        let sel = pred.as_ref().map_or(1.0, |c| apply(c, &mut v));
+        let composite = pred
+            .as_ref()
+            // Inner joins only: an outer or semi join's row rule (`max(l.rows)`, `min(inner,
+            // l.rows)`) and its unmatched fraction would read the larger inner estimate (TPC-DS
+            // q78's anti join collapsed to one row).
+            .filter(|_| self.propagate && matches!(kind, JoinKind::Inner))
+            .map_or(1.0, |c| composite_factor(&key_pairs(c, l, r), l, r));
+        let sel = pred.as_ref().map_or(1.0, |c| apply(c, &mut v)) * composite;
         // `inf * 0` is NaN: a zero selectivity is zero rows.
         let inner = if v.empty || sel <= 0.0 {
             0.0
@@ -523,6 +601,7 @@ impl<'a> Estimator<'a> {
                 rows,
                 cols,
                 from_statistics: false,
+                unfiltered_rows: 0.0,
             }
             .with_rows(rows);
         }
@@ -606,6 +685,9 @@ impl<'a> Estimator<'a> {
             rows,
             cols,
             from_statistics: false,
+            unfiltered_rows: rows
+                * (l.base_rows() / l.rows.max(1.0))
+                * (r.base_rows() / r.rows.max(1.0)),
         }
     }
 
@@ -638,6 +720,7 @@ impl<'a> Estimator<'a> {
             rows,
             cols,
             from_statistics: true,
+            unfiltered_rows: 0.0,
         }
     }
 }
@@ -695,6 +778,7 @@ fn union(
         rows,
         cols,
         from_statistics: false,
+        unfiltered_rows: 0.0,
     }
 }
 
@@ -812,6 +896,7 @@ fn expand(est: RelStats, projections: &[Vec<Arc<Expr>>], output: &[BoundColumn])
         rows,
         cols,
         from_statistics: est.from_statistics,
+        unfiltered_rows: 0.0,
     }
 }
 
@@ -838,4 +923,91 @@ fn kept_distinct(ndv: f64, kept: f64, rows: f64) -> f64 {
     }
     let per_value = (rows / ndv).max(1.0);
     ndv * (1.0 - (1.0 - kept).powf(per_value))
+}
+
+/// The distinct count a column held before a filter that kept the fraction `kept` of `rows` rows
+/// left it with `ndv`: the inverse of [`kept_distinct`] (monotone in the count, found by
+/// bisection between `ndv` and `rows`). A column of few values over many rows comes back as it
+/// is; a unique one comes back at `ndv / kept`.
+fn unfiltered_distinct(ndv: f64, kept: f64, rows: f64) -> f64 {
+    if !(kept > 0.0 && kept < 1.0) || ndv >= rows {
+        return ndv;
+    }
+    let (mut lo, mut hi) = (ndv, rows);
+    for _ in 0..40 {
+        let mid = 0.5 * (lo + hi);
+        if kept_distinct(mid, kept, rows) < ndv {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi
+}
+
+/// `predicate` over the projection `input` with every output that renames
+/// an input column read as the first output renaming that column: over
+/// `Project [a AS c0, a AS c1]`, `c0 = c1` is `c0 = c0`, which keeps every
+/// non-NULL row (`narrow`), as `a = a` does below the projection once
+/// pushdown moves it there. Estimated as two columns, the conjunct join
+/// ordering derives for the equal pair made its input look one row large on
+/// the first optimization and a million on the next.
+pub(crate) fn same_renames(predicate: &Arc<Expr>, input: &LogicalPlan) -> Arc<Expr> {
+    let to = renames_to_canonical(input);
+    if to.is_empty() {
+        return Arc::clone(predicate);
+    }
+    let out: Result<Arc<Expr>, std::convert::Infallible> =
+        Arc::clone(predicate).transform_up(&mut |n| {
+            Ok(match &n.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => match to.get(&c.id) {
+                    Some(canon) => Arc::new(
+                        Expr::new(ExprNode::Resolved(ResolvedExpr::Column(canon.clone())))
+                            .with_origin(n.origin),
+                    ),
+                    None => n,
+                },
+                _ => n,
+            })
+        });
+    match out {
+        Ok(p) => p,
+        Err(never) => match never {},
+    }
+}
+
+/// The outputs of the projection under `input` (through filters) that
+/// rename an input column another output already names, by attribute: that
+/// first output (the canonical name of the column).
+fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
+    // Filters and subquery aliases keep their input's columns (attributes):
+    // the projection may sit below them.
+    let mut input = input;
+    while let PlanNode::Filter { input: below, .. } | PlanNode::SubqueryAlias { input: below, .. } =
+        &input.node
+    {
+        input = below;
+    }
+    let PlanNode::Project { exprs, .. } = &input.node else {
+        return HashMap::new();
+    };
+    let mut first: HashMap<AttrId, BoundColumn> = HashMap::new();
+    let mut to: HashMap<AttrId, BoundColumn> = HashMap::new();
+    for e in exprs {
+        // `a AS c` renames `a`; a bare `a` passes it through under its own
+        // name (`Project [a, a AS c0]`: `a = c0` is `a = a`).
+        let (source, output) = match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => match &expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => (c.id, output),
+                _ => continue,
+            },
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => (c.id, c),
+            _ => continue,
+        };
+        let canon = first.entry(source).or_insert_with(|| output.clone());
+        if canon.id != output.id {
+            to.insert(output.id, canon.clone());
+        }
+    }
+    to
 }

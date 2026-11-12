@@ -6,11 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+publish = true
 
 [dependencies]
 arrow-array.workspace = true
-krishiv-types = { path = "../krishiv-types" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
 
 [lints]
 workspace = true

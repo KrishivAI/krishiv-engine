@@ -1,4 +1,4 @@
-# release-plz configuration for the first release, `0.2.0-alpha` (P2-T147).
+# release-plz configuration for the first release, `0.2.0` (P2-T147).
 #
 # NOTHING HERE PUBLISHES, TAGS OR RELEASES. Every release switch is off, no
 # workflow runs release-plz, and every crate also carries `publish = false` in
@@ -7,9 +7,9 @@
 # any of the switches below is turned on or a publishing path appears.
 #
 # The version: release-plz never invents the first version of a crate that has
-# not been released. It takes the version in Cargo.toml, so `0.2.0-alpha` is
+# not been released. It takes the version in Cargo.toml, so `0.2.0` is
 # `[workspace.package] version` (inherited by every crate; Python gets the
-# PEP 440 form `0.2.0a0`). Later releases are computed from Conventional
+# same version). Later releases are computed from Conventional
 # Commits by `release-plz update`, which only edits files in a local checkout.
 # Allowed commands: `release-plz update` (local changes only) and, with the
 # owner's approval, `release-plz release --dry-run`.
