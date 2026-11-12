@@ -23,8 +23,8 @@ use super::errors::{
 };
 use super::names::parse_multipart_identifier;
 use super::{Result, Translator};
-use crate::proto::v4_2::{self as pb, Expression};
-use crate::proto::v4_2::{
+use crate::proto::v4_3::{self as pb, Expression};
+use crate::proto::v4_3::{
     Relation, aggregate::GroupType, join::JoinType, read::ReadType, relation::RelType,
 };
 

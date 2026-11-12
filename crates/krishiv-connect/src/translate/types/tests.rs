@@ -6,7 +6,7 @@ use krishiv_types::{DataType, DecimalType};
 
 use super::super::testing::proto_type;
 use super::*;
-use crate::proto::v4_2::data_type as dt;
+use crate::proto::v4_3::data_type as dt;
 
 #[test]
 fn every_supported_kind_maps() {
@@ -224,7 +224,7 @@ fn interval_types_keep_their_fields() {
     }
 }
 
-use crate::proto::v4_2::DataType as DataTypeProto;
+use crate::proto::v4_3::DataType as DataTypeProto;
 
 /// `array<struct<a:int not null comment 'c', b:map<string,array<double>>>>`
 /// exactly as pyspark-client 4.2 sends it

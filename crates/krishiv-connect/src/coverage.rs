@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The coverage table of the Spark Connect translation (P3-T012a, owner decision 7): one row per arm of
-//! every `oneof` the translator dispatches on, for the vendored protocol version (4.2). Each row's
+//! every `oneof` the translator dispatches on, for the vendored protocol version (4.3). Each row's
 //! match is exhaustive and has no wildcard, so a regenerated proto with a new arm does not compile
 //! until the arm has a row. `cargo xtask connect-coverage` prints these rows into
 //! `docs/reference/connect/coverage.md` and `tests/connect/coverage.json`; the test
@@ -8,7 +8,7 @@
 //! `Partial` must answer `INVALID_ONE_OF_FIELD_NOT_SUPPORTED`). The rows are maintained here by hand
 //! as arms land; the generated files are never edited.
 
-use crate::proto::v4_2::{catalog, command, data_type, expression, relation};
+use crate::proto::v4_3::{catalog, command, data_type, expression, relation};
 
 /// How much of an arm the translator handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +142,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     ChunkedCachedLocalRelation => ("chunked_cached_local_relation", 45, Missing, "", "as #36, from chunked artifacts (4.1+); CHUNKED_CACHED_LOCAL_RELATION_WITHOUT_DATA", "P3-T083", 7),
     RelationChanges => ("relation_changes", 46, Missing, "", "CDC read (DataFrameReader.changes()): Delta change data feed through table_changes; the Iceberg changelog and is_streaming come later", "P3-T021b", 8),
     NearestByJoin => ("nearest_by_join", 47, Missing, "", "top-k per left row by a ranking expression: new NearestByJoin, planned on T077's top-k (num_results 1–100,000)", "P3-T077", 8),
+    Zip => ("zip", 48, Missing, "", "new Zip (columns of two inputs side by side, by row position)", "P3-T012", 3),
     FillNa => ("fill_na", 90, Missing, "", "lowering: Project of coalesce / nanvl by type; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH", "P3-T012", 5),
     DropNa => ("drop_na", 91, Missing, "", "lowering: Filter on non-null counts (how, thresh, subset)", "P3-T012", 5),
     Replace => ("replace", 92, Missing, "", "lowering: Project of CASE per column", "P3-T012", 5),
@@ -160,7 +161,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
 }
 
 oneof! { expression, EXPRESSION_ROWS, expression::ExprType, "Expression.expr_type";
-    Literal => ("literal", 1, Partial, "Array, Map, Struct, SpecializedArray, Time; 4.3 timestamp_ntz_nanos/timestamp_ltz_nanos (arms 29/30) not vendored", "Literal/TypedLiteral; nested literals after the IR literal supports them; nanos → clean unsupported until the types exist", "P3-T012", 1),
+    Literal => ("literal", 1, Partial, "Array, Map, Struct, SpecializedArray, Time", "Literal/TypedLiteral; nested literals after the IR literal supports them; nanosecond timestamps are refused until the types exist", "P3-T012", 1),
     UnresolvedAttribute => ("unresolved_attribute", 2, Partial, "is_metadata_column", "Column; metadata columns (_metadata) → the scan's metadata columns", "P3-T012", 1),
     UnresolvedFunction => ("unresolved_function", 3, Partial, "is_user_defined_function (qualified names) and is_internal", "Function with qualifier; internal functions map to Spark's internal names where Krishiv has them, otherwise 56K00-style refusal naming the function", "P3-T012", 1),
     ExpressionString => ("expression_string", 4, Missing, "", "the SQL expression parser + analyzer lowering that select_expr/expr() use (krishiv-session)", "P3-T012", 1),
@@ -269,6 +270,8 @@ oneof! { literal, LITERAL_ROWS, expression::literal::LiteralType, "Expression.Li
     Struct => ("struct", 24, Missing, "", "nested and TIME literals wait for IR values", "P3-T012", 1),
     SpecializedArray => ("specialized_array", 25, Missing, "", "nested and TIME literals wait for IR values", "P3-T012", 1),
     Time => ("time", 26, Missing, "", "nested and TIME literals wait for IR values", "P3-T012", 1),
+    TimestampNtzNanos => ("timestamp_ntz_nanos", 29, Missing, "", "no IR type for nanosecond timestamps", "P3-T012", 1),
+    TimestampLtzNanos => ("timestamp_ltz_nanos", 30, Missing, "", "no IR type for nanosecond timestamps", "P3-T012", 1),
 }
 
 oneof! { data_kind, DATA_KIND_ROWS, data_type::Kind, "DataType.kind";
@@ -300,6 +303,8 @@ oneof! { data_kind, DATA_KIND_ROWS, data_type::Kind, "DataType.kind";
     Geography => ("geography", 27, Done, "", "DataType", "P2-T091a", 1),
     Unparsed => ("unparsed", 24, Missing, "", "a type string parsed by the SQL type parser", "P3-T012", 1),
     Time => ("time", 28, Done, "", "DataType", "P2-T091a", 1),
+    TimestampNtzNanos => ("timestamp_ntz_nanos", 29, Missing, "", "no IR type for nanosecond timestamps", "P3-T012", 1),
+    TimestampLtzNanos => ("timestamp_ltz_nanos", 30, Missing, "", "no IR type for nanosecond timestamps", "P3-T012", 1),
 }
 
 fn quote(s: &str) -> String {

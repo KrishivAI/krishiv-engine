@@ -41,3 +41,7 @@ Paths are relative to this crate.
 
 ## Tests
 `cargo nextest run -p krishiv-common --no-tests=pass` · `cargo clippy -p krishiv-common --all-targets -- -D warnings`
+
+## Split modules (T193)
+Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
+- `config/registry/index.rs` (the sorted lookup index, `INDEX`).

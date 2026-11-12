@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+publish = true
 
 [[bin]]
 name = "krishiv"
@@ -18,15 +18,16 @@ doc = false
 [dependencies]
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
 futures = { workspace = true, features = ["alloc", "executor"] }
-krishiv = { path = "../krishiv" }
-krishiv-alloc = { path = "../krishiv-alloc", optional = true }
-krishiv-memory = { path = "../krishiv-memory", optional = true }
-krishiv-common = { path = "../krishiv-common" }
-krishiv-functions = { path = "../krishiv-functions" }
-krishiv-sql = { path = "../krishiv-sql" }
-krishiv-server = { path = "../krishiv-server", optional = true }
-krishiv-session = { path = "../krishiv-session", optional = true }
-krishiv-mcp = { path = "../krishiv-mcp", optional = true }
+krishiv = { path = "../krishiv", version = "=0.2.0" }
+krishiv-alloc = { path = "../krishiv-alloc", version = "=0.2.0", optional = true }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.0", optional = true }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-functions = { path = "../krishiv-functions", version = "=0.2.0" }
+krishiv-sql = { path = "../krishiv-sql", version = "=0.2.0" }
+reedline = { workspace = true }
+krishiv-server = { path = "../krishiv-server", version = "=0.2.0", optional = true }
+krishiv-session = { path = "../krishiv-session", version = "=0.2.0", optional = true }
+krishiv-mcp = { path = "../krishiv-mcp", version = "=0.2.0", optional = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"], optional = true }
 serde_json = { workspace = true }
 mimalloc = { workspace = true, optional = true }

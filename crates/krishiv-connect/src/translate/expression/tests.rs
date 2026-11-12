@@ -7,8 +7,8 @@ use krishiv_plan::{Expr, ExprNode, FunctionCall};
 use super::super::testing::{attr, attr_with, conf, expr, fails, func, lit, proto_type};
 use super::super::{TranslateConf, translate_expression};
 use super::*;
-use crate::proto::v4_2::data_type as dt;
-use crate::proto::v4_2::expression::literal::LiteralType;
+use crate::proto::v4_3::data_type as dt;
+use crate::proto::v4_3::expression::literal::LiteralType;
 
 fn text(e: &Expression) -> String {
     translate_expression(e, &conf())
@@ -198,7 +198,7 @@ fn qualified_and_internal_functions_are_unsupported() {
 #[test]
 fn call_function_splits_the_qualifier_and_named_arguments_name_parameters() {
     let call = |name: &str, args: Vec<Expression>| {
-        expr(ExprType::CallFunction(crate::proto::v4_2::CallFunction {
+        expr(ExprType::CallFunction(crate::proto::v4_3::CallFunction {
             function_name: name.into(),
             arguments: args,
         }))
@@ -226,7 +226,7 @@ fn call_function_splits_the_qualifier_and_named_arguments_name_parameters() {
     let e = translate_expression(&call("session.f", vec![]), &conf()).unwrap();
     assert_eq!(function(&e).qualifier, ["session"]);
     let named = expr(ExprType::NamedArgumentExpression(Box::new(
-        crate::proto::v4_2::NamedArgumentExpression {
+        crate::proto::v4_3::NamedArgumentExpression {
             key: "n".into(),
             value: Some(Box::new(attr("b"))),
         },

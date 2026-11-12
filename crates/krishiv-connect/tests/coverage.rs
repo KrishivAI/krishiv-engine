@@ -111,7 +111,7 @@ fn every_row_matches_the_descriptor() {
     let pool = DescriptorPool::decode(
         std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/spark-connect-4.2.fds"),
+                .join("tests/fixtures/spark-connect-4.3.fds"),
         )
         .expect("descriptor set")
         .as_slice(),

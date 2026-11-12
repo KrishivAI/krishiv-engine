@@ -7,8 +7,8 @@ use prost::Message;
 
 use super::testing::{attr, boxed, conf, expr, fails, func, lit, read_table, relation};
 use super::*;
-use crate::proto::v4_2::expression::{ExprType, literal::LiteralType};
-use crate::proto::v4_2::relation::RelType;
+use crate::proto::v4_3::expression::{ExprType, literal::LiteralType};
+use crate::proto::v4_3::relation::RelType;
 use krishiv_plan::{Grouping, PlanNode};
 
 fn filter_over(input: pb::Relation) -> pb::Relation {
@@ -255,7 +255,7 @@ fn leaves_count_as_a_level_of_the_ir() {
 
 #[test]
 fn debug_of_a_write_hides_a_path_held_by_a_oneof() {
-    use crate::proto::v4_2::{WriteOperation, write_operation::SaveType};
+    use crate::proto::v4_3::{WriteOperation, write_operation::SaveType};
     let write = WriteOperation {
         save_type: Some(SaveType::Path(
             "https://h/p?X-Amz-Signature=Canary-4d1".into(),

@@ -24,8 +24,8 @@ use super::literal::literal;
 use super::names::{parse_attribute_name, parse_multipart_identifier};
 use super::types::data_type;
 use super::{Result, Translator};
-use crate::proto::v4_2::Expression;
-use crate::proto::v4_2::expression::{
+use crate::proto::v4_3::Expression;
+use crate::proto::v4_3::expression::{
     self, ExprType, cast::CastToType, cast::EvalMode, sort_order::NullOrdering as ProtoNulls,
     sort_order::SortDirection as ProtoDirection,
 };
@@ -198,7 +198,7 @@ impl Translator<'_> {
 
     /// `CallFunction`: Spark's `UnresolvedFunction(parseMultipartIdentifier(name), args, false)`.
     /// The last part of the name is the function, the parts before it its qualifier.
-    fn call_function(&mut self, c: &crate::proto::v4_2::CallFunction) -> Result<ExprNode> {
+    fn call_function(&mut self, c: &crate::proto::v4_3::CallFunction) -> Result<ExprNode> {
         let mut parts = parse_multipart_identifier(&c.function_name)?;
         let name = parts.pop().unwrap_or_default();
         let (args, arg_names) = self.call_args(&c.arguments)?;

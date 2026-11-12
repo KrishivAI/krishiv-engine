@@ -31,7 +31,7 @@
 //! Spark's own `CONNECT_INVALID_PLAN.*` classes for an invalid plan.
 //!
 //! ```
-//! use krishiv_connect::proto::v4_2::{
+//! use krishiv_connect::proto::v4_3::{
 //!     Plan, Read, Relation, plan::OpType, read::{DataSource, ReadType}, relation::RelType,
 //! };
 //! use krishiv_connect::translate::{TranslateConf, translate_plan};
@@ -84,8 +84,8 @@ use krishiv_common::error::{FailedToParseTooComplex, KrishivError};
 use krishiv_plan::{Expr, MAX_DEPTH, Plan};
 use std::sync::Arc;
 
-use crate::proto::v4_2 as pb;
-use crate::proto::v4_2::plan::OpType;
+use crate::proto::v4_3 as pb;
+use crate::proto::v4_3::plan::OpType;
 use crate::stack::{INLINE_LEVELS, on_deep_stack};
 use crate::wire;
 use errors::{not_set, unsupported_field, unsupported_variant};

@@ -45,6 +45,7 @@
   {"oneof": "Relation.rel_type", "field": "chunked_cached_local_relation", "number": 45, "status": "missing", "refused": "", "target": "as #36, from chunked artifacts (4.1+); CHUNKED_CACHED_LOCAL_RELATION_WITHOUT_DATA", "task": "P3-T083", "group": 7},
   {"oneof": "Relation.rel_type", "field": "relation_changes", "number": 46, "status": "missing", "refused": "", "target": "CDC read (DataFrameReader.changes()): Delta change data feed through table_changes; the Iceberg changelog and is_streaming come later", "task": "P3-T021b", "group": 8},
   {"oneof": "Relation.rel_type", "field": "nearest_by_join", "number": 47, "status": "missing", "refused": "", "target": "top-k per left row by a ranking expression: new NearestByJoin, planned on T077's top-k (num_results 1–100,000)", "task": "P3-T077", "group": 8},
+  {"oneof": "Relation.rel_type", "field": "zip", "number": 48, "status": "missing", "refused": "", "target": "new Zip (columns of two inputs side by side, by row position)", "task": "P3-T012", "group": 3},
   {"oneof": "Relation.rel_type", "field": "fill_na", "number": 90, "status": "missing", "refused": "", "target": "lowering: Project of coalesce / nanvl by type; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH", "task": "P3-T012", "group": 5},
   {"oneof": "Relation.rel_type", "field": "drop_na", "number": 91, "status": "missing", "refused": "", "target": "lowering: Filter on non-null counts (how, thresh, subset)", "task": "P3-T012", "group": 5},
   {"oneof": "Relation.rel_type", "field": "replace", "number": 92, "status": "missing", "refused": "", "target": "lowering: Project of CASE per column", "task": "P3-T012", "group": 5},
@@ -60,7 +61,7 @@
   {"oneof": "Relation.rel_type", "field": "ml_relation", "number": 300, "status": "out of scope", "refused": "", "target": "machine learning is out of scope", "task": "", "group": 0},
   {"oneof": "Relation.rel_type", "field": "extension", "number": 998, "status": "missing", "refused": "", "target": "the krishiv.v1 extension handler; a message no handler claims is refused", "task": "P3-T015", "group": 10},
   {"oneof": "Relation.rel_type", "field": "unknown", "number": 999, "status": "out of scope", "refused": "", "target": "Spark falls to case other and answers 56K00 with UNKNOWN(999)", "task": "", "group": 0},
-  {"oneof": "Expression.expr_type", "field": "literal", "number": 1, "status": "partial", "refused": "Array, Map, Struct, SpecializedArray, Time; 4.3 timestamp_ntz_nanos/timestamp_ltz_nanos (arms 29/30) not vendored", "target": "Literal/TypedLiteral; nested literals after the IR literal supports them; nanos → clean unsupported until the types exist", "task": "P3-T012", "group": 1},
+  {"oneof": "Expression.expr_type", "field": "literal", "number": 1, "status": "partial", "refused": "Array, Map, Struct, SpecializedArray, Time", "target": "Literal/TypedLiteral; nested literals after the IR literal supports them; nanosecond timestamps are refused until the types exist", "task": "P3-T012", "group": 1},
   {"oneof": "Expression.expr_type", "field": "unresolved_attribute", "number": 2, "status": "partial", "refused": "is_metadata_column", "target": "Column; metadata columns (_metadata) → the scan's metadata columns", "task": "P3-T012", "group": 1},
   {"oneof": "Expression.expr_type", "field": "unresolved_function", "number": 3, "status": "partial", "refused": "is_user_defined_function (qualified names) and is_internal", "target": "Function with qualifier; internal functions map to Spark's internal names where Krishiv has them, otherwise 56K00-style refusal naming the function", "task": "P3-T012", "group": 1},
   {"oneof": "Expression.expr_type", "field": "expression_string", "number": 4, "status": "missing", "refused": "", "target": "the SQL expression parser + analyzer lowering that select_expr/expr() use (krishiv-session)", "task": "P3-T012", "group": 1},
@@ -160,6 +161,8 @@
   {"oneof": "Expression.Literal.literal_type", "field": "struct", "number": 24, "status": "missing", "refused": "", "target": "nested and TIME literals wait for IR values", "task": "P3-T012", "group": 1},
   {"oneof": "Expression.Literal.literal_type", "field": "specialized_array", "number": 25, "status": "missing", "refused": "", "target": "nested and TIME literals wait for IR values", "task": "P3-T012", "group": 1},
   {"oneof": "Expression.Literal.literal_type", "field": "time", "number": 26, "status": "missing", "refused": "", "target": "nested and TIME literals wait for IR values", "task": "P3-T012", "group": 1},
+  {"oneof": "Expression.Literal.literal_type", "field": "timestamp_ntz_nanos", "number": 29, "status": "missing", "refused": "", "target": "no IR type for nanosecond timestamps", "task": "P3-T012", "group": 1},
+  {"oneof": "Expression.Literal.literal_type", "field": "timestamp_ltz_nanos", "number": 30, "status": "missing", "refused": "", "target": "no IR type for nanosecond timestamps", "task": "P3-T012", "group": 1},
   {"oneof": "DataType.kind", "field": "null", "number": 1, "status": "missing", "refused": "", "target": "no IR type", "task": "P3-T012", "group": 1},
   {"oneof": "DataType.kind", "field": "binary", "number": 2, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
   {"oneof": "DataType.kind", "field": "boolean", "number": 3, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
@@ -187,5 +190,7 @@
   {"oneof": "DataType.kind", "field": "variant", "number": 25, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
   {"oneof": "DataType.kind", "field": "geometry", "number": 26, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
   {"oneof": "DataType.kind", "field": "geography", "number": 27, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
-  {"oneof": "DataType.kind", "field": "time", "number": 28, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1}
+  {"oneof": "DataType.kind", "field": "time", "number": 28, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
+  {"oneof": "DataType.kind", "field": "timestamp_ntz_nanos", "number": 29, "status": "missing", "refused": "", "target": "no IR type for nanosecond timestamps", "task": "P3-T012", "group": 1},
+  {"oneof": "DataType.kind", "field": "timestamp_ltz_nanos", "number": 30, "status": "missing", "refused": "", "target": "no IR type for nanosecond timestamps", "task": "P3-T012", "group": 1}
 ]
