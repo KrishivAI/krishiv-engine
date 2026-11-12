@@ -105,6 +105,8 @@ pub(crate) fn batch_rows(selection: Option<&Selection>, ids: &[u32]) -> Result<U
 pub(crate) struct Narrow {
     /// The columns of the batches received the predicate reads, ascending.
     pub(crate) columns: Vec<usize>,
+    /// Those columns' schema.
+    pub(crate) schema: arrow_schema::SchemaRef,
     /// The same predicate over those columns.
     pub(crate) predicate: Arc<dyn Predicate>,
 }
@@ -209,8 +211,16 @@ fn predicate_after(
             let stage = BooleanArray::new(kept.clone(), None);
             let inner = match narrow {
                 Some(narrow) => {
-                    let columns = data
-                        .project(&narrow.columns)
+                    let picked = narrow
+                        .columns
+                        .iter()
+                        .map(|&c| {
+                            data.columns().get(c).cloned().ok_or_else(|| {
+                                internal(format!("a fused filter's column {c} is past the batch"))
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let columns = RecordBatch::try_new(Arc::clone(&narrow.schema), picked)
                         .map_err(|e| internal(format!("a fused filter's columns: {e}")))?;
                     let copy = arrow_select::filter::filter_record_batch(&columns, &stage)
                         .map_err(|e| internal(format!("a fused row stage's copy: {e}")))?;
@@ -388,6 +398,11 @@ mod tests {
         let narrow_even = even_at(0);
         let narrow = Narrow {
             columns: vec![1],
+            schema: Arc::new(
+                data.schema()
+                    .project(&[1])
+                    .unwrap_or_else(|e| unreachable!("{e}")),
+            ),
             predicate: Arc::new(FnPredicate(move |b: &RecordBatch| {
                 if let Ok(mut s) = seen.lock() {
                     s.push((b.num_columns(), b.num_rows()));
@@ -423,6 +438,7 @@ mod tests {
         // A narrow column past the batch is an error, never a wrong row.
         let broken = Narrow {
             columns: vec![3],
+            schema: Arc::clone(&narrow.schema),
             predicate: Arc::new(FnPredicate(even_at(0))),
         };
         let sparse = bits(&[true, false, false, false, false, false, false, false]);

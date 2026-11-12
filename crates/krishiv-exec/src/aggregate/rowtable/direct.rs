@@ -9,7 +9,7 @@
 //! input row. Only each id's first row is encoded and looked up in the table
 //! (in first-occurrence order), as the batch-local map of E2 does; every row
 //! takes its first row's table row. A batch that fails the proof, holds more
-//! than [`DIRECT_MAX`] distinct keys, or whose rows are mostly new keys takes
+//! than [`DIRECT_MAX`] distinct keys, or whose rows are mostly distinct keys takes
 //! the ordinary path; after the latter two the next [`DIRECT_BACKOFF`]
 //! batches skip the attempt. Every column is proven before any is packed.
 //!
@@ -33,7 +33,9 @@ use crate::rows::EncodedKeys;
 
 /// Most distinct keys a batch may hold on the direct path.
 pub(super) const DIRECT_MAX: usize = 1024;
-/// Batches that skip the direct attempt after one that held too many keys.
+/// Batches that skip the direct attempt after one with more distinct keys
+/// than it may hold (past [`DIRECT_MAX`], or past half its rows above
+/// [`DIRECT_FLOOR`]).
 const DIRECT_BACKOFF: u8 = 16;
 /// Distinct keys a batch may always hold; past it, at most half its rows.
 const DIRECT_FLOOR: usize = 64;
@@ -62,7 +64,8 @@ struct Scratch {
     lut: Vec<u16>,
     /// The packed keys the current batch set in `lut`.
     set: Vec<u16>,
-    /// Batches left to skip after one with too many keys.
+    /// Batches left to skip after one with more distinct keys than it may
+    /// hold ([`DIRECT_BACKOFF`]).
     skip: u8,
 }
 
@@ -93,7 +96,9 @@ impl Direct {
     }
 
     /// The batch-local ids of `keys` (`n` rows), or `None` when the batch
-    /// is not provably tiny or holds more than [`DIRECT_MAX`] keys.
+    /// is not provably tiny, holds more distinct keys than it may (more than
+    /// [`DIRECT_MAX`], or more than half its rows above [`DIRECT_FLOOR`]), or
+    /// falls in a back-off.
     pub(super) fn ids(&self, keys: &[ArrayRef], n: usize) -> Option<DirectIds> {
         if keys.is_empty() || keys.len() * 8 > PACKED_BITS as usize || n == 0 {
             return None;
@@ -115,13 +120,17 @@ impl Direct {
         for (c, k) in keys.iter().enumerate() {
             pack(&mut packed, k.as_ref(), c == 0, 8 * u32::try_from(c).ok()?);
         }
+        // `pack` writes every row of a column `one_byte` accepted.
+        if packed.len() != n {
+            return None;
+        }
         let Scratch { lut, set, skip } = &mut *s;
         if lut.is_empty() {
             lut.resize(1 << PACKED_BITS, 0);
             set.reserve_exact(DIRECT_MAX);
             self.allocated.store(true, Ordering::Relaxed);
         }
-        // A batch whose rows are mostly new keys gains nothing (a small one
+        // A batch whose rows are mostly distinct keys gains nothing (a small one
         // costs little either way).
         let most = DIRECT_MAX.min((n / 2).max(DIRECT_FLOOR));
         let mut ids = Vec::with_capacity(n);
@@ -499,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn a_batch_of_mostly_new_keys_falls_back() {
+    fn a_batch_of_mostly_distinct_keys_falls_back() {
         let d = Direct::new();
         let i = |v: Vec<i64>| -> ArrayRef { Arc::new(Int64Array::from(v)) };
         // 200 rows, 100 keys: half the rows, allowed.
@@ -684,8 +693,10 @@ mod tests {
         use proptest::prelude::*;
         proptest::collection::vec(
             (
-                1usize..700,
-                1u8..40,
+                // Mostly small batches; some past 2 * DIRECT_MAX rows over a
+                // wide domain cross DIRECT_MAX.
+                prop_oneof![4 => 1usize..400, 1 => 2100usize..2600],
+                1u8..48,
                 any::<u64>(),
                 any::<bool>(),
                 any::<bool>(),
@@ -699,7 +710,9 @@ mod tests {
                     wide: wide && seed % 5 == 0,
                     weighted,
                 }),
-            1..6,
+            // Past DIRECT_BACKOFF batches: direct, bailed, skipped and
+            // resumed batches meet in one table.
+            1..24,
         )
     }
 
@@ -829,7 +842,7 @@ mod tests {
     }
 
     proptest::proptest! {
-        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(48))]
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(32))]
         /// The flag on gives the groups, counts and sums of the flag off for
         /// any mix of key types, domains, NULLs, too-wide values, weights and
         /// batch sizes, over input rows and over the states they make.

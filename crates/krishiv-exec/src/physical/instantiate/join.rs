@@ -145,19 +145,114 @@ fn narrow_probe_filter(probe: &SchemaRef, f: &ProbeFilter, env: &EvalEnv) -> Opt
         env,
         subqueries: &[],
     };
-    let e = compile_one(&f.predicate, &layout, &schema, &v).ok()?;
+    // The full form compiled: a failure here means `read_columns` missed a
+    // reader; the copy then holds every column (same results).
+    let e = match compile_one(&f.predicate, &layout, &schema, &v) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::debug!("a fused probe filter does not compile over its columns: {e}");
+            return None;
+        }
+    };
     Some(Narrow {
         columns,
+        schema,
         predicate: Arc::new(Compiled(e)),
     })
 }
 
-/// The attributes `e` reads as columns, its sub-expressions' too.
+/// The attributes `e` reads as columns, its sub-expressions' too (a
+/// higher-order call's captured columns included; its lambda variables are
+/// not input columns).
 fn read_columns(e: &Arc<Expr>, out: &mut HashSet<AttrId>) {
-    if let ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::LambdaVar(c)) = &e.node {
+    if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node {
         out.insert(c.id);
     }
     e.for_each_child(&mut |c| read_columns(c, out));
+}
+
+#[cfg(all(test, not(loom)))]
+mod tests {
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+    use krishiv_common::config::Config;
+    use krishiv_plan::{BoundColumn, Builtin, FunctionId, FunctionKind, Literal, ResolvedFunction};
+    use krishiv_types::DataType;
+
+    use super::*;
+
+    fn col(id: u64) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+            BoundColumn {
+                id: AttrId(id),
+                name: format!("c{id}"),
+                data_type: DataType::Long,
+                nullable: true,
+            },
+        ))))
+    }
+
+    fn op(b: Builtin, args: Vec<Arc<Expr>>) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Builtin(b),
+                kind: FunctionKind::Scalar,
+                args,
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type: DataType::Boolean,
+                nullable: true,
+                deterministic: true,
+            },
+        ))))
+    }
+
+    /// A predicate over two of four columns compiles over those two, in
+    /// layout order, and gives the full form's mask; one over every column
+    /// (or none) has no narrow form.
+    #[test]
+    fn a_narrow_filter_reads_only_its_columns() {
+        let fields: Vec<Field> = (0..4)
+            .map(|i| Field::new(format!("c{i}"), arrow_schema::DataType::Int64, true))
+            .collect();
+        let probe: SchemaRef = Arc::new(Schema::new(fields));
+        // The layout lists attributes 10..14; the predicate reads 13 and 11.
+        let layout: Vec<AttrId> = (10..14).map(AttrId).collect();
+        let env = EvalEnv::new(&Config::new(), Arc::from("test"));
+        let two = ProbeFilter {
+            layout: layout.clone(),
+            predicate: op(Builtin::Gt, vec![col(13), col(11)]),
+        };
+        let narrow = narrow_probe_filter(&probe, &two, &env).unwrap();
+        assert_eq!(narrow.columns, vec![1, 3]);
+        assert_eq!(narrow.schema.fields().len(), 2);
+        let cols: Vec<ArrayRef> = (0..4i64)
+            .map(|c| Arc::new(Int64Array::from(vec![c, 5 - c, 2 * c, 1])) as ArrayRef)
+            .collect();
+        let data = RecordBatch::try_new(Arc::clone(&probe), cols).unwrap();
+        let full = probe_filter(&probe, &two, &env)
+            .unwrap()
+            .evaluate(&data)
+            .unwrap();
+        let part = data.project(&narrow.columns).unwrap();
+        assert_eq!(narrow.predicate.evaluate(&part).unwrap(), full);
+        let all = ProbeFilter {
+            layout: layout.clone(),
+            predicate: op(
+                Builtin::And,
+                vec![
+                    op(Builtin::Gt, vec![col(10), col(11)]),
+                    op(Builtin::Gt, vec![col(12), col(13)]),
+                ],
+            ),
+        };
+        assert!(narrow_probe_filter(&probe, &all, &env).is_none());
+        let none = ProbeFilter {
+            layout,
+            predicate: Arc::new(Expr::new(ExprNode::Literal(Literal::Boolean(true)))),
+        };
+        assert!(narrow_probe_filter(&probe, &none, &env).is_none());
+    }
 }
 
 impl Instantiation<'_> {
