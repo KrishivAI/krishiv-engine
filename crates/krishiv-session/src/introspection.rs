@@ -1014,26 +1014,15 @@ impl Session {
                         .await;
                 }
                 if !column.is_empty() {
-                    // The statistics rows are NULL because the catalog keeps no column statistics; after
-                    // `ANALYZE .. FOR COLUMNS` Spark shows values, so say so rather than print NULLs.
-                    let analyzed = !temp
-                        && self
-                            .state
-                            .catalog
-                            .store
-                            .table(&name.namespace, &name.name)
-                            .is_some_and(|t| t.column_stats_requested);
-                    if mode.is_some() && analyzed {
-                        return Err(unsupported(
-                            "DESCRIBE EXTENDED of a column after ANALYZE TABLE ... FOR COLUMNS (column statistics)",
-                        ));
-                    }
+                    let stats = (!temp)
+                        .then(|| self.state.catalog.store.table(&name.namespace, &name.name))
+                        .flatten();
                     return self
                         .describe_column(
                             &columns,
                             column,
                             &self.declared_char_varchars(&name, temp).await?,
-                            mode.is_some(),
+                            mode.is_some().then_some(stats.as_deref()),
                         )
                         .await;
                 }
@@ -1203,7 +1192,7 @@ impl Session {
         columns: &[(String, DataType, Option<String>)],
         column: &[krishiv_sql::ast::ColumnName],
         declared: &std::collections::HashMap<String, String>,
-        statistics: bool,
+        statistics: Option<Option<&CatalogTable>>,
     ) -> Result<DataFrame, KrishivError> {
         let wanted = match column {
             [krishiv_sql::ast::ColumnName::Ident(i)] => i.value.clone(),
@@ -1229,24 +1218,59 @@ impl Session {
                 s(comment.clone().unwrap_or_else(|| "NULL".to_owned())),
             ],
         ];
-        // `EXTENDED | FORMATTED` add the statistics rows; the catalog keeps none, so they are NULL.
-        for stat in statistics
-            .then_some([
-                "min",
-                "max",
-                "num_nulls",
-                "distinct_count",
-                "avg_col_len",
-                "max_col_len",
-                "histogram",
-            ])
-            .into_iter()
-            .flatten()
-        {
-            rows.push(vec![s(stat), s("NULL")]);
+        // `EXTENDED | FORMATTED` add the statistics rows, NULL for what `ANALYZE` did not gather.
+        if let Some(table) = statistics {
+            let found = table.and_then(|t| t.column_stats.get(name));
+            let text = |f: fn(&crate::store::ColumnStats) -> &String| {
+                found.map_or_else(|| "NULL".to_owned(), |c| f(c).clone())
+            };
+            rows.push(vec![
+                s("min"),
+                s(self
+                    .shown_stat_bound(found.and_then(|c| c.min.as_deref()), data_type)
+                    .await?),
+            ]);
+            rows.push(vec![
+                s("max"),
+                s(self
+                    .shown_stat_bound(found.and_then(|c| c.max.as_deref()), data_type)
+                    .await?),
+            ]);
+            rows.push(vec![s("num_nulls"), s(text(|c| &c.num_nulls))]);
+            rows.push(vec![s("distinct_count"), s(text(|c| &c.distinct_count))]);
+            rows.push(vec![s("avg_col_len"), s(text(|c| &c.avg_col_len))]);
+            rows.push(vec![s("max_col_len"), s(text(|c| &c.max_col_len))]);
+            rows.push(vec![s("histogram"), s("NULL")]);
         }
         self.ordered_frame(&["info_name", "info_value"], &[], rows)
             .await
+    }
+
+    /// A stored `min` or `max` as `DESCRIBE` prints it (`NULL` when there is none): a timestamp in the session's time zone
+    /// (`DescribeColumnCommand.toZoneAwareExternalString`), anything else as stored.
+    async fn shown_stat_bound(
+        &self,
+        stored: Option<&str>,
+        data_type: &DataType,
+    ) -> Result<String, KrishivError> {
+        let Some(stored) = stored else {
+            return Ok("NULL".to_owned());
+        };
+        if *data_type != DataType::Timestamp {
+            return Ok(stored.to_owned());
+        }
+        let micros: i64 = stored
+            .parse()
+            .map_err(|_| unsupported("a timestamp statistic that is not a number"))?;
+        let query = format!(
+            "SELECT date_format(timestamp_micros({micros}), 'yyyy-MM-dd HH:mm:ss.SSSSSS Z')"
+        );
+        let batches = self.nested_query(&query).await?;
+        crate::column_stats::first_row_text(&batches)?
+            .into_iter()
+            .next()
+            .flatten()
+            .ok_or_else(|| unsupported("a timestamp statistic out of range"))
     }
 
     /// The `# Detailed Table Information` rows of `DESCRIBE EXTENDED|FORMATTED`.

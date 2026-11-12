@@ -34,7 +34,7 @@ use krishiv_plan::analyzer::{
     FunctionLookup, SqlFunction, SqlParam, TableColumn, VariableValue, variable_name,
 };
 use krishiv_plan::{
-    Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SourceId, SubqueryKind,
+    Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SubqueryKind,
 };
 use krishiv_sql::ast::{
     Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeSpec, DdlName,
@@ -302,12 +302,12 @@ impl Session {
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let case_sensitive = env.analysis.conf.case_sensitive;
         let analysis = df.analyzed_in(env).await?;
-        let output: Vec<String> = analysis
-            .analyzed
-            .output
-            .iter()
-            .map(|c| c.name.clone())
-            .collect();
+        let output: Vec<String> =
+            crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?
+                .output
+                .iter()
+                .map(|c| c.name.clone())
+                .collect();
         let mut columns: Vec<TableColumn> = analysis
             .analyzed
             .output
@@ -1791,16 +1791,7 @@ impl Session {
         &self,
         sql: &str,
     ) -> Result<Arc<crate::dataframe::Analysis>, KrishivError> {
-        let env = self.query_env();
-        let redacted = krishiv_sql::redact_sql(sql);
-        let query = krishiv_sql::parse_query(sql, &env.parser).map_err(|e| {
-            crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
-        })?;
-        let plan = krishiv_sql::lower(&query, SourceId(0)).map_err(|e| {
-            crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
-        })?;
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        df.analyzed_in_with_text(env, Some(&redacted)).await
+        self.analyze_variable_query_in(sql, self.query_env()).await
     }
 
     /// Runs analyzed `analysis` (from [`Self::analyze_variable_query`])
