@@ -5,6 +5,8 @@ def build_info() -> dict[str, str]
 def metrics() -> list[dict[str, Any]]
 def session() -> SparkSession
 ## _native.pyi
+AnonymousPythonUdf.def call(self, args: list[Column]) -> Column
+AnonymousPythonUdf.def version(self) -> int
 ArrowStream.def check_error(self) -> None
 ArrowStream.def consumed(self) -> bool
 ArrowStream.def from_arrow(data: object) -> ArrowStream
@@ -87,6 +89,7 @@ Session.def metrics(self) -> list[dict[str, object]]
 Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=...) -> DataFrame
 Session.def refresh_files(self) -> None
 Session.def refresh_table(self, name: str) -> None
+Session.def register_python_udf(self, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> int
 Session.def sql(self, query: str) -> DataFrame
 Session.def table(self, name: str) -> DataFrame
 Session.def temp_table_names(self) -> list[str]
@@ -96,7 +99,8 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Session', 'WindowSpec', '__allocator__', '__version__', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Session', 'WindowSpec', '__allocator__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lit', 'map_literal']
+class AnonymousPythonUdf()
 class ArrowStream()
 class Column()
 class DataFrame()
@@ -178,7 +182,7 @@ def not_implemented(feature: str) -> PySparkNotImplementedError
 def unsupported_feature(feature: str) -> UnsupportedOperationException
 ## sql/__init__.py
 __all__
-__all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Row', 'RuntimeConfig', 'SparkSession', 'Window', 'WindowSpec', 'functions', 'types']
+__all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Row', 'RuntimeConfig', 'SparkSession', 'UDFRegistration', 'Window', 'WindowSpec', 'functions', 'types']
 ## sql/_generated_functions.py
 __all__
 __all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'approx_count_distinct', 'approx_percentile', 'array', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'coalesce', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'get', 'get_json_object', 'getbit', 'greatest', 'hash', 'hex', 'hour', 'hypot', 'ifnull', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'json_array_length', 'json_object_keys', 'json_tuple', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'md5', 'mean', 'median', 'min', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'randstr', 'rank', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_json', 'schema_of_variant', 'sec', 'second', 'sequence', 'session_user', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'time_bucket', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xxhash64', 'year', 'zeroifnull']
@@ -1037,6 +1041,7 @@ def make_dt_interval(days: ColumnOrName | None=None, hours: ColumnOrName | None=
 def make_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None, weeks: ColumnOrName | None=None, days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
 def make_ym_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None) -> Column
 def try_make_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None, weeks: ColumnOrName | None=None, days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
+def udf(f: Any=None, returnType: DataType | str=StringType(), *, useArrow: bool | None=None) -> Any
 def unix_timestamp(timestamp: ColumnOrName | None=None, format: str='yyyy-MM-dd HH:mm:ss') -> Column
 def when(condition: Column, value: Any) -> Column
 ## sql/group.py
@@ -1055,6 +1060,14 @@ DataFrameNaFunctions.def drop(self, how: str | None='any', thresh: int | None=No
 DataFrameNaFunctions.def fill(self, value: Any, subset: Any=None) -> DataFrame
 DataFrameNaFunctions.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: Any=None) -> DataFrame
 class DataFrameNaFunctions()
+## sql/pandas/functions.py
+__all__
+__all__ = ['ArrowUDFType', 'PandasUDFType', 'arrow_udf', 'pandas_udf']
+class ArrowUDFType()
+class PandasUDFType()
+def arrow_udf(f: Any=None, returnType: Any=None, functionType: Any=None) -> Any
+def pandas_udf(f: Any=None, returnType: Any=None, functionType: Any=None) -> Any
+def vectorized_udf(f: Any=None, returnType: Any=None, functionType: Any=None, kind: str='pandas') -> Any
 ## sql/profile_view.py
 ProfileView.def __init__(self, document: dict[str, Any] | str) -> None
 ProfileView.def save(self, path: str | Path, title: str='Krishiv query profile') -> Path
@@ -1117,6 +1130,7 @@ Catalog.def listDatabases(self) -> DataFrame
 Catalog.def listTables(self, dbName: str | None=None) -> DataFrame
 Catalog.def refreshByPath(self, path: str) -> None
 Catalog.def refreshTable(self, tableName: str) -> DataFrame
+Catalog.def registerFunction(self, name: str, f: Any, returnType: Any=None) -> Any
 Catalog.def tableExists(self, tableName: str, dbName: str | None=None) -> bool
 Catalog.def uncacheTable(self, tableName: str) -> None
 SPARK_VERSION
@@ -1140,6 +1154,7 @@ SparkSession.def read(self) -> DataFrameReader
 SparkSession.def sql(self, sqlQuery: str, args: Any=None, **kwargs: Any) -> DataFrame
 SparkSession.def stop(self) -> None
 SparkSession.def table(self, tableName: str) -> DataFrame
+SparkSession.def udf(self) -> UDFRegistration
 SparkSession.def version(self) -> str
 class Catalog()
 class SparkSession()
@@ -1234,6 +1249,18 @@ class TimestampType(AtomicType)
 class VarcharType(AtomicType)
 class VariantType(AtomicType)
 class YearMonthIntervalType(AtomicType)
+## sql/udf.py
+UDFRegistration.def __init__(self, sparkSession: SparkSession)
+UDFRegistration.def register(self, name: str, f: Callable[..., Any], returnType: DataType | str | None=None) -> Any
+UserDefinedFunction.def __call__(self, *args: Any, **kwargs: Any) -> Column
+UserDefinedFunction.def __init__(self, func: Callable[..., Any], returnType: DataType | str=StringType(), name: str | None=None, evalType: int=PythonEvalType.SQL_BATCHED_UDF, deterministic: bool=True)
+UserDefinedFunction.def asNondeterministic(self) -> UserDefinedFunction
+UserDefinedFunction.def returnType(self) -> DataType
+__all__
+__all__ = ['PythonEvalType', 'UDFRegistration', 'UserDefinedFunction']
+class PythonEvalType()
+class UDFRegistration()
+class UserDefinedFunction()
 ## sql/variant.py
 VariantVal.def __init__(self, value: bytes, metadata: bytes) -> None
 VariantVal.def toJson(self, zone_id: str='UTC') -> str
