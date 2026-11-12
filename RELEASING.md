@@ -96,6 +96,21 @@ Not wired yet (each is a reviewed change by the maintainer, because it edits the
 Owner actions before the gate are listed in `ops/needs-owner.md` ("Release 0.2.0 channels and pre-publish setup"):
 crates.io keywords and description (drop `datafusion`), the PyPI classifier, the credentials, and the go/no-go.
 
+## Yanking a bad release (owner only)
+
+Every step is a hard stop for agents; the maintainer runs them. Yanking hides a version from new resolves and
+deletes nothing, so exact pins keep working.
+
+1. **PyPI**: project `krishiv` (and `krishiv-compat`), Manage, Releases, the version, Options, Yank, with a reason.
+   There is no token in the repository, so the web UI is the way.
+2. **crates.io**: `cargo yank --version 0.2.0 <crate>` for every published crate (the facade and the internal
+   crates at that version, ADR 0026). `cargo yank --undo` reverses it.
+3. **GitHub Release**: mark `v0.2.0` as a pre-release and say in its notes that it is yanked. Keep the tag; never
+   delete or move a published tag.
+4. **Record it**: retitle the CHANGELOG entry `## 0.2.0 (yanked)` with the reason and the fixed version.
+5. **Fix forward**: land the fix on `main`, bump the patch version and release `0.2.1` through the same gates.
+   A yanked version number is never reused.
+
 ## Before any release
 
 - `ui/scripts/sync-assets.sh` refreshes the committed UI assets

@@ -16,6 +16,19 @@ The first release is the embedded core: the engine runs in your process, from Py
 trying things out, not for production. Nothing has been published to PyPI or crates.io yet; see
 [RELEASING.md](RELEASING.md).
 
+### Highlights
+
+- **Embedded Spark-compatible engine.** `krishiv.session()` gives a PySpark-style session in your process, from Python or
+  Rust, with no JVM; Spark-observable behaviour is checked against real Spark runs.
+- **Memory-bounded and fast.** A vectorized Arrow executor that spills aggregation, joins, sorts and window frames to disk
+  instead of failing, with runtime filters, Parquet row-group and dictionary pruning, and a cost-based join order.
+- **Broad SQL.** Windows (`ROWS`/`RANGE`), `GROUPING SETS`, lateral joins, recursive CTEs, SQL scripting, `CHAR`/`VARCHAR`,
+  collations, `VARIANT`, calendar intervals, `GEOMETRY`/`GEOGRAPHY`, `PIVOT`, `TABLESAMPLE`, SQL functions and `IDENTIFIER(..)`.
+- **Python UDFs in process.** `@udf`, scalar `pandas_udf` and `arrow_udf` run on a thread pool, in parallel on free-threaded 3.14t.
+- **See what happened.** `EXPLAIN [ANALYZE|COST|VERBOSE]`, a versioned JSON profile with per-scan I/O, a local web console,
+  Prometheus metrics, OTLP spans and JSON logs, and errors that show the SQL span that raised them.
+- **Zero-copy interop** with pyarrow, Polars and DuckDB through the Arrow PyCapsule interface.
+
 ### Added
 
 - In-process batch SQL and DataFrames over Arrow: `krishiv.session()` returns a PySpark-style `SparkSession`
@@ -43,6 +56,14 @@ trying things out, not for production. Nothing has been published to PyPI or cra
 - Optimizer: eager aggregation below joins.
 - Results checked against real Spark runs: division and remainder evaluate their operands in Spark's order, `atan2` is
   bit-identical.
+- Python UDFs: `@udf`, scalar `pandas_udf` and `arrow_udf` run in process on a thread pool.
+- Collations (`UTF8_LCASE`, `_RTRIM`, `COLLATE`, collation-key comparison and operators, Parquet collation metadata).
+- `VARIANT` in Parquet at any depth; `GEOMETRY` and `GEOGRAPHY` types with WKT and SRS functions; `CALENDAR INTERVAL`;
+  `CHAR(n)`/`VARCHAR(n)`; `MSCK`, partition commands and column statistics; SQL scripting with exit handlers.
+- Deterministic row order (`krishiv.deterministicOrder`), `krishiv.optimizer.joinCost=bytes`, plan-time distinct-value
+  samples of Parquet columns, and inferred join filters.
+- A local web console (`krishiv.ui.enabled`), a bearer-token guard for `/metrics`, per-scan I/O fields in the profile, JSON
+  logs, and a `--share` profile that drops identity and trace ids.
 
 ### Known limits
 
