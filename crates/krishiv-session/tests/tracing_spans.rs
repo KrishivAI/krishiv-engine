@@ -290,7 +290,15 @@ fn the_execution_span_stays_open_while_the_results_are_consumed() {
         mine[0].1.contains_key("closed")
     };
     // Open after the first batch, closed only when the stream is dropped.
-    assert!(block_on(stream.next()).is_some());
+    let first = block_on(stream.next())
+        .expect("a first batch")
+        .expect("the first batch is rows, not an error");
+    let a = first
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::Int32Array>()
+        .expect("column a is Int32");
+    assert_eq!(a.values().to_vec(), vec![1, 2, 3]);
     assert!(!exec(), "closed while the rows are still being read");
     while block_on(stream.next()).is_some() {}
     drop(stream);
