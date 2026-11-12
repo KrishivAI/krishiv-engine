@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! [`ServerAuth`], the one authenticator of a server (design §3.1).
 //!
-//! The chain, in a fixed order: a throttled peer is refused first; then the bearer token goes to
-//! the static tokens (OIDC and client certificates join in later units, ahead of it as the
-//! design orders them); no credential is [`AuthFailure::Missing`]. Every failure writes one log
+//! The chain, in a fixed order: a throttled peer is refused first; then a verified client
+//! certificate names the principal (when client certificates are on; a bearer token sent with it
+//! must name the same principal); then the bearer token goes to the static tokens (OIDC joins in
+//! a later unit); no credential is [`AuthFailure::Missing`]. Every failure writes one log
 //! record (target `krishiv::auth`: surface, method, peer, failure; never the credential) and
 //! counts once per `(surface, method)`.
 
@@ -12,8 +13,10 @@ use std::time::Instant;
 
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
+use krishiv_common::principal::Principal;
 
-use super::config::{AuthConfig, SPARK_TOKEN_NAME};
+use super::config::{AuthConfig, RoleLists, SPARK_TOKEN_NAME};
+use super::mtls::{ClientCertificates, MtlsConfig};
 use super::throttle::FailureThrottle;
 use super::tokens::StaticTokens;
 use super::{AuthFailure, Authenticated, Authenticator, Credentials, Method, Surface};
@@ -37,6 +40,8 @@ pub struct FailureCount {
 #[derive(Debug)]
 pub struct ServerAuth {
     tokens: StaticTokens,
+    mtls: MtlsConfig,
+    roles: RoleLists,
     throttle: FailureThrottle,
     /// Indexed by `surface * Method::ALL.len() + method`.
     failures: [AtomicU64; Surface::ALL.len() * Method::ALL.len()],
@@ -59,6 +64,8 @@ impl ServerAuth {
         }
         Ok(Self {
             tokens,
+            mtls: config.mtls.clone(),
+            roles: config.roles.clone(),
             throttle: FailureThrottle::new(config.throttle),
             failures: std::array::from_fn(|_| AtomicU64::new(0)),
         })
@@ -68,7 +75,7 @@ impl ServerAuth {
     /// (loopback only; the listener enforces that).
     #[must_use]
     pub fn is_enabled(&self) -> bool {
-        !self.tokens.is_empty()
+        !self.tokens.is_empty() || self.mtls.is_on()
     }
 
     /// Authenticates `credentials` at `now` (the clock is a parameter for tests).
@@ -83,6 +90,16 @@ impl ServerAuth {
         let ip = credentials.peer.ip();
         if self.throttle.is_blocked(ip, now) {
             return Err(self.fail(credentials, Method::Throttle, AuthFailure::Throttled));
+        }
+        if self.mtls.is_on() {
+            if let Some(leaf) = credentials.peer_leaf {
+                return self.authenticate_certificate(credentials, leaf, now);
+            }
+            if self.mtls.client_certificates == ClientCertificates::Required {
+                // The handshake refuses a client without a certificate; a transport that did
+                // not pass the leaf through must not fall back to a token.
+                return Err(self.fail(credentials, Method::Mtls, AuthFailure::Missing));
+            }
         }
         let token = match credentials.bearer {
             Some(token) => Some(token),
@@ -106,6 +123,39 @@ impl ServerAuth {
                     );
                 }
                 Err(self.fail(credentials, Method::Token, AuthFailure::Invalid))
+            }
+        }
+    }
+
+    /// A client with a verified certificate: the configured rule names the principal. A bearer
+    /// token sent as well must name the same principal (a confused gateway is refused).
+    fn authenticate_certificate(
+        &self,
+        credentials: &Credentials<'_>,
+        leaf: &[u8],
+        now: Instant,
+    ) -> Result<Authenticated, AuthFailure> {
+        let ip = credentials.peer.ip();
+        let named = self.mtls.principal_of(leaf);
+        let agrees = |name: &str| match (credentials.bearer, credentials.malformed) {
+            (None, false) => true,
+            (Some(t), _) if t.len() <= MAX_TOKEN_BYTES => {
+                self.tokens.lookup(t).is_some_and(|(p, _)| p.name == name)
+            }
+            _ => false,
+        };
+        match named {
+            Some((name, kind)) if agrees(&name) => {
+                let role = self.roles.role_of(&name);
+                Ok(Authenticated::new(
+                    Principal::new(name, kind),
+                    role,
+                    Method::Mtls,
+                ))
+            }
+            _ => {
+                self.throttle.record_failure(ip, now);
+                Err(self.fail(credentials, Method::Mtls, AuthFailure::Invalid))
             }
         }
     }

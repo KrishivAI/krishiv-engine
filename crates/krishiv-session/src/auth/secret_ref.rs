@@ -70,36 +70,11 @@ impl SecretRef {
                 )
             }),
             Self::File(path) => {
-                use std::io::Read as _;
-                let shown = format!("file:{}", path.display());
-                let unreadable = |e: std::io::Error| {
-                    invalid(key, &shown, &format!("cannot be read: {}", e.kind()))
-                };
-                // The path is checked before it is opened, so a FIFO or device is refused
-                // instead of blocking startup in `open`; the handle is checked again, so the file
-                // checked is the file read.
-                check_private(key, &shown, &std::fs::metadata(path).map_err(unreadable)?)?;
-                let file = std::fs::File::open(path).map_err(unreadable)?;
-                check_private(key, &shown, &file.metadata().map_err(unreadable)?)?;
-                // A token plus one line break (CRLF) at most: one byte past that refuses the file
-                // here, before the line break is removed, so a longer file is never cut to fit.
+                // A token plus one line break (CRLF) at most: a longer file is refused before
+                // the line break is removed, so it is never cut to fit.
                 let most = super::tokens::MAX_SECRET_BYTES + 2;
-                let mut bytes = Vec::new();
-                file.take(most as u64 + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(unreadable)?;
-                if bytes.len() > most {
-                    return Err(invalid(
-                        key,
-                        &shown,
-                        &format!(
-                            "the file is longer than a {}-byte token and one line break",
-                            super::tokens::MAX_SECRET_BYTES
-                        ),
-                    ));
-                }
-                let mut text = String::from_utf8(bytes)
-                    .map_err(|_| invalid(key, &shown, "the file is not UTF-8"))?;
+                let secret = read_private_file(key, path, most)?;
+                let mut text = secret.expose_secret().to_owned();
                 if text.ends_with('\n') {
                     text.pop();
                     if text.ends_with('\r') {
@@ -117,6 +92,39 @@ impl SecretRef {
     pub fn is_inline(&self) -> bool {
         matches!(self, Self::Inline(_))
     }
+}
+
+/// The contents of the private file `path` (a secret, or a TLS key), at most `most` bytes.
+///
+/// The path is checked before it is opened, so a FIFO or device is refused instead of blocking
+/// startup in `open`; the handle is checked again, so the file checked is the file read. A file
+/// readable by group or others, or longer than `most`, is refused.
+pub(crate) fn read_private_file(
+    key: &str,
+    path: &std::path::Path,
+    most: usize,
+) -> Result<SecretString, KrishivError> {
+    use std::io::Read as _;
+    let shown = format!("file:{}", path.display());
+    let unreadable =
+        |e: std::io::Error| invalid(key, &shown, &format!("cannot be read: {}", e.kind()));
+    check_private(key, &shown, &std::fs::metadata(path).map_err(unreadable)?)?;
+    let file = std::fs::File::open(path).map_err(unreadable)?;
+    check_private(key, &shown, &file.metadata().map_err(unreadable)?)?;
+    let mut bytes = Vec::new();
+    file.take(most as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if bytes.len() > most {
+        return Err(invalid(
+            key,
+            &shown,
+            &format!("the file is longer than {most} bytes"),
+        ));
+    }
+    let text =
+        String::from_utf8(bytes).map_err(|_| invalid(key, &shown, "the file is not UTF-8"))?;
+    Ok(SecretString::new(text))
 }
 
 /// Refuses a secret file that group or others may read.

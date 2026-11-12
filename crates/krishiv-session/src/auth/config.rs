@@ -13,7 +13,16 @@
 //! krishiv.auth.failureThrottle.maxFailures = 20                    (per peer address and window)
 //! krishiv.auth.failureThrottle.window      = 60s
 //! krishiv.auth.failureThrottle.blockFor    = 60s
+//! krishiv.auth.clientCertificates      = off | optional | required (default off)
+//! krishiv.auth.clientCa                = file:/path               (PEM; with client certificates)
+//! krishiv.auth.mtls.principalFrom      = san-uri | san-dns | cn   (default san-uri)
+//! krishiv.auth.mtls.userPrincipals     = alice, bob               (certificate principals that are users)
+//! krishiv.auth.roles.{viewer,operator,admin} = a, b               (principal names; ADR 0046 §6)
 //! ```
+//!
+//! A static token names its own role. A certificate principal (and, later, an OIDC claim)
+//! gets its role from the `krishiv.auth.roles.*` lists; a name in none of them has no role,
+//! which denies everything.
 //!
 //! Every key is startup-only. An unknown `krishiv.auth.*` key is refused, so a misspelt
 //! setting never leaves a server open.
@@ -25,6 +34,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_common::principal::PrincipalKind;
 
 use super::Role;
+use super::mtls::MtlsConfig;
 use super::secret_ref::{SecretRef, invalid};
 
 /// The key prefix of every Krishiv authentication setting.
@@ -86,6 +96,44 @@ pub struct AuthConfig {
     pub tokens: Vec<TokenSpec>,
     /// Failure throttling.
     pub throttle: ThrottleConfig,
+    /// Client certificates.
+    pub mtls: MtlsConfig,
+    /// The roles of principals that do not carry one (certificates).
+    pub roles: RoleLists,
+}
+
+/// `krishiv.auth.roles.{viewer,operator,admin}`: principal names by role.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoleLists {
+    by_name: BTreeMap<String, Role>,
+}
+
+impl RoleLists {
+    /// The role of `name`, if a list names it.
+    #[must_use]
+    pub fn role_of(&self, name: &str) -> Option<Role> {
+        self.by_name.get(name).copied()
+    }
+
+    /// Sets the list of `role` from the setting `key = raw` (comma separated names).
+    fn set(&mut self, key: &str, role: Role, raw: &str) -> Result<(), KrishivError> {
+        self.by_name.retain(|_, r| *r != role);
+        for name in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(other) = self.by_name.get(name)
+                && *other != role
+            {
+                return Err(invalid(
+                    key,
+                    name,
+                    &format!(
+                        "`{name}` is already listed as {other}; a principal has exactly one role"
+                    ),
+                ));
+            }
+            self.by_name.insert(name.to_owned(), role);
+        }
+        Ok(())
+    }
 }
 
 /// The fields of one `krishiv.auth.tokens.<name>` group as given.
@@ -111,6 +159,8 @@ impl AuthConfig {
         let mut spark: Option<SecretRef> = None;
         let mut spark_principal = SPARK_TOKEN_NAME.to_owned();
         let mut throttle = ThrottleConfig::default();
+        let mut mtls = MtlsConfig::default();
+        let mut role_lists: BTreeMap<Role, (String, String)> = BTreeMap::new();
         for (key, raw) in settings {
             if key == SPARK_TOKEN_KEY {
                 spark = Some(SecretRef::parse(key, raw, true)?);
@@ -134,6 +184,16 @@ impl AuthConfig {
                     "role" => entry.role = Some(parse_role(key, raw)?),
                     _ => return Err(unknown(key)),
                 }
+                continue;
+            }
+            if mtls.apply(key, rest, raw)? {
+                continue;
+            }
+            if let Some(role) = rest.strip_prefix("roles.") {
+                let role = Role::parse(role)
+                    .filter(|r| r.as_str() == role)
+                    .ok_or_else(|| unknown(key))?;
+                role_lists.insert(role, (key.to_owned(), raw.to_owned()));
                 continue;
             }
             match rest {
@@ -183,13 +243,24 @@ impl AuthConfig {
                 role: Role::Admin,
             });
         }
-        Ok(Self { tokens, throttle })
+        mtls.validate()?;
+        // Each list once, whole, so a key given twice keeps its last value.
+        let mut roles = RoleLists::default();
+        for (role, (key, raw)) in role_lists {
+            roles.set(&key, role, &raw)?;
+        }
+        Ok(Self {
+            tokens,
+            throttle,
+            mtls,
+            roles,
+        })
     }
 
     /// Whether any authentication method is configured.
     #[must_use]
     pub fn is_configured(&self) -> bool {
-        !self.tokens.is_empty()
+        !self.tokens.is_empty() || self.mtls.is_on()
     }
 }
 

@@ -48,6 +48,8 @@ opentelemetry_sdk = { workspace = true, optional = true, features = ["trace"] }
 tracing-opentelemetry = { workspace = true, optional = true }
 prost = { workspace = true, optional = true, features = ["std"] }
 reqwest = { workspace = true, optional = true, features = ["blocking", "rustls"] }
+# Server TLS (P3-T002 PR-14c; design §3.5): rustls on the aws-lc-rs provider, never OpenSSL.
+rustls = { workspace = true, optional = true, features = ["aws_lc_rs", "std", "tls12"] }
 tracing-subscriber = { workspace = true, optional = true, features = ["registry", "std"] }
 # The local file system as a store (`fs`); no other store features.
 object_store = { workspace = true, features = ["fs"] }
@@ -66,6 +68,9 @@ tracing-subscriber = { workspace = true, features = ["registry", "std", "fmt", "
 # Cloud object stores (S3, GCS, Azure) via `krishiv-io/cloud`. Opt-in so the
 # default build stays inside the dependency and binary-size budgets.
 cloud = ["krishiv-exec/cloud", "krishiv-io/cloud"]
+# Server TLS for the listeners (`auth::ServerTls`: rustls on aws-lc-rs, reloadable certificate,
+# client-certificate verification). `krishiv-server`'s `server` feature turns it on.
+tls = ["dep:rustls"]
 # Access to the logical-plan IR (`Session::from_plan`, `DataFrame::plan`):
 # for the Python facade and tests; not covered by semver.
 unstable-ir = []

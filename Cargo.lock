@@ -2476,6 +2476,7 @@ dependencies = [
  "parquet",
  "prost",
  "reqwest",
+ "rustls",
  "serde_json",
  "sha2",
  "tempfile",
