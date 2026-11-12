@@ -97,16 +97,22 @@ fn icu_key(
         let mut cache = cache.borrow_mut();
         let collator = cache.entry(collation.id()).or_insert_with(|| {
             let name = collation.icu_locale()?;
-            // The collation data depends on the language and script, never the country.
-            let mut parts = name.split('_');
-            let language = parts.next()?;
+            // Spark spells the locale `language[_Script][_ALPHA3]`; ICU reads the alpha-2 region
+            // (`fr_CAN` is `fr-CA`, whose French sorts the accents backwards).
             let locale = if name == "UNICODE" {
                 Locale::UNKNOWN
             } else {
-                let tag = match parts.next() {
-                    Some(script) if script.len() == 4 => format!("{language}-{script}"),
-                    _ => language.to_owned(),
-                };
+                let mut tag = String::new();
+                for (i, part) in name.split('_').enumerate() {
+                    if i > 0 {
+                        tag.push('-');
+                    }
+                    if part.len() == 3 && i > 0 && part.chars().all(|c| c.is_ascii_uppercase()) {
+                        tag.push_str(region_alpha2(part)?);
+                    } else {
+                        tag.push_str(part);
+                    }
+                }
                 tag.parse::<Locale>().ok()?
             };
             let mut options = CollatorOptions::default();
@@ -126,6 +132,31 @@ fn icu_key(
         collator
             .write_sort_key_to(s, out)
             .map_err(|_| KernelError::internal("ICU sort key".to_owned()))
+    })
+}
+
+/// The alpha-2 code of a country Spark's ICU collation names carry (`collations()`).
+#[cfg(feature = "collations-icu")]
+fn region_alpha2(alpha3: &str) -> Option<&'static str> {
+    Some(match alpha3 {
+        "SAU" => "SA",
+        "AUT" => "AT",
+        "USA" => "US",
+        "AFG" => "AF",
+        "CAN" => "CA",
+        "ISR" => "IL",
+        "IDN" => "ID",
+        "NOR" => "NO",
+        "IND" => "IN",
+        "BIH" => "BA",
+        "MNE" => "ME",
+        "SRB" => "RS",
+        "CHN" => "CN",
+        "SGP" => "SG",
+        "HKG" => "HK",
+        "MAC" => "MO",
+        "TWN" => "TW",
+        _ => return None,
     })
 }
 
@@ -403,6 +434,7 @@ mod tests {
         assert_eq!(key("UTF8_LCASE_RTRIM", " a "), b" a");
     }
 
+    #[cfg(not(feature = "collations-icu"))]
     #[test]
     fn icu_has_no_key_here() {
         let mut out = Vec::new();
@@ -521,5 +553,8 @@ mod tests {
         assert!(key("sv", "Kypper") < key("sv", "K\u{f6}pfe"));
         assert!(key("de", "Kypper") > key("de", "K\u{f6}pfe"));
         assert_eq!(key("tr_ci", "I"), key("tr_ci", "\u{131}"));
+        // `fr_CAN` is Canadian French: the accents order backwards.
+        assert!(key("fr_CAN", "c\u{f4}te") < key("fr_CAN", "cot\u{e9}"));
+        assert!(key("fr", "cot\u{e9}") < key("fr", "c\u{f4}te"));
     }
 }
