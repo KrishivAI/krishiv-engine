@@ -287,5 +287,17 @@ mod tests {
         let got = run(Some(bits(&[false; 8]))).unwrap_or_else(|e| unreachable!("{e}"));
         assert_eq!(ids(got), Some(vec![]));
         assert_eq!(seen.load(Ordering::Relaxed), 0);
+        // Keeps exactly half (4 of 8): still the kept rows only.
+        let half = bits(&[true, true, true, true, false, false, false, false]);
+        let got = run(Some(half)).unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(ids(got), Some(vec![0, 2]));
+        assert_eq!(seen.swap(0, Ordering::Relaxed), 4);
+        // Keeps every row, or there is no row stage: the whole batch.
+        let got = run(Some(bits(&[true; 8]))).unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(ids(got), Some(vec![0, 2, 4, 6]));
+        assert_eq!(seen.swap(0, Ordering::Relaxed), 8);
+        let got = run(None).unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(ids(got), Some(vec![0, 2, 4, 6]));
+        assert_eq!(seen.swap(0, Ordering::Relaxed), 8);
     }
 }
