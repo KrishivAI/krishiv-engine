@@ -32,7 +32,7 @@ impl Iterator for QueryReader {
     fn next(&mut self) -> Option<Self::Item> {
         let batch = match self.first.take() {
             Some(batch) => batch,
-            None => match futures::executor::block_on(self.stream.next())? {
+            None => match wait_for(self.stream.next())? {
                 Ok(batch) => batch,
                 Err(e) => {
                     let arrow = ArrowError::ExternalError(e.to_string().into());
@@ -79,5 +79,57 @@ impl QueryReader {
     /// The slot the engine error that ends this reader is left in.
     pub(crate) fn error_slot(&self) -> ErrorSlot {
         ErrorSlot::clone(&self.error)
+    }
+}
+
+/// Runs `work` to completion on the calling thread, waiting on a
+/// `Mutex`/`Condvar` pair between polls.
+///
+/// Not `futures::executor::block_on`: that parks the thread with
+/// `std::thread::park`, which on Apple platforms waits on a libdispatch
+/// semaphore created with the thread's handle, a Mach port. Ports are not
+/// inherited by `fork`, so the main thread of a forked child (a parent that ran
+/// a query, then `os.fork()`) traps (`SIGTRAP`) the first time it parks. The
+/// pthread mutex and condition variable behind `Mutex` and `Condvar` live in
+/// ordinary memory, and each call makes fresh ones, so a child's first query
+/// runs as on Linux.
+pub(crate) fn wait_for<F: std::future::Future>(work: F) -> F::Output {
+    use std::sync::{Arc, Condvar, Mutex, PoisonError};
+    use std::task::{Context, Poll, Wake, Waker};
+
+    /// Set by a wake, cleared by the waiting thread before it polls again.
+    struct Signal {
+        woken: Mutex<bool>,
+        ready: Condvar,
+    }
+    impl Wake for Signal {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            *self.woken.lock().unwrap_or_else(PoisonError::into_inner) = true;
+            self.ready.notify_one();
+        }
+    }
+
+    let signal = Arc::new(Signal {
+        woken: Mutex::new(false),
+        ready: Condvar::new(),
+    });
+    let waker = Waker::from(Arc::clone(&signal));
+    let mut cx = Context::from_waker(&waker);
+    let mut work = std::pin::pin!(work);
+    loop {
+        if let Poll::Ready(out) = work.as_mut().poll(&mut cx) {
+            return out;
+        }
+        let mut woken = signal.woken.lock().unwrap_or_else(PoisonError::into_inner);
+        while !*woken {
+            woken = signal
+                .ready
+                .wait(woken)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        *woken = false;
     }
 }

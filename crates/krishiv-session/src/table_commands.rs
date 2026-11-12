@@ -36,7 +36,7 @@ use krishiv_common::error::{
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::secret::OptionValue;
-use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
+use krishiv_plan::analyzer::{Privilege, TableColumn};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
     AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable, AlterTableAction,
@@ -59,22 +59,6 @@ use crate::store::{
 
 /// The file formats a table can have.
 const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
-
-/// Spark's `CatalogUtils.makeQualifiedDBObjectPath` on the local file system: a location with a URI scheme
-/// stays as written; any other is resolved against the warehouse directory (an absolute path stays itself)
-/// and qualified as a `file:` URI.
-fn qualified_namespace_location(location: &str, warehouse: &std::path::Path) -> String {
-    let scheme = location.split_once(':').is_some_and(|(s, _)| {
-        s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-            && s.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-    });
-    if scheme {
-        location.to_owned()
-    } else {
-        format!("file:{}", warehouse.join(location).display())
-    }
-}
 
 /// The short name of a data source written fully qualified, as Spark maps its built-in classes
 /// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
@@ -155,7 +139,7 @@ fn unsupported(feature: &str) -> KrishivError {
 }
 
 /// An `ALTER` found its table dropped or altered by another statement while it ran.
-fn concurrent_change(name: &TableName) -> KrishivError {
+pub(crate) fn concurrent_change(name: &TableName) -> KrishivError {
     internal(format!(
         "{} was changed by another statement while this one ran; retry",
         name.quoted()
@@ -336,7 +320,11 @@ impl Session {
         let meta = NamespaceMeta {
             collation,
             comment: n.comment.clone(),
-            location: n.location.clone(),
+            location: n
+                .location
+                .as_deref()
+                .map(|l| qualified_namespace_location(l, || self.warehouse_dir()))
+                .transpose()?,
             properties: options_of(&n.properties, original),
         };
         if !self.state.catalog.store.create_namespace(&name, meta) && !n.if_not_exists {
@@ -362,7 +350,7 @@ impl Session {
                 Box::new(move |m| m.properties.extend(properties.clone()))
             }
             AlterNamespaceAction::SetLocation(l) => {
-                let l = qualified_namespace_location(l, &self.warehouse_dir()?);
+                let l = qualified_namespace_location(l, || self.warehouse_dir())?;
                 Box::new(move |m| m.location = Some(l.clone()))
             }
             AlterNamespaceAction::SetComment(c) => {
@@ -557,6 +545,7 @@ impl Session {
             .iter()
             .map(|c| c.name.clone())
             .collect();
+        crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
         let mut columns = crate::char_write::output_columns(&analysis.analyzed, None);
         if !v.columns.is_empty() {
             let mut declared = Vec::with_capacity(v.columns.len());
@@ -636,7 +625,9 @@ impl Session {
                 ),
             }),
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
         };
         self.state.catalog.store.create_table(view, mode)?;
         self.empty_frame().await
@@ -947,6 +938,7 @@ impl Session {
                 }
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
+                crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
                 changed.columns = crate::char_write::output_columns(&analysis.analyzed, None);
                 let query_columns = analysis
                     .analyzed
@@ -1110,26 +1102,23 @@ impl Session {
                 }
                 return Err(table_operation(&name, "DROP COLUMN"));
             }
-            AlterTableAction::AddPartition {
-                if_not_exists,
-                parts,
-                ..
-            } => {
-                changed = self
-                    .add_partitions(&table, parts, *if_not_exists, original)
-                    .await?;
+            AlterTableAction::AddPartition { .. }
+            | AlterTableAction::SetPartitionLocation { .. } => {
+                changed = self.alter_partitions(&table, &a.action, original).await?;
             }
-            AlterTableAction::SetPartitionLocation {
-                partition,
-                location,
-                ..
-            } => {
-                changed = self
-                    .set_partition_location(&table, partition, location, original)
-                    .await?;
-            }
+            // It swaps the catalog entry itself, between its directory move and the statement's end.
             AlterTableAction::RenamePartition { from, to, .. } => {
-                changed = self.rename_partition(&table, [from, to], original).await?;
+                self.rename_partition(&table, &name, [from, to], original)
+                    .await?;
+                return self.empty_frame().await;
+            }
+            // It swaps the catalog entry itself, between its log commit and its deletes.
+            AlterTableAction::DropPartition {
+                if_exists, specs, ..
+            } => {
+                self.drop_partitions(&table, &name, specs, *if_exists, original)
+                    .await?;
+                return self.empty_frame().await;
             }
             AlterTableAction::SetTblProperties(props) => {
                 // The `comment` property is the table comment (`AlterTableSetPropertiesCommand`); the
@@ -1415,7 +1404,9 @@ impl Session {
             root: warehouse.clone(),
             view: None,
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
         };
         let layout = LayoutRequest {
             partition_by: &partition_names,
@@ -1599,84 +1590,6 @@ impl Session {
         Ok(())
     }
 
-    /// Asks the session's policy about `path` for each privilege (the writer does the same for its files).
-    async fn authorize_path(
-        &self,
-        path: &Path,
-        privileges: &[Privilege],
-        class: StatementClass,
-    ) -> Result<(), KrishivError> {
-        let securable = Securable::Path(OptionValue::from_user("path", path.display().to_string()));
-        for privilege in privileges {
-            let r = authorize(
-                &*self.state.policy,
-                &self.state.principal,
-                &securable,
-                *privilege,
-            )
-            .await;
-            crate::access::audit(self, class, r)?;
-        }
-        Ok(())
-    }
-
-    /// Deletes the files of the managed `table` (all of its directory, or with `keep_dir` what is in it).
-    ///
-    /// The directory must lie inside the warehouse, must not be the warehouse and must not be a link: a name
-    /// can never reach outside it (names are checked at creation, and this is the second line). The policy is
-    /// asked about the directory before anything is removed.
-    async fn delete_table_files(
-        &self,
-        table: &CatalogTable,
-        keep_dir: bool,
-    ) -> Result<(), KrishivError> {
-        if let Some(dir) = self.deletable_dir(table).await? {
-            if keep_dir {
-                clear_dir(&dir)
-            } else {
-                remove_dir(&dir)
-            }
-        } else {
-            Ok(())
-        }
-    }
-
-    /// The directory whose files a delete of `table` would remove, after every check (containment in the root
-    /// the table was created under, no links, the policy): `None` when there is nothing to delete. Run before
-    /// the metadata changes, so a refused delete leaves the table in place.
-    async fn deletable_dir(&self, table: &CatalogTable) -> Result<Option<PathBuf>, KrishivError> {
-        if !table.managed {
-            return Ok(None);
-        }
-        let location = &table.location;
-        let meta = match location.symlink_metadata() {
-            Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => {
-                return Err(internal(format!(
-                    "cannot inspect {}: {e}",
-                    location.display()
-                )));
-            }
-        };
-        let root = table
-            .root
-            .canonicalize()
-            .map_err(|e| internal(format!("cannot resolve the warehouse: {e}")))?;
-        let canonical = location
-            .canonicalize()
-            .map_err(|e| internal(format!("cannot resolve {}: {e}", location.display())))?;
-        if meta.file_type().is_symlink() || !canonical.starts_with(&root) || canonical == root {
-            return Err(internal(format!(
-                "refusing to delete {}: it is not a directory inside the warehouse",
-                location.display()
-            )));
-        }
-        self.authorize_path(&canonical, &[Privilege::Modify], StatementClass::Write)
-            .await?;
-        Ok(Some(canonical))
-    }
-
     /// `CREATE TABLE ... AS SELECT`: writes the query to the table's
     /// location, then adds the metadata (so a failed write leaves none).
     async fn create_table_as(
@@ -1712,6 +1625,7 @@ impl Session {
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
+        crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
         table.columns = crate::char_write::output_columns(&analysis.analyzed, Some(true));
         let name = TableName {
             namespace: table.namespace.clone(),
@@ -1896,7 +1810,9 @@ impl Session {
             root: warehouse.clone(),
             view: None,
             layout,
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -1970,20 +1886,33 @@ impl Session {
             }
             .into());
         }
+        // Its deletes do not interleave with a rename's moves or a write's registration.
+        let _ddl = if table.is_partitioned() {
+            Some(
+                self.state
+                    .catalog
+                    .store
+                    .partition_ddl(&table.location)
+                    .await,
+            )
+        } else {
+            None
+        };
         self.forget_cached(&name);
         let deleted = self.delete_table_files(&table, true).await;
         // Data may have changed even when the cleanup failed part way.
         self.state.catalog.store.bump();
         self.forget_cached(&name);
+        self.forget_column_stats(&name);
         deleted?;
         self.empty_frame().await
     }
 
     /// `ANALYZE TABLE name COMPUTE STATISTICS [NOSCAN | FOR COLUMNS ...]`.
     ///
-    /// The table (and the listed columns) must exist, as in Spark. The engine
-    /// keeps no table statistics, so nothing is computed or stored: the
-    /// command only validates its target.
+    /// The table (and the listed columns) must exist, as in Spark. Column
+    /// statistics are computed and kept in the catalog; the engine keeps no
+    /// table-level statistics, so the other forms only validate their target.
     pub(crate) async fn exec_analyze(
         &self,
         a: &Analyze,
@@ -2030,7 +1959,7 @@ impl Session {
             _ => return Err(unsupported("this ANALYZE TABLE form")),
         };
         // Spark gathers statistics of numbers, booleans, dates and times, strings and binary only.
-        for column in chosen {
+        for column in &chosen {
             let supported = matches!(
                 column.data_type,
                 DataType::Boolean
@@ -2059,17 +1988,8 @@ impl Session {
                 );
             }
         }
-        // Nothing is computed, but the table remembers that column statistics were asked for, so that
-        // `DESCRIBE EXTENDED t col` refuses instead of printing NULLs (review of #496 M2).
-        if matches!(
-            a.columns,
-            AnalyzeColumns::ForAll | AnalyzeColumns::ForColumns(_)
-        ) && !table.column_stats_requested
-        {
-            let mut marked = CatalogTable::clone(&table);
-            marked.column_stats_requested = true;
-            // A concurrent change of the table wins; the mark is only a guard.
-            self.state.catalog.store.replace_table(&table, marked);
+        if !chosen.is_empty() {
+            self.store_column_stats(&name, &table, &chosen).await?;
         }
         self.empty_frame().await
     }
@@ -2418,9 +2338,23 @@ impl Session {
             return self.check_table_write(table, &df, overwrite).await;
         }
         let mode = if overwrite { "overwrite" } else { "append" };
+        // A RENAME or DROP PARTITION waits until these rows are written and their partitions registered (it could
+        // otherwise move or drop a partition between this write's log commit and its registration).
+        let _partitions = if table.is_partitioned() {
+            Some(
+                self.state
+                    .catalog
+                    .store
+                    .partition_write(&table.location)
+                    .await,
+            )
+        } else {
+            None
+        };
         let written = self.write_table_rows(table, &df, mode, &mut None).await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
+        self.forget_column_stats(name);
         self.forget_cached(name);
         let dirs =
             written.map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment))?;
@@ -2608,6 +2542,8 @@ impl Session {
                     .into());
                 }
                 self.validate_new_table(&name, &spec)?;
+                // The write refuses an indeterminate string column: not after the drop.
+                crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
                 // What the write itself would refuse (a format the engine does not
                 // write, duplicate output columns, options the format rejects) must
                 // not come after the drop.
@@ -2795,7 +2731,9 @@ impl Session {
             root: warehouse,
             view: None,
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
         };
         let layout = LayoutRequest {
             partition_by: &[],
@@ -3300,36 +3238,10 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// Deletes a managed table's directory; a directory that is already gone
-/// is fine.
-fn remove_dir(dir: &Path) -> Result<(), KrishivError> {
-    match std::fs::remove_dir_all(dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(internal(format!("cannot delete {}: {e}", dir.display()))),
-    }
-}
-
-/// Removes everything in `dir` and keeps `dir`.
-fn clear_dir(dir: &Path) -> Result<(), KrishivError> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(internal(format!("cannot list {}: {e}", dir.display()))),
-    };
-    for entry in entries {
-        let path = entry
-            .map_err(|e| internal(format!("cannot list {}: {e}", dir.display())))?
-            .path();
-        let removed = if path.is_dir() {
-            std::fs::remove_dir_all(&path)
-        } else {
-            std::fs::remove_file(&path)
-        };
-        removed.map_err(|e| internal(format!("cannot delete {}: {e}", path.display())))?;
-    }
-    Ok(())
-}
+mod files;
+use files::remove_dir;
+mod location;
+use location::qualified_namespace_location;
 
 #[cfg(test)]
 mod tests;

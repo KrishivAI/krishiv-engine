@@ -619,6 +619,7 @@ mod text;
 mod url;
 mod variant;
 mod vector;
+mod xml_binary;
 
 #[test]
 fn session_user_and_local_clock() {

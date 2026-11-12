@@ -952,6 +952,17 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 5)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "overlay" && n == 3 {
+                    // `overlay(input, replace, pos)` is `overlay(input, replace, pos, -1)`: Spark's
+                    // constructor writes the default length into the call, so names show it.
+                    owned = kids.clone();
+                    owned.push(default_argument(
+                        Literal::Integer(-1),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    (&owned[..], 4)
                 } else if is_builtin_entry(&entry)
                     && matches!(entry.id.name(), "st_geomfromwkb" | "st_asbinary")
                     && n == 1
@@ -1205,6 +1216,22 @@ impl Resolver<'_> {
                         ));
                     }
                     return self.cast_named_call(&entry, e, f, kids, to);
+                }
+                // `ExtractValue.applyOrNull`: an element or key of a `NULL` (`void`) base is `NULL`.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "__subscript"
+                    && n == 2
+                    && kids[0].ty.data_type.is_none()
+                {
+                    let ty = arg_type(DataType::Null, true);
+                    return Ok(Bound {
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(e.origin),
+                        ),
+                        shown: Some(Arc::clone(e)),
+                        ty: ty.clone(),
+                        ..keep(ty)
+                    });
                 }
                 // `s['a']` on a struct is the field `a` (Spark's
                 // `ExtractValue`): the extraction is a non-null string.
@@ -1716,7 +1743,12 @@ impl Resolver<'_> {
                     ResolvedExpr::Alias { output, .. } => column(output),
                     ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
                     ResolvedExpr::StateInput { raw_type, .. } => arg_type(raw_type.clone(), true),
-                    ResolvedExpr::Field {
+                    ResolvedExpr::EvalMode {
+                        data_type,
+                        nullable,
+                        ..
+                    }
+                    | ResolvedExpr::Field {
                         data_type,
                         nullable,
                         ..

@@ -142,6 +142,7 @@ pub use catalog::{
     TableFunctionKind, TableFunctionLookup, TableFunctionRegistry, TableIdent, TableKind,
     TableMeta,
 };
+pub use char_varchar::DeclaredType;
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, VariableValue, variable_name};
 

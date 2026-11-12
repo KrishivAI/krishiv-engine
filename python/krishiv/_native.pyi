@@ -15,6 +15,7 @@ from typing import final
 __version__: str
 __allocator__: str
 __all__ = [
+    "AnonymousPythonUdf",
     "ArrowStream",
     "Column",
     "DataFrame",
@@ -23,6 +24,8 @@ __all__ = [
     "WindowSpec",
     "__allocator__",
     "__version__",
+    "_udf_pool_shutdown",
+    "_udf_runner_conf",
     "call_function",
     "col",
     "count_distinct",
@@ -46,6 +49,15 @@ class Session:
     def conf_is_modifiable(self, key: str) -> bool: ...
     def conf_get(self, key: str) -> str | None: ...
     def conf_set(self, key: str, value: str) -> None: ...
+    def register_python_udf(
+        self,
+        name: str,
+        eval_type: int,
+        return_type: str,
+        deterministic: bool,
+        thread_safe: bool,
+        wrapper: object,
+    ) -> int: ...
     def conf_unset(self, key: str) -> None: ...
     def metrics(self) -> list[dict[str, object]]: ...
     def clear_cache(self) -> None: ...
@@ -185,6 +197,23 @@ class ArrowStream:
     @property
     def consumed(self) -> bool: ...
 
+@final
+class AnonymousPythonUdf:
+    def __new__(
+        cls,
+        name: str,
+        eval_type: int,
+        return_type: str,
+        deterministic: bool,
+        thread_safe: bool,
+        wrapper: object,
+    ) -> AnonymousPythonUdf: ...
+    @property
+    def version(self) -> int: ...
+    def call(self, args: list[Column]) -> Column: ...
+
+def _udf_pool_shutdown() -> int: ...
+def _udf_runner_conf() -> dict[str, str]: ...
 def col(name: str) -> Column: ...
 def lit(value: object) -> Column: ...
 def map_literal(pairs: list[tuple[str, str]]) -> Column: ...
