@@ -10,7 +10,7 @@ from pathlib import Path
 from . import manifest as mf
 from .denominator import compute
 from .report import dashboard, summarize, write_summary
-from .runner import run_file
+from .runner import check_pytest_timeout, run_file
 from .static_count import census
 
 DATA = Path(__file__).resolve().parents[2] / "pyspark"
@@ -33,17 +33,28 @@ def cmd_run(a: argparse.Namespace) -> None:
 
     connect = _connect_dir(a.checkout)
     entries = mf.load(DATA / "manifest.toml")
+    if not a.server_cmd:
+        raise SystemExit("run: --server-cmd needs a command")
+    if not connect.is_dir():
+        raise SystemExit(f"run: {connect} is not a directory (wrong --checkout?)")
     collected, skipped = census(connect)
+    if not collected:
+        raise SystemExit(f"run: no tests found under {connect}; not overwriting the summary")
     den, remaining = compute(a.version, collected, skipped, set(), entries)
     files = sorted({t.split("::", 1)[0] for t in remaining})
     if a.only:
         files = [f for f in files if any(f.startswith(o) for o in a.only)]
+    if not files:
+        raise SystemExit("run: no files selected")
+    check_pytest_timeout()
     out_dir = DATA / "results" / a.version
     records = []
     for rel in files:
         print(f"running {rel}", flush=True)
         records += run_file(a.version, a.checkout, rel, out_dir, a.server_cmd, a.port)
-    path = write_summary(summarize(den, remaining, records, source="run"), DATA / "summary")
+    # A partial (`--only`) run must not replace the committed full summary.
+    target = DATA / "results" if a.only else DATA / "summary"
+    path = write_summary(summarize(den, remaining, records, source="run"), target)
     print(f"wrote {path}")
 
 

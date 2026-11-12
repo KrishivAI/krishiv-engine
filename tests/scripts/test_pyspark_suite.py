@@ -116,3 +116,33 @@ def test_pass_rates_ratchet_and_dashboard(tmp_path):
     worse = dict(s, passed_ids=[])
     assert ratchet_regressions(s, worse) == sorted(s["passed_ids"])
     assert "| 4.3.0 | run |" in dashboard([s])
+
+
+def test_file_level_failure_is_reported() -> None:
+    from pyspark_suite.denominator import Denominator
+    from pyspark_suite.junit import Record
+
+    den = Denominator("4.3.0", 1, 0, 0, 0, 1, 0, {})
+    rec = Record("4.3.0", "a.py", "<file>", "<file>", "timeout", 1)
+    out = summarize(den, {"a.py::A::t"}, [rec], source="run")
+    assert out["file_failures"] == ["a.py"]
+    assert out["not_run"] == 1
+
+
+def test_server_refuses_stale_listener() -> None:
+    import socket
+
+    from pyspark_suite.runner import server
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        s.listen()
+        with pytest.raises(RuntimeError, match="already has a listener"), server(["true"], s.getsockname()[1]):
+            pass
+
+
+def test_server_fails_fast_when_process_exits() -> None:
+    from pyspark_suite.runner import server
+
+    with pytest.raises(RuntimeError, match="exited early"), server(["true"], 1):
+        pass

@@ -23,6 +23,8 @@ def summarize(den: Denominator, remaining: set[str], records: list[Record], *, s
     """`source` is `static` (ast census, nothing run) or `collected` (pytest) / `run`."""
     status = {r.test_id: r.status for r in records if r.test_id in remaining}
     passed = {t for t, s in status.items() if s == "pass"}
+    # A whole-file timeout, crash or missing XML is a `<file>` record; keep it visible, not just in `not_run`.
+    file_failures = sorted({r.file for r in records if r.test == "<file>"})
     client_only = {t for t in remaining if t.split("::", 1)[0] in CLIENT_ONLY_FILES}
 
     def rate(num: int, dnm: int) -> float:
@@ -35,6 +37,7 @@ def summarize(den: Denominator, remaining: set[str], records: list[Record], *, s
         "denominator": den.as_dict(),
         "counts": dict(sorted(Counter(status.values()).items())),
         "not_run": len(remaining) - len(status),
+        "file_failures": file_failures,
         "passed": len(passed),
         "pass_rate": rate(len(passed), den.denominator),
         "client_only": len(client_only),

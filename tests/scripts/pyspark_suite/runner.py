@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import os
+import signal
 import socket
 import subprocess
 import sys
 import time
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from .junit import Record, parse
@@ -18,32 +19,52 @@ TEST_TIMEOUT_S = 120  # per test, recalibrated at the first measured run
 FILE_TIMEOUT_S = 30 * 60
 
 
-def _wait_port(port: int, deadline_s: float = 30.0) -> bool:
+def _port_open(port: int) -> bool:
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _wait_port(port: int, proc: subprocess.Popen, deadline_s: float = 30.0) -> bool:
     end = time.monotonic() + deadline_s
     while time.monotonic() < end:
-        with socket.socket() as s:
-            s.settimeout(0.5)
-            if s.connect_ex(("127.0.0.1", port)) == 0:
-                return True
+        if proc.poll() is not None:
+            return False
+        if _port_open(port):
+            return True
         time.sleep(0.2)
     return False
+
+
+def check_pytest_timeout() -> None:
+    """Without pytest-timeout every `--timeout` run errors out and shows as 'not run'; fail early."""
+    if subprocess.run([sys.executable, "-c", "import pytest_timeout"], check=False, capture_output=True).returncode:
+        raise RuntimeError("pytest-timeout is not installed in the version venv")
 
 
 @contextmanager
 def server(cmd: list[str], port: int) -> Generator[None]:
     """Start the server command, wait for its port, stop it (and wait) on exit."""
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if _port_open(port):
+        raise RuntimeError(f"port {port} already has a listener; refusing to test a stale server")
+    # Own process group, so a wrapper (`cargo run`, a script) cannot leave the real server behind.
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
-        if not _wait_port(port):
-            raise RuntimeError(f"server did not open port {port}: {cmd}")
+        if not _wait_port(port, proc):
+            raise RuntimeError(f"server did not open port {port} (or exited early): {cmd}")
         yield
     finally:
-        proc.terminate()
+        _killpg(proc, signal.SIGTERM)
         try:
             proc.wait(10)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _killpg(proc, signal.SIGKILL)
             proc.wait()
+
+
+def _killpg(proc: subprocess.Popen, sig: int) -> None:
+    with suppress(ProcessLookupError):
+        os.killpg(proc.pid, sig)
 
 
 def run_file(version: str, checkout: Path, rel: str, out_dir: Path, server_cmd: list[str], port: int) -> list[Record]:
