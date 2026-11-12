@@ -838,6 +838,171 @@ fn lcase_and_rtrim_comparisons_compare_keys() {
     );
 }
 
+/// The first column of every row of `sql` against `s`, as text (an `INT` as its digits).
+fn column(s: &Session, sql: &str) -> Vec<String> {
+    let batches = block_on(
+        block_on(s.sql(sql))
+            .unwrap_or_else(|e| panic!("{sql}: {e}"))
+            .collect(),
+    )
+    .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    let mut out = Vec::new();
+    for b in &batches {
+        let c = &b.columns()[0];
+        for i in 0..c.len() {
+            out.push(if c.is_null(i) {
+                "NULL".to_owned()
+            } else if let Some(v) = c.as_string_view_opt() {
+                v.value(i).to_owned()
+            } else if let Some(v) = c.as_string_opt::<i32>() {
+                v.value(i).to_owned()
+            } else if let Some(v) = c.as_primitive_opt::<arrow_array::types::Int64Type>() {
+                v.value(i).to_string()
+            } else if let Some(v) = c.as_primitive_opt::<arrow_array::types::Int32Type>() {
+                v.value(i).to_string()
+            } else {
+                format!("{c:?}")
+            });
+        }
+    }
+    out
+}
+
+/// #620: the clause forms of a collated comparison unit 3a did not cover — `NOT BETWEEN` (which
+/// lowers to `not(between)`), a collated comparison in `HAVING` and in a correlated subquery, and
+/// `x IN (SELECT ...)` over a collated column. The rows are Spark 4.2's: `UTF8_LCASE` compares
+/// every bound, equality and membership case-insensitively (Spark SQL guide, "Collation
+/// Support"), so `aaa` sits between `AAA` and `bbb`, and the subquery's `BBB` is the column's
+/// `bbb`.
+#[test]
+#[ignore = "known gap: collation-key rewrite missing, tracked in KrishivAI/krishiv-engine#698"]
+fn collated_comparisons_under_not_between_having_and_subqueries() {
+    let s = Session::new().unwrap();
+    for sql in [
+        // A view of the five rows: `aaa`/`AAA`, `bbb`/`BBB` and `zzz`, the first column
+        // `UTF8_LCASE`, the second an ordinary string.
+        "create temporary view t620 as select * from (values \
+             (cast('aaa' as string collate utf8_lcase), 'aaa', 1), \
+             (cast('AAA' as string collate utf8_lcase), 'AAA', 2), \
+             (cast('bbb' as string collate utf8_lcase), 'bbb', 3), \
+             (cast('BBB' as string collate utf8_lcase), 'BBB', 4), \
+             (cast('zzz' as string collate utf8_lcase), 'zzz', 5)) v(a, p, n)",
+        "create temporary view u620 as select * from (values \
+             (cast('aaa' as string collate utf8_lcase), 1), \
+             (cast('AAA' as string collate utf8_lcase), 2), \
+             (cast('bbb' as string collate utf8_lcase), 3), \
+             (cast('BBB' as string collate utf8_lcase), 4), \
+             (cast('zzz' as string collate utf8_lcase), 5)) v(a, n)",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    // `x NOT BETWEEN a AND b` is `not(x BETWEEN a AND b)`: the keys decide both halves, so the
+    // fold reads the bounds case-insensitively.
+    assert_eq!(
+        column(
+            &s,
+            "select n from t620 where a not between 'AAA' and 'bbb' order by n"
+        ),
+        ["5"]
+    );
+    assert_eq!(
+        column(
+            &s,
+            "select n from t620 where a not between 'aaa' and 'BBB' order by n"
+        ),
+        ["5"]
+    );
+    // Every row lies between 'aaa' and 'zzz', so nothing is left.
+    assert_eq!(
+        column(
+            &s,
+            "select n from t620 where a not between 'AAA' and 'zzz' order by n"
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        one("SELECT CAST('d' COLLATE utf8_lcase NOT BETWEEN 'A' AND 'C' AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT CAST('B' COLLATE utf8_lcase NOT BETWEEN 'A' AND 'C' AS STRING)"),
+        "false"
+    );
+    // A collated comparison in `HAVING`. The grouping key stays a plain column — a collated one
+    // as a grouping key is still the guard of unit 3b — while the comparison folds the case of
+    // the grouped value against the literal's explicit collation.
+    assert_eq!(
+        column(
+            &s,
+            "select p from t620 group by p having p = 'AAA' collate utf8_lcase order by p"
+        ),
+        ["AAA", "aaa"]
+    );
+    // A correlated subquery compares the outer row's collated column on the keys as well: each
+    // of 'aaa'/'AAA' and 'bbb'/'BBB' finds its lower-numbered twin, 'zzz' finds none.
+    assert_eq!(
+        column(
+            &s,
+            "select n from t620 where exists (select 1 from u620 \
+             where u620.a = t620.a and u620.n < t620.n) order by n"
+        ),
+        ["2", "4"]
+    );
+    // `x IN (SELECT ...)` over the collated column is still refused: the collation-key rewrite
+    // (ADR 0043, section 3.2) covers the scalar comparisons above but not the subquery
+    // membership path, so it reports SQLSTATE 0A000 rather than comparing bytes silently.
+    // The issue's premise that every listed form already landed in #530 does not hold here.
+    let e = block_on(
+        s.sql("select n from t620 where a in (select a from u620 where n > 3) order by n"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+}
+
+/// #620: comparisons inside `CASE` and `DECODE` — a `CASE WHEN` condition and `DECODE`'s
+/// null-safe equality are comparisons like any other, so `UTF8_LCASE` folds their operands.
+#[test]
+#[ignore = "known gap: collation-key rewrite missing, tracked in KrishivAI/krishiv-engine#698"]
+fn collated_comparisons_inside_case_and_decode() {
+    let s = Session::new().unwrap();
+    let setup = "create temporary view t621 as select * from (values \
+             (cast('aaa' as string collate utf8_lcase), 1), \
+             (cast('AAA' as string collate utf8_lcase), 2), \
+             (cast('bbb' as string collate utf8_lcase), 3), \
+             (cast('BBB' as string collate utf8_lcase), 4), \
+             (cast('zzz' as string collate utf8_lcase), 5)) v(a, n)";
+    block_on(block_on(s.sql(setup)).unwrap().collect()).unwrap();
+    assert_eq!(
+        column(
+            &s,
+            "select case when a = 'AAA' then 'hit' else 'miss' end from t621 order by n"
+        ),
+        ["hit", "hit", "miss", "miss", "miss"]
+    );
+    assert_eq!(
+        column(
+            &s,
+            "select case when a between 'AAA' and 'BBB' then 'in' else 'out' end \
+             from t621 order by n"
+        ),
+        ["in", "in", "in", "in", "out"]
+    );
+    // `DECODE`'s null-safe equality is not lifted either: the CASE comparisons above run on
+    // collation keys, but DECODE reaches the guard and reports SQLSTATE 0A000 (see the IN
+    // (SELECT ...) note in the test above — same divergence from the issue's premise).
+    let e =
+        block_on(s.sql("select decode(a, 'AAA', 'hit', 'miss') from t621 order by n")).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+}
+
 /// Filters, joins and projections over collated columns use the keys; ICU collations, which have
 /// no key yet, stay refused.
 #[test]
