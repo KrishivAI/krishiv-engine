@@ -62,6 +62,14 @@ impl KrishivStorageHandler {
             .map_err(|e| KernelError::generic(format!("path {url}: {e}")))
     }
 
+    /// The URL of `relative` under the table root.
+    #[cfg(test)]
+    pub(crate) fn root_join(&self, relative: &str) -> Url {
+        self.root
+            .join(relative)
+            .unwrap_or_else(|_| self.root.clone())
+    }
+
     fn url_of(&self, location: &Path) -> Url {
         let mut url = self.root.clone();
         url.set_path(&format!("/{location}"));

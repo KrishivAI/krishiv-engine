@@ -2,7 +2,7 @@
 //! Kernel schema types to Arrow types, and kernel scalars to Arrow arrays.
 //!
 //! Follows `delta_kernel` 0.30.1 `engine/arrow_conversion` (Apache-2.0), reduced to what the data bridge
-//! needs: `timestamp` is microseconds UTC, `timestamp_ntz` microseconds without a zone, there is no
+//! needs: `timestamp` is microseconds UTC (zone `+00:00`: arrow-cast and arrow-json parse only offset zones without `chrono-tz`, which ADR 0028 bans), `timestamp_ntz` microseconds without a zone, there is no
 //! nanosecond type, and the unshredded Variant is a struct of `metadata` and `value`. Parquet field ids
 //! (column mapping) arrive with the Parquet handler.
 
@@ -69,7 +69,7 @@ pub fn arrow_type(t: &DataType) -> KernelResult<ArrowType> {
             }
             PrimitiveType::Date => ArrowType::Date32,
             PrimitiveType::Timestamp => {
-                ArrowType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+                ArrowType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into()))
             }
             PrimitiveType::TimestampNtz => ArrowType::Timestamp(TimeUnit::Microsecond, None),
             PrimitiveType::Void => ArrowType::Null,
@@ -133,7 +133,11 @@ fn kernel_field(f: &Field) -> KernelResult<StructField> {
 /// The kernel data type of an Arrow type. Wider-than-Delta layouts (large, view, dictionary) fold onto
 /// their logical type; millisecond and nanosecond timestamps map to the microsecond logical type.
 pub fn kernel_type(t: &ArrowType) -> KernelResult<DataType> {
-    let utc = |tz: &Option<Arc<str>>| tz.as_deref().is_some_and(|z| z.eq_ignore_ascii_case("utc"));
+    let utc = |tz: &Option<Arc<str>>| {
+        tz.as_deref().is_some_and(|z| {
+            z.eq_ignore_ascii_case("utc") || matches!(z, "+00:00" | "-00:00" | "+0000" | "Z")
+        })
+    };
     Ok(match t {
         ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View => DataType::STRING,
         ArrowType::Int64 | ArrowType::UInt64 => DataType::LONG,
@@ -343,7 +347,7 @@ mod tests {
         let arrow = arrow_schema(&schema).unwrap();
         assert_eq!(
             arrow.field(1).data_type(),
-            &ArrowType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+            &ArrowType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into()))
         );
         assert_eq!(kernel_schema(&arrow).unwrap(), schema);
     }

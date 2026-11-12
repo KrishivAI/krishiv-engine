@@ -10,6 +10,7 @@ Delta Lake connector on `delta_kernel` (no default features) with our own Engine
 - `src/error.rs` kernel errors as Krishiv errors (`from_kernel`; design `P3-T021-delta.md` §3.7)
 - `src/engine/data.rs`, `get_data.rs` `EngineData`/`GetData` over Arrow 60 (one `Getter` enum; orphan rule); `schema.rs` kernel types to Arrow, scalars to arrays
 - `src/engine/storage.rs` kernel `StorageHandler` over `IoContext`, bound to one store and table root (URLs outside the root refused)
+- `src/engine/json.rs` kernel `JsonHandler`: `parse_json` (bad timestamp/date/decimal cell is NULL), `read_json_files`, `write_json_file` (the commit primitive); `ParseLimits` (bytes, depth, width)
 
 ## Invariants
 - `delta_kernel` with `default-features = false`; never `deltalake`.
