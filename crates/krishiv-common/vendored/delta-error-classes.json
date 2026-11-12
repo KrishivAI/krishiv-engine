@@ -1,0 +1,244 @@
+{
+  "DELTA_CDC_NON_CONSTANT_ARGUMENT": {
+    "message": [
+      "The <argumentName> argument (position <pos>) of the <functionName> function requires a constant value, but got a non-constant expression: <sqlExpr>.",
+      ""
+    ],
+    "sqlState": "42K0H"
+  },
+  "DELTA_CDC_READ_NULL_RANGE_BOUNDARY": {
+    "message": [
+      "CDC read start/end parameters cannot be null. Please provide a valid version or timestamp."
+    ],
+    "sqlState": "22004"
+  },
+  "DELTA_CDC_START_VERSION_AFTER_LATEST": {
+    "message": [
+      "Start version <start> for change data feed exceeds the latest table version <latest>."
+    ],
+    "sqlState": "22003"
+  },
+  "DELTA_CONCURRENT_APPEND": {
+    "message": [
+      "Transaction conflict detected. a concurrent <operation> added data to table <tableName> committed at version <version>."
+    ],
+    "subClass": {
+      "WITHOUT_HINT": {
+        "message": [
+          "The concurrent operation modified data that should have been read by this operation. Please retry the operation. Refer to <docLink> for more information."
+        ]
+      },
+      "WITH_PARTITION_HINT": {
+        "message": [
+          "The concurrent operation modified data in the partition <partitionValues> that should have been read by this operation. Please retry the operation. Refer to <docLink> for more information."
+        ]
+      }
+    },
+    "sqlState": "2D521"
+  },
+  "DELTA_CONCURRENT_DELETE_DELETE": {
+    "message": [
+      "Transaction conflict detected, a concurrent <operation> deleted data from table <tableName> (committed at version <version>) that this transaction attempted to delete."
+    ],
+    "subClass": {
+      "WITHOUT_HINT": {
+        "message": [
+          "The concurrent operation deleted data that was read by this operation. Please retry the operation. Refer to <docLink> for more information."
+        ]
+      },
+      "WITH_PARTITION_HINT": {
+        "message": [
+          "The concurrent operation deleted data in the partition <partitionValues> that was read by this operation. Please retry the operation. Refer to <docLink> for more information."
+        ]
+      }
+    },
+    "sqlState": "2D521"
+  },
+  "DELTA_CONCURRENT_DELETE_READ": {
+    "message": [
+      "Transaction conflict detected, a concurrent <operation> deleted data from table <tableName> (committed at version <version>) that this transaction read."
+    ],
+    "subClass": {
+      "WITHOUT_HINT": {
+        "message": [
+          "The concurrent operation deleted data that was read by this operation. Please retry the operation. Refer to <docLink> for more information."
+        ]
+      },
+      "WITH_PARTITION_HINT": {
+        "message": [
+          "The concurrent operation deleted data in the partition <partitionValues> that was read by this operation. Please retry the operation. Refer to <docLink> for more information."
+        ]
+      }
+    },
+    "sqlState": "2D521"
+  },
+  "DELTA_CONCURRENT_TRANSACTION": {
+    "message": [
+      "ConcurrentTransactionException: This error occurs when multiple streaming queries are using the same checkpoint to write into this table. Did you run multiple instances of the same streaming query at the same time?<conflictingCommit>\nRefer to <docLink> for more details."
+    ],
+    "sqlState": "2D521"
+  },
+  "DELTA_CONCURRENT_WRITE": {
+    "message": [
+      "ConcurrentWriteException: A concurrent transaction has written new data since the current transaction read the table. Please try the operation again.<conflictingCommit>\nRefer to <docLink> for more details."
+    ],
+    "sqlState": "2D521"
+  },
+  "DELTA_FAILED_TO_MERGE_FIELDS": {
+    "message": [
+      "Failed to merge fields '<currentField>' and '<updateField>'"
+    ],
+    "sqlState": "22005"
+  },
+  "DELTA_ILLEGAL_USAGE": {
+    "message": [
+      "The usage of <option> is not allowed when <operation> a Delta table."
+    ],
+    "sqlState": "42601"
+  },
+  "DELTA_INVALID_CDC_RANGE": {
+    "message": [
+      "CDC range from start <start> to end <end> was invalid. End cannot be before start."
+    ],
+    "sqlState": "22003"
+  },
+  "DELTA_INVALID_ISOLATION_LEVEL": {
+    "message": [
+      "invalid isolation level '<isolationLevel>'"
+    ],
+    "sqlState": "25000"
+  },
+  "DELTA_INVALID_PROTOCOL_VERSION": {
+    "message": [
+      "Unsupported Delta protocol version: table \"<tableNameOrPath>\" requires reader version <readerRequired> and writer version <writerRequired>, but Delta Lake \"<deltaVersion>\" supports reader versions <supportedReaders> and writer versions <supportedWriters>. Please upgrade to a newer release."
+    ],
+    "sqlState": "KD004"
+  },
+  "DELTA_MAX_COMMIT_RETRIES_EXCEEDED": {
+    "message": [
+      "This commit has failed as it has been tried <numAttempts> times but did not succeed.",
+      "This can be caused by the Delta table being committed continuously by many concurrent",
+      "commits.",
+      "",
+      "Commit started at version: <startVersion>",
+      "Commit failed at version: <failVersion>",
+      "Number of actions attempted to commit: <numActions>",
+      "Total time spent attempting this commit: <timeSpent> ms"
+    ],
+    "sqlState": "40000"
+  },
+  "DELTA_MERGE_MISSING_WHEN": {
+    "message": [
+      "There must be at least one WHEN clause in a MERGE statement."
+    ],
+    "sqlState": "42601"
+  },
+  "DELTA_METADATA_CHANGED": {
+    "message": [
+      "MetadataChangedException: The metadata of the Delta table <tableName> has been changed by a concurrent update. Please try the operation again.<conflictingCommit>\nRefer to <docLink> for more details."
+    ],
+    "sqlState": "2D521"
+  },
+  "DELTA_METADATA_MISMATCH": {
+    "message": [
+      "A metadata mismatch was detected when writing to the Delta table."
+    ],
+    "subClass": {
+      "OVERWRITE_REQUIRED": {
+        "message": [
+          "To overwrite your schema or change partitioning, please set: '.option(\"overwriteSchema\", \"true\")'.",
+          "Note that the schema can't be overwritten when using 'replaceWhere'."
+        ]
+      },
+      "PARTITIONING_MISMATCH": {
+        "message": [
+          "Partition columns do not match the partition columns of the table.",
+          "Given: <provided>",
+          "Table: <original>",
+          ""
+        ]
+      },
+      "SCHEMA_MISMATCH": {
+        "message": [
+          "A schema mismatch detected when writing to the Delta table (Table ID: <id>).",
+          "To enable schema migration using DataFrameWriter or DataStreamWriter, please set: '.option(\"mergeSchema\", \"true\")'.",
+          "For other operations, set the session configuration spark.databricks.delta.schema.autoMerge.enabled to \"true\". See the documentation specific to the operation for details.",
+          "",
+          "Table schema:",
+          "<tableSchema>",
+          "",
+          "Data schema:",
+          "<dataSchema>",
+          ""
+        ]
+      }
+    },
+    "sqlState": "42KDG"
+  },
+  "DELTA_MISSING_CHANGE_DATA": {
+    "message": [
+      "Error getting change data for range [<startVersion> , <endVersion>] as change data was not",
+      "recorded for version [<version>]. If you've enabled change data feed on this table,",
+      "use `DESCRIBE HISTORY` to see when it was first enabled.",
+      "Otherwise, to start recording change data, use `ALTER TABLE table_name SET TBLPROPERTIES",
+      "(<key>=true)`."
+    ],
+    "sqlState": "KD002"
+  },
+  "DELTA_MULTIPLE_CDC_BOUNDARY": {
+    "message": [
+      "Multiple <startingOrEnding> arguments provided for CDC read. Please provide one of either <startingOrEnding>Timestamp or <startingOrEnding>Version."
+    ],
+    "sqlState": "42614"
+  },
+  "DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE": {
+    "message": [
+      "Cannot perform Merge as multiple source rows matched and attempted to modify the same",
+      "target row in the Delta table in possibly conflicting ways. By SQL semantics of Merge,",
+      "when multiple source rows match on the same target row, the result may be ambiguous",
+      "as it is unclear which source row should be used to update or delete the matching",
+      "target row. You can preprocess the source table to eliminate the possibility of",
+      "multiple matches. Please refer to",
+      "<usageReference>"
+    ],
+    "sqlState": "21506"
+  },
+  "DELTA_NO_START_FOR_CDC_READ": {
+    "message": [
+      "No startingVersion or startingTimestamp provided for CDC read."
+    ],
+    "sqlState": "42601"
+  },
+  "DELTA_PROTOCOL_CHANGED": {
+    "message": [
+      "ProtocolChangedException: The protocol version of the Delta table has been changed by a concurrent update. <additionalInfo><conflictingCommit>\nRefer to <docLink> for more details."
+    ],
+    "sqlState": "2D521"
+  },
+  "DELTA_TIMESTAMP_EARLIER_THAN_COMMIT_RETENTION": {
+    "message": [
+      "The provided timestamp (<userTimestamp>) is before the earliest version available to",
+      "this table (<commitTs>). Please use a timestamp after <timestampString>."
+    ],
+    "sqlState": "42816"
+  },
+  "DELTA_TIMESTAMP_GREATER_THAN_COMMIT": {
+    "message": [
+      "Timestamp <providedTimestamp> is after the table's latest version (<lastCommitTimestamp>). Use a timestamp at or before <maximumTimestamp>."
+    ],
+    "sqlState": "42816"
+  },
+  "DELTA_VERSIONS_NOT_CONTIGUOUS": {
+    "message": [
+      "Versions (<versionList>) are not contiguous. ",
+      "A gap in the delta log between versions <startVersion> and <endVersion> was detected while trying to load version <versionToLoad>."
+    ],
+    "sqlState": "KD00C"
+  },
+  "DELTA_VERSION_NOT_FOUND": {
+    "message": [
+      "Cannot time travel Delta table to version <userVersion>. Available versions: [<earliest>, <latest>]."
+    ],
+    "sqlState": "22003"
+  }
+}

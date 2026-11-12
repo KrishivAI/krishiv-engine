@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Generates the error-class registry from two JSON files of the same shape:
+//! Generates the error-class registry from three JSON files of the same shape:
 //! `spark-error-conditions.json` (Spark 4.2.0's `error-conditions.json`,
-//! vendored verbatim by `tests/scripts/gen_error_classes.py`) and
+//! vendored verbatim by `tests/scripts/gen_error_classes.py`),
+//! `delta-error-classes.json` (the subset of delta-spark 4.4.1's
+//! `delta-error-classes.json` that Krishiv raises, entries copied verbatim; every
+//! name `DELTA_`-prefixed with a SQLSTATE) and
 //! `krishiv-error-classes.json` (`KRISHIV_`-prefixed classes only). Output is
 //! deterministic: `serde_json` without `preserve_order` keeps objects sorted
 //! by key, and the merged list is sorted by class name.
@@ -38,14 +41,17 @@ struct Leaf {
 
 fn main() -> Result<(), BoxError> {
     println!("cargo::rerun-if-changed=vendored/spark-error-conditions.json");
+    println!("cargo::rerun-if-changed=vendored/delta-error-classes.json");
     println!("cargo::rerun-if-changed=krishiv-error-classes.json");
     println!("cargo::rerun-if-changed=error-audience.json");
     println!("cargo::rerun-if-changed=src/error/template.rs");
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
     let spark = std::fs::read_to_string(manifest.join("vendored/spark-error-conditions.json"))?;
     let krishiv = std::fs::read_to_string(manifest.join("krishiv-error-classes.json"))?;
-    let mut leaves = parse(&spark, false)?;
-    leaves.extend(parse(&krishiv, true)?);
+    let delta = std::fs::read_to_string(manifest.join("vendored/delta-error-classes.json"))?;
+    let mut leaves = parse(&spark, Source::Spark)?;
+    leaves.extend(parse(&delta, Source::Delta)?);
+    leaves.extend(parse(&krishiv, Source::Krishiv)?);
     leaves.sort_by(|a, b| a.name.cmp(&b.name));
     check_unique(&leaves)?;
     let audience = std::fs::read_to_string(manifest.join("error-audience.json"))?;
@@ -55,9 +61,19 @@ fn main() -> Result<(), BoxError> {
     Ok(())
 }
 
+/// The registry file a class comes from.
+#[derive(Clone, Copy, PartialEq)]
+enum Source {
+    Spark,
+    Delta,
+    Krishiv,
+}
+
 /// Parses one registry file. Krishiv classes must be `KRISHIV_`-prefixed and
-/// carry a SQLSTATE; Spark classes may omit it, as in Spark.
-fn parse(json: &str, krishiv: bool) -> Result<Vec<Leaf>, BoxError> {
+/// carry a SQLSTATE, Delta classes `DELTA_`-prefixed with one; Spark classes
+/// may omit it, as in Spark.
+fn parse(json: &str, source: Source) -> Result<Vec<Leaf>, BoxError> {
+    let krishiv = source == Source::Krishiv;
     let root: Map<String, Value> = serde_json::from_str(json)?;
     let mut leaves = Vec::new();
     for (name, info) in &root {
@@ -65,8 +81,11 @@ fn parse(json: &str, krishiv: bool) -> Result<Vec<Leaf>, BoxError> {
         if name.starts_with("KRISHIV_") != krishiv {
             return Err(format!("{name}: KRISHIV_ prefix must match the file it is in").into());
         }
+        if name.starts_with("DELTA_") != (source == Source::Delta) {
+            return Err(format!("{name}: DELTA_ prefix must match the file it is in").into());
+        }
         let sql_state = match info.get("sqlState") {
-            None if !krishiv => None,
+            None if source == Source::Spark => None,
             None => return Err(format!("{name}: missing sqlState").into()),
             Some(v) => {
                 let s = v
@@ -85,7 +104,7 @@ fn parse(json: &str, krishiv: bool) -> Result<Vec<Leaf>, BoxError> {
         let operator_only = match info.get("audience").map(Value::as_str) {
             Some(_) if !krishiv => {
                 return Err(format!(
-                    "{name}: Spark classes get their audience in error-audience.json"
+                    "{name}: vendored classes get their audience in error-audience.json"
                 )
                 .into());
             }

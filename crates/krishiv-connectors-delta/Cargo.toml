@@ -10,3 +10,7 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+delta_kernel = { workspace = true }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }

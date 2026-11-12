@@ -195,6 +195,43 @@ fn json(text: &str) -> serde_json::Value {
     serde_json::from_str(text).expect("valid JSON")
 }
 
+const DELTA_JSON: &str = include_str!("../../vendored/delta-error-classes.json");
+
+/// P3-T021a: the registry holds exactly the Delta classes of the vendored subset (delta-spark
+/// 4.4.1), each with the SQLSTATE and the message template of that file.
+#[test]
+fn delta_classes_equal_the_vendored_subset() {
+    let doc = json(DELTA_JSON);
+    let doc = doc.as_object().expect("object");
+    let delta: Vec<&ErrorClass> = ErrorClass::ALL
+        .iter()
+        .filter(|c| c.name().starts_with("DELTA_"))
+        .collect();
+    let leaves: usize = doc
+        .values()
+        .map(|v| {
+            v.get("subClass")
+                .and_then(|s| s.as_object())
+                .map_or(1, serde_json::Map::len)
+        })
+        .sum();
+    assert_eq!(delta.len(), leaves);
+    for class in &delta {
+        let top = class.name().split('.').next().unwrap_or_default();
+        assert_eq!(
+            class.sql_state(),
+            doc[top]["sqlState"].as_str(),
+            "{}",
+            class.name()
+        );
+    }
+    let class = ErrorClass::from_name("DELTA_INVALID_PROTOCOL_VERSION").expect("registered");
+    assert_eq!(class.sql_state(), Some("KD004"));
+    let class = ErrorClass::from_name("DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE")
+        .expect("registered");
+    assert_eq!(class.sql_state(), Some("21506"));
+}
+
 /// P2-T003: the registry has exactly the classes of Spark 4.2.0's JSON.
 #[test]
 fn class_count_equals_spark_4_2_0() {
@@ -210,7 +247,7 @@ fn class_count_equals_spark_4_2_0() {
         .sum();
     let spark: Vec<&ErrorClass> = ErrorClass::ALL
         .iter()
-        .filter(|c| !c.name().starts_with("KRISHIV_"))
+        .filter(|c| !c.name().starts_with("KRISHIV_") && !c.name().starts_with("DELTA_"))
         .collect();
     assert_eq!(spark.len(), leaves);
     let top: BTreeSet<&str> = spark

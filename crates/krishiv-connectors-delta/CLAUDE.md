@@ -6,6 +6,9 @@
 ## Purpose
 Delta Lake connector on `delta_kernel` (no default features) with our own Engine implementation.
 
+## Key files
+- `src/error.rs` kernel errors as Krishiv errors (`from_kernel`; design `P3-T021-delta.md` §3.7)
+
 ## Invariants
 - `delta_kernel` with `default-features = false`; never `deltalake`.
 - `#![forbid(unsafe_code)]`.

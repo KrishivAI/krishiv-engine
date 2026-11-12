@@ -151,7 +151,7 @@ quick-xml = { version = "0.41", default-features = false }
 jiff = { version = "0.2.38", default-features = false }
 slatedb = { version = "0.17", default-features = false }
 foyer = { version = "0.22.6", default-features = false }
-delta_kernel = { version = "0.30", default-features = false }
+delta_kernel = { version = "=0.30.1", default-features = false, features = ["internal-api"] }
 iceberg = { version = "0.10.1", default-features = false }
 rdkafka = { version = "0.39", default-features = false }
 wasmtime = { version = "49", default-features = false }
