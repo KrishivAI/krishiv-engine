@@ -23,6 +23,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(feature = "metrics-prometheus")]
 pub mod metrics;
 
+pub mod admin;
 pub mod internal;
 
 #[cfg(feature = "session")]
