@@ -8,7 +8,7 @@ edition = "2024"
 # MSRV = latest stable (1.99) minus two minor releases.
 rust-version = "1.97"
 license = "Apache-2.0"                                   # ADR 0033
-repository = "https://github.com/krishiv/krishiv-engine"
+repository = "https://github.com/KrishivAI/krishiv-engine"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
