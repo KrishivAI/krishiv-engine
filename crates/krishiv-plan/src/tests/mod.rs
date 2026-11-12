@@ -9,6 +9,7 @@ mod depth;
 mod display;
 mod display_more;
 mod dsl;
+mod e2_planning_speed;
 mod encode;
 mod files;
 mod function_call_forms;
