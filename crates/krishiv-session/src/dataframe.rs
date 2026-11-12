@@ -1736,12 +1736,12 @@ impl DataFrame {
         }
         // Spark analyzes the view's plan first: its errors come first.
         let analysis = self.analysis().await?;
-        let columns: Vec<TableColumn> = analysis
-            .analyzed
-            .output
-            .iter()
-            .map(|c| TableColumn::new(c.name.clone(), c.data_type.clone(), c.nullable))
-            .collect();
+        let columns: Vec<TableColumn> =
+            crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?
+                .output
+                .iter()
+                .map(|c| TableColumn::new(c.name.clone(), c.data_type.clone(), c.nullable))
+                .collect();
         // A view over files keeps listing them: files added or changed
         // later show up in the next query.
         if let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node {

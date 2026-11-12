@@ -38,6 +38,13 @@ pub(super) const NAMES: &[&str] = &[
     "instr",
     "find_in_set",
     "locate",
+    "__locate_lcase",
+    "__find_in_set_lcase",
+    "__trim_collated",
+    "__replace_lcase",
+    "__translate_lcase",
+    "__split_part_lcase",
+    "__substring_index_lcase",
     "position",
     "substring_index",
     "split_part",
@@ -53,6 +60,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
     let listed = listed(NAMES, name)?;
     let shape = shape(args);
     let ansi = opts.ansi;
+    let ctx = opts.kernel;
     let int = DataType::Int32;
     let one = Operand::Scalar(Some(1));
     let binding = match (listed, shape.as_str()) {
@@ -124,6 +132,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let out = string::locate(sub.operand(), s.operand(), one)?;
             Ok(Arc::new(out) as ArrayRef)
         }),
+        ("__find_in_set_lcase", "SS") => Binding::new(int, |x| {
+            let (w, s) = (x.str(0)?, x.str(1)?);
+            Ok(Arc::new(string::find_in_set_lcase(w.operand(), s.operand())?) as ArrayRef)
+        }),
+        ("__locate_lcase", "SSI") => Binding::new(int, move |x| {
+            let (sub, s, start) = (x.str(0)?, x.str(1)?, x.int(2)?);
+            let out = string::locate_lcase(
+                sub.operand(),
+                s.operand(),
+                start.operand(),
+                ctx.spark_version(),
+            )?;
+            Ok(Arc::new(out) as ArrayRef)
+        }),
         ("locate" | "position", "SS" | "SSI") => {
             let with_start = shape.len() == 3;
             Binding::new(int, move |x| {
@@ -145,6 +167,46 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         ("split_part", "SSI") => Binding::new(DataType::Utf8, |x| {
             let (s, d, n) = (x.str(0)?, x.str(1)?, x.int(2)?);
             Ok(utf8(string::split_part(
+                s.operand(),
+                d.operand(),
+                n.operand(),
+            )?))
+        }),
+        ("__trim_collated", "ISS") => Binding::new(DataType::Utf8, |x| {
+            let (mode, s, chars) = (x.int(0)?, x.str(1)?, x.str(2)?);
+            Ok(utf8(string::trim_collated(
+                mode.operand(),
+                s.operand(),
+                chars.operand(),
+            )?))
+        }),
+        ("__replace_lcase", "SSS") => Binding::new(DataType::Utf8, |x| {
+            let (s, a, b) = (x.str(0)?, x.str(1)?, x.str(2)?);
+            Ok(utf8(string::replace_lcase(
+                s.operand(),
+                a.operand(),
+                b.operand(),
+            )?))
+        }),
+        ("__translate_lcase", "SSS") => Binding::new(DataType::Utf8, |x| {
+            let (s, a, b) = (x.str(0)?, x.str(1)?, x.str(2)?);
+            Ok(utf8(string::translate_lcase(
+                s.operand(),
+                a.operand(),
+                b.operand(),
+            )?))
+        }),
+        ("__split_part_lcase", "SSI") => Binding::new(DataType::Utf8, |x| {
+            let (s, d, n) = (x.str(0)?, x.str(1)?, x.int(2)?);
+            Ok(utf8(string::split_part_lcase(
+                s.operand(),
+                d.operand(),
+                n.operand(),
+            )?))
+        }),
+        ("__substring_index_lcase", "SSI") => Binding::new(DataType::Utf8, |x| {
+            let (s, d, n) = (x.str(0)?, x.str(1)?, x.int(2)?);
+            Ok(utf8(string::substring_index_lcase(
                 s.operand(),
                 d.operand(),
                 n.operand(),

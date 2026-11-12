@@ -213,6 +213,9 @@ pub struct ScanStream {
     mapper: Option<SchemaMapper>,
     io: IoContext,
     file: FileRef,
+    /// `file.display_path()`, formatted once: the display runs the secret classifier, and a
+    /// scan step needs it for every batch's error context.
+    path: String,
     mem: Reservation,
     options: ScanOptions,
     ready: Ready,
@@ -288,6 +291,7 @@ impl ScanStream {
             final_row_filter: None,
             mapper: None,
             io: io.clone(),
+            path: file.display_path(),
             file,
             mem,
             options,
@@ -469,14 +473,13 @@ impl ScanStream {
     }
 
     async fn next_inner(&mut self) -> Result<Option<RecordBatch>> {
-        let path = self.file.display_path();
         loop {
             let step = self
                 .decoder
                 .as_mut()
                 .ok_or_else(|| internal("scan stream without a decoder"))?
                 .step()
-                .map_err(|e| e.into_error(&path))?;
+                .map_err(|e| e.into_error(&self.path))?;
             match step {
                 Step::Done => return Ok(None),
                 Step::Batch(batch) => {
@@ -504,7 +507,7 @@ impl ScanStream {
                         .as_mut()
                         .ok_or_else(|| internal("scan stream without a decoder"))?
                         .push(data)
-                        .map_err(|e| e.into_error(&path))?;
+                        .map_err(|e| e.into_error(&self.path))?;
                     self.account();
                     self.prefetch();
                 }
@@ -523,7 +526,7 @@ impl ScanStream {
             return Err(crate::FormatError::Corrupt(format!(
                 "the decoder asked for the inverted range {bad:?}"
             ))
-            .into_error(&self.file.display_path()));
+            .into_error(&self.path));
         }
         if let Some((_, fut, wanted)) = self.in_flight.take() {
             // The prefetch was issued for what the decoder asks next; a

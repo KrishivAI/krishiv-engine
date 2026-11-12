@@ -653,6 +653,11 @@ fn schema_matches_the_writer() {
         serde_json::json!({"parsed": "p", "analyzed": "a", "steps": [],
         "optimized": "o", "physical": "x"}),
     );
+    profile.trace = Some(serde_json::json!({"trace_id": "t", "session_id": "s"}));
+    profile.identity = Some(ProfileIdentity {
+        principal: "user:a".into(),
+        tags: [("team".to_owned(), "x".to_owned())].into(),
+    });
     let doc = profile.to_json_value();
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v
@@ -701,6 +706,7 @@ fn schema_matches_the_writer() {
         &doc["query"]["memory"],
     );
     check(&schema["$defs"]["planning"], &doc["planning"]);
+    check(&props["trace"], &doc["trace"]);
     check(&props["environment"], &doc["environment"]);
     check(&props["usage"], &doc["usage"]);
     check(
@@ -785,4 +791,60 @@ fn a_minor_2_document_reads_pipeline_stalls_as_zero() {
     let read = &back.metrics.pipelines[&0];
     assert_eq!((read.max_slice, read.stalls), (Duration::ZERO, 0));
     assert_eq!(read.ended, Duration::from_millis(3));
+}
+
+#[test]
+fn the_trace_member_round_trips_and_is_absent_without_one() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), true);
+    assert!(p.to_json_value().get("trace").is_none());
+    p.trace = Some(
+        serde_json::json!({"trace_id": "sentinel-trace-7f3a", "session_id": "sentinel-session-9c1d"}),
+    );
+    let back = QueryProfile::from_json(&p.to_json()).expect("reads its own document");
+    assert_eq!(back.trace, p.trace);
+}
+
+#[test]
+fn identity_round_trips_and_a_shared_profile_drops_it_with_the_trace() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), true);
+    p.trace = Some(
+        serde_json::json!({"trace_id": "sentinel-trace-7f3a", "session_id": "sentinel-session-9c1d"}),
+    );
+    p.identity = Some(ProfileIdentity {
+        principal: "sentinel-principal-ada".into(),
+        tags: [("team".to_owned(), "sentinel-tag-data".to_owned())].into(),
+    });
+    let v = p.to_json_value();
+    assert_eq!(v["usage"]["principal"], "sentinel-principal-ada");
+    assert_eq!(v["usage"]["tags"]["team"], "sentinel-tag-data");
+    assert_eq!(
+        QueryProfile::from_json(&p.to_json())
+            .expect("reads")
+            .identity,
+        p.identity
+    );
+
+    let shared = p.shareable();
+    let text = shared.to_json();
+    for marker in [
+        "sentinel-principal-ada",
+        "sentinel-tag-data",
+        "sentinel-trace-7f3a",
+        "sentinel-session-9c1d",
+        "\"trace\"",
+    ] {
+        assert!(!text.contains(marker), "{marker} survived --share: {text}");
+    }
+    // Every number is kept.
+    assert_eq!(shared.metrics, p.metrics);
+    assert_eq!(shared.plan, p.plan);
+}
+
+#[test]
+fn a_profile_without_usage_still_reads_with_no_identity() {
+    let p = QueryProfile::new(&plan(matching()), metrics(), true);
+    let mut v = p.to_json_value();
+    v.as_object_mut().expect("object").remove("usage");
+    let back = QueryProfile::from_json(&v.to_string()).expect("an older document reads");
+    assert!(back.identity.is_none());
 }

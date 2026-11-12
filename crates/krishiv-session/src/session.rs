@@ -486,7 +486,7 @@ impl Session {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
                 use tracing::Instrument as _;
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
-                let span = trace.prepare_span(&session.state.session_id);
+                let span = trace.prepare_span(&crate::telemetry::Who::of(&session.state));
                 session
                     .sql_here_marked(&text, marker)
                     .instrument(span)
@@ -1480,7 +1480,7 @@ impl Session {
         // Spark logs what analysis and planning ignore (hints) as
         // warnings; `DataFrame::warnings` returns them too.
         for w in analyzed.warnings.iter().chain(physical.warnings()) {
-            tracing::warn!(target: "krishiv::session", "{w}");
+            tracing::warn!(target: "krishiv::session::warnings", "{w}");
         }
         Ok((optimized, physical, steps))
     }
@@ -2489,7 +2489,7 @@ pub(crate) struct WriteTarget {
 /// UUID form. Its bits come from the standard library's per-process
 /// random hash keys, a clock reading and a counter, so two writes never
 /// share one, within or across processes.
-fn job_uuid() -> String {
+pub(crate) fn job_uuid() -> String {
     use std::hash::{BuildHasher, Hasher};
     static WRITES: AtomicU64 = AtomicU64::new(0);
     let n = WRITES.fetch_add(1, Ordering::Relaxed);

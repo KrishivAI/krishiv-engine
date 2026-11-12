@@ -51,11 +51,20 @@ fn schema_doc() -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
+/// The width of a `^[0-9a-f]{N}$` pattern, the only pattern form the schema uses.
+fn lower_hex_width(pattern: &str) -> Option<usize> {
+    pattern
+        .strip_prefix("^[0-9a-f]{")?
+        .strip_suffix("}$")?
+        .parse()
+        .ok()
+}
+
 /// A minimal JSON Schema validator covering the validation keywords the
 /// profile schema file uses: `type` (object, array, string, boolean,
 /// integer, null), `const`, `enum`, `required`, `properties`,
 /// `additionalProperties: false`, `items` (one schema for every element),
-/// `oneOf`, `minimum`, `maximum`, `minItems` and `$ref` (a local `#/...`
+/// `oneOf`, `minimum`, `maximum`, `minItems`, `pattern` (`^[0-9a-f]{N}$` only) and `$ref` (a local `#/...`
 /// pointer, used for `$defs/u64` and `$defs/u32`). The rest of the file is
 /// documentation (`title`, `description`) or lookup tables (`$defs`), which
 /// need no validation. Keep this list in sync with the schema file: a new
@@ -88,6 +97,18 @@ fn validate(schema: &Value, doc: &Value, root: &Value, path: &str) -> Result<(),
         };
         if !ok {
             return Err(bad(&format!("is not {want}: {doc}")));
+        }
+    }
+    if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
+        let width = lower_hex_width(pattern)
+            .ok_or_else(|| bad(&format!("unsupported pattern {pattern}")))?;
+        let text = doc.as_str().ok_or_else(|| bad("pattern needs a string"))?;
+        if text.len() != width
+            || !text
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(bad(&format!("does not match {pattern}: {text}")));
         }
     }
     if let Some(want) = schema.get("const")
@@ -217,6 +238,10 @@ fn validator_supports_every_schema_keyword() {
                 | "additionalProperties"
                 | "minItems"
                 | "$ref" => {}
+                "pattern" => assert!(
+                    value.as_str().and_then(lower_hex_width).is_some(),
+                    "{path}/pattern is not a lower-case hex width pattern: {value}"
+                ),
                 "$defs" => {
                     let defs = value
                         .as_object()
