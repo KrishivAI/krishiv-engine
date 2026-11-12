@@ -299,3 +299,16 @@ fn context_free_errors_stay_context_free() {
         );
     }
 }
+
+// A DataFrame write runs through `write_files`, not `run_on_query`: its run-time errors resolve too.
+// (An `INSERT` statement plans its query apart from the statement text and shows no span yet.)
+#[test]
+fn a_run_time_error_in_a_dataframe_write_has_its_span() {
+    let dir = std::env::temp_dir().join(format!("krishiv-ctx-write-{}", std::process::id()));
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT a / b FROM VALUES (1, 0) AS t(a, b)")).unwrap();
+    let e = block_on(df.write().parquet(dir.to_str().unwrap())).expect_err("the write fails");
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert_eq!(span(&e), (7, 11, "a / b"));
+    drop(std::fs::remove_dir_all(&dir));
+}
