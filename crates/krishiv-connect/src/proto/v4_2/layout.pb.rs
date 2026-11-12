@@ -8,6 +8,56 @@ pub(crate) const PLAN: u16 = 280;
 pub(crate) const RELATION: u16 = 298;
 pub(crate) const EXPRESSION: u16 = 144;
 
+/// The request messages of the service's RPCs, by id.
+impl crate::wire::Request for super::v4_2::AddArtifactsRequest {
+    const ROOT: u16 = 0;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::AddArtifactsRequest {}
+impl crate::wire::Request for super::v4_2::AnalyzePlanRequest {
+    const ROOT: u16 = 10;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::AnalyzePlanRequest {}
+impl crate::wire::Request for super::v4_2::ArtifactStatusesRequest {
+    const ROOT: u16 = 42;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::ArtifactStatusesRequest {}
+impl crate::wire::Request for super::v4_2::CloneSessionRequest {
+    const ROOT: u16 = 57;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::CloneSessionRequest {}
+impl crate::wire::Request for super::v4_2::ConfigRequest {
+    const ROOT: u16 = 65;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::ConfigRequest {}
+impl crate::wire::Request for super::v4_2::ExecutePlanRequest {
+    const ROOT: u16 = 130;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::ExecutePlanRequest {}
+impl crate::wire::Request for super::v4_2::FetchErrorDetailsRequest {
+    const ROOT: u16 = 173;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::FetchErrorDetailsRequest {}
+impl crate::wire::Request for super::v4_2::GetStatusRequest {
+    const ROOT: u16 = 191;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::GetStatusRequest {}
+impl crate::wire::Request for super::v4_2::InterruptRequest {
+    const ROOT: u16 = 200;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::InterruptRequest {}
+impl crate::wire::Request for super::v4_2::ReattachExecuteRequest {
+    const ROOT: u16 = 293;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::ReattachExecuteRequest {}
+impl crate::wire::Request for super::v4_2::ReleaseExecuteRequest {
+    const ROOT: u16 = 302;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::ReleaseExecuteRequest {}
+impl crate::wire::Request for super::v4_2::ReleaseSessionRequest {
+    const ROOT: u16 = 306;
+}
+impl crate::wire::sealed::Sealed for super::v4_2::ReleaseSessionRequest {}
+
 /// Every message of the package, by id.
 pub(crate) static MESSAGES: [Layout; 400] = [
     Layout { name: "AddArtifactsRequest", size: size_of::<super::v4_2::AddArtifactsRequest>(), fields: &[(1, Field::Bytes), (2, Field::Message(383)), (3, Field::Message(2)), (4, Field::Message(3)), (5, Field::Message(1)), (6, Field::Bytes), (7, Field::Bytes)] },

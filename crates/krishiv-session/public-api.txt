@@ -633,8 +633,11 @@ pub fn krishiv_session::Session::uncache_table(&self, &str)
 impl krishiv_session::Session
 pub fn krishiv_session::Session::cancel(&self, &krishiv_session::QueryId) -> bool
 pub fn krishiv_session::Session::close(&self) -> usize
+pub fn krishiv_session::Session::id(&self) -> &str
 pub fn krishiv_session::Session::interrupt_all(&self) -> alloc::vec::Vec<krishiv_session::QueryId>
+pub fn krishiv_session::Session::is_closed(&self) -> bool
 pub fn krishiv_session::Session::new_session(&self) -> Self
+pub fn krishiv_session::Session::running_queries(&self) -> usize
 pub fn krishiv_session::Session::runtime(&self) -> &alloc::sync::Arc<krishiv_session::EngineRuntime>
 pub async fn krishiv_session::Session::sql_with(&self, &str, krishiv_session::QueryOptions) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 impl krishiv_session::Session

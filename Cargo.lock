@@ -2062,6 +2062,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-connect-server"
+version = "0.2.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "krishiv-common",
+ "krishiv-connect",
+ "krishiv-session",
+ "prost",
+ "prost-types",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tracing",
+]
+
+[[package]]
 name = "krishiv-connector-sdk"
 version = "0.2.0"
 

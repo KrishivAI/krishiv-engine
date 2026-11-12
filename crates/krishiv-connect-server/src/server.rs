@@ -1,0 +1,318 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The gRPC listener (design P3-T001 §3.3, §3.4): HTTP/2 limits set before
+//! any request is read, a connection cap on the accept loop, the idle
+//! sweeper, and graceful shutdown.
+//!
+//! Shutdown: once the shutdown future resolves the server is draining (new
+//! RPCs get `UNAVAILABLE`, no new connection is accepted), running queries
+//! get up to [`ConnectServerConfig::shutdown_timeout`] to finish, then every
+//! session is closed, which cancels what is left.
+
+use std::future::Future;
+use std::io;
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
+use std::time::Duration;
+
+use krishiv_common::error::KrishivError;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tonic::transport::Server;
+use tonic::transport::server::{Connected, TcpConnectInfo};
+
+use crate::manager::SessionManager;
+use crate::service::{ConnectService, SparkConnectServiceServer};
+
+/// The listener's settings. The defaults are Spark 4.3.0's where Spark has
+/// the setting, the threat model's otherwise (design P3-T001 §3.3).
+#[derive(Debug, Clone)]
+pub struct ConnectServerConfig {
+    /// The largest request message (`spark.connect.grpc.maxInboundMessageSize`,
+    /// 128 MiB; tonic's own default is 4 MiB).
+    pub max_inbound_message_size: usize,
+    /// Server keepalive pings: interval and timeout
+    /// (`spark.connect.grpc.keepAlive.{time,timeout}`, 60 s and 20 s);
+    /// `None` when `spark.connect.grpc.keepAlive.enabled` is false.
+    pub keepalive: Option<(Duration, Duration)>,
+    /// Concurrent HTTP/2 streams per connection
+    /// (`krishiv.connect.http2.maxConcurrentStreams`, 100; tonic's default
+    /// is unlimited).
+    pub max_concurrent_streams: u32,
+    /// The largest request header list
+    /// (`krishiv.connect.http2.maxHeaderListBytes`, 16 KiB).
+    pub max_header_list_bytes: u32,
+    /// Reset streams not yet accepted before the connection is closed with
+    /// `GOAWAY` (`krishiv.connect.http2.maxPendingAcceptResets`, 20: the
+    /// HTTP/2 rapid-reset bound).
+    pub max_pending_accept_resets: usize,
+    /// Streams the server reset because of an error before the connection
+    /// is closed (1024, hyper's default, set explicitly).
+    pub max_local_error_resets: usize,
+    /// Open connections (`krishiv.connect.maxConnections`, 1024); past it
+    /// the accept loop waits for one to close.
+    pub max_connections: usize,
+    /// How often idle sessions are swept
+    /// (`spark.connect.session.manager.maintenanceInterval`, 30 s).
+    pub maintenance_interval: Duration,
+    /// How long running queries may finish after shutdown starts
+    /// (`krishiv.server.shutdownTimeout`, 30 s).
+    pub shutdown_timeout: Duration,
+}
+
+impl Default for ConnectServerConfig {
+    fn default() -> Self {
+        Self {
+            max_inbound_message_size: 128 * 1024 * 1024,
+            keepalive: Some((Duration::from_secs(60), Duration::from_secs(20))),
+            max_concurrent_streams: 100,
+            max_header_list_bytes: 16 * 1024,
+            max_pending_accept_resets: 20,
+            max_local_error_resets: 1024,
+            max_connections: 1024,
+            maintenance_interval: Duration::from_secs(30),
+            shutdown_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+/// The Spark Connect gRPC server of one process.
+#[derive(Debug)]
+pub struct ConnectServer {
+    manager: Arc<SessionManager>,
+    draining: Arc<AtomicBool>,
+    config: ConnectServerConfig,
+}
+
+impl ConnectServer {
+    /// A server over `manager`.
+    #[must_use]
+    pub fn new(manager: Arc<SessionManager>, config: ConnectServerConfig) -> Self {
+        Self {
+            manager,
+            draining: Arc::new(AtomicBool::new(false)),
+            config,
+        }
+    }
+
+    /// The flag that is set once shutdown starts (`/readyz` answers 503
+    /// from then on).
+    #[must_use]
+    pub fn draining(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.draining)
+    }
+
+    /// The session manager.
+    #[must_use]
+    pub fn manager(&self) -> &Arc<SessionManager> {
+        &self.manager
+    }
+
+    /// Serves on `listener` until `shutdown` resolves, then shuts down
+    /// gracefully (module docs). Returns once every session is closed and
+    /// the listener is stopped.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a transport failure.
+    pub async fn serve(
+        self,
+        listener: TcpListener,
+        shutdown: impl Future<Output = ()> + Send,
+    ) -> Result<(), KrishivError> {
+        let Self {
+            manager,
+            draining,
+            config,
+        } = self;
+        let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining));
+        let service = SparkConnectServiceServer::from_arc(Arc::new(service))
+            .max_decoding_message_size(config.max_inbound_message_size)
+            .max_encoding_message_size(config.max_inbound_message_size);
+        let (keepalive_interval, keepalive_timeout) = match config.keepalive {
+            Some((i, t)) => (Some(i), Some(t)),
+            None => (None, None),
+        };
+        let router = Server::builder()
+            .max_concurrent_streams(config.max_concurrent_streams)
+            .http2_max_header_list_size(config.max_header_list_bytes)
+            .http2_max_pending_accept_reset_streams(Some(config.max_pending_accept_resets))
+            .http2_max_local_error_reset_streams(Some(config.max_local_error_resets))
+            .http2_keepalive_interval(keepalive_interval)
+            .http2_keepalive_timeout(keepalive_timeout)
+            .tcp_nodelay(true)
+            .add_service(service);
+
+        let sweeper = tokio::spawn(sweep_loop(
+            Arc::clone(&manager),
+            config.maintenance_interval,
+        ));
+        let incoming = capped(listener, config.max_connections);
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = router.serve_with_incoming_shutdown(incoming, async {
+            let _ = stop_rx.await;
+        });
+        tokio::pin!(server);
+        tokio::pin!(shutdown);
+
+        let early = tokio::select! {
+            result = &mut server => Some(result),
+            () = &mut shutdown => None,
+        };
+        let result = match early {
+            Some(result) => result,
+            None => {
+                draining.store(true, Ordering::Release);
+                let _ = stop_tx.send(());
+                tracing::info!(target: "krishiv::connect", "shutting down: draining");
+                let grace = config.shutdown_timeout;
+                let deadline = tokio::time::Instant::now() + grace;
+                // The listener may stop first (no stream open): queries
+                // still get their grace period.
+                let stopped = tokio::select! {
+                    result = &mut server => Some(result),
+                    () = queries_done(&manager, deadline) => None,
+                };
+                if stopped.is_some() {
+                    queries_done(&manager, deadline).await;
+                }
+                let closed = manager.close_all();
+                if closed > 0 {
+                    tracing::info!(
+                        target: "krishiv::connect",
+                        sessions = closed,
+                        "closed the remaining sessions"
+                    );
+                }
+                match stopped {
+                    Some(result) => result,
+                    // The cancelled streams end at once; a connection that
+                    // still holds on is dropped with the server future.
+                    None => tokio::time::timeout(Duration::from_secs(5), &mut server)
+                        .await
+                        .unwrap_or(Ok(())),
+                }
+            }
+        };
+        sweeper.abort();
+        manager.close_all();
+        result.map_err(|e| transport_error(&e))
+    }
+}
+
+/// The local address a listener bound, for logs.
+///
+/// # Errors
+/// When the socket has no local address.
+pub fn local_addr(listener: &TcpListener) -> Result<SocketAddr, KrishivError> {
+    listener.local_addr().map_err(|e| transport_error(&e))
+}
+
+fn transport_error(e: &dyn std::fmt::Display) -> KrishivError {
+    krishiv_common::error::InternalError {
+        message: format!("Spark Connect listener: {e}"),
+    }
+    .into()
+}
+
+/// Waits until no session runs a query, or `deadline` passed.
+async fn queries_done(manager: &SessionManager, deadline: tokio::time::Instant) {
+    while manager.running_queries() > 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn sweep_loop(manager: Arc<SessionManager>, every: Duration) {
+    let mut tick = tokio::time::interval(every.max(Duration::from_millis(10)));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        manager.sweep();
+    }
+}
+
+/// The accepted connections of `listener`, at most `max` open at once.
+fn capped(
+    listener: TcpListener,
+    max: usize,
+) -> impl futures::Stream<Item = io::Result<CappedStream>> + Send + 'static {
+    let permits = Arc::new(Semaphore::new(max.max(1)));
+    futures::stream::unfold((listener, permits), |(listener, permits)| async move {
+        let permit = Arc::clone(&permits).acquire_owned().await.ok()?;
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    let _ = stream.set_nodelay(true);
+                    let item = Ok(CappedStream {
+                        inner: stream,
+                        _permit: permit,
+                    });
+                    return Some((item, (listener, permits)));
+                }
+                // A failed accept (the peer reset before it was taken,
+                // too many open files) does not stop the server.
+                Err(e) => {
+                    tracing::warn!(target: "krishiv::connect", error = %e, "accept failed");
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        }
+    })
+}
+
+/// A connection that holds one of the listener's permits until it closes.
+#[derive(Debug)]
+pub struct CappedStream {
+    inner: TcpStream,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Connected for CappedStream {
+    type ConnectInfo = TcpConnectInfo;
+
+    fn connect_info(&self) -> TcpConnectInfo {
+        self.inner.connect_info()
+    }
+}
+
+impl AsyncRead for CappedStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for CappedStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+}
