@@ -265,6 +265,13 @@ impl Drop for CancelOnDrop {
 /// that reports why.
 fn read_ranges_uninit(path: &FsPath, ranges: &[Range<u64>]) -> Option<Vec<bytes::Bytes>> {
     use std::io::{Read, Seek, SeekFrom};
+    // Overlapping ranges are the inner store's: it merges them and slices one shared buffer,
+    // where a buffer per range would read the same bytes again for each copy.
+    let mut order: Vec<&Range<u64>> = ranges.iter().filter(|r| r.start < r.end).collect();
+    order.sort_by_key(|r| r.start);
+    if order.windows(2).any(|w| w[1].start < w[0].end) {
+        return None;
+    }
     let mut file = std::fs::File::open(path).ok()?;
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
@@ -795,16 +802,19 @@ mod range_read_tests {
     use super::*;
 
     #[test]
-    fn ranges_read_in_full_match_the_file_and_overlap_freely() {
+    fn ranges_read_in_full_match_the_file_and_overlapping_ones_go_to_the_inner_store() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("f");
         let data: Vec<u8> = (0..=255).collect();
         std::fs::write(&p, &data).unwrap();
-        let got = read_ranges_uninit(&p, &[10..20, 0..0, 250..256, 15..30]).unwrap();
+        let got = read_ranges_uninit(&p, &[10..20, 0..0, 250..256, 20..30]).unwrap();
         assert_eq!(&got[0][..], &data[10..20]);
         assert!(got[1].is_empty());
         assert_eq!(&got[2][..], &data[250..256]);
-        assert_eq!(&got[3][..], &data[15..30]);
+        assert_eq!(&got[3][..], &data[20..30]);
+        // Overlapping (or repeated) ranges are merged by the inner store into one shared buffer.
+        assert!(read_ranges_uninit(&p, &[10..20, 15..30]).is_none());
+        assert!(read_ranges_uninit(&p, &[0..64, 0..64]).is_none());
     }
 
     #[test]
@@ -844,7 +854,8 @@ mod range_read_tests {
     async fn a_bounded_get_opts_is_served_by_the_fast_path_and_matches_the_inner_store() {
         let (_tmp, loc, data) = range_file();
         let store = SettledLocalFileSystem::new();
-        // The fast path answers exactly this shape, so it is the one a scan takes.
+        // The fast path answers exactly this shape, so it is the one a scan takes: the public
+        // `get_opts` returns its in-memory stream, where the inner store returns a file handle.
         let opts = GetOptions::default();
         assert!(
             store
@@ -858,6 +869,29 @@ mod range_read_tests {
                 .await
                 .is_some()
         );
+        let via = store
+            .get_opts(
+                &loc,
+                GetOptions {
+                    range: Some((10..20).into()),
+                    ..opts.clone()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(via.payload, GetResultPayload::Stream(_)));
+        let inner = store
+            .inner
+            .get_opts(
+                &loc,
+                GetOptions {
+                    range: Some((10..20).into()),
+                    ..opts.clone()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(inner.payload, GetResultPayload::File(..)));
         let (b, range, size) = get_range(&store, &loc, opts, 10..20).await.unwrap();
         assert_eq!((&b[..], range, size), (&data[10..20], 10..20, 256));
         // A condition that holds is served; one that fails is the inner store's error.

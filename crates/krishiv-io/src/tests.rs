@@ -1863,7 +1863,10 @@ fn a_projector_reuses_its_plan_across_batches_and_follows_a_schema_change() {
             .collect();
         let cols: Vec<ArrayRef> = names
             .iter()
-            .map(|_| Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef)
+            .map(|n| match *n {
+                "a" => Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                _ => Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef,
+            })
             .collect();
         RecordBatch::try_new(Arc::new(Schema::new(fields)), cols).unwrap()
     };
@@ -1873,10 +1876,22 @@ fn a_projector_reuses_its_plan_across_batches_and_follows_a_schema_change() {
     let again = p.project(&batch(&["a", "b"])).unwrap();
     assert_eq!(first, again);
     assert_eq!(first.schema().field(0).name(), "b");
+    let values = |b: &RecordBatch| {
+        b.column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .values()
+            .to_vec()
+    };
+    assert_eq!(values(&first), vec![10, 20]);
+    // The projected schema is built once and shared, not rebuilt per batch.
+    assert!(Arc::ptr_eq(first.schema_ref(), again.schema_ref()));
     // A different schema re-plans: `b` is now column 0.
     let moved = p.project(&batch(&["b", "a"])).unwrap();
     assert_eq!(moved.num_columns(), 1);
     assert_eq!(moved.schema().field(0).name(), "b");
+    assert_eq!(values(&moved), vec![10, 20]);
     // A missing column is still an error, not a stale answer.
     assert!(p.project(&batch(&["a", "c"])).is_err());
 }
