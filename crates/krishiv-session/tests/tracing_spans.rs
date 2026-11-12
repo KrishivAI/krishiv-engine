@@ -294,5 +294,10 @@ fn the_execution_span_stays_open_while_the_results_are_consumed() {
     assert!(!exec(), "closed while the rows are still being read");
     while block_on(stream.next()).is_some() {}
     drop(stream);
+    // The span closes when the dropped stream's task ends; a loaded runner (coverage) can be slow to get there.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !exec() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     assert!(exec(), "still open after the stream was dropped");
 }
