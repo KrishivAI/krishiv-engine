@@ -65,6 +65,18 @@ def ratchet_regressions(previous: dict, current: dict) -> list[str]:
     return sorted(set(previous.get("passed_ids", [])) - set(current["passed_ids"]))
 
 
+def gate(summary: dict, summary_dir: Path) -> list[str]:
+    """Regressions of `summary` against the committed run summary of the same version (empty: none, or no run yet).
+
+    A committed `static` summary has no passes recorded, so it never gates; only a previous `run` summary does.
+    """
+    path = summary_dir / f"{summary['version']}.json"
+    if not path.exists():
+        return []
+    previous = json.loads(path.read_text(encoding="utf-8"))
+    return ratchet_regressions(previous, summary) if previous.get("source") == "run" else []
+
+
 def dashboard(summaries: list[dict]) -> str:
     lines = [
         "# PySpark Connect pass rate",
