@@ -78,6 +78,6 @@ jobs:
               continue
             fi
             echo "::group::$crate $version"
-            cargo publish -p "$crate" --locked
+            cargo publish -p "$crate" --locked # zizmor: ignore[use-trusted-publishing] scoped token in the gated crates-io environment
             echo "::endgroup::"
           done < .github/scripts/publish-crates.txt
