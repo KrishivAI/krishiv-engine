@@ -203,6 +203,50 @@ fn a_readable_secret_file_is_refused() {
     assert!(e.to_string().contains("readable by group or others"), "{e}");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_fifo_secret_is_refused_without_blocking() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    // No writer: opening the FIFO would block; the path check refuses it first.
+    let e = SecretRef::File(path).resolve("k").unwrap_err();
+    assert!(e.to_string().contains("not a regular file"), "{e}");
+}
+
+#[test]
+fn an_oversized_secret_refuses_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = "x".repeat(16 * 1024 + 1);
+    let r = secret_file(dir.path(), "long", &long, 0o600);
+    let c = config(&[
+        ("krishiv.auth.tokens.a.secret", &r),
+        ("krishiv.auth.tokens.a.principal", "alice"),
+        ("krishiv.auth.tokens.a.role", "admin"),
+    ])
+    .unwrap();
+    let e = StaticTokens::build(&c.tokens).unwrap_err();
+    assert!(e.to_string().contains("at most 16384 bytes"), "{e}");
+
+    // The longest accepted secret is one a client can present.
+    let max = "y".repeat(16 * 1024);
+    let r = secret_file(dir.path(), "max", &format!("{max}\n"), 0o600);
+    let c = config(&[
+        ("krishiv.auth.tokens.a.secret", &r),
+        ("krishiv.auth.tokens.a.principal", "alice"),
+        ("krishiv.auth.tokens.a.role", "admin"),
+    ])
+    .unwrap();
+    let tokens = StaticTokens::build(&c.tokens).unwrap();
+    assert!(tokens.lookup(&max).is_some());
+}
+
 #[test]
 fn missing_env_secret_is_refused() {
     let e = SecretRef::Env("KRISHIV_TEST_UNSET_AUTH_VARIABLE".to_owned())

@@ -18,6 +18,10 @@ use super::secret_ref::invalid;
 /// The shortest secret accepted, in bytes (design §3.2; threat model T-A4).
 pub(crate) const MIN_SECRET_BYTES: usize = 32;
 
+/// The longest secret accepted, in bytes: the longest bearer token the server hashes
+/// (design §3.3's JWT cap), so every configured secret can be presented.
+pub(crate) const MAX_SECRET_BYTES: usize = 16 * 1024;
+
 /// One stored token.
 #[derive(Debug, Clone)]
 struct Entry {
@@ -37,18 +41,26 @@ impl StaticTokens {
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` when a secret cannot be resolved, is shorter than 32
-    /// bytes, or is the same as another token's secret, or when two tokens give one principal
+    /// bytes or longer than 16 KiB, or is the same as another token's secret, or when two tokens give one principal
     /// different roles.
     pub fn build(specs: &[TokenSpec]) -> Result<Self, KrishivError> {
         let mut entries: Vec<(Entry, &str)> = Vec::with_capacity(specs.len());
         for spec in specs {
             let key = secret_key(&spec.name);
             let secret: SecretString = spec.secret.resolve(&key)?;
-            if secret.expose_secret().len() < MIN_SECRET_BYTES {
+            let len = secret.expose_secret().len();
+            if len < MIN_SECRET_BYTES {
                 return Err(invalid(
                     &key,
                     krishiv_common::secret::REDACTED,
                     &format!("a token must be at least {MIN_SECRET_BYTES} bytes"),
+                ));
+            }
+            if len > MAX_SECRET_BYTES {
+                return Err(invalid(
+                    &key,
+                    krishiv_common::secret::REDACTED,
+                    &format!("a token must be at most {MAX_SECRET_BYTES} bytes"),
                 ));
             }
             let digest = digest(secret.expose_secret());
