@@ -1362,5 +1362,38 @@ fn server_entries_parse_default_and_take_sparks_names() {
     );
     assert!(c.set("krishiv.connect.maxSessions", "0").is_err());
     assert!(c.set("krishiv.connect.port", "-1").is_err());
+    assert_eq!(
+        Config::new()
+            .get(&CONNECT_MAX_OPERATIONS_PER_SESSION)
+            .and_then(ConfigValue::as_int),
+        Some(100)
+    );
+    assert_eq!(
+        Config::new()
+            .get(&CONNECT_EXECUTE_AHEAD_BYTES)
+            .and_then(ConfigValue::as_size),
+        Some(64 << 20)
+    );
+    c.set("krishiv.connect.maxOperationsPerSession", "3")
+        .unwrap();
+    c.set("krishiv.connect.execute.aheadBytes", "1m").unwrap();
+    assert_eq!(
+        c.get(&CONNECT_MAX_OPERATIONS_PER_SESSION)
+            .and_then(ConfigValue::as_int),
+        Some(3)
+    );
+    assert_eq!(
+        c.get(&CONNECT_EXECUTE_AHEAD_BYTES)
+            .and_then(ConfigValue::as_size),
+        Some(1 << 20)
+    );
+    assert!(
+        c.set("krishiv.connect.maxOperationsPerSession", "0")
+            .is_err()
+    );
+    assert_eq!(
+        CONNECT_MAX_OPERATIONS_PER_SESSION.settable_by,
+        SettableBy::Startup
+    );
     assert_eq!(CONNECT_PORT.settable_by, SettableBy::Startup);
 }

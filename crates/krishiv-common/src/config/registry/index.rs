@@ -182,6 +182,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_TIME_PARSER_POLICY,
     ),
     (
+        "krishiv.connect.execute.aheadBytes",
+        &CONNECT_EXECUTE_AHEAD_BYTES,
+    ),
+    (
         "krishiv.io.credentials.refreshSkew",
         &IO_CREDENTIALS_REFRESH_SKEW,
     ),
@@ -312,6 +316,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.sources.bucketing.maxBuckets",
         &BUCKETING_MAX_BUCKETS,
+    ),
+    (
+        "krishiv.connect.maxOperationsPerSession",
+        &CONNECT_MAX_OPERATIONS_PER_SESSION,
     ),
     (
         "krishiv.connect.maxSessionsPerPrincipal",
