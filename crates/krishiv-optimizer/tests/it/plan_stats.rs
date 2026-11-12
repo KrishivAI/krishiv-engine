@@ -461,6 +461,68 @@ fn an_inner_join_narrows_its_keys_and_scales_the_other_columns() {
 }
 
 #[test]
+fn a_composite_key_join_is_a_foreign_key_into_the_side_with_fewer_key_tuples() {
+    let e = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v");
+    // Independent keys would give 200,000 / (100 * 20) = 100 rows. The key
+    // tuples are min(100 * 10 capped at 1,000, 40 * 20 capped at 200) = 200:
+    // 200,000 / 200 = 1,000 rows.
+    close(e.rows(), 1000.0, "rows");
+}
+
+#[test]
+fn a_filtered_key_side_keeps_its_fraction_of_a_composite_join() {
+    let whole = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v").rows();
+    let filtered =
+        join("SELECT * FROM t JOIN (SELECT * FROM u WHERE v < 5) u ON t.a = u.k AND t.b = u.v")
+            .rows();
+    // The key tuples are those of the unfiltered side: the filter's fraction is not cancelled
+    // (it was when the cap was the filtered rows: the estimate stayed at every row of `t`).
+    assert!(
+        filtered < whole,
+        "filtered {filtered} must be below the whole {whole}"
+    );
+}
+
+#[test]
+fn a_column_in_two_key_equalities_gets_no_composite_factor() {
+    // `t.a` appears twice: the equalities narrow one after the other, the composite rule is off.
+    let shared = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.a = u.v").rows();
+    let composite = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v").rows();
+    assert!(
+        shared < composite,
+        "shared {shared} vs composite {composite}"
+    );
+}
+
+#[test]
+fn a_composite_key_over_a_computed_column_gets_no_composite_factor() {
+    // `abs(t.b)` has no known distinct count: the tuple count is unknown, so the independent
+    // product stays, well below the 1,000 rows the composite rule gives for the plain columns.
+    let e =
+        join("SELECT * FROM t JOIN (SELECT k, abs(v) AS v FROM u) u ON t.a = u.k AND t.b = u.v");
+    assert!(e.rows() < 1000.0, "rows {}", e.rows());
+}
+
+#[test]
+fn a_filter_on_a_non_key_column_does_not_inflate_the_composite_key_domain() {
+    let whole = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v").rows();
+    let filtered =
+        join("SELECT * FROM (SELECT * FROM t WHERE x < 50) t JOIN u ON t.a = u.k AND t.b = u.v")
+            .rows();
+    // The filter keeps a third of `t` (the default selectivity for the range): the join keeps
+    // the same third, not less (the key domain is not multiplied by the fraction a second time).
+    close(filtered, whole / 3.0, "filtered");
+}
+
+#[test]
+fn a_composite_outer_join_keeps_the_unmatched_fraction() {
+    // Only inner joins take the composite rule: an outer join still finds rows of `t` without a
+    // match (TPC-DS q78's anti join collapsed to one row when it did not).
+    let e = join("SELECT * FROM t LEFT JOIN u ON t.a = u.k AND t.b = u.v");
+    assert!(e.col("v").null_frac > 0.0, "{}", e.col("v").null_frac);
+}
+
+#[test]
 fn outer_joins_give_the_null_supplying_side_the_unmatched_fraction_as_nulls() {
     // 200 of `t`'s 1,000 rows match.
     let e = join("SELECT * FROM t LEFT JOIN w ON t.a = w.wk");

@@ -126,7 +126,12 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             };
             Binding::new(DataType::Boolean, move |x: &Inputs<'_>| {
                 let (l, r) = (x.str(0)?, x.str(1)?);
-                Ok(Arc::new(string::search_lcase(kind, l.operand(), r.operand())?) as ArrayRef)
+                Ok(Arc::new(string::search_lcase(
+                    kind,
+                    l.operand(),
+                    r.operand(),
+                    ctx.spark_version(),
+                )?) as ArrayRef)
             })
         }
         ("startswith" | "endswith" | "contains", "SS" | "BB") => {
