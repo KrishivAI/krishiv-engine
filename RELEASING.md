@@ -82,7 +82,6 @@ later change by the maintainer.
 
 ## Release channels for 0.2.0 (owner decision 2026-11-07)
 
-
 0.2.0 goes to three channels. Docker and Helm are **not** part of it; they move to P3 with the server and Spark
 Connect work. Every channel stays a hard stop: tag and publish only on the owner's explicit go.
 
