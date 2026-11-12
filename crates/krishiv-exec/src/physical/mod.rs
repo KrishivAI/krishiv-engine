@@ -66,9 +66,9 @@ mod shared_tests;
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
 pub(crate) use instantiate::{
-    Detached, Unbuilt, Values, aggregate_node, aggregate_spec, distinct_phases, expand_op,
-    filter_op, final_of, generate_op, group_limit_op, hash_join, nested_loop_join, project_op,
-    replicate_op, scan_filter, sort_merge_join, sort_op, top_n_op,
+    Detached, LoopRun, Unbuilt, Values, aggregate_node, aggregate_spec, compile_all,
+    distinct_phases, expand_op, filter_op, final_of, generate_op, group_limit_op, hash_join,
+    nested_loop_join, project_op, replicate_op, scan_filter, sort_merge_join, sort_op, top_n_op,
 };
 pub use instantiate::{
     ExchangeInput, SpillScopes, TaskSpec, WorkerContext, exchange_schemas, instantiate,
@@ -223,6 +223,18 @@ pub enum HashScheme {
 }
 
 impl HashScheme {
+    /// Whether [`partitions`](Self::partitions) routes a key column of type
+    /// `t`: `false` for [`Unpinned`](Self::Unpinned), and for
+    /// [`KeyGroupV1`](Self::KeyGroupV1) the types its hash refuses (nested,
+    /// 256-bit decimal, time of day, day-time and month-day-nano intervals).
+    #[must_use]
+    pub fn routes(self, t: &DataType) -> bool {
+        match self {
+            Self::Unpinned => false,
+            Self::KeyGroupV1 => routing::routable(t),
+        }
+    }
+
     /// The partition of `n` that each row of `keys` (the key columns, in
     /// hash order) goes to, written to `out` (cleared first).
     ///
@@ -333,6 +345,10 @@ pub struct ExprEnv {
     /// functions use the `SimpleDateFormat` parser. A plan that sets it
     /// needs the `legacy_time_parser` codec feature.
     pub legacy_time_parser: bool,
+    /// `spark.sql.binaryOutputStyle` when it is not `HEX_DISCRETE` (what an unset config
+    /// prints): `to_csv` and `to_xml` print binary fields in that style. A plan that sets it
+    /// needs the `binary_output_style` codec feature.
+    pub binary_output_style: Option<Arc<str>>,
 }
 
 impl ExprEnv {
@@ -391,6 +407,19 @@ pub enum PhysNode {
         offset: u64,
         /// The row count.
         limit: u64,
+    },
+    /// The rows of `input`, then one column per Python UDF call evaluated
+    /// over **every** row (design P2-T059 §2.2, Spark's `ExtractPythonUDFs`):
+    /// the nodes above read each call's column by its attribute. Calls of
+    /// one eval type share a node; a call over another call's result sits
+    /// in a node above it.
+    PythonEval {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The attribute of each input column.
+        layout: Vec<AttrId>,
+        /// The calls, in output column order.
+        calls: Vec<PythonCallPlan>,
     },
     /// Each row of `input` `count` times (`INTERSECT ALL`, `EXCEPT ALL`).
     ReplicateRows {
@@ -769,6 +798,71 @@ pub struct HashJoinPlan {
     pub runtime_filters: Vec<JoinFilterPlan>,
     /// Broadcast or partitioned.
     pub distribution: JoinDistribution,
+    /// The rows of each probe batch the probe joins: a filter and a scan's
+    /// runtime-filter row stage fused into it (design P2-E3 U2). `None`:
+    /// every row.
+    pub select: Option<ProbeSelect>,
+}
+
+/// What a hash probe keeps of each input batch before it joins it (design
+/// P2-E3 U2): the predicate of a `Filter` that sat below it (with the
+/// column-only projections between them) and the row stage of a
+/// runtime-filtered scan below it, in the same pipeline through
+/// column-only projections. The probe evaluates both over every input
+/// batch and joins the selected rows by id, without a filtered copy. The
+/// planner fuses only a predicate that cannot raise on a row, beside keys
+/// and a residual that cannot either (ADR 0008 §6).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeSelect {
+    /// The fused filter.
+    pub filter: Option<ProbeFilter>,
+    /// The scan whose row stage the probe runs.
+    pub row_stage: Option<ProbeRowStage>,
+    /// The column-only projection between the fused filter and the probe,
+    /// fused too: the probe's input columns, as columns of the batches it
+    /// receives (`None`: those batches as they are). The filter and the row
+    /// stage see the batches received.
+    pub columns: Option<Vec<ProbeColumn>>,
+}
+
+/// A probe input column read out of the batches the probe receives
+/// ([`ProbeSelect::columns`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeColumn {
+    /// Its column in the batches received.
+    pub index: usize,
+    /// Its name in the probe input.
+    pub name: String,
+}
+
+/// A filter fused into a hash probe ([`ProbeSelect::filter`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeFilter {
+    /// The attribute of each column of the batches the probe receives.
+    pub layout: Vec<AttrId>,
+    /// A boolean expression; NULL does not select a row.
+    pub predicate: Arc<Expr>,
+}
+
+/// A scan's runtime-filter row stage run by a hash probe above it
+/// ([`ProbeSelect::row_stage`]): the scan drops no row itself, and the
+/// probe evaluates the stage the scan's driver built (same filters,
+/// counters and switch-off).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeRowStage {
+    /// The scan.
+    pub scan: ScanId,
+    /// Each runtime filter of the scan with its column in the probe input.
+    pub columns: Vec<ProbeFilterColumn>,
+}
+
+/// A runtime filter's column in a hash probe's input.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProbeFilterColumn {
+    /// The filter.
+    pub id: FilterId,
+    /// Its column in the probe input.
+    pub column: usize,
 }
 
 impl HashJoinPlan {
@@ -917,7 +1011,8 @@ plan_data!(struct ExprEnv {
     map_key_dedup_last_win,
     legacy_java_charsets,
     legacy_coding_error_action,
-    legacy_time_parser
+    legacy_time_parser,
+    binary_output_style
 });
 plan_data!(enum PhysNode {
     Scan(scan),
@@ -927,6 +1022,7 @@ plan_data!(enum PhysNode {
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
     ReplicateRows { input, layout, count, subqueries },
+    PythonEval { input, layout, calls },
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
@@ -946,6 +1042,7 @@ plan_data!(enum PhysNode {
     UnionLoop { id, anchor, recursive, layout, nullable, limits },
     LoopRef { id, layout },
 });
+plan_data!(struct PythonCallPlan { call, output });
 plan_data!(struct LoopLimits { level, rows, pushed_limit });
 plan_data!(struct WritePlan {
     format,
@@ -981,8 +1078,13 @@ plan_data!(struct AggregatePlan { group_by, aggregates, distinct, output });
 plan_data!(struct Residual { layout, conjuncts });
 plan_data!(struct HashJoinPlan {
     probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match,
-    distinct_build, runtime_filters, distribution
+    distinct_build, runtime_filters, distribution, select
 });
+plan_data!(struct ProbeSelect { filter, row_stage, columns });
+plan_data!(struct ProbeFilter { layout, predicate });
+plan_data!(struct ProbeColumn { index, name });
+plan_data!(struct ProbeRowStage { scan, columns });
+plan_data!(struct ProbeFilterColumn { id, column });
 plan_data!(struct SortMergeJoinPlan {
     probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match
 });
@@ -1024,6 +1126,7 @@ impl PhysNode {
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
+            | Self::PythonEval { input, .. }
             | Self::WriteFiles { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
@@ -1069,6 +1172,7 @@ impl PhysNode {
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
+            | Self::PythonEval { input, .. }
             | Self::WriteFiles { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
@@ -1080,6 +1184,17 @@ impl PhysNode {
             } => vec![anchor.as_mut(), recursive.as_mut()],
         }
     }
+}
+
+/// One call of a [`PhysNode::PythonEval`]: the resolved Python UDF call
+/// (a `FunctionId::PythonUdf` function over expressions of the input) and
+/// the attribute of the column it produces.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PythonCallPlan {
+    /// The call.
+    pub call: Arc<Expr>,
+    /// The attribute of its output column.
+    pub output: AttrId,
 }
 
 /// An executable plan as data: the root node, the schema of its result

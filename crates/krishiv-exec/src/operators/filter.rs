@@ -57,7 +57,9 @@ impl Operator for Filter {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
         let partition = local_mut::<PartitionState>(local, "Filter")?.partition;
-        let mask = self.predicate.evaluate_in(input.data(), partition)?;
+        let mask = self
+            .predicate
+            .evaluate_in(input.data(), input.split().unwrap_or(partition))?;
         let out = input.filter(&mask)?;
         if out.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
@@ -74,8 +76,9 @@ impl Operator for Filter {
 /// `batch` (the filtered rows of `input`) with each top-level view column
 /// compacted (`gc`) whose data buffers hold more than 16 times the bytes
 /// its views use, or more than twice when its views use under a quarter of
-/// the bytes `input`'s views of the same column use.
-fn compact_sparse_views(input: &Batch, batch: Batch) -> Result<Batch> {
+/// the bytes `input`'s views of the same column use. Also the hash probe's,
+/// over the rows a fused filter selected; `batch`'s columns are `input`'s.
+pub(crate) fn compact_sparse_views(input: &Batch, batch: Batch) -> Result<Batch> {
     use arrow_array::cast::AsArray;
     use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
     use arrow_schema::DataType;
@@ -124,5 +127,6 @@ fn compact_sparse_views(input: &Batch, batch: Batch) -> Result<Batch> {
     )
     .map_err(|e| crate::error::internal(e.to_string()))?;
     Batch::with_weights(compacted, batch.weights().clone())
+        .map(|b| b.with_split(batch.split()))
         .map_err(|e| crate::error::internal(e.to_string()))
 }

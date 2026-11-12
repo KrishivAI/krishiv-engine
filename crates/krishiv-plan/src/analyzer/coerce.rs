@@ -1520,7 +1520,10 @@ pub(super) fn can_cast(
             Err(BadCast::Without)
         };
     }
-    if *from == T::String || *to == T::String {
+    // A collated string is a string here: it casts as `STRING` does.
+    if matches!(from, T::String | T::CollatedString(_))
+        || matches!(to, T::String | T::CollatedString(_))
+    {
         return Ok(());
     }
     // Within a family, and between an ANSI interval and a number (which runs
@@ -1583,23 +1586,10 @@ fn spatial_cast(from: &DataType, to: &DataType) -> bool {
         // Into the same kind: to `ANY` always, otherwise only the same SRID.
         (T::Geometry { srid: f }, T::Geometry { srid: t })
         | (T::Geography { srid: f }, T::Geography { srid: t }) => *t == Srid::Any || f == t,
-        // Between kinds: only equal fixed SRIDs.
-        (
-            T::Geometry {
-                srid: Srid::Fixed(f),
-            },
-            T::Geography {
-                srid: Srid::Fixed(t),
-            },
-        )
-        | (
-            T::Geography {
-                srid: Srid::Fixed(f),
-            },
-            T::Geometry {
-                srid: Srid::Fixed(t),
-            },
-        ) => f == t,
+        // Between kinds: only equal SRIDs, `ANY` (Spark's `-1`) included: a geometry of
+        // `ANY` casts to a geography of `ANY`, whose rows are checked one by one at run time.
+        (T::Geometry { srid: f }, T::Geography { srid: t })
+        | (T::Geography { srid: f }, T::Geometry { srid: t }) => f == t,
         _ => false,
     }
 }

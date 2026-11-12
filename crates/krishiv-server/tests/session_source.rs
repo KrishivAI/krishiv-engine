@@ -131,3 +131,51 @@ async fn cancelling_an_unknown_query_is_false_and_a_malformed_id_is_an_error() {
         "an id that is not an id names no running query"
     );
 }
+
+#[tokio::test]
+async fn an_embedded_ui_shows_the_hosts_own_queries_and_stops_on_drop() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn get(addr: std::net::SocketAddr, path: &str, token: Option<&str>) -> String {
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
+        let req =
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Connection: close\r\n\r\n");
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut out = Vec::new();
+        s.read_to_end(&mut out).await.unwrap();
+        String::from_utf8(out).unwrap()
+    }
+    let rt = runtime();
+    let user = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    user.sql("SELECT 7 * 6 AS embedded_marker")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let ui = krishiv_server::session_source::EmbeddedUi::start(rt, "127.0.0.1:0".parse().unwrap())
+        .unwrap();
+    let addr = ui.addr();
+    let token = ui.url().split("token=").nth(1).unwrap().to_owned();
+    let denied = get(addr, "/api/internal/queries", None).await;
+    assert!(denied.starts_with("HTTP/1.1 401"), "{denied}");
+    let shown = get(addr, "/api/internal/history", Some(&token)).await;
+    assert!(shown.starts_with("HTTP/1.1 200"), "{shown}");
+    assert!(shown.contains("embedded_marker"), "{shown}");
+    // An open event stream must not keep the stop waiting forever.
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req = format!(
+        "GET /api/internal/events?token={} HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        ui.token()
+    );
+    stream.write_all(req.as_bytes()).await.unwrap();
+    let mut buf = [0_u8; 64];
+    let _ = stream.read(&mut buf).await.unwrap();
+    let stopped = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || drop(ui)),
+    )
+    .await;
+    assert!(stopped.is_ok(), "drop hung on an open event stream");
+    assert!(tokio::net::TcpStream::connect(addr).await.is_err());
+}

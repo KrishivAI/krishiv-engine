@@ -5,6 +5,7 @@
 //! included), each writes its own output file so the result is read by
 //! several drivers, a task refused memory while others run waits instead
 //! of splitting beside them, and a cancel mid-phase leaves nothing behind.
+//! Also: a finished in-memory result frees its partitions as they are read.
 
 use arrow_array::StringViewArray;
 use krishiv_memory::{Reservation, Spillable};
@@ -768,4 +769,32 @@ fn corrupt_files(dir: &std::path::Path) -> usize {
         }
     }
     n
+}
+
+/// A finished in-memory result frees each radix partition once its rows
+/// are read out (and its key index when published), so a reader that
+/// copies the rows into state that cannot spill (a join build, a result
+/// buffer) does not need room for the whole result twice. With no spill
+/// directory, the row layout's `sum(x) group by k` over 20,000 keys alone
+/// completes at 1.5 MB; read into a buffer it needed 1.8 MB while the
+/// result held all its memory to the last chunk, and completes at 1.6 MB
+/// now. (The key layout's table is one piece: it still needs 1.8 MB.)
+#[tokio::test]
+async fn a_result_frees_each_partition_as_it_is_read() {
+    let free = Opts {
+        slots: 1,
+        ..Opts::default()
+    };
+    let (want, _) = exec_with(unread_plan(20_000, None), free, true)
+        .await
+        .unwrap();
+    let want = rows(&want);
+    assert_eq!(want.len(), 20_000);
+    let o = Opts {
+        slots: 1,
+        limit: 1_600_000,
+        ..Opts::default()
+    };
+    let (got, _) = exec_with(unread_plan(20_000, None), o, true).await.unwrap();
+    assert_eq!(rows(&got), want);
 }

@@ -50,11 +50,13 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   RustCrypto). `hash`/`xxhash64` take any number of columns of any type and chain per row (NULL leaves the hash unchanged; arrays hash
   their elements, structs their fields, maps each key then value). A column is resolved to a `Col` plan once, rows only match on the variant. The
   analyzer's MAP rejection (`DATATYPE_MISMATCH.HASH_MAP_TYPE` without `spark.sql.legacy.allowHashOnMapType`) is the caller's check.
-  Unsupported types (dictionary, 256-bit decimal, time of day, month-day-nano interval) are `KRISHIV_UNSUPPORTED_FEATURE`.
+  A calendar interval (the `krishiv_types::calendar` struct carrier) hashes microseconds, then months, and skips days, as Spark's
+  codegen path does. Unsupported types (dictionary, 256-bit decimal, time of day, a raw month-day-nano interval) are `KRISHIV_UNSUPPORTED_FEATURE`.
   `hash/routing.rs` (P2-T175) is not a Spark function: the engine's seedless routing hash `H_kg` version 1 (XXH64 seed 0 of
   the normalized little-endian key bytes, folded over several columns from `FOLD_INIT`; carrier-independent: dictionary,
   view, offset and narrow-decimal carriers hash as their values), key groups (top 12 bits) and key-group-range
-  partitioning (`partition_of`, `key_group_range`, `radix`). It is a format: `tests/routing.rs` pins golden vectors, and a
+  partitioning (`partition_of`, `key_group_range`, `radix`); `routable` names the key types it hashes (nested ones are
+  refused; the fragmenter checks it per exchange). It is a format: `tests/routing.rs` pins golden vectors, and a
   change is a new version and a new plan-codec feature, never an edit.
 - `map` (P2-T029): the map functions over `MapArray`/`ListArray`/`StructArray` (offsets and child values, never
   boxed): `map`, `map_concat`, `map_contains_key`, `map_keys`, `map_values`, `map_entries`, `map_from_arrays`,
@@ -92,6 +94,10 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `-0.0 == 0.0`). The module docs list which functions are bit-identical to Spark's JVM results and the share of inputs where
   `sin`/`cos`/`tan`/`ln`/`log10` differ in the last bit (the JVM's intrinsics are not fdlibm); `tests/math_differential.rs` in
   `krishiv-testkit` holds that bound.
+- `binary_style`: `spark.sql.binaryOutputStyle` printing (`write`/`render`) and Spark 4.1+'s `getBinaryParser` read-back (`parse`: lenient Java decoders, `None` is a miss; source-derived, no Spark run yet).
+- `string/collation_key.rs` (ADR 0043): the collation key of a string (`UTF8_LCASE` is Spark's `lowerCaseCodePoints`, checked for every code point
+  against `tests/fixtures/spark-4.2.0/collation-lowercase.json`; `_RTRIM` drops trailing `U+0020`) and of nested values; a type that does not
+  describe the column is `INTERNAL_ERROR`. Oracle `reference::collation_key_lists`, property `collation_key_matches_reference`, bench `collation_key`.
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 
 ## Key files

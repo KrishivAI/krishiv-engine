@@ -80,10 +80,10 @@ fn a_large_build_is_partitioned_and_a_small_one_broadcast() {
     +- HashJoin Inner, [a#0] = [a#3], RuntimeFilter #1: a#0 -> spark_catalog.default.big.a
        :- Exchange hashpartitioning(a#0)
        :  +- Project [a#0, s#2]
-       :     +- Scan spark_catalog.default.big [a#0, b#1, s#2]
+       :     +- Scan spark_catalog.default.big [a#0, b#1, s#2], PushedFilters: [isnotnull(a#0)]
        +- Exchange hashpartitioning(a#3)
           +- Project [a#3, b#4]
-             +- Scan spark_catalog.default.big [a#0, b#1, s#2] (ids +3)
+             +- Scan spark_catalog.default.big [a#0, b#1, s#2], PushedFilters: [isnotnull(a#0)] (ids +3)
     ");
     assert_eq!(
         exchanges_of(&env, "SELECT x.s FROM big x JOIN t y ON x.a = y.a"),
@@ -218,13 +218,13 @@ fn a_join_on_an_aggregated_key_exchanges_only_the_other_side() {
     Project [s#2, n#7]
     +- HashJoin Inner, [a#0] = [a#4], RuntimeFilter #1: a#0 -> spark_catalog.default.big.a
        :- Exchange hashpartitioning(a#0)
-       :  +- Scan spark_catalog.default.big [a#0, s#2]
-       +- Project [a#0, count(1)#4611686018427387904 AS n#3] (ids +4)
+       :  +- Scan spark_catalog.default.big [a#0, s#2], PushedFilters: [isnotnull(a#0)]
+       +- Project [a#0, count(1)#4611686018427387906 AS n#3] (ids +4)
           +- HashAggregate keys=[a#0], functions=[count(1)]
              +- Exchange hashpartitioning(a#0)
                 +- PartialHashAggregate keys=[a#0], functions=[count(1)]
                    +- Project [a#0]
-                      +- Scan spark_catalog.default.big [a#0, s#2]
+                      +- Scan spark_catalog.default.big [a#0, s#2], PushedFilters: [isnotnull(a#0)]
     ");
     // Through a CTE reference, which renames the definition's columns.
     let sql = "WITH g AS (SELECT a, count(*) AS n FROM big GROUP BY a) \
@@ -498,4 +498,31 @@ fn a_reused_window_order_gives_the_rows_of_a_new_sort() {
     assert_eq!(sorted.matches("Sort [").count(), 2, "{sorted}");
     assert_eq!(rows.len(), 20_000);
     assert_eq!(rows, again);
+}
+
+/// `DISTRIBUTE BY` (Spark's `RepartitionByExpression`) always places a hash
+/// exchange on its expressions, computed below it and dropped above it; a
+/// grouping on the same column above needs no second one, as in Spark.
+#[test]
+fn distribute_by_places_a_hash_exchange_on_its_expressions() {
+    let env = env();
+    insta::assert_snapshot!(explain(&env, "SELECT a FROM t DISTRIBUTE BY b + 1"), @"
+    Project [a#0]
+    +- Project [a#0, b#1]
+       +- Exchange hashpartitioning(_key2#4611686018427387904)
+          +- Project [(b#1 + 1L)]
+             +- Scan spark_catalog.default.t [a#0, b#1]
+    ");
+    assert_eq!(
+        exchanges_of(
+            &env,
+            "SELECT a, count(*) FROM (SELECT a FROM big DISTRIBUTE BY a) GROUP BY a"
+        ),
+        ["Exchange hashpartitioning(a#0)"]
+    );
+    let (_, mut rows) = env.rows("SELECT a, s FROM t DISTRIBUTE BY s SORT BY a");
+    rows.sort();
+    let (_, mut want) = env.rows("SELECT a, s FROM t");
+    want.sort();
+    assert_eq!(rows, want);
 }

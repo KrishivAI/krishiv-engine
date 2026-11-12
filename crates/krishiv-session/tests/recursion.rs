@@ -401,8 +401,10 @@ fn the_other_forbidden_places_are_refused() {
         "SELECT n + 1, row_number() OVER (ORDER BY n) FROM r",
         "SELECT r.n + 1 FROM r FULL OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k",
         "SELECT r.n + 1 FROM r RIGHT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k",
-        "SELECT r.n + 1 FROM r LEFT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k \
-         WHERE EXISTS (SELECT 1 FROM r)",
+        // A forbidden place inside a subquery expression.
+        "SELECT n + 1 FROM r WHERE n < 3 AND EXISTS \
+         (SELECT 1 FROM (SELECT 1 k) a LEFT JOIN r ON a.k = r.n)",
+        "SELECT n + 1 FROM r WHERE n < (SELECT max(n) + 5 FROM r)",
     ] {
         let sql =
             format!("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL {term}) SELECT * FROM r LIMIT 3");
@@ -576,6 +578,30 @@ fn case_sensitive_cte_names_are_distinct_from_the_recursive_one() {
 }
 
 #[test]
+fn a_table_named_like_the_cte_in_another_case_is_not_the_recursive_reference() {
+    // Spark 4.2.0, spark.sql.caseSensitive=true: the aggregate reads the
+    // table `R`, not the recursive `r`, so the term is allowed (1, 2, 3).
+    // By default `R` is the recursive reference under an aggregate.
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let run = |sql: &str| {
+        block_on(s.sql(sql))
+            .and_then(|d| block_on(d.collect()))
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    };
+    run("SET spark.sql.caseSensitive=true");
+    run("CREATE TABLE R USING parquet AS SELECT 10 AS n");
+    let q = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT r.n + 1 FROM r \
+             CROSS JOIN (SELECT max(n) AS m FROM R) q WHERE r.n < 3) SELECT * FROM r";
+    assert_eq!(column(rows(&s, q)), ["1", "2", "3"]);
+    run("SET spark.sql.caseSensitive=false");
+    assert_eq!(class_of(&s, q), ErrorClass::InvalidRecursiveReferencePlace);
+}
+
+#[test]
 fn recursive_term_types_follow_the_anchor() {
     let s = Session::new().unwrap();
     // A narrower recursive term is cast to the anchor's type.
@@ -710,6 +736,23 @@ fn a_seeded_random_draws_every_small_round_in_row_order() {
     );
 }
 
+/// Spark 4.2.0 `cte-recursion.sql` case 27: a reference under an aggregate
+/// is a misplaced reference, reported before the outer `n` (which the
+/// aggregate's output does not name) is found unresolved.
+#[test]
+fn a_reference_under_an_aggregate_is_misplaced_before_columns_resolve() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        class_of(
+            &s,
+            "WITH t1 AS (SELECT 1 as n), t2(n) AS (WITH RECURSIVE t3(n) AS (SELECT 1 \
+             UNION ALL SELECT n+1 FROM (SELECT MAX(n) FROM t3)) SELECT * FROM t3) \
+             SELECT * FROM t2"
+        ),
+        ErrorClass::InvalidRecursiveReferencePlace
+    );
+}
+
 /// Spark 4.2.0 `cte-recursion.sql` cases 75 and 79: the recursive term's
 /// output columns read the previous round's columns, not each other.
 #[test]
@@ -743,4 +786,123 @@ fn recursive_term_columns_read_the_previous_round() {
     .map(|r| r.iter().map(ToString::to_string).collect())
     .collect();
     assert_eq!(got, want);
+}
+
+#[test]
+fn a_reference_inside_a_subquery_expression_recurses() {
+    // Spark 4.2.0 (`cte-recursion` 28 and probes): a subquery is no
+    // forbidden place of its own.
+    let s = Session::new().unwrap();
+    for (term, want) in [
+        (
+            "SELECT (SELECT n + 1 FROM r WHERE n < 5)",
+            vec!["1", "2", "3", "4", "5"],
+        ),
+        (
+            "SELECT n + 1 FROM r WHERE n IN (SELECT n FROM r WHERE n < 4)",
+            vec!["1", "2", "3", "4"],
+        ),
+        (
+            "SELECT 2 WHERE EXISTS (SELECT * FROM r WHERE n < 2)",
+            vec!["1", "2"],
+        ),
+        (
+            "SELECT r.n + 1 FROM r LEFT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k \
+             WHERE EXISTS (SELECT 1 FROM r)",
+            vec!["1", "2", "3", "4", "5"],
+        ),
+    ] {
+        let sql =
+            format!("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL {term}) SELECT * FROM r LIMIT 5");
+        assert_eq!(column(rows(&s, &sql)), want, "{sql}");
+    }
+}
+
+/// Spark 4.2.0 (krishiv-internal `research/spark/loop-enclosing-cte/probe.{py,out}`): a nondeterministic CTE the
+/// loop reads is computed again by the anchor and by every round, from the seeds fixed at analysis, round `k`'s at
+/// partition `k - 1`: the anchor, round 1 and the outer query see one value, round 2 another.
+#[test]
+fn a_nondeterministic_enclosing_cte_is_computed_per_run_from_one_seed() {
+    let s = Session::new().unwrap();
+    let w = "WITH RECURSIVE t AS (SELECT uuid() AS u), ";
+    for (q, want) in [
+        // The anchor and round 1 draw one value, round 2 another.
+        (
+            "r(n, u) AS (SELECT 1, u FROM t UNION ALL SELECT n + 1, t.u FROM r CROSS JOIN t WHERE n < 3) \
+             SELECT count(DISTINCT u) FROM r",
+            "2",
+        ),
+        // The outer query's read of `t` is the anchor's value.
+        (
+            "r(n, u) AS (SELECT 1, u FROM t UNION ALL SELECT n + 1, t.u FROM r CROSS JOIN t WHERE n < 3) \
+             SELECT count(DISTINCT u) FROM (SELECT u FROM r UNION ALL SELECT u FROM t)",
+            "2",
+        ),
+        // Three rounds, three values.
+        (
+            "r(n, u) AS (SELECT 1, 'x' UNION ALL SELECT n + 1, t.u FROM r CROSS JOIN t WHERE n < 4) \
+             SELECT count(DISTINCT u) FROM r WHERE n > 1",
+            "3",
+        ),
+        // Only the anchor reads `t`.
+        (
+            "r(n, u) AS (SELECT 1, u FROM t UNION ALL SELECT n + 1, u FROM r WHERE n < 3) \
+             SELECT count(DISTINCT u) FROM r",
+            "1",
+        ),
+    ] {
+        let sql = format!("{w}{q}");
+        assert_eq!(column(rows(&s, &sql)), vec![want], "{sql}");
+    }
+    // A nondeterministic CTE read twice outside any loop is one value (probe: 1).
+    let q = "WITH RECURSIVE t AS (SELECT uuid() AS u), r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) \
+             SELECT count(DISTINCT u) FROM (SELECT u FROM t UNION ALL SELECT u FROM t)";
+    assert_eq!(column(rows(&s, q)), vec!["1"]);
+}
+
+/// A seeded random function draws from the split a row is read from, not from the driver that ran it: the multiset
+/// of values over a multi-morsel `range` is the same on every run, however the morsels fall to the drivers.
+#[test]
+fn a_seeded_random_draws_by_split_not_by_driver() {
+    let s = Session::new().unwrap();
+    let q = "SELECT md5(CAST(sort_array(collect_list(x)) AS STRING)) \
+             FROM (SELECT rand(7) AS x FROM range(100000))";
+    let first = column(rows(&s, q));
+    for run in 0..5 {
+        assert_eq!(column(rows(&s, q)), first, "run {run}");
+    }
+}
+
+/// Two `UNION ALL` children number their splits one after the other, so a split id (and the ids and seeded draws
+/// keyed by it) is unique across the children even when a child has more slices than drivers.
+#[test]
+fn union_all_children_number_their_splits_without_overlap() {
+    let s = Session::new().unwrap();
+    let q = "SELECT count(DISTINCT m), count(DISTINCT p) FROM (SELECT monotonically_increasing_id() AS m, \
+             spark_partition_id() AS p FROM (SELECT id FROM range(0, 1000, 1, 64) UNION ALL \
+             SELECT id FROM range(0, 1000, 1, 64)))";
+    assert_eq!(rows(&s, q), vec![vec!["2000".to_owned(), "128".to_owned()]]);
+}
+
+/// A seeded random above a generator draws by the split too (Generate keeps the batch's split).
+#[test]
+fn a_seeded_random_above_a_generator_draws_by_split_not_by_driver() {
+    let s = Session::new().unwrap();
+    let q = "SELECT md5(CAST(sort_array(collect_list(x)) AS STRING)) FROM \
+             (SELECT rand(7) AS x FROM (SELECT explode(array(1, 2)) AS e FROM range(50000)))";
+    let first = column(rows(&s, q));
+    for run in 0..5 {
+        assert_eq!(column(rows(&s, q)), first, "run {run}");
+    }
+}
+
+/// Two reads of one shared CTE number their splits apart: the stored batches carry no split tag of the
+/// pipeline that produced them, so ids drawn per split stay unique across the readers.
+#[test]
+fn two_reads_of_a_shared_cte_draw_ids_from_distinct_splits() {
+    let s = Session::new().unwrap();
+    let q = "WITH t AS (SELECT id, rand() AS r FROM range(0, 1000, 1, 4) UNION ALL SELECT count(*), rand() FROM range(10)) \
+             SELECT count(DISTINCT m) FROM (SELECT monotonically_increasing_id() AS m FROM t \
+             UNION ALL SELECT monotonically_increasing_id() AS m FROM t)";
+    assert_eq!(column(rows(&s, q)), vec!["2002"]);
 }

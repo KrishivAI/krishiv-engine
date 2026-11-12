@@ -31,8 +31,7 @@ fn a_namespace_takes_a_comment_properties_and_a_location() {
         "{rows:?}"
     );
     assert!(
-        rows.iter()
-            .any(|r| r.starts_with("Properties=") && r.contains("a=b")),
+        rows.iter().any(|r| r.as_str() == "Properties=((a,b))"),
         "{rows:?}"
     );
     assert!(

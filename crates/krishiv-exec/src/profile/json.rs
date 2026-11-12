@@ -64,10 +64,12 @@ impl QueryProfile {
                 "threads": p.threads,
                 "started_ns": ns(p.started),
                 "ended_ns": ns(p.ended),
+                "max_slice_ns": ns(p.max_slice),
+                "stalls": p.stalls,
             })).collect::<Vec<_>>(),
             "plan": plan_json(&self.plan),
             "operators": m.operators.iter().map(|(id, e)| operator_json(*id, e)).collect::<Vec<_>>(),
-            "usage": usage_json(&QueryUsage::of(m)),
+            "usage": usage_json(&QueryUsage::of(m), self.identity.as_ref()),
             "environment": {
                 "krishiv_version": env!("CARGO_PKG_VERSION"),
                 "os": std::env::consts::OS,
@@ -76,6 +78,9 @@ impl QueryProfile {
         });
         if let (Some(p), Some(o)) = (&self.planning, doc.as_object_mut()) {
             o.insert("planning".to_owned(), p.clone());
+        }
+        if let (Some(t), Some(o)) = (&self.trace, doc.as_object_mut()) {
+            o.insert("trace".to_owned(), t.clone());
         }
         doc
     }
@@ -135,6 +140,9 @@ impl QueryProfile {
                 threads: u64_of(p, "threads")?,
                 started: dur_of(p, "started_ns")?,
                 ended: dur_of(p, "ended_ns")?,
+                // Minor 3; absent (zero) in earlier documents.
+                max_slice: Duration::from_nanos(opt_u64(p, "max_slice_ns")?.unwrap_or(0)),
+                stalls: opt_u64(p, "stalls")?.unwrap_or(0),
             };
             if metrics.pipelines.insert(id, pm).is_some() {
                 return Err(ProfileError::new(format!("pipeline {id} listed twice")));
@@ -152,11 +160,35 @@ impl QueryProfile {
             Some(p) if p.is_object() => Some(p.clone()),
             Some(_) => return Err(ProfileError::new("planning is not an object")),
         };
+        // Optional: a profile written before minor 1 has no `usage`.
+        let usage = o.get("usage").unwrap_or(&Value::Null);
+        let identity = match usage.as_object().and_then(|u| u.get("principal")) {
+            Some(Value::String(p)) => Some(super::ProfileIdentity {
+                principal: p.clone(),
+                tags: usage
+                    .get("tags")
+                    .and_then(Value::as_object)
+                    .map(|t| {
+                        t.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_owned())))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            }),
+            _ => None,
+        };
+        let trace = match o.get("trace") {
+            None | Some(Value::Null) => None,
+            Some(t) if t.is_object() => Some(t.clone()),
+            Some(_) => return Err(ProfileError::new("trace is not an object")),
+        };
         Ok(Self {
             plan,
             metrics,
             detailed,
             planning,
+            trace,
+            identity,
         })
     }
 }
@@ -191,8 +223,8 @@ fn plan_json(root: &ProfileNode) -> Value {
     )
 }
 
-fn usage_json(u: &QueryUsage) -> Value {
-    json!({
+fn usage_json(u: &QueryUsage, who: Option<&super::ProfileIdentity>) -> Value {
+    let mut v = json!({
         "fidelity": u.fidelity,
         "wall_ns": ns(u.wall),
         "cpu_ns": ns(u.cpu),
@@ -200,7 +232,12 @@ fn usage_json(u: &QueryUsage) -> Value {
         "peak_memory_bytes": u.peak_memory_bytes,
         "spill_bytes": u.spill_bytes,
         "scan": { "bytes": u.scan_bytes, "rows": u.scan_rows },
-    })
+    });
+    if let (Some(w), Some(o)) = (who, v.as_object_mut()) {
+        o.insert("principal".to_owned(), w.principal.clone().into());
+        o.insert("tags".to_owned(), json!(w.tags));
+    }
+    v
 }
 
 fn operator_json(id: OperatorId, e: &OperatorEntry) -> Value {

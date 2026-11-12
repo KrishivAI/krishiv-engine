@@ -10,13 +10,14 @@ Query optimizer: rule- and cost-based rewrites, including the IVM rewrite pass.
 Paths are relative to this crate.
 - `src/lib.rs` rule batches and the `optimize` entry point
 - `src/dag.rs` `dag::Rewriter`, the rewrite-once rule for shared subtrees
+- `src/constraints.rs` `InferJoinFilters` (P2-T072b unit 3): `isnotnull` on nullable `=` keys and literal comparisons moved across `=` keys of one type, on the sides Spark's `InferFiltersFromConstraints` filters (no substitution; differences in `docs/known-differences.md`); runs after the rewrite batch (then the batch again when it added) and inside `order_and_restrict`
 - `src/fold.rs` constant folding; `src/pushdown.rs` predicate pushdown (below a window only on partition keys); `src/prune.rs` column pruning (removes unused window columns)
-- `src/project.rs` projection rules; `src/limit.rs` limit rules; `src/group_limit.rs` Spark's
+- `src/project.rs` projection rules; `src/repartition.rs` Spark's `CollapseRepartition` (a `DISTRIBUTE BY` directly over another drops the inner one; filters move below one in `pushdown.rs`, pruning keeps the columns its expressions read); `src/limit.rs` limit rules; `src/group_limit.rs` Spark's
   `InferWindowGroupLimit` decision (applied by the physical planner)
 - `src/restrict.rs` subquery restriction rules
 - `src/inline_cte.rs` CTE inlining (a nondeterministic definition read twice stays a `CteRef`); `src/share_cte.rs` `ShareCte` (P2-T198): equal deterministic instances with a pipeline breaker become one `WITH` definition, only when a session configuration is given and `krishiv.sql.optimizer.shareCteInstances` is on
 - `src/eager.rs` `EagerAggregate` (P2-T167): an aggregate's calls run below a join and merge above it, gated on statistics; `krishiv.optimizer.eagerAggregation`, `Options::eager_aggregation`
-- `src/join_order.rs` inner-join ordering (enumerator choice `krishiv.optimizer.joinEnumerator` / `joinDpLimit`, a `TreeStats` note per tree in `EXPLAIN VERBOSE`); `src/join_order/dp.rs` the exact enumerator DPsub over a hypergraph of input masks (P2-T113 kept it over DPhyp: `exp/t113-dphyp`); `src/stats.rs` `Statistics` it reads and the estimate types (`RelStats`, `AttrStats`, `StatSource`)
+- `src/join_order.rs` inner-join ordering (enumerator choice `krishiv.optimizer.joinEnumerator` / `joinDpLimit`, a `TreeStats` note per tree in `EXPLAIN VERBOSE`); `src/join_order/dp.rs` the exact enumerator DPsub over a hypergraph of input masks (P2-T113 kept it over DPhyp: `exp/t113-dphyp`); `src/join_order/reads.rs` which columns are read above a tree, for `krishiv.optimizer.joinCost=bytes` (E5b: a join costs its result rows plus its build's bytes, the fewer-rows input stays the build within 2x of the other's bytes; default `rows`, `tests/it/join_cost.rs`); `src/stats.rs` `Statistics` it reads and the estimate types (`RelStats`, `AttrStats`, `StatSource`)
 - `src/estimate.rs` the `Estimator`: what each operator leaves known of its columns (a column a filter or join does not read keeps the distinct values the kept rows are expected to hold, `kept_distinct`, Cardenas); `src/narrow.rs` predicates over estimates (selectivity and narrowed ranges); `src/plan_stats.rs` `PlanStats`, one pass over an optimized plan (physical planner, `EXPLAIN COST`)
 - `tests/it/plan_stats.rs` one test per propagation rule; `tests/it/qerror.rs` the q-error report (`cargo xtask qerror`)
 - `tests/it/rules.rs` per-rule snapshots; `tests/it/join_order.rs` ordering snapshots; `tests/it/join_enumerator.rs` enumerator settings over TPC-H/TPC-DS; `tests/it/support/eval.rs` reference interpreter
@@ -28,6 +29,7 @@ Paths are relative to this crate.
 - Input and output are resolved plans with the same output attributes; the optimised plan is a fixed point.
 - A rule returns its input `Arc` when it changes nothing (that is how a batch detects its fixed point) and
   rewrites a shared subtree once (`dag::Rewriter`), subquery plans included; never copy a shared subtree.
+- Inferred join filters keep `optimize` a fixed point: a side that already implies a candidate (`constraints::held`: through aliases, `cse_*` projections, `Shift`, positional unions, grouped aggregates, joins, row-preserving nodes; a literal `false`) gets nothing, and a side with nothing to add is returned as it is.
 - Only deterministic predicates move; folding never changes what a query returns or raises (no overflow,
   no division, no time-zone-dependent cast; a raising call stays in the plan).
 - `SUM(x + c)` of a narrow integral column becomes `SUM(x) + c * COUNT(x)` (`sum_rewrite.rs`, one pass after the
@@ -54,7 +56,7 @@ Paths are relative to this crate.
   ranges alone, so a range only stays or widens (the proptest in `plan_stats.rs` holds it to that). An equality with
   a literal outside `[min, max]` estimates 0 rows and removes nothing. A join's keys take the smaller distinct count
   (inner: the ranges intersect, no nulls); an outer join's null-supplying side gains the unmatched fraction as nulls.
-  `col = col` keeps `1 / max(NDV)` with an unknown count read as the rows (T166 note, section 2); only `col = literal` over an unknown count takes the default selectivity. A count from `StatSource::Sampled` (P2-T164 U6: the session samples file columns an equality or `IN` reads before optimizing) is known like any other. Statistics never change results;
+  `col = col` keeps `1 / max(NDV)` with an unknown count read as the rows (T166 note, section 2); `col = <scalar subquery>` (reading no column, deterministic) reads an unknown count as the rows too and leaves one value (study 26, E10: q15's `= (SELECT max(..))` over an aggregate output), and `col IN (..)` whose elements read no column, are deterministic and include a subquery leaves `k` values the same way (`k` counts a repeated literal once; a known count is clamped to `k` too); only `col = literal` over an unknown count takes the default selectivity. A count from `StatSource::Sampled` (P2-T164 U6: the session samples file columns an equality or `IN` reads before optimizing) is known like any other. Statistics never change results;
   `Options::stats_propagation` switches the propagation off for the differential tests.
 - Per-rule and TPC-H plan snapshots live in `tests/it/snapshots/`; differential tests run optimised and
   unoptimised plans through the reference interpreter in `tests/it/support/eval.rs`.

@@ -33,6 +33,8 @@ struct Gate {
     slots: Slots,
     refuse: AtomicBool,
     requests: std::sync::Mutex<Vec<String>>,
+    /// The estimate each request carried: `Some(scan_bytes)` or `None` when unknown.
+    estimates: std::sync::Mutex<Vec<Option<Option<u64>>>>,
 }
 
 impl Gate {
@@ -43,6 +45,7 @@ impl Gate {
             slots: Slots::default(),
             refuse: AtomicBool::new(false),
             requests: std::sync::Mutex::default(),
+            estimates: std::sync::Mutex::default(),
         })
     }
 }
@@ -57,6 +60,10 @@ impl AdmissionController for Gate {
                 .lock()
                 .unwrap()
                 .push(request.principal.name.clone());
+            self.estimates
+                .lock()
+                .unwrap()
+                .push(request.estimate.as_ref().map(|e| e.scan_bytes));
             if self.refuse.load(Ordering::SeqCst) {
                 return Err(KrishivUnsupportedFeature {
                     feature: "\"too many queries\"".into(),
@@ -395,4 +402,158 @@ async fn a_refused_table_overwrite_keeps_the_old_table() {
         1,
         "the table survived"
     );
+}
+
+/// A query cancelled while it waits for admission reports the time it waited as its wall time.
+#[tokio::test]
+async fn a_cancelled_queued_query_counts_its_queue_time_in_wall_ns() {
+    let gate = Gate::new();
+    let s = Session::builder()
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    let runner = s.clone();
+    let started = std::time::Instant::now();
+    let query = tokio::spawn(async move {
+        let _ = runner
+            .sql("SELECT 5 AS five")
+            .await
+            .unwrap()
+            .collect()
+            .await;
+    });
+    first_request_seen(&gate).await;
+    wait_for(&s, "SELECT 5 AS five", "queued").await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    query.abort();
+    let _ = query.await;
+    wait_for(&s, "SELECT 5 AS five", "cancelled").await;
+    let df = s
+        .sql("SELECT wall_ns FROM system.queries WHERE query_text = 'SELECT 5 AS five'")
+        .await
+        .unwrap();
+    let wall: i64 = df
+        .collect()
+        .await
+        .unwrap()
+        .iter()
+        .map(|b| {
+            b.column(0)
+                .as_primitive::<arrow_array::types::Int64Type>()
+                .value(0)
+        })
+        .next()
+        .expect("one row");
+    // At least the 60 ms it slept while queued, at most the time since before it was submitted
+    // (both on the monotonic clock).
+    let most = i64::try_from(started.elapsed().as_nanos()).unwrap();
+    assert!(
+        (60_000_000..=most).contains(&wall),
+        "the 60 ms in the queue count: {wall} ns, at most {most}"
+    );
+}
+
+/// A query that reads only `system.*` skips the controller, even one that refuses everything;
+/// a query that reads anything else, or nothing, does not.
+#[tokio::test]
+async fn a_query_reading_only_system_tables_skips_admission() {
+    let gate = Gate::new();
+    gate.first.store(false, Ordering::SeqCst);
+    gate.refuse.store(true, Ordering::SeqCst);
+    let s = Session::builder()
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    let rows = s
+        .sql("SELECT query_id FROM system.queries")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert!(rows.iter().all(|b| b.num_columns() == 1));
+    assert!(
+        gate.requests.lock().unwrap().is_empty(),
+        "the gate was not asked"
+    );
+    let refused = s.sql("SELECT 1 AS one").await.unwrap().collect().await;
+    assert!(
+        refused.is_err(),
+        "a query reading nothing is admitted as usual"
+    );
+    assert_eq!(gate.requests.lock().unwrap().len(), 1);
+    // A system table with rows of the query's own making, or with a user table, is admitted.
+    s.sql("CREATE TEMPORARY VIEW t AS SELECT 1 AS id")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .ok();
+    let mixed = [
+        "SELECT count(*) FROM system.queries CROSS JOIN range(10)",
+        "SELECT q.query_id FROM system.queries q CROSS JOIN VALUES (1), (2) AS v(x)",
+        "SELECT explode(array(1, 2)) FROM system.queries",
+        "SELECT q.query_id FROM system.queries q JOIN t ON true",
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) \
+         SELECT q.query_id FROM system.queries q CROSS JOIN r",
+    ];
+    for sql in mixed {
+        let before = gate.requests.lock().unwrap().len();
+        let refused = match s.sql(sql).await {
+            Ok(df) => df.collect().await.is_err(),
+            Err(e) => panic!("{sql}: {e}"),
+        };
+        assert!(
+            refused,
+            "{sql} is admitted, so the refusing gate refuses it"
+        );
+        assert_eq!(gate.requests.lock().unwrap().len(), before + 1, "{sql}");
+    }
+}
+
+/// The request carries the estimate of the optimized plan for a controller that reads it, and
+/// the default controller is never made to compute one.
+#[tokio::test]
+async fn the_request_carries_the_estimate_for_a_controller_that_wants_it() {
+    let gate = Gate::new();
+    gate.first.store(false, Ordering::SeqCst);
+    let s = Session::builder()
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    s.sql("SELECT 1 AS one")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let seen = gate.estimates.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1);
+    // An estimate was computed: a query with no table scan reads no bytes.
+    assert_eq!(seen, vec![Some(Some(0))]);
+    assert!(!krishiv_session::Unlimited.uses_estimate());
+    assert!(gate.uses_estimate());
+    // A scan of a table with statistics: the request carries the same estimate as
+    // `estimate_sql` of that query, not a trivial or stale one.
+    let dir = tempfile::tempdir().unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE t (a INT, b STRING) USING parquet",
+        "INSERT INTO t VALUES (1, 'x'), (2, 'y'), (3, 'z')",
+        "ANALYZE TABLE t COMPUTE STATISTICS",
+    ] {
+        s.sql(sql).await.unwrap().collect().await.unwrap();
+    }
+    let query = "SELECT a FROM t WHERE a > 1";
+    let expected = s
+        .estimate_sql(query)
+        .await
+        .unwrap()
+        .and_then(|e| e.scan_bytes);
+    assert!(expected.is_some_and(|b| b > 0), "{expected:?}");
+    gate.estimates.lock().unwrap().clear();
+    s.sql(query).await.unwrap().collect().await.unwrap();
+    assert_eq!(*gate.estimates.lock().unwrap(), vec![Some(expected)]);
 }

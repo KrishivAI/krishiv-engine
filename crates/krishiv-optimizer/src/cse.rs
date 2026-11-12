@@ -22,7 +22,7 @@
 //! Never extracted: columns, literals, aliases as such, aggregate functions
 //! themselves (their arguments do count), nondeterministic calls, anything
 //! holding a subquery or a lambda variable, and anything under `try_*` (a
-//! `try_*` call itself included, and a `TRY_CAST`).
+//! `try_*` call itself included, and a `TRY_CAST`) or under a pinned `EvalMode`.
 //!
 //! `nullif`/`nvl`/`ifnull`/`nvl2` are first resolved to their `CASE`/
 //! `coalesce` forms (`nullif(a, b)` to `WHEN a = b THEN NULL ELSE a`,
@@ -35,7 +35,7 @@
 //! Hoisting a surely-evaluated subexpression can change which error is
 //! raised first when two expressions on one row would both raise; Spark
 //! specifies no order there. That divergence is recorded with the ADR 0023
-//! divergences (see `docs/known-differences.md`).
+//! divergences (see `docs/concepts/known-differences.md`).
 //!
 //! Plans are pure data; the rewrite is deterministic and changes no result.
 
@@ -84,7 +84,7 @@ impl Fresh<'_> {
     fn get(&mut self) -> &mut u64 {
         let root = self.root;
         self.next.get_or_insert_with(|| {
-            max_id(root, &mut HashMap::new())
+            max_id(root, &mut Default::default())
                 .saturating_add(1)
                 .max(CSE_BASE)
         })
@@ -270,9 +270,11 @@ fn narrow_positional(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     if changed { Arc::new(out) } else { node }
 }
 
-/// Whether `e` is a `try_*` call or a `TRY_CAST`.
+/// Whether `e` is a `try_*` call, a `TRY_CAST` or an `EvalMode` (T184: what is under it runs in
+/// the mode it pins, so nothing may move out from under it into the query's mode).
 fn is_try(e: &Expr) -> bool {
     match &e.node {
+        ExprNode::Resolved(ResolvedExpr::EvalMode { .. }) => true,
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             f.id.name().starts_with("try_") || f.id.name() == "try_cast"
         }
@@ -997,7 +999,7 @@ fn fresh_columns(extracted: &[Arc<Expr>], next: &mut u64) -> Option<Vec<BoundCol
 
 /// The input columns of `input` that `exprs` still read, in input order.
 fn passthrough(exprs: &[Arc<Expr>], input: &Arc<LogicalPlan>) -> Vec<BoundColumn> {
-    let mut refs = Attrs::new();
+    let mut refs = Attrs::default();
     for e in exprs {
         references_into(e, &mut refs);
     }

@@ -75,3 +75,19 @@ BEGIN DECLARE b BOOLEAN; WHILE b DO SELECT 'never'; END WHILE; SELECT 'done'; EN
 BEGIN IF (SELECT 1, 2) THEN SELECT 1; END IF; END;
 -- CASE nested_compound_labels_case_insensitive
 BEGIN A: BEGIN SELECT 1 AS a; B: BEGIN SELECT 2 AS b; END b; END a; END;
+-- CASE if_condition_text_0
+BEGIN DECLARE x STRING DEFAULT 'q'; IF 'abc' THEN SELECT 'then'; END IF; END;
+-- CASE if_condition_text_1
+BEGIN DECLARE x STRING DEFAULT 'q'; IF 1+1 THEN SELECT 'then'; END IF; END;
+-- CASE if_condition_text_2
+BEGIN DECLARE x STRING DEFAULT 'q'; IF 'tr' || 'ue' THEN SELECT 'then'; END IF; END;
+-- CASE if_condition_text_3
+BEGIN DECLARE x STRING DEFAULT 'q'; IF x THEN SELECT 'then'; END IF; END;
+-- CASE if_condition_text_4
+BEGIN DECLARE x STRING DEFAULT 'q'; IF 1.5 THEN SELECT 'then'; END IF; END;
+-- CASE while_condition_text
+BEGIN WHILE 'yes' DO SELECT 1; END WHILE; END;
+-- CASE repeat_condition_text
+BEGIN REPEAT SELECT 1; UNTIL 7 END REPEAT; END;
+-- CASE searched_case_condition_text
+BEGIN CASE WHEN 5 THEN SELECT 1; END CASE; END;

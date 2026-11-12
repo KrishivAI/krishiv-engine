@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Project [w_warehouse_name#6, i_item_id#19, inv_before#68, inv_after#69]
@@ -10,14 +11,16 @@ Project [w_warehouse_name#6, i_item_id#19, inv_before#68, inv_after#69]
             +- Aggregate [w_warehouse_name#6, i_item_id#19], [w_warehouse_name#6, i_item_id#19, sum(CASE WHEN (d_date#42 < DATE '2000-03-11') THEN inv_quantity_on_hand#3 ELSE 0 END) AS inv_before#68, sum(CASE WHEN (d_date#42 >= DATE '2000-03-11') THEN inv_quantity_on_hand#3 ELSE 0 END) AS inv_after#69]
                +- Project [w_warehouse_name#6, inv_quantity_on_hand#3, d_date#42, i_item_id#19]
                   +- Join Inner, (inv_warehouse_sk#2 == w_warehouse_sk#4)
-                     :- Scan spark_catalog.default.warehouse [w_warehouse_sk#4, w_warehouse_name#6]
+                     :- Filter isnotnull(w_warehouse_sk#4)
+                     :  +- Scan spark_catalog.default.warehouse [w_warehouse_sk#4, w_warehouse_name#6]
                      +- Project [inv_warehouse_sk#2, inv_quantity_on_hand#3, d_date#42, i_item_id#19]
                         +- Join Inner, (i_item_sk#18 == inv_item_sk#1)
                            :- Project [inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3, d_date#42]
                            :  +- Join Inner, (inv_date_sk#0 == d_date_sk#40)
-                           :     :- Scan spark_catalog.default.inventory [inv_date_sk#0, inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3]
-                           :     +- Filter ((d_date#42 >= DATE '2000-02-10') and (d_date#42 <= DATE '2000-04-10'))
+                           :     :- Filter ((isnotnull(inv_warehouse_sk#2) and isnotnull(inv_item_sk#1)) and isnotnull(inv_date_sk#0))
+                           :     :  +- Scan spark_catalog.default.inventory [inv_date_sk#0, inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3]
+                           :     +- Filter (((d_date#42 >= DATE '2000-02-10') and (d_date#42 <= DATE '2000-04-10')) and isnotnull(d_date_sk#40))
                            :        +- Scan spark_catalog.default.date_dim [d_date_sk#40, d_date#42]
                            +- Project [i_item_sk#18, i_item_id#19]
-                              +- Filter ((i_current_price#23 >= 0.99) and (i_current_price#23 <= 1.49))
+                              +- Filter (((i_current_price#23 >= 0.99) and (i_current_price#23 <= 1.49)) and isnotnull(i_item_sk#18))
                                  +- Scan spark_catalog.default.item [i_item_sk#18, i_item_id#19, i_current_price#23]

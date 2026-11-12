@@ -84,6 +84,8 @@ Paths are relative to this crate.
   the same module, used by the conformance harness. Add new regex functions
   to this family.
 
+- `spark.sql.binaryOutputStyle` (`BindOptions::binary_style`, `krishiv_kernels::binary_style::BinaryStyle`; plan data through the `binary_output_style` codec feature, only when it differs from the unset default `HEX_DISCRETE`) sets how `to_csv` and `to_xml` print `BINARY` fields; `from_xml` reads a binary field back with Spark 4.1+'s `getBinaryParser` (`BinaryStyle::parse`, lenient as Java's decoders are: optional brackets, `Byte.parseByte`, odd-length hex, unpadded base64; SOURCE-DERIVED, no Spark run yet). A text the style's decoder refuses is a miss like any other leaf (NULL under PERMISSIVE, `MALFORMED_RECORD_IN_PARSING` under FAILFAST), there is no UTF-8 fallback; an empty element is NULL; Spark 4.0.x has no BINARY read-back, so every non-empty text misses there. `from_csv` reads the field text's UTF-8 bytes; `cast(binary as string)` ignores the setting (Spark 4.2.0 run). Goldens: `krishiv-session/tests/binary_output_style.rs`.
+
 ## Invariants
 - Behaviour keyed by Spark version (3.5, 4.0, 4.1, 4.2), never ad-hoc flags.
 - Each function registered compatible / incompatible (opt-in `krishiv.expr.<name>.allowIncompatible`) / unsupported; no global switch.

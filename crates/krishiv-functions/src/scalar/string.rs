@@ -31,6 +31,9 @@ pub(super) const NAMES: &[&str] = &[
     "startswith",
     "endswith",
     "contains",
+    "__contains_lcase",
+    "__startswith_lcase",
+    "__endswith_lcase",
     "replace",
     "mask",
     "lpad",
@@ -113,6 +116,22 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     s.operand(),
                     c.as_ref().map(Str::operand),
                 )?))
+            })
+        }
+        ("__contains_lcase" | "__startswith_lcase" | "__endswith_lcase", "SS") => {
+            let kind = match listed {
+                "__startswith_lcase" => string::LcaseSearch::Start,
+                "__endswith_lcase" => string::LcaseSearch::End,
+                _ => string::LcaseSearch::Anywhere,
+            };
+            Binding::new(DataType::Boolean, move |x: &Inputs<'_>| {
+                let (l, r) = (x.str(0)?, x.str(1)?);
+                Ok(Arc::new(string::search_lcase(
+                    kind,
+                    l.operand(),
+                    r.operand(),
+                    ctx.spark_version(),
+                )?) as ArrayRef)
             })
         }
         ("startswith" | "endswith" | "contains", "SS" | "BB") => {

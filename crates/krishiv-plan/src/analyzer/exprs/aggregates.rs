@@ -329,14 +329,43 @@ impl Resolver<'_> {
             let mut memo = std::collections::HashMap::new();
             let mut key = |e: &Arc<Expr>| semantic_key(e, &mut memo);
             let value = &call_kids[0].expr;
-            let same =
-                orders.len() == 1 && orders.first().is_some_and(|o| key(&o.expr) == key(value));
+            // A collated value reads through the carrier cast of the signature: the written value
+            // is what `DISTINCT` and the ordering compare. Only a collated one: a `DOUBLE`,
+            // `FLOAT` or `TIMESTAMP` value is still an unsafe cast of its ordering.
+            let written = &kids[0].expr;
+            let collated = kids[0]
+                .ty
+                .data_type
+                .as_ref()
+                .is_some_and(DataType::contains_collation);
+            let same = orders.len() == 1
+                && orders.first().is_some_and(|o| {
+                    key(&o.expr) == key(value) || (collated && key(&o.expr) == key(written))
+                });
             if !same {
-                let cast_of = match &call_kids[0].expr.node {
+                // The value reads as `STRING` (listagg's input type): when
+                // it is a cast the analyzer put over a written cast, the
+                // written cast is the one that counts (a cast to `STRING`
+                // the user wrote stays as it is).
+                let mut written = &call_kids[0].expr;
+                if let ExprNode::Cast {
+                    expr,
+                    to: DataType::String,
+                    ..
+                } = &written.node
+                    && matches!(expr.node, ExprNode::Cast { .. })
+                    && key(&kids[0].expr) != key(&call_kids[0].expr)
+                {
+                    written = expr;
+                }
+                let cast_of = match &written.node {
                     ExprNode::Cast { expr, to, .. }
                         if orders.len() == 1
                             && orders.first().is_some_and(|o| key(&o.expr) == key(expr))
-                            && matches!(to, DataType::String | DataType::Binary) =>
+                            && matches!(
+                                to,
+                                DataType::String | DataType::Binary | DataType::CollatedString(_)
+                            ) =>
                     {
                         Some(to.clone())
                     }

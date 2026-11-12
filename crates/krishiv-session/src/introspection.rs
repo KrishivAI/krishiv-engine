@@ -697,12 +697,20 @@ impl Session {
             let Some(entry) = self.state.catalog.get(&name, case_sensitive) else {
                 continue;
             };
-            // A data source view: its columns are all it has. A query view would print its text, which
-            // the session does not keep.
-            let crate::catalog::TempTable::Files { columns, .. } = &*entry else {
-                return Err(unsupported(
-                    "SHOW TABLE EXTENDED of a temporary view over a query or DataFrame",
-                ));
+            // A data source view: its columns are all it has. A view over a query prints its text (a
+            // DataFrame view has none, and is refused).
+            let (columns, text) = match &*entry {
+                crate::catalog::TempTable::Files { columns, .. } => (columns, None),
+                crate::catalog::TempTable::View {
+                    columns,
+                    text: Some(text),
+                    ..
+                } => (columns, Some(text)),
+                _ => {
+                    return Err(unsupported(
+                        "SHOW TABLE EXTENDED of a temporary view over a DataFrame",
+                    ));
+                }
             };
             let mut entries = vec![
                 ("Table".to_owned(), name.clone()),
@@ -711,7 +719,33 @@ impl Session {
                 ("Created By".to_owned(), "Spark 4.2.0".to_owned()),
                 ("Type".to_owned(), "VIEW".to_owned()),
             ];
-            if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
+            if let Some(text) = text {
+                // Spark prints no original text for a temporary view; its schema mode (when the feature is on)
+                // sits between the text and the catalog.
+                entries.push(("View Text".to_owned(), text.clone()));
+                if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
+                    entries.push(("View Schema Mode".to_owned(), "BINDING".to_owned()));
+                }
+                entries.push((
+                    "View Catalog and Namespace".to_owned(),
+                    format!(
+                        "{}.{}",
+                        crate::catalog::CATALOG,
+                        self.state.catalog.current_namespace()
+                    ),
+                ));
+                entries.push((
+                    "View Query Output Columns".to_owned(),
+                    format!(
+                        "[{}]",
+                        columns
+                            .iter()
+                            .map(|c| format!("`{}`", c.name.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            } else if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
                 entries.push(("View Schema Mode".to_owned(), "BINDING".to_owned()));
             }
             let fields: Vec<(&str, &DataType, bool)> = columns
@@ -806,6 +840,7 @@ impl Session {
         &self,
         d: &Describe,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         match &d.kind {
@@ -847,26 +882,15 @@ impl Session {
                         .await;
                 }
                 if !column.is_empty() {
-                    // The statistics rows are NULL because the catalog keeps no column statistics; after
-                    // `ANALYZE .. FOR COLUMNS` Spark shows values, so say so rather than print NULLs.
-                    let analyzed = !temp
-                        && self
-                            .state
-                            .catalog
-                            .store
-                            .table(&name.namespace, &name.name)
-                            .is_some_and(|t| t.column_stats_requested);
-                    if mode.is_some() && analyzed {
-                        return Err(unsupported(
-                            "DESCRIBE EXTENDED of a column after ANALYZE TABLE ... FOR COLUMNS (column statistics)",
-                        ));
-                    }
+                    let stats = (!temp)
+                        .then(|| self.state.catalog.store.table(&name.namespace, &name.name))
+                        .flatten();
                     return self
                         .describe_column(
                             &columns,
                             column,
                             &self.declared_char_varchars(&name, temp).await?,
-                            mode.is_some(),
+                            mode.is_some().then_some(stats.as_deref()),
                         )
                         .await;
                 }
@@ -936,19 +960,25 @@ impl Session {
                     .await
             }
             DescribeKind::Query { query, .. } => {
-                let plan = krishiv_sql::lower_with(
+                let plan = krishiv_sql::lower_identified(
                     query,
                     self.next_source_id(),
                     self.parser_options().case_sensitive,
+                    ids,
                 )
                 .map_err(|e| e.error)?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
-                let rows = analysis
-                    .analyzed
+                // A column's comment follows it through the query (Spark's field metadata).
+                let analyzed = &analysis.analyzed;
+                let rows = analyzed
                     .output
                     .iter()
-                    .map(|c| vec![s(&c.name), s(c.data_type.catalog_string()), None])
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let comment = analyzed.output_comments.get(i).cloned().flatten();
+                        vec![s(&c.name), s(c.data_type.catalog_string()), comment]
+                    })
                     .collect();
                 self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
                     .await
@@ -970,13 +1000,20 @@ impl Session {
                     })?;
                 let mut rows = self.namespace_rows(&ns, &meta)?;
                 if *extended {
+                    // Spark 4.2.0 (`research/spark/schema-collation/probe1.out`): the sorted pairs as Scala
+                    // tuples, `((a,1), (b,2))`; nothing for none.
                     let props = meta
                         .properties
                         .iter()
-                        .map(|(k, v)| format!("{k}={}", redact(k, v)))
+                        .map(|(k, v)| format!("({k},{})", redact(k, v)))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    rows.push(vec![s("Properties"), s(format!("({props})"))]);
+                    let shown = if props.is_empty() {
+                        String::new()
+                    } else {
+                        format!("({props})")
+                    };
+                    rows.push(vec![s("Properties"), s(shown)]);
                 }
                 self.ordered_frame(&["info_name", "info_value"], &[], rows)
                     .await
@@ -1002,13 +1039,19 @@ impl Session {
                 format!("file:{}", dir.display())
             }
         };
-        Ok(vec![
+        let mut rows = vec![
             vec![s("Catalog Name"), s(crate::catalog::CATALOG)],
             vec![s("Namespace Name"), s(ns)],
             vec![s("Comment"), s(meta.comment.clone().unwrap_or_default())],
-            vec![s("Location"), s(location)],
-            vec![s("Owner"), s("spark")],
-        ])
+        ];
+        // The schema's default collation, after the comment (Spark 4.2.0,
+        // `research/spark/schema-collation/probe2.out`).
+        if let Some(c) = &meta.collation {
+            rows.push(vec![s("Collation"), s(c.clone())]);
+        }
+        rows.push(vec![s("Location"), s(location)]);
+        rows.push(vec![s("Owner"), s("spark")]);
+        Ok(rows)
     }
 
     /// One column's `info_name`/`info_value` rows.
@@ -1017,7 +1060,7 @@ impl Session {
         columns: &[(String, DataType, Option<String>)],
         column: &[krishiv_sql::ast::ColumnName],
         declared: &std::collections::HashMap<String, String>,
-        statistics: bool,
+        statistics: Option<Option<&CatalogTable>>,
     ) -> Result<DataFrame, KrishivError> {
         let wanted = match column {
             [krishiv_sql::ast::ColumnName::Ident(i)] => i.value.clone(),
@@ -1043,24 +1086,59 @@ impl Session {
                 s(comment.clone().unwrap_or_else(|| "NULL".to_owned())),
             ],
         ];
-        // `EXTENDED | FORMATTED` add the statistics rows; the catalog keeps none, so they are NULL.
-        for stat in statistics
-            .then_some([
-                "min",
-                "max",
-                "num_nulls",
-                "distinct_count",
-                "avg_col_len",
-                "max_col_len",
-                "histogram",
-            ])
-            .into_iter()
-            .flatten()
-        {
-            rows.push(vec![s(stat), s("NULL")]);
+        // `EXTENDED | FORMATTED` add the statistics rows, NULL for what `ANALYZE` did not gather.
+        if let Some(table) = statistics {
+            let found = table.and_then(|t| t.column_stats.get(name));
+            let text = |f: fn(&crate::store::ColumnStats) -> &String| {
+                found.map_or_else(|| "NULL".to_owned(), |c| f(c).clone())
+            };
+            rows.push(vec![
+                s("min"),
+                s(self
+                    .shown_stat_bound(found.and_then(|c| c.min.as_deref()), data_type)
+                    .await?),
+            ]);
+            rows.push(vec![
+                s("max"),
+                s(self
+                    .shown_stat_bound(found.and_then(|c| c.max.as_deref()), data_type)
+                    .await?),
+            ]);
+            rows.push(vec![s("num_nulls"), s(text(|c| &c.num_nulls))]);
+            rows.push(vec![s("distinct_count"), s(text(|c| &c.distinct_count))]);
+            rows.push(vec![s("avg_col_len"), s(text(|c| &c.avg_col_len))]);
+            rows.push(vec![s("max_col_len"), s(text(|c| &c.max_col_len))]);
+            rows.push(vec![s("histogram"), s("NULL")]);
         }
         self.ordered_frame(&["info_name", "info_value"], &[], rows)
             .await
+    }
+
+    /// A stored `min` or `max` as `DESCRIBE` prints it (`NULL` when there is none): a timestamp in the session's time zone
+    /// (`DescribeColumnCommand.toZoneAwareExternalString`), anything else as stored.
+    async fn shown_stat_bound(
+        &self,
+        stored: Option<&str>,
+        data_type: &DataType,
+    ) -> Result<String, KrishivError> {
+        let Some(stored) = stored else {
+            return Ok("NULL".to_owned());
+        };
+        if *data_type != DataType::Timestamp {
+            return Ok(stored.to_owned());
+        }
+        let micros: i64 = stored
+            .parse()
+            .map_err(|_| unsupported("a timestamp statistic that is not a number"))?;
+        let query = format!(
+            "SELECT date_format(timestamp_micros({micros}), 'yyyy-MM-dd HH:mm:ss.SSSSSS Z')"
+        );
+        let batches = self.nested_query(&query).await?;
+        crate::column_stats::first_row_text(&batches)?
+            .into_iter()
+            .next()
+            .flatten()
+            .ok_or_else(|| unsupported("a timestamp statistic out of range"))
     }
 
     /// The `# Detailed Table Information` rows of `DESCRIBE EXTENDED|FORMATTED`.
@@ -1089,8 +1167,8 @@ impl Session {
             if let Some(c) = &t.comment {
                 rows.push(("Comment".to_owned(), c.clone()));
             }
-            rows.push(("View Text".to_owned(), view.sql.clone()));
-            rows.push(("View Original Text".to_owned(), view.sql.clone()));
+            rows.push(("View Text".to_owned(), view.written.clone()));
+            rows.push(("View Original Text".to_owned(), view.written.clone()));
             let enabled = crate::view_schema::binding_enabled(&self.state.conf.snapshot());
             let mode = crate::view_schema::effective_mode(view.schema_mode, enabled);
             if let Some(mode) = mode {
@@ -1488,7 +1566,7 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
             out.push_str(&format!("WITH SCHEMA {}\n", mode.as_str()));
         }
         out.push_str("AS ");
-        out.push_str(&view.sql);
+        out.push_str(&view.written);
         out.push('\n');
         return Ok(out);
     }

@@ -143,6 +143,7 @@ fn query_results_are_written_committed_and_read_back() {
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
             legacy_time_parser: false,
+            binary_output_style: None,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()));
@@ -188,6 +189,7 @@ fn query_results_are_written_committed_and_read_back() {
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
             legacy_time_parser: false,
+            binary_output_style: None,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
@@ -358,6 +360,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
+                binary_output_style: None,
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -543,6 +546,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
+                binary_output_style: None,
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -745,6 +749,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
+                binary_output_style: None,
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -827,6 +832,7 @@ fn a_write_without_a_write_plan_is_refused() {
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
             legacy_time_parser: false,
+            binary_output_style: None,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()));
@@ -880,6 +886,7 @@ fn a_write_without_a_configuration_is_refused() {
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
             legacy_time_parser: false,
+            binary_output_style: None,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
@@ -991,6 +998,7 @@ fn a_write_with_an_out_of_range_partition_column_is_refused() {
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
             legacy_time_parser: false,
+            binary_output_style: None,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
@@ -1000,4 +1008,65 @@ fn a_write_with_an_out_of_range_partition_column_is_refused() {
     let e = instantiate(&plan, &worker).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     assert!(e.to_string().contains("partition column 9"), "{e}");
+}
+
+/// A worker parses a write's options against its own configuration, so
+/// the session's conf fallbacks travel in the plan's options
+/// (`OptionSchema::with_conf_fallbacks`): a CSV write under the session's
+/// `spark.sql.binaryOutputStyle = BASE64` prints BASE64 on a worker whose
+/// configuration leaves the default (HEX_DISCRETE).
+#[test]
+fn a_worker_writes_csv_binaries_in_the_sessions_output_style() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/planner");
+    let db = parquet_dir(&fixtures, &["t"], true, &rt);
+    let formats = Arc::new(FormatRegistry::with_defaults());
+    let csv = formats.get("csv").unwrap();
+    let mut session = Config::new();
+    session
+        .set("spark.sql.binaryOutputStyle", "BASE64")
+        .unwrap();
+    let carried = csv
+        .options()
+        .with_conf_fallbacks(&BTreeMap::new(), &session);
+    let write = |options: BTreeMap<String, krishiv_common::secret::OptionValue>| {
+        let out = tempfile::tempdir().unwrap();
+        let store = Arc::new(LocalFileSystem::new_with_prefix(out.path()).unwrap());
+        let sched = IoScheduler::new(IoConfig::default());
+        sched.register_store(
+            StoreId::new("file://out"),
+            Arc::clone(&store) as Arc<dyn ObjectStore>,
+        );
+        let plan = db
+            .plan_sql("SELECT CAST('Spark' AS BINARY) AS b FROM t LIMIT 1")
+            .unwrap()
+            .into_write(WritePlan {
+                format: "csv".to_owned(),
+                options,
+                store: "file://out".to_owned(),
+                dir: "result".to_owned(),
+                job_uuid: "job-1".to_owned(),
+                max_records_per_file: 0,
+                target_file_bytes: 0,
+                partition_by: Vec::new(),
+                column_types: BTreeMap::new(),
+            })
+            .unwrap()
+            .with_io(sched.context())
+            .with_formats(Arc::clone(&formats))
+            // The worker's own configuration: the style is not set.
+            .with_config(Arc::new(Config::new()));
+        super::run(&plan).unwrap();
+        let mut text = String::new();
+        for entry in std::fs::read_dir(out.path().join("result")).unwrap() {
+            text.push_str(&std::fs::read_to_string(entry.unwrap().path()).unwrap());
+        }
+        text
+    };
+    assert_eq!(write(carried), "U3Bhcms\n");
+    // Without the carried options the worker's default applies.
+    assert_eq!(write(BTreeMap::new()), "[53 70 61 72 6B]\n");
 }

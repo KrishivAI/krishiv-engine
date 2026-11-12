@@ -952,6 +952,17 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 5)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "overlay" && n == 3 {
+                    // `overlay(input, replace, pos)` is `overlay(input, replace, pos, -1)`: Spark's
+                    // constructor writes the default length into the call, so names show it.
+                    owned = kids.clone();
+                    owned.push(default_argument(
+                        Literal::Integer(-1),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    (&owned[..], 4)
                 } else if is_builtin_entry(&entry)
                     && matches!(entry.id.name(), "st_geomfromwkb" | "st_asbinary")
                     && n == 1
@@ -1205,6 +1216,22 @@ impl Resolver<'_> {
                         ));
                     }
                     return self.cast_named_call(&entry, e, f, kids, to);
+                }
+                // `ExtractValue.applyOrNull`: an element or key of a `NULL` (`void`) base is `NULL`.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "__subscript"
+                    && n == 2
+                    && kids[0].ty.data_type.is_none()
+                {
+                    let ty = arg_type(DataType::Null, true);
+                    return Ok(Bound {
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(e.origin),
+                        ),
+                        shown: Some(Arc::clone(e)),
+                        ty: ty.clone(),
+                        ..keep(ty)
+                    });
                 }
                 // `s['a']` on a struct is the field `a` (Spark's
                 // `ExtractValue`): the extraction is a non-null string.
@@ -1558,6 +1585,34 @@ impl Resolver<'_> {
                     ..keep(arg_type(to.clone(), nullable))
                 }
             }
+            // Spark's `ValidateAndStripPipeExpressions`: the item itself,
+            // once its aggregate functions fit the operator.
+            ExprNode::Pipe { clause, .. } => {
+                let first = first_aggregate(&kids[0].expr);
+                match (clause, first) {
+                    (crate::PipeClause::Aggregate, None) => {
+                        return Err(AnalysisError::new(
+                            krishiv_common::error::PipeOperatorAggregateExpressionContainsNoAggregateFunction {
+                                expr: kids[0].expr.to_string(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    (crate::PipeClause::Extend | crate::PipeClause::Set, Some(a)) => {
+                        return Err(AnalysisError::new(
+                            krishiv_common::error::PipeOperatorContainsAggregateFunction {
+                                expr: a.to_string(),
+                                clause: clause.name().to_owned(),
+                            },
+                            a.origin,
+                        ));
+                    }
+                    _ => kids[0].clone(),
+                }
+            }
+            // Metadata only: the comment is taken from the written form by the alias above it
+            // (`carry_declared_item`).
+            ExprNode::StoredField { .. } => kids[0].clone(),
             ExprNode::Collate {
                 collation, name, ..
             } => {
@@ -1688,7 +1743,12 @@ impl Resolver<'_> {
                     ResolvedExpr::Alias { output, .. } => column(output),
                     ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
                     ResolvedExpr::StateInput { raw_type, .. } => arg_type(raw_type.clone(), true),
-                    ResolvedExpr::Field {
+                    ResolvedExpr::EvalMode {
+                        data_type,
+                        nullable,
+                        ..
+                    }
+                    | ResolvedExpr::Field {
                         data_type,
                         nullable,
                         ..
@@ -1837,4 +1897,25 @@ fn make_nullable(mut b: Bound) -> Bound {
         );
     }
     b
+}
+
+/// The first aggregate call in `e`, in Spark's order (a node before its
+/// children); window expressions are not entered, as Spark's
+/// `findFirstAggregate` does not enter them.
+fn first_aggregate(e: &Arc<Expr>) -> Option<Arc<Expr>> {
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(x) = stack.pop() {
+        match &x.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
+                return Some(x);
+            }
+            ExprNode::Window(_) => {}
+            _ => {
+                let mut kids = Vec::new();
+                x.for_each_child(&mut |k| kids.push(Arc::clone(k)));
+                stack.extend(kids.into_iter().rev());
+            }
+        }
+    }
+    None
 }

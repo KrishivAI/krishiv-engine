@@ -29,6 +29,7 @@ mod cond;
 mod field;
 mod func;
 mod hof;
+mod in_prefix;
 mod interval;
 pub(crate) mod logic;
 mod nested_cast;
@@ -47,7 +48,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_null_array};
 use arrow_schema::{DataType as ArrowType, SchemaRef};
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, LEGACY_CODING_ERROR_ACTION, LEGACY_JAVA_CHARSETS,
+    ANSI_ENABLED, BINARY_OUTPUT_STYLE, Config, LEGACY_CODING_ERROR_ACTION, LEGACY_JAVA_CHARSETS,
     LEGACY_STATISTICAL_AGGREGATE, LEGACY_TIME_PARSER_POLICY, MAP_KEY_DEDUP_POLICY,
     SESSION_TIME_ZONE,
 };
@@ -216,6 +217,8 @@ pub(crate) struct EvalEnv {
     pub(crate) legacy_coding_error_action: bool,
     /// `spark.sql.legacy.timeParserPolicy = LEGACY`; plan data too.
     pub(crate) legacy_time_parser: bool,
+    /// `spark.sql.binaryOutputStyle`; plan data too (the `binary_output_style` codec feature).
+    pub(crate) binary_style: krishiv_kernels::binary_style::BinaryStyle,
     /// Counts the unseeded random binds of one plan instantiation (see
     /// [`BindOptions::seed_salt`](krishiv_functions::scalar::BindOptions::seed_salt)).
     pub(crate) seed_salt: Arc<AtomicU64>,
@@ -273,6 +276,11 @@ impl EvalEnv {
             .get(&LEGACY_TIME_PARSER_POLICY)
             .and_then(|v| v.as_str())
             .is_some_and(|s| s.eq_ignore_ascii_case("LEGACY"));
+        let binary_style = config
+            .get(&BINARY_OUTPUT_STYLE)
+            .and_then(|v| v.as_str())
+            .and_then(krishiv_kernels::binary_style::BinaryStyle::from_name)
+            .unwrap_or_default();
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -291,6 +299,7 @@ impl EvalEnv {
             legacy_java_charsets,
             legacy_coding_error_action,
             legacy_time_parser,
+            binary_style,
             seed_salt: Arc::new(AtomicU64::new(0)),
             partition_shift: 0,
         }
@@ -319,6 +328,11 @@ impl EvalEnv {
             legacy_java_charsets: env.legacy_java_charsets,
             legacy_coding_error_action: env.legacy_coding_error_action,
             legacy_time_parser: env.legacy_time_parser,
+            binary_style: env
+                .binary_output_style
+                .as_deref()
+                .and_then(krishiv_kernels::binary_style::BinaryStyle::from_name)
+                .unwrap_or_default(),
             seed_salt: Arc::new(AtomicU64::new(0)),
             partition_shift: 0,
         }
@@ -337,6 +351,11 @@ impl EvalEnv {
             legacy_java_charsets: self.legacy_java_charsets,
             legacy_coding_error_action: self.legacy_coding_error_action,
             legacy_time_parser: self.legacy_time_parser,
+            // An unset style and an explicit `HEX_DISCRETE` print alike: only a different style
+            // is plan data, so older plans encode as before.
+            binary_output_style: (self.binary_style
+                != krishiv_kernels::binary_style::BinaryStyle::default())
+            .then(|| Arc::from(self.binary_style.name())),
         }
     }
 }
@@ -401,6 +420,15 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         // higher-order call compiled around the body (see `hof`).
         ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => column(input, c),
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
+        // A SQL function body created under the other ANSI mode (T184): everything below
+        // reads the mode through the environment it is compiled with.
+        ExprNode::Resolved(ResolvedExpr::EvalMode { ansi, expr, .. }) => {
+            let env = EvalEnv {
+                ansi: *ansi,
+                ..input.env.clone()
+            };
+            compile(expr, Input { env: &env, ..input })
+        }
         ExprNode::Resolved(ResolvedExpr::Field {
             base,
             ordinal,
@@ -736,7 +764,10 @@ fn builtin(
                 arith::negative(e, env)?
             }
         }
-        (Builtin::In, n) if n >= 2 => cond::in_list(args, env)?,
+        (Builtin::In, n) if n >= 2 => match in_prefix::in_prefix(f, &args, input)? {
+            Some(prefix) => prefix,
+            None => cond::in_list(args, env)?,
+        },
         (Builtin::Between, 3) => {
             let hi = args.pop().ok_or_else(arity)?;
             let lo = args.pop().ok_or_else(arity)?;
@@ -899,18 +930,9 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
             months,
             days,
             micros,
-        } => Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
-            arrow_buffer::IntervalMonthDayNano::new(
-                *months,
-                *days,
-                micros.checked_mul(1000).ok_or_else(|| {
-                    unsupported(
-                        "a calendar interval whose microseconds overflow the nanosecond \
-                             field of its Arrow type",
-                    )
-                })?,
-            ),
-        ])),
+        } => krishiv_types::calendar::calendar_array([Some(
+            krishiv_types::calendar::CalendarValue::new(*months, *days, *micros),
+        )]),
         // A one-row string map, as the JSON options bind.
         Literal::Map(pairs) => {
             let keys: ArrayRef = Arc::new(StringArray::from(
@@ -1152,6 +1174,7 @@ mod tests {
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
             legacy_time_parser: false,
+            binary_style: krishiv_kernels::binary_style::BinaryStyle::default(),
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             partition_shift: 0,
         }
@@ -1258,17 +1281,22 @@ mod tests {
     }
 
     #[test]
-    fn a_calendar_literal_past_the_nanosecond_field_is_refused_by_name() {
+    fn a_calendar_literal_holds_every_long_of_microseconds() {
         let literal = |micros| Literal::CalendarInterval {
             months: 0,
             days: 0,
             micros,
         };
-        assert!(super::literal_array(&literal(i64::MAX / 1000)).is_ok());
-        let e = super::literal_array(&literal(i64::MAX / 1000 + 1)).err();
-        assert_eq!(
-            e.map(|e| e.error_class().name().to_owned()).as_deref(),
-            Some("KRISHIV_UNSUPPORTED_FEATURE")
-        );
+        for micros in [i64::MAX / 1000 + 1, i64::MAX, i64::MIN] {
+            let a = super::literal_array(&literal(micros)).ok();
+            let got = a
+                .as_deref()
+                .and_then(krishiv_types::calendar::Calendars::of)
+                .and_then(|c| c.get(0));
+            assert_eq!(
+                got,
+                Some(krishiv_types::calendar::CalendarValue::new(0, 0, micros))
+            );
+        }
     }
 }

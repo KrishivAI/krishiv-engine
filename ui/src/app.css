@@ -25,7 +25,7 @@
   --accent-foreground: var(--k-text);
   --destructive: var(--k-error);
   --border: var(--k-border);
-  --input: var(--k-border-strong);
+  --input: var(--k-btn-border);
   --ring: var(--k-focus);
   --radius: var(--k-radius-md);
 }
@@ -40,6 +40,7 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--k-primary-hover);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);

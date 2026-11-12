@@ -1,10 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The config entries. Add new entries here and to [`REGISTRY`].
 
+use super::registry_join::{
+    EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT,
+};
 use std::borrow::Cow;
 use std::time::Duration;
 
-use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
+use super::{
+    ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
+    build_projection::EXEC_JOIN_BUILD_PROJECTION, join_cost::JOIN_COST,
+    partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+};
+
+mod python;
+pub use python::{ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS};
+mod result_cache;
+pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -13,6 +25,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ANSI_ENABLED,
     &SESSION_TIME_ZONE,
     &SQL_PATH_ENABLED,
+    &SCHEMA_LEVEL_COLLATIONS_ENABLED,
     &SQL_DEFAULT_PATH,
     &STORE_ASSIGNMENT_POLICY,
     &CTE_PRECEDENCE_POLICY,
@@ -24,10 +37,13 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
+    &EXEC_JOIN_BUILD_PROJECTION,
     &EXEC_JOIN_RADIX_BITS,
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
+    &EXEC_JOIN_FUSE_PROBE_SELECT,
+    &EXEC_JOIN_IDLE_SPILL_AFTER,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -101,7 +117,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CTE_RECURSION_ROW_LIMIT,
     &LEGACY_CODING_ERROR_ACTION,
     &LEGACY_JAVA_CHARSETS,
+    &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
     &LEGACY_STATISTICAL_AGGREGATE,
+    &BINARY_OUTPUT_STYLE,
     &LEGACY_TIME_PARSER_POLICY,
     &LEGACY_VIEW_SCHEMA_BINDING_MODE,
     &LEGACY_VIEW_SCHEMA_COMPENSATION,
@@ -111,11 +129,15 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
+    &ARROW_MAX_RECORDS_PER_BATCH,
+    &PYTHON_UDF_ARROW_ENABLED,
+    &PYTHON_UDF_THREADS,
     &JOIN_ENUMERATOR,
     &JOIN_DP_LIMIT,
     &NDV_SAMPLING_ENABLED,
     &NDV_SAMPLING_ROWS,
     &NDV_SAMPLING_TIMEOUT,
+    &JOIN_COST,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -159,6 +181,8 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.cache.diskBytes", &IO_CACHE_DISK_BYTES),
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
+    ("krishiv.optimizer.joinCost", &JOIN_COST),
+    ("krishiv.python.udf.threads", &PYTHON_UDF_THREADS),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
@@ -167,6 +191,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
+    ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
@@ -180,6 +205,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.joinDpLimit", &JOIN_DP_LIMIT),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
     ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
+    ("krishiv.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
@@ -205,6 +231,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_DEBUG_PLAN_ROUND_TRIP,
     ),
     (
+        "krishiv.exec.join.idleSpillAfter",
+        &EXEC_JOIN_IDLE_SPILL_AFTER,
+    ),
+    (
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
@@ -215,6 +245,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.cteRecursionLevelLimit",
         &CTE_RECURSION_LEVEL_LIMIT,
+    ),
+    (
+        "krishiv.exec.join.buildProjection",
+        &EXEC_JOIN_BUILD_PROJECTION,
+    ),
+    (
+        "krishiv.exec.join.fuseProbeSelect",
+        &EXEC_JOIN_FUSE_PROBE_SELECT,
     ),
     (
         "krishiv.exec.join.smj.bufferBytes",
@@ -376,6 +414,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &AVRO_DATETIME_REBASE_MODE_IN_READ,
     ),
     (
+        "spark.sql.collation.schemaLevel.enabled",
+        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
+    ),
+    (
         "spark.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
@@ -404,6 +446,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &AVRO_DATETIME_REBASE_MODE_IN_READ,
     ),
     (
+        "krishiv.sql.collation.schemaLevel.enabled",
+        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
+    ),
+    (
         "krishiv.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
@@ -416,8 +462,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_PARQUET_DICTIONARY_FILTER_ENABLED,
     ),
     (
+        "spark.sql.execution.pythonUDF.arrow.enabled",
+        &PYTHON_UDF_ARROW_ENABLED,
+    ),
+    (
+        "spark.sql.execution.arrow.maxRecordsPerBatch",
+        &ARROW_MAX_RECORDS_PER_BATCH,
+    ),
+    (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
         &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
+    ),
+    (
+        "krishiv.sql.execution.pythonUDF.arrow.enabled",
+        &PYTHON_UDF_ARROW_ENABLED,
     ),
     (
         "spark.sql.optimizer.windowGroupLimitThreshold",
@@ -426,6 +484,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.bloom.minApplicationRows",
         &RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
+    ),
+    (
+        "krishiv.sql.execution.arrow.maxRecordsPerBatch",
+        &ARROW_MAX_RECORDS_PER_BATCH,
     ),
     (
         "krishiv.sql.optimizer.windowGroupLimitThreshold",
@@ -438,6 +500,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
         &RUNTIME_FILTER_BLOOM_ENABLED,
+    ),
+    (
+        "spark.sql.legacy.skipTypeValidationOnAlterPartition",
+        &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    ),
+    (
+        "krishiv.sql.legacy.skipTypeValidationOnAlterPartition",
+        &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
     ),
 ];
 
@@ -477,6 +547,22 @@ pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.path.enabled"),
+};
+
+/// Whether schema-level default collations (`CREATE|ALTER SCHEMA .. DEFAULT COLLATION`) are allowed.
+pub static SCHEMA_LEVEL_COLLATIONS_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.collation.schemaLevel.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether a schema may have a default collation (`CREATE SCHEMA .. DEFAULT COLLATION`, \
+          `ALTER SCHEMA .. DEFAULT COLLATION`). Off, as in Spark 4.2, the clause is \
+          `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`. On, the schema stores it and `DESCRIBE \
+          SCHEMA` shows it; tables, views and functions are not created in such a schema yet \
+          (Spark gives their strings the schema's collation; Krishiv does not apply it).",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.collation.schemaLevel.enabled"),
 };
 
 /// What `DEFAULT_PATH` expands to.
@@ -614,21 +700,6 @@ pub static EXEC_JOIN_BUILD_SIDE: ConfigEntry = ConfigEntry {
           larger than its left builds its hash table from the left input (a right semi, \
           right anti or right outer join). Results are the same either way; false keeps \
           Spark's side (the right input).",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// Hash join keys in the row layout with a size-adaptive index (P2-T158).
-pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
-    key: "krishiv.exec.join.rowLayout",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
-    doc: "Internal: hash joins store their keys as fixed-width rows and index them with a \
-          table that switches by size between a flat and a salted directory. Results are \
-          the same either way; joins whose key types have no row encoding keep the \
-          columnar path.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
@@ -879,7 +950,8 @@ pub static QUERY_MAX_EXECUTION_TIME: ConfigEntry = ConfigEntry {
     default: None,
     doc: "The longest a query may run from the start of its execution: past it the query is \
           cancelled and fails with `KRISHIV_QUERY_TIMEOUT`. The limit is read when the query \
-          starts. When unset, queries run without a time limit.",
+          starts. For a SQL script, the whole script is the query: the limit counts from its start. \
+          When unset, queries run without a time limit.",
     scope: Scope::Session,
     version_added: "0.2.0",
     spark_alias: None,
@@ -938,60 +1010,15 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           states (a decimal `sum` or `avg`, whose overflow can depend on the order of the \
           merges) are merged in the order the input arrives and a query without `ORDER BY` \
           returns its rows in the same order on every run, byte for byte, for the engine's \
-          own scans. Costs the parallelism of the query: meant for reproducing a result, \
-          comparing two builds, and tests. Memory pressure from other queries in the process \
-          can still change when an operator spills, and so the order of what it returns, and the \
+          own scans. The key hashes take a fixed seed, so an operator that spills splits \
+          its rows the same way on every run. Costs the parallelism of the query: meant for \
+          reproducing a result, comparing two builds, and tests. Memory pressure from other queries in the process \
+          can still change when an operator spills, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
-          probing a union) still run side by side. Off by default.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// Whether the process-wide result cache serves and stores query results.
-pub static RESULT_CACHE_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.resultCache.enabled",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
-    doc: "Keep the rows of a query for later runs of the same query by any session of the process \
-          with the same principal and access-policy version. Only queries over permanent \
-          catalog tables with no non-deterministic function are cached. Entries are dropped by \
-          `REFRESH TABLE`, `CLEAR CACHE` and every write the engine commits to a table they \
-          read; a change made outside the engine is not seen until the entry expires. Off by \
+          probing a union) take turns, one after another, so they lose their overlap too. Off by \
           default.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// How long a result-cache entry is served.
-pub static RESULT_CACHE_TTL: ConfigEntry = ConfigEntry {
-    key: "krishiv.resultCache.ttl",
-    value_type: ValueType::Duration,
-    default: Some(ConfigValue::Duration(Duration::from_secs(24 * 60 * 60))),
-    doc: "How long the result cache serves an entry, counted from when it was stored; an older \
-          entry is dropped before the next lookup and the query runs again. `0s` never \
-          expires. Needs `krishiv.resultCache.enabled`.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// Byte cap of the process-wide result cache.
-pub static RESULT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
-    key: "krishiv.resultCache.maxBytes",
-    value_type: ValueType::Size,
-    default: Some(ConfigValue::Size(64 * MIB)),
-    doc: "Most bytes the result cache of an engine runtime holds (the process-wide store of \
-          sessions built alone, or a supplied runtime's own), as Arrow batches outside the query \
-          memory pool; fixed when the runtime is built. A result \
-          larger than the cap is not stored; when a new result would pass the cap the oldest \
-          entries go first, and entries past their ttl go whenever a result is stored. Needs `krishiv.resultCache.enabled`.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1490,7 +1517,7 @@ pub static RUNTIME_FILTER_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.runtimeFilter.enabled",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
-    doc: "Plan runtime filters (design P2-T163): the build side of an inner or left semi hash join \
+    doc: "Plan runtime filters: the build side of an inner or left semi hash join \
           publishes the min/max, a small value set or a Bloom filter of its keys to the scans \
           feeding the probe side, which skip splits, row groups and rows no build key can match. \
           Results are the same either way.",
@@ -1688,6 +1715,21 @@ pub static LEGACY_JAVA_CHARSETS: ConfigEntry = ConfigEntry {
     spark_alias: Some("spark.sql.legacy.javaCharsets"),
 };
 
+/// `spark.sql.binaryOutputStyle`.
+pub static BINARY_OUTPUT_STYLE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.binaryOutputStyle",
+    value_type: ValueType::Enum(&["UTF-8", "BASIC", "BASE64", "HEX", "HEX_DISCRETE"]),
+    default: None,
+    doc: "How `to_csv` and `to_xml` print a `BINARY` value: `UTF-8` text, `BASIC` signed byte \
+          values (`[69, 97]`), `BASE64` without padding, `HEX` (`4561`) or `HEX_DISCRETE` \
+          (`[45 61]`). When unset the values print as `HEX_DISCRETE`, as in Spark. \
+          `CAST(binary AS STRING)` ignores the setting.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.binaryOutputStyle"),
+};
+
 /// `spark.sql.legacy.timeParserPolicy`.
 pub static LEGACY_TIME_PARSER_POLICY: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.legacy.timeParserPolicy",
@@ -1875,14 +1917,16 @@ pub static NDV_SAMPLING_ROWS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// Time a distinct-value sample may take (`krishiv.optimizer.ndvSampling.timeout`).
+/// Time a query's distinct-value samples may take (`krishiv.optimizer.ndvSampling.timeout`).
 pub static NDV_SAMPLING_TIMEOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.ndvSampling.timeout",
     value_type: ValueType::Duration,
-    default: Some(ConfigValue::Duration(Duration::from_secs(2))),
-    doc: "The time a distinct-value sample of one table may take; past it the table keeps its \
-          default estimates. The row limit is what bounds a sample; this only guards against slow \
-          storage, so that how fast the machine is does not decide the plan.",
+    default: Some(ConfigValue::Duration(Duration::from_secs(5))),
+    doc: "The time one query's distinct-value samples may take together: its tables are sampled \
+          in turn, each with what the ones before it left. A table that runs out of time, or \
+          gets none, keeps its default estimates; EXPLAIN COST and EXPLAIN VERBOSE say which \
+          (\"Distinct-Value Samples\"). The row limit is what bounds a sample; this only guards \
+          against slow storage, so that how fast the machine is does not decide the plan.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",

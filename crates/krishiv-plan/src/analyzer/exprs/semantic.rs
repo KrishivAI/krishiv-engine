@@ -81,6 +81,8 @@ pub(in crate::analyzer) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128
                 format!("f{id}:{:?}:{}:{directions:?}", f.kind, f.distinct)
             }
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => format!("a{}", output.id.0),
+            // The pinned mode is part of what the expression computes; the child is keyed below.
+            ExprNode::Resolved(ResolvedExpr::EvalMode { ansi, .. }) => format!("m{ansi}"),
             ExprNode::Literal(v) => format!("l{v:?}"),
             ExprNode::Cast { to, mode, .. } => format!("x{}:{mode:?}", to.simple_string()),
             ExprNode::Subquery { plan, .. } => format!("s{}", addr(&**plan)),

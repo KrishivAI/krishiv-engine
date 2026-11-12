@@ -37,6 +37,7 @@
 
 #![deny(clippy::arithmetic_side_effects)]
 
+pub mod binary_style;
 pub mod cast;
 mod chunk;
 pub mod compare;

@@ -223,6 +223,8 @@ pub(super) struct Resolver<'a> {
     /// The attributes that hold a `CHAR(n)` / `VARCHAR(n)` column, by id, with the catalog string they were
     /// declared with (see `char_varchar`).
     pub(super) declared: HashMap<AttrId, Arc<str>>,
+    /// The attributes that carry a column comment, by id (Spark's `comment` field metadata; see `comments`).
+    pub(super) comments: HashMap<AttrId, Arc<str>>,
 }
 
 type Resolved = (
@@ -230,6 +232,7 @@ type Resolved = (
     Vec<BoundColumn>,
     Vec<SecurableUse>,
     Vec<String>,
+    Vec<Option<String>>,
     Vec<Option<String>>,
 );
 
@@ -264,6 +267,7 @@ pub(super) fn resolve(
         sql_calls: 0,
         pending_nondeterministic: None,
         declared: HashMap::new(),
+        comments: HashMap::new(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -294,6 +298,11 @@ pub(super) fn resolve(
             kept.flatten().map(ToString::to_string)
         })
         .collect();
+    let comments = rel
+        .out
+        .iter()
+        .map(|a| r.comments.get(&a.col.id).map(ToString::to_string))
+        .collect();
     let uses = b
         .securables
         .iter()
@@ -304,7 +313,7 @@ pub(super) fn resolve(
             columns,
         })
         .collect();
-    Ok((root, output, uses, warnings, declared))
+    Ok((root, output, uses, warnings, declared, comments))
 }
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its
@@ -510,7 +519,24 @@ impl Resolver<'_> {
                 continue;
             }
             let (lo, saved) = (self.next_id, self.op_outer.take());
-            let mut r = self.node(&p, env)?;
+            let mut r = match self.node(&p, env) {
+                Ok(r) => r,
+                // A select-list generator runs below its projection: see
+                // `generator_over_lateral_alias`.
+                Err(e) if matches!(p.node, PlanNode::Generate { .. }) => {
+                    let list = stack.iter().rev().find_map(|(q, open)| match &q.node {
+                        PlanNode::Generate { .. } if *open => None,
+                        PlanNode::Project { exprs, .. } if *open => Some(Some(exprs)),
+                        _ if *open => Some(None),
+                        _ => None,
+                    });
+                    return Err(match list.flatten() {
+                        Some(exprs) => self.generator_over_lateral_alias(exprs, e),
+                        None => e,
+                    });
+                }
+                Err(e) => return Err(e),
+            };
             if self.next_id > lo {
                 r.ids = hull(r.ids, Some((lo, self.next_id - 1)));
             }
@@ -569,6 +595,7 @@ impl Resolver<'_> {
                 | PlanNode::Sort { .. }
                 | PlanNode::Limit { .. }
                 | PlanNode::Offset { .. }
+                | PlanNode::Repartition { .. }
         );
         let plan = Arc::new(LogicalPlan::new(node).with_origin(origin));
         let mut r = self.wrap(plan, origin.plan_id, out, kids);
@@ -843,6 +870,7 @@ impl Resolver<'_> {
                 params,
             } => self.hint(p, input, name, params, env),
             PlanNode::PipeOperator { input } => self.pipe_operator(input, env),
+            PlanNode::Repartition { input, exprs } => self.repartition(p, input, exprs, env),
             PlanNode::TableFunction { name, args } => self.table_function(p, name, args, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
@@ -895,6 +923,13 @@ impl Resolver<'_> {
                         }
                     }
                 }
+                if let Some(comments) = self.b.scan_comments.get(&name) {
+                    for c in &s.output {
+                        if let Some(t) = comments.get(&c.name) {
+                            self.comments.insert(c.id, Arc::clone(t));
+                        }
+                    }
+                }
                 let qual: Arc<[String]> = name.into();
                 let out = s
                     .output
@@ -912,9 +947,7 @@ impl Resolver<'_> {
                 // A reference in a stored analyzed plan (a DataFrame's temporary view) holds the declared
                 // `CHAR`/`VARCHAR` types of its definition's columns, as a fresh reference does.
                 for (source, out) in r.source.iter().zip(&r.output) {
-                    if let Some(d) = self.declared.get(source).cloned() {
-                        self.declared.insert(out.id, d);
-                    }
+                    self.carry_column_meta(*source, out.id);
                 }
                 let qual: Arc<[String]> = vec![r.name.clone()].into();
                 let out = r
@@ -1017,6 +1050,7 @@ impl Resolver<'_> {
             | PlanNode::WithCte { .. }
             | PlanNode::Hint { .. }
             | PlanNode::PipeOperator { .. }
+            | PlanNode::Repartition { .. }
             | PlanNode::Union { .. }
             | PlanNode::Distinct { .. }
             | PlanNode::Pivot { .. }
