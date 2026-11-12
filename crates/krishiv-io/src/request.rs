@@ -707,24 +707,68 @@ pub fn project_schema(schema: &Schema, paths: &[ColumnPath]) -> Result<SchemaRef
 /// # Errors
 /// `INTERNAL_ERROR` if a path does not exist in the batch's schema.
 pub fn project_batch(batch: &RecordBatch, paths: &[ColumnPath]) -> Result<RecordBatch> {
-    let schema = project_schema(batch.schema_ref(), paths)?;
-    let columns = schema
-        .fields()
-        .iter()
-        .map(|f| {
-            let i = batch
-                .schema_ref()
-                .index_of(f.name())
-                .map_err(|e| internal(e.to_string()))?;
-            prune_array(batch.column(i), f.data_type())
-        })
-        .collect::<Result<Vec<_>>>()?;
-    RecordBatch::try_new_with_options(
-        schema,
-        columns,
-        &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
-    )
-    .map_err(|e| internal(format!("projected batch is invalid: {e}")))
+    Projector::new(paths).project(batch)
+}
+
+/// [`project_batch`] for a stream of batches that share one schema: the projected schema and the
+/// column positions are worked out for the first batch and reused while the input schema stays
+/// the same (decoders emit one schema for a whole file), instead of rebuilt for every batch.
+#[derive(Debug)]
+pub(crate) struct Projector {
+    paths: Vec<ColumnPath>,
+    /// The input schema the cached plan was made for, the projected schema, and each projected
+    /// column's index in the input.
+    cached: Option<(SchemaRef, SchemaRef, Vec<usize>)>,
+}
+
+impl Projector {
+    /// A projector for `paths`.
+    #[must_use]
+    pub(crate) fn new(paths: &[ColumnPath]) -> Self {
+        Self {
+            paths: paths.to_vec(),
+            cached: None,
+        }
+    }
+
+    /// `batch` projected to the paths.
+    ///
+    /// # Errors
+    /// A path that is not in the batch's schema.
+    pub(crate) fn project(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let reusable = self.cached.as_ref().is_some_and(|(input, _, _)| {
+            Arc::ptr_eq(input, batch.schema_ref()) || input == batch.schema_ref()
+        });
+        if !reusable {
+            let schema = project_schema(batch.schema_ref(), &self.paths)?;
+            let indices = schema
+                .fields()
+                .iter()
+                .map(|f| {
+                    batch
+                        .schema_ref()
+                        .index_of(f.name())
+                        .map_err(|e| internal(e.to_string()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            self.cached = Some((Arc::clone(batch.schema_ref()), schema, indices));
+        }
+        let Some((_, schema, indices)) = &self.cached else {
+            return Err(internal("projector without a plan"));
+        };
+        let columns = schema
+            .fields()
+            .iter()
+            .zip(indices)
+            .map(|(f, &i)| prune_array(batch.column(i), f.data_type()))
+            .collect::<Result<Vec<_>>>()?;
+        RecordBatch::try_new_with_options(
+            Arc::clone(schema),
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+        )
+        .map_err(|e| internal(format!("projected batch is invalid: {e}")))
+    }
 }
 
 /// `array` with its nested struct fields pruned to `want`'s.
