@@ -26,14 +26,15 @@ def _public(name: str) -> bool:
 
 
 def _dunder(name: str) -> bool:
-    """Protocol methods (`__getitem__`, `__eq__`, `__add__`, ...) are public surface;"""
+    """Protocol methods (`__getitem__`, `__eq__`, `__add__`, ...) are public surface."""
     return name.startswith("__") and name.endswith("__")
 
 
 def _sig(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     args = ast.unparse(fn.args)
     ret = f" -> {ast.unparse(fn.returns)}" if fn.returns else ""
-    return f"{'async ' if isinstance(fn, ast.AsyncFunctionDef) else ''}def {fn.name}({args}){ret}"
+    decos = "".join(f"@{ast.unparse(d)} " for d in fn.decorator_list)
+    return f"{decos}{'async ' if isinstance(fn, ast.AsyncFunctionDef) else ''}def {fn.name}({args}){ret}"
 
 
 def _walk(body: list[ast.stmt], prefix: str, out: list[str]) -> None:
@@ -62,8 +63,6 @@ def render() -> str:
     for path in files:
         rel = path.relative_to(PKG)
         if any(part.startswith("_") and part not in _KEEP for part in rel.parts):
-            continue
-        if "testing" in rel.parts:
             continue
         out: list[str] = []
         _walk(ast.parse(path.read_text()).body, "", out)
