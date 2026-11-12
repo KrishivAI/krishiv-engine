@@ -12,7 +12,8 @@
 # +43 lines over main: nested session and script variables (T196, PR #505)
 # +48 lines: schema-level default collations (DEFAULT COLLATION on CREATE/ALTER SCHEMA, refused unless spark.sql.collation.schemaLevel.enabled) and IDENTIFIER(..) text for views and functions (row 14 batch B-6)
 # +5 lines: the temporary view creation takes the statement text and stores the query text (row 14 batch B-6)
-2350 crates/krishiv-session/src/command.rs
+# +3 lines over main: DROP VIEW takes the statement's authorized QueryEnv (exec_drop_view's signature), so a concurrent USE cannot move the drop (B-10 review thread)
+2353 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 # +20 lines: collect_engine (unstable-ir) reads results on the engine carriers for the golden harness (calendar carrier)
 # +1 line: the file view's `partitions` field (reading partitioned tables)
