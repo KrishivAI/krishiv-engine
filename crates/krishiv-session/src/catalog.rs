@@ -177,6 +177,36 @@ impl SessionCatalog {
         }
     }
 
+    /// A catalog over the same permanent store and warehouse holding this
+    /// one's temporary tables and views, current catalog, namespace and
+    /// path; later changes to either do not reach the other.
+    pub(crate) fn copy(&self) -> Self {
+        let tables = self
+            .tables
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let position = self
+            .position
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let path = self
+            .path
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Self {
+            tables: RwLock::new(tables),
+            epoch: AtomicU64::new(0),
+            hidden: AtomicU64::new(self.hidden.load(Ordering::Acquire)),
+            store: Arc::clone(&self.store),
+            warehouse: Arc::clone(&self.warehouse),
+            position: RwLock::new(position),
+            path: RwLock::new(path),
+        }
+    }
+
     /// Adds or replaces `name`, removing the snapshot pins the old entry
     /// owned that no other live view still owns.
     pub(crate) fn put(&self, name: &str, table: TempTable) {

@@ -36,6 +36,27 @@ impl Session {
         config: Config,
         parts: SessionParts,
     ) -> Self {
+        let catalog = SessionCatalog::over(
+            Arc::clone(&runtime.catalog_store),
+            Arc::clone(&runtime.warehouse),
+        );
+        let seed = Seed {
+            conf: ConfStore::new(config),
+            catalog,
+            variables: SessionVariables::default(),
+            udfs: Arc::new(UdfLibrary::new()),
+            // Per session, as Spark's `spark.udf.register`: a new session does
+            // not see another's Python UDFs.
+            python_udfs: crate::python_udfs::PythonUdfLibrary::new(),
+            python_runtime: None,
+            sql_functions: SqlFunctions::default(),
+        };
+        Self::seeded(runtime, parts, seed)
+    }
+
+    /// A session of `parts` on `runtime` starting from `seed`'s state.
+    fn seeded(runtime: Arc<EngineRuntime>, parts: SessionParts, seed: Seed) -> Self {
+        let config = seed.conf.snapshot();
         let queries = Arc::new(crate::system::QueryLog::new(
             Arc::clone(&runtime.history),
             &parts.principal.name,
@@ -58,10 +79,8 @@ impl Session {
             .ok()
             .and_then(|d| d.to_str().map(str::to_owned))
             .unwrap_or_else(|| "/".to_owned());
-        let udfs = Arc::new(UdfLibrary::new());
-        // Per session, as Spark's `spark.udf.register`: a new session does
-        // not see another's Python UDFs.
-        let python_udfs = Arc::new(crate::python_udfs::PythonUdfLibrary::new());
+        let udfs = seed.udfs;
+        let python_udfs = Arc::new(seed.python_udfs);
         let base_functions = parts.functions;
         let functions = match base_functions.clone() {
             Some(f) => Arc::new(
@@ -77,13 +96,10 @@ impl Session {
             operation: None,
             deadline: None,
             state: Arc::new(SessionState {
-                conf: Arc::new(ConfStore::new(config)),
-                catalog: Arc::new(SessionCatalog::over(
-                    Arc::clone(&runtime.catalog_store),
-                    Arc::clone(&runtime.warehouse),
-                )),
+                conf: Arc::new(seed.conf),
+                catalog: Arc::new(seed.catalog),
                 cache,
-                variables: Arc::new(SessionVariables::default()),
+                variables: Arc::new(seed.variables),
                 profile: parts.profile,
                 principal: parts.principal,
                 policy: parts.policy,
@@ -91,8 +107,8 @@ impl Session {
                 base_functions,
                 udfs,
                 python_udfs,
-                python_runtime: Mutex::new(None),
-                sql_functions: SqlFunctions::default(),
+                python_runtime: Mutex::new(seed.python_runtime),
+                sql_functions: seed.sql_functions,
                 commit_log_probes: Mutex::new(HashMap::new()),
                 number: runtime.next_session(),
                 closed: AtomicBool::new(false),
@@ -145,6 +161,57 @@ impl Session {
         // (for a private runtime, the builder's configuration).
         let config = Config::clone(&runtime.config);
         Self::on_runtime(runtime, config, parts)
+    }
+
+    /// A new session on the same runtime that starts as a copy of this one
+    /// (Spark Connect's `CloneSession`, Spark's `SparkSession.cloneSession`):
+    /// the same principal, access policy and profile, and copies of the
+    /// configuration, temporary tables and views, temporary functions (SQL
+    /// bodied and Python), variables, current catalog, namespace and path.
+    /// Later changes to either session do not reach the other, except Rust
+    /// UDFs (`register_udf`): the two sessions share those registrations.
+    /// Not copied: cached relations (`CACHE TABLE`, `DataFrame.cache`) and
+    /// running queries; the copy has a session id of its own.
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::new()?;
+    /// futures::executor::block_on(s.sql("CREATE TEMPORARY VIEW v AS SELECT 1 AS x"))?;
+    /// s.conf().set("my.app.flag", "on")?;
+    /// let c = s.clone_session()?;
+    /// assert_eq!(c.conf().get("my.app.flag").as_deref(), Some("on"));
+    /// futures::executor::block_on(futures::executor::block_on(c.sql("SELECT x FROM v"))?.collect())?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_HANDLE.SESSION_CLOSED` when this session is closed.
+    pub fn clone_session(&self) -> Result<Self, KrishivError> {
+        self.check_open()?;
+        let state = &self.state;
+        let parts = SessionParts {
+            profile: state.profile,
+            principal: Arc::clone(&state.principal),
+            policy: Arc::clone(&state.policy),
+            functions: state.base_functions.clone(),
+            admission: Some(Arc::clone(&state.admission)),
+        };
+        let python_runtime = state
+            .python_runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let seed = Seed {
+            conf: state.conf.copy(),
+            catalog: state.catalog.copy(),
+            variables: state.variables.copy(),
+            // Shared, not copied: the SDK's library has no copy (a public
+            // surface), and Connect clients cannot register Rust UDFs.
+            udfs: Arc::clone(&state.udfs),
+            python_udfs: state.python_udfs.copy(),
+            python_runtime,
+            sql_functions: state.sql_functions.copy(),
+        };
+        Ok(Self::seeded(Arc::clone(&state.runtime), parts, seed))
     }
 
     /// The runtime this session runs on.
@@ -217,11 +284,20 @@ impl Session {
         query: &str,
         options: crate::QueryOptions,
     ) -> Result<DataFrame, KrishivError> {
+        self.with_options(options)?.sql(query).await
+    }
+
+    /// A handle of this session that runs its queries under `options` (the
+    /// operation id taken now, held while the handle or a clone lives).
+    pub(crate) fn with_options(
+        &self,
+        options: crate::QueryOptions,
+    ) -> Result<Session, KrishivError> {
         self.check_open()?;
-        let operation = match options.operation_id.as_deref() {
+        let operation = match options.operation_id {
             None => None,
             Some(text) => {
-                let id = crate::QueryId::parse(text)?;
+                let id = crate::QueryId::parse(&text)?;
                 let taken = self
                     .state
                     .queries
@@ -236,7 +312,7 @@ impl Session {
             operation,
             deadline: options.deadline.or(self.deadline),
         };
-        handle.sql(query).await
+        Ok(handle)
     }
 
     /// The operation id of the statement this handle runs, if the caller
@@ -333,6 +409,18 @@ impl Session {
             .queries
             .record_refused(policy, text, class, error, self.operation_id())
     }
+}
+
+/// The state a new session starts from: empty for a new session, copies of
+/// another's for a clone ([`Session::clone_session`]).
+struct Seed {
+    conf: ConfStore,
+    catalog: SessionCatalog,
+    variables: SessionVariables,
+    udfs: Arc<UdfLibrary>,
+    python_udfs: crate::python_udfs::PythonUdfLibrary,
+    python_runtime: Option<Arc<dyn krishiv_exec::python_eval::UdfRuntime>>,
+    sql_functions: SqlFunctions,
 }
 
 #[cfg(test)]

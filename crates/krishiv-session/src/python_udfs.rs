@@ -56,7 +56,7 @@ pub struct PythonUdfLibrary {
     inner: RwLock<Inner>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Inner {
     udfs: HashMap<String, PythonUdfEntry>,
     /// The last version given to each name, kept after a replacement so a
@@ -67,6 +67,15 @@ struct Inner {
 }
 
 impl PythonUdfLibrary {
+    /// A library holding this one's registrations and versions; later
+    /// registrations to either do not reach the other.
+    pub(crate) fn copy(&self) -> Self {
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        Self {
+            inner: RwLock::new(inner.clone()),
+        }
+    }
+
     /// An empty library.
     #[must_use]
     pub fn new() -> Self {

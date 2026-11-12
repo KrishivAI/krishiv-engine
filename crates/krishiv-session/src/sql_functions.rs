@@ -76,6 +76,14 @@ pub(crate) struct SqlFunctions {
 }
 
 impl SqlFunctions {
+    /// Functions starting from this session's current map; later changes
+    /// to either do not reach the other (the map is replaced, never edited).
+    pub(crate) fn copy(&self) -> Self {
+        Self {
+            map: RwLock::new(self.snapshot()),
+        }
+    }
+
     /// The current map; what a query reads throughout.
     pub(crate) fn snapshot(&self) -> Arc<FunctionMap> {
         Arc::clone(&self.map.read().unwrap_or_else(PoisonError::into_inner))
