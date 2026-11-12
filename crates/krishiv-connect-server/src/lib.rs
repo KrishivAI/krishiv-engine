@@ -11,6 +11,7 @@
 #![deny(clippy::disallowed_methods)]
 
 pub mod codec;
+pub mod host;
 pub mod manager;
 pub mod server;
 pub mod service;

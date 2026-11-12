@@ -2017,11 +2017,13 @@ dependencies = [
 name = "krishiv-cli"
 version = "0.2.0"
 dependencies = [
+ "axum",
  "clap",
  "futures",
  "krishiv",
  "krishiv-alloc",
  "krishiv-common",
+ "krishiv-connect-server",
  "krishiv-functions",
  "krishiv-mcp",
  "krishiv-memory",
@@ -2072,6 +2074,7 @@ dependencies = [
  "krishiv-session",
  "prost",
  "prost-types",
+ "rustix",
  "serde_json",
  "tokio",
  "tonic",

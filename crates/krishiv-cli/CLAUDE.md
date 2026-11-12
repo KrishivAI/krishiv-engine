@@ -10,6 +10,7 @@ The `krishiv` binary: sql, server, coordinator, worker, mcp, ui, doctor, migrate
 Paths are relative to this crate.
 - `src/main.rs` subcommand dispatch and the allocator/memory hook set-up
 - `src/sql.rs` the `krishiv sql` subcommand: input (`-e`, `-f`, stdin), output (`-o`), `--conf`, `--table`, `--timing`, `--agent`, `--max-rows`, `--max-seconds`
+- `src/server.rs` `krishiv server` (feature `server`; `ui` implies it; design P3-T001): host checks before binding (non-loopback refused until P3-T002, root refused without `--allow-root`, core dumps off unless `krishiv.server.allowCoreDumps`), one tokio runtime for the Spark Connect listener (`krishiv-connect-server`, `--connect-port`, default 15002) and the admin listener (`--port` 8080: `/healthz`, `/readyz`, `/metrics` behind the printed token, the UI with `ui`), SIGTERM/SIGINT drain then exit 0 after the engine runtime is dropped, a second signal exits 130; `tests/server.rs`
 - `src/repl.rs` the interactive loop (no `-e`/`-f` on a terminal): `.timer`, `.format`, `.complete`, `.history`, history persistence
 - `src/complete.rs` completion sources (keywords, function registry, session catalog, config registry)
 - `src/highlight.rs` ANSI highlighting of statements

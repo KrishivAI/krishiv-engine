@@ -19,6 +19,7 @@ krishiv-connect = { path = "../krishiv-connect" }
 krishiv-session = { path = "../krishiv-session" }
 prost = { workspace = true, features = ["derive", "std"] }
 prost-types = { workspace = true, features = ["std"] }
+rustix.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["net", "rt", "sync", "time", "macros"] }
 tonic = { workspace = true, features = ["server", "router", "codegen"] }
