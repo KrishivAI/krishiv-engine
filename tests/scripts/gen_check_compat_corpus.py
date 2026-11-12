@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Writes the check_compat corpus (T029): 30 PySpark scripts, 30 SQL files and
-expected.json (file, line, name, status) into crates/krishiv-cli/tests/check_compat_corpus.
+expected.json (file, line, name, status) into crates/krishiv-cli/tests/check_compat_corpus/generated (a volume
+check; the hand-written corpus next to it is what measures the scanner).
 The planted names are chosen here, not by the scanner, so the expected findings
 are independent of it."""
 
@@ -9,7 +10,7 @@ import pathlib
 import random
 import shutil
 
-out = pathlib.Path("crates/krishiv-cli/tests/check_compat_corpus")
+out = pathlib.Path("crates/krishiv-cli/tests/check_compat_corpus/generated")
 matrix = json.loads(pathlib.Path("crates/krishiv-cli/src/check_compat/functions.json").read_text())
 
 

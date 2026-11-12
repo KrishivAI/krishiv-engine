@@ -17,9 +17,15 @@ for page in sorted(root.glob("*.md")):
     m = re.search(r"^\| Krishiv \| (.+?) \|$", text, re.M)
     if not m:
         continue
-    status = (
-        "not yet" if m.group(1).startswith("Not implemented") else ("partial" if "(" in m.group(1) else "supported")
-    )
+    # "Implemented (SQL syntax)" and "Implemented (rewritten to a `CAST`)" are full
+    # implementations; only an explicit "Partial" row is partial (the pages have none today).
+    cell = m.group(1)
+    if cell.startswith("Not implemented"):
+        status = "not yet"
+    elif cell.startswith("Partial"):
+        status = "partial"
+    else:
+        status = "supported"
     title = re.match(r"# `(.+?)`", text)
     rows[(title.group(1) if title else page.stem).lower()] = status
 data = json.dumps(dict(sorted(rows.items())), indent=1) + "\n"

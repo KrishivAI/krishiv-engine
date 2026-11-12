@@ -1,0 +1,100 @@
+[
+ {
+  "file": "sales_report.sql",
+  "line": 17,
+  "name": "legacy_score",
+  "status": "unknown"
+ },
+ {
+  "file": "sales_report.sql",
+  "line": 18,
+  "name": "hll_sketch_agg",
+  "status": "not yet"
+ },
+ {
+  "file": "ddl_and_types.sql",
+  "line": 16,
+  "name": "java_method",
+  "status": "not yet"
+ },
+ {
+  "file": "table_functions.sql",
+  "line": 9,
+  "name": "sentences",
+  "status": "not yet"
+ },
+ {
+  "file": "table_functions.sql",
+  "line": 10,
+  "name": "try_reflect",
+  "status": "not yet"
+ },
+ {
+  "file": "etl_job.py",
+  "line": 20,
+  "name": "sentences",
+  "status": "not yet"
+ },
+ {
+  "file": "etl_job.py",
+  "line": 24,
+  "name": "legacy_score",
+  "status": "unknown"
+ },
+ {
+  "file": "etl_job.py",
+  "line": 25,
+  "name": "kll_sketch_agg_bigint",
+  "status": "not yet"
+ },
+ {
+  "file": "stream_job.py",
+  "line": 8,
+  "name": "window",
+  "status": "not yet"
+ },
+ {
+  "file": "stream_job.py",
+  "line": 11,
+  "name": "theta_sketch_agg",
+  "status": "not yet"
+ },
+ {
+  "file": "stream_job.py",
+  "line": 12,
+  "name": "hll_sketch_estimate",
+  "status": "not yet"
+ },
+ {
+  "file": "direct_imports.py",
+  "line": 8,
+  "name": "count_min_sketch",
+  "status": "not yet"
+ },
+ {
+  "file": "direct_imports.py",
+  "line": 8,
+  "name": "histogram_numeric",
+  "status": "not yet"
+ },
+ {
+  "file": "direct_imports.py",
+  "line": 9,
+  "name": "nope_fn",
+  "status": "unknown"
+ },
+ {
+  "file": "notebook.ipynb",
+  "line": 27,
+  "name": "xpath_float",
+  "status": "not yet",
+  "cell": 2
+ },
+ {
+  "file": "notebook.ipynb",
+  "line": 37,
+  "name": "legacy_score",
+  "status": "unknown",
+  "cell": 3
+ }
+]

@@ -21,7 +21,7 @@ pub(crate) use scan::{Finding, scan_file};
 pub(crate) enum ReportFormat {
     /// One `file:line: name: status` line per finding.
     Text,
-    /// A JSON array of findings (the documented, stable form).
+    /// A JSON object `{schema_version, files_scanned, findings, errors}` (the stable form).
     Json,
 }
 
@@ -36,7 +36,7 @@ pub(crate) struct CheckArgs {
     format: ReportFormat,
 }
 
-/// Status of a function in the matrix.
+/// Status of a function in the matrix, or `Unknown` for a name it does not list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Status {
     /// Fully implemented.
@@ -45,68 +45,116 @@ pub(crate) enum Status {
     Partial,
     /// Listed by Spark, not implemented yet.
     NotYet,
+    /// Not in the matrix at all.
+    Unknown,
 }
 
-/// The function matrix: lower-case name to status.
+impl Status {
+    /// The status word of the report (`unknown` is spelled out in the text form).
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Status::Supported => "supported",
+            Status::Partial => "partial",
+            Status::NotYet => "not yet",
+            Status::Unknown => "unknown",
+        }
+    }
+}
+
+/// Parses the matrix JSON; an unrecognised status is an error, not `not yet`.
+pub(crate) fn parse_matrix(raw: &str) -> Result<BTreeMap<String, Status>, String> {
+    let raw: BTreeMap<String, String> = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+    raw.into_iter()
+        .map(|(k, v)| {
+            let s = match v.as_str() {
+                "supported" => Status::Supported,
+                "partial" => Status::Partial,
+                "not yet" => Status::NotYet,
+                other => return Err(format!("{k}: unknown status {other:?}")),
+            };
+            Ok((k, s))
+        })
+        .collect()
+}
+
+/// The function matrix: lower-case name to status. The embedded file is checked by a
+/// unit test; a parse failure here would make every name `unknown`.
 pub(crate) fn matrix() -> &'static BTreeMap<String, Status> {
     static M: OnceLock<BTreeMap<String, Status>> = OnceLock::new();
-    M.get_or_init(|| {
-        let raw: BTreeMap<String, String> =
-            serde_json::from_str(include_str!("functions.json")).unwrap_or_default();
-        raw.into_iter()
-            .map(|(k, v)| {
-                let s = match v.as_str() {
-                    "supported" => Status::Supported,
-                    "partial" => Status::Partial,
-                    _ => Status::NotYet,
-                };
-                (k, s)
-            })
-            .collect()
-    })
+    M.get_or_init(|| parse_matrix(include_str!("functions.json")).unwrap_or_default())
 }
 
-/// Collects the scannable files under `path`, sorted.
-fn collect(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    std::fs::metadata(path)?;
-    if path.is_dir() {
-        let mut entries: Vec<_> = std::fs::read_dir(path)?
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .map(|e| e.path())
-            .collect();
+/// Directories never descended into: VCS, virtual environments, installed packages, build output.
+const SKIP_DIRS: &[&str] = &[
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "site-packages",
+    "__pycache__",
+    ".ipynb_checkpoints",
+    "target",
+];
+
+/// Collects the scannable files under `path`, sorted. A file named on the command
+/// line with another extension is an error; read errors are collected, not fatal.
+fn collect(path: &Path, top: bool, out: &mut Vec<PathBuf>, errors: &mut Vec<(String, String)>) {
+    let mut err = |e: String| errors.push((path.display().to_string(), e));
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => return err(e.to_string()),
+    };
+    if meta.is_dir() {
+        let rd = match std::fs::read_dir(path) {
+            Ok(rd) => rd,
+            Err(e) => return err(e.to_string()),
+        };
+        let mut entries = Vec::new();
+        for e in rd {
+            match e {
+                Ok(e) => entries.push(e.path()),
+                Err(e) => err(e.to_string()),
+            }
+        }
         entries.sort();
         for e in entries {
-            collect(&e, out)?;
+            let skipped = e.is_dir()
+                && e.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| SKIP_DIRS.contains(&n));
+            if !skipped {
+                collect(&e, false, out, errors);
+            }
         }
     } else if matches!(
         path.extension().and_then(|e| e.to_str()),
         Some("py" | "sql" | "ipynb")
     ) {
         out.push(path.to_path_buf());
+    } else if top {
+        err("not a .py, .sql or .ipynb file".to_string());
     }
-    Ok(())
 }
+
+/// Version of the JSON report; bumped only for a breaking change.
+const SCHEMA_VERSION: u32 = 1;
 
 /// Runs the command; returns the exit code.
 pub(crate) fn run(args: &CheckArgs) -> i32 {
     let mut files = Vec::new();
-    let mut errors = 0;
+    let mut errors: Vec<(String, String)> = Vec::new();
     for p in &args.paths {
-        if let Err(e) = collect(p, &mut files) {
-            let _ = writeln!(std::io::stderr(), "check-compat: {}: {e}", p.display());
-            errors += 1;
-        }
+        collect(p, true, &mut files, &mut errors);
     }
     let mut findings = Vec::new();
     for f in &files {
         match scan_file(f) {
             Ok(mut v) => findings.append(&mut v),
-            Err(e) => {
-                let _ = writeln!(std::io::stderr(), "check-compat: {}: {e}", f.display());
-                errors += 1;
-            }
+            Err(e) => errors.push((f.display().to_string(), e.to_string())),
         }
+    }
+    for (path, e) in &errors {
+        let _ = writeln!(std::io::stderr(), "check-compat: {path}: {e}");
     }
     let mut out = std::io::stdout().lock();
     match args.format {
@@ -116,13 +164,21 @@ pub(crate) fn run(args: &CheckArgs) -> i32 {
             }
         }
         ReportFormat::Json => {
-            let v: Vec<_> = findings.iter().map(Finding::json).collect();
-            let _ = writeln!(out, "{}", serde_json::Value::Array(v));
+            let report = serde_json::json!({
+                "schema_version": SCHEMA_VERSION,
+                "files_scanned": files.len(),
+                "findings": findings.iter().map(Finding::json).collect::<Vec<_>>(),
+                "errors": errors
+                    .iter()
+                    .map(|(p, m)| serde_json::json!({"path": p, "message": m}))
+                    .collect::<Vec<_>>(),
+            });
+            let _ = writeln!(out, "{report}");
         }
     }
-    if errors > 0 {
-        2
-    } else {
+    if errors.is_empty() {
         i32::from(!findings.is_empty())
+    } else {
+        2
     }
 }
