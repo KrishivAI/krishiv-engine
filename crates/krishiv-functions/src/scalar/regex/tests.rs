@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the Java-compatible regular expression functions (`rlike`, `regexp_*`) and their error cases.
 
 use arrow_array::Array as _;
 use arrow_array::ArrayRef;
