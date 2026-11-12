@@ -449,7 +449,13 @@ impl Session {
                 ])
             }
             TargetObject::Namespace(name) => {
-                let mut p = namespace_parts(catalogs, &parts(name)?);
+                let written = parts(name)?;
+                // `SHOW TABLES IN system` lists the system catalog (the introspection handler reads the
+                // argument that way), so it is checked as the catalog, as `USE system; SHOW TABLES` is.
+                if written.len() == 1 && crate::system::is_system(&written[0]) {
+                    return Ok(namespaces(vec![crate::system::SYSTEM.to_owned()]));
+                }
+                let mut p = namespace_parts(catalogs, &written);
                 // The `global_temp` registry belongs to the session catalog, whatever catalog is current.
                 if p.len() == 2 && p[1].eq_ignore_ascii_case(GLOBAL_TEMP) {
                     p[0] = crate::catalog::CATALOG.to_owned();

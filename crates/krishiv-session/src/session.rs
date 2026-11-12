@@ -614,7 +614,7 @@ impl Session {
                 self.exec_create_view(&v, query, &env.identifier_spans)
                     .await
             }
-            Statement::DropView(v) => self.exec_drop_view(&v).await,
+            Statement::DropView(v) => self.exec_drop_view(&v, &env).await,
             Statement::Cache(c) => {
                 Box::pin(self.exec_cache(&c, query, &env.identifier_spans)).await
             }

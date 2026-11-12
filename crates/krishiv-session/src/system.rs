@@ -1455,7 +1455,7 @@ impl QueryRow {
                     + o.pipelines.len() * 4
                     + o.extra
                         .iter()
-                        .map(|(k, v)| k.len() + v.len())
+                        .map(|(k, v)| size_of::<(String, String)>() + k.len() + v.len())
                         .sum::<usize>()
             })
             .sum();
@@ -1466,7 +1466,7 @@ impl QueryRow {
             + self
                 .tags
                 .iter()
-                .map(|(k, v)| k.len() + v.len())
+                .map(|(k, v)| size_of::<(String, String)>() + k.len() + v.len())
                 .sum::<usize>()
             + opt(&self.trace_id)
             + opt(&self.text)
@@ -1589,7 +1589,22 @@ impl Session {
             }
             .into());
         }
-        Ok(self.state.catalog.current_namespace())
+        Ok(env.catalog.namespace().join("."))
+    }
+
+    /// The namespace a bare name of a stored object resolves in, from the query's own catalog snapshot
+    /// (the one the statement was authorized in), refused under `system`.
+    pub(crate) fn stored_namespace_in(
+        &self,
+        env: &crate::session::QueryEnv,
+    ) -> Result<String, KrishivError> {
+        if env.catalog.in_system() {
+            return Err(krishiv_common::error::SchemaNotFound {
+                schema_name: format!("`{SYSTEM}`"),
+            }
+            .into());
+        }
+        Ok(env.catalog.namespace().join("."))
     }
 }
 

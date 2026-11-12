@@ -156,32 +156,9 @@ pub(super) fn mask_quoted(message: &str) -> String {
 /// the value-bearing ones would miss the next one Spark prints without quotes.
 fn is_structural(name: &str) -> bool {
     const SUFFIXES: &[&str] = &[
-        "Name",
-        "Names",
-        "Type",
-        "Types",
-        "Class",
-        "Id",
-        "Index",
-        "Size",
-        "Count",
-        "Num",
-        "Mode",
-        "Conf",
-        "Config",
-        "Expr",
-        "Expression",
-        "Expressions",
-        "Sql",
-        "Function",
-        "Operator",
-        "Clause",
-        "Status",
-        "Version",
-        "Level",
-        "Kind",
-        "Scope",
-        "Path",
+        "Name", "Names", "Type", "Types", "Class", "Id", "Index", "Size", "Count", "Num", "Mode",
+        "Conf", "Config", "Function", "Operator", "Clause", "Status", "Version", "Level", "Kind",
+        "Scope", "Path",
     ];
     SUFFIXES.iter().any(|s| name.ends_with(s)) || name == "sqlState"
 }

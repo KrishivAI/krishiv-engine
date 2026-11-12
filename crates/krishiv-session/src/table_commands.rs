@@ -882,9 +882,9 @@ impl Session {
         &self,
         name: &str,
         if_exists: bool,
+        env: &crate::session::QueryEnv,
     ) -> Result<(), KrishivError> {
-        let env = self.query_env();
-        let name = TableName::resolve(&[name.to_owned()], &self.stored_namespace()?, &env)?;
+        let name = TableName::resolve(&[name.to_owned()], &self.stored_namespace_in(env)?, env)?;
         self.drop_stored_view(&name, if_exists)
     }
 

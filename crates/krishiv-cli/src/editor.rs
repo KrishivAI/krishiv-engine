@@ -10,8 +10,8 @@ use std::borrow::Cow;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use reedline::{
-    ColumnarMenu, Completer, CompletionResult, Emacs, FileBackedHistory, HistoryItem, InputMode,
-    KeyCode, KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch, Reedline,
+    ColumnarMenu, Completer, CompletionResult, Emacs, FileBackedHistory, InputMode, KeyCode,
+    KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch, Reedline,
     ReedlineEvent, ReedlineMenu, Signal, Span, Suggestion, ValidationResult, Validator,
     default_emacs_keybindings,
 };
@@ -100,9 +100,11 @@ impl Validator for StatementValidator {
 }
 
 impl Editor {
-    /// An editor seeded with `history` (oldest first). `None` when the
-    /// editor cannot start, so the caller falls back to the plain loop.
-    pub(crate) fn new(ctx: CompletionContext, history: &[String]) -> Option<Self> {
+    /// An editor for this session's commands. `None` when the editor cannot start, so the caller falls back to
+    /// the plain loop. The saved history file is not replayed into it: the file stores each command with its
+    /// whitespace collapsed (`history::append`), which would change a literal such as `'a  b'` when the
+    /// recalled line is executed. Recall of earlier sessions waits for a lossless history format.
+    pub(crate) fn new(ctx: CompletionContext, _saved: &[String]) -> Option<Self> {
         let mut keys = default_emacs_keybindings();
         keys.add_binding(
             KeyModifiers::NONE,
@@ -112,11 +114,7 @@ impl Editor {
                 ReedlineEvent::MenuNext,
             ]),
         );
-        let mut store = FileBackedHistory::new(history.len().max(1000)).ok()?;
-        for entry in history {
-            reedline::History::save(&mut store, HistoryItem::from_command_line(entry.clone()))
-                .ok()?;
-        }
+        let store = FileBackedHistory::new(1000).ok()?;
         let ctx = Arc::new(Mutex::new(ctx));
         let line = Reedline::create()
             .with_history(Box::new(store))

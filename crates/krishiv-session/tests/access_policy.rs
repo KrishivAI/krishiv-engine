@@ -1828,9 +1828,31 @@ fn use_system_and_show_catalogs_need_no_privilege() {
     let policy = Policy::new(allow);
     let s = session(Arc::clone(&policy) as Arc<dyn AccessPolicy>);
     policy.deny_everything();
-    assert_eq!(class(rows(&s, "SHOW CATALOGS")), "OK");
+    assert_eq!(rows(&s, "SHOW CATALOGS").unwrap(), 2);
     assert_eq!(class(rows(&s, "USE system")), "OK");
-    assert_eq!(class(rows(&s, "SHOW CATALOGS")), "OK");
+    assert_eq!(rows(&s, "SHOW CATALOGS").unwrap(), 2);
+    assert_eq!(
+        rows(&s, "SELECT 1 WHERE current_catalog() = 'system'").unwrap(),
+        1,
+        "USE system changed the current catalog"
+    );
+}
+
+/// Allows only `Select` on the `system` catalog's namespace.
+fn only_the_system_namespace(securable: &Securable, _: Privilege) -> AccessDecision {
+    match securable {
+        Securable::Namespace(p) if p.len() == 1 && p[0].eq_ignore_ascii_case("system") => {
+            AccessDecision::Allow
+        }
+        _ => deny(),
+    }
+}
+
+/// `SHOW TABLES IN system` is checked as the system catalog, the same securable `USE system; SHOW TABLES` gets.
+#[test]
+fn show_tables_in_system_is_authorized_against_the_system_catalog() {
+    let s = session(Policy::new(only_the_system_namespace));
+    assert_eq!(class(rows(&s, "SHOW TABLES IN system")), "OK");
 }
 
 #[test]

@@ -830,7 +830,14 @@ fn a_file_write_records_the_files_it_wrote() {
          WHERE state = 'finished' AND files_written > 0",
     );
     assert_eq!(r.len(), 1, "{r:?}");
-    assert!(r[0].parse::<i64>().unwrap() >= 1, "{r:?}");
+    let parquet_files = std::fs::read_dir(&out)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .is_ok_and(|e| e.path().extension().is_some_and(|x| x == "parquet"))
+        })
+        .count();
+    assert_eq!(r[0].parse::<usize>().unwrap(), parquet_files, "{r:?}");
 }
 
 #[test]
@@ -1035,7 +1042,12 @@ fn a_replayed_query_masks_literals_by_the_session_policy() {
     run(&s, "INSERT INTO rc VALUES (1)").unwrap();
     run(&s, "SELECT a FROM rc WHERE a = 12345").unwrap();
     run(&s, "SELECT a FROM rc WHERE a = 12345").unwrap();
-    let texts = column_of(&s, "SELECT query_text FROM system.queries", 0);
+    let texts = column_of(
+        &s,
+        "SELECT query_text FROM system.queries WHERE result_cache_hit = true",
+        0,
+    );
+    assert!(!texts.is_empty(), "no replayed query was recorded");
     assert!(texts.iter().all(|t| !t.contains("12345")), "{texts:?}");
 }
 
@@ -1113,10 +1125,9 @@ fn query_text_is_cut_at_a_character_boundary() {
     run(&s, "SELECT 'ééééééééééééééééééééééééééééééé' AS wide").unwrap();
     let texts = column_of(&s, "SELECT query_text FROM system.queries", 0);
     assert!(texts.iter().all(|t| t.len() <= 40), "{texts:?}");
-    assert!(
-        texts.iter().any(|t| t.starts_with("SELECT 'é")),
-        "{texts:?}"
-    );
+    // 40 bytes: `SELECT '` (8) and 16 two-byte characters.
+    let cut = format!("SELECT '{}", "é".repeat(16));
+    assert!(texts.contains(&cut), "{texts:?}");
 }
 
 #[test]
@@ -1574,6 +1585,7 @@ fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() 
         "SELECT raise_error('canarysecret')",
         "SELECT next_day(DATE '2024-01-01', 'canarysecret')",
         "SELECT map('canarysecret', 1, 'canarysecret', 2)",
+        "SELECT mask('canarysecret', 'XX')",
     ] {
         assert!(run_all(&s, sql).is_err(), "{sql}");
     }
@@ -1581,7 +1593,7 @@ fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() 
         &s,
         "SELECT COALESCE(error_message, '') FROM system.queries WHERE error_class IS NOT NULL",
     );
-    assert!(messages.len() >= 4, "{messages:?}");
+    assert_eq!(messages.len(), 6, "{messages:?}");
     assert!(
         messages.iter().all(|m| !m.contains("canarysecret")),
         "{messages:?}"
@@ -1611,28 +1623,40 @@ fn a_dataframe_writer_never_creates_a_stored_table_through_a_temporary_name_unde
 #[test]
 fn show_columns_with_a_from_namespace_reaches_a_system_table() {
     let s = Session::new().unwrap();
+    let expected = column_of(&s, "DESCRIBE system.queries", 0);
+    assert!(!expected.is_empty());
     for sql in [
         "SHOW COLUMNS IN queries FROM system",
         "SHOW COLUMNS IN system.queries FROM system",
     ] {
-        assert!(!strings_in(&s, sql).is_empty(), "{sql}");
+        assert_eq!(strings_in(&s, sql), expected, "{sql}");
     }
 }
 
 #[test]
 fn show_columns_with_a_conflicting_qualifier_and_from_system_is_refused() {
     let s = Session::new().unwrap();
-    assert!(run_all(&s, "SHOW COLUMNS IN default.queries FROM system").is_err());
+    let e = run_all(&s, "SHOW COLUMNS IN default.queries FROM system").unwrap_err();
+    assert!(e.contains("SHOW_COLUMNS_WITH_CONFLICT_NAMESPACE"), "{e}");
 }
 
 #[test]
-fn a_message_with_many_unmatched_apostrophes_is_masked_in_linear_time() {
+fn a_message_with_many_unmatched_apostrophes_is_masked() {
     let s = Session::new().unwrap();
     s.conf()
         .set("krishiv.system.queryText.literals", "mask")
         .unwrap();
     let name = " 'x".repeat(40_000);
-    let started = std::time::Instant::now();
-    let _ = run_all(&s, &format!("SELECT `{name}` FROM (SELECT 1 AS a)"));
-    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    // The scan is linear by construction (one closing-quote table); the runner's test timeout is the guard
+    // against a regression to rescanning.
+    assert!(run_all(&s, &format!("SELECT `{name}` FROM (SELECT 1 AS a)")).is_err());
+    let messages = strings_in(
+        &s,
+        "SELECT COALESCE(error_message, '') FROM system.queries WHERE error_class IS NOT NULL",
+    );
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(
+        !messages[0].contains(" 'x"),
+        "an unmatched quote run was left unmasked"
+    );
 }

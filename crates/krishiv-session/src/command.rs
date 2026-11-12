@@ -388,8 +388,11 @@ impl Session {
 
     /// Runs `DROP VIEW [IF EXISTS] name` over the temporary views,
     /// returning an empty frame as in Spark.
-    pub(crate) async fn exec_drop_view(&self, v: &DropView) -> Result<DataFrame, KrishivError> {
-        let env = self.query_env();
+    pub(crate) async fn exec_drop_view(
+        &self,
+        v: &DropView,
+        env: &crate::session::QueryEnv,
+    ) -> Result<DataFrame, KrishivError> {
         if !is_global_key(&v.name.value)
             && self
                 .state
@@ -399,7 +402,7 @@ impl Session {
             self.state.catalog.drop_table(&v.name.value);
             self.state.cache.invalidate_table(&v.name.value);
         } else {
-            self.drop_bare_stored_view(&v.name.value, v.if_exists)?;
+            self.drop_bare_stored_view(&v.name.value, v.if_exists, env)?;
         }
         self.empty_frame().await
     }
