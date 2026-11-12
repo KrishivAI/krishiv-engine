@@ -109,22 +109,20 @@ impl TextPolicy {
     }
 }
 
-/// The index of the quote that closes the run starting at `from`: a quote before a non-word character, a
-/// backslash escaping the character after it (`\'` inside a value is not the end).
-pub(super) fn closing_quote(
-    chars: &[(usize, char)],
-    from: usize,
-    word: impl Fn(char) -> bool,
-) -> Option<usize> {
-    let mut j = from;
-    while j < chars.len() {
-        match chars[j].1 {
-            '\\' => j += 2,
-            '\'' if chars.get(j + 1).is_none_or(|n| !word(n.1)) => return Some(j),
-            _ => j += 1,
-        }
+/// For each position, the index of the quote that closes a run starting there: a quote before a non-word
+/// character, a backslash escaping the character after it (`\'` inside a value is not the end). Built right to
+/// left, so every answer is one lookup and the whole table is linear.
+fn closing_quotes(chars: &[(usize, char)], word: impl Fn(char) -> bool) -> Vec<Option<usize>> {
+    let n = chars.len();
+    let mut next = vec![None; n + 2];
+    for j in (0..n).rev() {
+        next[j] = match chars[j].1 {
+            '\\' => next[j + 2],
+            '\'' if chars.get(j + 1).is_none_or(|c| !word(c.1)) => Some(j),
+            _ => next[j + 1],
+        };
     }
-    None
+    next
 }
 
 /// `message` with each quoted `'...'` run replaced by `'?'`. A quote opens
@@ -133,13 +131,14 @@ pub(super) fn closing_quote(
 pub(super) fn mask_quoted(message: &str) -> String {
     let word = |c: char| c.is_alphanumeric() || c == '_';
     let chars: Vec<(usize, char)> = message.char_indices().collect();
+    let closers = closing_quotes(&chars, word);
     let mut out = String::with_capacity(message.len());
     let mut copied = 0;
     let mut i = 0;
     while i < chars.len() {
         let (at, c) = chars[i];
         let opens = c == '\'' && (i == 0 || !word(chars[i - 1].1));
-        if opens && let Some(j) = closing_quote(&chars, i + 1, word) {
+        if opens && let Some(j) = closers[i + 1] {
             out.push_str(&message[copied..at]);
             out.push_str("'?'");
             copied = chars.get(j + 1).map_or(message.len(), |n| n.0);

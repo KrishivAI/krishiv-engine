@@ -1621,3 +1621,15 @@ fn show_columns_with_a_conflicting_qualifier_and_from_system_is_refused() {
     let s = Session::new().unwrap();
     assert!(run_all(&s, "SHOW COLUMNS IN default.queries FROM system").is_err());
 }
+
+#[test]
+fn a_message_with_many_unmatched_apostrophes_is_masked_in_linear_time() {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    let name = " 'x".repeat(40_000);
+    let started = std::time::Instant::now();
+    let _ = run_all(&s, &format!("SELECT `{name}` FROM (SELECT 1 AS a)"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
