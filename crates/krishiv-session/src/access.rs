@@ -315,6 +315,34 @@ impl Session {
         audit(self, StatementClass::Read, r)
     }
 
+    /// The columns of the system table `table` for `DESCRIBE` / `SHOW COLUMNS`: `Browse` on
+    /// `system.<table>` (ADR 0046 §3), not the `Select` a read of its rows needs.
+    pub(crate) async fn system_table_columns(
+        &self,
+        table: &str,
+        env: &QueryEnv,
+    ) -> Result<Vec<(String, krishiv_types::DataType)>, KrishivError> {
+        let parts = ["system".to_owned(), table.to_owned()];
+        let ident = table_ident(&*env.analysis.catalogs, &parts)
+            .ok_or_else(|| unplaceable("an empty name"))?;
+        let r = authorize(
+            &*self.state.policy,
+            &self.state.principal,
+            &Securable::Table(ident),
+            Privilege::Browse,
+        )
+        .await;
+        audit(self, StatementClass::Read, r)?;
+        crate::system::columns(table)
+            .map(|cols| cols.into_iter().map(|c| (c.name, c.data_type)).collect())
+            .ok_or_else(|| {
+                krishiv_common::error::InternalError {
+                    message: format!("system.{table}: no such system table"),
+                }
+                .into()
+            })
+    }
+
     /// `parts` (a name written in a statement's target), with a bare temporary relation placed in the session
     /// catalog's current namespace: a temporary relation resolves before any catalog, `system` included.
     fn temp_first(&self, parts: Vec<String>, env: &QueryEnv) -> Vec<String> {

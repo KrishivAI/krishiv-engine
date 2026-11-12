@@ -544,20 +544,11 @@ impl Session {
                     }
                 };
                 if let Some(t) = system_table {
-                    let analysis = DataFrame::new(
-                        self.clone(),
-                        Arc::new(krishiv_plan::LogicalPlan::table([
-                            "system",
-                            &t.to_lowercase(),
-                        ])),
-                    )
-                    .analyzed_in(env.clone())
-                    .await?;
-                    let names = analysis
-                        .analyzed
-                        .output
+                    let names = self
+                        .system_table_columns(&t.to_lowercase(), &env)
+                        .await?
                         .iter()
-                        .map(|c| vec![s(&c.name)])
+                        .map(|(name, _)| vec![s(name)])
                         .collect();
                     return self
                         .frame_with_order(&["col_name"], &[], names, false)
@@ -958,15 +949,11 @@ impl Session {
                 "DESCRIBE variants other than the plain form of a system table",
             ));
         }
-        let plan = Arc::new(krishiv_plan::LogicalPlan::table(["system", table]));
-        let analysis = DataFrame::new(self.clone(), plan)
-            .analyzed_in(env.clone())
-            .await?;
-        let rows: Vec<Vec<Cell>> = analysis
-            .analyzed
-            .output
+        let rows: Vec<Vec<Cell>> = self
+            .system_table_columns(table, env)
+            .await?
             .iter()
-            .map(|c| vec![s(&c.name), s(c.data_type.catalog_string()), s("")])
+            .map(|(name, ty)| vec![s(name), s(ty.catalog_string()), s("")])
             .collect();
         self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
             .await

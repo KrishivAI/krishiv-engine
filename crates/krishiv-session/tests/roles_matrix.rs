@@ -72,6 +72,11 @@ const MATRIX: &[(&str, Role)] = &[
     ("SELECT count(*) FROM system.queries", Role::Viewer),
     ("SELECT count(*) FROM SYSTEM.QUERIES", Role::Viewer),
     ("SELECT count(*) FROM system.capabilities", Role::Viewer),
+    // A system table's schema is metadata, even where its rows are not (Browse, not Select).
+    ("DESCRIBE system.memory", Role::Viewer),
+    ("SHOW COLUMNS IN system.memory", Role::Viewer),
+    ("DESCRIBE system.operators", Role::Viewer),
+    ("SHOW COLUMNS IN system.caches", Role::Viewer),
     // Tables that name other principals' work.
     ("SELECT count(*) FROM system.memory", Role::Operator),
     ("SELECT count(*) FROM system.operators", Role::Operator),
