@@ -8,8 +8,10 @@
 //! id is then `lut[packed]`: no encoded key row, no hash and no compare per
 //! input row. Only each id's first row is encoded and looked up in the table
 //! (in first-occurrence order), as the batch-local map of E2 does; every row
-//! takes its first row's table row. A batch that fails the proof, or holds more
-//! than [`DIRECT_MAX`] distinct keys, takes the ordinary path.
+//! takes its first row's table row. A batch that fails the proof, holds more
+//! than [`DIRECT_MAX`] distinct keys, or whose rows are mostly new keys takes
+//! the ordinary path; after the latter two the next [`DIRECT_BACKOFF`]
+//! batches skip the attempt. Every column is proven before any is packed.
 //!
 //! The rows a key's first row is encoded from are the batch's own values, so
 //! the table sees the same key bytes and hashes as the per-row encode gives:
@@ -31,6 +33,10 @@ use crate::rows::EncodedKeys;
 
 /// Most distinct keys a batch may hold on the direct path.
 pub(super) const DIRECT_MAX: usize = 1024;
+/// Batches that skip the direct attempt after one that held too many keys.
+const DIRECT_BACKOFF: u8 = 16;
+/// Distinct keys a batch may always hold; past it, at most half its rows.
+const DIRECT_FLOOR: usize = 64;
 /// Packed keys are at most this many bits (one byte per key column).
 const PACKED_BITS: u32 = 16;
 /// Bytes of a table's direct scratch once allocated: the packed-key map and
@@ -41,6 +47,9 @@ const SCRATCH_BYTES: usize = ((1 << PACKED_BITS) + DIRECT_MAX) * size_of::<u16>(
 /// between batches and cleared entry by entry.
 #[derive(Debug)]
 pub(super) struct Direct {
+    /// A `Mutex` only because [`RowTable::prepare`] takes `&self` (and
+    /// keeps `RowTable: Sync`); one driver owns the table, so it is never
+    /// contended, and a poisoned lock takes the ordinary path.
     scratch: Mutex<Scratch>,
     /// Whether `scratch` holds its map ([`SCRATCH_BYTES`]); it is allocated
     /// by the first batch that passes the proof and kept for the table's life.
@@ -53,6 +62,8 @@ struct Scratch {
     lut: Vec<u16>,
     /// The packed keys the current batch set in `lut`.
     set: Vec<u16>,
+    /// Batches left to skip after one with too many keys.
+    skip: u8,
 }
 
 /// A batch's rows by batch-local id.
@@ -87,35 +98,49 @@ impl Direct {
         if keys.is_empty() || keys.len() * 8 > PACKED_BITS as usize || n == 0 {
             return None;
         }
-        let mut packed: Vec<u16> = Vec::new();
-        for (c, k) in keys.iter().enumerate() {
-            if k.len() != n || k.null_count() > 0 {
-                return None;
-            }
-            add_bytes(&mut packed, k.as_ref(), c == 0, 8 * u32::try_from(c).ok()?)?;
-        }
+        // Row positions are `u32` first rows.
+        u32::try_from(n).ok()?;
         let mut s = self.scratch.lock().ok()?;
-        let Scratch { lut, set } = &mut *s;
+        if s.skip > 0 {
+            s.skip -= 1;
+            return None;
+        }
+        if !keys
+            .iter()
+            .all(|k| k.len() == n && k.null_count() == 0 && one_byte(k.as_ref()))
+        {
+            return None;
+        }
+        let mut packed: Vec<u16> = Vec::with_capacity(n);
+        for (c, k) in keys.iter().enumerate() {
+            pack(&mut packed, k.as_ref(), c == 0, 8 * u32::try_from(c).ok()?);
+        }
+        let Scratch { lut, set, skip } = &mut *s;
         if lut.is_empty() {
             lut.resize(1 << PACKED_BITS, 0);
             set.reserve_exact(DIRECT_MAX);
             self.allocated.store(true, Ordering::Relaxed);
         }
+        // A batch whose rows are mostly new keys gains nothing (a small one
+        // costs little either way).
+        let most = DIRECT_MAX.min((n / 2).max(DIRECT_FLOOR));
         let mut ids = Vec::with_capacity(n);
         let mut firsts: Vec<u32> = Vec::new();
         let mut ok = true;
         for (k, &p) in packed.iter().enumerate() {
             let slot = &mut lut[usize::from(p)];
             if *slot == 0 {
-                if firsts.len() == DIRECT_MAX {
+                let (Ok(row), Ok(id)) = (u32::try_from(k), u16::try_from(firsts.len() + 1)) else {
+                    ok = false;
+                    break;
+                };
+                if firsts.len() == most {
                     ok = false;
                     break;
                 }
-                // `k` < `n`, a batch's row count.
-                firsts.push(u32::try_from(k).unwrap_or(u32::MAX));
+                firsts.push(row);
                 set.push(p);
-                // At most DIRECT_MAX (< u16::MAX) ids.
-                *slot = u16::try_from(firsts.len()).unwrap_or(u16::MAX);
+                *slot = id;
             }
             ids.push(*slot - 1);
         }
@@ -123,6 +148,9 @@ impl Direct {
             lut[usize::from(p)] = 0;
         }
         set.clear();
+        if !ok {
+            *skip = DIRECT_BACKOFF;
+        }
         ok.then(|| DirectIds {
             ids,
             firsts: UInt32Array::from(firsts),
@@ -130,9 +158,33 @@ impl Direct {
     }
 }
 
+/// Whether every row of `a` holds a one-byte value (string or binary views
+/// of length 1, integers in a byte's range); NULLs are checked by the caller.
+fn one_byte(a: &dyn Array) -> bool {
+    // A view's length is its low 32 bits.
+    let views = |v: &[u128]| v.iter().all(|&w| (w & 0xffff_ffff) == 1);
+    macro_rules! ints {
+        ($t:ty) => {
+            a.as_primitive::<$t>()
+                .values()
+                .iter()
+                .all(|&x| i8::try_from(x).is_ok())
+        };
+    }
+    match a.data_type() {
+        DataType::Utf8View => views(a.as_string_view().views()),
+        DataType::BinaryView => views(a.as_binary_view().views()),
+        DataType::UInt8 | DataType::Int8 => true,
+        DataType::Int16 => ints!(Int16Type),
+        DataType::Int32 => ints!(Int32Type),
+        DataType::Int64 => ints!(Int64Type),
+        _ => false,
+    }
+}
+
 /// Writes (`first`) or ORs in column `a`'s one-byte code of each row,
-/// shifted left by `shift`; `None` when a row's value is not one byte.
-fn add_bytes(packed: &mut Vec<u16>, a: &dyn Array, first: bool, shift: u32) -> Option<()> {
+/// shifted left by `shift`. `a` passed [`one_byte`].
+fn pack(packed: &mut Vec<u16>, a: &dyn Array, first: bool, shift: u32) {
     fn put(packed: &mut Vec<u16>, first: bool, shift: u32, bytes: impl Iterator<Item = u8>) {
         if first {
             packed.extend(bytes.map(u16::from));
@@ -142,52 +194,49 @@ fn add_bytes(packed: &mut Vec<u16>, a: &dyn Array, first: bool, shift: u32) -> O
             }
         }
     }
-    // A view's length is its low 32 bits; a value of up to 12 bytes is
-    // inline from byte 4.
-    let mut views = |v: &[u128]| -> Option<()> {
-        if !v.iter().all(|&w| (w & 0xffff_ffff) == 1) {
-            return None;
-        }
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "the view's first data byte"
-        )]
-        put(packed, first, shift, v.iter().map(|&w| (w >> 32) as u8));
-        Some(())
-    };
+    // A value of up to 12 bytes is inline from byte 4 of its view.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the view's first data byte"
+    )]
+    let first_byte = |w: &u128| (*w >> 32) as u8;
     macro_rules! ints {
-        ($t:ty) => {{
-            let v = a.as_primitive::<$t>().values();
-            if !v.iter().all(|&x| i8::try_from(x).is_ok()) {
-                return None;
-            }
+        ($t:ty) => {
             put(
                 packed,
                 first,
                 shift,
-                v.iter()
+                a.as_primitive::<$t>()
+                    .values()
+                    .iter()
                     .map(|&x| i8::try_from(x).map_or(0, i8::cast_unsigned)),
-            );
-            Some(())
-        }};
+            )
+        };
     }
     match a.data_type() {
-        DataType::Utf8View => views(a.as_string_view().views()),
-        DataType::BinaryView => views(a.as_binary_view().views()),
-        DataType::UInt8 => {
-            put(
-                packed,
-                first,
-                shift,
-                a.as_primitive::<UInt8Type>().values().iter().copied(),
-            );
-            Some(())
-        }
+        DataType::Utf8View => put(
+            packed,
+            first,
+            shift,
+            a.as_string_view().views().iter().map(first_byte),
+        ),
+        DataType::BinaryView => put(
+            packed,
+            first,
+            shift,
+            a.as_binary_view().views().iter().map(first_byte),
+        ),
+        DataType::UInt8 => put(
+            packed,
+            first,
+            shift,
+            a.as_primitive::<UInt8Type>().values().iter().copied(),
+        ),
         DataType::Int8 => ints!(Int8Type),
         DataType::Int16 => ints!(Int16Type),
         DataType::Int32 => ints!(Int32Type),
         DataType::Int64 => ints!(Int64Type),
-        _ => None,
+        _ => {}
     }
 }
 
@@ -324,6 +373,7 @@ mod tests {
     use crate::aggregate::table::AggCore;
     use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput, AggregateSpec};
     use crate::hash::HashSeed;
+    use krishiv_types::batch::Weights;
 
     fn core() -> Arc<AggCore> {
         core_of(DataType::Utf8View, DataType::Utf8View)
@@ -437,9 +487,40 @@ mod tests {
         let a: Vec<i64> = (0..2048).map(|k| k % 64).collect();
         let b: Vec<i64> = (0..2048).map(|k| k / 64).collect();
         assert!(d.ids(&[i(a), i(b)], 2048).is_none());
-        let got = d.ids(&[i(vec![3, 3]), i(vec![0, 0])], 2).unwrap();
+        // The next DIRECT_BACKOFF batches skip the attempt, then it resumes
+        // with a clean map.
+        let small = || [i(vec![3, 3]), i(vec![0, 0])];
+        for _ in 0..DIRECT_BACKOFF {
+            assert!(d.ids(&small(), 2).is_none());
+        }
+        let got = d.ids(&small(), 2).unwrap();
         assert_eq!(got.ids, [0, 0]);
         assert_eq!(got.firsts.values().to_vec(), [0]);
+    }
+
+    #[test]
+    fn a_batch_of_mostly_new_keys_falls_back() {
+        let d = Direct::new();
+        let i = |v: Vec<i64>| -> ArrayRef { Arc::new(Int64Array::from(v)) };
+        // 200 rows, 100 keys: half the rows, allowed.
+        let half: Vec<i64> = (0..200).map(|k| k % 100).collect();
+        let b: Vec<i64> = (0..200).map(|k| (k % 100) / 50).collect();
+        let half_a: Vec<i64> = half.iter().map(|k| k % 50).collect();
+        let got = d.ids(&[i(half_a), i(b.clone())], 200).unwrap();
+        assert_eq!(got.firsts.len(), 100);
+        // 200 rows, 101 keys: more than half, the ordinary path; then back-off.
+        let mut a: Vec<i64> = (0..200).map(|k| (k % 100) % 50).collect();
+        let mut b2 = b;
+        a[199] = 60;
+        b2[199] = 0;
+        assert!(d.ids(&[i(a), i(b2)], 200).is_none());
+        assert!(d.ids(&[i(vec![1]), i(vec![1])], 1).is_none());
+        // A small batch may be all new keys (up to DIRECT_FLOOR).
+        let fresh = Direct::new();
+        let all: Vec<i64> = (0..64).collect();
+        assert_eq!(fresh.ids(&[i(all)], 64).unwrap().firsts.len(), 64);
+        let over: Vec<i64> = (0..65).collect();
+        assert!(Direct::new().ids(&[i(over)], 65).is_none());
     }
 
     /// The direct path gives the groups, counts and sums of the per-row path
@@ -584,5 +665,222 @@ mod tests {
         t.apply(&p).unwrap();
         assert!(t.memory_size() >= before + SCRATCH_BYTES);
         assert!(t.memory_size() <= want, "{} > {want}", t.memory_size());
+    }
+
+    /// One batch of the property test: `n` rows of keys drawn from `domain`
+    /// values per column (`nulls`: row 0's first key is NULL; `wide`: row 0's
+    /// second key does not fit a byte), with per-row weights when `weighted`.
+    #[derive(Debug, Clone)]
+    struct Shape {
+        n: usize,
+        domain: u8,
+        seed: u64,
+        nulls: bool,
+        wide: bool,
+        weighted: bool,
+    }
+
+    fn shapes() -> impl proptest::strategy::Strategy<Value = Vec<Shape>> {
+        use proptest::prelude::*;
+        proptest::collection::vec(
+            (
+                1usize..700,
+                1u8..40,
+                any::<u64>(),
+                any::<bool>(),
+                any::<bool>(),
+                any::<bool>(),
+            )
+                .prop_map(|(n, domain, seed, nulls, wide, weighted)| Shape {
+                    n,
+                    domain,
+                    seed,
+                    nulls: nulls && seed % 4 == 0,
+                    wide: wide && seed % 5 == 0,
+                    weighted,
+                }),
+            1..6,
+        )
+    }
+
+    /// A key column of type `t` for `s` (column `c`).
+    fn column(t: &DataType, s: &Shape, c: u64) -> ArrayRef {
+        let mut x = (s.seed ^ c.wrapping_mul(0x9e37_79b9)) | 1;
+        let mut keys: Vec<Option<i64>> = (0..s.n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                Some(i64::try_from(x % u64::from(s.domain)).unwrap())
+            })
+            .collect();
+        if s.nulls && c == 0 {
+            keys[0] = None;
+        }
+        let wide = s.wide && c == 1;
+        let chars: Vec<char> = ('A'..='Z').chain('a'..='z').collect();
+        match t {
+            DataType::Utf8View => Arc::new(StringViewArray::from_iter(
+                keys.iter().enumerate().map(|(i, k)| {
+                    k.map(|k| {
+                        let ch = chars[usize::try_from(k).unwrap()].to_string();
+                        if wide && i == 0 {
+                            format!("{ch}{ch}")
+                        } else {
+                            ch
+                        }
+                    })
+                }),
+            )),
+            DataType::Int32 => Arc::new(Int32Array::from_iter(keys.iter().enumerate().map(
+                |(i, k)| {
+                    k.map(|k| {
+                        if wide && i == 0 {
+                            1000
+                        } else {
+                            i32::try_from(k).unwrap() - 20
+                        }
+                    })
+                },
+            ))),
+            DataType::UInt8 => Arc::new(UInt8Array::from_iter(
+                keys.iter()
+                    .map(|k| k.map(|k| u8::try_from(k).unwrap() + 200)),
+            )),
+            other => panic!("no property column of {other}"),
+        }
+    }
+
+    /// The final rows of `t`, merged into one table, as sorted strings.
+    fn final_rows(core: &Arc<AggCore>, seed: &HashSeed, t: &RowTable) -> Vec<String> {
+        let m = merged(core, seed, t);
+        let out = m.output_batch(&m.ids(0..m.len())).unwrap();
+        let mut r: Vec<String> = (0..out.num_rows())
+            .map(|i| {
+                let cells: Vec<_> = out.columns().iter().map(|c| c.slice(i, 1)).collect();
+                format!("{cells:?}")
+            })
+            .collect();
+        r.sort();
+        r
+    }
+
+    fn merged(core: &Arc<AggCore>, seed: &HashSeed, t: &RowTable) -> RowTable {
+        let mut m = RowTable::new(core, seed, Mode::Grow, false, RADIX_BITS).unwrap();
+        for p in 0..t.part_count() {
+            let c = t.merge_chunk(p, 0..t.part_len(p)).unwrap();
+            m.apply_merge(t, &c).unwrap();
+        }
+        m
+    }
+
+    /// A weighted batch and a batch of states take the direct path, and give
+    /// the per-row path's results.
+    #[test]
+    fn weights_and_states_take_the_direct_path() {
+        let core = core_of(DataType::Utf8View, DataType::Int32);
+        let seed = HashSeed::new(Some(13));
+        let shape = Shape {
+            n: 600,
+            domain: 6,
+            seed: 7,
+            nulls: false,
+            wide: false,
+            weighted: true,
+        };
+        let run = |direct: bool| {
+            let mut t = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS)
+                .unwrap()
+                .with_direct(direct);
+            let v = Int64Array::from((0..600).collect::<Vec<i64>>());
+            let cols = vec![
+                column(&DataType::Utf8View, &shape, 0),
+                column(&DataType::Int32, &shape, 1),
+                Arc::new(v) as ArrayRef,
+            ];
+            let data = RecordBatch::try_new(Arc::clone(&core.spec.input), cols).unwrap();
+            let w = Int64Array::from((0..600).map(|i| i % 3 - 1).collect::<Vec<i64>>());
+            let p = t
+                .prepare(
+                    &Batch::with_weights(data, Weights::Column(w)).unwrap(),
+                    false,
+                )
+                .unwrap();
+            assert_eq!(p.local.is_some(), direct);
+            t.apply(&p).unwrap();
+            let m = merged(&core, &seed, &t);
+            let states = Batch::new(m.state_batch(&m.ids(0..m.len())).unwrap());
+            let mut again = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS)
+                .unwrap()
+                .with_direct(direct);
+            // One row per group, at most 36: within the floor.
+            let p = again.prepare(&states, true).unwrap();
+            assert!(states.num_rows() <= DIRECT_FLOOR);
+            assert_eq!(p.local.is_some(), direct);
+            again.apply(&p).unwrap();
+            (
+                final_rows(&core, &seed, &t),
+                final_rows(&core, &seed, &again),
+            )
+        };
+        let (on, off) = (run(true), run(false));
+        assert_eq!(on, off);
+        assert_eq!(on.0, on.1);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(48))]
+        /// The flag on gives the groups, counts and sums of the flag off for
+        /// any mix of key types, domains, NULLs, too-wide values, weights and
+        /// batch sizes, over input rows and over the states they make.
+        #[test]
+        fn direct_keys_on_equal_off(
+            types in proptest::sample::select(vec![
+                (DataType::Utf8View, DataType::Int32),
+                (DataType::UInt8, DataType::Utf8View),
+                (DataType::Int32, DataType::UInt8),
+            ]),
+            batches in shapes(),
+            mode in proptest::sample::select(vec![Mode::Grow, Mode::Fixed { limit: 7 }, Mode::Append]),
+        ) {
+            let (ta, tb) = types;
+            let core = core_of(ta.clone(), tb.clone());
+            let seed = HashSeed::new(Some(11));
+            let run = |direct: bool| {
+                let mut t = RowTable::new(&core, &seed, mode, true, RADIX_BITS)
+                    .unwrap()
+                    .with_direct(direct);
+                for s in &batches {
+                    let v = Int64Array::from((0..s.n as i64).collect::<Vec<_>>());
+                    let cols = vec![column(&ta, s, 0), column(&tb, s, 1), Arc::new(v) as ArrayRef];
+                    let data = RecordBatch::try_new(Arc::clone(&core.spec.input), cols).unwrap();
+                    let b = if s.weighted {
+                        let w = Int64Array::from(
+                            (0..s.n as i64).map(|i| i % 3 - 1).collect::<Vec<_>>(),
+                        );
+                        Batch::with_weights(data, Weights::Column(w)).unwrap()
+                    } else {
+                        Batch::new(data)
+                    };
+                    let p = t.prepare(&b, false).unwrap();
+                    let want = t.projected(&p);
+                    t.apply(&p).unwrap();
+                    assert!(t.memory_size() <= want, "{} > {want}", t.memory_size());
+                }
+                // The merged states, fed again as a state batch.
+                let m = merged(&core, &seed, &t);
+                let states = Batch::new(m.state_batch(&m.ids(0..m.len())).unwrap());
+                let mut again = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS)
+                    .unwrap()
+                    .with_direct(direct);
+                let p = again.prepare(&states, true).unwrap();
+                again.apply(&p).unwrap();
+                (final_rows(&core, &seed, &t), final_rows(&core, &seed, &again))
+            };
+            let (on, off) = (run(true), run(false));
+            proptest::prop_assert_eq!(&on.0, &off.0);
+            proptest::prop_assert_eq!(&on.1, &off.1);
+            proptest::prop_assert_eq!(&on.0, &on.1);
+        }
     }
 }
