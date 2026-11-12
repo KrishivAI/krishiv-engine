@@ -322,3 +322,61 @@ fn directory_symlink_cycles_are_not_followed() {
     assert_eq!(code, Some(0), "{rep}");
     assert_eq!(rep["files_scanned"], 1, "{rep}");
 }
+
+#[test]
+fn findings_carry_an_alternative_where_one_is_listed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("a.sql"),
+        "SELECT hll_sketch_estimate(hll_sketch_agg(c)), sentences(s) FROM t\n",
+    )
+    .expect("write");
+    let (_, rep) = report(dir.path());
+    let by_name = |n: &str| {
+        rep["findings"]
+            .as_array()
+            .and_then(|a| a.iter().find(|f| f["name"] == n))
+            .cloned()
+            .expect("finding")
+    };
+    let alt = by_name("hll_sketch_agg")["alternative"].clone();
+    assert!(
+        alt.as_str()
+            .is_some_and(|a| a.contains("approx_count_distinct")),
+        "{alt}"
+    );
+    assert!(by_name("sentences").get("alternative").is_none());
+    let text = run(&[], dir.path());
+    let out = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        out.contains("hll_sketch_agg: not yet (alternative: approx_count_distinct"),
+        "{out}"
+    );
+}
+
+/// P3-T029 speed: 1,000 files in under 10 s (the CI box gets the same bound; the real
+/// run takes well under a second).
+#[test]
+fn a_thousand_files_scan_in_under_ten_seconds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for i in 0..1000 {
+        let (name, body) = if i % 2 == 0 {
+            (
+                format!("q{i}.sql"),
+                "WITH a AS (SELECT id, upper(name) AS n FROM t WHERE id > 1)\nSELECT n, count(*), sentences(n) FROM a GROUP BY n;\n".repeat(20),
+            )
+        } else {
+            (
+                format!("j{i}.py"),
+                "import pyspark.sql.functions as F\ndf = spark.table('t').select(F.col('a'), F.mystery_fn('b'))\nspark.sql('SELECT abs(x) FROM t')\n".repeat(20),
+            )
+        };
+        std::fs::write(dir.path().join(name), body).expect("write");
+    }
+    let start = std::time::Instant::now();
+    let (code, rep) = report(dir.path());
+    let took = start.elapsed();
+    assert_eq!(code, Some(1));
+    assert_eq!(rep["files_scanned"], 1000);
+    assert!(took.as_secs_f64() < 10.0, "took {took:?}");
+}

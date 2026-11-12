@@ -84,6 +84,13 @@ pub(crate) fn matrix() -> &'static BTreeMap<String, Status> {
     M.get_or_init(|| parse_matrix(include_str!("functions.json")).unwrap_or_default())
 }
 
+/// Workarounds for "not yet" functions that have a real one: lower-case name to a
+/// sentence. Every function the text names must be supported (a unit test checks).
+pub(crate) fn alternatives() -> &'static BTreeMap<String, String> {
+    static A: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    A.get_or_init(|| serde_json::from_str(include_str!("alternatives.json")).unwrap_or_default())
+}
+
 /// Directories never descended into: VCS, virtual environments, installed packages, build output.
 const SKIP_DIRS: &[&str] = &[
     ".git",

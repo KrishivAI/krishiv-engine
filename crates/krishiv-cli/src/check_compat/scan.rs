@@ -32,7 +32,10 @@ impl Finding {
             Status::Unknown => "unknown, not supported",
             s => s.label(),
         };
-        format!("{}:{}: {}: {what}", self.file, self.line, self.name)
+        let alt = super::alternatives()
+            .get(&self.name)
+            .map_or(String::new(), |a| format!(" (alternative: {a})"));
+        format!("{}:{}: {}: {what}{alt}", self.file, self.line, self.name)
     }
 
     /// The JSON object of the stable report format.
@@ -42,6 +45,9 @@ impl Finding {
         });
         if let (Some(c), Some(o)) = (self.cell, v.as_object_mut()) {
             o.insert("cell".to_string(), json!(c));
+        }
+        if let (Some(a), Some(o)) = (super::alternatives().get(&self.name), v.as_object_mut()) {
+            o.insert("alternative".to_string(), json!(a));
         }
         v
     }
@@ -1237,5 +1243,28 @@ mod tests {
         let f = scan_sql("t.sql", "SELECT `sentences`(x), `t`.`c` FROM `db`.`tbl`", 1);
         assert_eq!(names(&f), [("sentences", "not yet")]);
         assert!(scan_sql("t.sql", "INSERT INTO `t`(a, b) SELECT 1", 1).is_empty());
+    }
+
+    #[test]
+    fn alternatives_are_for_not_yet_names_and_name_only_supported_functions() {
+        let alts = super::super::alternatives();
+        assert!(!alts.is_empty());
+        for (name, text) in alts {
+            assert_eq!(
+                super::super::matrix().get(name),
+                Some(&super::super::Status::NotYet),
+                "{name}"
+            );
+            // Every `fn(` the text names is a supported function.
+            for w in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '(')) {
+                if let Some(f) = w.strip_suffix('(') {
+                    assert_eq!(
+                        super::super::matrix().get(f),
+                        Some(&super::super::Status::Supported),
+                        "{name}: {f}"
+                    );
+                }
+            }
+        }
     }
 }
