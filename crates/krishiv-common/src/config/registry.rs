@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use super::{
     ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
-    build_projection::EXEC_JOIN_BUILD_PROJECTION, join_cost::JOIN_COST,
+    build_projection::EXEC_JOIN_BUILD_PROJECTION, direct_keys::EXEC_AGG_DIRECT_KEYS,
+    join_cost::JOIN_COST, partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
 };
 
 mod python;
@@ -33,6 +34,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
+    &EXEC_AGG_DIRECT_KEYS,
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
@@ -116,6 +118,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CTE_RECURSION_ROW_LIMIT,
     &LEGACY_CODING_ERROR_ACTION,
     &LEGACY_JAVA_CHARSETS,
+    &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
     &LEGACY_STATISTICAL_AGGREGATE,
     &BINARY_OUTPUT_STYLE,
     &LEGACY_TIME_PARSER_POLICY,
@@ -182,6 +185,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.joinCost", &JOIN_COST),
     ("krishiv.python.udf.threads", &PYTHON_UDF_THREADS),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
+    ("krishiv.exec.agg.directKeys", &EXEC_AGG_DIRECT_KEYS),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
@@ -498,6 +502,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
         &RUNTIME_FILTER_BLOOM_ENABLED,
+    ),
+    (
+        "spark.sql.legacy.skipTypeValidationOnAlterPartition",
+        &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    ),
+    (
+        "krishiv.sql.legacy.skipTypeValidationOnAlterPartition",
+        &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
     ),
 ];
 

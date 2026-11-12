@@ -473,6 +473,18 @@ fn the_broadcast_threshold_defaults_to_10_mib_under_both_keys() {
 #[test]
 fn spark_aliases_map_to_krishiv_keys() {
     let mut c = Config::new();
+    assert_eq!(
+        LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION.key,
+        "krishiv.sql.legacy.skipTypeValidationOnAlterPartition"
+    );
+    assert_eq!(
+        lookup("spark.sql.legacy.skipTypeValidationOnAlterPartition").map(|e| e.key),
+        Some(LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION.key)
+    );
+    assert_eq!(
+        c.get(&LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION),
+        Some(&ConfigValue::Bool(false))
+    );
     assert_eq!(c.set("spark.sql.ansi.enabled", "false").unwrap(), None);
     assert_eq!(c.get(&ANSI_ENABLED), Some(&ConfigValue::Bool(false)));
     assert_eq!(
@@ -1180,6 +1192,16 @@ fn build_side_projection_defaults_on_and_parses_booleans() {
         c.set("krishiv.exec.join.buildProjection", "sometimes")
             .is_err()
     );
+}
+
+#[test]
+fn direct_agg_keys_default_on_and_parse_booleans() {
+    let mut c = Config::new();
+    let get = |c: &Config| c.get(&EXEC_AGG_DIRECT_KEYS).and_then(ConfigValue::as_bool);
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.agg.directKeys", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(c.set("krishiv.exec.agg.directKeys", "sometimes").is_err());
 }
 
 #[test]

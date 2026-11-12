@@ -1971,7 +1971,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-alloc"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "krishiv-common",
  "libmimalloc-sys",
@@ -1993,7 +1993,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-bench-runner"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-row",
@@ -2015,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-cli"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "clap",
  "futures",
@@ -2037,7 +2037,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-common"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "codspeed-criterion-compat",
  "serde_json",
@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connect"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2063,27 +2063,27 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connector-sdk"
-version = "0.2.0-alpha"
+version = "0.2.0"
 
 [[package]]
 name = "krishiv-connectors-cdc"
-version = "0.2.0-alpha"
+version = "0.2.0"
 
 [[package]]
 name = "krishiv-connectors-delta"
-version = "0.2.0-alpha"
+version = "0.2.0"
 
 [[package]]
 name = "krishiv-connectors-iceberg"
-version = "0.2.0-alpha"
+version = "0.2.0"
 
 [[package]]
 name = "krishiv-connectors-kafka"
-version = "0.2.0-alpha"
+version = "0.2.0"
 
 [[package]]
 name = "krishiv-exec"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2122,11 +2122,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-flight-sql"
-version = "0.2.0-alpha"
+version = "0.2.0"
 
 [[package]]
 name = "krishiv-functions"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2148,7 +2148,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-io"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "apache-avro",
  "arrow-array",
@@ -2185,7 +2185,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-kernels"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-mcp"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "futures",
  "krishiv-common",
@@ -2224,7 +2224,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-memory"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2245,7 +2245,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-optimizer"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2264,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-plan"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2284,7 +2284,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-plan-codec"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-ipc",
  "arrow-schema",
@@ -2304,7 +2304,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-python"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2323,7 +2323,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-scheduler"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2345,7 +2345,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-server"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2362,7 +2362,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-session"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2395,6 +2395,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "tempfile",
+ "thiserror",
  "tokio",
  "tracing",
  "tracing-opentelemetry",
@@ -2404,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-shuffle"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-ipc",
@@ -2419,7 +2420,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-sim"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2443,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-sql"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "codspeed-criterion-compat",
  "insta",
@@ -2457,11 +2458,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-state"
-version = "0.2.0-alpha"
+version = "0.2.0"
 
 [[package]]
 name = "krishiv-store"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2474,11 +2475,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-stream"
-version = "0.2.0-alpha"
+version = "0.2.0"
 
 [[package]]
 name = "krishiv-testkit"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2512,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-types"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2526,7 +2527,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-udf-sdk"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "krishiv-types",
@@ -2534,7 +2535,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-ui-assets"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "rust-embed",
 ]
@@ -4531,6 +4532,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4540,12 +4551,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -4977,7 +4991,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "krishiv-common",
  "krishiv-exec",

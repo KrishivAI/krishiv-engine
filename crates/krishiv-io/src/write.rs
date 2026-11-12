@@ -15,7 +15,7 @@
 //! partition key changes ([`partition`](crate::partition)).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
@@ -25,7 +25,7 @@ use object_store::path::Path;
 use krishiv_kernels::cast::{FixedOffset, TimeZoneRules};
 use krishiv_kernels::datetime::{ZoneRef, resolve_zone};
 
-use crate::error::{Result, internal, unsupported};
+use crate::error::{Result, cancelled, internal, unsupported};
 use crate::format::{Encoder, FileFormat};
 use crate::io::{IoContext, PinnedStore, StoreId, Upload};
 use crate::options::FormatOptions;
@@ -131,6 +131,8 @@ pub struct FileWriter {
     next_file: Arc<AtomicU32>,
     written: Vec<WrittenFileInfo>,
     mem: Reservation,
+    /// Set once the write is abandoned (see [`FileWriter::stopping_on`]).
+    stop: Option<Arc<AtomicBool>>,
 }
 
 impl std::fmt::Debug for FileWriter {
@@ -205,6 +207,7 @@ impl FileWriter {
             next_file: Arc::new(AtomicU32::new(0)),
             written: Vec::new(),
             mem,
+            stop: None,
         })
     }
 
@@ -224,7 +227,27 @@ impl FileWriter {
         self
     }
 
+    /// This writer stopping once `flag` is set: [`FileWriter::write`] then
+    /// fails with `OPERATION_CANCELED` before its next file or slice, so an
+    /// abandoned write (a cancelled query whose driver is gone) does not
+    /// go on encoding its queued rows (with `maxRecordsPerFile` = 1, one
+    /// file per row) before [`FileWriter::abort`] deletes them.
+    #[must_use]
+    pub fn stopping_on(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.stop = Some(flag);
+        self
+    }
+
+    fn check_stop(&self) -> Result<()> {
+        match &self.stop {
+            Some(f) if f.load(Ordering::Acquire) => Err(cancelled()),
+            _ => Ok(()),
+        }
+    }
+
     async fn open_file(&mut self) -> Result<()> {
+        // Every file a writer opens starts here, a partition's included.
+        self.check_stop()?;
         let file = self.next_file.fetch_add(1, Ordering::Relaxed);
         let name = if self.options.partition_by.is_empty() {
             spark_file_name(
@@ -281,7 +304,8 @@ impl FileWriter {
     /// Writes `batch`, rolling over to new files as needed.
     ///
     /// # Errors
-    /// Encode, upload and memory errors; the writer should then be aborted.
+    /// Encode, upload and memory errors, `OPERATION_CANCELED` once stopped
+    /// ([`FileWriter::stopping_on`]); the writer should then be aborted.
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         if self.options.partition_by.is_empty() {
             return self.write_to_current(batch).await;
@@ -362,6 +386,7 @@ impl FileWriter {
     async fn write_to_current(&mut self, batch: &RecordBatch) -> Result<()> {
         let mut offset = 0;
         while offset < batch.num_rows() {
+            self.check_stop()?;
             if self.current.is_none() {
                 self.open_file().await?;
             }
