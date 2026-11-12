@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the Spark data types: Arrow mapping, DDL names, coercion and equality.
 use std::sync::Arc;
 
 use arrow_schema::{DataType as ArrowType, Field, TimeUnit};

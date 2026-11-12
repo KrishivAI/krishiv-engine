@@ -1466,3 +1466,371 @@ fn demand_reads_run_on_the_io_runtime() {
         .unwrap();
     assert_eq!(rows(&batches), 5000);
 }
+
+/// Nulls at every level of deep nesting (null vs empty lists, null structs
+/// inside lists, null elements, a struct in a struct, a map of lists) come
+/// back as written. The interop fixtures only nest one level.
+#[test]
+fn deep_nested_nulls_round_trip() {
+    use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StructBuilder};
+    let env = Env::new();
+    let inner_list = || {
+        Field::new(
+            "b",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        )
+    };
+    let elem_fields =
+        arrow_schema::Fields::from(vec![Field::new("a", DataType::Int32, true), inner_list()]);
+    let sb = StructBuilder::new(
+        elem_fields.clone(),
+        vec![
+            Box::new(Int32Builder::new()),
+            Box::new(ListBuilder::new(Int32Builder::new())),
+        ],
+    );
+    let mut lst = ListBuilder::new(sb).with_field(Arc::new(Field::new(
+        "item",
+        DataType::Struct(elem_fields),
+        true,
+    )));
+    // row 0: null list; row 1: empty; row 2: [null struct, {a:null,b:null}, {a:1,b:[]}, {a:2,b:[null,3]}]
+    lst.append(false);
+    lst.append(true);
+    for (kind, a) in [(0, 0), (1, 0), (2, 1), (3, 2)] {
+        let s = lst.values();
+        match kind {
+            0 => {
+                s.field_builder::<Int32Builder>(0).unwrap().append_null();
+                s.field_builder::<ListBuilder<Int32Builder>>(1)
+                    .unwrap()
+                    .append(false);
+                s.append(false);
+            }
+            1 => {
+                s.field_builder::<Int32Builder>(0).unwrap().append_null();
+                s.field_builder::<ListBuilder<Int32Builder>>(1)
+                    .unwrap()
+                    .append(false);
+                s.append(true);
+            }
+            2 => {
+                s.field_builder::<Int32Builder>(0).unwrap().append_value(a);
+                s.field_builder::<ListBuilder<Int32Builder>>(1)
+                    .unwrap()
+                    .append(true);
+                s.append(true);
+            }
+            _ => {
+                s.field_builder::<Int32Builder>(0).unwrap().append_value(a);
+                let l = s.field_builder::<ListBuilder<Int32Builder>>(1).unwrap();
+                l.values().append_null();
+                l.values().append_value(3);
+                l.append(true);
+                s.append(true);
+            }
+        }
+    }
+    lst.append(true);
+    lst.append(true);
+    let lst = lst.finish();
+    // struct<s: struct<i: int32>>: rows: outer null; outer ok inner null; inner ok leaf null; leaf 5.
+    let leaf = arrow_schema::Fields::from(vec![Field::new("i", DataType::Int32, true)]);
+    let mid = Arc::new(arrow_array::StructArray::new(
+        leaf.clone(),
+        vec![Arc::new(Int32Array::from(vec![None, None, None, Some(5)])) as ArrayRef],
+        Some(vec![false, false, true, true].into()),
+    ));
+    let outer_f = arrow_schema::Fields::from(vec![Field::new("s", DataType::Struct(leaf), true)]);
+    let outer = arrow_array::StructArray::new(
+        outer_f,
+        vec![mid as ArrayRef],
+        Some(vec![false, true, true, true].into()),
+    );
+    let mut m = MapBuilder::new(
+        None,
+        Int32Builder::new(),
+        ListBuilder::new(Int32Builder::new()),
+    );
+    m.append(false).unwrap();
+    m.append(true).unwrap();
+    m.keys().append_value(1);
+    m.values().append(false);
+    m.keys().append_value(2);
+    m.values().values().append_null();
+    m.values().values().append_value(9);
+    m.values().append(true);
+    m.append(true).unwrap();
+    m.append(true).unwrap();
+    let m = m.finish();
+    // Rows: lst has 4 rows (null, empty, 4 elems, empty-after) ; pad others to 4.
+    assert_eq!((lst.len(), outer.len(), m.len()), (4, 4, 4));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l", lst.data_type().clone(), true),
+        Field::new("o", outer.data_type().clone(), true),
+        Field::new("m", m.data_type().clone(), true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(lst), Arc::new(outer), Arc::new(m)],
+    )
+    .unwrap();
+    let file = env.put(
+        "deep.parquet",
+        write(std::slice::from_ref(&batch), WriterProperties::default()),
+    );
+    let o = env.options(&[]);
+    let meta = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+        )
+        .unwrap();
+    let out = env
+        .scan(&file, &ScanRequest::all(meta.schema()), &o)
+        .unwrap();
+    let out = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+    for c in 0..3 {
+        assert_eq!(
+            out.column(c).to_data(),
+            batch.column(c).to_data(),
+            "column {c}"
+        );
+    }
+    // The same rows in row groups of one row keep their nulls too.
+    let split = env.put(
+        "deep_split.parquet",
+        write(
+            std::slice::from_ref(&batch),
+            WriterProperties::builder()
+                .set_max_row_group_row_count(Some(1))
+                .build(),
+        ),
+    );
+    let out = env
+        .scan(&split, &ScanRequest::all(meta.schema()), &o)
+        .unwrap();
+    let out = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+    for c in 0..3 {
+        assert_eq!(
+            out.column(c).to_data(),
+            batch.column(c).to_data(),
+            "split column {c}"
+        );
+    }
+    // A row selection inside one page of nested columns (the skipped rows
+    // hold the null list, the empty list and a list of structs) keeps
+    // the rows that follow aligned.
+    for (name, f) in [("one", &file), ("split", &split)] {
+        for ranges in [&[(2, 4)][..], &[(0, 1), (3, 4)], &[(1, 3)]] {
+            let mut req = ScanRequest::all(meta.schema());
+            req.selection = Some(RowSelection::from_ranges(ranges.iter().map(|&(a, b)| a..b)));
+            let out = env.scan(f, &req, &o).unwrap();
+            let out = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+            let idx =
+                arrow_array::UInt64Array::from_iter_values(ranges.iter().flat_map(|&(a, b)| a..b));
+            for c in 0..3 {
+                let want = arrow_select::take::take(batch.column(c), &idx, None).unwrap();
+                assert_eq!(
+                    out.column(c).to_data(),
+                    want.to_data(),
+                    "{name} {ranges:?} column {c}"
+                );
+            }
+        }
+    }
+}
+
+/// Predicates over a path into a nullable struct (null struct rows, null
+/// leaves, several row groups, row filter on and off) never drop a row the
+/// predicate keeps, and `IS NULL` keeps rows whose struct is null.
+#[test]
+fn nested_path_predicates_keep_every_matching_row() {
+    use crate::request::RowFilterPolicy;
+    let env = Env::new();
+    let n: i32 = 3000;
+    let leaf = arrow_schema::Fields::from(vec![Field::new("x", DataType::Int32, true)]);
+    // x is null every 7th row; the whole struct is null every 11th row.
+    let x = Int32Array::from_iter((0..n).map(|i| (i % 7 != 0).then_some(i)));
+    let st = arrow_array::StructArray::new(
+        leaf.clone(),
+        vec![Arc::new(x) as ArrayRef],
+        Some((0..n).map(|i| i % 11 != 0).collect()),
+    );
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("s", DataType::Struct(leaf), true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from_iter_values(0..n)), Arc::new(st)],
+    )
+    .unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(500))
+        .build();
+    let file = env.put("np.parquet", write(&[batch], props));
+    let o = env.options(&[]);
+    let file_schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+        )
+        .unwrap()
+        .schema();
+    let path = || ColumnPath::nested(["s", "x"]);
+    let is_null = |i: i32| i % 11 == 0 || i % 7 == 0;
+    type Keeps = Box<dyn Fn(i32) -> bool>;
+    let cases: Vec<(&str, PushdownExpr, Keeps)> = vec![
+        ("is null", PushdownExpr::IsNull(path()), Box::new(is_null)),
+        (
+            "is not null",
+            PushdownExpr::IsNotNull(path()),
+            Box::new(move |i| !is_null(i)),
+        ),
+        (
+            "> 2500",
+            PushdownExpr::cmp(path(), CmpOp::Gt, ScalarValue::Int32(2500)),
+            Box::new(move |i| !is_null(i) && i > 2500),
+        ),
+        (
+            "= 1234",
+            PushdownExpr::cmp(path(), CmpOp::Eq, ScalarValue::Int32(1234)),
+            Box::new(move |i| !is_null(i) && i == 1234),
+        ),
+    ];
+    for policy in [
+        RowFilterPolicy::Off,
+        RowFilterPolicy::On,
+        RowFilterPolicy::Auto,
+    ] {
+        for (name, pred, keeps) in &cases {
+            let mut req = ScanRequest::new(
+                Arc::clone(&file_schema),
+                vec![ColumnPath::new("id"), ColumnPath::new("s")],
+            );
+            req.predicate = Some(pred.clone());
+            req.row_filter = policy;
+            let out = env.scan(&file, &req, &o).unwrap();
+            let b = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+            let ids = b.column(0).as_primitive::<Int32Type>();
+            let got: std::collections::BTreeSet<i32> = ids.values().iter().copied().collect();
+            assert!(
+                ids.values().windows(2).all(|w| w[0] < w[1]),
+                "{policy:?} {name}: ids repeat or leave file order"
+            );
+            let want: Vec<i32> = (0..n).filter(|i| keeps(*i)).collect();
+            assert!(
+                want.iter().all(|i| got.contains(i)),
+                "{policy:?} {name}: lost {:?}",
+                want.iter()
+                    .filter(|i| !got.contains(i))
+                    .take(5)
+                    .collect::<Vec<_>>()
+            );
+            // Rows kept above the predicate are consistent with the data.
+            let s = b.column(1).as_struct();
+            for r in 0..b.num_rows() {
+                let i = ids.value(r);
+                assert_eq!(s.is_null(r), i % 11 == 0, "{policy:?} {name} id {i}");
+            }
+        }
+    }
+}
+
+/// Nested leaves that the writer dictionary-encodes (few distinct strings
+/// under lists and structs, with nulls at each level) read back as
+/// written, whole and under a row selection.
+#[test]
+fn dictionary_encoded_nested_leaves_round_trip() {
+    use arrow_array::builder::{ListBuilder, StringViewBuilder};
+    let env = Env::new();
+    let mut lst = ListBuilder::new(StringViewBuilder::new());
+    let rows: [Option<&[Option<&str>]>; 6] = [
+        Some(&[Some("a"), Some("b"), None]),
+        None,
+        Some(&[]),
+        Some(&[Some("b"), Some("a"), Some("a")]),
+        Some(&[None]),
+        Some(&[Some("a")]),
+    ];
+    for r in rows {
+        match r {
+            None => lst.append(false),
+            Some(vs) => {
+                for v in vs {
+                    lst.values().append_option(*v);
+                }
+                lst.append(true);
+            }
+        }
+    }
+    let lst = lst.finish();
+    let leaf = arrow_schema::Fields::from(vec![Field::new("s", DataType::Utf8View, true)]);
+    let st = arrow_array::StructArray::new(
+        leaf,
+        vec![Arc::new(arrow_array::StringViewArray::from(vec![
+            Some("x"),
+            None,
+            Some("y"),
+            Some("x"),
+            Some("y"),
+            Some("x"),
+        ])) as ArrayRef],
+        Some(vec![true, false, true, true, true, true].into()),
+    );
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l", lst.data_type().clone(), true),
+        Field::new("st", st.data_type().clone(), true),
+    ]));
+    let batch =
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(lst), Arc::new(st)]).unwrap();
+    let bytes = write(
+        std::slice::from_ref(&batch),
+        WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build(),
+    );
+    {
+        let reader =
+            parquet::file::reader::SerializedFileReader::new(bytes::Bytes::from(bytes.clone()))
+                .unwrap();
+        let rg = parquet::file::reader::FileReader::metadata(&reader).row_group(0);
+        assert!(rg.num_columns() >= 2);
+        for c in rg.columns() {
+            assert!(
+                c.dictionary_page_offset().is_some(),
+                "leaf {} is not dictionary-encoded",
+                c.column_path()
+            );
+        }
+    }
+    let file = env.put("dict_nested.parquet", bytes);
+    let o = env.options(&[]);
+    let meta = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+        )
+        .unwrap();
+    for ranges in [&[(0, 6)][..], &[(1, 3)], &[(0, 1), (4, 6)], &[(3, 5)]] {
+        let mut req = ScanRequest::all(meta.schema());
+        req.selection = Some(RowSelection::from_ranges(ranges.iter().map(|&(a, b)| a..b)));
+        let out = env.scan(&file, &req, &o).unwrap();
+        let out = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+        let idx =
+            arrow_array::UInt64Array::from_iter_values(ranges.iter().flat_map(|&(a, b)| a..b));
+        for c in 0..2 {
+            let want = arrow_select::take::take(batch.column(c), &idx, None).unwrap();
+            assert_eq!(
+                out.column(c).to_data(),
+                want.to_data(),
+                "{ranges:?} column {c}"
+            );
+        }
+    }
+}
