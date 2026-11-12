@@ -24,9 +24,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::Arc;
 
-use krishiv_optimizer::{
-    ColumnStats, Options, PlanStats, Statistics, TableStats, optimize_with_options,
-};
+use krishiv_optimizer::{ColumnStats, PlanStats, Statistics, TableStats, optimize_with_options};
 use krishiv_plan::{Literal, LogicalPlan, PlanNode, ReadSource, Scan};
 use krishiv_types::DataType;
 use serde_json::Value;
@@ -322,10 +320,7 @@ fn run_suite(
     on: bool,
 ) -> Errors {
     let stats = stats_of(db);
-    let options = Options {
-        stats_propagation: on,
-        ..Options::default()
-    };
+    let options = support::options(|o| o.stats_propagation = on);
     let mut errors = Errors::default();
     // The interpreter panics on constructs it does not run: those relations
     // are skipped (and counted), quietly.
