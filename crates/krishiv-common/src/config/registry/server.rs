@@ -148,8 +148,8 @@ pub static CONNECT_HANDSHAKE_TIMEOUT: ConfigEntry = startup(
     "krishiv.connect.handshakeTimeout",
     ValueType::Duration,
     ConfigValue::Duration(Duration::from_secs(10)),
-    "A new Spark Connect connection that sends nothing for this long is closed, so idle sockets \
-     cannot use up `krishiv.connect.maxConnections`.",
+    "A new Spark Connect connection that sends no first byte for this long is closed, so silent \
+     sockets cannot hold `krishiv.connect.maxConnections` for longer. `0s` means no deadline.",
     None,
 );
 

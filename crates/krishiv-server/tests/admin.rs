@@ -97,3 +97,15 @@ async fn connections_past_the_cap_wait_for_one_to_close() {
         .expect("served once the first closed");
     assert!(third.starts_with("HTTP/1.1 200"), "{third}");
 }
+
+#[tokio::test]
+async fn the_api_router_serves_no_page() {
+    let (addr, _stop) = start(krishiv_server::api_router(), HttpLimits::default()).await;
+    let v = get_raw(addr, "/api/v1/version").await;
+    assert!(v.starts_with("HTTP/1.1 200"), "{v}");
+    for path in ["/", "/index.html", "/queries"] {
+        let r = get_raw(addr, path).await;
+        assert!(r.starts_with("HTTP/1.1 404"), "{path}: {r}");
+        assert!(!r.contains("<html"), "{path}: {r}");
+    }
+}

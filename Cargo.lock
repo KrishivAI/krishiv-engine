@@ -2380,6 +2380,7 @@ dependencies = [
  "krishiv-ui-assets",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

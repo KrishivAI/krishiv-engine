@@ -20,6 +20,7 @@ futures = { workspace = true, features = ["alloc"] }
 getrandom.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync"] }
+tracing.workspace = true
 
 [features]
 # Prometheus exposition of the engine metrics snapshot (`GET /metrics`).

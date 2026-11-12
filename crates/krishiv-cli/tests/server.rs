@@ -177,6 +177,13 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
     assert!(r.ends_with(r#"{"status":"ready"}"#), "{r}");
     // The Connect port accepts connections.
     TcpStream::connect(&run.connect).expect("connect port is bound");
+    // Without `ui` there is no page; with it, the SPA answers.
+    let page = http_get(&run.admin, "/");
+    if cfg!(feature = "ui") {
+        assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    } else {
+        assert!(page.starts_with("HTTP/1.1 404"), "{page}");
+    }
     // `/metrics` needs the admin token unless made public (or is off).
     let m = http_get(&run.admin, "/metrics");
     assert!(

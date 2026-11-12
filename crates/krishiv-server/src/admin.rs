@@ -130,6 +130,7 @@ impl axum::serve::Listener for CappedListener {
     type Addr = SocketAddr;
 
     async fn accept(&mut self) -> (CappedStream, SocketAddr) {
+        let mut backoff = Duration::from_millis(10);
         loop {
             let Ok(permit) = Arc::clone(&self.permits).acquire_owned().await else {
                 // The semaphore is never closed; wait as a closed listener would.
@@ -146,7 +147,12 @@ impl axum::serve::Listener for CappedListener {
                         addr,
                     );
                 }
-                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                // Out of file descriptors every retry fails: log and back off.
+                Err(e) => {
+                    tracing::warn!(target: "krishiv::server", error = %e, "admin accept failed");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(1));
+                }
             }
         }
     }

@@ -62,8 +62,8 @@ pub struct ConnectServerConfig {
     /// Open connections (`krishiv.connect.maxConnections`, 1024); past it
     /// the accept loop waits for one to close.
     pub max_connections: usize,
-    /// A new connection that sends nothing for this long is closed
-    /// (`krishiv.connect.handshakeTimeout`, 10 s).
+    /// A new connection that sends no first byte for this long is closed
+    /// (`krishiv.connect.handshakeTimeout`, 10 s; zero: no deadline).
     pub handshake_timeout: Duration,
     /// How often idle sessions are swept
     /// (`spark.connect.session.manager.maintenanceInterval`, 30 s).
@@ -317,9 +317,11 @@ async fn sweep_loop(manager: Arc<SessionManager>, every: Duration) {
 }
 
 /// The accepted connections of `listener`, at most `max` open at once. A
-/// connection that sends nothing within `handshake` is closed before it is
-/// handed to the server, so silent sockets cannot hold the cap (threat
-/// model T-D6). Accepting runs on a task of its own, aborted when the
+/// connection that sends nothing within `handshake` (zero: no deadline) is
+/// closed before it is handed to the server, so a silent socket holds a
+/// slot for at most that long (threat model T-D6). The deadline covers the
+/// first byte only: a client that sends one byte and stalls keeps its slot
+/// until the established-connection idle timeout exists (T011a). Accepting runs on a task of its own, aborted when the
 /// stream is dropped; each new connection waits for its first byte on a
 /// task of its own, so one slow client delays no other.
 fn capped(
@@ -364,7 +366,14 @@ async fn accept_loop(
         let sender = tx.clone();
         tokio::spawn(async move {
             let mut first = [0_u8; 1];
-            match tokio::time::timeout(handshake, stream.peek(&mut first)).await {
+            // A zero deadline means none (as `0s` for the session idle
+            // timeout).
+            let peeked = if handshake.is_zero() {
+                Ok(stream.peek(&mut first).await)
+            } else {
+                tokio::time::timeout(handshake, stream.peek(&mut first)).await
+            };
+            match peeked {
                 Ok(Ok(n)) if n > 0 => {
                     let _ = sender
                         .send(Ok(CappedStream {
