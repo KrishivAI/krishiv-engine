@@ -1451,6 +1451,9 @@ fn an_unpartitioned_table_over_foreign_files_skips_a_subdirectory() {
     std::fs::create_dir_all(loc.path().join("tmp_x")).unwrap();
     std::fs::copy(&file, loc.path().join(file.file_name().unwrap())).unwrap();
     std::fs::copy(&file, loc.path().join("tmp_x").join("b.parquet")).unwrap();
+    // A `name=value` subdirectory is not a partition of an unpartitioned table either (#690 review).
+    std::fs::create_dir_all(loc.path().join("p=1")).unwrap();
+    std::fs::copy(&file, loc.path().join("p=1").join("c.parquet")).unwrap();
     run(
         &s,
         &format!(

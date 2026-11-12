@@ -439,6 +439,7 @@ impl FileReads {
         // partitioned one's registered locations only).
         // (`recursiveFileLookup` keeps reading every directory, as before.)
         mode.skip_foreign_dirs = known.is_some() && mode.base.is_none() && !mode.recursive;
+        mode.skip_all_dirs = mode.skip_foreign_dirs && !partitioned;
         // Spark checks the paths before the format.
         let mut listed: Vec<(FileRef, Vec<Segment>)> = Vec::new();
         for p in paths {
@@ -717,6 +718,7 @@ impl FileReads {
             base: mode.base.clone(),
             logged: outer,
             skip_foreign_dirs: mode.skip_foreign_dirs,
+            skip_all_dirs: mode.skip_all_dirs,
         };
         for (names, path) in matched {
             let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
@@ -755,6 +757,7 @@ impl FileReads {
             base,
             logged: None,
             skip_foreign_dirs: false,
+            skip_all_dirs: false,
         })
     }
 
@@ -977,7 +980,9 @@ impl FileReads {
             // partition directory holds none of its files (Spark 4.2.0 reads
             // neither an unpartitioned table's subdirectories nor a partitioned
             // one's unregistered locations). Any other read refuses it.
-            if mode.skip_foreign_dirs && names.iter().any(|d| parse_segment(d).is_none()) {
+            if (mode.skip_all_dirs && !names.is_empty())
+                || (mode.skip_foreign_dirs && names.iter().any(|d| parse_segment(d).is_none()))
+            {
                 continue;
             }
             let segments = Self::base_segments(at, mode, &names)?;
@@ -1113,6 +1118,9 @@ struct ListMode {
     /// A catalog table's listing: files under a directory that is not a
     /// `name=value` partition directory are skipped, not refused.
     skip_foreign_dirs: bool,
+    /// An unpartitioned catalog table's listing: every subdirectory is
+    /// skipped, `name=value` ones too (its files are its root's).
+    skip_all_dirs: bool,
 }
 
 /// The partition columns of a permanent table and the partitions its

@@ -246,6 +246,8 @@ impl FileWriter {
     }
 
     async fn open_file(&mut self) -> Result<()> {
+        // Every file a writer opens starts here, a partition's included.
+        self.check_stop()?;
         let file = self.next_file.fetch_add(1, Ordering::Relaxed);
         let name = if self.options.partition_by.is_empty() {
             spark_file_name(
