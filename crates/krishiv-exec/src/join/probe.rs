@@ -22,6 +22,8 @@ use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::hash::ProbeCount;
 use crate::operator::{FlushOutput, LocalState, Operator, OperatorOutput};
+use crate::operators::compact_sparse_views;
+use crate::operators::select::{RowSelect, Selection, batch_rows};
 use crate::sync::lock;
 
 /// The probe operator.
@@ -82,10 +84,14 @@ const MATCHED: u8 = 1;
 const SKIP: u8 = 2;
 
 /// Iterates the matches of one probe batch, emitting bounded batches; the
-/// rows that stay unmatched (or matched) are emitted at the end.
+/// rows that stay unmatched (or matched) are emitted at the end. With a
+/// selection (design P2-E3 U2) the cursor's rows are the selected rows of
+/// `batch`, in order: row `i` of the cursor is batch row `sel.row(i)`, and
+/// every gather composes its ids through it.
 #[derive(Debug)]
 pub(crate) struct Cursor {
     batch: Batch,
+    sel: Option<Selection>,
     heads: Vec<u32>,
     parts: Vec<u8>,
     state: Vec<u8>,
@@ -99,21 +105,32 @@ pub(crate) struct Cursor {
 }
 
 impl Cursor {
-    /// Encodes `batch` and finds each row's first match. Also returns the
-    /// rows of spilled partitions, per partition.
+    /// Encodes `batch` (its rows `sel`, all without one) and finds each
+    /// row's first match. Also returns the rows of spilled partitions, per
+    /// partition, as rows of `batch`.
     pub(crate) fn new(
         shared: &Shared,
         hashing: &Hashing,
         batch: Batch,
+        sel: Option<Selection>,
         tables: &Tables<'_>,
         detailed: bool,
     ) -> Result<(Self, Vec<Vec<u32>>)> {
-        let n = batch.num_rows();
+        let n = sel.as_ref().map_or(batch.num_rows(), Selection::len);
+        let picked = sel.as_ref().map(Selection::array);
+        // Only the key columns of the selected rows are gathered.
         let cols: Vec<ArrayRef> = shared
             .probe_keys
             .iter()
-            .map(|&k| Arc::clone(batch.data().column(k)))
-            .collect();
+            .map(|&k| {
+                let c = batch.data().column(k);
+                match &picked {
+                    Some(ids) => arrow_select::take::take(c.as_ref(), ids, None)
+                        .map_err(|e| internal(e.to_string())),
+                    None => Ok(Arc::clone(c)),
+                }
+            })
+            .collect::<Result<_>>()?;
         let keys = shared.keys.encode(&cols, hashing)?;
         let hashes = keys.hashes();
         let mut state = vec![UNMATCHED; n];
@@ -141,7 +158,7 @@ impl Cursor {
                 lookup[p].push(row);
             } else if tables.spilled(p) {
                 state[i] = SKIP;
-                deferred[p].push(row);
+                deferred[p].push(sel.as_ref().map_or(Ok(row), |s| s.row(row))?);
             }
         }
         let started = Instant::now();
@@ -172,6 +189,7 @@ impl Cursor {
         let matches = heads.iter().filter(|&&h| h != NONE).count();
         let cursor = Self {
             batch,
+            sel,
             matches,
             heads,
             parts,
@@ -191,7 +209,7 @@ impl Cursor {
         limit: usize,
         partition: u32,
     ) -> Result<(Option<Batch>, bool)> {
-        let n = self.batch.num_rows();
+        let n = self.state.len();
         let quick = !shared.join_type.emits_build() && shared.filter.is_none();
         // Semi / anti candidates produce no rows, so they need no output
         // bound: evaluate the filter on larger slices.
@@ -259,7 +277,8 @@ impl Cursor {
     ) -> Result<Option<Batch>> {
         let arena = |p: usize| tables.get(p).map(JoinTable::arena);
         let build_cols = shared.build_columns(self.rows, build, arena)?;
-        let taken = take_batch(&self.batch, &UInt32Array::from(probe.to_vec()))?;
+        let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), probe)?)?;
+        let taken = self.compact_selected(taken)?;
         let m = probe.len();
         let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
         columns.extend(build_cols);
@@ -333,6 +352,28 @@ impl Cursor {
         Ok((out.num_rows() > 0).then_some(out))
     }
 
+    /// The cursor's rows `rows` of the batch (the batch itself when they
+    /// are all of its rows).
+    fn gather(&self, rows: &[u32]) -> Result<Batch> {
+        if self.sel.is_none() && rows.len() == self.batch.num_rows() {
+            return Ok(self.batch.clone());
+        }
+        let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), rows)?)?;
+        self.compact_selected(taken)
+    }
+
+    /// `taken` (rows of the batch, its columns) with the string views of a
+    /// selective fused filter compacted, as the `Filter` it replaces does:
+    /// a `take` keeps every data buffer of the scan's batch, which each
+    /// breaker above would charge to the memory pool.
+    fn compact_selected(&self, taken: Batch) -> Result<Batch> {
+        if self.sel.is_some() {
+            compact_sparse_views(&self.batch, taken)
+        } else {
+            Ok(taken)
+        }
+    }
+
     /// The rows the join type emits once every match is known.
     fn tail(&self, shared: &Shared) -> Result<Option<Batch>> {
         let want = match shared.join_type {
@@ -357,11 +398,7 @@ impl Cursor {
         if rows.is_empty() {
             return Ok(None);
         }
-        let taken = if rows.len() == self.batch.num_rows() {
-            self.batch.clone()
-        } else {
-            take_batch(&self.batch, &UInt32Array::from(rows))?
-        };
+        let taken = self.gather(&rows)?;
         if !shared.join_type.pads_probe() {
             return Ok(Some(taken));
         }
@@ -395,11 +432,7 @@ impl Cursor {
         if rows.is_empty() {
             return Ok(None);
         }
-        let taken = if rows.len() == self.batch.num_rows() {
-            self.batch.clone()
-        } else {
-            take_batch(&self.batch, &UInt32Array::from(rows))?
-        };
+        let taken = self.gather(&rows)?;
         let (data, weights) = taken.into_parts();
         let mut columns = data.columns().to_vec();
         columns.push(Arc::new(BooleanArray::from(marks)) as ArrayRef);
@@ -485,6 +518,12 @@ struct ProbeLocal {
     batch_size: usize,
     /// The driver's partition: the residual filter evaluates in it.
     partition: u32,
+    /// The fused selection (design P2-E3 U2).
+    select: Option<RowSelect>,
+    /// The selection of the input batch a `NeedMemory` interrupted: the
+    /// retry joins the same rows without evaluating (and counting) the row
+    /// stage again.
+    selected: Option<Option<Selection>>,
 }
 
 fn local_mut(local: &mut LocalState) -> Result<&mut ProbeLocal> {
@@ -494,30 +533,73 @@ fn local_mut(local: &mut LocalState) -> Result<&mut ProbeLocal> {
 }
 
 impl ProbeOp {
-    fn execute_inner(&self, input: &Batch, l: &mut ProbeLocal) -> Result<OperatorOutput> {
+    fn execute_inner(&self, received: &Batch, l: &mut ProbeLocal) -> Result<OperatorOutput> {
         let s = &*self.0;
         let g = &*l.build;
         let built = g
             .built()
             .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
-        if s.join_type.builds_preserved() && !input.is_unweighted() {
+        if s.join_type.builds_preserved() && !received.is_unweighted() {
             // Whether a build row "matched" depends on the net multiplicity
             // of the probe rows with its key, which marks do not track.
             return Err(super::unsupported(
                 "a weighted (change-stream) probe side for a join that returns its build rows",
             ));
         }
+        // A new input batch: its fused selection first (design P2-E3 U2),
+        // over the batch received, kept across a `NeedMemory` retry; then
+        // the columns the probe reads of it.
+        let sel = if l.cursor.is_none() && received.num_rows() > 0 {
+            match l.selected.take() {
+                Some(sel) => sel,
+                None => match &mut l.select {
+                    Some(select) => select.select(received, l.partition)?,
+                    None => None,
+                },
+            }
+        } else {
+            None
+        };
+        let projected;
+        let input = match s.select.as_ref().and_then(|x| x.columns.as_deref()) {
+            Some(columns) if l.cursor.is_none() => {
+                let data = arrow_array::RecordBatch::try_new_with_options(
+                    Arc::clone(&s.probe_schema),
+                    columns
+                        .iter()
+                        .map(|&c| Arc::clone(received.data().column(c)))
+                        .collect(),
+                    &arrow_array::RecordBatchOptions::new()
+                        .with_row_count(Some(received.num_rows())),
+                )
+                .map_err(|e| internal(e.to_string()))?;
+                projected = Batch::with_weights(data, received.weights().clone())
+                    .map_err(|e| internal(e.to_string()))?;
+                &projected
+            }
+            _ => received,
+        };
+        if l.cursor.is_none() && sel.as_ref().is_some_and(Selection::is_empty) {
+            return Ok(OperatorOutput::NeedMoreInput(None));
+        }
+        let rows = sel.as_ref().map_or(input.num_rows(), Selection::len);
         if s.join_type == JoinType::NullAwareAnti {
             use std::sync::atomic::Ordering;
             if g.null_key.load(Ordering::Acquire) {
-                s.counters.add(Counter::ProbeRows, input.num_rows() as u64);
+                s.counters.add(Counter::ProbeRows, rows as u64);
                 return Ok(OperatorOutput::NeedMoreInput(None));
             }
             if g.rows.load(Ordering::Acquire) == 0 {
-                s.counters.add(Counter::ProbeRows, input.num_rows() as u64);
-                return Ok(OperatorOutput::NeedMoreInput(
-                    (input.num_rows() > 0).then(|| input.clone()),
-                ));
+                s.counters.add(Counter::ProbeRows, rows as u64);
+                let kept = match &sel {
+                    _ if rows == 0 => None,
+                    Some(sel) => Some(compact_sparse_views(
+                        input,
+                        take_batch(input, &sel.array())?,
+                    )?),
+                    None => Some(input.clone()),
+                };
+                return Ok(OperatorOutput::NeedMoreInput(kept));
             }
         }
         let tables = Tables::Level0(&built.tables, built.spilled);
@@ -526,7 +608,7 @@ impl ProbeOp {
                 return Ok(OperatorOutput::NeedMoreInput(None));
             }
             let (cursor, deferred) =
-                Cursor::new(s, &g.hashing, input.clone(), &tables, l.detailed)?;
+                Cursor::new(s, &g.hashing, input.clone(), sel, &tables, l.detailed)?;
             let mut chunks = Vec::new();
             for (p, rows) in deferred
                 .into_iter()
@@ -537,6 +619,7 @@ impl ProbeOp {
                 chunks.push((p, super::compact_views(chunk)?));
             }
             if let Err(bytes) = reserve_chunks(&mut l.parts, &chunks) {
+                l.selected = Some(cursor.sel);
                 return Ok(OperatorOutput::NeedMemory { bytes });
             }
             for (p, c) in chunks {
@@ -547,7 +630,7 @@ impl ProbeOp {
             }
             l.signal
                 .set_spillable_bytes(l.parts.iter().map(Part::bytes).sum());
-            s.counters.add(Counter::ProbeRows, input.num_rows() as u64);
+            s.counters.add(Counter::ProbeRows, rows as u64);
             l.cursor = Some(cursor);
         }
         let limit = l.batch_size;
@@ -585,6 +668,23 @@ impl Operator for ProbeOp {
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
+        // The scan below built this driver's row stage before this
+        // operator's state (the driver builds its source's first); a stage
+        // it cannot find is a broken contract, not a probe without one.
+        let select = match self.0.select.as_ref() {
+            None => None,
+            Some(spec) => {
+                let stage = match spec.row_stage.as_ref() {
+                    None => None,
+                    Some(r) => Some(r.consumer_stage(ctx.partition()).ok_or_else(|| {
+                        internal(
+                            "a scan handed its row stage to a probe that cannot find it".to_owned(),
+                        )
+                    })?),
+                };
+                Some(RowSelect::new(spec.predicate.clone(), stage))
+            }
+        };
         let dep = ctx
             .dependency()
             .ok_or_else(|| internal("hash join probe without its build".to_owned()))?;
@@ -602,6 +702,8 @@ impl Operator for ProbeOp {
             flush: Flush::default(),
             batch_size: ctx.query().config().batch_size.max(1),
             partition: ctx.partition(),
+            select,
+            selected: None,
         }))
     }
 

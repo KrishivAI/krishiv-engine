@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for shuffle frames and files: header and batch round trips, checksums, commits and damaged data.
 use std::sync::Arc;
 
 use arrow_array::{Int64Array, RecordBatch, StringArray};

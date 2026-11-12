@@ -355,6 +355,13 @@ impl Engine for SessionEngine {
                 session
                     .register_batches(&table.name, schema, vec![batch])
                     .map_err(|e| engine_error(&e))?;
+            } else if let Some(ddl) = empty_table_ddl(table) {
+                // An empty table of declared types (`CHAR(n)`, `VARCHAR(n)`) is a table the session creates,
+                // as Spark's suite does for the TPC-DS schemas `pipe-operators` queries.
+                self.block_on(async {
+                    let df = session.sql(&ddl).await?;
+                    df.collect_engine().await.map(drop)
+                })?;
             }
         }
         self.base.clone_from(&setup.configs);
@@ -430,7 +437,9 @@ impl Engine for SessionEngine {
         let format = format?;
         // `HiveResult.formatDescribeTableOutput`: the rows of DESCRIBE TABLE / COLUMN / QUERY print
         // each of their three cells left-aligned in 20 characters (`DESCRIBE SCHEMA` is not padded).
-        let describe = match krishiv_sql::parse_statement(sql, &self.options()) {
+        // The classification parses the text after `${name}` substitution, as `parse` does.
+        let parsed_text = session.substitute_variables(sql);
+        let describe = match krishiv_sql::parse_statement(&parsed_text, &self.options()) {
             Ok(Statement::Describe(d)) => Some(matches!(
                 d.kind,
                 DescribeKind::Table { .. } | DescribeKind::Query { .. }
@@ -443,7 +452,7 @@ impl Engine for SessionEngine {
         // `HiveResult` prints only the name column (the second) of SHOW TABLES and SHOW VIEWS, the
         // schema line still lists all three.
         let names_only = matches!(
-            krishiv_sql::parse_statement(sql, &self.options()),
+            krishiv_sql::parse_statement(&parsed_text, &self.options()),
             Ok(Statement::Show(s)) if matches!(s.kind, ShowKind::Tables { .. } | ShowKind::Views { .. })
         );
         let output = &analyzed.output;
@@ -857,6 +866,26 @@ fn binary_value(col: &ArrayRef, row: usize) -> Option<Vec<u8>> {
         ArrowType::LargeBinary => col.as_binary::<i64>().value(row).to_vec(),
         _ => return None,
     })
+}
+
+/// `CREATE TABLE` for a fixture table without rows, from its Spark column types as written.
+fn empty_table_ddl(table: &Table) -> Option<String> {
+    if !table.rows.is_empty() || table.columns.is_empty() {
+        return None;
+    }
+    let columns: Vec<String> = table
+        .columns
+        .iter()
+        .map(|c| {
+            let null = if c.nullable { "" } else { " NOT NULL" };
+            format!("`{}` {}{null}", c.name, c.spark_type)
+        })
+        .collect();
+    Some(format!(
+        "CREATE TABLE `{}` ({}) USING parquet",
+        table.name,
+        columns.join(", ")
+    ))
 }
 
 /// A fixture table as one batch, or `None` when a column type is one the session cannot hold.

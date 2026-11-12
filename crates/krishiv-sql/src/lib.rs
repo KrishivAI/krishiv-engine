@@ -58,7 +58,7 @@ pub use lower::{
 };
 pub use params::{ParameterMarker, parameter_markers};
 pub use redact::redact_sql;
-pub use summary::{query_summary, sanitize_query_text};
+pub use summary::{mask_literals, query_summary, sanitize_query_text};
 
 /// Spark's check that a temporary function's name takes no database
 /// (`INVALID_TEMP_OBJ_QUALIFIER`), for a name an `IDENTIFIER(...)` clause

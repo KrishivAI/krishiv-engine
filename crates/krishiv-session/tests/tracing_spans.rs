@@ -38,6 +38,26 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for Ca
     ) {
         let mut fields = BTreeMap::new();
         attrs.record(&mut Fields(&mut fields));
+        // The parent span's name (explicit, or the span current when this one is made).
+        let parent = attrs
+            .parent()
+            .cloned()
+            .or_else(|| ctx.current_span().id().cloned())
+            .and_then(|pid| ctx.span(&pid).map(|p| p.name().to_owned()));
+        if let Some(parent) = parent {
+            fields.insert("parent".to_owned(), parent);
+        }
+        // Where the parent's fields are in `Spans`, to tell one test's child from another's.
+        if let Some(pid) = attrs
+            .parent()
+            .cloned()
+            .or_else(|| ctx.current_span().id().cloned())
+            && let Some(Slot(slot)) = ctx
+                .span(&pid)
+                .and_then(|p| p.extensions().get::<Slot>().copied())
+        {
+            fields.insert("parent_slot".to_owned(), slot.to_string());
+        }
         if let Ok(mut spans) = self.0.lock() {
             if let Some(span) = ctx.span(id) {
                 span.extensions_mut().insert(Slot(spans.len()));
@@ -61,6 +81,18 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for Ca
             && let Some((_, fields)) = spans.get_mut(slot)
         {
             values.record(&mut Fields(fields));
+        }
+    }
+
+    fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(&id) else { return };
+        let Some(Slot(slot)) = span.extensions().get::<Slot>().copied() else {
+            return;
+        };
+        if let Ok(mut spans) = self.0.lock()
+            && let Some((_, fields)) = spans.get_mut(slot)
+        {
+            fields.insert("closed".to_owned(), "true".to_owned());
         }
     }
 }
@@ -206,4 +238,67 @@ fn a_command_that_runs_eagerly_has_a_span_around_its_execution() {
     assert!(p["db.query.text"].contains("v_e"), "{p:?}");
     // The planning and eager work is not a query span of its own.
     assert!(spans_of("orders_e").is_empty());
+}
+
+/// P2-T116: analysis, planning and execution are child spans of the query's span, so a backend
+/// shows where a query's time went.
+#[test]
+fn analysis_planning_and_execution_are_child_spans() {
+    spans();
+    let s = session("orders_pipeline");
+    let df = block_on(s.sql("SELECT a FROM orders_pipeline WHERE a > 1")).expect("plans");
+    block_on(df.collect()).expect("runs");
+    let all = spans().lock().map(|s| s.clone()).unwrap_or_default();
+    for child in ["krishiv.analyze", "krishiv.plan", "krishiv.execute"] {
+        assert!(
+            all.iter()
+                .any(|(n, f)| n == child
+                    && f.get("parent").map(String::as_str) == Some("krishiv.query")),
+            "no {child} span under krishiv.query in {all:#?}"
+        );
+    }
+}
+
+/// The execution span lasts while the result stream is alive, not only until the stream is handed
+/// back.
+#[test]
+fn the_execution_span_stays_open_while_the_results_are_consumed() {
+    use futures::StreamExt as _;
+    spans();
+    let s = session("orders_open");
+    let df = block_on(s.sql("SELECT a FROM orders_open")).expect("plans");
+    let mut stream = block_on(df.execute_stream()).expect("starts");
+    // This test's execute span: the child of its own query span (other tests share the subscriber).
+    let exec = || {
+        let all = spans().lock().map(|s| s.clone()).unwrap_or_default();
+        let query = all
+            .iter()
+            .position(|(n, f)| {
+                n == "krishiv.query"
+                    && f.get("db.query.summary")
+                        .is_some_and(|v| v.contains("orders_open"))
+            })
+            .expect("the query span");
+        let mine: Vec<_> = all
+            .into_iter()
+            .filter(|(n, f)| {
+                n == "krishiv.execute"
+                    && f.get("parent_slot").map(String::as_str) == Some(&query.to_string())
+            })
+            .collect();
+        assert_eq!(mine.len(), 1, "{mine:?}");
+        mine[0].1.contains_key("closed")
+    };
+    // Open after the first batch, closed only when the stream is dropped.
+    assert!(block_on(stream.next()).is_some());
+    assert!(!exec(), "closed while the rows are still being read");
+    while block_on(stream.next()).is_some() {}
+    drop(stream);
+    // The span closes when its last clone drops: a driver thread may still hold one for a moment
+    // after the stream is gone, so wait for the close (bounded) rather than race it.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !exec() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(exec(), "still open 10 s after the stream was dropped");
 }

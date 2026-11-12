@@ -866,7 +866,7 @@ fn a_nondeterministic_enclosing_cte_is_computed_per_run_from_one_seed() {
 fn a_seeded_random_draws_by_split_not_by_driver() {
     let s = Session::new().unwrap();
     let q = "SELECT md5(CAST(sort_array(collect_list(x)) AS STRING)) \
-             FROM (SELECT rand(7) AS x FROM range(100000))";
+             FROM (SELECT rand(7) AS x FROM range(0, 20000, 1, 48))";
     let first = column(rows(&s, q));
     for run in 0..5 {
         assert_eq!(column(rows(&s, q)), first, "run {run}");
@@ -889,7 +889,7 @@ fn union_all_children_number_their_splits_without_overlap() {
 fn a_seeded_random_above_a_generator_draws_by_split_not_by_driver() {
     let s = Session::new().unwrap();
     let q = "SELECT md5(CAST(sort_array(collect_list(x)) AS STRING)) FROM \
-             (SELECT rand(7) AS x FROM (SELECT explode(array(1, 2)) AS e FROM range(50000)))";
+             (SELECT rand(7) AS x FROM (SELECT explode(array(1, 2)) AS e FROM range(0, 10000, 1, 48)))";
     let first = column(rows(&s, q));
     for run in 0..5 {
         assert_eq!(column(rows(&s, q)), first, "run {run}");
@@ -905,4 +905,76 @@ fn two_reads_of_a_shared_cte_draw_ids_from_distinct_splits() {
              SELECT count(DISTINCT m) FROM (SELECT monotonically_increasing_id() AS m FROM t \
              UNION ALL SELECT monotonically_increasing_id() AS m FROM t)";
     assert_eq!(column(rows(&s, q)), vec!["2002"]);
+}
+
+/// Spark 4.2.0 (krishiv-internal `research/spark/seed-by-split/probe.{py,out}`): split `i` of a `range` draws from
+/// the stream seeded `seed + i`, in the split's row order, whichever driver reads it.
+#[test]
+fn a_seeded_random_draws_split_i_from_seed_plus_i_as_spark() {
+    let s = Session::new().unwrap();
+    for (q, want) in [
+        (
+            "SELECT id, CAST(rand(7) AS STRING) FROM range(0, 6, 1, 3) ORDER BY id",
+            [
+                "0.28188121484885875",
+                "0.45998819035056326",
+                "0.4836508543933039",
+                "0.734216416644485",
+                "0.7145670158242735",
+                "0.46621774950712846",
+            ]
+            .as_slice(),
+        ),
+        (
+            "SELECT id, CAST(randn(7) AS STRING) FROM range(0, 6, 1, 3) ORDER BY id",
+            [
+                "-1.773755556110447",
+                "-0.32537852999017897",
+                "-0.12108592338857035",
+                "1.7346662488921807",
+                "1.8039683668407596",
+                "-0.2840236697878177",
+            ]
+            .as_slice(),
+        ),
+        (
+            "SELECT id, CAST(uuid(7) AS STRING) FROM range(0, 4, 1, 2) ORDER BY id",
+            [
+                "cee40aac-b68a-440d-b75a-41718652cb36",
+                "50fe06d6-e030-43ea-9ff6-ff3a773b207a",
+                "6c186627-616a-45dd-85c2-ac0fd2cf712d",
+                "57eb05c8-7dfb-4f3c-8c90-54cb6d4902b1",
+            ]
+            .as_slice(),
+        ),
+        (
+            "SELECT id, CAST(rand(7) AS STRING) FROM range(0, 4, 1, 1) ORDER BY id",
+            [
+                "0.28188121484885875",
+                "0.45998819035056326",
+                "0.7690971666031955",
+                "0.6631414615273216",
+            ]
+            .as_slice(),
+        ),
+    ] {
+        let got: Vec<String> = rows(&s, q).into_iter().map(|r| r[1].clone()).collect();
+        assert_eq!(got, want, "{q}");
+    }
+}
+
+/// Spark 4.2.0 (same probe): a nondeterministic CTE read through a one-row scalar subquery is the CTE's one value,
+/// inside a loop's query and outside any.
+#[test]
+fn a_scalar_subquery_over_a_nondeterministic_cte_reads_its_one_value() {
+    let s = Session::new().unwrap();
+    for q in [
+        "WITH RECURSIVE t AS (SELECT uuid() AS u), r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) \
+         SELECT count(DISTINCT v) FROM (SELECT (SELECT max(u) FROM t) AS v FROM r UNION ALL SELECT u FROM t)",
+        "WITH t AS (SELECT uuid() AS u) SELECT count(DISTINCT v) FROM \
+         (SELECT (SELECT max(u) FROM t) AS v FROM range(5) UNION ALL SELECT u FROM t)",
+        "WITH t AS (SELECT uuid() AS u) SELECT CAST((SELECT max(u) FROM t) = (SELECT min(u) FROM t) AS INT)",
+    ] {
+        assert_eq!(column(rows(&s, q)), vec!["1"], "{q}");
+    }
 }

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the weighted batch: weights and their length checks, zero-column batches and filtering.
 use std::sync::Arc;
 
 use arrow_array::{Array, BooleanArray, Int64Array, RecordBatch, RecordBatchOptions, StringArray};

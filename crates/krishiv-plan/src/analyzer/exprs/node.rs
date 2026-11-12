@@ -952,6 +952,17 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 5)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "overlay" && n == 3 {
+                    // `overlay(input, replace, pos)` is `overlay(input, replace, pos, -1)`: Spark's
+                    // constructor writes the default length into the call, so names show it.
+                    owned = kids.clone();
+                    owned.push(default_argument(
+                        Literal::Integer(-1),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    (&owned[..], 4)
                 } else if is_builtin_entry(&entry)
                     && matches!(entry.id.name(), "st_geomfromwkb" | "st_asbinary")
                     && n == 1
@@ -1206,6 +1217,22 @@ impl Resolver<'_> {
                     }
                     return self.cast_named_call(&entry, e, f, kids, to);
                 }
+                // `ExtractValue.applyOrNull`: an element or key of a `NULL` (`void`) base is `NULL`.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "__subscript"
+                    && n == 2
+                    && kids[0].ty.data_type.is_none()
+                {
+                    let ty = arg_type(DataType::Null, true);
+                    return Ok(Bound {
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(e.origin),
+                        ),
+                        shown: Some(Arc::clone(e)),
+                        ty: ty.clone(),
+                        ..keep(ty)
+                    });
+                }
                 // `s['a']` on a struct is the field `a` (Spark's
                 // `ExtractValue`): the extraction is a non-null string.
                 if is_builtin_entry(&entry)
@@ -1393,6 +1420,7 @@ impl Resolver<'_> {
                         "current_schema" | "current_database" => {
                             Some(self.ctx.catalogs.current_namespace().join("."))
                         }
+                        "current_catalog" => Some(self.ctx.catalogs.current_catalog().to_owned()),
                         "current_path" => Some(super::super::current_path(&*self.ctx.catalogs)),
                         _ => None,
                     }

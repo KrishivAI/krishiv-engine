@@ -542,7 +542,7 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
             ShowKind::CreateTable { name, .. }
             | ShowKind::TblProperties { name, .. }
             | ShowKind::Partitions { name, .. } => vec![t(O::Table(name), Select)],
-            ShowKind::CurrentNamespace { .. } => Vec::new(),
+            ShowKind::CurrentNamespace { .. } | ShowKind::Catalogs { .. } => Vec::new(),
         },
         Statement::Describe(d) => match &d.kind {
             DescribeKind::Table { table, .. } => vec![t(O::Table(table), Select)],

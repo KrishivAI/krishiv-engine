@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the stage planner: cutting a plan at exchanges, task counts per stage and refused plans.
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -343,6 +344,7 @@ fn only_streaming_scans_are_dealt() {
         distinct_build: false,
         runtime_filters: Vec::new(),
         distribution: JoinDistribution::Broadcast,
+        select: None,
     });
     let stages = fragment(&plan(exchange(1, join, hash())), &schemas(&[1])).unwrap();
     let map = &stages[0];

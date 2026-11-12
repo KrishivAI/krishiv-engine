@@ -937,7 +937,7 @@ pub(crate) async fn step(
             Some(b) => {
                 let tables = Tables::Single(&a.table);
                 let detailed = ctx.query().config().detailed_metrics;
-                a.cursor = Some(Cursor::new(shared, hashing, b, &tables, detailed)?.0);
+                a.cursor = Some(Cursor::new(shared, hashing, b, None, &tables, detailed)?.0);
             }
             None if shared.join_type.builds_preserved() => {
                 // Every probe row of the partition is joined: emit its

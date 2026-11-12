@@ -845,7 +845,11 @@ fn scan_reports_inconsistent_state_as_internal_errors() {
         offset: 0,
         claimed: 0,
         position: None,
-        rows: super::RowStage::new(&[], &schema(), super::RowStageSettings::default()),
+        rows: super::ScanRows::Here(super::RowStage::new(
+            &[],
+            &schema(),
+            super::RowStageSettings::default(),
+        )),
         partition: 0,
         lane: None,
         taken: 0,

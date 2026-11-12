@@ -39,6 +39,7 @@ WIDE = decimal.Context(prec=100)
 DUCKDB_UNREADABLE = {
     "lz4": "no reader for the Hadoop-framed LZ4 codec (Spark's lz4 writes it too)",
     "v2": "no DELTA_BYTE_ARRAY for fixed-length decimals (Spark's v2 writer without dictionary uses it too)",
+    "nested_v2": "no DELTA_BYTE_ARRAY for fixed-length decimals (the decimal(38,10) list), as for v2",
 }
 
 
@@ -97,6 +98,52 @@ def page_index(path: Path) -> bool:
     )
 
 
+def leaves(value: Any) -> list[Any]:
+    """Every scalar inside `value` (structs, lists and maps flattened)."""
+    if isinstance(value, dict):
+        return [x for v in value.values() for x in leaves(v)]
+    if isinstance(value, (list, tuple)):
+        return [x for v in value for x in leaves(v)]
+    return [] if value is None else [value]
+
+
+def bad_statistics(path: Path) -> tuple[list[str], int]:
+    """Column chunks whose statistics a reader could skip rows with wrongly: a minimum above, or a
+    maximum below, a value of the chunk (NaN aside), or (for flat columns, where nulls are only the
+    column's own) a null count that is not the number of nulls. Returns the findings and the number
+    of chunks whose bounds were compared."""
+    import math
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    pf = pq.ParquetFile(path)
+    bad: list[str] = []
+    checked = [0]
+    for g in range(pf.metadata.num_row_groups):
+        for c in range(pf.metadata.num_columns):
+            col = pf.metadata.row_group(g).column(c)
+            st = col.statistics
+            if st is None:
+                continue
+            name = col.path_in_schema
+            table = pf.read_row_group(g, columns=[name])
+            rows = table.column(0).to_pylist()
+            values = [v for v in leaves(rows) if not (isinstance(v, float) and math.isnan(v))]
+            flat = pf.schema.column(c).max_repetition_level == 0 and pf.schema.column(c).max_definition_level <= 1
+            if flat and st.has_null_count and st.null_count != sum(r is None for r in rows):
+                bad.append(f"{name} rg{g}: null_count {st.null_count}")
+            if st.has_min_max and values:
+                try:
+                    lo, hi = st.min, st.max
+                except pa.ArrowNotImplementedError:
+                    continue  # pyarrow cannot decode these statistics (the INT32/INT64-backed decimals)
+                checked[0] += 1
+                if min(values) < lo or max(values) > hi:
+                    bad.append(f"{name} rg{g}: values outside [{lo}, {hi}]")
+    return bad, checked[0]
+
+
 def duckdb_table(path: Path) -> Any:
     import duckdb
 
@@ -112,7 +159,12 @@ def main() -> None:
     reads: dict[str, dict[str, Any]] = {"pyarrow": {}, "duckdb": {}, "spark": {}}
     for path in sorted(written.glob("*.parquet")):
         variant = path.stem
-        reads["pyarrow"][variant] = digest(pq.read_table(path)) | {"page_index": page_index(path)}
+        bad, compared = bad_statistics(path)
+        reads["pyarrow"][variant] = digest(pq.read_table(path)) | {
+            "page_index": page_index(path),
+            "bad_statistics": bad,
+            "statistics_compared": compared,
+        }
         if variant in DUCKDB_UNREADABLE:
             reads["duckdb"][variant] = {"unsupported": DUCKDB_UNREADABLE[variant]}
         else:

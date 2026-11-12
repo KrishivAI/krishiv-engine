@@ -3,12 +3,12 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.2.0-alpha"
+version = "0.2.0"
 edition = "2024"
 # MSRV = latest stable (1.99) minus two minor releases.
 rust-version = "1.97"
-license = "Apache-2.0"                                   # ADR 0033
-repository = "https://github.com/krishiv/krishiv-engine"
+license = "Apache-2.0"                                     # ADR 0033
+repository = "https://github.com/KrishivAI/krishiv-engine"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -185,7 +185,7 @@ prost-reflect = { version = "0.16.5", default-features = false }
 # Concurrency model checking (dev-dependency only, under `--cfg loom`).
 loom = { version = "0.7", default-features = false }
 # Self-removing test directories (dev-dependency only).
-rustix = { version = "=1.1.5", default-features = false, features = ["fs", "process", "std"] }
+rustix = { version = "=1.1.6", default-features = false, features = ["fs", "process", "std"] }
 tempfile = { version = "3.27", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 serde = { version = "1.0.229", default-features = false }

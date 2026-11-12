@@ -36,6 +36,7 @@ mod late_fetch;
 mod ndv_sample;
 pub(crate) mod nodes;
 mod orient;
+mod probe_select;
 mod properties;
 pub(crate) mod pushdown;
 mod python_udf;

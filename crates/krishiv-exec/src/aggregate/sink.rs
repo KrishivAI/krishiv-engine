@@ -400,7 +400,8 @@ impl HashAggregate {
                         .widening(widen, self.widen_at)
                         .with_abandons(Arc::clone(&self.counters.row_abandons))
                         .with_resizes(Arc::clone(&self.counters.resizes))
-                        .with_probes(g.probes.clone()),
+                        .with_probes(g.probes.clone())
+                        .with_direct(local && g.direct),
                 )
             }
             None => Table::Keys(
@@ -1066,6 +1067,9 @@ struct Global {
     row_bits: u32,
     /// Where tables count probe lengths (a detailed profile only).
     probes: Option<Arc<ProbeTotals>>,
+    /// Thread-local row tables find tiny keys by direct addressing
+    /// (`krishiv.exec.agg.directKeys`).
+    direct: bool,
     /// Bytes of the combined tables, before `finalize`.
     combined: AtomicUsize,
     inner: Mutex<Inner>,
@@ -1463,6 +1467,7 @@ impl Sink for HashAggregate {
             probes: config
                 .detailed_metrics
                 .then(|| Arc::clone(&self.counters.probes)),
+            direct: config.agg_direct_keys,
             combined: AtomicUsize::new(0),
             inner: Mutex::new(Inner::default()),
             done: OnceLock::new(),

@@ -23,12 +23,18 @@ use std::time::Duration;
 use crate::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig};
 
 mod build_projection;
+mod direct_keys;
 mod join_cost;
+mod partition_types;
 mod registry;
+mod registry_join;
 
 pub use build_projection::EXEC_JOIN_BUILD_PROJECTION;
+pub use direct_keys::EXEC_AGG_DIRECT_KEYS;
 pub use join_cost::JOIN_COST;
+pub use partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION;
 pub use registry::*;
+pub use registry_join::*;
 
 /// Where a config entry may be set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

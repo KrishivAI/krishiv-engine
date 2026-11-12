@@ -186,12 +186,26 @@ pub(crate) struct CatalogTable {
     pub(crate) view: Option<ViewDef>,
     /// Partitioning, bucketing and the partitions the catalog tracks.
     pub(crate) layout: TableLayout,
-    /// `ANALYZE TABLE .. FOR COLUMNS` ran on it. The engine stores no column statistics, so
-    /// `DESCRIBE EXTENDED t col` refuses rather than print NULLs where Spark prints values.
-    pub(crate) column_stats_requested: bool,
+    /// `ANALYZE TABLE .. FOR COLUMNS` results by column name (Spark's `CatalogStatistics.colStats`).
+    pub(crate) column_stats: BTreeMap<String, ColumnStats>,
+    /// Which entry of its name this is: set by the store when the table is created (a table dropped and created
+    /// again, or replaced by `CREATE OR REPLACE`, gets a new one) and kept by [`CatalogStore::replace_table`]. A
+    /// command that read the table and publishes later checks it, so a result never lands on a new table of the
+    /// same name. Built entries carry 0 until the store sets it.
+    pub(crate) incarnation: u64,
+    /// Moves on every change of the table's data ([`CatalogTable::data_changed`]) and is never lowered by
+    /// [`CatalogStore::replace_table`]. `ANALYZE` reads it with the table and publishes its statistics only if it
+    /// has not moved, so statistics of rows a concurrent write replaced are never stored.
+    pub(crate) data_version: u64,
 }
 
 impl CatalogTable {
+    /// Records that the table's data changed: its column statistics no longer describe it (`updateTableStats`).
+    pub(crate) fn data_changed(&mut self) {
+        self.column_stats.clear();
+        self.data_version += 1;
+    }
+
     /// Whether the table has partition columns.
     pub(crate) fn is_partitioned(&self) -> bool {
         !self.layout.partition_columns.is_empty()
@@ -212,6 +226,19 @@ impl CatalogTable {
             .filter_map(|p| self.columns.iter().find(|c| &c.name == p))
             .collect()
     }
+}
+
+/// What `ANALYZE TABLE .. FOR COLUMNS` found for a column, as `DESCRIBE EXTENDED t col` prints it. A `min` or `max`
+/// is `None` for a string or binary column and for one with no value; a timestamp's is microseconds since the
+/// epoch, rendered in the session time zone of the `DESCRIBE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ColumnStats {
+    pub(crate) min: Option<String>,
+    pub(crate) max: Option<String>,
+    pub(crate) num_nulls: String,
+    pub(crate) distinct_count: String,
+    pub(crate) avg_col_len: String,
+    pub(crate) max_col_len: String,
 }
 
 /// How a table's files are laid out (Spark's `partitionColumnNames`, `bucketSpec` and, for a partitioned
@@ -397,6 +424,14 @@ pub(crate) struct InMemoryCatalogStore {
     /// Where a table change reaches every cache of the runtime: its result
     /// cache and each session's relation cache.
     hub: Arc<crate::cache::Invalidation>,
+    /// One read/write lock per partitioned table's location, held exclusively by a command that moves or deletes
+    /// its partition directories or log entries (`RENAME` / `DROP PARTITION`, `MSCK REPAIR`, `TRUNCATE`) from
+    /// before it reads the entry to after its catalog swap, and shared by an `INSERT` into it from its write to
+    /// its partition registration: no two such commands, and no such command and a write, interleave their
+    /// directory moves, log entries and catalog swaps on one table. Writes never wait for each other, and other
+    /// tables never wait (entries are weak: a lock lives while a statement holds it).
+    partition_locks:
+        Mutex<std::collections::HashMap<PathBuf, std::sync::Weak<tokio::sync::RwLock<()>>>>,
 }
 
 #[derive(Debug)]
@@ -428,7 +463,41 @@ impl InMemoryCatalogStore {
                 functions: Arc::new(StoredFunctions::default()),
             }),
             epoch: AtomicU64::new(0),
+            partition_locks: Mutex::default(),
         }
+    }
+
+    /// The partition lock of the table at `location` (see the field).
+    fn partition_lock(&self, location: &Path) -> Arc<tokio::sync::RwLock<()>> {
+        let mut locks = self
+            .partition_locks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(location).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(tokio::sync::RwLock::new(()));
+        locks.insert(location.to_path_buf(), Arc::downgrade(&lock));
+        lock
+    }
+
+    /// The exclusive hold of a command that moves or deletes the partition directories of the table at
+    /// `location` (see the field).
+    pub(crate) async fn partition_ddl(
+        &self,
+        location: &Path,
+    ) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        self.partition_lock(location).write_owned().await
+    }
+
+    /// The shared hold of a write into the partitioned table at `location` (see the field). Taken before the
+    /// write's admission: admission never takes this lock, so the order cannot deadlock.
+    pub(crate) async fn partition_write(
+        &self,
+        location: &Path,
+    ) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        self.partition_lock(location).read_owned().await
     }
 
     /// Marks a change to a table's data (an `INSERT`, a `TRUNCATE`): cached
@@ -549,8 +618,10 @@ impl CatalogStore for InMemoryCatalogStore {
             (true, CreateMode::Replace) | (false, _) => {}
         }
         let changed = format!("{}.{}", key.0, key.1);
+        // The epoch moves under the state lock on every create, so each created entry gets its own value.
+        let mut table = table;
+        table.incarnation = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
         state.tables.insert(key, Arc::new(table));
-        self.epoch.fetch_add(1, Ordering::AcqRel);
         // What the result cache holds for this table is stale (it also covers the results
         // computed between a table's data being written and its partitions being registered).
         self.hub.invalidate_table(&changed);
@@ -565,6 +636,10 @@ impl CatalogStore for InMemoryCatalogStore {
             _ => return false,
         }
         let changed = format!("{}.{}", key.0, key.1);
+        // The same table, changed: it keeps its incarnation.
+        let mut table = table;
+        table.incarnation = expected.incarnation;
+        table.data_version = table.data_version.max(expected.data_version);
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
         self.hub.invalidate_table(&changed);
@@ -697,7 +772,9 @@ mod tests {
             root: PathBuf::new(),
             view: None,
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
         }
     }
 
@@ -710,6 +787,15 @@ mod tests {
         let epoch = s.epoch();
         assert!(s.replace_table(&read, table("default", "t")));
         assert_eq!(s.epoch(), epoch + 1);
+        // A replacement never lowers the data version, even when it was built fresh (version 0).
+        let current = s.table("default", "t").unwrap();
+        let mut changed = (*current).clone();
+        changed.data_changed();
+        assert!(s.replace_table(&current, changed));
+        let current = s.table("default", "t").unwrap();
+        assert_eq!(current.data_version, 1);
+        assert!(s.replace_table(&current, table("default", "t")));
+        assert_eq!(s.table("default", "t").unwrap().data_version, 1);
         // `read` is stale now.
         assert!(!s.replace_table(&read, table("default", "t")));
         // And so is a copy of a dropped table: it is not recreated.

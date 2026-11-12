@@ -142,15 +142,20 @@ impl QueryRunner {
         };
         let executor = Arc::clone(&self.executor);
         let q = Arc::clone(&query);
+        // The pipeline task runs inside the span that submitted it (the caller's `krishiv.execute`).
+        let span = tracing::Span::current();
         drop(self.executor.spawn(
             query.class(),
-            Box::pin(async move {
-                if let Err(e) = run_pipelines(&executor, &q, pipelines).await {
-                    q.fail(e);
-                }
-                q.blocking_done().await;
-                finish.complete();
-            }),
+            Box::pin(tracing::Instrument::instrument(
+                async move {
+                    if let Err(e) = run_pipelines(&executor, &q, pipelines).await {
+                        q.fail(e);
+                    }
+                    q.blocking_done().await;
+                    finish.complete();
+                },
+                span,
+            )),
         ));
         Ok(Box::pin(ResultStream { channel, query }))
     }
@@ -516,7 +521,9 @@ fn start_group(
         let base = u32::try_from(next_partition)
             .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
         // The next member starts past every split of this one (a source can
-        // have more splits than drivers), so split ids never overlap.
+        // have more splits than drivers), so split ids never overlap. The
+        // 2^24 cap only bounds the id space: a source reporting more splits
+        // than that would see members' split ids (and seeded draws) overlap.
         let span = drivers.max(source.partitions(&source_global).min(1 << 24));
         // `span` fits `usize`; the end index must fit `u32` as well.
         u32::try_from(next_partition + span as u64)
