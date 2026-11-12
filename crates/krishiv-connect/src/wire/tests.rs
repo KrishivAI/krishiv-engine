@@ -512,6 +512,8 @@ fn client_version_comes_from_the_client_type() {
             Some(ClientVersion::V4_3),
         ),
         ("spark/5.0.0", Some(ClientVersion::V4_3)),
+        ("myspark/1.2 spark/4.3.0", Some(ClientVersion::V4_3)),
+        ("myspark/1.2", None),
         ("something-else", None),
         ("spark/x.y", None),
     ] {
@@ -524,40 +526,101 @@ fn client_version_comes_from_the_client_type() {
 }
 
 #[test]
+fn every_gated_field_exists_in_4_3() {
+    // That the fields are absent from 4.2 is pinned by `tests/scripts/check_proto_manifest.py`.
+    for &(name, number, _) in FIELDS_SINCE_4_3 {
+        let found = layout::MESSAGES
+            .iter()
+            .find(|m| m.name == name)
+            .is_some_and(|m| m.fields.binary_search_by_key(&number, |&(n, _)| n).is_ok());
+        assert!(found, "{name} {number} missing from the 4.3 layout");
+    }
+}
+
+#[test]
 fn a_field_newer_than_the_declared_version_is_56k00() {
     let zip = field(48, &[field(1, &sql_leaf()), field(2, &sql_leaf())].concat());
-    let nanos_literal = field(1, &field(29, &[0x08, 0x01]));
+    let literal = |number| field(1, &field(number, &[0x08, 0x01]));
+    // A cast to a nanosecond DataType: Expression.cast = 7 { expr = 1, type = 2 { field 29 } }.
+    let cast = |number| field(7, &[field(1, &[]), field(2, &field(number, &[]))].concat());
+    let flow = |number| {
+        // PipelineCommand.DefineFlow.AutoCdcFlowDetails: reached through its own layout id.
+        let id = layout::MESSAGES
+            .iter()
+            .position(|m| m.name == "PipelineCommand.DefineFlow.AutoCdcFlowDetails")
+            .expect("layout");
+        (id, field(number, &[]))
+    };
+    let parameters = |e: &KrishivError, full_name: &str, name: &str, number: u32| {
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+        );
+        assert!(
+            e.message().ends_with(&format!(
+                "This oneOf field message in {full_name} is not supported: {name}({number})"
+            )),
+            "{}",
+            e.message()
+        );
+    };
     for version in [
         ClientVersion::V3_5,
         ClientVersion::V4_0,
         ClientVersion::V4_1,
         ClientVersion::V4_2,
     ] {
-        let err = decode_relation_for(&zip, version).expect_err("zip");
-        assert_eq!(
-            err.error_class(),
-            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+        parameters(
+            &decode_relation_for(&zip, version).expect_err("zip"),
+            "spark.connect.Relation",
+            "ZIP",
+            48,
         );
-        assert!(
-            err.message().contains("spark.connect.Relation") && err.message().contains("(48)"),
-            "{}",
-            err.message()
-        );
-        let err = decode_expression_for(&nanos_literal, version).expect_err("literal");
-        assert_eq!(
-            err.error_class(),
-            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
-        );
-        assert!(
-            err.message().contains("spark.connect.Expression.Literal")
-                && err.message().contains("(29)"),
-            "{}",
-            err.message()
-        );
+        for (number, name) in [(29, "TIMESTAMP_NTZ_NANOS"), (30, "TIMESTAMP_LTZ_NANOS")] {
+            parameters(
+                &decode_expression_for(&literal(number), version).expect_err("literal"),
+                "spark.connect.Expression.Literal",
+                name,
+                number,
+            );
+            parameters(
+                &decode_expression_for(&cast(number), version).expect_err("cast type"),
+                "spark.connect.DataType",
+                name,
+                number,
+            );
+        }
+        // The SCD2 lists, walked from their own message.
+        for (number, name) in [
+            (11, "TRACK_HISTORY_COLUMN_LIST"),
+            (12, "TRACK_HISTORY_EXCEPT_COLUMN_LIST"),
+        ] {
+            let (id, bytes) = flow(number);
+            let e = scan(
+                &layout::MESSAGES,
+                u16::try_from(id).expect("id"),
+                &bytes,
+                &Limits {
+                    bytes: usize::MAX,
+                    messages: usize::MAX,
+                    decoded: usize::MAX,
+                    nesting: usize::MAX,
+                    version,
+                },
+            )
+            .expect_err("scd2");
+            parameters(
+                &KrishivError::from(e),
+                "spark.connect.PipelineCommand.DefineFlow.AutoCdcFlowDetails",
+                name,
+                number,
+            );
+        }
     }
     // A 4.3 client, and the default profile, are accepted.
     decode_relation_for(&zip, ClientVersion::V4_3).expect("4.3 zip");
     decode_relation(&zip).expect("default profile");
+    decode_expression_for(&cast(29), ClientVersion::V4_3).expect("4.3 cast");
     // A field every version has is not gated.
     decode_relation_for(&sql_leaf(), ClientVersion::V3_5).expect("sql");
 }
