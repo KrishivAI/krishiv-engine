@@ -17,6 +17,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use krishiv_common::config::{
+    CONNECT_HTTP2_MAX_CONCURRENT_STREAMS, CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
+    CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS, CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME,
+    CONNECT_KEEPALIVE_TIMEOUT, CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE,
+    CONNECT_SESSION_MAINTENANCE_INTERVAL, Config, ConfigValue, SERVER_SHUTDOWN_TIMEOUT,
+};
 use krishiv_common::error::KrishivError;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
@@ -75,6 +81,55 @@ impl Default for ConnectServerConfig {
             max_connections: 1024,
             maintenance_interval: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+impl ConnectServerConfig {
+    /// The settings `config` gives (the `krishiv.connect.*` and
+    /// `krishiv.server.*` keys, or their Spark names); defaults otherwise.
+    #[must_use]
+    pub fn from_config(config: &Config) -> Self {
+        let d = Self::default();
+        let duration = |e| config.get(e).and_then(ConfigValue::as_duration);
+        let count = |e| {
+            config
+                .get(e)
+                .and_then(ConfigValue::as_int)
+                .and_then(|v| usize::try_from(v).ok())
+        };
+        let keepalive = config
+            .get(&CONNECT_KEEPALIVE_ENABLED)
+            .and_then(ConfigValue::as_bool)
+            .unwrap_or(true)
+            .then(|| {
+                (
+                    duration(&CONNECT_KEEPALIVE_TIME).unwrap_or(Duration::from_secs(60)),
+                    duration(&CONNECT_KEEPALIVE_TIMEOUT).unwrap_or(Duration::from_secs(20)),
+                )
+            });
+        Self {
+            max_inbound_message_size: config
+                .get(&CONNECT_MAX_INBOUND_MESSAGE_SIZE)
+                .and_then(ConfigValue::as_size)
+                .and_then(|v| usize::try_from(v).ok())
+                .unwrap_or(d.max_inbound_message_size),
+            keepalive,
+            max_concurrent_streams: count(&CONNECT_HTTP2_MAX_CONCURRENT_STREAMS)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(d.max_concurrent_streams),
+            max_header_list_bytes: config
+                .get(&CONNECT_HTTP2_MAX_HEADER_LIST_BYTES)
+                .and_then(ConfigValue::as_size)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(d.max_header_list_bytes),
+            max_pending_accept_resets: count(&CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS)
+                .unwrap_or(d.max_pending_accept_resets),
+            max_local_error_resets: d.max_local_error_resets,
+            max_connections: count(&CONNECT_MAX_CONNECTIONS).unwrap_or(d.max_connections),
+            maintenance_interval: duration(&CONNECT_SESSION_MAINTENANCE_INTERVAL)
+                .unwrap_or(d.maintenance_interval),
+            shutdown_timeout: duration(&SERVER_SHUTDOWN_TIMEOUT).unwrap_or(d.shutdown_timeout),
         }
     }
 }

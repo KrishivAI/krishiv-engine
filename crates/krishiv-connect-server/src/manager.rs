@@ -19,6 +19,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use krishiv_common::config::{
+    CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL, CONNECT_SESSION_IDLE_TIMEOUT,
+    CONNECT_SESSION_TOMBSTONES, Config, ConfigValue,
+};
 use krishiv_common::error::{
     InvalidHandleSessionChanged, InvalidHandleSessionClosed, InvalidHandleSessionNotFound,
     KrishivError, KrishivSessionLimit,
@@ -54,6 +58,37 @@ impl Default for SessionLimits {
             max_sessions_per_principal: 100,
             idle_timeout: Some(Duration::from_secs(60 * 60)),
             tombstones: 1000,
+        }
+    }
+}
+
+impl SessionLimits {
+    /// The limits `config` gives (`krishiv.connect.maxSessions`,
+    /// `maxSessionsPerPrincipal`, `session.idleTimeout` with `0s` for never,
+    /// `session.closedTombstones`); defaults otherwise.
+    #[must_use]
+    pub fn from_config(config: &Config) -> Self {
+        let d = Self::default();
+        let count = |e| {
+            config
+                .get(e)
+                .and_then(ConfigValue::as_int)
+                .and_then(|v| usize::try_from(v).ok())
+        };
+        let idle_timeout = match config
+            .get(&CONNECT_SESSION_IDLE_TIMEOUT)
+            .and_then(ConfigValue::as_duration)
+        {
+            Some(t) if t.is_zero() => None,
+            Some(t) => Some(t),
+            None => d.idle_timeout,
+        };
+        Self {
+            max_sessions: count(&CONNECT_MAX_SESSIONS).unwrap_or(d.max_sessions),
+            max_sessions_per_principal: count(&CONNECT_MAX_SESSIONS_PER_PRINCIPAL)
+                .unwrap_or(d.max_sessions_per_principal),
+            idle_timeout,
+            tombstones: count(&CONNECT_SESSION_TOMBSTONES).unwrap_or(d.tombstones),
         }
     }
 }

@@ -219,3 +219,18 @@ fn a_failing_factory_creates_nothing() {
     m.get_or_create(&alice(), ID, None, "u").unwrap_err();
     assert_eq!(m.counts().live, 0);
 }
+
+#[test]
+fn limits_come_from_the_config() {
+    let mut c = krishiv_common::config::Config::new();
+    assert_eq!(SessionLimits::from_config(&c).max_sessions, 1000);
+    c.set("krishiv.connect.maxSessions", "3").unwrap();
+    c.set("krishiv.connect.session.idleTimeout", "0s").unwrap();
+    c.set(
+        "spark.connect.session.manager.closedSessionsTombstonesSize",
+        "5",
+    )
+    .unwrap();
+    let l = SessionLimits::from_config(&c);
+    assert_eq!((l.max_sessions, l.idle_timeout, l.tombstones), (3, None, 5));
+}

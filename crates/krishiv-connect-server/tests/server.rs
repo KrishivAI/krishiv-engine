@@ -363,3 +363,24 @@ async fn a_draining_service_refuses_new_rpcs_with_unavailable() {
     assert_eq!(e.code(), Code::Unavailable);
     assert_eq!(e.message(), "server shutting down");
 }
+
+#[test]
+fn server_settings_come_from_the_config() {
+    let mut c = krishiv_common::config::Config::new();
+    let d = ConnectServerConfig::from_config(&c);
+    assert_eq!(d.max_inbound_message_size, 128 << 20);
+    assert_eq!(d.max_concurrent_streams, 100);
+    assert_eq!(
+        d.keepalive,
+        Some((Duration::from_secs(60), Duration::from_secs(20)))
+    );
+    c.set("spark.connect.grpc.keepAlive.enabled", "false")
+        .unwrap();
+    c.set("spark.connect.grpc.maxInboundMessageSize", "1048576")
+        .unwrap();
+    c.set("krishiv.server.shutdownTimeout", "2s").unwrap();
+    let s = ConnectServerConfig::from_config(&c);
+    assert_eq!(s.keepalive, None);
+    assert_eq!(s.max_inbound_message_size, 1 << 20);
+    assert_eq!(s.shutdown_timeout, Duration::from_secs(2));
+}
