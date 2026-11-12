@@ -440,3 +440,30 @@ fn an_any_extension_is_checked_flatly() {
     ok.extend([0x18, 0x05, 0x25, 1, 2, 3, 4, 0x29, 1, 2, 3, 4, 5, 6, 7, 8]);
     assert!(any(&ok).is_ok());
 }
+
+#[test]
+fn the_4_3_additions_decode_in_the_superset() {
+    // Relation field 48 is Zip { left, right } (new in Spark 4.3).
+    let zip = field(48, &[field(1, &sql_leaf()), field(2, &sql_leaf())].concat());
+    let decoded = decode_relation(&zip).expect("Zip is defined in the superset");
+    assert!(matches!(
+        decoded.message.rel_type,
+        Some(relation::RelType::Zip(_))
+    ));
+    // Literal fields 29 and 30 are the nanosecond timestamps: epoch_micros = 1.
+    for number in [29, 30] {
+        let e = field(1, &field(number, &[0x08, 0x01]));
+        let decoded = decode_expression(&e).expect("nanosecond literal is defined in the superset");
+        assert!(matches!(
+            decoded.message.expr_type,
+            Some(expression::ExprType::Literal(_))
+        ));
+    }
+    // Still undefined in 4.3: a new relation number past Zip.
+    let err = decode_relation(&[sql_leaf(), field(49, b"x")].concat()).expect_err("field 49");
+    assert!(
+        err.message().contains("field 49 of spark.connect.Relation"),
+        "{}",
+        err.message()
+    );
+}

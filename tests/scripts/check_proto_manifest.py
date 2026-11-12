@@ -14,9 +14,9 @@ files and added field names, so the next bump is read, not assumed.
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -25,19 +25,39 @@ PROTO = ROOT / "proto" / "spark-connect"
 MANIFEST = ROOT / "tests" / "connect" / "proto-manifest.json"
 # vendored directory -> upstream apache/spark tag
 TAGS = {"3.5": "v3.5.0", "4.0": "v4.0.0", "4.1": "v4.1.0", "4.2": "v4.2.0", "4.2.1": "v4.2.1", "4.3": "v4.3.0"}
-# 4.2.1 -> 4.3.0: the only files that may differ, and the only identifiers the diff may add.
-DELTA_FILES = {"expressions.proto", "pipelines.proto", "relations.proto", "types.proto"}
+# 4.2.1 -> 4.3.0: the only files that may differ, and for each the exact statement lines (comments, blank lines and
+# lone braces aside) the diff may add. Nothing may be removed or changed.
 DELTA_ADDED = {
-    "Zip zip = 48",
-    "timestamp_ntz_nanos = 29",
-    "timestamp_ltz_nanos = 30",
-    "message TimestampNTZNanos",
-    "message TimestampLTZNanos",
-    "message Zip",
-    "track_history_column_list = 11",
-    "track_history_except_column_list = 12",
-    "SCD_TYPE_2 = 2",
+    "expressions.proto": {
+        "TimestampNTZNanos timestamp_ntz_nanos = 29;",
+        "TimestampLTZNanos timestamp_ltz_nanos = 30;",
+        "message TimestampNTZNanos {",
+        "message TimestampLTZNanos {",
+        "int64 epoch_micros = 1;",
+        "int32 nanos_within_micro = 2;",
+        "optional int32 precision = 3;",
+    },
+    "pipelines.proto": {
+        "repeated Expression track_history_column_list = 11;",
+        "repeated Expression track_history_except_column_list = 12;",
+        "SCD_TYPE_2 = 2;",
+    },
+    "relations.proto": {
+        "Zip zip = 48;",
+        "message Zip {",
+        "Relation left = 1;",
+        "Relation right = 2;",
+    },
+    "types.proto": {
+        "TimestampNTZNanos timestamp_ntz_nanos = 29;",
+        "TimestampLTZNanos timestamp_ltz_nanos = 30;",
+        "message TimestampNTZNanos {",
+        "message TimestampLTZNanos {",
+        "optional int32 precision = 1;",
+        "uint32 type_variation_reference = 2;",
+    },
 }
+DELTA_FILES = set(DELTA_ADDED)
 
 
 def sha256(path: Path) -> str:
@@ -45,6 +65,9 @@ def sha256(path: Path) -> str:
 
 
 def collect() -> dict:
+    on_disk = sorted(d.name for d in PROTO.iterdir() if d.is_dir())
+    if on_disk != sorted(TAGS):
+        raise SystemExit(f"vendored versions {on_disk} differ from TAGS {sorted(TAGS)}")
     out = {}
     for ver, tag in TAGS.items():
         files = sorted((PROTO / ver / "spark" / "connect").glob("*.proto"))
@@ -52,25 +75,38 @@ def collect() -> dict:
     return out
 
 
+def _statement(line: str) -> str | None:
+    """The line without indentation, or None for blanks, comments and lone braces."""
+    t = line.strip()
+    if not t or t.startswith(("//", "*", "/*")) or t in {"}", "};"}:
+        return None
+    return t
+
+
 def delta_problems(base: str = "4.2.1", new: str = "4.3") -> list[str]:
     problems = []
     a, b = PROTO / base / "spark" / "connect", PROTO / new / "spark" / "connect"
+    if sorted(p.name for p in a.glob("*.proto")) != sorted(p.name for p in b.glob("*.proto")):
+        problems.append("the set of .proto files differs")
     for f in sorted(b.glob("*.proto")):
         old = a / f.name
-        if not old.exists():
-            problems.append(f"{f.name}: new file")
-        elif sha256(old) != sha256(f):
-            if f.name not in DELTA_FILES:
-                problems.append(f"{f.name}: changed outside the known delta")
+        if not old.exists() or sha256(old) == sha256(f):
+            continue
+        if f.name not in DELTA_FILES:
+            problems.append(f"{f.name}: changed outside the known delta")
+            continue
+        old_lines = old.read_text().splitlines()
+        new_lines = f.read_text().splitlines()
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False).get_opcodes():
+            if tag == "equal":
                 continue
-            old_lines = set(old.read_text().splitlines())
-            for line in f.read_text().splitlines():
-                if line in old_lines or not line.strip() or line.strip().startswith(("//", "}", "*")):
-                    continue
-                if not any(re.search(re.escape(k), line) for k in DELTA_ADDED) and not re.match(
-                    r"\s*(optional |repeated )?[\w.]+ \w+ = \d+;|\s*\w+ = \d+;|\s*(int|uint)\d+ \w+ = \d+;", line
-                ):
-                    problems.append(f"{f.name}: unexpected added line {line.strip()!r}")
+            for line in old_lines[i1:i2]:
+                if _statement(line) is not None:
+                    problems.append(f"{f.name}: removed or changed line {line.strip()!r}")
+            for line in new_lines[j1:j2]:
+                st = _statement(line)
+                if st is not None and st not in DELTA_ADDED[f.name]:
+                    problems.append(f"{f.name}: unexpected added line {st!r}")
     return problems
 
 
