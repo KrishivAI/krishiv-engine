@@ -4327,7 +4327,13 @@ fn is_json_tuple_call(e: &Arc<Expr>) -> bool {
 /// resolve on their own; [`Expr::for_each_child`] does not enter them).
 /// Expressions are DAGs, so shared nodes are visited once.
 pub(super) fn has_generator(e: &Arc<Expr>) -> bool {
-    let mut seen: HashSet<*const ()> = HashSet::new();
+    // A leaf (a column, a literal) is its own answer: no set, no stack.
+    let mut leaf = true;
+    e.for_each_child(&mut |_| leaf = false);
+    if leaf {
+        return is_generator(e);
+    }
+    let mut seen: crate::walk::PtrSet<*const ()> = crate::walk::PtrSet::default();
     let mut stack = vec![Arc::clone(e)];
     while let Some(x) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&x).cast::<()>()) {
