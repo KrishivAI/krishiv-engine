@@ -168,9 +168,25 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
   in Spark. Clients pick random session ids, so this does not happen in practice. A session id another principal holds
   answers `INVALID_HANDLE.SESSION_NOT_FOUND`.
 - **An idle session running a query is kept.** Spark releases a session by its last access alone; Krishiv also keeps
-  one whose query is still running.
+  one whose query is still running or whose results are still being sent.
 - **A request over `spark.connect.grpc.maxInboundMessageSize` is refused with `OUT_OF_RANGE`**, read from the message
   length before the body; Spark (grpc-java) answers `RESOURCE_EXHAUSTED`.
 - **`krishiv.connect.session.idleTimeout`** replaces `spark.connect.session.manager.defaultSessionTimeout`, whose
   "never" is `-1`; Krishiv's is `0s`. `krishiv server` refuses Spark's key, and any other `spark.connect.*` key it
   does not read, rather than ignore it.
+- **Too many operations in one session** fail with `KRISHIV_OPERATION_LIMIT` (`RESOURCE_EXHAUSTED`) past
+  `krishiv.connect.maxOperationsPerSession`; Spark has no such cap.
+- **An invalid operation tag** fails with `KRISHIV_INVALID_OPERATION_TAG` (SQLSTATE 22023) and Spark's message; Spark
+  sends an `INTERNAL` status without an error class.
+- **Results arrive in the engine's batches** (4,096 rows by default), cut further at Spark's
+  `spark.connect.grpc.arrow.maxBatchSize` and `spark.sql.execution.arrow.maxRecordsPerBatch` but never merged.
+- **Timestamps are labelled UTC when `spark.sql.session.timeZone` is unset**; Spark labels them with the JVM's zone.
+  The instants are the same.
+- **Geometry, geography and variant columns** get Spark's Arrow shape at the top level of a result only, not inside a
+  struct, array or map.
+- **The `metrics` response of ExecutePlan is empty** until the operator tree is wired through.
+- **Reattaching to an operation that is still sending** answers `INVALID_CURSOR.DISCONNECTED` to the new stream, and
+  ExecutePlan re-sent with a live operation id answers the same; Spark ends the old stream and replays from the start.
+  The stock client reattaches only after a dropped connection, when Krishiv has already cancelled the operation.
+- **ReleaseExecute without a release type** fails with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark throws
+  an `UnsupportedOperationException` without an error class.
