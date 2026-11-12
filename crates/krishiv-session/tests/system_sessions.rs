@@ -245,3 +245,23 @@ fn a_callers_own_session_kill_is_recorded_as_a_release() {
         ["closed|release_session"]
     );
 }
+
+#[test]
+fn equal_names_in_two_tenants_do_not_see_each_other() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let mk = |tenant: &str| {
+        let mut p = Principal::new("pat", PrincipalKind::User);
+        p.tenant = Some(tenant.to_owned());
+        Session::builder()
+            .runtime(Arc::clone(&rt))
+            .principal(p)
+            .access_policy(Arc::new(MonitorForAdmin))
+            .build()
+            .unwrap()
+    };
+    let (a, _b) = (mk("acme"), mk("globex"));
+    assert_eq!(
+        texts(&a, "SELECT CAST(count(*) AS STRING) FROM system.sessions"),
+        ["1"]
+    );
+}

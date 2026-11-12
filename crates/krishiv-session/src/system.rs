@@ -944,11 +944,6 @@ impl QueryLog {
         }
     }
 
-    /// The session's principal.
-    pub(crate) fn principal(&self) -> &str {
-        &self.principal
-    }
-
     /// The session's id (UUIDv7).
     pub(crate) fn session_id(&self) -> &str {
         &self.session_id

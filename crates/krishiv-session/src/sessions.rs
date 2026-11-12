@@ -172,12 +172,20 @@ impl Activity {
     }
 }
 
+/// Who owns a session, for the per-principal filter: kind, tenant and name (never the groups,
+/// which may differ between two sessions of one principal), so equal names in two tenants differ.
+pub(crate) fn owner_key(p: &krishiv_plan::analyzer::Principal) -> String {
+    format!("{:?}|{:?}|{}", p.kind, p.tenant, p.name)
+}
+
 /// One row of `system.sessions`.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionRow {
     pub(crate) session_id: String,
     pub(crate) server_session_id: Option<String>,
     pub(crate) principal: String,
+    /// [`owner_key`] of the principal: what the per-principal filter compares.
+    pub(crate) owner: String,
     pub(crate) client_user_id: Option<String>,
     pub(crate) client_type: Option<String>,
     pub(crate) transport: &'static str,
@@ -209,6 +217,7 @@ impl SessionRow {
             session_id: s.session_id.clone(),
             server_session_id: c.server_session_id,
             principal: s.principal.name.clone(),
+            owner: owner_key(&s.principal),
             client_user_id: c.client_user_id,
             client_type: c.client_type,
             transport: Transport::from_code(a.transport.load(Ordering::Relaxed)).name(),
@@ -309,7 +318,10 @@ impl SessionRegistry {
             })
             .collect();
         live.sort_by_key(|r| (r.created_ms, r.session_id.clone()));
-        live.extend(self.lock().ended.iter().cloned());
+        // A session that ended during the pass above shows once, as ended.
+        let ended: Vec<SessionRow> = self.lock().ended.iter().cloned().collect();
+        live.retain(|r| !ended.iter().any(|e| e.session_id == r.session_id));
+        live.extend(ended);
         live
     }
 }
@@ -332,13 +344,13 @@ impl Default for SessionView {
 /// The columns of `system.sessions` for the session that asked.
 pub(crate) fn columns(sources: &Sources) -> Vec<ArrayRef> {
     let all = sources.monitor.sees_all();
-    let me = sources.queries.principal();
+    let me = sources.monitor.owner();
     let rows: Vec<crate::sessions::SessionRow> = sources
         .sessions
         .registry
         .snapshot(&*sources.sessions.running)
         .into_iter()
-        .filter(|r| all || r.principal == me)
+        .filter(|r| all || r.owner == me)
         .collect();
     let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
     let time = |f: &dyn Fn(&crate::sessions::SessionRow) -> Option<i64>| -> ArrayRef {

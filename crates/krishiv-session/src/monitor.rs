@@ -48,6 +48,11 @@ impl Monitor {
         let _ = self.decided.set(allowed);
     }
 
+    /// The asking principal's ownership key ([`crate::sessions::owner_key`]).
+    pub(crate) fn owner(&self) -> String {
+        crate::sessions::owner_key(&self.principal)
+    }
+
     /// Whether every principal's rows show.
     pub(crate) fn sees_all(&self) -> bool {
         self.decided.get().copied().unwrap_or(false)
