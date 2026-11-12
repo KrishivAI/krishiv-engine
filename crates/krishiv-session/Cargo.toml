@@ -12,6 +12,7 @@ publish = false
 arrow-array.workspace = true
 arrow-buffer.workspace = true
 arrow-schema.workspace = true
+thiserror = { workspace = true, optional = true }
 # `executor`: file footers are read on a thread of their own (catalog.rs).
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv-common = { path = "../krishiv-common" }
@@ -83,6 +84,7 @@ telemetry-otlp = [
 
 # Structured JSON logs with the query's ids and a per-callsite rate limit (`logging.rs`).
 telemetry-logs = [
+    "dep:thiserror",
     "dep:tracing-subscriber",
     "tracing-subscriber/fmt",
     "tracing-subscriber/json",
