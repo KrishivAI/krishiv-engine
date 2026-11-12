@@ -46,13 +46,15 @@ pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
-) -> Result<Arc<LogicalPlan>, KrishivError> {
+) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let mut r = Rule {
         est: Estimator::with_propagation(stats, propagate),
         root: Arc::clone(&root),
         next: None,
+        notes: Vec::new(),
     };
-    dag::rewrite_up(root, &mut |p| Ok(r.join(&p).unwrap_or(p)))
+    let out = dag::rewrite_up(root, &mut |p| Ok(r.join(&p).unwrap_or(p)))?;
+    Ok((out, r.notes))
 }
 
 struct Rule<'a> {
@@ -60,6 +62,8 @@ struct Rule<'a> {
     root: Arc<LogicalPlan>,
     /// The next unused attribute id, computed at the first firing.
     next: Option<u64>,
+    /// One line per firing and per cost-guard refusal, for `EXPLAIN VERBOSE`.
+    notes: Vec<String>,
 }
 
 /// A relation both blocks read: the body under its `Shift`s, and what those add to every id.
@@ -359,8 +363,14 @@ impl Rule<'_> {
             scan_bytes += est.rows_for_costing() * width;
         }
         if window_bytes > scan_bytes {
+            self.notes.push(format!(
+                "SubqueryAsWindow: refused by the cost guard (window ~{window_bytes:.0} bytes > second scan ~{scan_bytes:.0} bytes)"
+            ));
             return None;
         }
+        self.notes.push(format!(
+            "SubqueryAsWindow: form M, window over the outer block (window ~{window_bytes:.0} bytes <= second scan ~{scan_bytes:.0} bytes)"
+        ));
         // The plan.
         let first = match self.next {
             Some(n) => n,

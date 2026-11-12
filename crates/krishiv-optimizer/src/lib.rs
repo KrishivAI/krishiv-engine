@@ -419,13 +419,18 @@ fn run(
                     .unwrap_or(false)
             });
         let root = if window {
-            t.once("SubqueryAsWindow", &root, |r| {
-                win_magic::rewrite(
+            let mut notes = Vec::new();
+            let after = t.once("SubqueryAsWindow", &root, |r| {
+                let (after, n) = win_magic::rewrite(
                     Arc::clone(r),
                     stats.unwrap_or(&NoStatistics),
                     options.stats_propagation,
-                )
-            })?
+                )?;
+                notes = n;
+                Ok(after)
+            })?;
+            t.notes("SubqueryAsWindow", &after, notes);
+            after
         } else {
             root
         };

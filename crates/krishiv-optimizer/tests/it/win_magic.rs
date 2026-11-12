@@ -151,3 +151,42 @@ fn without_statistics_the_guard_does_not_fire() {
     .unwrap();
     assert!(!out.root().to_string().contains("Window ["));
 }
+
+#[test]
+fn avg_of_an_integer_is_refused() {
+    // Without `avg_is_exact` the window's average could differ from the aggregate's.
+    let sql = q17("avg(l_linenumber)", "", "", "l_partkey = p_partkey");
+    assert!(!windowed(&sql));
+}
+
+#[test]
+fn a_floating_point_key_is_refused() {
+    let sql = q17(
+        "avg(l_quantity)",
+        "",
+        "",
+        "CAST(l_partkey AS DOUBLE) = CAST(p_partkey AS DOUBLE)",
+    );
+    assert!(!windowed(&sql));
+}
+
+#[test]
+fn a_firing_is_noted_in_the_trace() {
+    let plan = support::resolve(&support::tpch_sql(17), &support::ctx());
+    let mut config = Config::new();
+    config
+        .set("krishiv.optimizer.subqueryAsWindow", "true")
+        .unwrap();
+    let (_, steps) = krishiv_optimizer::optimize_traced_with_udfs(
+        &plan,
+        &fixture(),
+        &UdfLibrary::new(),
+        &config,
+    )
+    .unwrap();
+    assert!(
+        steps
+            .iter()
+            .any(|s| { s.note.contains("SubqueryAsWindow: form M") }),
+    );
+}
