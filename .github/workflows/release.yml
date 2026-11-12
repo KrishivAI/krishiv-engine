@@ -108,6 +108,14 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: bundle/SHA256SUMS
+      - name: Verify the attestations before keeping the bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: bundle
+        run: |
+          for f in $(ls | grep -v '^SHA256SUMS$'); do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" > /dev/null || { echo "::error::no valid attestation for $f"; exit 1; }
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-bundle

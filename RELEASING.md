@@ -103,6 +103,20 @@ Not wired yet (each is a reviewed change by the maintainer, because it edits the
 Owner actions before the gate are listed in `ops/needs-owner.md` ("Release 0.2.0 channels and pre-publish setup"):
 crates.io keywords and description (drop `datafusion`), the PyPI classifier, the credentials, and the go/no-go.
 
+## Release integrity
+
+- **Provenance:** every file in the `release-bundle` artifact (wheels, binaries, SBOMs) has a GitHub build-provenance
+  attestation, and `release.yml` verifies each one with `gh attestation verify` before it keeps the bundle. Anyone can
+  check a downloaded file: `gh attestation verify <file> --repo KrishivAI/krishiv-engine`.
+- **SBOMs:** one CycloneDX file per shipped package (facade, CLI, Python extension) sits in the bundle; attach them to
+  the GitHub Release with the binaries and `SHA256SUMS`.
+- **PyPI:** trusted publishing over OIDC, no token (`publish-pypi.yml`, `publish-testpypi.yml`).
+- **crates.io:** still a scoped token in the `crates-io` environment. crates.io supports trusted publishing
+  (`rust-lang/crates-io-auth-action`); moving to it means registering the workflow on each crate and editing the
+  publish guard, so it is a reviewed change by the maintainer after 0.2.0, not part of the dry run.
+- **Signed tags:** the owner creates the release tag signed, `git tag -s v0.2.0 -m "krishiv 0.2.0"`, and checks it with
+  `git verify-tag v0.2.0` before pushing it. Agents never tag.
+
 ## The 0.2.0 release, step by step (owner only)
 
 Each step is a hard stop for agents; the maintainer runs it and approves its environment.
