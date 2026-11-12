@@ -120,7 +120,9 @@ impl Session {
             root: warehouse.clone(),
             view: None,
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
         };
         let layout = LayoutRequest {
             partition_by: &partition_names,
@@ -302,87 +304,6 @@ impl Session {
         // Tables are never replaced, so nothing comes back from the store to clean up.
         self.state.catalog.store.create_table(table, mode)?;
         Ok(())
-    }
-
-    /// Asks the session's policy about `path` for each privilege (the writer does the same for its files).
-    pub(super) async fn authorize_path(
-        &self,
-        path: &Path,
-        privileges: &[Privilege],
-        class: StatementClass,
-    ) -> Result<(), KrishivError> {
-        let securable = Securable::Path(OptionValue::from_user("path", path.display().to_string()));
-        for privilege in privileges {
-            let r = authorize(
-                &*self.state.policy,
-                &self.state.principal,
-                &securable,
-                *privilege,
-            )
-            .await;
-            crate::access::audit(self, class, r)?;
-        }
-        Ok(())
-    }
-
-    /// Deletes the files of the managed `table` (all of its directory, or with `keep_dir` what is in it).
-    ///
-    /// The directory must lie inside the warehouse, must not be the warehouse and must not be a link: a name
-    /// can never reach outside it (names are checked at creation, and this is the second line). The policy is
-    /// asked about the directory before anything is removed.
-    pub(super) async fn delete_table_files(
-        &self,
-        table: &CatalogTable,
-        keep_dir: bool,
-    ) -> Result<(), KrishivError> {
-        if let Some(dir) = self.deletable_dir(table).await? {
-            if keep_dir {
-                clear_dir(&dir)
-            } else {
-                remove_dir(&dir)
-            }
-        } else {
-            Ok(())
-        }
-    }
-
-    /// The directory whose files a delete of `table` would remove, after every check (containment in the root
-    /// the table was created under, no links, the policy): `None` when there is nothing to delete. Run before
-    /// the metadata changes, so a refused delete leaves the table in place.
-    pub(super) async fn deletable_dir(
-        &self,
-        table: &CatalogTable,
-    ) -> Result<Option<PathBuf>, KrishivError> {
-        if !table.managed {
-            return Ok(None);
-        }
-        let location = &table.location;
-        let meta = match location.symlink_metadata() {
-            Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => {
-                return Err(internal(format!(
-                    "cannot inspect {}: {e}",
-                    location.display()
-                )));
-            }
-        };
-        let root = table
-            .root
-            .canonicalize()
-            .map_err(|e| internal(format!("cannot resolve the warehouse: {e}")))?;
-        let canonical = location
-            .canonicalize()
-            .map_err(|e| internal(format!("cannot resolve {}: {e}", location.display())))?;
-        if meta.file_type().is_symlink() || !canonical.starts_with(&root) || canonical == root {
-            return Err(internal(format!(
-                "refusing to delete {}: it is not a directory inside the warehouse",
-                location.display()
-            )));
-        }
-        self.authorize_path(&canonical, &[Privilege::Modify], StatementClass::Write)
-            .await?;
-        Ok(Some(canonical))
     }
 
     /// `CREATE TABLE ... AS SELECT`: writes the query to the table's
@@ -605,7 +526,9 @@ impl Session {
             root: warehouse.clone(),
             view: None,
             layout,
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -679,20 +602,33 @@ impl Session {
             }
             .into());
         }
+        // Its deletes do not interleave with a rename's moves or a write's registration.
+        let _ddl = if table.is_partitioned() {
+            Some(
+                self.state
+                    .catalog
+                    .store
+                    .partition_ddl(&table.location)
+                    .await,
+            )
+        } else {
+            None
+        };
         self.forget_cached(&name);
         let deleted = self.delete_table_files(&table, true).await;
         // Data may have changed even when the cleanup failed part way.
         self.state.catalog.store.bump();
         self.forget_cached(&name);
+        self.forget_column_stats(&name);
         deleted?;
         self.empty_frame().await
     }
 
     /// `ANALYZE TABLE name COMPUTE STATISTICS [NOSCAN | FOR COLUMNS ...]`.
     ///
-    /// The table (and the listed columns) must exist, as in Spark. The engine
-    /// keeps no table statistics, so nothing is computed or stored: the
-    /// command only validates its target.
+    /// The table (and the listed columns) must exist, as in Spark. Column
+    /// statistics are computed and kept in the catalog; the engine keeps no
+    /// table-level statistics, so the other forms only validate their target.
     pub(crate) async fn exec_analyze(
         &self,
         a: &Analyze,
@@ -739,7 +675,7 @@ impl Session {
             _ => return Err(unsupported("this ANALYZE TABLE form")),
         };
         // Spark gathers statistics of numbers, booleans, dates and times, strings and binary only.
-        for column in chosen {
+        for column in &chosen {
             let supported = matches!(
                 column.data_type,
                 DataType::Boolean
@@ -768,17 +704,8 @@ impl Session {
                 );
             }
         }
-        // Nothing is computed, but the table remembers that column statistics were asked for, so that
-        // `DESCRIBE EXTENDED t col` refuses instead of printing NULLs (review of #496 M2).
-        if matches!(
-            a.columns,
-            AnalyzeColumns::ForAll | AnalyzeColumns::ForColumns(_)
-        ) && !table.column_stats_requested
-        {
-            let mut marked = CatalogTable::clone(&table);
-            marked.column_stats_requested = true;
-            // A concurrent change of the table wins; the mark is only a guard.
-            self.state.catalog.store.replace_table(&table, marked);
+        if !chosen.is_empty() {
+            self.store_column_stats(&name, &table, &chosen).await?;
         }
         self.empty_frame().await
     }

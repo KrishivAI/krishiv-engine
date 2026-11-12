@@ -36,7 +36,7 @@ use krishiv_common::error::{
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::secret::OptionValue;
-use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
+use krishiv_plan::analyzer::{Privilege, TableColumn};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
     AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable, AlterTableAction,
@@ -139,7 +139,7 @@ fn unsupported(feature: &str) -> KrishivError {
 }
 
 /// An `ALTER` found its table dropped or altered by another statement while it ran.
-fn concurrent_change(name: &TableName) -> KrishivError {
+pub(crate) fn concurrent_change(name: &TableName) -> KrishivError {
     internal(format!(
         "{} was changed by another statement while this one ran; retry",
         name.quoted()
@@ -625,7 +625,9 @@ impl Session {
                 ),
             }),
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
         };
         self.state.catalog.store.create_table(view, mode)?;
         self.empty_frame().await
@@ -1100,26 +1102,23 @@ impl Session {
                 }
                 return Err(table_operation(&name, "DROP COLUMN"));
             }
-            AlterTableAction::AddPartition {
-                if_not_exists,
-                parts,
-                ..
-            } => {
-                changed = self
-                    .add_partitions(&table, parts, *if_not_exists, original)
-                    .await?;
+            AlterTableAction::AddPartition { .. }
+            | AlterTableAction::SetPartitionLocation { .. } => {
+                changed = self.alter_partitions(&table, &a.action, original).await?;
             }
-            AlterTableAction::SetPartitionLocation {
-                partition,
-                location,
-                ..
-            } => {
-                changed = self
-                    .set_partition_location(&table, partition, location, original)
-                    .await?;
-            }
+            // It swaps the catalog entry itself, between its directory move and the statement's end.
             AlterTableAction::RenamePartition { from, to, .. } => {
-                changed = self.rename_partition(&table, [from, to], original).await?;
+                self.rename_partition(&table, &name, [from, to], original)
+                    .await?;
+                return self.empty_frame().await;
+            }
+            // It swaps the catalog entry itself, between its log commit and its deletes.
+            AlterTableAction::DropPartition {
+                if_exists, specs, ..
+            } => {
+                self.drop_partitions(&table, &name, specs, *if_exists, original)
+                    .await?;
+                return self.empty_frame().await;
             }
             AlterTableAction::SetTblProperties(props) => {
                 // The `comment` property is the table comment (`AlterTableSetPropertiesCommand`); the
@@ -1756,37 +1755,8 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// Deletes a managed table's directory; a directory that is already gone
-/// is fine.
-fn remove_dir(dir: &Path) -> Result<(), KrishivError> {
-    match std::fs::remove_dir_all(dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(internal(format!("cannot delete {}: {e}", dir.display()))),
-    }
-}
-
-/// Removes everything in `dir` and keeps `dir`.
-fn clear_dir(dir: &Path) -> Result<(), KrishivError> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(internal(format!("cannot list {}: {e}", dir.display()))),
-    };
-    for entry in entries {
-        let path = entry
-            .map_err(|e| internal(format!("cannot list {}: {e}", dir.display())))?
-            .path();
-        let removed = if path.is_dir() {
-            std::fs::remove_dir_all(&path)
-        } else {
-            std::fs::remove_file(&path)
-        };
-        removed.map_err(|e| internal(format!("cannot delete {}: {e}", path.display())))?;
-    }
-    Ok(())
-}
-
+mod files;
+use files::remove_dir;
 mod location;
 use location::qualified_namespace_location;
 

@@ -460,6 +460,15 @@ pub fn run_file_with(
     file
 }
 
+/// Whether a parse failure is an error Spark raises while building the AST rather than as a `ParseException`:
+/// the expected error of `s` is not a parse error and the engine's has its class and SQLSTATE, so the
+/// statement counts as parsed. Any such class qualifies; the cases that need it today are interval literals
+/// that overflow (`SparkArithmeticException`) or name an unknown unit (`SparkIllegalArgumentException`).
+fn raised_while_building_the_ast(s: &Statement, got: &EngineError) -> bool {
+    matches!(&s.expected, Expected::Error(e) if !e.is_parse_error()
+        && e.error_class.as_deref().is_some_and(|class| error_matches(e, class, got)))
+}
+
 fn failed(s: &Statement) -> Outcome {
     outcome(s, false, None)
 }
@@ -471,7 +480,10 @@ fn run_session(engine: &mut dyn Engine, statements: &[Statement]) -> Vec<Outcome
     statements
         .iter()
         .map(|s| {
-            let parsed = engine.parse(&s.query).is_ok();
+            let parsed = match engine.parse(&s.query) {
+                Ok(()) => true,
+                Err(e) => raised_while_building_the_ast(s, &e),
+            };
             outcome(s, parsed, Some((engine.execute(&s.query), &masker)))
         })
         .collect()
@@ -922,6 +934,40 @@ mod tests {
         let mut e = NoSession;
         assert_eq!(e.name(), "no-session");
         assert!(e.parse("x").is_ok() && e.execute("x").is_err());
+        Ok(())
+    }
+
+    /// An engine whose parser raises what Spark's `AstBuilder` raises.
+    struct RaisesInParser;
+
+    impl Engine for RaisesInParser {
+        fn name(&self) -> &str {
+            "raises-in-parser"
+        }
+        fn reset(&mut self, _setup: &SessionSetup) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn parse(&mut self, _sql: &str) -> Result<(), EngineError> {
+            Err(EngineError {
+                class: Some("INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION".to_owned()),
+                sql_state: Some("22015".to_owned()),
+                message: String::new(),
+            })
+        }
+        fn execute(&mut self, sql: &str) -> Result<QueryOutput, EngineError> {
+            self.parse(sql)
+                .and_then(|()| Err(RejectAllEngine::reject()))
+        }
+    }
+
+    #[test]
+    fn an_error_spark_raises_while_building_the_ast_counts_as_parsed() -> R {
+        let out = "-- !query\nselect 1\n-- !query schema\nstruct<>\n-- !query output\n\
+                   org.apache.spark.SparkArithmeticException\n{\n  \"errorClass\" : \
+                   \"INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION\",\n  \"sqlState\" : \"22015\"\n}\n";
+        let f = run_file(&mut RaisesInParser, "t", &parse_results(out)?, &plain());
+        assert_eq!((f.parse.passed, f.negative.passed), (1, 1));
+        assert!(f.cases.iter().all(|c| c.detail.is_empty()));
         Ok(())
     }
 

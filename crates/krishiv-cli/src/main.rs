@@ -86,12 +86,30 @@ enum Command {
     },
 }
 
+/// `KRISHIV_LOG=json` turns on JSON log records on stderr (query, session and trace ids on each;
+/// at most `KRISHIV_LOG_RATE` events per callsite per second, default 50). Anything else: off.
+#[cfg(feature = "telemetry-logs")]
+#[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+fn install_logs_from_env() {
+    if std::env::var("KRISHIV_LOG").is_ok_and(|v| v.eq_ignore_ascii_case("json")) {
+        let rate = std::env::var("KRISHIV_LOG_RATE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50);
+        if let Err(e) = krishiv_session::logging::install_json_logs(rate) {
+            eprintln!("krishiv: JSON logs not enabled: {e}");
+        }
+    }
+}
+
 fn main() {
     // First, so a CPU older than the build targets gets a message instead of SIGILL.
     // `run` holds everything else: the compiler may use the build's CPU level in the
     // prologue of a function with large locals, which must not come before the check.
     krishiv_common::cpu::check_or_exit();
     krishiv::register_build_features(&bundle::feature_states());
+    #[cfg(feature = "telemetry-logs")]
+    install_logs_from_env();
     // Allocator policy is this binary's (it owns the global allocator):
     // under memory pressure, threads return freed memory to the OS. With a
     // configured limit that is not generous, mimalloc also purges promptly

@@ -340,6 +340,17 @@ impl DataFrame {
         physical: &krishiv_exec::planner::PhysicalPlan,
         keep: bool,
     ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
+        // Snapshot who runs the query now: `set_trace_context` and `set_tag` apply to the
+        // queries started after them, not to this one.
+        let who = crate::telemetry::Who::of(&self.session.state);
+        let mut trace = serde_json::json!({ "session_id": who.session_id });
+        if let (Some(t), Some(o)) = (&who.trace_id, trace.as_object_mut()) {
+            o.insert("trace_id".to_owned(), t.clone().into());
+        }
+        let identity = krishiv_exec::profile::ProfileIdentity {
+            principal: self.session.state.principal.name.clone(),
+            tags: self.session.state.queries.tags().into_iter().collect(),
+        };
         let (mut stream, query) = self.session.run_profiled(physical, &a.env).await?;
         let mut out = Vec::new();
         while let Some(batch) = stream.next().await {
@@ -351,7 +362,10 @@ impl DataFrame {
         drop(stream);
         // Every driver has merged its counters once the query finished.
         query.finished().await;
-        Ok((out, QueryProfile::new(physical, query.metrics(), true)))
+        let mut profile = QueryProfile::new(physical, query.metrics(), true);
+        profile.trace = Some(trace);
+        profile.identity = Some(identity);
+        Ok((out, profile))
     }
 
     /// The plan at every stage (`EXPLAIN VERBOSE`): parsed, analyzed, after

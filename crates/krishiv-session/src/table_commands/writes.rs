@@ -278,9 +278,23 @@ impl Session {
             return self.check_table_write(table, &df, overwrite).await;
         }
         let mode = if overwrite { "overwrite" } else { "append" };
+        // A RENAME or DROP PARTITION waits until these rows are written and their partitions registered (it could
+        // otherwise move or drop a partition between this write's log commit and its registration).
+        let _partitions = if table.is_partitioned() {
+            Some(
+                self.state
+                    .catalog
+                    .store
+                    .partition_write(&table.location)
+                    .await,
+            )
+        } else {
+            None
+        };
         let written = self.write_table_rows(table, &df, mode, &mut None).await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
+        self.forget_column_stats(name);
         self.forget_cached(name);
         let dirs =
             written.map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment))?;
@@ -665,7 +679,9 @@ impl Session {
             root: warehouse,
             view: None,
             layout: TableLayout::default(),
-            column_stats_requested: false,
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
         };
         let layout = LayoutRequest {
             partition_by: &[],

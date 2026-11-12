@@ -364,4 +364,12 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
         &RUNTIME_FILTER_BLOOM_ENABLED,
     ),
+    (
+        "spark.sql.legacy.skipTypeValidationOnAlterPartition",
+        &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    ),
+    (
+        "krishiv.sql.legacy.skipTypeValidationOnAlterPartition",
+        &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    ),
 ];

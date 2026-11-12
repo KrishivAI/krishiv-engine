@@ -10,6 +10,7 @@ use std::time::Duration;
 use super::{
     ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
     build_projection::EXEC_JOIN_BUILD_PROJECTION, join_cost::JOIN_COST,
+    partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
 };
 
 mod python;
@@ -116,6 +117,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CTE_RECURSION_ROW_LIMIT,
     &LEGACY_CODING_ERROR_ACTION,
     &LEGACY_JAVA_CHARSETS,
+    &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
     &LEGACY_STATISTICAL_AGGREGATE,
     &BINARY_OUTPUT_STYLE,
     &LEGACY_TIME_PARSER_POLICY,
