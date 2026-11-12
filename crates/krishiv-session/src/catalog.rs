@@ -154,8 +154,10 @@ pub(crate) struct SessionCatalog {
     pub(crate) store: Arc<InMemoryCatalogStore>,
     /// Where managed tables live (the runtime's).
     pub(crate) warehouse: Arc<Warehouse>,
-    /// The namespace bare table names resolve in (`USE`).
-    current_namespace: RwLock<String>,
+    /// The current catalog (`USE system`; empty is `spark_catalog`) and the namespace bare
+    /// table names resolve in (`USE`; empty is the default), under one lock so a reader never
+    /// sees half of a `USE`.
+    position: RwLock<(String, String)>,
     /// The entries `SET PATH` stored; `None` is the default path.
     path: RwLock<Option<Vec<crate::sql_path::Entry>>>,
 }
@@ -170,7 +172,7 @@ impl SessionCatalog {
             hidden: AtomicU64::new(0),
             store,
             warehouse,
-            current_namespace: RwLock::default(),
+            position: RwLock::default(),
             path: RwLock::default(),
         }
     }
@@ -279,15 +281,15 @@ impl SessionCatalog {
 
     /// The namespace bare table names resolve in.
     pub(crate) fn current_namespace(&self) -> String {
-        let ns = self
-            .current_namespace
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        if ns.is_empty() {
-            NAMESPACE.to_owned()
-        } else {
-            ns.clone()
-        }
+        self.position_pair().1
+    }
+
+    /// The current catalog's canonical name and namespace, read together.
+    pub(crate) fn position_pair(&self) -> (String, String) {
+        let p = self.position.read().unwrap_or_else(PoisonError::into_inner);
+        let catalog = if p.0.is_empty() { CATALOG } else { &p.0 };
+        let namespace = if p.1.is_empty() { NAMESPACE } else { &p.1 };
+        (catalog.to_owned(), namespace.to_owned())
     }
 
     /// The stored path entries, `None` for the default.
@@ -310,17 +312,55 @@ impl SessionCatalog {
         let entries = self
             .stored_path()
             .unwrap_or_else(|| crate::sql_path::default_entries(default_conf));
-        let namespace = self.current_namespace();
-        entries.iter().map(|e| e.parts(&namespace)).collect()
+        let current = self.current_position();
+        entries.iter().map(|e| e.parts(&current)).collect()
+    }
+
+    /// The current catalog and namespace as path parts: `[spark_catalog,
+    /// db]`, or `[system]`.
+    pub(crate) fn current_position(&self) -> Vec<String> {
+        let (catalog, namespace) = self.position_pair();
+        if crate::system::is_system(&catalog) {
+            vec![catalog]
+        } else {
+            vec![catalog, namespace]
+        }
+    }
+
+    /// The current catalog's canonical name.
+    pub(crate) fn current_catalog(&self) -> String {
+        self.position_pair().0
+    }
+
+    /// `USE <catalog>`: a no-op when `catalog` is current, else its default
+    /// namespace (the default database for `spark_catalog`, none for `system`).
+    pub(crate) fn use_catalog(&self, catalog: &str) {
+        {
+            let mut p = self
+                .position
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            let current = if p.0.is_empty() {
+                CATALOG
+            } else {
+                p.0.as_str()
+            };
+            if current == catalog {
+                return;
+            }
+            *p = (catalog.to_owned(), String::new());
+        }
+        self.epoch.fetch_add(1, Ordering::AcqRel);
     }
 
     /// `USE namespace`.
     pub(crate) fn use_namespace(&self, namespace: &str) {
         namespace.clone_into(
             &mut self
-                .current_namespace
+                .position
                 .write()
-                .unwrap_or_else(PoisonError::into_inner),
+                .unwrap_or_else(PoisonError::into_inner)
+                .1,
         );
         self.epoch.fetch_add(1, Ordering::AcqRel);
     }
@@ -416,6 +456,8 @@ pub(crate) struct QueryCatalog {
     epoch: u64,
     /// The current namespace (`USE`) as this query sees it.
     namespace: Vec<String>,
+    /// The current catalog (`USE system`) as this query sees it.
+    catalog: String,
     /// The SQL path (`SET PATH`) as this query sees it.
     path: Vec<Vec<String>>,
     /// What the `system` tables read.
@@ -465,8 +507,14 @@ impl QueryCatalog {
         system: crate::system::Sources,
     ) -> Self {
         let epoch = session.epoch();
-        let namespace = vec![session.current_namespace()];
-        let path = session.sql_path(default_path);
+        // One read of the position, so the snapshot never mixes two `USE`s.
+        let (catalog, current_namespace) = session.position_pair();
+        let namespace = if crate::system::is_system(&catalog) {
+            Vec::new()
+        } else {
+            vec![current_namespace]
+        };
+        let path = session.sql_path_in(default_path, &catalog, &namespace);
         Self {
             session,
             cache,
@@ -477,6 +525,7 @@ impl QueryCatalog {
             opened: Mutex::new(Vec::new()),
             epoch,
             namespace,
+            catalog,
             path,
             system,
             scanned: Scanned::default(),
@@ -1071,7 +1120,7 @@ pub(crate) struct QueryCatalogs(pub(crate) Arc<QueryCatalog>);
 
 impl CatalogResolver for QueryCatalogs {
     fn current_catalog(&self) -> &str {
-        CATALOG
+        &self.0.catalog
     }
 
     fn current_namespace(&self) -> &[String] {
@@ -1084,7 +1133,7 @@ impl CatalogResolver for QueryCatalogs {
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
         if crate::system::is_system(name) {
-            return Some(Arc::new(crate::system::SystemCatalog::of(&self.0.system)));
+            return Some(Arc::new(self.0.system_catalog()));
         }
         name.eq_ignore_ascii_case(CATALOG)
             .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)
@@ -1204,6 +1253,8 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) path: Vec<Vec<String>>,
     /// `spark.sql.legacy.viewSchemaBindingMode` of the query's snapshot: views read by their schema binding mode.
     pub(crate) binding_enabled: bool,
+    /// Whether `system` was the current catalog as the query snapshot saw it.
+    pub(crate) in_system: bool,
     /// Qualifies the bare routine calls of an expression written in a namespace under a frozen path
     /// (`None` when nothing changed): the calls of a stored view's query resolve where the view was
     /// created, not where it is read.

@@ -144,6 +144,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &STORE_ASSIGNMENT_POLICY,
     ),
     (
+        "krishiv.system.queryText.literals",
+        &SYSTEM_QUERY_TEXT_LITERALS,
+    ),
+    (
+        "krishiv.system.queryText.maxBytes",
+        &SYSTEM_QUERY_TEXT_MAX_BYTES,
+    ),
+    (
         "spark.sql.files.maxPartitionBytes",
         &FILES_MAX_PARTITION_BYTES,
     ),

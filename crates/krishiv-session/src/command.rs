@@ -200,13 +200,13 @@ impl Session {
                     .get(&krishiv_common::config::SQL_DEFAULT_PATH)
                     .map(ToString::to_string)
                     .unwrap_or_default();
-                let namespace = self.state.catalog.current_namespace();
+                let current = self.state.catalog.current_position();
                 let live = self
                     .state
                     .catalog
                     .stored_path()
                     .unwrap_or_else(|| crate::sql_path::default_entries(&default_conf));
-                let entries = crate::sql_path::expand(elements, &live, &default_conf, &namespace)?;
+                let entries = crate::sql_path::expand(elements, &live, &default_conf, &current)?;
                 self.state.catalog.set_path(entries);
                 self.empty_frame().await
             }
@@ -388,8 +388,11 @@ impl Session {
 
     /// Runs `DROP VIEW [IF EXISTS] name` over the temporary views,
     /// returning an empty frame as in Spark.
-    pub(crate) async fn exec_drop_view(&self, v: &DropView) -> Result<DataFrame, KrishivError> {
-        let env = self.query_env();
+    pub(crate) async fn exec_drop_view(
+        &self,
+        v: &DropView,
+        env: &crate::session::QueryEnv,
+    ) -> Result<DataFrame, KrishivError> {
         if !is_global_key(&v.name.value)
             && self
                 .state
@@ -399,7 +402,7 @@ impl Session {
             self.state.catalog.drop_table(&v.name.value);
             self.state.cache.invalidate_table(&v.name.value);
         } else {
-            self.drop_bare_stored_view(&v.name.value, v.if_exists)?;
+            self.drop_bare_stored_view(&v.name.value, v.if_exists, env)?;
         }
         self.empty_frame().await
     }
@@ -422,7 +425,7 @@ impl Session {
                 if self.state.catalog.exists(only, case_sensitive) {
                     return Some(only.clone());
                 }
-                let namespace = self.state.catalog.current_namespace();
+                let namespace = self.stored_namespace().ok()?;
                 store
                     .table(&namespace, &fold(only))
                     .map(|_| format!("{namespace}.{}", fold(only)))
@@ -437,7 +440,7 @@ impl Session {
                 // The cache records a view by the last part of the name it was read by.
                 Some(name.clone())
             }
-            [namespace, name] => store
+            [namespace, name] if self.stored_namespace().is_ok() => store
                 .table(&fold(namespace), &fold(name))
                 .map(|_| format!("{}.{}", fold(namespace), fold(name))),
             _ => None,
@@ -1243,8 +1246,8 @@ impl Session {
         parts: &'a [Ident],
     ) -> Result<(String, &'a Ident), KrishivError> {
         let (namespace, part) = match parts {
-            [part] => (self.state.catalog.current_namespace(), part),
-            [ns, part] => (ns.value.clone(), part),
+            [part] => (self.stored_namespace()?, part),
+            [ns, part] => (self.function_namespace(&ns.value)?, part),
             [catalog, ns, part] if catalog.value.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
                 (ns.value.clone(), part)
             }
@@ -1536,14 +1539,26 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         match &s.kind {
             krishiv_sql::ast::ShowKind::CurrentNamespace { .. } => {
-                self.string_frame(
-                    &["catalog", "namespace"],
-                    vec![vec![
+                // `system` has no namespace: after `USE system` the row says so rather than
+                // naming the default database of another catalog.
+                let row = if crate::system::is_system(&self.state.catalog.current_catalog()) {
+                    vec![Some(crate::system::SYSTEM.to_owned()), Some(String::new())]
+                } else {
+                    vec![
                         Some(CATALOG.to_owned()),
                         Some(self.state.catalog.current_namespace()),
-                    ]],
-                )
-                .await
+                    ]
+                };
+                self.string_frame(&["catalog", "namespace"], vec![row])
+                    .await
+            }
+            krishiv_sql::ast::ShowKind::Catalogs { pattern, .. } => {
+                let rows = [CATALOG, crate::system::SYSTEM]
+                    .into_iter()
+                    .filter(|n| crate::introspection::keep(pattern.as_ref(), n))
+                    .map(|n| vec![Some(n.to_owned())])
+                    .collect();
+                self.ordered_frame(&["catalog"], &[], rows).await
             }
             _ => self.exec_show_catalog(s, original).await,
         }

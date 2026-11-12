@@ -332,11 +332,7 @@ impl Session {
         text: &str,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
-        let quoted = format!(
-            "`{}`.`{}`",
-            name.namespace.replace('`', "``"),
-            name.name.replace('`', "``")
-        );
+        let quoted = name.quoted_in_session_catalog();
         let text = text.replace("{}", &quoted);
         let statement = krishiv_sql::parse_statement(&text, &env.parser).map_err(|e| e.error)?;
         let class = krishiv_sql::classify(&statement);
@@ -375,7 +371,7 @@ impl Session {
         let parsed = krishiv_sql::parse_multipart_identifier(table, &self.parser_options())
             .map_err(|e| e.error)?;
         let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
-        TableName::resolve(&parts, &self.state.catalog.current_namespace(), env)
+        TableName::resolve(&parts, &self.namespace_for_stored(&parts, env)?, env)
     }
 
     /// `DataFrameWriter.saveAsTable`: Spark's V1 save modes over a table. The
@@ -606,10 +602,7 @@ impl Session {
         pre: &mut Option<Admitted>,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
-        let parsed = krishiv_sql::parse_multipart_identifier(&spec.table, &self.parser_options())
-            .map_err(|e| e.error)?;
-        let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
-        let name = TableName::resolve(&parts, &self.state.catalog.current_namespace(), &env)?;
+        let name = self.writer_table_name(&spec.table, &env)?;
         self.authorize_table_write(&name, mode != V2Mode::Append, &env)
             .await?;
         match mode {

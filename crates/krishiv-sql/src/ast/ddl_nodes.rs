@@ -1298,6 +1298,13 @@ pub enum ShowKind {
         /// Source text.
         span: Span,
     },
+    /// `SHOW CATALOGS [[LIKE] 'pattern']`.
+    Catalogs {
+        /// The pattern, if written.
+        pattern: Option<ShowPattern>,
+        /// Source text.
+        span: Span,
+    },
     /// `SHOW CURRENT NAMESPACE|SCHEMA|DATABASE`.
     CurrentNamespace {
         /// Which keyword.

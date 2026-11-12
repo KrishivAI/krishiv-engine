@@ -56,10 +56,10 @@ impl Expander<'_> {
                 .iter()
                 .any(|c| same_name(c, bare, self.case_sensitive))
         {
-            // The first schema of the view's frozen path holding the name. A name no schema of a
-            // non-empty frozen path holds stays missing (the first schema reports it), never
-            // read from a namespace the path left out; a view without a catalog schema in its
-            // path reads its own namespace.
+            if let Some(system) = self.system_table_in_path(&plan) {
+                return Ok(system);
+            }
+            // First schema of the frozen path holding the name (none held: the first reports it).
             let namespace = self
                 .view_path
                 .as_deref()
@@ -73,7 +73,7 @@ impl Expander<'_> {
                 })
                 .unwrap_or_else(|| namespace.clone());
             let qualified = ReadSource::Table {
-                name: vec![namespace, bare.clone()],
+                name: self.view_read_name(namespace, bare.clone()),
                 options: options.clone(),
             };
             let plan =
@@ -150,21 +150,6 @@ impl Expander<'_> {
         self.expand_stored(plan, scope)
     }
 
-    /// The first schema of `path` (in the catalog store) holding the table or view `table`.
-    pub(super) fn path_schema_of(&self, path: &[Vec<String>], table: &str) -> Option<String> {
-        path.iter().find_map(|entry| match entry.as_slice() {
-            [c, n] if c.eq_ignore_ascii_case(CATALOG) => {
-                let (n_key, t_key) = if self.case_sensitive {
-                    (n.clone(), table.to_owned())
-                } else {
-                    (n.to_lowercase(), table.to_lowercase())
-                };
-                self.catalog.store.table(&n_key, &t_key).map(|_| n.clone())
-            }
-            _ => None,
-        })
-    }
-
     /// `plan`, or when it reads a stored view, that view's query as a subquery named for the view.
     pub(super) fn expand_stored(
         &mut self,
@@ -174,6 +159,7 @@ impl Expander<'_> {
         let Some(stored) = self.stored else {
             return Ok(plan);
         };
+        let plan = self.anchored(plan);
         let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node else {
             return Ok(plan);
         };
@@ -196,6 +182,7 @@ impl Expander<'_> {
                 // Outside a stored view, the first schema of the path holding the name; inside one,
                 // the view's own namespace.
                 let path = self.view_path.as_deref().unwrap_or(&stored.path);
+                let path = Self::before_system(path, table);
                 let from_path = (self.view_namespace.is_none() || self.view_path.is_some())
                     .then(|| self.path_schema_of(path, table))
                     .flatten();
@@ -206,7 +193,7 @@ impl Expander<'_> {
                     (None, None) => return Ok(plan),
                 }
             }
-            [namespace, table] => (namespace.clone(), table),
+            [namespace, table] if self.names_a_stored_namespace() => (namespace.clone(), table),
             [catalog, namespace, table] if catalog.eq_ignore_ascii_case(CATALOG) => {
                 (namespace.clone(), table)
             }
@@ -219,7 +206,7 @@ impl Expander<'_> {
         };
         let entry = self.catalog.store.table(&namespace, &table_key);
         let candidate = ReadCandidate {
-            written: name.clone(),
+            written: self.read_name(name, &namespace, &table_key),
             view: entry
                 .as_ref()
                 .filter(|e| e.view.is_some())
@@ -228,13 +215,10 @@ impl Expander<'_> {
         if !self.reads.contains(&candidate) {
             self.reads.push(candidate);
         }
-        let Some(entry) = entry else {
+        let Some((entry, view)) = entry.as_ref().and_then(|e| Some((e, e.view.as_ref()?))) else {
             return Ok(plan);
         };
-        let Some(view) = &entry.view else {
-            return Ok(plan);
-        };
-        match self.inline_stored(&plan, &entry, view, &namespace, &table_key, scope) {
+        match self.inline_stored(&plan, entry, view, &namespace, &table_key, scope) {
             Ok(done) => Ok(done),
             Err(e) => {
                 // Keep the read as it is; the failure is raised once the reads are authorized.

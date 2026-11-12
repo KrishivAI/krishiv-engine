@@ -218,11 +218,8 @@ impl Session {
         name: &DdlName,
         env: &QueryEnv,
     ) -> Result<TableName, KrishivError> {
-        TableName::resolve(
-            &crate::access::ddl_parts(name, env)?,
-            &self.state.catalog.current_namespace(),
-            env,
-        )
+        let parts = crate::access::ddl_parts(name, env)?;
+        TableName::resolve(&parts, &self.namespace_for(&parts, env)?, env)
     }
 
     /// Refuses a table, view or SQL function in a schema with a default collation (`spark.sql.collation.schemaLevel.enabled`):
@@ -278,7 +275,7 @@ impl Session {
             }
         };
         match parts.as_slice() {
-            [ns] => Ok(fold(ns)),
+            [ns] => self.namespace_arg(&fold(ns)),
             [catalog, ns] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => Ok(fold(ns)),
             [catalog, _] => Err(unsupported(&format!(
                 "namespaces in the catalog `{catalog}`"
@@ -441,6 +438,49 @@ impl Session {
     /// `USE [NAMESPACE|DATABASE|SCHEMA] name`.
     pub(crate) async fn exec_use(&self, u: &Use) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        // Spark's catalog-first rule: unless the statement says NAMESPACE, a
+        // first part that names a catalog is the catalog.
+        let parts = crate::access::ddl_parts(&u.name, &env)?;
+        let canonical = |p: &str| {
+            if crate::system::is_system(p) {
+                Some("system")
+            } else if p.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+                Some(crate::catalog::CATALOG)
+            } else {
+                None
+            }
+        };
+        let quoted = |ps: &[String]| format!("`{}`", ps.join("`.`"));
+        if u.kind.is_none()
+            && let Some(catalog) = parts.first().and_then(|p| canonical(p))
+        {
+            match (catalog, &parts[1..]) {
+                (_, []) => {
+                    self.state.catalog.use_catalog(catalog);
+                    return self.empty_frame().await;
+                }
+                ("system", rest) => {
+                    return Err(SchemaNotFound {
+                        schema_name: quoted(&[vec!["system".to_owned()], rest.to_vec()].concat()),
+                    }
+                    .into());
+                }
+                (_, [_]) => {}
+                (_, rest) => {
+                    return Err(SchemaNotFound {
+                        schema_name: quoted(
+                            &[vec![crate::catalog::CATALOG.to_owned()], rest.to_vec()].concat(),
+                        ),
+                    }
+                    .into());
+                }
+            }
+        } else if self.names_a_system_namespace(&parts) {
+            return Err(SchemaNotFound {
+                schema_name: quoted(&[vec!["system".to_owned()], parts].concat()),
+            }
+            .into());
+        }
         let name = self.namespace_name(&u.name, &env)?;
         if !self.state.catalog.store.has_namespace(&name) {
             return Err(SchemaNotFound {
@@ -448,7 +488,9 @@ impl Session {
             }
             .into());
         }
-        self.state.catalog.use_namespace(&name);
+        self.state
+            .catalog
+            .use_position(crate::catalog::CATALOG, &name);
         self.empty_frame().await
     }
 
@@ -840,13 +882,9 @@ impl Session {
         &self,
         name: &str,
         if_exists: bool,
+        env: &crate::session::QueryEnv,
     ) -> Result<(), KrishivError> {
-        let env = self.query_env();
-        let name = TableName::resolve(
-            &[name.to_owned()],
-            &self.state.catalog.current_namespace(),
-            &env,
-        )?;
+        let name = TableName::resolve(&[name.to_owned()], &self.stored_namespace_in(env)?, env)?;
         self.drop_stored_view(&name, if_exists)
     }
 
