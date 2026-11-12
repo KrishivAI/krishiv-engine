@@ -4,6 +4,11 @@
 //! stage a scan below hands the probe ([`RuntimeFilters::hand_to_consumer`]).
 
 use super::*;
+use std::collections::HashSet;
+
+use krishiv_plan::{ExprNode, ResolvedExpr};
+
+use crate::operators::select::Narrow;
 use crate::physical::{ProbeColumn, ProbeFilter};
 
 /// The hash join of `j` over inputs of `probe` and `build`, publishing its
@@ -48,7 +53,13 @@ pub(crate) fn hash_join(
         spill,
     })?;
     let join = match j.select.as_ref().and_then(|s| s.filter.as_ref()) {
-        Some(f) => join.with_probe_filter(probe_filter(received, f, env)?)?,
+        Some(f) => {
+            let join = join.with_probe_filter(probe_filter(received, f, env)?)?;
+            match narrow_probe_filter(received, f, env) {
+                Some(narrow) => join.with_narrow_probe_filter(narrow)?,
+                None => join,
+            }
+        }
         None => join,
     };
     let join = match columns {
@@ -113,6 +124,40 @@ fn probe_filter(probe: &SchemaRef, f: &ProbeFilter, env: &EvalEnv) -> Result<Arc
     };
     let e = compile_one(&f.predicate, &f.layout, probe, &v)?;
     Ok(Arc::new(Compiled(e)))
+}
+
+/// The fused filter `f` compiled over only the columns of `probe` it reads,
+/// for the copy of a selective row stage's rows (design P2-E3 U2): `None`
+/// when it reads every column or none, or does not compile over them (the
+/// copy then holds every column; results are the same either way).
+fn narrow_probe_filter(probe: &SchemaRef, f: &ProbeFilter, env: &EvalEnv) -> Option<Narrow> {
+    let mut read = HashSet::new();
+    read_columns(&f.predicate, &mut read);
+    let columns: Vec<usize> = (0..f.layout.len())
+        .filter(|&i| read.contains(&f.layout[i]))
+        .collect();
+    if columns.is_empty() || columns.len() >= f.layout.len() {
+        return None;
+    }
+    let layout: Vec<AttrId> = columns.iter().map(|&i| f.layout[i]).collect();
+    let schema = Arc::new(probe.project(&columns).ok()?);
+    let v = Values {
+        env,
+        subqueries: &[],
+    };
+    let e = compile_one(&f.predicate, &layout, &schema, &v).ok()?;
+    Some(Narrow {
+        columns,
+        predicate: Arc::new(Compiled(e)),
+    })
+}
+
+/// The attributes `e` reads as columns, its sub-expressions' too.
+fn read_columns(e: &Arc<Expr>, out: &mut HashSet<AttrId>) {
+    if let ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::LambdaVar(c)) = &e.node {
+        out.insert(c.id);
+    }
+    e.for_each_child(&mut |c| read_columns(c, out));
 }
 
 impl Instantiation<'_> {

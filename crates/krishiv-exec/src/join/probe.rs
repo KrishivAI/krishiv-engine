@@ -676,7 +676,11 @@ impl Operator for ProbeOp {
                         )
                     })?),
                 };
-                Some(RowSelect::new(spec.predicate.clone(), stage))
+                Some(RowSelect::new(
+                    spec.predicate.clone(),
+                    spec.narrow.clone(),
+                    stage,
+                ))
             }
         };
         let dep = ctx
