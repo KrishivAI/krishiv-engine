@@ -11,7 +11,7 @@ name: krishiv-bench
 
 services:
   spark:
-    image: ${SPARK_IMAGE:-apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89}   # newest published 4.2.x on Docker Hub as of 2026-10 (4.2.1 not published)
+    image: ${SPARK_IMAGE:-apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89}   # default: newest published 4.2.x (4.2.1 not published as of 2026-10); override with SPARK_IMAGE, pinned by digest
     container_name: krishiv-bench-spark
     user: root
     entrypoint: []

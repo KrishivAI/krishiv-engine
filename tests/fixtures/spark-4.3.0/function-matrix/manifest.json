@@ -1,7 +1,7 @@
 {
  "format_version": 1,
  "spark_version": "4.3.0",
- "spark_image": "apache/spark:4.3.0",
+ "spark_image": "apache/spark:4.3.0@sha256:3dedc5c8665a6f472e2f0a3a828207a79a30785090ef325d3af219cb90a73d63",
  "generator": "tests/scripts/gen_function_matrix.py",
  "seed": null,
  "determinism": "no randomness; content-hashed ids; sorted output; unordered results sorted; cases Spark analyzes as non-deterministic or CURRENT_LIKE (incl. seeded rand/uuid/shuffle), value_unstable_functions, and outputs with JVM identity hashes record schema only",
