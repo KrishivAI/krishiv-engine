@@ -213,6 +213,18 @@ fn equality(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
         v.column(b).map(|(i, c)| (i, c.clone())),
     );
     match (x, y) {
+        // `a = a` keeps every non-NULL row (`a <=> a` every row): it is
+        // `isnotnull(a)`, not a join of two columns. Estimated as one, an
+        // inferred `a = a` made its input look `1 / NDV` as large on the
+        // next optimization, which then chose the other build side.
+        (Some((i, ci)), Some((j, _))) if i == j => {
+            if op == Builtin::Eq {
+                v.update(i, |c| c.null_frac = 0.0);
+                1.0 - ci.null_frac
+            } else {
+                1.0
+            }
+        }
         (Some((i, ci)), Some((j, cj))) => {
             // `1 / max(NDV)`; a count that is only the default guess is
             // read as the rows (T166 design note, section 2): only
@@ -311,6 +323,14 @@ fn compare(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
         (a, b, op)
     } else if v.column(b).is_some() && literal(a).is_some() {
         (b, a, flip(op))
+    } else if let (Some((i, c)), Some((j, _))) = (v.column(a), v.column(b))
+        && i == j
+        && matches!(op, Builtin::LtEq | Builtin::GtEq)
+    {
+        // `a <= a`, `a >= a`: every non-NULL row, as `isnotnull(a)`.
+        let kept = 1.0 - c.null_frac;
+        v.update(i, |c| c.null_frac = 0.0);
+        return kept;
     } else {
         // Two columns (or something else): every comparison rejects NULL.
         for e in [a, b] {

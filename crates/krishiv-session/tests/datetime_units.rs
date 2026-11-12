@@ -630,3 +630,40 @@ fn a_parameter_in_a_doubly_nested_subquery_is_unresolved() {
     let e = format!("{:?}", r.expect_err("deep"));
     assert!(e.contains("UnresolvedColumn"), "{e}");
 }
+
+/// Only the keyword form is Spark's grammar, so a qualified or quoted name is a call Spark's
+/// catalog lacks (Spark 4.2.0): `system.builtin.f` is looked up in the session catalog
+/// (`REQUIRES_SINGLE_PART_NAMESPACE`), `builtin.f` and a quoted `f` are `UNRESOLVED_ROUTINE`.
+#[test]
+fn only_the_keyword_form_of_timestampadd_and_timestampdiff_resolves() {
+    let s = session();
+    for (expr, class) in [
+        (
+            "system.builtin.timestampadd(YEAR, 1, DATE'2024-01-15')",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+        (
+            "`system`.`builtin`.`timestampdiff`(DAY, DATE'2024-01-15', DATE'2024-01-20')",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+        (
+            "builtin.timestampadd(YEAR, 1, DATE'2024-01-15')",
+            "UNRESOLVED_ROUTINE",
+        ),
+        (
+            "`timestampadd`('YEAR', 1, DATE'2024-01-15')",
+            "UNRESOLVED_ROUTINE",
+        ),
+        (
+            "`timestampdiff`(DAY, DATE'2024-01-15', DATE'2024-01-20')",
+            "UNRESOLVED_ROUTINE",
+        ),
+    ] {
+        let err = error_of(&s, expr);
+        assert_eq!(err.error_class().name(), class, "{expr}: {err}");
+    }
+    assert_eq!(
+        one(&s, "timestampdiff(DAY, DATE'2024-01-15', DATE'2024-01-20')").as_deref(),
+        Some("5")
+    );
+}

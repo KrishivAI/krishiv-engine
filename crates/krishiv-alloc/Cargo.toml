@@ -6,13 +6,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+publish = true
 
 [lints]
 workspace = true
 
 [dependencies]
-krishiv-common = { path = "../krishiv-common" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
 libmimalloc-sys = { workspace = true, features = ["extended"] }
 
 [features]

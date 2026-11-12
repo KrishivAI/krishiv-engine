@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the memory pools: configuration, the spill scratch floor, reservations, limits and the pool tree.
 use std::sync::Arc;
 use std::time::Duration;
 

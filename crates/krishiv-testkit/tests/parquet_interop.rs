@@ -224,6 +224,71 @@ fn spark_nested_columns() {
     }
 }
 
+/// pyarrow's deeply nested columns, null by null (`nested/pyarrow_deep_nested.parquet`,
+/// written by `tests/scripts/gen_parquet_nested.py`): a list of structs holding
+/// lists, a struct in a struct, a map of lists; nulls at every level.
+#[test]
+fn pyarrow_deep_nested_nulls() {
+    let (rows, _, b) = read(&fixtures().join("nested"), "pyarrow_deep_nested.parquet");
+    assert_eq!(rows, 4);
+    let l = b.column_by_name("l").unwrap().as_list::<i32>();
+    assert_eq!(
+        (0..4).map(|r| l.is_null(r)).collect::<Vec<_>>(),
+        [true, false, false, false]
+    );
+    assert_eq!(l.value(1).len(), 0);
+    let r2 = l.value(2);
+    let r2 = r2.as_struct();
+    assert_eq!(r2.len(), 4);
+    assert!(r2.is_null(0) && !r2.is_null(1));
+    let a = r2.column(0).as_primitive::<Int32Type>();
+    assert!(a.is_null(1) && a.value(2) == 1 && a.value(3) == 2);
+    let bl = r2.column(1).as_list::<i32>();
+    assert!(bl.is_null(1), "{{a: null, b: null}} keeps its null list");
+    assert!(!bl.is_null(2), "an empty list is not null");
+    assert_eq!(bl.value(2).len(), 0, "an empty list stays empty");
+    let tail = bl.value(3);
+    let tail = tail.as_primitive::<Int32Type>();
+    assert!(tail.is_null(0) && tail.value(1) == 3);
+    let r3 = l.value(3);
+    let r3 = r3.as_struct();
+    assert_eq!(r3.column(0).as_primitive::<Int32Type>().value(0), 4);
+    assert_eq!(
+        r3.column(1)
+            .as_list::<i32>()
+            .value(0)
+            .as_primitive::<Int32Type>()
+            .values(),
+        &[5]
+    );
+    let o = b.column_by_name("o").unwrap().as_struct();
+    let s = o.column(0).as_struct();
+    assert_eq!(
+        (0..4).map(|r| o.is_null(r)).collect::<Vec<_>>(),
+        [true, false, false, false]
+    );
+    assert_eq!(
+        (0..4).map(|r| s.is_null(r)).collect::<Vec<_>>(),
+        [true, true, false, false]
+    );
+    let i = s.column(0).as_primitive::<Int32Type>();
+    assert!(i.is_null(2) && !i.is_null(3) && i.value(3) == 5);
+    let m = b.column_by_name("m").unwrap().as_map();
+    assert!(m.is_null(0) && !m.is_null(1) && !m.is_null(2) && !m.is_null(3));
+    assert_eq!(m.value(3).len(), 0);
+    let m1 = m.value(1);
+    assert_eq!(m1.column(0).as_primitive::<Int32Type>().values(), &[1]);
+    assert!(m1.column(1).as_list::<i32>().is_null(0));
+    let m2 = m.value(2);
+    assert_eq!(m2.column(0).as_primitive::<Int32Type>().values(), &[1, 2]);
+    let v = m2.column(1).as_list::<i32>();
+    let v0 = v.value(0);
+    let v0 = v0.as_primitive::<Int32Type>();
+    assert!(v0.is_null(0) && v0.value(1) == 9);
+    assert!(!v.is_null(1), "an empty list is not null");
+    assert_eq!(v.value(1).len(), 0);
+}
+
 /// Acceptance (P2-T080a): TPC-H SF1 written by DuckDB reads to exactly the
 /// values pyarrow reads, per column. Needs the generated data (about 1 GB,
 /// outside the repo).

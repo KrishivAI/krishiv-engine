@@ -123,3 +123,7 @@ Paths are relative to this crate.
 (|| tag); an empty IV on encryption draws OS random bytes, so the result differs per row). Errors carry only lengths and the mode
 text as Spark's do; the key argument prints as `***` in plans, errors and derived names (`krishiv-plan` `display.rs` and
 `analyzer/exprs.rs` `call`), which differs from Spark's names on purpose. `try_aes_decrypt` is NULL on any failure of a row.
+
+## Split modules (T193)
+Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
+- `registry/defs/aggregates.rs` (aggregate result types and specs); `registry/tests/signatures{1,2,3}.rs` (signature tests; helpers stay in `registry/tests.rs`).
