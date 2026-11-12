@@ -1433,6 +1433,42 @@ fn a_base_path_above_the_location_of_a_partitioned_table_is_refused() {
     assert!(e.to_string().contains("basePath"), "{e}");
 }
 
+/// A registered partition's location is its exact directory: `p=%32` decodes to `p=2` but is not `p=2`'s
+/// location, so its files are not read once `p = 2` is registered (#690 review).
+#[test]
+fn a_registered_partition_is_read_from_its_exact_spelling_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE src (x INT, p INT) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO src VALUES (2, 2)");
+    let file = std::fs::read_dir(dir.path().join("src").join("p=2"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with("part-"))
+        .unwrap()
+        .path();
+    let loc = tempfile::tempdir().unwrap();
+    for sub in ["p=2", "p=%32"] {
+        std::fs::create_dir_all(loc.path().join(sub)).unwrap();
+        std::fs::copy(&file, loc.path().join(sub).join(file.file_name().unwrap())).unwrap();
+    }
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE e (x INT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{}'",
+            loc.path().display()
+        ),
+    );
+    run(&s, "ALTER TABLE e ADD PARTITION (p = 2)");
+    assert_eq!(
+        rows(&s, "SELECT CAST(x AS STRING), CAST(p AS STRING) FROM e"),
+        ["2\t2"]
+    );
+}
+
 /// An unpartitioned table over foreign files reads its root's files only: a subdirectory is not read (Spark 4.2.0,
 /// krishiv-internal `research/spark/registered-partitions/probe.out`, table `u`: one row, `tmp_x/b.parquet` unread).
 #[test]

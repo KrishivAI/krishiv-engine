@@ -497,7 +497,7 @@ impl FileReads {
             }
             let registered: HashSet<&[Option<String>]> =
                 declared.registered.iter().map(Vec::as_slice).collect();
-            listed.retain(|(_, segs)| is_registered(&declared.columns, &registered, segs));
+            listed.retain(|(f, segs)| is_registered(&declared.columns, &registered, segs, &f.path));
         }
         let format = match self.formats.get(format) {
             Ok(format) => format,
@@ -1186,14 +1186,17 @@ fn declared_partitions(
     Ok(out)
 }
 
-/// Whether a file's partition directories (`segs`) are one of the
-/// `registered` partitions: exactly the declared `columns`, in order and as
-/// written (Spark reads the exact location `<root>/p=1`, never `P=1`), with
-/// registered values.
+/// Whether a file's partition directories (`segs`, decoded from the
+/// directories above `path`) are one of the `registered` partitions:
+/// exactly the declared `columns`, in order and as written (Spark reads the
+/// exact location `<root>/p=1`, never `P=1`), with registered values, and
+/// spelled as the writer spells that partition's location: `p=%32` decodes
+/// to `p=2` but is not `p=2`'s directory.
 fn is_registered(
     columns: &[String],
     registered: &HashSet<&[Option<String>]>,
     segs: &[Segment],
+    path: &object_store::path::Path,
 ) -> bool {
     if segs.len() != columns.len()
         || !segs
@@ -1204,7 +1207,22 @@ fn is_registered(
         return false;
     }
     let values: Vec<Option<String>> = segs.iter().map(|(_, v)| v.clone()).collect();
-    registered.contains(values.as_slice())
+    if !registered.contains(values.as_slice()) {
+        return false;
+    }
+    let parts: Vec<String> = path.parts().map(|p| p.as_ref().to_owned()).collect();
+    let Some(dirs) = parts
+        .len()
+        .checked_sub(1 + segs.len())
+        .and_then(|start| parts.get(start..parts.len() - 1))
+    else {
+        return false;
+    };
+    let spelled: Vec<String> = values
+        .iter()
+        .map(|v| krishiv_io::partition::partition_segment(v.as_deref()))
+        .collect();
+    dirs.join("/") == krishiv_io::partition::partition_dir_name(columns, &spelled)
 }
 
 /// `schema` followed by `partitions`.
