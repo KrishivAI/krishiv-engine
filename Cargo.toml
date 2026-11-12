@@ -90,6 +90,8 @@ parquet = { version = "60", default-features = false }
 # the default build. OpenSSL stays banned (deny.toml). On a bump, re-list
 # `ClientConfigKey` in krishiv-store's `http_clients.rs` `KEYS` (it is non-exhaustive).
 object_store = { version = "=0.14.2", default-features = false }
+# Already in the tree through delta_kernel (url 2.5.8); the Delta connector parses the kernel's table URLs.
+url = { version = "2.5", default-features = false, features = ["std"] }
 # Header types for the Hugging Face bearer token (T195); already in the tree through
 # object_store's reqwest. Only under krishiv-io/cloud.
 http = { version = "1", default-features = false }

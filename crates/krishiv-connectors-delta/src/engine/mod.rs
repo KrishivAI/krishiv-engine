@@ -7,3 +7,4 @@
 pub mod data;
 mod get_data;
 pub mod schema;
+pub mod storage;

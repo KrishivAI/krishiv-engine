@@ -2231,9 +2231,15 @@ dependencies = [
  "arrow-buffer",
  "arrow-schema",
  "arrow-select",
+ "bytes",
  "delta_kernel",
  "krishiv-common",
+ "krishiv-io",
+ "object_store",
  "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
 ]
 
 [[package]]
