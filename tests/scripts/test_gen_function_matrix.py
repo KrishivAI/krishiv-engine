@@ -185,3 +185,8 @@ def test_self_check_rejects_local_paths(tmp_path):
     with pytest.raises(SystemExit) as exc:
         g.self_check(tmp_path, bad)
     assert "x#1/ansi_on" in str(exc.value)
+
+
+def test_default_out_is_per_tag():
+    assert g.default_out("4.3.0") == "tests/fixtures/spark-4.3.0/function-matrix"
+    assert g.default_out("4.2.1") == "tests/fixtures/spark-4.2.1/function-matrix"

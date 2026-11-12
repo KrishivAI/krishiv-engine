@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Generate the Spark function-matrix golden fixtures (P2-T106a, ADR 0029 coverage strategy).
 
-Every expected value is produced by executing a REAL Spark 4.2 (the `krishiv-bench` container); nothing
+Every expected value is produced by executing a REAL Spark (the running `krishiv-bench` container, e.g. 4.2.0 or
+4.3.0); nothing
 is transcribed from docs or memory (review I12). Inputs are derived mechanically:
 
 1. The function list comes from Spark itself: `FunctionRegistry` + `TableFunctionRegistry` +
@@ -32,7 +33,7 @@ Usage (from repo root; take the bench lock, start Spark, stop it afterwards; see
     docker compose -f bench/baselines/docker-compose.yml up -d spark
     flock "$KRISHIV_DATA/.bench.lock" nice -n 19 sh -c \
       'cd bench && uv run python ../tests/scripts/gen_function_matrix.py \
-         --out ../tests/fixtures/spark-4.2.0/function-matrix'
+         [--out ../tests/fixtures/spark-<version>/function-matrix]'   # default derives <version> from Spark
     docker compose -f bench/baselines/docker-compose.yml stop spark
 """
 
@@ -873,6 +874,11 @@ def classify_nondeterministic(container: str, keys: list[tuple[str, dict]]) -> s
     return {int(line.split()[1]) for line in spark_shell(container, script, data) if line.startswith("@@ND ")}
 
 
+def default_out(version: str) -> str:
+    """Per-tag fixture directory (P3-T018): the version comes from the running Spark, never from a flag."""
+    return f"tests/fixtures/spark-{version}/function-matrix"
+
+
 def container_image(container: str) -> str:
     try:
         return subprocess.run(
@@ -928,7 +934,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--remote", default="sc://127.0.0.1:15002")
     ap.add_argument("--container", default="krishiv-bench-spark")
-    ap.add_argument("--out", default="tests/fixtures/spark-4.2.0/function-matrix")
+    ap.add_argument("--out", default="", help="default: tests/fixtures/spark-<version>/function-matrix")
     ap.add_argument("--work", default="", help="per-function result cache dir; lets a crashed run resume")
     ap.add_argument("--only", default="", help="comma-separated function names (debugging; partial output)")
     args = ap.parse_args()
@@ -941,6 +947,7 @@ def main() -> int:
     main_session = SparkSession.builder.remote(args.remote).getOrCreate()
     if main_session.version != version:
         raise SystemExit(f"registry dump version {version} != Connect server {main_session.version}")
+    args.out = args.out or default_out(version)
     shown = sorted(r[0] for r in main_session.sql("SHOW FUNCTIONS").collect())
     by_name = {}
     for fn in registry:
