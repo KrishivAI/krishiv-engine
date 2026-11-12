@@ -756,7 +756,7 @@ impl std::fmt::Debug for ReadOnlyPolicy {
 }
 
 impl ReadOnlyPolicy {
-    /// Read-only over `inner`, which decides every `Select`.
+    /// Read-only over `inner`, which decides every `Select` and `Browse`.
     #[must_use]
     pub fn new(inner: Arc<dyn AccessPolicy>) -> Self {
         Self { inner }
@@ -774,7 +774,8 @@ impl AccessPolicy for ReadOnlyPolicy {
         securable: &'a Securable,
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
-        if privilege != Privilege::Select {
+        // `Browse` (metadata) reads nothing a `Select` would not; the inner policy decides both.
+        if !matches!(privilege, Privilege::Select | Privilege::Browse) {
             return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
                 reason: "the session is read-only".to_owned(),
             })));

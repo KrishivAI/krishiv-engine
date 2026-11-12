@@ -159,3 +159,24 @@ fn path_reads_need_operator() {
     assert!(viewer.contains(DENIED), "{viewer}");
     run(&session(&rt, Some(Role::Operator)), &sql).unwrap();
 }
+
+#[test]
+fn read_only_keeps_a_viewers_metadata_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path());
+    let s = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .principal(Principal::new("viewer", PrincipalKind::User))
+        .access_policy(Arc::new(krishiv_session::ReadOnlyPolicy::new(Arc::new(
+            RolePolicy::new(Some(Role::Viewer), Role::Admin, PolicyVersion(1)),
+        ))))
+        .build()
+        .unwrap();
+    for sql in ["SHOW TABLES", "DESCRIBE t", "SHOW COLUMNS IN v"] {
+        run(&s, sql).unwrap_or_else(|e| panic!("`{sql}`: {e}"));
+    }
+    for sql in ["SELECT * FROM t", "INSERT INTO t VALUES (3)"] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains(DENIED), "`{sql}`: {e}");
+    }
+}
