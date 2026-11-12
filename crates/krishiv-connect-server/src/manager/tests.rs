@@ -234,3 +234,36 @@ fn limits_come_from_the_config() {
     let l = SessionLimits::from_config(&c);
     assert_eq!((l.max_sessions, l.idle_timeout, l.tombstones), (3, None, 5));
 }
+
+#[test]
+fn no_session_is_created_after_close_all() {
+    let m = manager(SessionLimits::default());
+    m.close_all();
+    let e = m.get_or_create(&alice(), ID, None, "u").unwrap_err();
+    assert_eq!(class(&e), "INVALID_HANDLE.SESSION_CLOSED");
+    assert_eq!(m.counts().live, 0);
+}
+
+#[test]
+fn racing_creates_of_one_key_share_one_session_and_close_the_losers() {
+    let m = Arc::new(manager(SessionLimits::default()));
+    let barrier = Arc::new(std::sync::Barrier::new(8));
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let (m, barrier) = (Arc::clone(&m), Arc::clone(&barrier));
+            std::thread::spawn(move || {
+                barrier.wait();
+                m.get_or_create(&alice(), ID, None, "u").expect("create")
+            })
+        })
+        .collect();
+    let entries: Vec<_> = handles
+        .into_iter()
+        .map(|h| h.join().expect("join"))
+        .collect();
+    for e in &entries {
+        assert!(Arc::ptr_eq(e, &entries[0]), "every caller got the winner");
+        assert!(!e.session().is_closed());
+    }
+    assert_eq!(m.counts().live, 1);
+}

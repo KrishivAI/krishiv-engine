@@ -75,11 +75,13 @@ pub fn status_of(error: &KrishivError) -> Status {
     if let Some(state) = error.sql_state() {
         metadata.insert("sqlState".to_owned(), state.to_owned());
     }
-    metadata.insert("errorClass".to_owned(), class.name().to_owned());
-    metadata.insert(
-        "messageParameters".to_owned(),
-        json_object(error.message_parameters()),
-    );
+    // Spark leaves both out when the parameters exceed
+    // `spark.connect.grpc.maxMetadataSize` (1024 by default).
+    let parameters = json_object(error.message_parameters());
+    if utf16_len(&parameters) <= MAX_METADATA_SIZE {
+        metadata.insert("errorClass".to_owned(), class.name().to_owned());
+        metadata.insert("messageParameters".to_owned(), parameters);
+    }
     let info = ErrorInfo {
         reason: classes.first().copied().unwrap_or_default().to_owned(),
         domain: "org.apache.spark".to_owned(),
@@ -92,7 +94,7 @@ pub fn status_of(error: &KrishivError) -> Status {
     } else {
         Code::Internal
     };
-    let message = error.to_string();
+    let message = abbreviate(&error.to_string(), MAX_MESSAGE);
     let details = RpcStatus {
         code: code as i32,
         message: message.clone(),
@@ -102,6 +104,37 @@ pub fn status_of(error: &KrishivError) -> Status {
         }],
     };
     Status::with_details(code, message, details.encode_to_vec().into())
+}
+
+/// Spark's `spark.connect.grpc.maxMetadataSize` default, in UTF-16 units
+/// (Java string length).
+const MAX_METADATA_SIZE: usize = 1024;
+
+/// The longest status message Spark sends (`extractErrorMessage`).
+const MAX_MESSAGE: usize = 2048;
+
+fn utf16_len(s: &str) -> usize {
+    s.chars().map(char::len_utf16).sum()
+}
+
+/// Spark's `abbreviate(s, len)`: `s` if it fits in `len` UTF-16 units,
+/// else its first `len - 3` units and `...`.
+fn abbreviate(s: &str, len: usize) -> String {
+    if utf16_len(s) <= len {
+        return s.to_owned();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = c.len_utf16();
+        if used + w > len - 3 {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
+    out.push_str("...");
+    out
 }
 
 /// A JSON array of strings (Jackson's compact form).

@@ -18,9 +18,10 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use krishiv_common::config::{
-    CONNECT_HTTP2_MAX_CONCURRENT_STREAMS, CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
-    CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS, CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME,
-    CONNECT_KEEPALIVE_TIMEOUT, CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE,
+    CONNECT_HANDSHAKE_TIMEOUT, CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
+    CONNECT_HTTP2_MAX_HEADER_LIST_BYTES, CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
+    CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME, CONNECT_KEEPALIVE_TIMEOUT,
+    CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE,
     CONNECT_SESSION_MAINTENANCE_INTERVAL, Config, ConfigValue, SERVER_SHUTDOWN_TIMEOUT,
 };
 use krishiv_common::error::KrishivError;
@@ -61,6 +62,9 @@ pub struct ConnectServerConfig {
     /// Open connections (`krishiv.connect.maxConnections`, 1024); past it
     /// the accept loop waits for one to close.
     pub max_connections: usize,
+    /// A new connection that sends nothing for this long is closed
+    /// (`krishiv.connect.handshakeTimeout`, 10 s).
+    pub handshake_timeout: Duration,
     /// How often idle sessions are swept
     /// (`spark.connect.session.manager.maintenanceInterval`, 30 s).
     pub maintenance_interval: Duration,
@@ -79,6 +83,7 @@ impl Default for ConnectServerConfig {
             max_pending_accept_resets: 20,
             max_local_error_resets: 1024,
             max_connections: 1024,
+            handshake_timeout: Duration::from_secs(10),
             maintenance_interval: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
         }
@@ -127,10 +132,26 @@ impl ConnectServerConfig {
                 .unwrap_or(d.max_pending_accept_resets),
             max_local_error_resets: d.max_local_error_resets,
             max_connections: count(&CONNECT_MAX_CONNECTIONS).unwrap_or(d.max_connections),
+            handshake_timeout: duration(&CONNECT_HANDSHAKE_TIMEOUT).unwrap_or(d.handshake_timeout),
             maintenance_interval: duration(&CONNECT_SESSION_MAINTENANCE_INTERVAL)
                 .unwrap_or(d.maintenance_interval),
             shutdown_timeout: duration(&SERVER_SHUTDOWN_TIMEOUT).unwrap_or(d.shutdown_timeout),
         }
+    }
+}
+
+/// How long the listener may take to stop after every session was closed.
+pub const CLOSE_WAIT: Duration = Duration::from_secs(5);
+
+/// The grace period when `krishiv.server.shutdownTimeout` overflows a clock.
+const MAX_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Aborts its task when dropped.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -167,7 +188,10 @@ impl ConnectServer {
     }
 
     /// Serves on `listener` until `shutdown` resolves, then shuts down
-    /// gracefully (module docs). Returns once every session is closed and
+    /// gracefully (module docs): at most `shutdown_timeout` plus
+    /// [`CLOSE_WAIT`] after the signal. Connection tasks may outlive it
+    /// until the tokio runtime is dropped. Returns once every session is
+    /// closed and
     /// the listener is stopped.
     ///
     /// # Errors
@@ -200,11 +224,13 @@ impl ConnectServer {
             .tcp_nodelay(true)
             .add_service(service);
 
-        let sweeper = tokio::spawn(sweep_loop(
+        // Aborted on drop, so a caller that cancels `serve` leaves no task
+        // holding the manager (and through it the engine runtime).
+        let _sweeper = AbortOnDrop(tokio::spawn(sweep_loop(
             Arc::clone(&manager),
             config.maintenance_interval,
-        ));
-        let incoming = capped(listener, config.max_connections);
+        )));
+        let incoming = capped(listener, config.max_connections, config.handshake_timeout);
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
         let server = router.serve_with_incoming_shutdown(incoming, async {
             let _ = stop_rx.await;
@@ -223,7 +249,8 @@ impl ConnectServer {
                 let _ = stop_tx.send(());
                 tracing::info!(target: "krishiv::connect", "shutting down: draining");
                 let grace = config.shutdown_timeout;
-                let deadline = tokio::time::Instant::now() + grace;
+                let now = tokio::time::Instant::now();
+                let deadline = now.checked_add(grace).unwrap_or(now + MAX_GRACE);
                 // The listener may stop first (no stream open): queries
                 // still get their grace period.
                 let stopped = tokio::select! {
@@ -243,15 +270,16 @@ impl ConnectServer {
                 }
                 match stopped {
                     Some(result) => result,
-                    // The cancelled streams end at once; a connection that
-                    // still holds on is dropped with the server future.
-                    None => tokio::time::timeout(Duration::from_secs(5), &mut server)
+                    // The cancelled streams end at once. tonic runs each
+                    // connection as a task of its own, which outlives this
+                    // future: the caller drops the tokio runtime to end a
+                    // connection that still holds on.
+                    None => tokio::time::timeout(CLOSE_WAIT, &mut server)
                         .await
                         .unwrap_or(Ok(())),
                 }
             }
         };
-        sweeper.abort();
         manager.close_all();
         result.map_err(|e| transport_error(&e))
     }
@@ -288,33 +316,71 @@ async fn sweep_loop(manager: Arc<SessionManager>, every: Duration) {
     }
 }
 
-/// The accepted connections of `listener`, at most `max` open at once.
+/// The accepted connections of `listener`, at most `max` open at once. A
+/// connection that sends nothing within `handshake` is closed before it is
+/// handed to the server, so silent sockets cannot hold the cap (threat
+/// model T-D6). Accepting runs on a task of its own, aborted when the
+/// stream is dropped; each new connection waits for its first byte on a
+/// task of its own, so one slow client delays no other.
 fn capped(
     listener: TcpListener,
     max: usize,
+    handshake: Duration,
 ) -> impl futures::Stream<Item = io::Result<CappedStream>> + Send + 'static {
     let permits = Arc::new(Semaphore::new(max.max(1)));
-    futures::stream::unfold((listener, permits), |(listener, permits)| async move {
-        let permit = Arc::clone(&permits).acquire_owned().await.ok()?;
-        loop {
+    let (tx, rx) = tokio::sync::mpsc::channel::<io::Result<CappedStream>>(64);
+    let acceptor = AbortOnDrop(tokio::spawn(accept_loop(listener, permits, tx, handshake)));
+    futures::stream::unfold((rx, acceptor), |(mut rx, acceptor)| async move {
+        rx.recv().await.map(|item| (item, (rx, acceptor)))
+    })
+}
+
+async fn accept_loop(
+    listener: TcpListener,
+    permits: Arc<Semaphore>,
+    tx: tokio::sync::mpsc::Sender<io::Result<CappedStream>>,
+    handshake: Duration,
+) {
+    let mut backoff = Duration::from_millis(10);
+    loop {
+        let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
+            return;
+        };
+        let stream = loop {
             match listener.accept().await {
-                Ok((stream, _)) => {
-                    let _ = stream.set_nodelay(true);
-                    let item = Ok(CappedStream {
-                        inner: stream,
-                        _permit: permit,
-                    });
-                    return Some((item, (listener, permits)));
-                }
-                // A failed accept (the peer reset before it was taken,
-                // too many open files) does not stop the server.
+                Ok((stream, _)) => break stream,
+                // A failed accept (the peer reset before it was taken, too
+                // many open files) does not stop the server; back off, as
+                // every retry fails while file descriptors are out.
                 Err(e) => {
                     tracing::warn!(target: "krishiv::connect", error = %e, "accept failed");
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(1));
                 }
             }
+        };
+        backoff = Duration::from_millis(10);
+        let _ = stream.set_nodelay(true);
+        let sender = tx.clone();
+        tokio::spawn(async move {
+            let mut first = [0_u8; 1];
+            match tokio::time::timeout(handshake, stream.peek(&mut first)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    let _ = sender
+                        .send(Ok(CappedStream {
+                            inner: stream,
+                            _permit: permit,
+                        }))
+                        .await;
+                }
+                // Silent, closed or failed: drop it and its permit.
+                _ => {}
+            }
+        });
+        if tx.is_closed() {
+            return;
         }
-    })
+    }
 }
 
 /// A connection that holds one of the listener's permits until it closes.

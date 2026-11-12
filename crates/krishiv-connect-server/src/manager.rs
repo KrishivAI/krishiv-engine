@@ -9,7 +9,8 @@
 //! authenticated principal instead (ADR 0046 §5, threat model T-A8): the
 //! client's `user_id` is recorded, unverified, and never decides anything.
 //! A session id another principal holds is refused as unknown
-//! (`INVALID_HANDLE.SESSION_NOT_FOUND`), so the refusal reveals nothing.
+//! (`INVALID_HANDLE.SESSION_NOT_FOUND`), the answer a lookup of an unknown
+//! id gets.
 //!
 //! No lock is held across an `await`, nor while a session is built or
 //! closed: the map lock guards lookups and inserts only.
@@ -147,6 +148,8 @@ struct Inner {
     owners: HashMap<String, Principal>,
     per_principal: HashMap<Principal, usize>,
     closed: Tombstones,
+    /// Set by [`SessionManager::close_all`]: no session is created after it.
+    shut: bool,
 }
 
 /// A bounded set of released keys; the least recently used goes first, as
@@ -283,29 +286,38 @@ impl SessionManager {
         });
         let raced = {
             let mut inner = self.lock();
-            if let Some(existing) = inner.live.get(&key) {
-                Some(Arc::clone(existing))
+            if let Some(existing) = inner.live.get(&key).map(Arc::clone) {
+                existing.last_access.store(self.now_ms(), Ordering::Relaxed);
+                Ok(Some(existing))
             } else {
-                Self::check_create_locked(&mut inner, &key, &self.limits)?;
-                inner.live.insert(key.clone(), Arc::clone(&entry));
-                inner
-                    .owners
-                    .insert(key.session_id.clone(), key.principal.clone());
-                *inner
-                    .per_principal
-                    .entry(key.principal.clone())
-                    .or_insert(0) += 1;
-                None
+                match Self::check_create_locked(&mut inner, &key, &self.limits) {
+                    Err(e) => Err(e),
+                    Ok(()) => {
+                        inner.live.insert(key.clone(), Arc::clone(&entry));
+                        inner
+                            .owners
+                            .insert(key.session_id.clone(), key.principal.clone());
+                        *inner
+                            .per_principal
+                            .entry(key.principal.clone())
+                            .or_insert(0) += 1;
+                        Ok(None)
+                    }
+                }
             }
         };
         match raced {
-            Some(existing) => {
+            Err(e) => {
+                // Built, then refused by a check that changed meanwhile.
+                entry.session.close();
+                Err(e)
+            }
+            Ok(Some(existing)) => {
                 entry.session.close();
                 Self::check_observed(&key, &existing, observed)?;
-                existing.last_access.store(self.now_ms(), Ordering::Relaxed);
                 Ok(existing)
             }
-            None => {
+            Ok(None) => {
                 Self::check_observed(&key, &entry, observed)?;
                 Ok(entry)
             }
@@ -353,7 +365,9 @@ impl SessionManager {
         session_id: &str,
     ) -> Option<Arc<SessionEntry>> {
         let key = Self::key(principal, session_id);
-        let entry = self.lock().live.get(&key).map(Arc::clone)?;
+        let inner = self.lock();
+        let entry = inner.live.get(&key).map(Arc::clone)?;
+        // Stamped under the lock, so a sweep cannot release it in between.
         entry.last_access.store(self.now_ms(), Ordering::Relaxed);
         Some(entry)
     }
@@ -426,10 +440,12 @@ impl SessionManager {
     }
 
     /// Closes every live session (shutdown): each one's queries are
-    /// cancelled. Returns how many.
+    /// cancelled, and no session is created afterwards (a create answers
+    /// `INVALID_HANDLE.SESSION_CLOSED`). Returns how many.
     pub fn close_all(&self) -> usize {
         let entries: Vec<Arc<SessionEntry>> = {
             let mut inner = self.lock();
+            inner.shut = true;
             inner.owners.clear();
             inner.per_principal.clear();
             inner.live.drain().map(|(_, e)| e).collect()
@@ -466,7 +482,12 @@ impl SessionManager {
         let entry = {
             let inner = self.lock();
             match inner.live.get(key) {
-                Some(e) => Arc::clone(e),
+                Some(e) => {
+                    // Stamped under the lock, so a sweep cannot release it
+                    // in between.
+                    e.last_access.store(self.now_ms(), Ordering::Relaxed);
+                    Arc::clone(e)
+                }
                 None => {
                     // Held by another principal: refused as unknown.
                     if inner
@@ -483,7 +504,6 @@ impl SessionManager {
                 }
             }
         };
-        entry.last_access.store(self.now_ms(), Ordering::Relaxed);
         Self::check_observed(key, &entry, observed)?;
         Ok(Some(entry))
     }
@@ -512,7 +532,9 @@ impl SessionManager {
         key: &Key,
         limits: &SessionLimits,
     ) -> Result<(), KrishivError> {
-        if inner.closed.contains(key) {
+        // Shutting down: a handler that passed the drain check before
+        // `close_all` must not leave a session nothing will close.
+        if inner.shut || inner.closed.contains(key) {
             return Err(InvalidHandleSessionClosed {
                 handle: key.session_id.clone(),
             }

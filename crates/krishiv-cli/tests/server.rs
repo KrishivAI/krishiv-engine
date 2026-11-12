@@ -35,6 +35,25 @@ fn a_bad_setting_is_refused_before_anything_starts() {
 }
 
 #[test]
+fn an_unsupported_spark_connect_setting_is_refused() {
+    let out = krishiv()
+        .args([
+            "server",
+            "--port",
+            "0",
+            "--connect-port",
+            "0",
+            "--conf",
+            "spark.connect.session.manager.defaultSessionTimeout=-1",
+        ])
+        .output()
+        .expect("run krishiv server");
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("krishiv.connect.session.idleTimeout"), "{err}");
+}
+
+#[test]
 fn non_loopback_requires_auth() {
     for host in ["0.0.0.0", "::"] {
         let out = krishiv()
@@ -71,11 +90,21 @@ fn non_loopback_requires_auth() {
     assert_eq!(out.status.code(), Some(1));
 }
 
-/// A running server and the addresses it printed.
+/// A running server and the addresses it printed; killed and reaped on
+/// drop, so a failed assertion leaves no server behind.
 struct Running {
     child: Child,
     admin: String,
     connect: String,
+    /// Kept open: the server may print more lines.
+    _stdout: std::io::Lines<BufReader<std::process::ChildStdout>>,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 fn start(spill: &std::path::Path) -> Running {
@@ -104,6 +133,7 @@ fn start(spill: &std::path::Path) -> Running {
         child,
         admin: admin.expect("admin"),
         connect: connect.expect("connect"),
+        _stdout: lines,
     }
 }
 
@@ -174,13 +204,13 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
 /// `SPARK_REMOTE` set to its Connect address.
 fn pyspark(script: &str) {
     let spill = tempfile::tempdir().expect("tempdir");
-    let mut run = start(spill.path());
+    let run = start(spill.path());
     let out = Command::new("python3")
         .args(["-c", script])
         .env("SPARK_REMOTE", format!("sc://{}", run.connect))
         .output()
         .expect("python3");
-    let _ = run.child.kill();
+    drop(run);
     assert!(
         out.status.success(),
         "{}",

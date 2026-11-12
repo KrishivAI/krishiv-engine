@@ -98,7 +98,7 @@ pub static CONNECT_SESSION_IDLE_TIMEOUT: ConfigEntry = startup(
 /// How often idle sessions are swept.
 pub static CONNECT_SESSION_MAINTENANCE_INTERVAL: ConfigEntry = startup(
     "krishiv.connect.session.maintenanceInterval",
-    ValueType::Duration,
+    ValueType::Millis,
     ConfigValue::Duration(Duration::from_secs(30)),
     "How often the server looks for idle Spark Connect sessions to release.",
     Some("spark.connect.session.manager.maintenanceInterval"),
@@ -140,6 +140,16 @@ pub static CONNECT_MAX_CONNECTIONS: ConfigEntry = startup(
     ValueType::PositiveInt,
     ConfigValue::Int(1024),
     "Most open Spark Connect connections; past it the server accepts no new one until one closes.",
+    None,
+);
+
+/// Deadline for a new connection's first byte.
+pub static CONNECT_HANDSHAKE_TIMEOUT: ConfigEntry = startup(
+    "krishiv.connect.handshakeTimeout",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(10)),
+    "A new Spark Connect connection that sends nothing for this long is closed, so idle sockets \
+     cannot use up `krishiv.connect.maxConnections`.",
     None,
 );
 

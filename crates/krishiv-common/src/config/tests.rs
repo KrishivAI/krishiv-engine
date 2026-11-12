@@ -1272,6 +1272,22 @@ fn server_entries_parse_default_and_take_sparks_names() {
     c.set("spark.connect.grpc.binding.port", "16000").unwrap();
     c.set("spark.connect.session.manager.maintenanceInterval", "5s")
         .unwrap();
+    // Spark's timeConf(MILLISECONDS): a bare number is milliseconds.
+    let mut ms = Config::new();
+    ms.set("spark.connect.session.manager.maintenanceInterval", "30000")
+        .unwrap();
+    assert_eq!(
+        ms.get(&CONNECT_SESSION_MAINTENANCE_INTERVAL)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(30))
+    );
+    // keepAlive.* is timeConf(SECONDS) in Spark 4.3.0: a bare number is seconds.
+    ms.set("spark.connect.grpc.keepAlive.time", "45").unwrap();
+    assert_eq!(
+        ms.get(&CONNECT_KEEPALIVE_TIME)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(45))
+    );
     c.set("krishiv.connect.maxSessions", "7").unwrap();
     assert_eq!(
         c.get(&CONNECT_PORT).and_then(ConfigValue::as_int),

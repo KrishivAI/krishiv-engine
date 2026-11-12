@@ -384,3 +384,116 @@ fn server_settings_come_from_the_config() {
     assert_eq!(s.max_inbound_message_size, 1 << 20);
     assert_eq!(s.shutdown_timeout, Duration::from_secs(2));
 }
+
+fn spill_entries(root: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(root)
+        .map(|d| {
+            d.filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("krishiv-spill-"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_then_dropping_the_runtime_leaves_no_spill_directory() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().join("spill");
+    let runtime = krishiv_session::EngineRuntime::builder()
+        .config("krishiv.spill.dir", root.to_str().expect("utf-8"))
+        .config("krishiv.memory.limit", "4m")
+        .build()
+        .expect("runtime");
+    let base = Session::builder()
+        .runtime(Arc::clone(&runtime))
+        .build()
+        .expect("session");
+    let manager = Arc::new(SessionManager::from_base(base, SessionLimits::default()));
+    let entry = manager
+        .get_or_create(&Principal::local_user(), ID, None, "u")
+        .expect("create");
+    // A sort larger than the pool spills, which makes the spill directory.
+    let rows = entry
+        .session()
+        .sql("SELECT id FROM range(0, 1000000, 1, 2) ORDER BY id DESC")
+        .await
+        .expect("df")
+        .collect()
+        .await
+        .expect("sorted");
+    assert!(!rows.is_empty());
+    assert!(
+        !spill_entries(&root).is_empty(),
+        "the query spilled, so the spill directory exists"
+    );
+    drop(entry);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let server = ConnectServer::new(Arc::clone(&manager), ConnectServerConfig::default());
+    server
+        .serve(listener, async {})
+        .await
+        .expect("serve and shut down");
+    assert_eq!(manager.counts().live, 0);
+    // Design P3-T001 §3.4 step 4: the last handle on the runtime goes, and
+    // with it the spill directory and its lock.
+    // Aborted tasks (the sweeper) drop their handles when tokio next runs
+    // them; `krishiv server` drops the whole tokio runtime instead.
+    drop(manager);
+    drop(runtime);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !spill_entries(&root).is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "spill directory left: {:?}",
+            spill_entries(&root)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_silent_socket_loses_its_slot_after_the_handshake_deadline() {
+    let manager = Arc::new(SessionManager::from_base(
+        Session::new().expect("session"),
+        SessionLimits::default(),
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = ConnectServer::new(
+        manager,
+        ConnectServerConfig {
+            max_connections: 1,
+            handshake_timeout: Duration::from_millis(300),
+            ..ConnectServerConfig::default()
+        },
+    );
+    let (stop, stopped) = oneshot::channel::<()>();
+    let done = tokio::spawn(server.serve(listener, async {
+        let _ = stopped.await;
+    }));
+    // Takes the only slot and sends nothing.
+    let silent = tokio::net::TcpStream::connect(addr).await.expect("connect");
+    let started = tokio::time::Instant::now();
+    let channel = Channel::from_shared(format!("http://{addr}"))
+        .expect("uri")
+        .connect()
+        .await
+        .expect("connect");
+    let response: pb::ReleaseSessionResponse = tokio::time::timeout(
+        Duration::from_secs(10),
+        unary(&channel, "ReleaseSession", release(ID, false)),
+    )
+    .await
+    .expect("served once the silent socket was dropped")
+    .expect("release");
+    assert_eq!(response.session_id, ID);
+    assert!(
+        started.elapsed() >= Duration::from_millis(250),
+        "the second connection waited for the slot"
+    );
+    drop(silent);
+    stop.send(()).expect("stop");
+    done.await.expect("join").expect("serve");
+}

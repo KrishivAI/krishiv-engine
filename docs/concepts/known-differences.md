@@ -172,4 +172,5 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
 - **A request over `spark.connect.grpc.maxInboundMessageSize` is refused with `OUT_OF_RANGE`**, read from the message
   length before the body; Spark (grpc-java) answers `RESOURCE_EXHAUSTED`.
 - **`krishiv.connect.session.idleTimeout`** replaces `spark.connect.session.manager.defaultSessionTimeout`, whose
-  "never" is `-1`; Krishiv's is `0s`.
+  "never" is `-1`; Krishiv's is `0s`. `krishiv server` refuses Spark's key, and any other `spark.connect.*` key it
+  does not read, rather than ignore it.

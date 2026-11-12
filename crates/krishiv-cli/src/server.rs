@@ -66,7 +66,17 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     let mut config = Config::new();
     let mut builder = EngineRuntime::builder();
     for (k, v) in &args.conf {
-        config.set(k, v).map_err(|e| e.to_string())?;
+        let warning = config.set(k, v).map_err(|e| e.to_string())?;
+        // A Spark Connect setting Krishiv does not read would be ignored
+        // silently: refuse it, naming the replacement where there is one.
+        if warning.is_some() && k.starts_with("spark.connect.") {
+            let hint = if k == "spark.connect.session.manager.defaultSessionTimeout" {
+                " (use krishiv.connect.session.idleTimeout; 0s means never, Spark's -1)"
+            } else {
+                ""
+            };
+            return Err(format!("{k} is not supported by krishiv server{hint}"));
+        }
         builder = builder.config(k, v);
     }
     let host = match args.host {
@@ -177,8 +187,12 @@ async fn run_listeners(
     ));
     println!("krishiv server: Spark Connect on sc://{connect_bound}");
     println!("krishiv server: admin on http://{admin_bound}");
-    if flag(config, &UI_ENABLED, true) && cfg!(feature = "ui") {
+    let ui = flag(config, &UI_ENABLED, true) && cfg!(feature = "ui");
+    if ui {
         println!("open http://{admin_bound}/?token={token}");
+    } else if metrics_need_token(config, admin_bound) {
+        // `/metrics` is behind the admin token: print it once.
+        println!("krishiv server: admin token {token}");
     }
     ready.store(true, Ordering::Release);
     let served = connect
@@ -204,8 +218,7 @@ fn admin_router(
     bound: SocketAddr,
 ) -> Result<axum::Router, String> {
     let metrics_on = flag(config, &METRICS_ENABLED, false);
-    // `/metrics` is open only on loopback, and only when asked.
-    let public = flag(config, &SERVER_METRICS_PUBLIC, false) && bound.ip().is_loopback();
+    let public = metrics_on && !metrics_need_token(config, bound);
     let snapshot_runtime = Arc::clone(runtime);
     let metrics = krishiv_server::metrics::metrics_route(
         metrics_on,
@@ -217,7 +230,7 @@ fn admin_router(
             .map_err(|e| e.to_string())?;
         krishiv_server::internal::router_with_ui(Arc::new(source), token)
     } else {
-        krishiv_server::router()
+        krishiv_server::api_router()
     };
     let app = base
         .merge(krishiv_server::admin::health_routes(ready))
@@ -226,6 +239,13 @@ fn admin_router(
         app,
         krishiv_server::admin::HttpLimits::default(),
     ))
+}
+
+/// Whether `/metrics` is on and behind the admin token: it is open only on
+/// a loopback address, and only with `krishiv.server.metrics.public`.
+fn metrics_need_token(config: &Config, bound: SocketAddr) -> bool {
+    flag(config, &METRICS_ENABLED, false)
+        && !(flag(config, &SERVER_METRICS_PUBLIC, false) && bound.ip().is_loopback())
 }
 
 /// The first SIGTERM or SIGINT starts the drain; a second exits at once.

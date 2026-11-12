@@ -74,6 +74,16 @@ pub fn router() -> Router {
         .fallback(assets)
 }
 
+/// The admin API without the web UI: [`router`] with no asset fallback (a
+/// server built or configured without the UI serves no page).
+pub fn api_router() -> Router {
+    Router::new()
+        .route("/api/v1/version", get(version))
+        .route("/api", any(api_not_found))
+        .route("/api/", any(api_not_found))
+        .route("/api/{*rest}", any(api_not_found))
+}
+
 /// Serves on an already-bound listener until the future is dropped.
 ///
 /// # Errors

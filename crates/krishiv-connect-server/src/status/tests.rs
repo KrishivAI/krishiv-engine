@@ -75,3 +75,20 @@ fn parameters_are_json_escaped() {
         serde_json::from_str(&info.metadata["messageParameters"]).expect("json");
     assert_eq!(parsed["handle"], "a\"b\\c\n");
 }
+
+#[test]
+fn a_long_handle_is_bounded_as_spark_bounds_it() {
+    let e: KrishivError = InvalidHandleSessionClosed {
+        handle: "h".repeat(5000),
+    }
+    .into();
+    let status = status_of(&e);
+    assert_eq!(status.message().chars().count(), 2048);
+    assert!(status.message().ends_with("..."));
+    let (rpc, info) = details(&status);
+    assert_eq!(rpc.message, status.message());
+    // Parameters past 1024 bytes: errorClass and messageParameters left out.
+    assert!(!info.metadata.contains_key("errorClass"));
+    assert!(!info.metadata.contains_key("messageParameters"));
+    assert!(info.metadata.contains_key("sqlState"));
+}
