@@ -151,16 +151,12 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32, base: u32) -> 
         baton: Arc::clone(baton),
         member: *member,
     });
-    // The span of whoever starts the driver (the query's), so the driver's
-    // operator and I/O records carry the trace and span ids.
-    let span = tracing::Span::current();
     let body = async move {
         let _turn = turn;
         if let Err(e) = drive(run, partition, base).await {
             q.fail(e);
         }
     };
-    let body = tracing::Instrument::instrument(body, span);
     let timed = Timed {
         inner: Box::pin(body),
         stats: DriverStats {
