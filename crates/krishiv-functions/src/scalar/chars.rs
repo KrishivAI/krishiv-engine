@@ -60,6 +60,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
     let listed = listed(NAMES, name)?;
     let shape = shape(args);
     let ansi = opts.ansi;
+    let ctx = opts.kernel;
     let int = DataType::Int32;
     let one = Operand::Scalar(Some(1));
     let binding = match (listed, shape.as_str()) {
@@ -135,9 +136,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let (w, s) = (x.str(0)?, x.str(1)?);
             Ok(Arc::new(string::find_in_set_lcase(w.operand(), s.operand())?) as ArrayRef)
         }),
-        ("__locate_lcase", "SSI") => Binding::new(int, |x| {
+        ("__locate_lcase", "SSI") => Binding::new(int, move |x| {
             let (sub, s, start) = (x.str(0)?, x.str(1)?, x.int(2)?);
-            let out = string::locate_lcase(sub.operand(), s.operand(), start.operand())?;
+            let out = string::locate_lcase(
+                sub.operand(),
+                s.operand(),
+                start.operand(),
+                ctx.spark_version(),
+            )?;
             Ok(Arc::new(out) as ArrayRef)
         }),
         ("locate" | "position", "SS" | "SSI") => {
