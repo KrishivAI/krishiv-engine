@@ -301,7 +301,6 @@ fn context_free_errors_stay_context_free() {
 }
 
 // A DataFrame write runs through `write_files`, not `run_on_query`: its run-time errors resolve too.
-// (An `INSERT` statement plans its query apart from the statement text and shows no span yet.)
 #[test]
 fn a_run_time_error_in_a_dataframe_write_has_its_span() {
     let dir = std::env::temp_dir().join(format!("krishiv-ctx-write-{}", std::process::id()));
@@ -339,4 +338,24 @@ fn non_ansi_mode_drops_the_context_of_a_cast_and_element_at() {
             );
         }
     }
+}
+
+// An `INSERT ... SELECT` statement's run-time errors show the span of the expression in its query.
+#[test]
+fn a_run_time_error_in_an_insert_has_its_span() {
+    let dir = std::env::temp_dir().join(format!("krishiv-ctx-insert-{}", std::process::id()));
+    let s = Session::new().unwrap();
+    block_on(s.sql(&format!(
+        "CREATE TABLE w (q INT) USING parquet OPTIONS ('path' '{}')",
+        dir.display()
+    )))
+    .unwrap();
+    let sql = "INSERT INTO w SELECT a / b FROM VALUES (1, 0) AS t(a, b)";
+    let e = match block_on(s.sql(sql)) {
+        Err(e) => e,
+        Ok(df) => block_on(df.collect()).expect_err("the insert fails"),
+    };
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert_eq!(span(&e), (21, 25, "a / b"));
+    drop(std::fs::remove_dir_all(&dir));
 }

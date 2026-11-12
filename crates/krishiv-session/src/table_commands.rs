@@ -2188,9 +2188,11 @@ impl Session {
                 );
             }
         }
+        // The query's spans are offsets into the statement: source 0, as a query statement's.
+        let redacted = krishiv_sql::redact_sql(original);
         let plan = krishiv_sql::lower_identified(
             &c.query,
-            self.next_source_id(),
+            krishiv_plan::SourceId(0),
             self.parser_options().case_sensitive,
             ids,
         )
@@ -2214,6 +2216,7 @@ impl Session {
                 overwrite: c.overwrite,
                 statics: &statics,
                 dry,
+                text: Some(&redacted),
             },
         )
         .await
@@ -2235,6 +2238,7 @@ impl Session {
             overwrite,
             statics,
             dry,
+            text,
         } = *target;
         let env = self.query_env();
         let analysis = source.analyzed_in(self.query_env()).await?;
@@ -2333,6 +2337,11 @@ impl Session {
             select.push(checked.alias(&column.name));
         }
         let df = computed.select(select);
+        if let Some(text) = text {
+            // The frame's analysis keeps the statement text, so a run-time error shows its span.
+            df.analyzed_in_with_text(self.query_env(), Some(text))
+                .await?;
+        }
         if dry {
             // Every check of the write, without writing.
             return self.check_table_write(table, &df, overwrite).await;
@@ -2640,6 +2649,7 @@ impl Session {
             overwrite,
             statics: &[],
             dry: false,
+            text: None,
         };
         self.insert_rows(&name, &found, df, &target).await
     }
@@ -2675,6 +2685,7 @@ impl Session {
                     overwrite: false,
                     statics: &[],
                     dry: false,
+                    text: None,
                 };
                 return self.insert_rows(&name, &table, df, &target).await;
             }
@@ -2855,6 +2866,9 @@ struct InsertTarget<'a> {
     statics: &'a [(String, String)],
     /// Checked through to the rows it would write, not written.
     dry: bool,
+    /// The statement's redacted text, which the query's spans (source 0) index: a run-time
+    /// error of the query renders its span against it.
+    text: Option<&'a krishiv_common::redact::RedactedSql>,
 }
 
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
