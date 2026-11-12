@@ -437,7 +437,9 @@ impl Engine for SessionEngine {
         let format = format?;
         // `HiveResult.formatDescribeTableOutput`: the rows of DESCRIBE TABLE / COLUMN / QUERY print
         // each of their three cells left-aligned in 20 characters (`DESCRIBE SCHEMA` is not padded).
-        let describe = match krishiv_sql::parse_statement(sql, &self.options()) {
+        // The classification parses the text after `${name}` substitution, as `parse` does.
+        let parsed_text = session.substitute_variables(sql);
+        let describe = match krishiv_sql::parse_statement(&parsed_text, &self.options()) {
             Ok(Statement::Describe(d)) => Some(matches!(
                 d.kind,
                 DescribeKind::Table { .. } | DescribeKind::Query { .. }
@@ -450,7 +452,7 @@ impl Engine for SessionEngine {
         // `HiveResult` prints only the name column (the second) of SHOW TABLES and SHOW VIEWS, the
         // schema line still lists all three.
         let names_only = matches!(
-            krishiv_sql::parse_statement(sql, &self.options()),
+            krishiv_sql::parse_statement(&parsed_text, &self.options()),
             Ok(Statement::Show(s)) if matches!(s.kind, ShowKind::Tables { .. } | ShowKind::Views { .. })
         );
         let output = &analyzed.output;

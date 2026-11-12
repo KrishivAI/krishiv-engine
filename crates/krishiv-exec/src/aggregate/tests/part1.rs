@@ -524,6 +524,29 @@ async fn spill_matches_in_memory() {
     }
 }
 
+/// `krishiv.exec.agg.directKeys` on and off give the same rows through the
+/// operator, in memory and spilling (five Int64 keys take the direct path).
+#[tokio::test]
+async fn direct_keys_on_and_off_give_the_same_rows() {
+    let (s, b) = grouped_input(60_000, 5);
+    for limit in [1 << 30, 2 << 20] {
+        let (_m, scope) = spill_dir();
+        let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+        sp.spill = Some(scope);
+        let run = |direct| {
+            let o = Opts {
+                limit,
+                direct,
+                ..Opts::default()
+            };
+            exec_with(node(scan(&s, b.clone()), sp.clone()), o, true)
+        };
+        let (on, off) = (run(true).await.unwrap().0, run(false).await.unwrap().0);
+        assert_eq!(rows(&on), rows(&off), "limit {limit}");
+        assert_eq!(rows(&on).len(), 5);
+    }
+}
+
 /// A partition that still does not fit is split by the next hash bits.
 #[tokio::test]
 async fn spill_repartitions_a_partition_that_does_not_fit() {

@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use super::{
     ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
-    build_projection::EXEC_JOIN_BUILD_PROJECTION, join_cost::JOIN_COST,
-    partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    build_projection::EXEC_JOIN_BUILD_PROJECTION, direct_keys::EXEC_AGG_DIRECT_KEYS,
+    join_cost::JOIN_COST, partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
 };
 
 mod python;
@@ -34,6 +34,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
+    &EXEC_AGG_DIRECT_KEYS,
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,

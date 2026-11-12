@@ -50,6 +50,8 @@ struct Opts {
     seed: Option<u64>,
     /// Collect a detailed profile's counters (`ExecConfig::detailed_metrics`).
     detailed: bool,
+    /// `krishiv.exec.agg.directKeys`.
+    direct: bool,
 }
 
 impl Default for Opts {
@@ -60,6 +62,7 @@ impl Default for Opts {
             both_layouts: true,
             seed: Some(7),
             detailed: false,
+            direct: true,
         }
     }
 }
@@ -130,6 +133,7 @@ async fn exec_with(
         seed: o.seed,
         agg_row_layout: rows,
         detailed_metrics: o.detailed,
+        agg_direct_keys: o.direct,
         ..ExecConfig::default()
     };
     let q = QueryContext::new(

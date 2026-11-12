@@ -48,6 +48,7 @@ use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
 mod generator_order;
 mod identified;
 mod pipe;
+mod unit_call;
 mod variant;
 
 pub use identified::lower_identified;
@@ -1505,6 +1506,12 @@ impl Lowerer {
                     }
                     _ => name.value.clone(),
                 };
+                self.mark_non_keyword_unit(
+                    qualifier.is_empty() && !name.quoted,
+                    &lname,
+                    &mut args,
+                    sp,
+                );
                 let within_group = f
                     .within_group
                     .iter()
