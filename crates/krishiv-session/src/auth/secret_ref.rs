@@ -70,10 +70,16 @@ impl SecretRef {
                 )
             }),
             Self::File(path) => {
+                use std::io::Read as _;
                 let shown = format!("file:{}", path.display());
-                check_private(key, &shown, path)?;
-                let mut text = std::fs::read_to_string(path)
-                    .map_err(|e| invalid(key, &shown, &format!("cannot be read: {}", e.kind())))?;
+                let unreadable = |e: std::io::Error| {
+                    invalid(key, &shown, &format!("cannot be read: {}", e.kind()))
+                };
+                // One handle for the check and the read, so the file checked is the file read.
+                let mut file = std::fs::File::open(path).map_err(unreadable)?;
+                check_private(key, &shown, &file.metadata().map_err(unreadable)?)?;
+                let mut text = String::new();
+                file.read_to_string(&mut text).map_err(unreadable)?;
                 if text.ends_with('\n') {
                     text.pop();
                     if text.ends_with('\r') {
@@ -95,10 +101,11 @@ impl SecretRef {
 
 /// Refuses a secret file that group or others may read.
 #[cfg(unix)]
-fn check_private(key: &str, shown: &str, path: &std::path::Path) -> Result<(), KrishivError> {
+fn check_private(key: &str, shown: &str, meta: &std::fs::Metadata) -> Result<(), KrishivError> {
     use std::os::unix::fs::PermissionsExt;
-    let meta = std::fs::metadata(path)
-        .map_err(|e| invalid(key, shown, &format!("cannot be read: {}", e.kind())))?;
+    if !meta.is_file() {
+        return Err(invalid(key, shown, "not a regular file"));
+    }
     if meta.permissions().mode() & 0o077 != 0 {
         return Err(invalid(
             key,
@@ -111,7 +118,7 @@ fn check_private(key: &str, shown: &str, path: &std::path::Path) -> Result<(), K
 
 /// Other platforms have no mode bits to check.
 #[cfg(not(unix))]
-fn check_private(_key: &str, _shown: &str, _path: &std::path::Path) -> Result<(), KrishivError> {
+fn check_private(_key: &str, _shown: &str, _meta: &std::fs::Metadata) -> Result<(), KrishivError> {
     Ok(())
 }
 

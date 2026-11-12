@@ -144,8 +144,8 @@ impl AuthConfig {
                         .parse()
                         .map_err(|_| invalid(key, raw, "expected a whole number >= 0"))?;
                 }
-                "failureThrottle.window" => throttle.window = parse_duration(key, raw)?,
-                "failureThrottle.blockFor" => throttle.block_for = parse_duration(key, raw)?,
+                "failureThrottle.window" => throttle.window = bounded_duration(key, raw)?,
+                "failureThrottle.blockFor" => throttle.block_for = bounded_duration(key, raw)?,
                 _ => return Err(unknown(key)),
             }
         }
@@ -237,5 +237,18 @@ fn parse_duration(key: &str, raw: &str) -> Result<Duration, KrishivError> {
             ));
         }
     };
+    Ok(d)
+}
+
+/// The bounds of the throttle's durations: zero would switch it off silently (use
+/// `maxFailures = 0` for that), and a huge value would overflow the clock.
+const MIN_THROTTLE: Duration = Duration::from_secs(1);
+const MAX_THROTTLE: Duration = Duration::from_hours(24);
+
+fn bounded_duration(key: &str, raw: &str) -> Result<Duration, KrishivError> {
+    let d = parse_duration(key, raw)?;
+    if !(MIN_THROTTLE..=MAX_THROTTLE).contains(&d) {
+        return Err(invalid(key, raw, "must be between 1s and 24h"));
+    }
     Ok(d)
 }

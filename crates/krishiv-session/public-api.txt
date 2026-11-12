@@ -155,9 +155,10 @@ impl core::marker::StructuralPartialEq for krishiv_session::auth::AuthFailure
 pub krishiv_session::auth::Method::Mtls
 pub krishiv_session::auth::Method::None
 pub krishiv_session::auth::Method::Oidc
+pub krishiv_session::auth::Method::Throttle
 pub krishiv_session::auth::Method::Token
 impl krishiv_session::auth::Method
-pub const krishiv_session::auth::Method::ALL: [Self; 4]
+pub const krishiv_session::auth::Method::ALL: [Self; 5]
 pub fn krishiv_session::auth::Method::as_str(self) -> &'static str
 impl core::clone::Clone for krishiv_session::auth::Method
 pub fn krishiv_session::auth::Method::clone(&self) -> krishiv_session::auth::Method
@@ -261,6 +262,7 @@ pub fn krishiv_session::auth::Authenticated::fmt(&self, &mut core::fmt::Formatte
 impl core::marker::StructuralPartialEq for krishiv_session::auth::Authenticated
 #[non_exhaustive] pub struct krishiv_session::auth::Credentials<'a>
 pub krishiv_session::auth::Credentials::bearer: core::option::Option<&'a str>
+pub krishiv_session::auth::Credentials::malformed: bool
 pub krishiv_session::auth::Credentials::peer: core::net::socket_addr::SocketAddr
 pub krishiv_session::auth::Credentials::surface: krishiv_session::auth::Surface
 impl<'a> krishiv_session::auth::Credentials<'a>

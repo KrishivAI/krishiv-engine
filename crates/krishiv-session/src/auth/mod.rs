@@ -115,13 +115,21 @@ pub enum Method {
     Oidc,
     /// A client certificate (a later unit).
     Mtls,
+    /// Refused before any method ran (the peer is throttled).
+    Throttle,
     /// No credential was presented.
     None,
 }
 
 impl Method {
     /// Every method, in counter order.
-    pub const ALL: [Self; 4] = [Self::Token, Self::Oidc, Self::Mtls, Self::None];
+    pub const ALL: [Self; 5] = [
+        Self::Token,
+        Self::Oidc,
+        Self::Mtls,
+        Self::Throttle,
+        Self::None,
+    ];
 
     /// The label value: `token`, `oidc`, `mtls` or `none`.
     #[must_use]
@@ -130,6 +138,7 @@ impl Method {
             Self::Token => "token",
             Self::Oidc => "oidc",
             Self::Mtls => "mtls",
+            Self::Throttle => "throttle",
             Self::None => "none",
         }
     }
@@ -145,6 +154,9 @@ pub struct Credentials<'a> {
     pub peer: SocketAddr,
     /// The listener.
     pub surface: Surface,
+    /// An `Authorization` header was present but not a usable `Bearer` token (`Basic ..`,
+    /// `Bearer` with no token): Spark answers "Invalid authentication token", not "missing".
+    pub malformed: bool,
 }
 
 impl<'a> Credentials<'a> {
@@ -155,6 +167,7 @@ impl<'a> Credentials<'a> {
             bearer: None,
             peer,
             surface,
+            malformed: false,
         }
     }
 
@@ -170,6 +183,7 @@ impl<'a> Credentials<'a> {
     #[must_use]
     pub fn with_authorization_header(mut self, value: &'a str) -> Self {
         self.bearer = bearer_token(value);
+        self.malformed = self.bearer.is_none();
         self
     }
 }
@@ -183,6 +197,7 @@ impl fmt::Debug for Credentials<'_> {
             )
             .field("peer", &self.peer)
             .field("surface", &self.surface)
+            .field("malformed", &self.malformed)
             .finish()
     }
 }

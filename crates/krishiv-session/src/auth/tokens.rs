@@ -37,7 +37,8 @@ impl StaticTokens {
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` when a secret cannot be resolved, is shorter than 32
-    /// bytes, or is the same as another token's secret.
+    /// bytes, or is the same as another token's secret, or when two tokens give one principal
+    /// different roles.
     pub fn build(specs: &[TokenSpec]) -> Result<Self, KrishivError> {
         let mut entries: Vec<(Entry, &str)> = Vec::with_capacity(specs.len());
         for spec in specs {
@@ -60,6 +61,22 @@ impl StaticTokens {
                 ));
             }
             let principal = Principal::new(spec.principal.clone(), spec.kind);
+            // A principal has exactly one role (ADR 0046 §2): two tokens may name one principal
+            // (rotation), but only with the same role.
+            if let Some((other, other_name)) = entries
+                .iter()
+                .find(|(e, _)| e.principal.name == principal.name && e.role != spec.role)
+            {
+                return Err(invalid(
+                    &format!("krishiv.auth.tokens.{}.role", spec.name),
+                    spec.role.as_str(),
+                    &format!(
+                        "principal `{}` already has role {} through token `{other_name}`; a \
+                         principal has exactly one role",
+                        principal.name, other.role
+                    ),
+                ));
+            }
             entries.push((
                 Entry {
                     digest,

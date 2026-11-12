@@ -10,7 +10,7 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_common::principal::PrincipalKind;
 
 use super::config::SPARK_TOKEN_KEY;
-use super::throttle::{MAX_PEERS, step};
+use super::throttle::{MAX_PEERS, key, step};
 use super::{
     AuthConfig, AuthFailure, Authenticator, Credentials, FailureThrottle, Method, Role, SecretRef,
     ServerAuth, StaticTokens, Surface, ThrottleConfig, bearer_token, is_auth_key,
@@ -167,12 +167,12 @@ fn throttle_settings_parse() {
     let c = config(&[
         ("krishiv.auth.failureThrottle.maxFailures", "5"),
         ("krishiv.auth.failureThrottle.window", "2m"),
-        ("krishiv.auth.failureThrottle.blockFor", "500ms"),
+        ("krishiv.auth.failureThrottle.blockFor", "1500ms"),
     ])
     .unwrap();
     assert_eq!(c.throttle.max_failures, 5);
     assert_eq!(c.throttle.window, Duration::from_mins(2));
-    assert_eq!(c.throttle.block_for, Duration::from_millis(500));
+    assert_eq!(c.throttle.block_for, Duration::from_millis(1500));
     assert!(!c.is_configured());
     for bad in ["soon", "5d", "-1s"] {
         let e = config(&[("krishiv.auth.failureThrottle.window", bad)]).unwrap_err();
@@ -320,7 +320,8 @@ fn throttle_off_and_bounded() {
 
     let t = FailureThrottle::new(ThrottleConfig::default());
     for i in 0..=MAX_PEERS {
-        let ip = IpAddr::V6(std::net::Ipv6Addr::from(u128::try_from(i).unwrap()));
+        // One /64 per entry: addresses inside one /64 share a key.
+        let ip = IpAddr::V6(std::net::Ipv6Addr::from(u128::try_from(i).unwrap() << 64));
         t.record_failure(ip, now);
     }
     assert_eq!(
@@ -419,4 +420,163 @@ fn authenticator_trait_object() {
     let c = Credentials::new(peer(3), Surface::Admin).with_bearer(TOKEN_A);
     let r = futures::executor::block_on(auth.authenticate(&c)).unwrap();
     assert_eq!(r.principal.name, "alice");
+}
+
+#[test]
+fn one_principal_has_one_role() {
+    let dir = tempfile::tempdir().unwrap();
+    let one = secret_file(dir.path(), "one", TOKEN_A, 0o600);
+    let two = secret_file(dir.path(), "two", TOKEN_B, 0o600);
+    let tokens = |role_b: &str| {
+        config(&[
+            ("krishiv.auth.tokens.a.secret", &one),
+            ("krishiv.auth.tokens.a.principal", "alice"),
+            ("krishiv.auth.tokens.a.role", "viewer"),
+            ("krishiv.auth.tokens.b.secret", &two),
+            ("krishiv.auth.tokens.b.principal", "alice"),
+            ("krishiv.auth.tokens.b.role", role_b),
+        ])
+        .unwrap()
+    };
+    let e = StaticTokens::build(&tokens("admin").tokens).unwrap_err();
+    assert!(e.to_string().contains("exactly one role"), "{e}");
+    // Two tokens of one principal with one role (rotation) are fine.
+    let t = StaticTokens::build(&tokens("viewer").tokens).unwrap();
+    assert_eq!(t.len(), 2);
+    // Spark's token is admin: naming a viewer principal `spark` collides too.
+    let c = config(&[
+        (SPARK_TOKEN_KEY, TOKEN_B),
+        ("krishiv.auth.tokens.a.secret", &one),
+        ("krishiv.auth.tokens.a.principal", "spark"),
+        ("krishiv.auth.tokens.a.role", "viewer"),
+    ])
+    .unwrap();
+    assert!(StaticTokens::build(&c.tokens).is_err());
+}
+
+#[test]
+fn throttle_durations_are_bounded() {
+    for bad in ["0s", "25h", "18446744073709551615s"] {
+        for k in [
+            "krishiv.auth.failureThrottle.window",
+            "krishiv.auth.failureThrottle.blockFor",
+        ] {
+            let e = config(&[(k, bad)]).unwrap_err();
+            assert!(invalid_config(&e), "{k}={bad}: {e}");
+        }
+    }
+    // A config built in code with a huge block does not overflow the clock.
+    let t = FailureThrottle::new(ThrottleConfig {
+        max_failures: 1,
+        window: Duration::from_secs(1),
+        block_for: Duration::MAX,
+    });
+    let now = Instant::now();
+    assert!(t.record_failure(peer(1).ip(), now));
+    assert!(t.is_blocked(peer(1).ip(), now));
+}
+
+#[test]
+fn throttle_keys_ipv6_by_64_and_maps_ipv4() {
+    let a: IpAddr = "2001:db8:1:2:aaaa::1".parse().unwrap();
+    let b: IpAddr = "2001:db8:1:2:bbbb::9".parse().unwrap();
+    let c: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+    assert_eq!(key(a), key(b));
+    assert_ne!(key(a), key(c));
+    let mapped: IpAddr = "::ffff:10.0.0.1".parse().unwrap();
+    assert_eq!(key(mapped), peer(1).ip());
+    let cfg = ThrottleConfig {
+        max_failures: 2,
+        ..ThrottleConfig::default()
+    };
+    let t = FailureThrottle::new(cfg);
+    let now = Instant::now();
+    t.record_failure(a, now);
+    assert!(
+        t.record_failure(b, now),
+        "rotating inside the /64 still counts"
+    );
+    assert!(t.is_blocked(a, now) && !t.is_blocked(c, now));
+}
+
+#[test]
+fn a_malformed_header_is_an_invalid_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth = ServerAuth::new(&two_tokens(dir.path())).unwrap();
+    let now = Instant::now();
+    for header in ["Basic dXNlcjpwYXNz", "Bearer ", "Bearer"] {
+        let c = Credentials::new(peer(4), Surface::Connect).with_authorization_header(header);
+        assert_eq!(
+            auth.authenticate_at(&c, now),
+            Err(AuthFailure::Invalid),
+            "{header}"
+        );
+    }
+    let tokens = auth
+        .failure_counts()
+        .into_iter()
+        .find(|c| c.surface == Surface::Connect && c.method == Method::Token)
+        .map(|c| c.count);
+    assert_eq!(tokens, Some(3));
+}
+
+#[test]
+fn throttled_requests_count_as_throttle() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth = ServerAuth::new(&two_tokens(dir.path())).unwrap();
+    let now = Instant::now();
+    let guess = Credentials::new(peer(5), Surface::Ui).with_bearer("guess");
+    for _ in 0..=ThrottleConfig::default().max_failures {
+        let _ = auth.authenticate_at(&guess, now);
+    }
+    let throttled = auth
+        .failure_counts()
+        .into_iter()
+        .find(|c| c.surface == Surface::Ui && c.method == Method::Throttle)
+        .map(|c| c.count);
+    assert_eq!(throttled, Some(1));
+}
+
+#[test]
+fn failure_logs_never_contain_the_token() {
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let sink = Sink::default();
+    let writer = sink.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || writer.clone())
+        .finish();
+    let dir = tempfile::tempdir().unwrap();
+    let near_miss = format!("{}x", &TOKEN_A[..TOKEN_A.len() - 1]);
+    tracing::subscriber::with_default(subscriber, || {
+        let auth = ServerAuth::new(&two_tokens(dir.path())).unwrap();
+        let now = Instant::now();
+        for token in [near_miss.as_str(), TOKEN_A, "short"] {
+            let c = Credentials::new(peer(6), Surface::Admin).with_bearer(token);
+            let _ = auth.authenticate_at(&c, now);
+        }
+        let header = format!("Basic {TOKEN_B}");
+        let c = Credentials::new(peer(6), Surface::Admin).with_authorization_header(&header);
+        let _ = auth.authenticate_at(&c, now);
+    });
+    let logged = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    assert!(logged.contains("authentication failed"), "{logged}");
+    for secret in [TOKEN_A, TOKEN_B, near_miss.as_str()] {
+        assert!(!logged.contains(secret), "{logged}");
+    }
 }

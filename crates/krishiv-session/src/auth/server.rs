@@ -18,6 +18,9 @@ use super::throttle::FailureThrottle;
 use super::tokens::StaticTokens;
 use super::{AuthFailure, Authenticated, Authenticator, Credentials, Method, Surface};
 
+/// The longest bearer token hashed (design §3.3's JWT cap; static tokens are far shorter).
+const MAX_TOKEN_BYTES: usize = 16 * 1024;
+
 /// One failure counter (`krishiv_auth_failed_total{surface, method}`, ADR 0046 §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -79,12 +82,16 @@ impl ServerAuth {
     ) -> Result<Authenticated, AuthFailure> {
         let ip = credentials.peer.ip();
         if self.throttle.is_blocked(ip, now) {
-            return Err(self.fail(credentials, Method::None, AuthFailure::Throttled));
+            return Err(self.fail(credentials, Method::Throttle, AuthFailure::Throttled));
         }
-        let Some(token) = credentials.bearer else {
-            return Err(self.fail(credentials, Method::None, AuthFailure::Missing));
+        let token = match credentials.bearer {
+            Some(token) => Some(token),
+            None if credentials.malformed => None,
+            None => return Err(self.fail(credentials, Method::None, AuthFailure::Missing)),
         };
-        match self.tokens.lookup(token) {
+        // A token longer than any credential this server issues is refused unhashed.
+        let token = token.filter(|t| t.len() <= MAX_TOKEN_BYTES);
+        match token.and_then(|t| self.tokens.lookup(t)) {
             Some((principal, role)) => Ok(Authenticated::new(
                 principal.clone(),
                 Some(role),
