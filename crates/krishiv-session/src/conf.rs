@@ -84,12 +84,23 @@ impl ConfStore {
     }
 
     /// A store starting at this one's current configuration, with the same
-    /// starting configuration for `RESET` and the same local zone.
-    pub(crate) fn copy(&self) -> Self {
+    /// local zone, whose `RESET` restores `baseline` (the runtime's
+    /// configuration) and this one's build-time session keys. Spark's
+    /// `cloneSession` gives the clone empty initial session options
+    /// (`SparkSession.scala:286-298` at v4.3.0, and likewise at v3.5.0,
+    /// v4.0.0, v4.1.0 and v4.2.0), so its `RESET` restores the shared
+    /// state's configuration only (`ResetCommand`, `SetCommand.scala:220-238`
+    /// at v4.3.0). The build-time keys (the memory limit) describe the pool
+    /// the clone is built with, so they stay.
+    pub(crate) fn copy_onto(&self, baseline: &Config) -> Self {
         let (config, _) = self.versioned_snapshot();
+        let mut initial = baseline.clone();
+        for key in SESSION_BUILD_TIME {
+            initial.reset_key(key, &self.initial);
+        }
         Self {
             current: RwLock::new((config, 0)),
-            initial: self.initial.clone(),
+            initial,
             local_zone: Arc::clone(&self.local_zone),
         }
     }

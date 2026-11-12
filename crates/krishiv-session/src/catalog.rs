@@ -179,13 +179,16 @@ impl SessionCatalog {
 
     /// A catalog over the same permanent store and warehouse holding this
     /// one's temporary tables and views, current catalog, namespace and
-    /// path; later changes to either do not reach the other.
+    /// path; later changes to either do not reach the other. Script
+    /// results no copied view pins are left out: their frames belong to
+    /// this catalog's session.
     pub(crate) fn copy(&self) -> Self {
-        let tables = self
+        let mut tables = self
             .tables
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
+        script_results::leave_out(&mut tables);
         let position = self
             .position
             .read()
