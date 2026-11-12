@@ -81,12 +81,25 @@ impl SecretRef {
                 check_private(key, &shown, &std::fs::metadata(path).map_err(unreadable)?)?;
                 let file = std::fs::File::open(path).map_err(unreadable)?;
                 check_private(key, &shown, &file.metadata().map_err(unreadable)?)?;
-                // One byte past the token cap is enough to refuse an oversized secret.
-                let cap = super::tokens::MAX_SECRET_BYTES as u64 + 2;
-                let mut text = String::new();
-                file.take(cap)
-                    .read_to_string(&mut text)
+                // A token plus one line break (CRLF) at most: one byte past that refuses the file
+                // here, before the line break is removed, so a longer file is never cut to fit.
+                let most = super::tokens::MAX_SECRET_BYTES + 2;
+                let mut bytes = Vec::new();
+                file.take(most as u64 + 1)
+                    .read_to_end(&mut bytes)
                     .map_err(unreadable)?;
+                if bytes.len() > most {
+                    return Err(invalid(
+                        key,
+                        &shown,
+                        &format!(
+                            "the file is longer than a {}-byte token and one line break",
+                            super::tokens::MAX_SECRET_BYTES
+                        ),
+                    ));
+                }
+                let mut text = String::from_utf8(bytes)
+                    .map_err(|_| invalid(key, &shown, "the file is not UTF-8"))?;
                 if text.ends_with('\n') {
                     text.pop();
                     if text.ends_with('\r') {
