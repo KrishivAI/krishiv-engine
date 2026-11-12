@@ -82,6 +82,22 @@ versions to the path dependencies of the crates that ship (what
 credentials or trusted publishers, and a new gated workflow like the TestPyPI
 one. Until then there is nothing to run.
 
+## Release train
+
+Owner decision 2026-11-07 (default adopted): a minor release every **6 weeks**.
+
+- **Cut:** one week before the release date, branch `release-X.Y` from `main`. That starts the one-week
+  **RC freeze**: only fixes for regressions, doc corrections and version bumps go onto the branch (cherry-picked
+  from `main`, or fixed there and merged back). `main` stays open for the next minor.
+- **RC:** tag `vX.Y.0-rc.N` from the branch; it publishes nowhere until the owner says go (see above).
+- **Release:** on the date, tag `vX.Y.0` from `release-X.Y`. Patch releases (`X.Y.Z`) are cut from the same branch.
+  Support covers the latest minor only while the major is 0.
+- **Dates:** every date is 6 weeks (42 days) after the previous minor's release date. 0.3 is planned as
+  *0.2 release date + 42 days*, its branch cut 7 days before that; the 0.2 date is set by the owner's publish go, so
+  record the 0.3 dates in `STATUS.md` the day 0.2 ships. A slipped release does not move the next one: the train
+  keeps its dates and the next minor takes what is ready.
+- Breaking changes (docs/concepts/stability.md) go into a minor only, with the changelog "Breaking" heading.
+
 ## Before any release
 
 - `ui/scripts/sync-assets.sh` refreshes the committed UI assets
