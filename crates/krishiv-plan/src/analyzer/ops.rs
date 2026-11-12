@@ -612,7 +612,28 @@ impl Resolver<'_> {
         let mut items = Vec::new();
         let mut lateral: Vec<Attr> = Vec::new();
         let lca = self.ctx.conf.lateral_column_alias;
-        for e in exprs {
+        for (position, e) in exprs.iter().enumerate() {
+            // An item that is the input's own column at the same position (what `withColumn` passes
+            // through) is already resolved: bound without the expression machinery, as `bind` and
+            // `named` would leave it. Linear in the width, not quadratic over a chain of steps.
+            if let ExprNode::Resolved(ResolvedExpr::Column(col)) = &e.node
+                && extra.is_none()
+                && c.out.get(position).is_some_and(|a| a.col == *col)
+            {
+                items.push(Bound {
+                    expr: Arc::clone(e),
+                    ty: ArgType {
+                        data_type: Some(col.data_type.clone()),
+                        nullable: col.nullable,
+                    },
+                    agg: None,
+                    win: None,
+                    outer: None,
+                    lateral: Vec::new(),
+                    shown: None,
+                });
+                continue;
+            }
             if let ExprNode::Star(s) = &e.node {
                 let cx = Self::cx(&c.out, &rels, env, op);
                 // `* EXCEPT (s.f)` and `s.* EXCEPT (...)` rebuild the structs.

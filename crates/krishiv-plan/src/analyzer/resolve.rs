@@ -190,6 +190,10 @@ pub(super) struct Resolver<'a> {
     /// (`encode::identity_keys`): resolution does not depend on how the
     /// input shares subtrees, so equal input keys give equal plans.
     canon: HashMap<usize, Arc<LogicalPlan>>,
+    /// The expression that reads each column without an origin, shared by every projection that passes
+    /// the column through: a chain of `withColumn` steps then holds one such expression per column, not
+    /// one per column per step, and the passes that skip an expression already seen skip it.
+    pass_exprs: HashMap<AttrId, Arc<crate::Expr>>,
     pub(super) columns: Vec<BTreeSet<String>>,
     /// The lambda scopes pushed by the higher-order calls whose bodies
     /// bind now, innermost last (see `hof`).
@@ -253,6 +257,7 @@ pub(super) fn resolve(
         memo: HashMap::new(),
         closed: HashMap::new(),
         canon: HashMap::new(),
+        pass_exprs: HashMap::new(),
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
         expr_depth: 0,
@@ -441,6 +446,19 @@ impl Resolver<'_> {
                 }
                 e.for_each_child(&mut |c| exprs.push(Arc::clone(c)));
             }
+        }
+    }
+
+    /// The shared expression that passes `col` through a projection (see `pass_exprs`).
+    pub(super) fn pass_expr(&mut self, col: &BoundColumn) -> Arc<Expr> {
+        let shared = self
+            .pass_exprs
+            .entry(col.id)
+            .or_insert_with(|| col_expr(col, Origin::UNKNOWN));
+        // The same id names the same column; a different shape builds its own expression.
+        match &shared.node {
+            ExprNode::Resolved(crate::ResolvedExpr::Column(c)) if c == col => Arc::clone(shared),
+            _ => col_expr(col, Origin::UNKNOWN),
         }
     }
 
@@ -1096,7 +1114,7 @@ impl Resolver<'_> {
                         name: news[i].0.clone(),
                     })));
                 }
-                None => exprs.push(col_expr(&a.col, Origin::UNKNOWN)),
+                None => exprs.push(self.pass_expr(&a.col)),
             }
         }
         for (i, (name, b)) in news.iter().enumerate() {
