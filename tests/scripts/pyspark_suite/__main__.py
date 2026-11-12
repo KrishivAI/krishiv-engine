@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import manifest as mf
 from .denominator import compute
-from .report import dashboard, summarize, write_summary
+from .report import dashboard, gate, summarize, write_summary
 from .runner import check_pytest_timeout, run_file
 from .static_count import census
 
@@ -56,10 +56,19 @@ def cmd_run(a: argparse.Namespace) -> None:
     for rel in files:
         print(f"running {rel}", flush=True)
         records += run_file(a.version, a.checkout, rel, out_dir, a.server_cmd, a.port)
-    # A partial (`--only`) run must not replace the committed full summary.
-    target = DATA / "results" if a.only else DATA / "summary"
-    path = write_summary(summarize(den, remaining, records, source="run"), target)
+    summary = summarize(den, remaining, records, source="run")
+    # The pass-list ratchet: a test that passed in the committed summary and does not now fails the run, and the
+    # committed summary stays as it was (the new one goes to results/ for inspection). A partial (`--only`) run
+    # never replaces the committed full summary and is not gated against it.
+    regressions = [] if a.only else gate(summary, DATA / "summary")
+    target = DATA / "results" if a.only or regressions else DATA / "summary"
+    path = write_summary(summary, target)
     print(f"wrote {path}")
+    if regressions:
+        print(f"ratchet: {len(regressions)} test(s) passed before and do not now:")
+        for t in regressions:
+            print(f"  {t}")
+        raise SystemExit(1)
 
 
 def cmd_report(_: argparse.Namespace) -> None:
