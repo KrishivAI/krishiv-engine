@@ -112,7 +112,9 @@ pub async fn serve_capped(
 ) -> io::Result<()> {
     let listener = CappedListener {
         inner: listener,
-        permits: Arc::new(Semaphore::new(max_connections.max(1))),
+        permits: Arc::new(Semaphore::new(
+            max_connections.clamp(1, Semaphore::MAX_PERMITS),
+        )),
     };
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)

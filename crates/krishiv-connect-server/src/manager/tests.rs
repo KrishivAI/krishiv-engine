@@ -141,13 +141,25 @@ fn another_principals_session_id_is_not_found_and_not_shared() {
 
 #[test]
 fn session_caps_refuse_before_building() {
-    let m = manager(SessionLimits {
-        max_sessions: 2,
-        max_sessions_per_principal: 1,
-        ..SessionLimits::default()
-    });
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let built = Arc::new(AtomicUsize::new(0));
+    let base = Session::new().expect("session");
+    let counter = Arc::clone(&built);
+    let m = SessionManager::new(
+        Box::new(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(base.new_session())
+        }),
+        SessionLimits {
+            max_sessions: 2,
+            max_sessions_per_principal: 1,
+            ..SessionLimits::default()
+        },
+    );
     m.get_or_create(&alice(), ID, None, "u").expect("first");
+    assert_eq!(built.load(Ordering::SeqCst), 1);
     let e = m.get_or_create(&alice(), ID2, None, "u").unwrap_err();
+    assert_eq!(built.load(Ordering::SeqCst), 1, "refused before building");
     assert_eq!(class(&e), "KRISHIV_SESSION_LIMIT");
     assert!(
         e.to_string()
@@ -160,6 +172,7 @@ fn session_caps_refuse_before_building() {
         .get_or_create(&carol, "2b1c6e0a-0f3d-4f7e-9a51-7c6d5e4f3a21", None, "u")
         .unwrap_err();
     assert!(e.to_string().contains("krishiv.connect.maxSessions"));
+    assert_eq!(built.load(Ordering::SeqCst), 2, "refused before building");
     // Releasing frees a slot.
     m.release(&alice(), ID, false);
     m.get_or_create(&alice(), "3c2d7f1b-1a4e-4a8f-8b62-8d7e6f5a4b32", None, "u")
@@ -266,4 +279,34 @@ fn racing_creates_of_one_key_share_one_session_and_close_the_losers() {
         assert!(!e.session().is_closed());
     }
     assert_eq!(m.counts().live, 1);
+}
+
+#[test]
+fn get_if_present_finds_only_the_owners_live_session() {
+    let m = manager(SessionLimits::default());
+    assert!(m.get_if_present(&alice(), ID).is_none());
+    let a = m.get_or_create(&alice(), ID, None, "u").expect("create");
+    let found = m.get_if_present(&alice(), ID).expect("present");
+    assert!(Arc::ptr_eq(&a, &found));
+    assert!(m.get_if_present(&bob(), ID).is_none());
+    m.release(&alice(), ID, false);
+    assert!(m.get_if_present(&alice(), ID).is_none());
+}
+
+#[test]
+fn zero_tombstones_keeps_no_released_id() {
+    let limits = SessionLimits {
+        tombstones: 0,
+        ..SessionLimits::default()
+    };
+    let m = manager(limits);
+    assert_eq!(m.limits().tombstones, 0);
+    m.get_or_create(&alice(), ID, None, "u").expect("create");
+    m.release(&alice(), ID, false);
+    assert_eq!(m.counts().tombstones, 0);
+    // With no tombstone the id can be created again.
+    m.get_or_create(&alice(), ID, None, "u").expect("recreate");
+    let debug = format!("{m:?}");
+    assert!(debug.starts_with("SessionManager"), "{debug}");
+    assert!(debug.contains("live: 1"), "{debug}");
 }

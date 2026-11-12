@@ -17,6 +17,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS,
@@ -175,7 +176,11 @@ async fn run_listeners(
     );
 
     let (stop_tx, stop_rx) = watch::channel(false);
-    let signals = tokio::spawn(watch_signals(Arc::clone(&ready), stop_tx));
+    // Installed before the addresses are printed: a SIGTERM right after
+    // readiness must start the drain, not kill the process.
+    let handlers = Signals::install()
+        .map_err(|e| format!("cannot install the SIGTERM/SIGINT handlers: {e}"))?;
+    let signals = tokio::spawn(watch_signals(handlers, Arc::clone(&ready), stop_tx));
     let stopped = |mut rx: watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
@@ -201,10 +206,14 @@ async fn run_listeners(
         .map_err(|e| e.to_string());
     ready.store(false, Ordering::Release);
     signals.abort();
-    // The admin listener stopped with the same signal; its open event
-    // streams end with the process.
-    admin.abort();
-    let _ = admin.await;
+    // The admin listener stopped accepting with the same signal; requests in
+    // flight get `ADMIN_DRAIN` to finish. Open event streams never end on
+    // their own, so whatever is left then is aborted.
+    let mut admin = admin;
+    if tokio::time::timeout(ADMIN_DRAIN, &mut admin).await.is_err() {
+        admin.abort();
+        let _ = admin.await;
+    }
     drop(manager);
     drop(runtime);
     served
@@ -248,37 +257,55 @@ fn metrics_need_token(config: &Config, bound: SocketAddr) -> bool {
         && !(flag(config, &SERVER_METRICS_PUBLIC, false) && bound.ip().is_loopback())
 }
 
+/// How long admin requests in flight may take once the server stops.
+const ADMIN_DRAIN: Duration = Duration::from_secs(2);
+
 /// The first SIGTERM or SIGINT starts the drain; a second exits at once.
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
-async fn watch_signals(ready: Arc<AtomicBool>, stop: watch::Sender<bool>) {
-    signal().await;
+async fn watch_signals(mut signals: Signals, ready: Arc<AtomicBool>, stop: watch::Sender<bool>) {
+    signals.next().await;
     ready.store(false, Ordering::Release);
     eprintln!("krishiv server: shutting down (a second signal exits at once)");
     let _ = stop.send(true);
-    signal().await;
+    signals.next().await;
     eprintln!("krishiv server: second signal, exiting");
     std::process::exit(130);
 }
 
-async fn signal() {
+/// SIGTERM and SIGINT, registered when installed (tokio registers a
+/// handler only when its stream is created, not when it is first polled).
+struct Signals {
     #[cfg(unix)]
-    {
+    term: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    int: tokio::signal::unix::Signal,
+}
+
+impl Signals {
+    #[cfg(unix)]
+    fn install() -> std::io::Result<Self> {
         use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::terminate()) {
-            Ok(mut term) => {
-                tokio::select! {
-                    _ = term.recv() => {}
-                    _ = tokio::signal::ctrl_c() => {}
-                }
-            }
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
+        Ok(Self {
+            term: signal(SignalKind::terminate())?,
+            int: signal(SignalKind::interrupt())?,
+        })
     }
+
     #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
+    fn install() -> std::io::Result<Self> {
+        Ok(Self {})
+    }
+
+    async fn next(&mut self) {
+        #[cfg(unix)]
+        tokio::select! {
+            _ = self.term.recv() => {}
+            _ = self.int.recv() => {}
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
     }
 }
 

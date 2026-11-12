@@ -123,7 +123,16 @@ impl Drop for Running {
 
 fn start(spill: &std::path::Path) -> Running {
     let mut child = krishiv()
-        .args(["server", "--port", "0", "--connect-port", "0", "--conf"])
+        // `--allow-root`: CI containers may run as root.
+        .args([
+            "server",
+            "--allow-root",
+            "--port",
+            "0",
+            "--connect-port",
+            "0",
+        ])
+        .args(["--conf", "krishiv.metrics.enabled=true", "--conf"])
         .arg(format!("krishiv.spill.dir={}", spill.display()))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -198,12 +207,9 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
     } else {
         assert!(page.starts_with("HTTP/1.1 404"), "{page}");
     }
-    // `/metrics` needs the admin token unless made public (or is off).
+    // `/metrics` is on (`start` sets it) and needs the admin token.
     let m = http_get(&run.admin, "/metrics");
-    assert!(
-        m.starts_with("HTTP/1.1 401") || m.starts_with("HTTP/1.1 404"),
-        "{m}"
-    );
+    assert!(m.starts_with("HTTP/1.1 401"), "{m}");
 
     let status = Command::new("kill")
         .args(["-TERM", &run.child.id().to_string()])

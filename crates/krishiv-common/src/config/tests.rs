@@ -84,6 +84,22 @@ fn size_and_duration_units() {
         Ok(ConfigValue::Duration(Duration::from_secs(3600)))
     );
     assert!(dur("1 fortnight").is_err());
+    let millis = |s| ValueType::Millis.parse(s);
+    assert_eq!(
+        millis("250"),
+        Ok(ConfigValue::Duration(Duration::from_millis(250)))
+    );
+    assert_eq!(
+        millis("2s"),
+        Ok(ConfigValue::Duration(Duration::from_secs(2)))
+    );
+    assert_eq!(
+        millis("soon"),
+        Err(
+            "expected a duration such as `500ms` or `120s` (a bare number is milliseconds)"
+                .to_owned()
+        )
+    );
 }
 
 #[test]

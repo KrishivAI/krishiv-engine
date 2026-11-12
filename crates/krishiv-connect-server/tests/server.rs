@@ -212,10 +212,11 @@ async fn a_field_the_version_does_not_define_is_refused_by_the_codec() {
     .await
     .unwrap_err();
     assert_eq!(e.code(), Code::Internal);
-    assert!(
-        e.message().starts_with("[KRISHIV_UNSUPPORTED_FEATURE]"),
-        "{}",
-        e.message()
+    assert_eq!(
+        e.message(),
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature field 99 of \
+         spark.connect.ReleaseSessionRequest, which Spark Connect 4.2 does not define \
+         (sent by a newer client?) is not supported by Krishiv yet. SQLSTATE: 0A000"
     );
 }
 
@@ -473,9 +474,11 @@ async fn a_silent_socket_loses_its_slot_after_the_handshake_deadline() {
     let done = tokio::spawn(server.serve(listener, async {
         let _ = stopped.await;
     }));
-    // Takes the only slot and sends nothing.
-    let silent = tokio::net::TcpStream::connect(addr).await.expect("connect");
+    // Takes the only slot and sends nothing. `started` is taken first: the
+    // server's deadline starts at accept, which is after it, so the lower
+    // bound below holds however late this task runs.
     let started = tokio::time::Instant::now();
+    let silent = tokio::net::TcpStream::connect(addr).await.expect("connect");
     let channel = Channel::from_shared(format!("http://{addr}"))
         .expect("uri")
         .connect()
@@ -530,4 +533,127 @@ fn every_krishiv_key_sets_its_setting() {
     assert_eq!(SessionLimits::from_config(&c).tombstones, 7);
     c.set("krishiv.connect.keepAlive.enabled", "false").unwrap();
     assert_eq!(ConnectServerConfig::from_config(&c).keepalive, None);
+}
+
+fn decoded<T: krishiv_connect::wire::Request>() -> krishiv_connect::wire::Decoded<T> {
+    krishiv_connect::wire::decode_request::<T>(&T::default().encode_to_vec()).expect("decode")
+}
+
+/// Every RPC a later task implements answers `UNIMPLEMENTED` naming the RPC,
+/// and `UNAVAILABLE` once the server drains.
+#[tokio::test]
+async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
+    use krishiv_connect_server::service::SparkConnectService;
+    use tonic::Request;
+    let manager = Arc::new(SessionManager::from_base(
+        Session::new().expect("session"),
+        SessionLimits::default(),
+    ));
+    let draining = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let service =
+        krishiv_connect_server::ConnectService::new(Arc::clone(&manager), Arc::clone(&draining));
+    assert!(Arc::ptr_eq(service.manager(), &manager));
+    for (drain, code) in [(false, Code::Unimplemented), (true, Code::Unavailable)] {
+        draining.store(drain, Ordering::Release);
+        let results: Vec<(&str, tonic::Status)> = vec![
+            (
+                "ExecutePlan",
+                service
+                    .execute_plan(Request::new(decoded()))
+                    .await
+                    .err()
+                    .expect("err"),
+            ),
+            (
+                "AnalyzePlan",
+                service
+                    .analyze_plan(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+            ),
+            (
+                "Config",
+                service.config(Request::new(decoded())).await.unwrap_err(),
+            ),
+            (
+                "ArtifactStatus",
+                service
+                    .artifact_status(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+            ),
+            (
+                "Interrupt",
+                service
+                    .interrupt(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+            ),
+            (
+                "ReattachExecute",
+                service
+                    .reattach_execute(Request::new(decoded()))
+                    .await
+                    .err()
+                    .expect("err"),
+            ),
+            (
+                "ReleaseExecute",
+                service
+                    .release_execute(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+            ),
+            (
+                "FetchErrorDetails",
+                service
+                    .fetch_error_details(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+            ),
+            (
+                "CloneSession",
+                service
+                    .clone_session(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+            ),
+            (
+                "GetStatus",
+                service
+                    .get_status(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+            ),
+        ];
+        for (rpc, status) in results {
+            assert_eq!(status.code(), code, "{rpc}");
+            if drain {
+                assert_eq!(status.message(), "server shutting down", "{rpc}");
+            } else {
+                assert_eq!(
+                    status.message(),
+                    format!("{rpc} is not supported by this server yet")
+                );
+            }
+        }
+    }
+}
+
+/// A connection cap past the semaphore's capacity is clamped, not a panic.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connection_cap_past_the_semaphore_limit_is_clamped() {
+    let run = start(
+        ConnectServerConfig {
+            max_connections: usize::MAX,
+            ..ConnectServerConfig::default()
+        },
+        SessionLimits::default(),
+    )
+    .await;
+    let response: pb::ReleaseSessionResponse =
+        unary(&run.channel, "ReleaseSession", release(ID, false))
+            .await
+            .expect("release");
+    assert_eq!(response.session_id, ID);
 }

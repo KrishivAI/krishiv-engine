@@ -61,13 +61,16 @@ async fn healthz_is_ok_and_readyz_follows_the_flag() {
 
 #[tokio::test]
 async fn a_slow_request_times_out_but_an_event_stream_does_not() {
-    let slow = || async {
+    // `/slow` never finishes, so the timeout wins however the runtime
+    // schedules; the exempt event stream finishes after the timeout.
+    let never = || std::future::pending::<&'static str>();
+    let late = || async {
         tokio::time::sleep(Duration::from_millis(400)).await;
         "done"
     };
     let app = Router::new()
-        .route("/slow", get(slow))
-        .route("/api/internal/events", get(slow));
+        .route("/slow", get(never))
+        .route("/api/internal/events", get(late));
     let limits = HttpLimits {
         request_timeout: Duration::from_millis(100),
         ..HttpLimits::default()
@@ -86,9 +89,19 @@ async fn connections_past_the_cap_wait_for_one_to_close() {
         ..HttpLimits::default()
     };
     let (addr, _stop) = start(health_routes(Arc::new(AtomicBool::new(true))), limits).await;
-    // One idle connection holds the only permit.
-    let held = TcpStream::connect(addr).await.expect("connect");
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // One kept-alive connection holds the only permit: its answered request
+    // shows the server accepted it before the second connects.
+    let mut held = TcpStream::connect(addr).await.expect("connect");
+    held.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+        .await
+        .expect("write");
+    let mut seen = Vec::new();
+    while !seen.ends_with(br#"{"status":"ok"}"#) {
+        let mut buf = [0_u8; 512];
+        let n = held.read(&mut buf).await.expect("read");
+        assert!(n > 0, "closed before answering");
+        seen.extend_from_slice(&buf[..n]);
+    }
     let second = tokio::time::timeout(Duration::from_millis(300), get_raw(addr, "/healthz")).await;
     assert!(second.is_err(), "served past the cap");
     drop(held);

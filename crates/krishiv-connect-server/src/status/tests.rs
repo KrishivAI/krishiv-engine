@@ -44,7 +44,8 @@ fn an_invalid_handle_is_sent_as_sparks_sql_exception() {
     );
     assert_eq!(info.metadata["errorClass"], "INVALID_HANDLE.SESSION_CLOSED");
     // The vendored 4.2.0 registry's SQLSTATE (4.3.0 moves it to 08003).
-    assert_eq!(Some(info.metadata["sqlState"].as_str()), e.sql_state());
+    assert_eq!(info.metadata["sqlState"], "HY000");
+    assert_eq!(e.sql_state(), Some("HY000"));
     assert_eq!(info.metadata["messageParameters"], r#"{"handle":"abc"}"#);
 }
 

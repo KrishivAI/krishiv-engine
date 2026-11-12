@@ -329,7 +329,7 @@ fn capped(
     max: usize,
     handshake: Duration,
 ) -> impl futures::Stream<Item = io::Result<CappedStream>> + Send + 'static {
-    let permits = Arc::new(Semaphore::new(max.max(1)));
+    let permits = Arc::new(Semaphore::new(max.clamp(1, Semaphore::MAX_PERMITS)));
     let (tx, rx) = tokio::sync::mpsc::channel::<io::Result<CappedStream>>(64);
     let acceptor = AbortOnDrop(tokio::spawn(accept_loop(listener, permits, tx, handshake)));
     futures::stream::unfold((rx, acceptor), |(mut rx, acceptor)| async move {

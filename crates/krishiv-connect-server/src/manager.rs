@@ -275,7 +275,10 @@ impl SessionManager {
         }
         // Validate before building: Spark's `validateSessionCreate`.
         QueryId::parse(session_id)?;
-        self.check_create(&key)?;
+        if let Some(existing) = self.check_create(&key)? {
+            Self::check_observed(&key, &existing, observed)?;
+            return Ok(existing);
+        }
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
         let session = (self.factory)(principal)?;
@@ -522,9 +525,16 @@ impl SessionManager {
         }
     }
 
-    fn check_create(&self, key: &Key) -> Result<(), KrishivError> {
+    /// The caps, checked before a session is built. A racing create that
+    /// inserted the key since the lookup is returned instead: reusing it
+    /// takes no slot, so the caps must not refuse it.
+    fn check_create(&self, key: &Key) -> Result<Option<Arc<SessionEntry>>, KrishivError> {
         let mut inner = self.lock();
-        Self::check_create_locked(&mut inner, key, &self.limits)
+        if let Some(existing) = inner.live.get(key).map(Arc::clone) {
+            existing.last_access.store(self.now_ms(), Ordering::Relaxed);
+            return Ok(Some(existing));
+        }
+        Self::check_create_locked(&mut inner, key, &self.limits).map(|()| None)
     }
 
     fn check_create_locked(
