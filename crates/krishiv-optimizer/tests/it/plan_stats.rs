@@ -1093,3 +1093,30 @@ fn an_unknown_count_in_a_list_of_one_values_keeps_k_rows() {
     close(known.rows(), 2.0, "a known count");
     assert_eq!(known.col("b").ndv, 2.0, "two values left of a known count");
 }
+
+/// A filter over a projection that names one column twice narrows both
+/// names: `c1 > 49` over `a AS c0, a AS c1` leaves `c0` the same range as
+/// `c1` (#692 review), and `c0 = c1` keeps every non-NULL row.
+#[test]
+fn a_filter_narrows_every_rename_of_its_column() {
+    let over_project = |p: &LogicalPlan| matches!(&p.node, PlanNode::Filter { input, .. } if matches!(input.node, PlanNode::SubqueryAlias { .. }));
+    let e = Estimated::of(
+        "SELECT * FROM (SELECT a AS c0, a AS c1 FROM t) q WHERE c1 > 49",
+        over_project,
+    );
+    let (c0, c1) = (e.col("c0"), e.col("c1"));
+    assert_eq!((c1.min, c1.max), (Some(49.0), Some(99.0)));
+    assert_eq!((c0.min, c0.max), (c1.min, c1.max));
+    let all = Estimated::of("SELECT * FROM (SELECT a AS c0, a AS c1 FROM t) q", |p| {
+        matches!(p.node, PlanNode::Project { .. })
+    });
+    let e = Estimated::of(
+        "SELECT * FROM (SELECT a AS c0, a AS c1 FROM t) q WHERE c0 = c1",
+        over_project,
+    );
+    close(
+        e.rows(),
+        all.rows() * (1.0 - all.col("c0").null_frac),
+        "c0 = c1",
+    );
+}

@@ -372,7 +372,15 @@ impl<'a> Estimator<'a> {
                     let defs = cse_definitions(input);
                     filtered(&est, &resolve_cse(predicate, &defs), self.propagate)
                 } else {
-                    filtered(&est, &same_renames(predicate, input), self.propagate)
+                    let mut out = filtered(&est, &same_renames(predicate, input), self.propagate);
+                    // Every rename of a column holds the same values: the
+                    // narrowing the canonical one got is theirs too.
+                    for (renamed, canon) in renames_to_canonical(input) {
+                        if let Some(c) = out.cols.get(&canon.id).cloned() {
+                            out.cols.insert(renamed, c);
+                        }
+                    }
+                    out
                 }
             }
             PlanNode::Project { input, exprs } => {
@@ -945,32 +953,7 @@ fn unfiltered_distinct(ndv: f64, kept: f64, rows: f64) -> f64 {
 /// ordering derives for the equal pair made its input look one row large on
 /// the first optimization and a million on the next.
 pub(crate) fn same_renames(predicate: &Arc<Expr>, input: &LogicalPlan) -> Arc<Expr> {
-    // Filters keep their input's columns: the projection may sit below them.
-    let mut input = input;
-    while let PlanNode::Filter { input: below, .. } = &input.node {
-        input = below;
-    }
-    let PlanNode::Project { exprs, .. } = &input.node else {
-        return Arc::clone(predicate);
-    };
-    let mut first: HashMap<AttrId, BoundColumn> = HashMap::new();
-    let mut to: HashMap<AttrId, BoundColumn> = HashMap::new();
-    for e in exprs {
-        // `a AS c` renames `a`; a bare `a` passes it through under its own
-        // name (`Project [a, a AS c0]`: `a = c0` is `a = a`).
-        let (source, output) = match &e.node {
-            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => match &expr.node {
-                ExprNode::Resolved(ResolvedExpr::Column(c)) => (c.id, output),
-                _ => continue,
-            },
-            ExprNode::Resolved(ResolvedExpr::Column(c)) => (c.id, c),
-            _ => continue,
-        };
-        let canon = first.entry(source).or_insert_with(|| output.clone());
-        if canon.id != output.id {
-            to.insert(output.id, canon.clone());
-        }
-    }
+    let to = renames_to_canonical(input);
     if to.is_empty() {
         return Arc::clone(predicate);
     }
@@ -991,4 +974,40 @@ pub(crate) fn same_renames(predicate: &Arc<Expr>, input: &LogicalPlan) -> Arc<Ex
         Ok(p) => p,
         Err(never) => match never {},
     }
+}
+
+/// The outputs of the projection under `input` (through filters) that
+/// rename an input column another output already names, by attribute: that
+/// first output (the canonical name of the column).
+fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
+    // Filters and subquery aliases keep their input's columns (attributes):
+    // the projection may sit below them.
+    let mut input = input;
+    while let PlanNode::Filter { input: below, .. } | PlanNode::SubqueryAlias { input: below, .. } =
+        &input.node
+    {
+        input = below;
+    }
+    let PlanNode::Project { exprs, .. } = &input.node else {
+        return HashMap::new();
+    };
+    let mut first: HashMap<AttrId, BoundColumn> = HashMap::new();
+    let mut to: HashMap<AttrId, BoundColumn> = HashMap::new();
+    for e in exprs {
+        // `a AS c` renames `a`; a bare `a` passes it through under its own
+        // name (`Project [a, a AS c0]`: `a = c0` is `a = a`).
+        let (source, output) = match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => match &expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => (c.id, output),
+                _ => continue,
+            },
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => (c.id, c),
+            _ => continue,
+        };
+        let canon = first.entry(source).or_insert_with(|| output.clone());
+        if canon.id != output.id {
+            to.insert(output.id, canon.clone());
+        }
+    }
+    to
 }
