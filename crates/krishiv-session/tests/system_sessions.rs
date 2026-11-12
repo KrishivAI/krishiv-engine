@@ -211,3 +211,37 @@ fn a_dropped_handle_is_remembered_as_client_gone() {
         ["closed|client_gone"]
     );
 }
+
+#[test]
+fn queries_running_counts_live_queries_only_and_activity_moves() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let admin = session_of(&rt, "admin");
+    let s = session_of(&rt, "runner");
+    let q = "SELECT concat_ws('|', CAST(queries_running AS STRING), CAST(queries_started AS STRING), \
+             CAST(last_active_at >= created_at AS STRING), CAST(idle_timeout_ms AS STRING)) \
+             FROM system.sessions WHERE principal = 'runner'";
+    s.set_idle_timeout_ms(Some(60_000));
+    let df = block_on(s.sql("SELECT id FROM range(0, 2000000000)")).unwrap();
+    let stream = block_on(df.execute_stream()).unwrap();
+    assert_eq!(texts(&admin, q), ["1|1|true|60000"]);
+    drop(stream);
+    block_on(block_on(s.sql("SELECT 1")).unwrap().collect()).unwrap();
+    let r = &texts(&admin, q)[0];
+    assert!(r.starts_with("0|"), "{r}");
+}
+
+#[test]
+fn a_callers_own_session_kill_is_recorded_as_a_release() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let admin = session_of(&rt, "admin");
+    let _s = session_of(&rt, "me");
+    let id = id_of(&admin, "me");
+    assert_eq!(rt.kill_session(&id, CancelReason::ClientGone), Some(0));
+    assert_eq!(
+        texts(
+            &admin,
+            "SELECT concat_ws('|', state, close_reason) FROM system.sessions WHERE principal = 'me'"
+        ),
+        ["closed|release_session"]
+    );
+}

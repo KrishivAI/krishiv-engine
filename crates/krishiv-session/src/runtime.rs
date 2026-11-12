@@ -473,6 +473,11 @@ impl EngineRuntime {
             .queries
             .values()
             .filter(|l| l.session == session)
+            .filter(|l| {
+                l.query
+                    .as_ref()
+                    .is_none_or(|q| q.upgrade().is_some_and(|q| !q.is_finished()))
+            })
             .count();
         i64::try_from(n).unwrap_or(i64::MAX)
     }
@@ -514,12 +519,13 @@ impl EngineRuntime {
     /// `None` for an unknown (or already ended) id. The privilege check and the
     /// audit line belong in front of it, as for [`Self::cancel`].
     pub fn kill_session(&self, session_id: &str, reason: CancelReason) -> Option<usize> {
-        let why = if reason == CancelReason::Drain {
-            "drain"
-        } else {
-            "admin_kill"
+        let end = match reason {
+            CancelReason::Drain => crate::sessions::End::Killed("drain"),
+            // A caller ending its own session (T066 `KillSession` of its own): recorded as a release.
+            CancelReason::ClientGone => crate::sessions::End::Closed("release_session"),
+            _ => crate::sessions::End::Killed("admin_kill"),
         };
-        self.end_session(session_id, reason, crate::sessions::End::Killed(why))
+        self.end_session(session_id, reason, end)
     }
 
     /// Ends session `session_id` as idle (the server's sweep): its queries
