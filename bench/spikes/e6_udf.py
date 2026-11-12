@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -21,6 +22,10 @@ import pyarrow.compute as pc
 N = int(os.environ.get("E6_ROWS", "2000000"))
 BATCH = 65536
 ARROW_BATCHED = 101
+
+
+def _load() -> str:
+    return Path("/proc/loadavg").read_text().strip()
 
 
 def light(x: pa.Array) -> pa.Array:
@@ -83,7 +88,7 @@ def in_process(name: str, threads: int, rows: int) -> float:
 
 def speed() -> None:
     print(f"gil_enabled={getattr(sys, '_is_gil_enabled', lambda: True)()} cpus={os.cpu_count()} rows={N}")
-    print(f"load before: {open('/proc/loadavg').read().strip()}")
+    print(f"load before: {_load()}")
     for name in ("light", "heavy"):
         rows = N * 10 if name == "light" else N // 10
         for w in (1, 2, 4, 8):
@@ -93,9 +98,11 @@ def speed() -> None:
             )
             inproc = float(r.stdout.strip().splitlines()[-1]) if r.returncode == 0 else float("nan")
             pp = process_pool(name, w, rows)
-            print(f"{name:5} workers={w} rows={rows}: in-process {inproc:.2f}s ({rows / inproc / 1e6:.2f} Mrows/s) | "
-                  f"process pool {pp:.2f}s ({rows / pp / 1e6:.2f} Mrows/s)")
-    print(f"load after: {open('/proc/loadavg').read().strip()}")
+            print(
+                f"{name:5} workers={w} rows={rows}: in-process {inproc:.2f}s ({rows / inproc / 1e6:.2f} Mrows/s) | "
+                f"process pool {pp:.2f}s ({rows / pp / 1e6:.2f} Mrows/s)"
+            )
+    print(f"load after: {_load()}")
 
 
 def isolation() -> None:
@@ -105,7 +112,8 @@ def isolation() -> None:
         "def die(x):\n    os._exit(139)\n"
         "c=[('krishiv.python.udf.threads','2')]\ns=SparkSession(_native.Session(c),c)\n"
         "s._native.register_python_udf('die',101,'bigint',True,True,die)\n"
-        "try:\n    s.sql('SELECT die(id) FROM range(10)').collect()\nexcept Exception as e:\n    print('RAISED', type(e).__name__)\n"
+        "try:\n    s.sql('SELECT die(id) FROM range(10)').collect()\n"
+        "except Exception as e:\n    print('RAISED', type(e).__name__)\n"
         "print('ENGINE ALIVE')\n"
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
@@ -114,11 +122,13 @@ def isolation() -> None:
         fut = pool.submit(os._exit, 139)
         try:
             fut.result(timeout=30)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f"process pool crash UDF: parent alive, task raised {type(e).__name__}")
     # A hang: a process can be killed on a deadline, a thread cannot.
-    print("hang: a pool worker process can be killed on a deadline; an in-process UDF thread cannot be "
-          "interrupted from Rust (it holds the GIL or a Python frame)")
+    print(
+        "hang: a pool worker process can be killed on a deadline; an in-process UDF thread cannot be "
+        "interrupted from Rust (it holds the GIL or a Python frame)"
+    )
 
 
 if __name__ == "__main__":
