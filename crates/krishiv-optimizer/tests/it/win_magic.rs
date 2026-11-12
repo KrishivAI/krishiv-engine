@@ -190,3 +190,33 @@ fn a_firing_is_noted_in_the_trace() {
             .any(|s| { s.note.contains("SubqueryAsWindow: form M") }),
     );
 }
+
+#[test]
+fn an_or_filter_on_the_outer_block_is_refused() {
+    // An OR over the subquery's table is not a conjunct the subquery shares.
+    let sql = q17(
+        "avg(l_quantity)",
+        "AND (l_shipdate > DATE '1995-01-01' OR l_discount > 0.05)",
+        "",
+        "l_partkey = p_partkey",
+    );
+    assert!(!windowed(&sql));
+}
+
+#[test]
+fn a_coalesced_subquery_value_is_refused() {
+    // `coalesce(.., 0)` gives a group with no match a value the window cannot give.
+    let sql = "SELECT sum(l_extendedprice) FROM lineitem, part WHERE p_partkey = l_partkey \
+               AND l_quantity < coalesce((SELECT avg(l_quantity) FROM lineitem \
+               WHERE l_partkey = p_partkey), 0)";
+    assert!(!windowed(sql));
+}
+
+#[test]
+fn a_second_instance_of_the_table_in_the_outer_block_is_refused() {
+    let sql = "SELECT sum(a.l_extendedprice) FROM lineitem a, lineitem b, part \
+               WHERE p_partkey = a.l_partkey AND b.l_orderkey = a.l_orderkey \
+               AND a.l_quantity < (SELECT avg(l_quantity) FROM lineitem \
+               WHERE l_partkey = p_partkey)";
+    assert!(!windowed(sql));
+}
