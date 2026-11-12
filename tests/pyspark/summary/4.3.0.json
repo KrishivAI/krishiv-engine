@@ -19,6 +19,7 @@
   "version": "4.3.0",
   "within_cap": true
  },
+ "file_failures": [],
  "not_run": 2774,
  "pass_rate": 0.0,
  "pass_rate_without_client_only": 0.0,
