@@ -42,6 +42,7 @@ mod tpch;
 mod two_phase;
 mod union;
 mod union_order;
+mod win_magic;
 mod window;
 mod write;
 
