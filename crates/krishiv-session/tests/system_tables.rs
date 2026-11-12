@@ -1567,10 +1567,12 @@ fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() 
     s.conf()
         .set("krishiv.system.queryText.literals", "mask")
         .unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
     for sql in [
         "SELECT from_json('{\"a\":\"canarysecret\",', 'a STRING', map('mode', 'FAILFAST'))",
         "SELECT parse_url('http://canarysecret host/x', 'HOST')",
         "SELECT raise_error('canarysecret')",
+        "SELECT next_day(DATE '2024-01-01', 'canarysecret')",
     ] {
         assert!(run_all(&s, sql).is_err(), "{sql}");
     }
