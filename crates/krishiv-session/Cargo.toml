@@ -63,6 +63,8 @@ tracing-subscriber = { workspace = true, features = ["registry", "std", "fmt", "
 # Cloud object stores (S3, GCS, Azure) via `krishiv-io/cloud`. Opt-in so the
 # default build stays inside the dependency and binary-size budgets.
 cloud = ["krishiv-exec/cloud", "krishiv-io/cloud"]
+# ICU collations (ADR 0043): UNICODE, en, sv, ... with _CI/_AI.
+collations-icu = ["krishiv-exec/collations-icu", "krishiv-plan/collations-icu", "krishiv-kernels/collations-icu"]
 # Access to the logical-plan IR (`Session::from_plan`, `DataFrame::plan`):
 # for the Python facade and tests; not covered by semver.
 unstable-ir = []

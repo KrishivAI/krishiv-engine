@@ -36,6 +36,7 @@ python = []
 wasm-udf = []
 ui = ["dep:krishiv-server"]
 celeborn = []
+collations-icu = ["krishiv-session/collations-icu"]
 mimalloc = []
 # Cloud object stores (S3, GCS, Azure) via `krishiv-session/cloud`. Opt-in so
 # the default build stays inside the dependency and binary-size budgets.

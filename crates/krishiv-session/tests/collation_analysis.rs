@@ -79,7 +79,9 @@ fn collate_checks_its_input_and_its_name() {
 }
 
 /// A collated value with no key (ICU, unit 6) is refused in a comparing position instead of being
-/// compared as bytes; `collation_keys.rs` runs every key-bearing operator.
+/// compared as bytes; `collation_keys.rs` runs every key-bearing operator. With `collations-icu`
+/// ICU has a key, so this holds only without it.
+#[cfg(not(feature = "collations-icu"))]
 #[test]
 fn comparing_positions_refuse_a_collated_value() {
     let ci = "('a' COLLATE unicode_ci)";
@@ -882,13 +884,13 @@ fn tables_filter_and_join_on_collation_keys() {
             "{sql}"
         );
     }
-    assert_eq!(
-        class_of(
-            &s,
-            "select count(*) from c1 where a = 'aaa' collate unicode_ci"
-        ),
-        ErrorClass::KrishivUnsupportedFeature
-    );
+    // ICU has no key without `collations-icu`; with it the comparison runs.
+    let icu = "select count(*) from c1 where a = 'aaa' collate unicode_ci";
+    if cfg!(feature = "collations-icu") {
+        assert!(block_on(s.sql(icu)).is_ok());
+    } else {
+        assert_eq!(class_of(&s, icu), ErrorClass::KrishivUnsupportedFeature);
+    }
 }
 
 /// The first value of the first column of `sql`, as text.
@@ -1363,5 +1365,26 @@ fn lcase_search_calls_of_the_wrong_arity_are_arity_errors() {
             run(&format!("select {f}('Ab' collate utf8_lcase, 'a')")).is_ok(),
             "{f} 2"
         );
+    }
+}
+
+/// The ICU comparisons of the `collations-basic` golden (statements 93 to 103): each is `true`.
+#[cfg(feature = "collations-icu")]
+#[test]
+fn icu_comparisons_follow_the_golden() {
+    for sql in [
+        "select 'a' collate unicode < 'A'",
+        "select 'a' collate unicode_ci = 'A'",
+        "select 'a' collate unicode_ai = 'å'",
+        "select 'a' collate unicode_ci_ai = 'Å'",
+        "select 'a' collate en < 'A'",
+        "select 'a' collate en_ci = 'A'",
+        "select 'a' collate en_ai = 'å'",
+        "select 'a' collate en_ci_ai = 'Å'",
+        "select 'Kypper' collate sv < 'Köpfe'",
+        "select 'Kypper' collate de > 'Köpfe'",
+        "select 'I' collate tr_ci = 'ı'",
+    ] {
+        assert!(one(sql).contains("true"), "{sql}");
     }
 }

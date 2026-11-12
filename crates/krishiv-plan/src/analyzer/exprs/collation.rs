@@ -263,13 +263,15 @@ pub(super) fn string_of(c: Collation) -> DataType {
     }
 }
 
-/// Whether every collated leaf of `t` has a key here (`UTF8_LCASE`, `_RTRIM`).
+/// Whether every collated leaf of `t` has a key here (`UTF8_LCASE`, `_RTRIM`, and ICU with the
+/// `collations-icu` feature).
 fn has_key(t: &DataType) -> bool {
     !t.any_type(&|x| {
         matches!(x, DataType::CollatedString(c) if !matches!(
             c.family(),
             CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
-        ) || c.is_indeterminate())
+        ) && !(cfg!(feature = "collations-icu") && matches!(c.family(), CollationFamily::Icu { .. }))
+            || c.is_indeterminate())
     })
 }
 
