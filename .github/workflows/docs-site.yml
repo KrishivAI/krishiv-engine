@@ -85,6 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo xtask docs-sql --check
+          cargo xtask connect-coverage --check
           cargo xtask docs-examples --check
           cargo xtask docs-python --check
           cargo xtask docs-config "$RUNNER_TEMP/configuration.md"
