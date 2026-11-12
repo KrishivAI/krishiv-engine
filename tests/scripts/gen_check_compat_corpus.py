@@ -3,16 +3,32 @@
 expected.json (file, line, name, status) into crates/krishiv-cli/tests/check_compat_corpus.
 The planted names are chosen here, not by the scanner, so the expected findings
 are independent of it."""
-import json, pathlib, random
+
+import json
+import pathlib
+import random
+import shutil
 
 out = pathlib.Path("crates/krishiv-cli/tests/check_compat_corpus")
 matrix = json.loads(pathlib.Path("crates/krishiv-cli/src/check_compat/functions.json").read_text())
-ident = lambda n: n.isidentifier() and not n.startswith("_")
-supported = [n for n, s in matrix.items() if s == "supported" and ident(n) and n not in ("if", "in", "not", "and", "or", "case", "when", "like", "between", "div", "mod")]
+
+
+def ident(n):
+    return n.isidentifier() and not n.startswith("_")
+
+
+supported = [
+    n
+    for n, s in matrix.items()
+    if s == "supported"
+    and ident(n)
+    and n not in ("if", "in", "not", "and", "or", "case", "when", "like", "between", "div", "mod")
+]
 not_yet = [n for n, s in matrix.items() if s == "not yet" and ident(n)]
 unknown = [f"legacy_fn_{i}" for i in range(40)]
 rnd = random.Random(29)
 expected = []
+
 
 def pick(file, line):
     r = rnd.random()
@@ -26,7 +42,7 @@ def pick(file, line):
     expected.append({"file": file, "line": line, "name": n, "status": "unknown"})
     return n, "unknown"
 
-import shutil
+
 shutil.rmtree(out, ignore_errors=True)
 out.mkdir(parents=True)
 for i in range(30):
