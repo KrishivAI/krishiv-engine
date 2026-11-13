@@ -281,10 +281,10 @@ impl DeltaScanSource {
                 .cardinality()
                 .map_err(|err| from_kernel(&err, &name))?
                 .unwrap_or(0);
-            let peak = usize::try_from(cardinality)
+            let slots = usize::try_from(cardinality)
                 .unwrap_or(usize::MAX)
-                .saturating_add(1)
-                .saturating_mul(DV_PEAK_BYTES_PER_ROW);
+                .saturating_add(1);
+            let peak = slots.saturating_mul(DV_PEAK_BYTES_PER_ROW);
             dv_memory.try_grow(peak)?;
             let dv = unit.dv.clone();
             let root = engine.table_root().clone();
@@ -309,8 +309,10 @@ impl DeltaScanSource {
                     unsupported("a Delta deletion vector on a file of unknown row count")
                 })?;
             let selection = RowSelection::excluding(rows, deleted);
-            // What stays held while the file is read: the selection's ranges.
-            let kept = selection.ranges().len().saturating_mul(RANGE_BYTES);
+            // What stays held while the file is read: the selection's range vector, whose
+            // capacity `RowSelection::excluding` sizes for one more range than deleted rows,
+            // however few ranges a contiguous delete leaves.
+            let kept = slots.saturating_mul(RANGE_BYTES);
             dv_memory.shrink(dv_memory.size().saturating_sub(kept));
             request = self.request.clone();
             request.selection = Some(selection);
