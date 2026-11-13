@@ -43,6 +43,10 @@ def test_cache_acts_on_the_frame_itself(spark: SparkSession) -> None:
     assert df.cache() is df
     assert df.count() == 2
     assert df.is_cached
+    # Already cached: the first registration's level stays, as in Spark.
+    assert df.persist(StorageLevel.DISK_ONLY) is df
+    assert df.storageLevel == StorageLevel.MEMORY_AND_DISK
+    assert df.unpersist() is df
     assert df.persist(StorageLevel.DISK_ONLY) is df
     assert df.storageLevel == StorageLevel.DISK_ONLY
     assert df.unpersist() is df
@@ -178,17 +182,17 @@ def test_checkpoint_arguments_are_checked(spark: SparkSession) -> None:
 
 def test_a_checkpoint_is_a_snapshot_of_a_changing_source(spark: SparkSession, tmp_path) -> None:
     spark.conf.set("spark.checkpoint.dir", str(tmp_path / "cp"))
-    spark.sql("CREATE TABLE snap_src (age INT, name STRING) USING parquet")
-    spark.sql("INSERT INTO snap_src VALUES (1, 'a')")
-    for make in (
-        lambda d: d.localCheckpoint(),
-        lambda d: d.checkpoint(),
-    ):
-        cp = make(spark.table("snap_src"))
-        spark.sql("INSERT INTO snap_src VALUES (9, 'z')")
+    makers = {
+        "local": lambda d: d.localCheckpoint(),
+        "reliable": lambda d: d.checkpoint(),
+        "lazy": lambda d: d.localCheckpoint(eager=False),
+    }
+    for kind, make in makers.items():
+        table = f"snap_{kind}"
+        spark.sql(f"CREATE TABLE {table} (age INT, name STRING) USING parquet")
+        spark.sql(f"INSERT INTO {table} VALUES (1, 'a')")
+        cp = make(spark.table(table))
+        if kind == "lazy":
+            assert rows(cp) == [(1, "a")]
+        spark.sql(f"INSERT INTO {table} VALUES (9, 'z')")
         assert rows(cp) == [(1, "a")]
-        spark.sql("DELETE FROM snap_src WHERE age = 9")
-    lazy = spark.table("snap_src").localCheckpoint(eager=False)
-    assert rows(lazy) == [(1, "a")]
-    spark.sql("INSERT INTO snap_src VALUES (9, 'z')")
-    assert rows(lazy) == [(1, "a")]
