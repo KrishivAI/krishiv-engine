@@ -224,11 +224,14 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
   letters and digits. Anything else is `INVALID_ARTIFACT_PATH` (Spark accepts an unknown prefix as a plain file and
   turns `\` into a separator). `jars/` and `classes/` (no JVM) and `forward_to_fs/` (no Hadoop file system) fail with
   `KRISHIV_UNSUPPORTED_FEATURE`. Each session may hold `krishiv.connect.artifacts.maxBytes` (1 GiB) of artifacts and
-  one artifact `krishiv.connect.artifacts.maxArtifactBytes` (256 MiB), each artifact also counting 4 KiB; past either,
-  `KRISHIV_ARTIFACT_LIMIT` (`RESOURCE_EXHAUSTED`); Spark has no cap. A broken chunk sequence (too many or too few
-  chunks, a chunk with no artifact begun, a new artifact before the last chunk, a wrong `total_bytes`) fails with
-  `KRISHIV_INVALID_ARTIFACT_TRANSFER` where Spark sends `INTERNAL` without an error class; a chunked artifact of one
-  chunk is accepted (Spark fails it). An artifact that collides with one already stored fails with
+  one artifact `krishiv.connect.artifacts.maxArtifactBytes` (256 MiB); past either,
+  `KRISHIV_ARTIFACT_LIMIT` (`RESOURCE_EXHAUSTED`); Spark has no cap. Each segment of a name (the file and every
+  directory it may need) counts 4 KiB rather than each artifact, and all sessions together may hold
+  `krishiv.connect.artifacts.maxTotalBytes` (16 GiB). A broken chunk sequence (too many or too few chunks, a chunk
+  with no artifact begun, a new chunked artifact before the last chunk, a wrong `total_bytes`) fails with
+  `KRISHIV_INVALID_ARTIFACT_TRANSFER` where Spark sends `INTERNAL` without an error class. A `batch` sent while a
+  chunked artifact is still open fails the same way, which Spark accepts (the stock client never sends one). A
+  chunked artifact of one chunk is accepted (Spark fails it). An artifact that collides with one already stored fails with
   `ARTIFACT_ALREADY_EXISTS` as in Spark, also when the name holds a directory or a link. Archives are stored, not
   unpacked, until Python UDFs use them.
 - **FetchErrorDetails** sends no stack trace (Spark sends the JVM's): there is no JVM, and a Rust backtrace would

@@ -21,10 +21,12 @@ Paths are relative to this crate.
   session is known goes through `entry.errors().status` (it gets an `errorId`), one before it through `status_of`
 - `src/artifacts.rs` `AddArtifacts` / `ArtifactStatus` (design §3.9): the chunk protocol and CRC-32 (`crc32`), names
   from `krishiv_connect::artifact` checked before any file, the privilege gate `config::check_add_artifact`, the
-  per-session quota (`krishiv.connect.artifacts.maxBytes`, `maxArtifactBytes`, `ARTIFACT_OVERHEAD` per artifact)
+  per-session quota (`krishiv.connect.artifacts.maxBytes`, `maxArtifactBytes`, `ARTIFACT_OVERHEAD` per name segment)
+  and the server-wide one (`maxTotalBytes`, checked `>= maxArtifactBytes` at startup)
   counted before each write, `Transfer` (runs on the blocking pool; dropping it removes what it staged and returns its
   quota), `SessionArtifacts` (per session: directory, `cache/<hash>` blobs in the pool as `connect_artifacts`,
-  `cached(hash)` for T012), `ArtifactStore` (the server's root, created on first use); `src/artifacts/dir.rs` the
+  `cached(hash)` for T012; a blob's pool reservation covers its whole capacity), `ArtifactStore` (the server's root,
+  created on first use, removed by the awaited `shutdown` that `serve` calls after closing the sessions); `src/artifacts/dir.rs` the
   private root and session directories, `O_EXCL | O_NOFOLLOW` staging, `linkat` install (never replaces), every name
   resolved per segment from a directory descriptor without following links; removal on the blocking pool
 - `src/errors.rs` `SessionErrors` (design §3.10): `errorId` on every status sent on a session unless

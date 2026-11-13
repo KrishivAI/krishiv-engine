@@ -58,12 +58,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use bytes::Bytes;
 use krishiv_common::config::{
-    CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES, CONNECT_ARTIFACTS_MAX_BYTES, Config, ConfigValue,
+    CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES, CONNECT_ARTIFACTS_MAX_BYTES,
+    CONNECT_ARTIFACTS_MAX_TOTAL_BYTES, Config, ConfigValue,
 };
 use krishiv_common::error::{
     ArtifactAlreadyExists, ConnectInvalidPlanInvalidOneOfFieldNotSet, ErrorClass, InternalError,
     InvalidArtifactPath, InvalidHandleSessionClosed, KrishivArtifactLimit, KrishivError,
-    KrishivInvalidArtifactTransfer,
+    KrishivInvalidArtifactTransfer, KrishivInvalidConfigValue,
 };
 use krishiv_common::principal::Principal;
 use krishiv_connect::artifact::{ArtifactKind, ArtifactName, parse_artifact_name};
@@ -92,6 +93,9 @@ pub struct ArtifactLimits {
     pub max_session_bytes: u64,
     /// Bytes of one artifact (`krishiv.connect.artifacts.maxArtifactBytes`).
     pub max_artifact_bytes: u64,
+    /// Bytes all sessions together may hold
+    /// (`krishiv.connect.artifacts.maxTotalBytes`).
+    pub max_total_bytes: u64,
     /// The directory the server's artifact root is created in; `None`: the
     /// system's temporary directory.
     pub parent: Option<PathBuf>,
@@ -102,6 +106,7 @@ impl Default for ArtifactLimits {
         Self {
             max_session_bytes: 1 << 30,
             max_artifact_bytes: 256 << 20,
+            max_total_bytes: 16 << 30,
             parent: None,
         }
     }
@@ -117,9 +122,66 @@ impl ArtifactLimits {
             max_session_bytes: size(&CONNECT_ARTIFACTS_MAX_BYTES).unwrap_or(d.max_session_bytes),
             max_artifact_bytes: size(&CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES)
                 .unwrap_or(d.max_artifact_bytes),
+            max_total_bytes: size(&CONNECT_ARTIFACTS_MAX_TOTAL_BYTES).unwrap_or(d.max_total_bytes),
             parent: None,
         }
     }
+
+    /// Checks the limits fit together (at startup).
+    ///
+    /// # Errors
+    /// `KRISHIV_INVALID_CONFIG_VALUE` when `maxTotalBytes` is below
+    /// `maxArtifactBytes` (no artifact of the allowed size could ever fit).
+    pub fn validate(&self) -> Result<(), KrishivError> {
+        if self.max_total_bytes < self.max_artifact_bytes {
+            return Err(KrishivInvalidConfigValue {
+                value: format!("'{}'", self.max_total_bytes),
+                key: format!("\"{}\"", CONNECT_ARTIFACTS_MAX_TOTAL_BYTES.key),
+                reason: format!(
+                    "it must be at least {} ({} bytes)",
+                    CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES.key, self.max_artifact_bytes
+                ),
+            }
+            .into());
+        }
+        Ok(())
+    }
+}
+
+/// The server-wide count of artifact bytes (`maxTotalBytes`).
+#[derive(Debug)]
+struct ServerQuota {
+    used: Mutex<u64>,
+    cap: u64,
+}
+
+impl ServerQuota {
+    fn lock(&self) -> std::sync::MutexGuard<'_, u64> {
+        self.used.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn reserve(&self, bytes: u64, name: &str) -> Result<(), KrishivError> {
+        let mut used = self.lock();
+        match used.checked_add(bytes) {
+            Some(total) if total <= self.cap => {
+                *used = total;
+                Ok(())
+            }
+            _ => Err(limit(name, CONNECT_ARTIFACTS_MAX_TOTAL_BYTES.key, self.cap)),
+        }
+    }
+
+    fn release(&self, bytes: u64) {
+        let mut used = self.lock();
+        *used = used.saturating_sub(bytes);
+    }
+}
+
+/// The root directory and whether the store was shut down.
+#[derive(Debug, Default)]
+struct RootState {
+    root: Option<Arc<ArtifactRoot>>,
+    shut: bool,
 }
 
 /// The server's artifacts: the limits and the root directory, created by
@@ -128,7 +190,8 @@ impl ArtifactLimits {
 #[derive(Debug)]
 pub struct ArtifactStore {
     limits: ArtifactLimits,
-    root: Mutex<Option<Arc<ArtifactRoot>>>,
+    total: Arc<ServerQuota>,
+    root: Mutex<RootState>,
 }
 
 impl ArtifactStore {
@@ -136,8 +199,12 @@ impl ArtifactStore {
     #[must_use]
     pub fn new(limits: ArtifactLimits) -> Self {
         Self {
+            total: Arc::new(ServerQuota {
+                used: Mutex::new(0),
+                cap: limits.max_total_bytes,
+            }),
             limits,
-            root: Mutex::new(None),
+            root: Mutex::new(RootState::default()),
         }
     }
 
@@ -150,17 +217,60 @@ impl ArtifactStore {
     /// The root directory, once created.
     #[must_use]
     pub fn root_path(&self) -> Option<PathBuf> {
-        self.lock().as_ref().map(|r| r.path().to_owned())
+        self.lock().root.as_ref().map(|r| r.path().to_owned())
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Arc<ArtifactRoot>>> {
+    /// Bytes all sessions hold now (against `maxTotalBytes`).
+    #[must_use]
+    pub fn used_bytes(&self) -> u64 {
+        *self.total.lock()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, RootState> {
         self.root.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Removes the root and everything under it, and creates none again:
+    /// the server calls it after every session is closed, so the files are
+    /// gone before `serve` returns (a removal queued on the blocking pool
+    /// may never run once the runtime is dropped).
+    pub async fn shutdown(&self) {
+        let path = {
+            let mut state = self.lock();
+            state.shut = true;
+            state.root.as_ref().map(|r| r.path().to_owned())
+        };
+        let Some(path) = path else {
+            return;
+        };
+        let removed = tokio::task::spawn_blocking(move || {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "runs on the blocking pool; std's remove_dir_all follows no link"
+            )]
+            let removed = std::fs::remove_dir_all(&path);
+            removed
+        })
+        .await;
+        match removed {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) if e.kind() == io::ErrorKind::NotFound => {}
+            Ok(Err(e)) => {
+                tracing::warn!(target: "krishiv::connect", error = %e, "could not remove the artifact root");
+            }
+            Err(e) => {
+                tracing::warn!(target: "krishiv::connect", error = %e, "could not remove the artifact root");
+            }
+        }
     }
 
     /// The root, created on first use (blocking file system calls).
     fn root(&self) -> Result<Arc<ArtifactRoot>, KrishivError> {
-        let mut root = self.lock();
-        if let Some(r) = root.as_ref() {
+        let mut state = self.lock();
+        if state.shut {
+            return Err(SessionArtifacts::closed_error());
+        }
+        if let Some(r) = state.root.as_ref() {
             return Ok(Arc::clone(r));
         }
         let parent = self
@@ -175,7 +285,7 @@ impl ArtifactStore {
             match ArtifactRoot::create(&parent, &name) {
                 Ok(r) => {
                     let r = Arc::new(r);
-                    *root = Some(Arc::clone(&r));
+                    state.root = Some(Arc::clone(&r));
                     return Ok(r);
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
@@ -200,6 +310,8 @@ struct State {
     used: u64,
     cache: HashMap<String, Cached>,
     consumer: Option<Arc<ConsumerHandle>>,
+    /// The server-wide count `used` is also held in.
+    total: Option<Arc<ServerQuota>>,
     closed: bool,
 }
 
@@ -254,6 +366,9 @@ impl SessionArtifacts {
         let (dir, cache) = {
             let mut s = self.lock();
             s.closed = true;
+            if let Some(total) = s.total.take() {
+                total.release(s.used);
+            }
             s.used = 0;
             (s.dir.take(), std::mem::take(&mut s.cache))
         };
@@ -269,47 +384,67 @@ impl SessionArtifacts {
         .into()
     }
 
-    /// Counts `bytes` of artifact `name` against the session's quota.
-    fn reserve(&self, bytes: u64, limits: &ArtifactLimits, name: &str) -> Result<(), KrishivError> {
+    /// Counts `bytes` of artifact `name` against the session's quota and
+    /// the server's (`store`).
+    fn reserve(&self, bytes: u64, store: &ArtifactStore, name: &str) -> Result<(), KrishivError> {
+        let limits = store.limits();
         let mut s = self.lock();
         if s.closed {
             return Err(Self::closed_error());
         }
-        match s.used.checked_add(bytes) {
-            Some(total) if total <= limits.max_session_bytes => {
-                s.used = total;
-                Ok(())
+        let total = match s.used.checked_add(bytes) {
+            Some(total) if total <= limits.max_session_bytes => total,
+            _ => {
+                return Err(limit(
+                    name,
+                    CONNECT_ARTIFACTS_MAX_BYTES.key,
+                    limits.max_session_bytes,
+                ));
             }
-            _ => Err(limit(
-                name,
-                CONNECT_ARTIFACTS_MAX_BYTES.key,
-                limits.max_session_bytes,
-            )),
-        }
+        };
+        // Lock order: the session's state, then the server's count.
+        store.total.reserve(bytes, name)?;
+        s.total.get_or_insert_with(|| Arc::clone(&store.total));
+        s.used = total;
+        Ok(())
     }
 
     fn release(&self, bytes: u64) {
         let mut s = self.lock();
-        s.used = s.used.saturating_sub(bytes);
+        let bytes = bytes.min(s.used);
+        s.used -= bytes;
+        if let Some(total) = &s.total {
+            total.release(bytes);
+        }
     }
 
-    /// The session's directory, created on first use (blocking).
+    /// The session's directory, created on first use (blocking; the file
+    /// system calls run outside the session's lock).
     fn dir(&self, store: &ArtifactStore) -> Result<Arc<SessionDir>, KrishivError> {
-        let mut s = self.lock();
-        if s.closed {
-            return Err(Self::closed_error());
-        }
-        if let Some(d) = &s.dir {
-            return Ok(Arc::clone(d));
+        {
+            let s = self.lock();
+            if s.closed {
+                return Err(Self::closed_error());
+            }
+            if let Some(d) = &s.dir {
+                return Ok(Arc::clone(d));
+            }
         }
         let root = store.root()?;
         let name = uuid_text(random_uuid()?);
-        let d = Arc::new(
+        let made = Arc::new(
             SessionDir::create(&root, &name)
                 .map_err(|e| io_failure("create a session's artifact directory", &e))?,
         );
-        s.dir = Some(Arc::clone(&d));
-        Ok(d)
+        let mut s = self.lock();
+        if s.closed {
+            // Dropped (and removed) outside the lock.
+            drop(s);
+            drop(made);
+            return Err(Self::closed_error());
+        }
+        // A racing transfer made one first: ours goes, theirs is used.
+        Ok(Arc::clone(s.dir.get_or_insert(made)))
     }
 
     /// The session's memory consumer for cached artifacts.
@@ -408,6 +543,26 @@ pub fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
+/// Makes room in `buf` for `more` bytes, reserving every byte of capacity
+/// it gains from the pool first: the pool holds what the blob allocates,
+/// never less.
+fn grow_exact(
+    buf: &mut Vec<u8>,
+    reservation: Option<&mut Reservation>,
+    more: usize,
+) -> Result<(), KrishivError> {
+    let need = buf.len().saturating_add(more);
+    if need <= buf.capacity() {
+        return Ok(());
+    }
+    let gain = need - buf.capacity();
+    if let Some(r) = reservation {
+        r.try_grow(gain)?;
+    }
+    buf.reserve_exact(need - buf.len());
+    Ok(())
+}
+
 /// Where a staged artifact's bytes go.
 enum Sink {
     /// A staged file; `file` is closed once the artifact is complete.
@@ -458,11 +613,8 @@ impl Drop for Staged {
 }
 
 impl Staged {
-    fn write(
-        &mut self,
-        chunk: &ArtifactChunk,
-        limits: &ArtifactLimits,
-    ) -> Result<(), KrishivError> {
+    fn write(&mut self, chunk: &ArtifactChunk, store: &ArtifactStore) -> Result<(), KrishivError> {
+        let limits = store.limits();
         let n = chunk.data.len() as u64;
         if self
             .written
@@ -475,7 +627,7 @@ impl Staged {
                 limits.max_artifact_bytes,
             ));
         }
-        self.owner.reserve(n, limits, &self.raw)?;
+        self.owner.reserve(n, store, &self.raw)?;
         self.reserved += n;
         match &mut self.sink {
             Sink::File { file: Some(f), .. } => f
@@ -488,9 +640,7 @@ impl Staged {
                 ));
             }
             Sink::Memory { buf, reservation } => {
-                if let Some(r) = reservation {
-                    r.try_grow(chunk.data.len())?;
-                }
+                grow_exact(buf, reservation.as_mut(), chunk.data.len())?;
                 buf.extend_from_slice(&chunk.data);
             }
         }
@@ -632,12 +782,26 @@ impl Transfer {
                 ));
             }
         }
-        self.owner.reserve(ARTIFACT_OVERHEAD, limits, raw)?;
-        // From here a failure returns the overhead through `Staged`'s drop.
+        // One block per segment: the file and each directory the install
+        // may create (review HIGH-1), reserved before any of them exists.
+        let segments = u64::try_from(name.segments().count()).unwrap_or(u64::MAX);
+        let overhead = ARTIFACT_OVERHEAD.saturating_mul(segments);
+        self.owner.reserve(overhead, &self.store, raw)?;
         let sink = if name.kind() == ArtifactKind::Cache {
+            let mut buf = Vec::new();
+            let mut reservation = self.owner.consumer(&self.pool).reservation();
+            // A chunked blob is sized once from its announced size (capped
+            // by `maxArtifactBytes` above).
+            let announced = chunks
+                .and_then(|c| usize::try_from(c.total_bytes).ok())
+                .unwrap_or(0);
+            if let Err(e) = grow_exact(&mut buf, Some(&mut reservation), announced) {
+                self.owner.release(overhead);
+                return Err(e);
+            }
             Sink::Memory {
-                buf: Vec::new(),
-                reservation: Some(self.owner.consumer(&self.pool).reservation()),
+                buf,
+                reservation: Some(reservation),
             }
         } else {
             let made = self.owner.dir(&self.store).and_then(|dir| {
@@ -654,7 +818,7 @@ impl Transfer {
             match made {
                 Ok(sink) => sink,
                 Err(e) => {
-                    self.owner.release(ARTIFACT_OVERHEAD);
+                    self.owner.release(overhead);
                     return Err(e);
                 }
             }
@@ -667,7 +831,7 @@ impl Transfer {
             first_chunk: true,
             chunks,
             written: 0,
-            reserved: ARTIFACT_OVERHEAD,
+            reserved: overhead,
             owner: Arc::clone(&self.owner),
         })
     }
@@ -677,14 +841,14 @@ impl Transfer {
         &mut self,
         request: &pb::AddArtifactsRequest,
     ) -> Result<(), KrishivError> {
-        let limits = self.store.limits().clone();
+        let store = Arc::clone(&self.store);
         match &request.payload {
             Some(Payload::Batch(batch)) => {
                 self.refuse_while_open()?;
                 for artifact in &batch.artifacts {
                     let mut staged = self.stage(&artifact.name, None)?;
                     let empty = ArtifactChunk::default();
-                    staged.write(artifact.data.as_ref().unwrap_or(&empty), &limits)?;
+                    staged.write(artifact.data.as_ref().unwrap_or(&empty), &store)?;
                     staged.complete()?;
                     self.staged.push(staged);
                 }
@@ -699,9 +863,9 @@ impl Transfer {
                 let staged = self.stage(&begin.name, Some(chunks))?;
                 self.open = Some(staged);
                 let empty = ArtifactChunk::default();
-                self.next_chunk(begin.initial_chunk.as_ref().unwrap_or(&empty), &limits)?;
+                self.next_chunk(begin.initial_chunk.as_ref().unwrap_or(&empty), &store)?;
             }
-            Some(Payload::Chunk(chunk)) => self.next_chunk(chunk, &limits)?,
+            Some(Payload::Chunk(chunk)) => self.next_chunk(chunk, &store)?,
             None => {
                 return Err(ConnectInvalidPlanInvalidOneOfFieldNotSet {
                     full_name: "spark.connect.AddArtifactsRequest".to_owned(),
@@ -726,7 +890,7 @@ impl Transfer {
     fn next_chunk(
         &mut self,
         chunk: &ArtifactChunk,
-        limits: &ArtifactLimits,
+        store: &ArtifactStore,
     ) -> Result<(), KrishivError> {
         let Some(open) = self.open.as_mut() else {
             return Err(transfer_error(
@@ -745,7 +909,7 @@ impl Transfer {
         }
         chunks.remaining -= 1;
         let done = chunks.remaining == 0;
-        open.write(chunk, limits)?;
+        open.write(chunk, store)?;
         if done && let Some(mut finished) = self.open.take() {
             finished.complete()?;
             self.staged.push(finished);
@@ -834,7 +998,19 @@ pub(crate) async fn add_artifacts(
         .map_err(|e| errors.status(&e))?;
         // A client that goes away ends the stream with an error: the
         // transfer is dropped here and its staged files with it.
-        next = stream.message().await?;
+        next = match stream.message().await {
+            Ok(next) => next,
+            Err(status) => {
+                // Its staged files are removed on the blocking pool (a
+                // handler dropped mid-await by tonic drops it in place).
+                let _ = blocking(move || {
+                    drop(transfer);
+                    Ok(())
+                })
+                .await;
+                return Err(status);
+            }
+        };
     }
     let artifacts = blocking(move || transfer.finish())
         .await

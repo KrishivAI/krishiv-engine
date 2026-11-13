@@ -44,7 +44,8 @@ struct Running {
     manager: Arc<SessionManager>,
     channel: Channel,
     parent: tempfile::TempDir,
-    _stop: oneshot::Sender<()>,
+    stop: oneshot::Sender<()>,
+    served: tokio::task::JoinHandle<Result<(), krishiv_common::error::KrishivError>>,
 }
 
 impl Running {
@@ -68,6 +69,15 @@ impl Running {
 }
 
 async fn start_with(max_session: u64, max_artifact: u64) -> Running {
+    start_limits(ArtifactLimits {
+        max_session_bytes: max_session,
+        max_artifact_bytes: max_artifact,
+        ..ArtifactLimits::default()
+    })
+    .await
+}
+
+async fn start_limits(limits: ArtifactLimits) -> Running {
     let manager = Arc::new(SessionManager::from_base(
         Session::new().expect("session"),
         SessionLimits::default(),
@@ -77,15 +87,14 @@ async fn start_with(max_session: u64, max_artifact: u64) -> Running {
     let addr = listener.local_addr().expect("addr");
     let config = ConnectServerConfig {
         artifacts: ArtifactLimits {
-            max_session_bytes: max_session,
-            max_artifact_bytes: max_artifact,
             parent: Some(parent.path().to_owned()),
+            ..limits
         },
         ..ConnectServerConfig::default()
     };
     let server = ConnectServer::new(Arc::clone(&manager), config);
     let (stop, stopped) = oneshot::channel::<()>();
-    tokio::spawn(server.serve(listener, async {
+    let served = tokio::spawn(server.serve(listener, async {
         let _ = stopped.await;
     }));
     let channel = Channel::from_shared(format!("http://{addr}"))
@@ -97,7 +106,8 @@ async fn start_with(max_session: u64, max_artifact: u64) -> Running {
         manager,
         channel,
         parent,
-        _stop: stop,
+        stop,
+        served,
     }
 }
 
@@ -306,7 +316,8 @@ async fn add_artifacts_batch_and_chunked() {
         b"PK\x03\x04"
     );
     let used = run.entry().artifacts().used_bytes();
-    assert_eq!(used, 4 * ARTIFACT_OVERHEAD + 18 + 5 + 4 + 100_000);
+    // One block per segment: 2 + 3 + 2 + 2.
+    assert_eq!(used, 9 * ARTIFACT_OVERHEAD + 18 + 5 + 4 + 100_000);
     // Private directories.
     use std::os::unix::fs::PermissionsExt;
     for d in [run.root().expect("root"), dir.clone(), dir.join("files")] {
@@ -372,7 +383,7 @@ async fn artifact_crc() {
     // The discarded artifacts gave their bytes back.
     assert_eq!(
         run.entry().artifacts().used_bytes(),
-        2 * ARTIFACT_OVERHEAD + 2
+        4 * ARTIFACT_OVERHEAD + 2
     );
 }
 
@@ -941,36 +952,63 @@ async fn enrich_error_off_sends_no_error_id() {
     assert!(run.entry().errors().is_empty());
 }
 
-/// T-C8: a planted secret or an internal path never comes back from
-/// `FetchErrorDetails` (the grep `config_redaction` in `tests/rpcs.rs` runs).
+/// T-C8: a planted secret never comes back from `FetchErrorDetails` (the
+/// grep of `config_redaction` in `tests/rpcs.rs`), nor a server path an
+/// operator-only cause carries.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_error_details_redacts() {
     const PLANTED: &str = "hunter2-planted-value";
+    const INTERNAL: &str = "/srv/krishiv/internal-planted-dir";
     let run = start().await;
-    let missing = tempfile::tempdir().expect("dir");
-    let internal = missing.path().join("internal-planted-dir");
-    let queries = [
-        format!("SELECT * FROM parquet.`s3://user:{PLANTED}@bucket/x` WHERE"),
-        format!("SELECT * FROM parquet.`s3://bucket/x?X-Amz-Signature={PLANTED}`"),
-        format!("SELECT * FROM parquet.`{}`", internal.display()),
-        format!("CREATE TABLE t USING parquet OPTIONS (password '{PLANTED}') AS SELECT 1/0 AS x"),
-    ];
-    for q in &queries {
-        let status = failing(&run, SESSION, q).await;
-        let Some(id) = info(&status).metadata.get("errorId").cloned() else {
-            panic!("{q}: no errorId in {status:?}");
-        };
-        let r = fetch(&run, SESSION, &id).await;
-        let text = format!("{r:?} {:?}", r.encode_to_vec());
+    let check = |what: &str, status: &tonic::Status, r: &pb::FetchErrorDetailsResponse| {
+        assert!(!r.errors.is_empty(), "{what}: no details");
+        let text = format!("{r:?}");
         let bytes = String::from_utf8_lossy(&r.encode_to_vec()).into_owned();
         for haystack in [&text, &bytes, &status.message().to_owned()] {
-            assert!(!haystack.contains(PLANTED), "{q}: {haystack}");
-            assert!(!haystack.contains("pw-planted"), "{q}: {haystack}");
+            assert!(!haystack.contains(PLANTED), "{what}: {haystack}");
+            assert!(
+                !haystack.contains("internal-planted-dir"),
+                "{what}: {haystack}"
+            );
         }
-        assert!(!bytes.contains("stack"), "{q}: {bytes}");
-        // Every element carries no stack trace.
         assert!(r.errors.iter().all(|e| e.stack_trace.is_empty()));
+    };
+    // Queries whose credentials the session lifts out of the text before
+    // any error can quote it (ADR 0038).
+    for q in [
+        format!("SELECT * FROM parquet.`s3://user:{PLANTED}@bucket/x`"),
+        format!("SELECT * FROM parquet.`s3://bucket/x?X-Amz-Signature={PLANTED}`"),
+    ] {
+        let status = failing(&run, SESSION, &q).await;
+        let id = info(&status).metadata["errorId"].clone();
+        let r = fetch(&run, SESSION, &id).await;
+        check(&q, &status, &r);
     }
+    // The cause chain: a user-facing error caused by an operator-only one
+    // that names a server path and carries a secret (an I/O failure in the
+    // spill directory). The cause is sent, with its parameters redacted.
+    let cause: krishiv_common::error::KrishivError = krishiv_common::error::KrishivSpillIoError {
+        operation: "write".to_owned(),
+        path: INTERNAL.to_owned(),
+        reason: format!("token={PLANTED}"),
+    }
+    .into();
+    let error: krishiv_common::error::KrishivError = krishiv_common::error::DivideByZero {
+        config: "\"spark.sql.ansi.enabled\"".to_owned(),
+    }
+    .into();
+    let status = run.entry().errors().status(&error.with_cause(cause));
+    let id = info(&status).metadata["errorId"].clone();
+    let r = fetch(&run, SESSION, &id).await;
+    assert_eq!(r.errors.len(), 2, "{r:?}");
+    assert_eq!(
+        r.errors[1]
+            .spark_throwable
+            .as_ref()
+            .and_then(|t| t.error_class.as_deref()),
+        Some("KRISHIV_SPILL_IO_ERROR")
+    );
+    check("an operator-only cause", &status, &r);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1012,4 +1050,168 @@ async fn errors_on_every_rpc_carry_an_error_id() {
         pb::FetchErrorDetailsResponse::default()
     );
     assert!(!fetch(&run, SESSION, &ids[20]).await.errors.is_empty());
+}
+
+// ------------------------------------------------------------ review fixes
+
+/// Review HIGH-1: each directory an install may create counts against the
+/// quota, so deep unique names cannot get past it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deep_unique_names_stop_at_the_quota() {
+    // 8 segments: 32 KiB of overhead each; 64 KiB holds two.
+    let run = start_with(64 << 10, 16 << 10).await;
+    let name = |i: u32| format!("files/d{i}/a/b/c/d/e/f");
+    for i in 0..2 {
+        add(&run, vec![batch(vec![single(&name(i), b"")])])
+            .await
+            .expect("fits");
+    }
+    let s = add(&run, vec![batch(vec![single(&name(2), b"")])])
+        .await
+        .unwrap_err();
+    assert_eq!(s.code(), tonic::Code::ResourceExhausted);
+    assert_eq!(error_class(&s), "KRISHIV_ARTIFACT_LIMIT");
+    assert!(info(&s).metadata["messageParameters"].contains("krishiv.connect.artifacts.maxBytes"));
+    assert_eq!(
+        run.entry().artifacts().used_bytes(),
+        2 * 8 * ARTIFACT_OVERHEAD
+    );
+    assert!(!run.session_dir().join("files/d2").exists());
+}
+
+/// Review HIGH-2: one server-wide cap over every session's artifacts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_wide_cap_holds_across_sessions() {
+    // Each artifact: 2 segments (8 KiB) + 12 KiB = 20 KiB; 48 KiB in all.
+    let run = start_limits(ArtifactLimits {
+        max_session_bytes: 64 << 10,
+        max_artifact_bytes: 16 << 10,
+        max_total_bytes: 48 << 10,
+        parent: None,
+    })
+    .await;
+    let blob = vec![1u8; 12 << 10];
+    add_in(
+        &run.channel,
+        SESSION,
+        vec![batch(vec![single("files/a", &blob)])],
+    )
+    .await
+    .expect("a fits");
+    add_in(
+        &run.channel,
+        OTHER_SESSION,
+        vec![batch(vec![single("files/b", &blob)])],
+    )
+    .await
+    .expect("b fits");
+    let s = add_in(
+        &run.channel,
+        OTHER_SESSION,
+        vec![batch(vec![single("files/c", &blob)])],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(s.code(), tonic::Code::ResourceExhausted);
+    assert_eq!(error_class(&s), "KRISHIV_ARTIFACT_LIMIT");
+    assert!(
+        info(&s).metadata["messageParameters"].contains("krishiv.connect.artifacts.maxTotalBytes"),
+        "{:?}",
+        info(&s).metadata
+    );
+    // Released sessions give their bytes back to the server.
+    let _: pb::ReleaseSessionResponse = unary(
+        &run.channel,
+        "ReleaseSession",
+        pb::ReleaseSessionRequest {
+            session_id: SESSION.to_owned(),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("release");
+    add_in(
+        &run.channel,
+        OTHER_SESSION,
+        vec![batch(vec![single("files/c", &blob)])],
+    )
+    .await
+    .expect("fits after the release");
+}
+
+/// Review HIGH-2: `maxTotalBytes` below `maxArtifactBytes` is refused at
+/// startup.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_total_cap_below_one_artifact_is_refused_at_startup() {
+    let manager = Arc::new(SessionManager::from_base(
+        Session::new().expect("session"),
+        SessionLimits::default(),
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let config = ConnectServerConfig {
+        artifacts: ArtifactLimits {
+            max_artifact_bytes: 2 << 20,
+            max_total_bytes: 1 << 20,
+            ..ArtifactLimits::default()
+        },
+        ..ConnectServerConfig::default()
+    };
+    let e = ConnectServer::new(manager, config)
+        .serve(listener, async {})
+        .await
+        .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_INVALID_CONFIG_VALUE");
+    assert!(
+        e.to_string()
+            .contains("krishiv.connect.artifacts.maxTotalBytes"),
+        "{e}"
+    );
+}
+
+/// Review MEDIUM-1: the artifact root is gone when `serve` returns, also if
+/// the runtime is dropped at once (as `krishiv server` does).
+#[test]
+fn shutdown_then_dropping_the_runtime_leaves_no_artifacts() {
+    // One blocking thread, kept busy from before the shutdown until after
+    // the runtime starts to drop: a removal merely queued there never runs.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let parent = runtime.block_on(async {
+        let run = start().await;
+        add(
+            &run,
+            vec![batch(vec![
+                single("files/a", b"a"),
+                single("cache/ab", b"b"),
+            ])],
+        )
+        .await
+        .expect("add");
+        assert!(run.root().is_some());
+        let Running {
+            stop,
+            served,
+            parent,
+            channel,
+            manager,
+        } = run;
+        drop(channel);
+        drop(tokio::task::spawn_blocking(|| {
+            std::thread::sleep(Duration::from_millis(1500));
+        }));
+        let _ = stop.send(());
+        served.await.expect("joined").expect("served");
+        // Gone when `serve` returns, not when a queued removal gets to run.
+        let left: Vec<_> = std::fs::read_dir(parent.path()).expect("parent").collect();
+        assert!(left.is_empty(), "artifacts left after serve: {left:?}");
+        drop(manager);
+        parent
+    });
+    drop(runtime);
+    let left: Vec<_> = std::fs::read_dir(parent.path()).expect("parent").collect();
+    assert!(left.is_empty(), "artifacts left: {left:?}");
 }
