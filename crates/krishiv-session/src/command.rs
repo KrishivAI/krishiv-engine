@@ -156,10 +156,10 @@ impl Session {
                     }
                     .into());
                 }
-                // A store endpoint is `Manage` on the cluster (P3-T067b), asked before the
+                // A server-scoped store key is `Manage` on the cluster (P3-T067b), asked before the
                 // value is stored, so a refused `SET` leaves the configuration as it was.
-                if krishiv_io::is_endpoint_key(key) {
-                    self.authorize_endpoints(
+                if krishiv_io::is_server_scoped_option(key) {
+                    self.authorize_store_options(
                         krishiv_sql::StatementClass::Session,
                         &self.state.conf.snapshot(),
                         std::iter::once(key.as_str()),

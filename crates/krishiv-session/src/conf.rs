@@ -117,15 +117,15 @@ impl ConfStore {
         self.versioned_snapshot().0
     }
 
-    /// Whether `config` gives a store endpoint key (`krishiv_io::is_endpoint_key`) another value
-    /// than the configuration the session was built with: the session itself pointed a store at
-    /// another host (P3-T067b).
-    pub(crate) fn endpoint_changed(&self, config: &Config) -> bool {
+    /// Whether `config` gives a server-scoped store key (`krishiv_io::is_server_scoped_option`:
+    /// endpoints, regions, accounts, key files) another value than the configuration the session
+    /// was built with, i.e. whether the session itself redirected a store (P3-T067b).
+    pub(crate) fn store_settings_changed(&self, config: &Config) -> bool {
         let endpoints = |c: &Config| {
             let mut v: Vec<(String, String)> = c
                 .explicit_unregistered()
                 .into_iter()
-                .filter(|(k, _)| krishiv_io::is_endpoint_key(k))
+                .filter(|(k, _)| krishiv_io::is_server_scoped_option(k))
                 .map(|(k, v)| (k.to_ascii_lowercase(), v.to_owned()))
                 .collect();
             v.sort();

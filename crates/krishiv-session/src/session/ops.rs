@@ -43,7 +43,7 @@ impl Session {
         )
         .await;
         crate::access::audit(self, StatementClass::Write, r)?;
-        self.authorize_endpoints(
+        self.authorize_store_options(
             StatementClass::Write,
             &self.state.conf.snapshot(),
             options.keys().map(String::as_str),
@@ -63,17 +63,21 @@ impl Session {
         Ok(())
     }
 
-    /// `Manage` on the cluster when `options` or the session's configuration `config` point a
-    /// store at another host than the session was built with (an endpoint key, P3-T067b): the
-    /// store would take the server's credentials there. Admin only in server mode; embedded
-    /// use (`AllowAll`) is unchanged.
-    pub(crate) async fn authorize_endpoints<'a>(
+    /// `Manage` on the cluster when `options` hold a server-scoped store key
+    /// (`krishiv_io::is_server_scoped_option`: endpoints, regions, accounts, key files; not inline
+    /// credentials), or when the session's configuration `config` changed one from what the
+    /// session was built with (P3-T067b). A store built from them could send the server's own
+    /// credentials to another host. Admin only in server mode; embedded use (`AllowAll`) is
+    /// unchanged.
+    pub(crate) async fn authorize_store_options<'a>(
         &self,
         class: StatementClass,
         config: &krishiv_common::config::Config,
         mut options: impl Iterator<Item = &'a str>,
     ) -> Result<(), KrishivError> {
-        if !options.any(krishiv_io::is_endpoint_key) && !self.state.conf.endpoint_changed(config) {
+        if !options.any(krishiv_io::is_server_scoped_option)
+            && !self.state.conf.store_settings_changed(config)
+        {
             return Ok(());
         }
         let r = authorize(

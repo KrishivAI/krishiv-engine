@@ -250,9 +250,11 @@ fn walk_once(
                 && !std::fs::canonicalize(&path)
                     .is_ok_and(|t| roots.iter().any(|r| t.starts_with(r)))
             {
+                // The link's name is not shown: which entries lead out of the roots is not the
+                // reader's to learn.
                 return Err(io_err(std::io::Error::new(
                     ErrorKind::PermissionDenied,
-                    format!("a link out of the allowed roots at {}", path.display()),
+                    "the listing met a link out of the allowed roots",
                 )));
             }
             if m.is_dir() {
@@ -997,6 +999,7 @@ mod range_read_tests {
             e.to_string().contains("a link out of the allowed roots"),
             "{e}"
         );
+        assert!(!e.to_string().contains("k=1"), "the link is not named: {e}");
         std::fs::remove_file(root.join("k=1")).unwrap();
 
         std::os::unix::fs::symlink(outside.join("k=1/s.csv"), root.join("inner/s.csv")).unwrap();

@@ -72,10 +72,10 @@ pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
 pub use self::latency::{LATENCY_BUCKETS, LatencyHistogram};
 use self::pace::{Direction, Pacer};
 pub use self::stores::{
-    AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, ENDPOINT_KEYS, GCS_ENDPOINT,
-    GCS_KEY, GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, OpenedStore, ParsedUrl,
-    S3_ACCESS_KEY, S3_ENDPOINT, S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY,
-    S3_SESSION_TOKEN, StoreRegistry, StoreSettings, is_endpoint_key, parse_object_url,
+    AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
+    GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, OpenedStore, ParsedUrl, S3_ACCESS_KEY,
+    S3_ENDPOINT, S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY,
+    S3_SESSION_TOKEN, StoreRegistry, StoreSettings, is_server_scoped_option, parse_object_url,
     query_registry, register, register_with_options,
 };
 pub use self::upload::Upload;

@@ -1183,8 +1183,16 @@ impl Session {
                 }
             }
             AlterTableAction::SetSerdeProperties(props) => {
-                // The storage properties are the table's options (what the reader and writer get).
-                changed.options.extend(options_of(props, original));
+                // The storage properties are the table's options (what the reader and writer get):
+                // a server-scoped store key in them is `Manage` on the cluster (P3-T067b).
+                let props = options_of(props, original);
+                self.authorize_store_options(
+                    krishiv_sql::StatementClass::Ddl,
+                    &self.state.conf.snapshot(),
+                    props.keys().map(String::as_str),
+                )
+                .await?;
+                changed.options.extend(props);
             }
             AlterTableAction::RenameTo { name: to, .. } => {
                 return self.rename_table(&table, &self.table_name(to, &env)?).await;

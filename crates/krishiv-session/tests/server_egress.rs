@@ -122,35 +122,102 @@ fn ambient_credentials_reach_only_allowed_prefixes() {
     }
 }
 
-/// A store endpoint in the read options is `Manage` on the cluster: 42501 for viewer and
-/// operator, whichever endpoint key and case; admin reads.
+/// The store keys that redirect a store (endpoints, regions, accounts, key files, any `fs.*` key
+/// but an inline credential).
+const SERVER_SCOPED: [(&str, &str); 9] = [
+    ("fs.s3a.endpoint", ENDPOINT),
+    ("fs.gs.storage.root.url", ENDPOINT),
+    ("fs.gs.endpoint", ENDPOINT),
+    ("fs.azure.endpoint", ENDPOINT),
+    ("fs.hf.endpoint", ENDPOINT),
+    ("fs.s3a.region", "eu-west-1"),
+    ("fs.s3a.endpoint.region", "eu-west-1"),
+    ("fs.gs.auth.service.account.json.keyfile", "/etc/hostname"),
+    ("fs.azure.account.name", "otheracct"),
+];
+
+/// A server-scoped store key in the read options is `Manage` on the cluster: 42501 for viewer
+/// and operator, whatever the key's case; admin reads. Inline credentials only authenticate
+/// and stay open to readers.
 #[test]
-fn an_endpoint_read_option_is_admin_only() {
+fn a_server_scoped_read_option_is_admin_only() {
     let tmp = data();
     let path = tmp.path().join("a.csv");
     let path = path.to_str().unwrap();
-    for key in krishiv_io::ENDPOINT_KEYS {
+    for (key, value) in SERVER_SCOPED {
         let upper = key.to_ascii_uppercase();
         for k in [key, upper.as_str()] {
             for role in [Role::Viewer, Role::Operator] {
                 let s = session(tmp.path(), role, &[]);
                 assert_eq!(
-                    read_with(&s, path, &[(k, ENDPOINT)]),
+                    read_with(&s, path, &[(k, value)]),
                     Err(DENIED.to_owned()),
                     "{role:?} {k}"
                 );
             }
             let admin = session(tmp.path(), Role::Admin, &[]);
-            assert_eq!(read_with(&admin, path, &[(k, ENDPOINT)]), Ok(2), "{k}");
+            assert_eq!(read_with(&admin, path, &[(k, value)]), Ok(2), "{k}");
         }
     }
-    // Other store options are not endpoints.
     let operator = session(tmp.path(), Role::Operator, &[]);
+    for (key, value) in [
+        ("fs.s3a.access.key", "AKIAEXAMPLE"),
+        ("fs.s3a.secret.key", "not-a-real-secret"),
+        ("fs.azure.sas.exports.lakeacct", "sv=x"),
+    ] {
+        assert_eq!(read_with(&operator, path, &[(key, value)]), Ok(2), "{key}");
+    }
+    assert_eq!(read_with(&operator, path, &[]), Ok(2));
+}
+
+/// A table read's options (`FROM t WITH (...)`; Connect's table reads lower to the same node) are
+/// checked like a read by path; a server-scoped key in a table's stored options (CREATE TABLE `OPTIONS`,
+/// `SET SERDEPROPERTIES`) is `Manage` when it is stored, not on every later read.
+#[test]
+fn table_options_are_checked_where_they_are_given() {
+    let tmp = data();
+    let dir = tmp.path().to_str().unwrap();
+    let s = Session::builder()
+        .principal(Principal::new("w", PrincipalKind::User))
+        .access_policy(Arc::new(WriterWithoutManage))
+        .config("spark.sql.warehouse.dir", dir)
+        .build()
+        .unwrap();
+    let create = |name: &str, options: &str| {
+        format!("CREATE TABLE {name} (a INT) USING csv {options} LOCATION '{dir}'")
+    };
     assert_eq!(
-        read_with(&operator, path, &[("fs.s3a.region", "eu-west-1")]),
+        rows(
+            &s,
+            &create("t1", &format!("OPTIONS ('fs.s3a.endpoint' = '{ENDPOINT}')"))
+        ),
+        Err(DENIED.to_owned())
+    );
+    assert_eq!(rows(&s, "SHOW TABLES LIKE 't1'"), Ok(0), "nothing stored");
+    rows(&s, &create("t2", "")).unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM t2"), Ok(2));
+    assert_eq!(
+        rows(
+            &s,
+            &format!("SELECT * FROM t2 WITH ('fs.gs.storage.root.url' = '{ENDPOINT}')")
+        ),
+        Err(DENIED.to_owned())
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "ALTER TABLE t2 SET SERDEPROPERTIES ('fs.s3a.region' = 'eu-west-1')"
+        ),
+        Err(DENIED.to_owned())
+    );
+    assert_eq!(rows(&s, "SELECT * FROM t2"), Ok(2), "nothing changed");
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT * FROM t2 WITH ('fs.s3a.access.key' = 'AKIAEXAMPLE')"
+        ),
         Ok(2)
     );
-    assert_eq!(read_with(&operator, path, &[]), Ok(2));
 }
 
 /// A store endpoint the session sets (SQL `SET`, `spark.conf.set`) is `Manage` on the cluster for

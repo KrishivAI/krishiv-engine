@@ -160,6 +160,30 @@ enum Found<'a> {
     FileScan(&'a ReadSource, &'a [BoundColumn], Origin),
     /// The scopes of the secret references in a table read's options (E12).
     Secrets(Vec<String>, Origin),
+    /// A table read whose options (`FROM t WITH (...)`) hold a server-scoped store key.
+    StoreOptions(Origin),
+}
+
+/// Whether read `options` hold a server-scoped store key (`krishiv_io::is_server_scoped_option`).
+fn server_scoped(options: &BTreeMap<String, OptionValue>) -> bool {
+    options
+        .keys()
+        .any(|k| krishiv_io::is_server_scoped_option(k))
+}
+
+/// `Manage` on the cluster, for a read whose options hold a server-scoped store key (an
+/// endpoint, region, account or key file could point the store, and the server's credentials,
+/// at another host; P3-T067b), asked before anything is listed.
+async fn authorize_store_options(
+    ctx: &AnalysisContext,
+    b: &mut Bindings,
+    checked: &mut Vec<(Securable, usize)>,
+    origin: Origin,
+) -> Result<(), AnalysisError> {
+    let cluster = Securable::System("cluster".to_owned());
+    authorize_as(ctx, b, checked, cluster, Privilege::Manage, origin)
+        .await
+        .map(|_| ())
 }
 
 /// One node of the walk: reports what it reads, checks its functions, and
@@ -180,6 +204,9 @@ fn visit<'a>(
                     if !scopes.is_empty() {
                         found.push(Found::Secrets(scopes, p.origin));
                     }
+                    if server_scoped(options) {
+                        found.push(Found::StoreOptions(p.origin));
+                    }
                     let shadowed = name.len() == 1 && env.iter().any(|c| same(c, &name[0], cs));
                     if !shadowed {
                         found.push(Found::Table(name, p.origin));
@@ -194,6 +221,9 @@ fn visit<'a>(
                         let scopes = super::access::secret_scopes(options.values());
                         if !scopes.is_empty() {
                             found.push(Found::Secrets(scopes, p.origin));
+                        }
+                        if server_scoped(options) {
+                            found.push(Found::StoreOptions(p.origin));
                         }
                         found.push(Found::Scan(name, s.version, &s.output, p.origin));
                     }
@@ -768,6 +798,10 @@ async fn load(
                 authorize_usage(ctx, b, &mut checked, &scopes, origin).await?;
                 continue;
             }
+            Found::StoreOptions(origin) => {
+                authorize_store_options(ctx, b, &mut checked, origin).await?;
+                continue;
+            }
             Found::Table(name, origin) => (name, None, &[][..], origin, false),
             Found::Scan(name, version, columns, origin) => (name, version, columns, origin, true),
         };
@@ -1065,11 +1099,11 @@ async fn bind_files(
     // before anything is listed or inferred.
     let scopes = super::access::secret_scopes(options.values().chain(&qualified));
     authorize_usage(ctx, b, checked, &scopes, origin).await?;
-    // An endpoint option points the store, and the credentials it holds, at another host:
-    // `Manage` on the cluster (admin in server mode, P3-T067b), before anything is listed.
-    if options.keys().any(|k| krishiv_io::is_endpoint_key(k)) {
-        let cluster = Securable::System("cluster".to_owned());
-        authorize_as(ctx, b, checked, cluster, Privilege::Manage, origin).await?;
+    // A server-scoped store option (endpoint, region, account, key file) could point the store,
+    // and the server's credentials, at another host: `Manage` on the cluster (admin in server
+    // mode, P3-T067b), before anything is listed.
+    if server_scoped(options) {
+        authorize_store_options(ctx, b, checked, origin).await?;
     }
     let columns = files
         .infer(format, &qualified, options)
