@@ -65,6 +65,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &QUERY_MAX_EXECUTION_TIME,
     &QUERY_MAX_QUEUED_TIME,
     &CACHE_MAX_BYTES,
+    &DEFAULT_CACHE_STORAGE_LEVEL,
     &DETERMINISTIC_ORDER,
     &RESULT_CACHE_ENABLED,
     &RESULT_CACHE_TTL,
@@ -662,6 +663,35 @@ pub static CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
+};
+
+/// The storage level `DataFrame.cache()`, `catalog.cacheTable` and `CACHE TABLE` register a
+/// relation at when none is named.
+pub static DEFAULT_CACHE_STORAGE_LEVEL: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.defaultCacheStorageLevel",
+    value_type: ValueType::Enum(&[
+        "NONE",
+        "DISK_ONLY",
+        "DISK_ONLY_2",
+        "DISK_ONLY_3",
+        "MEMORY_ONLY",
+        "MEMORY_ONLY_2",
+        "MEMORY_ONLY_SER",
+        "MEMORY_ONLY_SER_2",
+        "MEMORY_AND_DISK",
+        "MEMORY_AND_DISK_2",
+        "MEMORY_AND_DISK_SER",
+        "MEMORY_AND_DISK_SER_2",
+        "OFF_HEAP",
+    ]),
+    default: Some(ConfigValue::String(Cow::Borrowed("MEMORY_AND_DISK"))),
+    doc: "The storage level of `DataFrame.cache()`, `catalog.cacheTable` and `CACHE TABLE` \
+          without a `storageLevel` option, read when the call is made. The level is reported \
+          as registered (`storageLevel`); every level is held in memory for now.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.defaultCacheStorageLevel"),
 };
 
 /// Reproducible results: one driver per pipeline.

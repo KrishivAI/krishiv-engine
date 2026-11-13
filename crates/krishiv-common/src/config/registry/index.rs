@@ -187,6 +187,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &SHUFFLE_PARTITIONS_HINT,
     ),
     (
+        "spark.sql.defaultCacheStorageLevel",
+        &DEFAULT_CACHE_STORAGE_LEVEL,
+    ),
+    (
         "spark.sql.legacy.codingErrorAction",
         &LEGACY_CODING_ERROR_ACTION,
     ),
@@ -209,6 +213,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.bloom.maxItems",
         &RUNTIME_FILTER_BLOOM_MAX_ITEMS,
+    ),
+    (
+        "krishiv.sql.defaultCacheStorageLevel",
+        &DEFAULT_CACHE_STORAGE_LEVEL,
     ),
     (
         "krishiv.sql.legacy.codingErrorAction",

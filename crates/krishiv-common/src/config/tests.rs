@@ -1281,3 +1281,23 @@ fn fuse_probe_select_defaults_on_and_parses() {
         Some(&ConfigValue::Bool(false))
     );
 }
+
+#[test]
+fn default_cache_storage_level_parses_and_defaults() {
+    use super::registry::DEFAULT_CACHE_STORAGE_LEVEL;
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&DEFAULT_CACHE_STORAGE_LEVEL)
+            .and_then(ConfigValue::as_str)
+            .map(str::to_owned)
+    };
+    assert_eq!(get(&c).as_deref(), Some("MEMORY_AND_DISK"));
+    c.set("spark.sql.defaultCacheStorageLevel", "disk_only_3")
+        .unwrap();
+    assert_eq!(get(&c).as_deref(), Some("DISK_ONLY_3"));
+    assert!(
+        c.set("spark.sql.defaultCacheStorageLevel", "MEMORY_ONLY_3")
+            .is_err()
+    );
+    assert_eq!(get(&c).as_deref(), Some("DISK_ONLY_3"));
+}
