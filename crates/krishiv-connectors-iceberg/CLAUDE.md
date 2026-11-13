@@ -51,7 +51,7 @@ table's Arrow schema (nested types retyped onto the field-id schema; another sha
 partition key from the default spec (`partition_value`; an all-`void` spec does no per-row work), rows taken per key,
 one open Parquet file per key (at most `max_open_files`, default 100, oldest-opened closed first), rollover at a
 multiple of 1,000 rows once `write.target-file-size-bytes` is reached (Java's `RollingFileWriter`), Parquet settings
-from `write.parquet.{compression-codec,row-group-size-bytes,page-size-bytes}` (default zstd; the level is not applied;
+from `write.parquet.{compression-codec,row-group-size-bytes,page-size-bytes}` (gzip when unset, Java's fallback; the level is not applied;
 `write.format.default` other than parquet, `uuid`/`fixed`/`variant` columns refused), Java's file names and partition
 directories, a `WrittenDataFile` per file (`file_metrics`, no `split_offsets`); open uploads and the encoders' memory
 charged to one `Reservation`; `finish` failing, `abort` and drop delete the finished files; tests `write_tests.rs`

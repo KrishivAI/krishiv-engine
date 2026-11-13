@@ -18,9 +18,12 @@
 //!   `write.target-file-size-bytes` (Java's `RollingFileWriter`:
 //!   `ROWS_DIVISOR` = 1000, `length >= targetFileSize`).
 //! - **Parquet settings** from the table properties, as Java's `Parquet`
-//!   write builder reads them (defaults as iceberg-rust 0.11's port,
-//!   `src/spec/table_properties.rs:437, 507, 516, 521`):
-//!   `write.parquet.compression-codec` (`zstd`) is the codec,
+//!   write builder reads them (`TableProperties` and `Parquet.java` at
+//!   apache-iceberg-1.12.0): `write.parquet.compression-codec` is the codec,
+//!   `gzip` when the table does not set it (Java's fallback
+//!   `PARQUET_COMPRESSION_DEFAULT`; Java writes `zstd` into the properties of
+//!   the tables it creates since 1.4, `PARQUET_COMPRESSION_DEFAULT_SINCE_1_4_0`,
+//!   and iceberg-rust 0.11's `zstd` fallback differs from Java's),
 //!   `write.parquet.row-group-size-bytes` (128 MiB) the row-group size
 //!   (`parquet.block.size`), `write.parquet.page-size-bytes` (1 MiB) the page
 //!   size; timestamps are INT64 microseconds, never rebased. The codec's
@@ -78,9 +81,11 @@ pub(crate) const DEFAULT_MAX_OPEN_FILES: usize = 100;
 /// `WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT`, 512 MiB).
 pub(crate) const TARGET_FILE_SIZE: &str = "write.target-file-size-bytes";
 const TARGET_FILE_SIZE_DEFAULT: i64 = 512 * 1024 * 1024;
-/// `write.parquet.compression-codec` and its default (`zstd` since Iceberg 1.4).
+/// `write.parquet.compression-codec` and Java's fallback when a table does
+/// not set it (`PARQUET_COMPRESSION_DEFAULT`, `gzip`; new tables carry `zstd`
+/// as a property instead).
 pub(crate) const PARQUET_CODEC: &str = "write.parquet.compression-codec";
-const PARQUET_CODEC_DEFAULT: &str = "zstd";
+const PARQUET_CODEC_DEFAULT: &str = "gzip";
 /// `write.parquet.row-group-size-bytes` and its default (128 MiB).
 pub(crate) const ROW_GROUP_SIZE: &str = "write.parquet.row-group-size-bytes";
 const ROW_GROUP_SIZE_DEFAULT: i32 = 128 * 1024 * 1024;
@@ -749,7 +754,9 @@ fn value_at(chain: &[ArrayRef], row: usize) -> Result<Option<ScalarValue>, Krish
     }))
 }
 
-/// A partition key as bytes: equal tuples give equal bytes (floats by bits).
+/// A partition key as bytes: equal tuples give equal bytes. Floats compare by
+/// bits with every NaN made one NaN, as Java's `Float.equals`/`Double.equals`
+/// (`floatToIntBits` collapses NaN payloads; -0.0 and 0.0 stay apart).
 fn key_bytes(values: &[Option<ScalarValue>]) -> Vec<u8> {
     let mut out = Vec::new();
     for v in values {
@@ -763,8 +770,14 @@ fn key_bytes(values: &[Option<ScalarValue>]) -> Vec<u8> {
             Some(ScalarValue::Boolean(b)) => put(1, &[u8::from(*b)]),
             Some(ScalarValue::Int32(x)) => put(2, &x.to_le_bytes()),
             Some(ScalarValue::Int64(x)) => put(3, &x.to_le_bytes()),
-            Some(ScalarValue::Float32(x)) => put(4, &x.to_bits().to_le_bytes()),
-            Some(ScalarValue::Float64(x)) => put(5, &x.to_bits().to_le_bytes()),
+            Some(ScalarValue::Float32(x)) => {
+                let x = if x.is_nan() { f32::NAN } else { *x };
+                put(4, &x.to_bits().to_le_bytes());
+            }
+            Some(ScalarValue::Float64(x)) => {
+                let x = if x.is_nan() { f64::NAN } else { *x };
+                put(5, &x.to_bits().to_le_bytes());
+            }
             Some(ScalarValue::Decimal128 { unscaled, .. }) => put(6, &unscaled.to_le_bytes()),
             Some(ScalarValue::Utf8(s)) => put(7, s.as_bytes()),
             Some(ScalarValue::Binary(b)) => put(8, b),
@@ -865,4 +878,25 @@ fn unsupported(feature: String) -> KrishivError {
 
 fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
+}
+
+#[cfg(test)]
+mod key_tests {
+    use krishiv_io::ScalarValue;
+
+    use super::key_bytes;
+
+    #[test]
+    fn nan_payloads_are_one_key_and_signed_zeros_two() {
+        let f64_key = |x: f64| key_bytes(&[Some(ScalarValue::Float64(x))]);
+        let f32_key = |x: f32| key_bytes(&[Some(ScalarValue::Float32(x))]);
+        assert_eq!(
+            f64_key(f64::NAN),
+            f64_key(f64::from_bits(0x7ff0_0000_0000_0001))
+        );
+        assert_eq!(f64_key(f64::NAN), f64_key(-f64::NAN));
+        assert_eq!(f32_key(f32::NAN), f32_key(f32::from_bits(0x7f80_0001)));
+        assert_ne!(f64_key(0.0), f64_key(-0.0));
+        assert_ne!(f32_key(0.0), f32_key(-0.0));
+    }
 }

@@ -324,10 +324,10 @@ fn unpartitioned_one_file_with_field_ids_and_metrics() {
     let long = |v: i64| encode(&krishiv_io::ScalarValue::Int64(v), &IcebergType::Long);
     assert_eq!(f.metrics.lower_bounds.get(&1).cloned(), long(0));
     assert_eq!(f.metrics.upper_bounds.get(&1).cloned(), long(99));
-    // zstd by default (Java's `write.parquet.compression-codec` default).
+    // gzip when the table sets no codec (Java's `PARQUET_COMPRESSION_DEFAULT`).
     let codec = codecs(&f.location);
     assert!(
-        codec.len() == 1 && codec[0].starts_with("ZSTD"),
+        codec.len() == 1 && codec[0].starts_with("GZIP"),
         "{codec:?}"
     );
 }
