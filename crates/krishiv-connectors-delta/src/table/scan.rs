@@ -29,8 +29,8 @@ use arrow_schema::{FieldRef, Schema, SchemaRef};
 use delta_kernel::expressions::{Predicate, PredicateRef};
 use krishiv_common::error::{FailedReadFileNoHint, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::{
-    FilterPushdown, GlobalState, LocalState, PushedFilter, ScanPushdown, ScanPushdowns, Source,
-    TaskContext,
+    FilterPushdown, GlobalState, LocalState, PushedFilter, RuntimeFilters, ScanPushdown,
+    ScanPushdowns, Source, SourceRows, TaskContext,
 };
 use krishiv_io::{
     ByteRange, ColumnPath, FileRef, FormatOptions, MetadataCols, MetadataNeeds, RowLevel,
@@ -165,6 +165,7 @@ impl DeltaScan {
             layout,
             output: Arc::new(Schema::new(fields)),
             pushed: self.kernel_predicate(&p.filters).map(Arc::new),
+            runtime: p.dynamic.clone(),
         })
     }
 }
@@ -220,6 +221,9 @@ pub struct DeltaScanSource {
     layout: Vec<Slot>,
     output: SchemaRef,
     pushed: Option<PredicateRef>,
+    /// The join's runtime filters, applied last to each batch (or by the probe above when the
+    /// planner handed the row stage to it).
+    runtime: RuntimeFilters,
 }
 
 impl DeltaScanSource {
@@ -412,6 +416,8 @@ impl DeltaScanSource {
                 match cur.stream.next_batch().await? {
                     Some(b) => {
                         let b = self.assemble(&b, &cur.partitions)?;
+                        // After every other filter, as Spark evaluates a runtime filter last.
+                        let b = local.rows.apply(b)?;
                         return Ok(Some(Batch::new(b)));
                     }
                     None => {
@@ -426,6 +432,8 @@ impl DeltaScanSource {
                 return Ok(None);
             };
             local.claimed += 1;
+            // Runtime filter decisions are per file.
+            local.rows.start_partition();
             self.open(local, unit).await?;
         }
     }
@@ -449,6 +457,7 @@ struct Local {
     gate: Arc<krishiv_io::ScanGate>,
     current: Option<Current>,
     claimed: u64,
+    rows: SourceRows,
 }
 
 fn state_error(what: &str) -> KrishivError {
@@ -491,6 +500,7 @@ impl Source for DeltaScanSource {
             gate: Arc::clone(ctx.query().scan_gate()),
             current: None,
             claimed: 0,
+            rows: self.runtime.source_rows(&self.output, ctx.partition()),
         }))
     }
 
