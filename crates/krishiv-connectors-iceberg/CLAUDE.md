@@ -59,7 +59,7 @@ manifests × 100 entries, timed as fetch/parse/map/prune), `delete_tests.rs` (sn
 numbers: deletes through SQL, `delete_application_matches_model`, DV corruption, missing delete file, Java's
 assignment errors, equality deletes by sequence number and partition, null keys, a missing equality delete file;
 PR-25d: pruned files read no delete file, the delete state charged and cancel-safe, equality deletes through
-`with_file_splits`, the row estimate, `EXPLAIN`, the manifest cache). `evolution_tests.rs`
+`with_file_splits`, the row estimate, `EXPLAIN`, the manifest cache). `dst_tests.rs` (PR-25d step 2: `Flaky`, a local store whose read faults are a function of a seed, the request and its attempt, so a case replays in any request order: transient failures before or mid-body (manifest list, manifests, data and delete files) retried to the model's rows or failing as `KRISHIV_OBJECT_STORE_REQUEST_FAILED`; a data or delete file vanished after planning fails `FAILED_READ_FILE.FILE_NOT_EXIST` naming it, never wrong rows; `delete_tests`' `history` model under faults). `evolution_tests.rs`
 (snapshots written by hand with one manifest per writing schema, as iceberg-rust 0.11 cannot promote or rename:
 `promoted_column_filter_returns_all_rows`, the iceberg-rust #3482 shape, int → long with 4-byte bounds in the old
 manifest, plus float → double with NaN and decimal(9,2) → decimal(18,2); `iceberg_schema_evolution_matrix`).

@@ -42,7 +42,7 @@ use krishiv_types::StructType;
 use super::provider::IcebergTableProvider;
 use super::storage::{KrishivStorageFactory, StorageRegistration};
 use super::table::IcebergTable;
-use super::tests::local;
+use super::tests::local_on;
 use crate::plan::VersionSpec;
 
 /// A runtime for the I/O side, a registration over the local file system and
@@ -56,6 +56,16 @@ pub(super) struct Env {
 }
 
 pub(super) fn env() -> Env {
+    let store = Arc::new(object_store::local::LocalFileSystem::new());
+    env_on(store, krishiv_io::IoConfig::default())
+}
+
+/// [`env`] over `store` (a wrapper of the local file system) with the
+/// scheduler's settings `config`.
+pub(super) fn env_on(
+    store: Arc<dyn object_store::ObjectStore>,
+    config: krishiv_io::IoConfig,
+) -> Env {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -64,7 +74,7 @@ pub(super) fn env() -> Env {
     let dir = tempfile::tempdir().unwrap();
     let (sched, reg) = {
         let _entered = rt.enter();
-        local(dir.path())
+        local_on(dir.path(), store, config)
     };
     let factory = Arc::new(KrishivStorageFactory {
         name: reg.name().to_owned(),

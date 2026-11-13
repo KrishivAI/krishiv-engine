@@ -13,14 +13,24 @@ use super::storage::{KrishivStorageFactory, StorageRegistration, from_iceberg};
 /// A scheduler with the local file system registered as `file://` and a
 /// registration whose relative paths resolve under `dir`.
 pub(super) fn local(dir: &std::path::Path) -> (Arc<IoScheduler>, StorageRegistration) {
+    let store = Arc::new(object_store::local::LocalFileSystem::new());
+    local_on(dir, store, IoConfig::default())
+}
+
+/// [`local`] with `store` registered as `file://` (a wrapper of the local
+/// file system) and the scheduler's settings `config`.
+pub(super) fn local_on(
+    dir: &std::path::Path,
+    store: Arc<dyn ObjectStore>,
+    config: IoConfig,
+) -> (Arc<IoScheduler>, StorageRegistration) {
     // The I/O runtime is the test's own (iceberg-rust's `Runtime` needs one).
     let sched = match tokio::runtime::Handle::try_current() {
-        Ok(h) => IoScheduler::with_runtime(IoConfig::default(), h),
-        Err(_) => IoScheduler::new(IoConfig::default()),
+        Ok(h) => IoScheduler::with_runtime(config, h),
+        Err(_) => IoScheduler::new(config),
     };
     let id = StoreId::new("file://");
-    let store = Arc::new(object_store::local::LocalFileSystem::new());
-    sched.register_store(id.clone(), store as Arc<dyn ObjectStore>);
+    sched.register_store(id.clone(), store);
     let paths = Arc::new(LocalPaths::new(id, dir.to_string_lossy().into_owned()));
     let reg = StorageRegistration::new(sched.context(), paths);
     (sched, reg)

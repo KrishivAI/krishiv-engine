@@ -60,22 +60,33 @@ enum Content {
 /// One file: its name, partition value (for a partitioned table), data
 /// sequence number and content.
 #[derive(Debug, Clone)]
-struct File {
-    name: String,
+pub(super) struct File {
+    pub(super) name: String,
     p: i32,
     seq: i64,
     content: Content,
 }
 
+impl File {
+    /// A data file (not a delete file).
+    pub(super) fn is_data(&self) -> bool {
+        matches!(self.content, Content::Data { .. })
+    }
+}
+
 /// A table with one snapshot listing `files` (data in a v2 data manifest,
 /// deletes in a v3 delete manifest so DVs carry their fields).
-struct Table {
-    env: Env,
-    table: IcebergTable,
+pub(super) struct Table {
+    pub(super) env: Env,
+    pub(super) table: IcebergTable,
 }
 
 fn build(files: &[File], partitioned: bool) -> Table {
-    let env = env();
+    build_in(env(), files, partitioned)
+}
+
+/// [`build`] in `env`.
+pub(super) fn build_in(env: Env, files: &[File], partitioned: bool) -> Table {
     let schema = schema();
     let spec = if partitioned {
         PartitionSpec::builder(schema.clone())
@@ -275,7 +286,7 @@ fn build(files: &[File], partitioned: bool) -> Table {
 impl Table {
     /// The ids `SELECT id FROM t` returns, sorted, or the error of opening
     /// the provider or running the query.
-    fn ids(&self, sql: &str) -> Result<Vec<i64>, KrishivError> {
+    pub(super) fn ids(&self, sql: &str) -> Result<Vec<i64>, KrishivError> {
         let p = self.env.provider(&self.table, &VersionSpec::Current)?;
         let batches = provider_session(p).run(sql)?;
         let mut out: Vec<i64> = super::provider_tests::render(&batches)
@@ -293,7 +304,7 @@ impl Table {
     }
 }
 
-fn data(name: &str, p: i32, seq: i64, first: i64, rows: i64) -> File {
+pub(super) fn data(name: &str, p: i32, seq: i64, first: i64, rows: i64) -> File {
     File {
         name: name.to_owned(),
         p,
@@ -306,7 +317,13 @@ fn data(name: &str, p: i32, seq: i64, first: i64, rows: i64) -> File {
     }
 }
 
-fn positions(name: &str, p: i32, seq: i64, rows: &[(&str, i64)], scoped: Option<&str>) -> File {
+pub(super) fn positions(
+    name: &str,
+    p: i32,
+    seq: i64,
+    rows: &[(&str, i64)],
+    scoped: Option<&str>,
+) -> File {
     File {
         name: name.to_owned(),
         p,
@@ -1002,7 +1019,7 @@ fn a_pruned_file_with_an_unreadable_tuple_does_not_fail() {
 
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
 #[derive(Debug, Clone)]
-enum Op {
+pub(super) enum Op {
     /// Append a data file of `rows` rows in partition `p`, with a data
     /// sequence number `back` below the commit's (a rewrite keeping its
     /// sequence number), and optionally a position delete of `same` in the
@@ -1033,7 +1050,7 @@ enum Op {
     Equality { p: i32, keys: Vec<i64>, back: i64 },
 }
 
-fn ops() -> impl Strategy<Value = Vec<Op>> {
+pub(super) fn ops() -> impl Strategy<Value = Vec<Op>> {
     let op = prop_oneof![
         (0..2i32, 1..6i64, 0..3i64, prop::option::of(0..6u64)).prop_map(|(p, rows, back, same)| {
             Op::Append {
@@ -1079,7 +1096,7 @@ enum ModelDelete {
 /// the rows naming it in every position delete file with `seq >= data seq`
 /// that is scoped to it or to its partition.
 /// The survivors are by id, with their partition.
-fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeMap<i64, i32>) {
+pub(super) fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeMap<i64, i32>) {
     struct Live {
         name: String,
         p: i32,

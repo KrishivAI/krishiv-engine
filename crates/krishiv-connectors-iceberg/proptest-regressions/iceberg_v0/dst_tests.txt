@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5a18e21a17340fa785554301bc1738b3b80e479aa9387f159ee83ba2724bb6e9 # shrinks to ops = [Append { p: 0, rows: 1, back: 2, same: Some(5) }, Append { p: 1, rows: 2, back: 2, same: Some(4) }, Delete { kind: 2, stale: true, picks: [(2, 5), (6, 0)] }], partitioned = true, seed = 12422016924301475877, permille = 271

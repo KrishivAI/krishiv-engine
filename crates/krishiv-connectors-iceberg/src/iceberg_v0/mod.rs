@@ -18,6 +18,8 @@ mod baseline_tests;
 #[cfg(test)]
 mod delete_tests;
 #[cfg(test)]
+mod dst_tests;
+#[cfg(test)]
 mod evolution_tests;
 #[cfg(test)]
 mod provider_tests;
