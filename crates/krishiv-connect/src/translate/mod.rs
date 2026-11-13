@@ -88,7 +88,7 @@ use crate::proto::v4_3 as pb;
 use crate::proto::v4_3::plan::OpType;
 use crate::stack::{INLINE_LEVELS, on_deep_stack};
 use crate::wire;
-use errors::{not_set, unsupported_field};
+use errors::{not_set, unsupported_field, unsupported_variant};
 
 type Result<T> = std::result::Result<T, KrishivError>;
 
@@ -135,16 +135,15 @@ pub fn expression_from_bytes(bytes: &[u8], conf: &TranslateConf) -> Result<Arc<E
 /// Translates a `Plan` whose root is a relation.
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a command or a compressed plan (the
+/// `INVALID_ONE_OF_FIELD_NOT_SUPPORTED` for a command, `KRISHIV_UNSUPPORTED_FEATURE` for a compressed plan (the
 /// server's job, P3), plus the errors of [`translate_relation`].
 pub fn translate_plan(plan: &pb::Plan, conf: &TranslateConf) -> Result<Plan> {
     match &plan.op_type {
         Some(OpType::Root(relation)) => translate_relation(relation, conf),
-        Some(OpType::Command(_)) => Err(unsupported_field(
-            "Plan",
-            "command",
-            "commands (writes, SQL commands, catalog operations)",
-        )),
+        Some(OpType::Command(command)) => Err(match &command.command_type {
+            Some(arm) => unsupported_variant("spark.connect.Command", arm.variant()),
+            None => not_set("spark.connect.Command", "COMMAND_TYPE_NOT_SET"),
+        }),
         Some(OpType::CompressedOperation(_)) => Err(unsupported_field(
             "Plan",
             "compressed_operation",
@@ -157,7 +156,7 @@ pub fn translate_plan(plan: &pb::Plan, conf: &TranslateConf) -> Result<Plan> {
 /// Translates a relation and everything below it.
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a relation or field outside the
+/// `INVALID_ONE_OF_FIELD_NOT_SUPPORTED` for an arm outside the supported subset, `KRISHIV_UNSUPPORTED_FEATURE` for a field outside the
 /// supported subset, `CONNECT_INVALID_PLAN.*` for an invalid plan,
 /// `FAILED_TO_PARSE_TOO_COMPLEX` past the depth cap, and
 /// `CONNECT_INVALID_PLAN.PLAN_SIZE_LARGER_THAN_MAX` past the node cap.

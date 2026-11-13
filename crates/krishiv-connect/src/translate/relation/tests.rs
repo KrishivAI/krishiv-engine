@@ -350,11 +350,15 @@ fn range_builds_the_range_leaf() {
 }
 
 #[test]
-fn project_without_input_and_qualified_alias_are_unsupported() {
+fn a_project_without_input_reads_one_row_and_a_qualified_alias_is_unsupported() {
     let no_input = relation(RelType::Project(Box::default()));
-    let e = fails(translate(&no_input));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("Project.input"), "{}", e.message());
+    match node(&no_input) {
+        PlanNode::Project { input, exprs } => {
+            assert!(matches!(input.node, PlanNode::OneRowRelation));
+            assert!(exprs.is_empty());
+        }
+        other => panic!("{other:?}"),
+    }
     let qualified = relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
         input: input(),
         alias: "x".into(),
@@ -407,6 +411,103 @@ fn join_of(kind: i32, condition: Option<Expression>, using: &[&str]) -> Relation
         using_columns: using.iter().map(|c| (*c).to_owned()).collect(),
         join_data_type: None,
     })))
+}
+
+fn set_op_of(
+    kind: i32,
+    all: Option<bool>,
+    by_name: Option<bool>,
+    missing: Option<bool>,
+) -> Relation {
+    relation(RelType::SetOp(Box::new(pb::SetOperation {
+        left_input: boxed(read_table("l")),
+        right_input: boxed(read_table("r")),
+        set_op_type: kind,
+        is_all: all,
+        by_name,
+        allow_missing_columns: missing,
+    })))
+}
+
+#[test]
+fn set_operations_follow_spark() {
+    use pb::set_operation::SetOpType as T;
+    // UNION ALL is a Union; a UNION that is not ALL (or has no is_all) is a Distinct over it.
+    match node(&set_op_of(T::Union as i32, Some(true), None, None)) {
+        PlanNode::Union {
+            inputs,
+            by_name,
+            allow_missing_columns,
+        } => {
+            assert_eq!(inputs.len(), 2);
+            assert!(!by_name && !allow_missing_columns);
+        }
+        other => panic!("{other:?}"),
+    }
+    for all in [Some(false), None] {
+        match node(&set_op_of(T::Union as i32, all, Some(true), Some(true))) {
+            PlanNode::Distinct { input } => assert!(matches!(
+                &input.node,
+                PlanNode::Union {
+                    by_name: true,
+                    allow_missing_columns: true,
+                    ..
+                }
+            )),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(matches!(
+        node(&set_op_of(T::Except as i32, Some(true), None, None)),
+        PlanNode::SetOp {
+            op: krishiv_plan::SetOperation::Except,
+            all: true,
+            ..
+        }
+    ));
+    assert!(matches!(
+        node(&set_op_of(T::Intersect as i32, None, None, None)),
+        PlanNode::SetOp {
+            op: krishiv_plan::SetOperation::Intersect,
+            all: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn set_operation_errors_are_spark_classes() {
+    use pb::set_operation::SetOpType as T;
+    assert_eq!(
+        code(&set_op_of(T::Except as i32, None, Some(true), None)),
+        ErrorClass::ConnectInvalidPlanExceptDoesNotSupportUnionByName
+    );
+    assert_eq!(
+        code(&set_op_of(T::Intersect as i32, None, Some(true), None)),
+        ErrorClass::ConnectInvalidPlanIntersectDoesNotSupportUnionByName
+    );
+    assert_eq!(
+        code(&set_op_of(T::Union as i32, None, None, Some(true))),
+        ErrorClass::ConnectInvalidPlanUnionByNameAllowMissingColRequiresByName
+    );
+    assert_eq!(
+        code(&set_op_of(0, None, None, None)),
+        ErrorClass::ConnectInvalidPlanInvalidEnum
+    );
+    assert_eq!(
+        code(&set_op_of(99, None, None, None)),
+        ErrorClass::ConnectInvalidPlanInvalidEnum
+    );
+    let one_sided = relation(RelType::SetOp(Box::new(pb::SetOperation {
+        left_input: boxed(read_table("l")),
+        right_input: None,
+        set_op_type: T::Union as i32,
+        ..pb::SetOperation::default()
+    })));
+    assert_eq!(
+        code(&one_sided),
+        ErrorClass::ConnectInvalidPlanSetOperationMustHaveTwoInputs
+    );
 }
 
 #[test]
@@ -693,32 +794,30 @@ fn a_relations_plan_id_becomes_its_origin() {
 #[test]
 fn unsupported_relations_are_named() {
     for (kind, name) in [
+        (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
+        (RelType::ToDf(Box::default()), "TO_DF(18)"),
+        (RelType::Deduplicate(Box::default()), "DEDUPLICATE(14)"),
         (
-            RelType::ShowString(Box::default()),
-            "ShowString (spark.connect.Relation.show_string)",
+            RelType::LocalRelation(Default::default()),
+            "LOCAL_RELATION(11)",
         ),
-        (
-            RelType::ToDf(Box::default()),
-            "ToDF (spark.connect.Relation.to_df)",
-        ),
-        (
-            RelType::SetOp(Box::default()),
-            "SetOperation (spark.connect.Relation.set_op)",
-        ),
-        (RelType::Deduplicate(Box::default()), "Deduplicate"),
-        (RelType::LocalRelation(Default::default()), "LocalRelation"),
-        (RelType::Drop(Box::default()), "Drop"),
-        (RelType::WithRelations(Box::default()), "WithRelations"),
+        (RelType::Drop(Box::default()), "DROP(21)"),
+        (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
         let r = relation(kind);
         let e = fails(translate(&r));
         assert_eq!(
             e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
             "{name}"
         );
-        assert_eq!(e.sql_state(), Some("0A000"));
-        assert!(e.message().contains(name), "{name}: {}", e.message());
+        assert_eq!(e.sql_state(), Some("56K00"));
+        assert!(
+            e.message()
+                .contains(&format!("spark.connect.Relation is not supported: {name}")),
+            "{name}: {}",
+            e.message()
+        );
     }
 }
 
