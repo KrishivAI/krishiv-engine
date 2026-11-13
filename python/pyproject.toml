@@ -5,10 +5,16 @@ build-backend = "maturin"
 [project]
 name = "krishiv"
 description = "Krishiv: a Rust-native, Spark-compatible batch and streaming engine"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
+keywords = ["spark", "pyspark", "spark-alternative", "sql", "dataframe", "arrow", "rust", "etl", "big-data"]
 dynamic = ["version"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
@@ -19,6 +25,13 @@ classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
+
+[project.urls]
+Homepage = "https://krishiv.ai"
+Documentation = "https://krishiv.ai/docs"
+Benchmarks = "https://krishiv.ai/benchmarks"
+Changelog = "https://github.com/KrishivAI/krishiv-engine/releases"
+Source = "https://github.com/KrishivAI/krishiv-engine"
 
 [project.optional-dependencies]
 # Arrow libraries are optional: `__arrow_c_stream__` needs none (Polars and DuckDB consume it
