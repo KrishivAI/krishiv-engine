@@ -21,15 +21,15 @@ use krishiv_common::error::{
 };
 use krishiv_io::{ColumnPath, PushdownExpr};
 
-use super::manifest_cache::{ManifestCache, ManifestKey};
+use super::manifest_cache::{Cached, CachedEntry, ManifestCache, ManifestKey};
 use super::storage::from_iceberg;
 use super::types::spark_schema;
 use crate::plan::bounds::min_be_bytes;
 use crate::plan::deletes::DeleteIndex;
 use crate::plan::entry::{
-    ContentFile, ContentKind, EntryStatus, FileFormatKind, FileScanTask, LiveEntry,
-    ManifestContent, ManifestFileEntry, ManifestFilter, ParsedEntry, PartitionFieldSummary,
-    PartitionValue, ScanPlan, inherit,
+    ContentFile, ContentKind, EntryStatus, FileFormatKind, FileScanTask, ManifestContent,
+    ManifestFileEntry, ManifestFilter, ParsedEntry, PartitionFieldSummary, PartitionValue,
+    ScanPlan, inherit,
 };
 use crate::plan::metrics::WriterMetrics;
 use crate::plan::prune::{PruneOptions, Pruner};
@@ -484,13 +484,19 @@ async fn manifest_entries(
     io: &FileIO,
     manifest: &ManifestFileEntry,
     env: PlanEnv<'_>,
-) -> Result<Arc<[LiveEntry]>, KrishivError> {
+) -> Result<Arc<[CachedEntry]>, KrishivError> {
     let cache = env.cache.filter(|(_, limit)| *limit > 0);
     let key = cache.map(|_| ManifestKey::of(manifest));
     if let (Some((c, _)), Some(k)) = (cache, &key)
         && let Some(hit) = c.get(k)
     {
-        return Ok(hit);
+        check_size(
+            "manifest",
+            &manifest.path,
+            hit.read_bytes,
+            env.max_metadata_bytes,
+        )?;
+        return Ok(hit.entries);
     }
     if manifest.encrypted {
         return Err(KrishivUnsupportedFeature {
@@ -507,10 +513,16 @@ async fn manifest_entries(
         env.max_metadata_bytes,
     )
     .await?;
-    let entries: Arc<[LiveEntry]> =
-        inherit(manifest, parse_manifest(&bytes, manifest.spec_id)?)?.into();
+    let entries: Arc<[CachedEntry]> = inherit(manifest, parse_manifest(&bytes, manifest.spec_id)?)?
+        .into_iter()
+        .map(CachedEntry::from)
+        .collect();
     if let (Some((c, limit)), Some(k)) = (cache, key) {
-        c.insert(k, Arc::clone(&entries), limit);
+        let cached = Cached {
+            entries: Arc::clone(&entries),
+            read_bytes: bytes.len() as u64,
+        };
+        c.insert(k, cached, limit);
     }
     Ok(entries)
 }
@@ -590,7 +602,7 @@ pub(crate) async fn plan_files(
         .filter(|m| m.may_have_live_files() && pruner.manifest_may_match(m))
         .collect();
     let manifests_pruned = manifests_total - kept.len();
-    let per_manifest: Vec<Arc<[LiveEntry]>> = futures::stream::iter(kept.iter())
+    let per_manifest: Vec<Arc<[CachedEntry]>> = futures::stream::iter(kept.iter())
         .map(|m| manifest_entries(io, m, env))
         .buffered(MANIFEST_CONCURRENCY)
         .try_collect()
@@ -603,10 +615,10 @@ pub(crate) async fn plan_files(
     };
     for entry in per_manifest.iter().flat_map(|m| m.iter()).cloned() {
         match entry {
-            LiveEntry::Data(d) => {
+            CachedEntry::Data(d) => {
                 if pruner.file_may_match(&d.file) {
                     out.tasks.push(FileScanTask {
-                        file: Arc::new(d),
+                        file: d,
                         residual: predicate.cloned(),
                         deletes: Arc::default(),
                     });
@@ -614,7 +626,7 @@ pub(crate) async fn plan_files(
                     out.files_pruned += 1;
                 }
             }
-            LiveEntry::Delete(d) => out.delete_files.push(Arc::new(d)),
+            CachedEntry::Delete(d) => out.delete_files.push(d),
         }
     }
     let index = DeleteIndex::new(&out.delete_files, &snapshot.partition_specs)?;

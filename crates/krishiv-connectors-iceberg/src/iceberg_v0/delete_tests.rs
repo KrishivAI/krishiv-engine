@@ -894,6 +894,27 @@ fn a_second_plan_reads_manifests_from_the_cache() {
         .provider(&uncached, &VersionSpec::Current)
         .unwrap_err();
     assert!(e.message().contains("-m.avro"), "{e}");
+    // A hit is held to the reading table's parse limit (review 25d N2).
+    let mut capped = t
+        .env
+        .rt
+        .block_on(IcebergTable::load(&t.env.reg, &location, "db", "t"))
+        .unwrap();
+    // At the manifest list's size: the list reads, the cached manifests
+    // (larger: they carry the schema) are refused.
+    let list = capped
+        .snapshot(&VersionSpec::Current)
+        .unwrap()
+        .manifest_list
+        .unwrap();
+    let list = list.strip_prefix("file://").unwrap_or(&list);
+    capped.max_metadata_bytes = std::fs::metadata(list).unwrap().len();
+    let e = t.env.provider(&capped, &VersionSpec::Current).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogLimitExceeded,
+        "{e}"
+    );
 }
 
 /// Position-delete selections are charged at their size (review 25d S1):
