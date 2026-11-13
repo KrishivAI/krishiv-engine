@@ -758,6 +758,11 @@ impl Sink for BuildSink {
             .collect()
     }
 
+    /// Partitions absorb in `combine`, which runs in lane order.
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let hashing = self.0.hashing(ctx.query().config());
         let fanout = hashing.fanout0();

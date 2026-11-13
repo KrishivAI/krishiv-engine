@@ -6,8 +6,17 @@
 ## Purpose
 Delta Lake connector on `delta_kernel` (no default features) with our own Engine implementation.
 
+## Layout
+- `src/error.rs` kernel errors as Krishiv errors (a Krishiv error raised in a handler travels through the kernel and back).
+- `src/engine/schema.rs` kernel `StructType`/`DataType`/`Scalar` to Arrow 60 and back (µs timestamps, unshredded Variant, field ids).
+- `src/engine/data.rs` `KrishivEngineData`: the kernel's `EngineData`/`GetData` over a `RecordBatch` (port of the kernel's `arrow_data.rs`/`arrow_get_data.rs`).
+- `src/engine/mod.rs` `DeltaEngine` (IoContext, StoreId, table root, tokio `Handle`, `DeltaLimits`, the query's `CancellationToken`) and `delta_blocking`, the only entry to kernel calls; `src/engine/pool.rs` `LogPool`, the one process-wide bounded pool of its own OS threads (`krishiv.delta.logThreads`; never the runtime's blocking pool, which the handlers' local I/O needs), cancellable slot wait, `delta.log_pool.wait_ms` (`WaitStats`), the log-pool thread flag the handlers' `block_on` asserts.
+- `src/engine/storage.rs` `KrishivStorageHandler` (`list_from` via `IoContext::list_from`, `read_files` lazily per item with the `_last_checkpoint`/`.crc` limits, `put` with `put_if_absent`, `head`, `delete`; `copy_atomic` unsupported); `src/engine/json.rs` `KrishivJsonHandler` (arrow-json; `UTC` timestamps cross arrow-json as `+00:00` since chrono-tz is banned) and the parse limits (`KRISHIV_CATALOG_LIMIT_EXCEEDED`); `src/engine/paths.rs` `TableRoot`, every URL confined to the table root (lexically, and on local roots also with symlinks resolved).
+- Tests: `src/engine/tests.rs` (local temp tables: handlers, `delta_handler_cancellation`, `catalog_parse_limits`, `delta_log_paths_confined`, a kernel snapshot through the handlers), `schema_tests.rs`, `data_tests.rs`.
+
 ## Invariants
 - `delta_kernel` with `default-features = false`; never `deltalake`.
+- Kernel calls run only through `DeltaEngine::delta_blocking` (the log pool), never on a runtime worker; lazy kernel iterators are drained inside that call; puts are never raced against cancellation once started (`block_on_to_completion`); every handler call checks the query's cancellation first and confines its URLs to the table root.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
