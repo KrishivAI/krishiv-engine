@@ -69,15 +69,6 @@ pub(crate) struct Variant {
     pub(crate) type_name: &'static str,
 }
 
-impl Variant {
-    /// The message type without its package (`Filter`).
-    pub(crate) fn short_type(&self) -> &'static str {
-        self.type_name
-            .strip_prefix("spark.connect.")
-            .unwrap_or(self.type_name)
-    }
-}
-
 // `variant()` for every oneof enum of the generated types; the translator
 // calls it on the few it reports unsupported fields of.
 #[expect(

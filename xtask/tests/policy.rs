@@ -971,7 +971,7 @@ fn release_publishing_is_manual_and_gated() {
         .filter(|l| !l.is_empty())
         .map(String::from)
         .collect();
-    assert_eq!(listed.len(), 20, "the 0.2 release publishes 20 crates");
+    assert_eq!(listed.len(), 22, "the 0.2 release publishes 22 crates");
     let mut manifests = vec![root().join("xtask/Cargo.toml")];
     for entry in std::fs::read_dir(root().join("crates")).unwrap() {
         manifests.push(entry.unwrap().path().join("Cargo.toml"));

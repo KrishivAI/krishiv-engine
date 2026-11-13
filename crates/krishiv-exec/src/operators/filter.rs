@@ -38,6 +38,10 @@ impl Filter {
 }
 
 impl Operator for Filter {
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "Filter"
     }

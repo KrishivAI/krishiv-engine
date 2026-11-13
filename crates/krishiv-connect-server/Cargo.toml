@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+publish = true
 
 [lints]
 workspace = true
@@ -17,12 +17,12 @@ arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
-krishiv-common = { path = "../krishiv-common" }
-krishiv-connect = { path = "../krishiv-connect" }
-krishiv-memory = { path = "../krishiv-memory" }
-krishiv-plan = { path = "../krishiv-plan" }
-krishiv-session = { path = "../krishiv-session", features = ["unstable-ir"] }
-krishiv-types = { path = "../krishiv-types" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-connect = { path = "../krishiv-connect", version = "=0.2.0" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.0" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0" }
+krishiv-session = { path = "../krishiv-session", version = "=0.2.0", features = ["unstable-ir"] }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
 getrandom.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
 prost-types = { workspace = true, features = ["std"] }

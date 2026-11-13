@@ -66,6 +66,10 @@ struct State {
 }
 
 impl Operator for Expand {
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "Expand"
     }
