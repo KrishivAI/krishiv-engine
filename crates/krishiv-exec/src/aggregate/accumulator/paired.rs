@@ -183,6 +183,10 @@ fn fold<N: DecimalNative>(
             groups.iter().all(|&g| (g as usize) < avg_sum.len()),
             "a group id past the table"
         );
+        debug_assert!(
+            count.len() == avg_sum.len() && state.len() == avg_sum.len(),
+            "the four states have one slot per group"
+        );
         let (acc, rows) = small_totals(groups, v, fits64_moves(moves));
         for (g, ((a, c), (s, st))) in avg_sum
             .iter_mut()

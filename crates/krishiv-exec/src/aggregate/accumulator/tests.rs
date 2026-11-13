@@ -284,3 +284,76 @@ fn running_snapshots_equal_row_by_row_folds() {
         .unwrap_err();
     assert!(e.to_string().contains("different lengths"), "{e}");
 }
+
+/// `count`'s dense path (`fold.rs`: no NULL in the batch, no mask, one
+/// weight) against a per-row reference: a slice whose validity buffer has no
+/// NULL inside it, the same column with one NULL, two arguments where one has
+/// a NULL, `count(*)`, `count(NULL)`, weights other than 1 and one, few and
+/// many groups.
+#[test]
+fn count_dense_path_matches_the_row_loop() {
+    let full: ArrayRef = Arc::new(Int64Array::from(vec![
+        Some(1),
+        None,
+        Some(2),
+        Some(3),
+        Some(4),
+        None,
+        Some(5),
+        Some(6),
+    ]));
+    let other: ArrayRef = Arc::new(Int64Array::from(vec![
+        Some(9),
+        Some(8),
+        Some(7),
+        None,
+        Some(6),
+        Some(5),
+        Some(4),
+        Some(3),
+    ]));
+    // (first row, length): no NULL in the slice (but a validity buffer), one
+    // NULL, the whole column.
+    for (lo, len) in [(2_usize, 3_usize), (1, 4), (0, 8)] {
+        let a = full.slice(lo, len);
+        let b = other.slice(lo, len);
+        let nulls: ArrayRef = Arc::new(arrow_array::NullArray::new(len));
+        let cases: [(Vec<usize>, Vec<ArrayRef>); 4] = [
+            (vec![0], vec![Arc::clone(&a)]),
+            (vec![0, 1], vec![Arc::clone(&a), Arc::clone(&b)]),
+            (vec![], vec![Arc::clone(&a)]),
+            (vec![0], vec![nulls]),
+        ];
+        for (args, cols) in &cases {
+            for w in [1_i64, 3, -2, i64::MAX] {
+                for n_groups in [1_usize, 3, 9] {
+                    let groups: Vec<u32> = (0..len)
+                        .map(|i| u32::try_from(i % n_groups).unwrap_or(0))
+                        .collect();
+                    let mut expr =
+                        AggregateExpr::new(AggregateFunction::Count, 0, DataType::Int64, "c");
+                    expr.args.clone_from(args);
+                    let mut acc = Accumulator::new(&expr, true).unwrap();
+                    acc.resize(n_groups);
+                    acc.update(&groups, cols, &Weights::Const(w)).unwrap();
+                    let Kind::Count(got) = &acc.kind else {
+                        panic!("not a count");
+                    };
+                    let mut want = vec![0_i64; n_groups];
+                    for (i, &g) in groups.iter().enumerate() {
+                        if args
+                            .iter()
+                            .all(|&c| cols[c].logical_nulls().is_none_or(|n| n.is_valid(i)))
+                        {
+                            want[g as usize] = want[g as usize].wrapping_add(w);
+                        }
+                    }
+                    assert_eq!(
+                        got, &want,
+                        "rows {lo}+{len}, args {args:?}, weight {w}, {n_groups} groups"
+                    );
+                }
+            }
+        }
+    }
+}

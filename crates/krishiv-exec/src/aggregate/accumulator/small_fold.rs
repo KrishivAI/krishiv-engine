@@ -169,8 +169,8 @@ pub(super) fn dense_count(groups: &[u32], k: i64, count: &mut [i64]) {
         let mut rows = [[0_i64; SMALL_GROUPS]; 2];
         let (gp, gr) = groups.as_chunks::<2>();
         for g2 in gp {
-            for k in 0..2 {
-                rows[k][g2[k] as usize & (SMALL_GROUPS - 1)] += 1;
+            for lane in 0..2 {
+                rows[lane][g2[lane] as usize & (SMALL_GROUPS - 1)] += 1;
             }
         }
         for &g in gr {
@@ -291,6 +291,34 @@ mod tests {
             small_totals(&groups, &v, true),
             small_totals(&groups, &v, false)
         );
+    }
+
+    /// A group whose batch total is exactly `±(2^63 - 1)`, the most
+    /// [`super::super::fits64_moves`] admits: the 64-bit lanes give the
+    /// 128-bit result, from `i128` values (low halves) and `i64` ones.
+    #[test]
+    fn narrow_totals_at_the_i64_edge() {
+        let max = i64::MAX;
+        let wide = [i128::from(max) - 5, 5, -i128::from(max), 0];
+        for groups in [[0_u32, 0, 1, 1], [0, 0, 0, 0], [1, 1, 0, 0]] {
+            assert_eq!(
+                small_totals(&groups, &wide[..2], true),
+                small_totals(&groups, &wide[..2], false)
+            );
+            assert_eq!(
+                small_totals(&groups[2..], &wide[2..], true),
+                small_totals(&groups[2..], &wide[2..], false)
+            );
+            let narrow = [max - 1, 1, -max, 0];
+            assert_eq!(
+                small_totals(&groups, &narrow[..2], true),
+                small_totals(&groups, &narrow[..2], false)
+            );
+            assert_eq!(
+                small_totals(&groups[2..], &narrow[2..], true),
+                small_totals(&groups[2..], &narrow[2..], false)
+            );
+        }
     }
 
     /// `narrow` holds exactly up to `i64::MAX`.
