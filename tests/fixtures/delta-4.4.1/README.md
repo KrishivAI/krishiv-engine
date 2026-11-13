@@ -53,5 +53,6 @@ refuses, with the table path elided as `<path>`:
   (`file:<path>`, a trailing slash dropped), and a corrupt commit file (`FAILED_READ_FILE.NO_HINT`, KD001, with the
   commit's `file://` URL).
 
-`session-appends` is a table of three commits (a create and two appends); the session's snapshot-cache tests remove its
+`session-table` is that table as the probes found it (before their writes), for the session's tests. `session-appends`
+is a table of three commits (a create and two appends); the session's snapshot-cache tests remove its
 last commit and put it back while a query runs.

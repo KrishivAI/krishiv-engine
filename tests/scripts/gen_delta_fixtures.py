@@ -467,6 +467,9 @@ def session_probes(spark: SparkSession, out: str) -> None:
         f"INSERT INTO delta.`{base}` VALUES (1, 'a', 1.50, TIMESTAMP'2024-01-01 00:00:00', 'x'), "
         "(2, NULL, NULL, NULL, 'y')"
     )
+    # The table as the probes find it, kept for the session's tests (the probes write to it).
+    write_scan_expected(spark, base, {"feature": "session"})
+    shutil.copytree(base, os.path.join(out, "session-table"))
     record: dict = {
         "format_version": FORMAT_VERSION,
         "generator": "tests/scripts/gen_delta_fixtures.py",
