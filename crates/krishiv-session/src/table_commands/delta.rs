@@ -10,7 +10,9 @@
 //! (`DELTA_CREATE_TABLE_WITH_DIFFERENT_PARTITIONING`, checked after the schema). The writes
 //! (`INSERT`, CTAS, `CREATE` without a location or over a location without a Delta table,
 //! `ALTER`) succeed in Spark; Krishiv refuses each by name as
-//! `UNSUPPORTED_FEATURE.TABLE_OPERATION`.
+//! `UNSUPPORTED_FEATURE.TABLE_OPERATION`. So are `TBLPROPERTIES` and options other than `path`
+//! on a `CREATE` over an existing table: delta-spark compares them with the log's
+//! configuration, a rule no probe has pinned yet.
 
 use super::*;
 use crate::delta::DELTA;
@@ -90,7 +92,8 @@ impl Session {
     /// partitioning that differs from the log's is delta-spark's error.
     ///
     /// # Errors
-    /// The write refusals (CTAS, no location, a location without a Delta table, bucketing);
+    /// The write refusals (CTAS, no location, a location without a Delta table, bucketing,
+    /// `TBLPROPERTIES` or options other than `path`);
     /// `DELTA_CREATE_TABLE_SCHEME_MISMATCH`; `DELTA_CREATE_TABLE_WITH_DIFFERENT_PARTITIONING`;
     /// the table's read errors.
     #[expect(
@@ -173,6 +176,24 @@ impl Session {
                 }
                 .into(),
             );
+        }
+        // delta-spark compares given properties with the log's configuration; until a probe
+        // pins its rule (and class), they are refused rather than stored unchecked (ADR 0008).
+        if !table.properties.is_empty() {
+            return Err(delta_write_refused(
+                quoted,
+                "CREATE TABLE ... TBLPROPERTIES over an existing Delta table",
+            ));
+        }
+        if table
+            .options
+            .keys()
+            .any(|k| !k.eq_ignore_ascii_case("path"))
+        {
+            return Err(delta_write_refused(
+                quoted,
+                "CREATE TABLE ... OPTIONS over an existing Delta table",
+            ));
         }
         table.columns = shape
             .columns
