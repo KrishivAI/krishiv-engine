@@ -7,10 +7,6 @@
     expect(dead_code, reason = "the commit loop of PR-36a (next commit) calls it")
 )]
 pub(crate) mod append;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the write path of PR-36a (next commit) calls it")
-)]
 pub(crate) mod data_file;
 pub(crate) mod deletes;
 pub(crate) mod eq_deletes;
@@ -24,8 +20,9 @@ pub(crate) mod table;
 pub(crate) mod types;
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "the write path of PR-36a (next commit) calls it")
+    expect(dead_code, reason = "the Iceberg sink of PR-36a (later step) calls it")
 )]
+pub(crate) mod write;
 pub(crate) mod write_metrics;
 
 #[cfg(test)]
@@ -48,3 +45,5 @@ mod scan_tests;
 mod table_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_tests;

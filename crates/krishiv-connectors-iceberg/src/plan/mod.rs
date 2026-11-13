@@ -13,10 +13,6 @@ pub(crate) mod bounds;
 pub(crate) mod deletes;
 pub(crate) mod dv;
 pub(crate) mod entry;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the write path of PR-36a (next commit) calls it")
-)]
 pub(crate) mod file_metrics;
 pub(crate) mod metrics;
 pub(crate) mod prune;

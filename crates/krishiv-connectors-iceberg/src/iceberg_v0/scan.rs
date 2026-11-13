@@ -72,6 +72,21 @@ pub(crate) fn iceberg_type(p: &PrimitiveType) -> IcebergType {
     }
 }
 
+/// The Krishiv form of an iceberg partition transform.
+pub(crate) fn plan_transform(t: iceberg::spec::Transform) -> Transform {
+    match t {
+        iceberg::spec::Transform::Identity => Transform::Identity,
+        iceberg::spec::Transform::Bucket(n) => Transform::Bucket(n),
+        iceberg::spec::Transform::Truncate(w) => Transform::Truncate(w),
+        iceberg::spec::Transform::Year => Transform::Year,
+        iceberg::spec::Transform::Month => Transform::Month,
+        iceberg::spec::Transform::Day => Transform::Day,
+        iceberg::spec::Transform::Hour => Transform::Hour,
+        iceberg::spec::Transform::Void => Transform::Void,
+        iceberg::spec::Transform::Unknown => Transform::Unknown,
+    }
+}
+
 /// The primitive columns of `schema` reachable through structs.
 pub(crate) fn schema_fields(schema: &Schema) -> Vec<SchemaField> {
     fn walk(fields: &[Arc<NestedField>], prefix: &[String], out: &mut Vec<SchemaField>) {
@@ -112,17 +127,7 @@ pub(crate) fn partition_specs(metadata: &TableMetadata, read: &Schema) -> Partit
                 .fields()
                 .iter()
                 .map(|f| {
-                    let transform = match f.transform {
-                        iceberg::spec::Transform::Identity => Transform::Identity,
-                        iceberg::spec::Transform::Bucket(n) => Transform::Bucket(n),
-                        iceberg::spec::Transform::Truncate(w) => Transform::Truncate(w),
-                        iceberg::spec::Transform::Year => Transform::Year,
-                        iceberg::spec::Transform::Month => Transform::Month,
-                        iceberg::spec::Transform::Day => Transform::Day,
-                        iceberg::spec::Transform::Hour => Transform::Hour,
-                        iceberg::spec::Transform::Void => Transform::Void,
-                        iceberg::spec::Transform::Unknown => Transform::Unknown,
-                    };
+                    let transform = plan_transform(f.transform);
                     PartitionFieldInfo::new(
                         f.field_id,
                         f.source_id,

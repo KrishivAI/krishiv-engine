@@ -53,10 +53,6 @@ pub fn apply(
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` naming the transform and the source type.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the write task of PR-36a (later commit) calls it")
-)]
 pub(crate) fn partition_value(
     transform: Transform,
     source: &IcebergType,

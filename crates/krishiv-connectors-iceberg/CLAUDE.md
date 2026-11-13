@@ -46,6 +46,17 @@ sequence number `last-sequence-number` + 1; v3 `first-row-id`/`added-rows`; summ
 `krishiv.write-id`/`krishiv.query-id`; requirements `assert-table-uuid`/`assert-ref-snapshot-id`, updates
 `add-snapshot`/`set-snapshot-ref`); no manifest split or merge yet; tests `append_tests.rs` (committed as a catalog
 applies a request, read back through SQL and iceberg-rust's planning, a stale attempt refused and rebuilt, v3 lineage)
+· `write.rs` (PR-36a) `DataFileWriter`, one task's data files for an append (distribution `none`): batches of the
+table's Arrow schema (nested types retyped onto the field-id schema; another shape is `INTERNAL_ERROR`), each row's
+partition key from the default spec (`partition_value`; an all-`void` spec does no per-row work), rows taken per key,
+one open Parquet file per key (at most `max_open_files`, default 100, oldest-opened closed first), rollover at a
+multiple of 1,000 rows once `write.target-file-size-bytes` is reached (Java's `RollingFileWriter`), Parquet settings
+from `write.parquet.{compression-codec,row-group-size-bytes,page-size-bytes}` (default zstd; the level is not applied;
+`write.format.default` other than parquet, `uuid`/`fixed`/`variant` columns refused), Java's file names and partition
+directories, a `WrittenDataFile` per file (`file_metrics`, no `split_offsets`); open uploads and the encoders' memory
+charged to one `Reservation`; `finish` failing, `abort` and drop delete the finished files; tests `write_tests.rs`
+(tuples against iceberg-rust's transforms over the rows read back, footers' field ids, rollover, the open-file cap,
+an append of the written files read back, failed writes and an injected upload failure leaving no file)
 · `deletes.rs` reads each position
 delete file once per scan (`file_path IN` row-group pruning, rows of other files dropped, order not trusted) and each
 DV by range, into one `RowSelection` per data file (unbounded, so a wrong `record_count` never drops rows; positions

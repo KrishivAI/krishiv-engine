@@ -25,10 +25,10 @@ use super::table::IcebergTable;
 use crate::plan::VersionSpec;
 use crate::plan::file_metrics::FileMetrics;
 
-const MAX: u64 = 1 << 30;
+pub(super) const MAX: u64 = 1 << 30;
 
 /// A table `t` partitioned by `identity(x)`, of format `version`.
-fn create(env: &Env, version: u8) -> iceberg::table::Table {
+pub(super) fn create(env: &Env, version: u8) -> iceberg::table::Table {
     let schema = ixn_schema();
     let spec = PartitionSpec::builder(schema.clone())
         .with_spec_id(0)
@@ -109,7 +109,7 @@ fn check(m: &TableMetadata, a: &Attempt) -> Result<(), iceberg::Error> {
 
 /// What a catalog does with the request: check the requirements against
 /// `m`, apply the updates, write the new metadata file; its location.
-fn commit(
+pub(super) fn commit(
     env: &Env,
     m: &TableMetadata,
     location: &str,
@@ -131,7 +131,7 @@ fn commit(
     (next, path)
 }
 
-fn ids(write_id: &str) -> WriteIds<'_> {
+pub(super) fn ids(write_id: &str) -> WriteIds<'_> {
     WriteIds {
         branch: "main",
         write_id,
@@ -160,11 +160,11 @@ fn append(
 }
 
 /// A timestamp after the table's last update.
-fn now(m: &TableMetadata) -> i64 {
+pub(super) fn now(m: &TableMetadata) -> i64 {
     m.last_updated_ms() + 1
 }
 
-fn rows(env: &Env, location: &str) -> Vec<String> {
+pub(super) fn rows(env: &Env, location: &str) -> Vec<String> {
     let table = env
         .rt
         .block_on(IcebergTable::load(&env.reg, location, "db", "t"))
@@ -178,7 +178,7 @@ fn rows(env: &Env, location: &str) -> Vec<String> {
 }
 
 /// iceberg-rust's own planning of the table at `location`: its data files.
-fn iceberg_rust_files(env: &Env, m: &TableMetadata, location: &str) -> Vec<String> {
+pub(super) fn iceberg_rust_files(env: &Env, m: &TableMetadata, location: &str) -> Vec<String> {
     let table = iceberg::table::Table::builder()
         .metadata(m.clone())
         .metadata_location(location)
