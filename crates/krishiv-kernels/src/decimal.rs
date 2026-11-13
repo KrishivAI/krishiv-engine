@@ -565,8 +565,12 @@ impl<N: DecimalNative, Op: BinaryOp> LaneOp<N> for Lane128<'_, Op> {
 /// `+ - *`, so whenever the exact result is in range (hence fits an `i64`)
 /// the wrapped value is exact, as [`LaneOp`] requires; the same argument
 /// modulo 2^128 covers [`Lane128`].
+///
+/// `L_UNIT` / `R_UNIT`: that side's rescale factor is 1 (for `+ -` the side
+/// already at the result scale; both sides of `*`), so its lane is not
+/// multiplied: no widening multiply per row for the rescale.
 #[derive(Clone, Copy)]
-struct Lane64<'p, Op, R> {
+struct Lane64<'p, Op, R, const L_UNIT: bool = false, const R_UNIT: bool = false> {
     plan: &'p DecimalPlan,
     l_mul: i64,
     r_mul: i64,
@@ -574,7 +578,7 @@ struct Lane64<'p, Op, R> {
     op: std::marker::PhantomData<(Op, R)>,
 }
 
-impl<'p, Op, R> Lane64<'p, Op, R> {
+impl<'p, Op, R, const L_UNIT: bool, const R_UNIT: bool> Lane64<'p, Op, R, L_UNIT, R_UNIT> {
     fn new(plan: &'p DecimalPlan) -> Self {
         let narrow = |v: i128| i64::try_from(v).unwrap_or(i64::MAX);
         Self {
@@ -587,21 +591,38 @@ impl<'p, Op, R> Lane64<'p, Op, R> {
     }
 }
 
-impl<N: DecimalNative, Op: BinaryOp, R: DecimalOut> LaneOp<N> for Lane64<'_, Op, R> {
+impl<N: DecimalNative, Op: BinaryOp, R: DecimalOut, const L_UNIT: bool, const R_UNIT: bool>
+    LaneOp<N> for Lane64<'_, Op, R, L_UNIT, R_UNIT>
+{
     type Out = R;
     #[inline(always)]
     fn wrapping(self, a: N, b: N) -> R {
         let (a, b) = (a.low64().0, b.low64().0);
-        R::of64(Op::wrapping(
-            a.wrapping_mul(self.l_mul),
-            b.wrapping_mul(self.r_mul),
-        ))
+        let a = if L_UNIT {
+            a
+        } else {
+            a.wrapping_mul(self.l_mul)
+        };
+        let b = if R_UNIT {
+            b
+        } else {
+            b.wrapping_mul(self.r_mul)
+        };
+        R::of64(Op::wrapping(a, b))
     }
     #[inline(always)]
     fn checked(self, a: N, b: N) -> (R, bool) {
         let ((a, wa), (b, wb)) = (a.low64(), b.low64());
-        let (a, fa) = IntNative::overflowing_mul(a, self.l_mul);
-        let (b, fb) = IntNative::overflowing_mul(b, self.r_mul);
+        let (a, fa) = if L_UNIT {
+            (a, false)
+        } else {
+            IntNative::overflowing_mul(a, self.l_mul)
+        };
+        let (b, fb) = if R_UNIT {
+            (b, false)
+        } else {
+            IntNative::overflowing_mul(b, self.r_mul)
+        };
         let (v, fv) = Op::overflowing(a, b);
         let bad = wa | wb | fa | fb | fv | (v >= self.bound) | (v <= self.bound.wrapping_neg());
         (R::of64(v), bad)
@@ -889,6 +910,9 @@ where
 {
     let raise = |row, fault| plan_error(plan, ctx, sl, sr, row, fault);
     let lane64 = Lane64::<Op, R>::new(plan);
+    // A side at the result scale (`+ -`; both sides of `*`) skips the
+    // rescale multiply.
+    let unit = (lane64.l_mul == 1, lane64.r_mul == 1);
     let lane128 = Lane128::<Op> {
         plan,
         bound: pow10(plan.out.0),
@@ -904,19 +928,51 @@ where
     };
     let done = |c: chunk::Computed<R>| R::finish(c.values, c.nulls, carrier, plan.out);
     let wide = |c: chunk::Computed<i128>| i128::finish(c.values, c.nulls, carrier, plan.out);
+    macro_rules! lanes64 {
+        ($pol:ty) => {
+            match unit {
+                (true, true) => chunk::compute::<N, _, $pol>(
+                    ctx,
+                    sl,
+                    sr,
+                    nulls,
+                    len,
+                    Lane64::<Op, R, true, true>::new(plan),
+                    raise,
+                ),
+                (false, true) => chunk::compute::<N, _, $pol>(
+                    ctx,
+                    sl,
+                    sr,
+                    nulls,
+                    len,
+                    Lane64::<Op, R, false, true>::new(plan),
+                    raise,
+                ),
+                (true, false) => chunk::compute::<N, _, $pol>(
+                    ctx,
+                    sl,
+                    sr,
+                    nulls,
+                    len,
+                    Lane64::<Op, R, true, false>::new(plan),
+                    raise,
+                ),
+                (false, false) => {
+                    chunk::compute::<N, _, $pol>(ctx, sl, sr, nulls, len, lane64, raise)
+                }
+            }
+        };
+    }
     match (proof, plan.storage) {
-        (BatchProof::Fits64, _) => done(chunk::compute::<N, _, Unchecked>(
-            ctx, sl, sr, nulls, len, lane64, raise,
-        )?),
+        (BatchProof::Fits64, _) => done(lanes64!(Unchecked)?),
         (BatchProof::Fits, _) => wide(chunk::compute::<N, _, Unchecked>(
             ctx, sl, sr, nulls, len, lane128, raise,
         )?),
         (BatchProof::None, DecimalStorage::I128) => wide(chunk::compute::<N, _, O>(
             ctx, sl, sr, nulls, len, lane128, raise,
         )?),
-        (BatchProof::None, DecimalStorage::I64) => done(chunk::compute::<N, _, O>(
-            ctx, sl, sr, nulls, len, lane64, raise,
-        )?),
+        (BatchProof::None, DecimalStorage::I64) => done(lanes64!(O)?),
     }
 }
 
