@@ -619,7 +619,7 @@ impl Driver {
         // earlier (source, operators) never passes: the higher lanes stay parked until the
         // query's failure cancels the query and the drivers are aborted.
         let _lane = match (&run.combine_order, run.lanes) {
-            (Some(order), Some((first, _))) => {
+            (Some(order), Some((first, _))) if !sink.combine_unordered() => {
                 let lane = (self.partition - first) as usize;
                 order.wait(lane).await;
                 Some(LanePass {

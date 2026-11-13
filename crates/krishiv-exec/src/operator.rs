@@ -340,6 +340,13 @@ pub trait Sink: Send + Sync {
     fn lane_safe(&self) -> bool {
         false
     }
+    /// Whether `combine` may run in any lane order. The result sink's `combine` only marks
+    /// the lane ended, which releases batches other lanes hold back; making it wait for
+    /// lower lanes could deadlock (an exhausted lane parked behind a lane that is blocked on
+    /// the holdback limit). Default `false`: lanes combine in order.
+    fn combine_unordered(&self) -> bool {
+        false
+    }
     /// Merges one driver's state into the global state, once per driver
     /// after its source is exhausted. Under `krishiv.deterministicOrder`
     /// with logical partitions the drivers call it in partition order.

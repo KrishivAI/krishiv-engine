@@ -448,6 +448,10 @@ impl Sink for ResultSink {
         true
     }
 
+    fn combine_unordered(&self) -> bool {
+        true
+    }
+
     fn expect_ordered(&self, global: &GlobalState, member: u32, partitions: std::ops::Range<u32>) {
         let Ok(g) = result_global(global) else {
             return;
