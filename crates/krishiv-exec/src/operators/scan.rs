@@ -207,6 +207,13 @@ pub trait ScanPushdown: Send + Sync {
             "this scan can't read rows by position".to_owned(),
         ))))
     }
+    /// What `EXPLAIN` adds to the scan's line for a scan built with
+    /// `pushdowns` (for example a table format's snapshot and file counts),
+    /// after its columns and pushed filters. The default adds nothing.
+    fn explain(&self, pushdowns: &ScanPushdowns) -> Option<String> {
+        let _ = pushdowns;
+        None
+    }
     /// The schema of the batches a source built with `pushdowns` returns,
     /// without building it (planning reads it; the source is built when the
     /// plan is instantiated). The default builds the source.

@@ -1132,13 +1132,18 @@ impl<'a> Planner<'a> {
                 exact,
             });
         }
-        let schema = factory.output_schema(&ScanPushdowns {
+        let pushdowns = ScanPushdowns {
             projection: Some(projection.clone()),
             filters: pushed,
             row_id,
             metadata,
             ..ScanPushdowns::default()
-        })?;
+        };
+        if let Some(more) = factory.explain(&pushdowns) {
+            detail.push_str(", ");
+            detail.push_str(&more);
+        }
+        let schema = factory.output_schema(&pushdowns)?;
         let id = self.next_scan_id()?;
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);
