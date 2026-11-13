@@ -54,18 +54,38 @@ fn node_key(e: &Expr) -> usize {
 /// Whether `e` holds a Python UDF call anywhere (not inside subqueries,
 /// which are planned on their own). Each shared node is visited once.
 pub(crate) fn has_python_udf(e: &Expr) -> bool {
-    has_python_udf_in(e, &mut HashSet::new())
+    has_python_udf_in(e, &|_| true, &mut HashSet::new())
 }
 
-fn has_python_udf_in(e: &Expr, seen: &mut HashSet<usize>) -> bool {
-    if python_call(e).is_some() {
+/// Whether `e` holds a call of a Python aggregate UDF (the grouped or
+/// window aggregate kinds): in a window, Spark's window aggregate, which
+/// runs from P3-T014 PR-26c.
+pub(crate) fn has_python_aggregate_udf(e: &Expr) -> bool {
+    has_python_udf_in(
+        e,
+        &|t| {
+            matches!(
+                t.kind(),
+                krishiv_plan::PythonUdfKind::GroupedAgg | krishiv_plan::PythonUdfKind::WindowAgg
+            )
+        },
+        &mut HashSet::new(),
+    )
+}
+
+fn has_python_udf_in(
+    e: &Expr,
+    of: &dyn Fn(PythonEvalType) -> bool,
+    seen: &mut HashSet<usize>,
+) -> bool {
+    if python_call(e).is_some_and(of) {
         return true;
     }
     if !seen.insert(node_key(e)) {
         return false;
     }
     let mut found = false;
-    e.for_each_child(&mut |c| found = found || has_python_udf_in(c, seen));
+    e.for_each_child(&mut |c| found = found || has_python_udf_in(c, of, seen));
     found
 }
 

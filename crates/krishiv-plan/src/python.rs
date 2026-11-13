@@ -25,8 +25,13 @@ pub fn is_python_udaf(e: &Expr) -> bool {
 /// Refuses an aggregate whose expressions call a grouped-aggregate Python UDF
 /// beside any other aggregate function (Spark's planner,
 /// `SparkStrategies.scala` L670-671 at v4.2.0: `INVALID_PANDAS_UDF_PLACEMENT`,
-/// the UDFs' names quoted as `toSQLId` quotes them). Subqueries are not
-/// looked into.
+/// the UDFs' names quoted as `toSQLId` quotes them). Called by the physical
+/// planner, where Spark raises it: analysis accepts such an aggregate, so a
+/// DataFrame is refused at its first action, not at creation. Subqueries
+/// are not looked into.
+///
+/// Known difference: the names are the canonical lower-case ones a plan
+/// carries, where Spark prints the name as registered.
 ///
 /// # Errors
 /// `INVALID_PANDAS_UDF_PLACEMENT` (0A000).

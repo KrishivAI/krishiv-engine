@@ -331,12 +331,12 @@ async fn drive(r: &Rig, batches: Vec<Batch>) -> crate::error::Result<()> {
     let g = r.sink.global_state(&r.ctx)?;
     let mut l = r.sink.local_state(&r.ctx, &g)?;
     for b in batches {
-        loop {
-            match r.sink.sink(b.clone(), &mut l, &g)? {
-                SinkStatus::Blocked(wait) => wait.await,
-                SinkStatus::NeedMemory { bytes } => panic!("no memory for {bytes}"),
-                _ => break,
-            }
+        // `Blocked` took the batch: wait, then the next one. `NeedMemory`
+        // took nothing: the same batch again.
+        match r.sink.sink(b, &mut l, &g)? {
+            SinkStatus::Blocked(wait) => wait.await,
+            SinkStatus::NeedMemory { bytes } => panic!("no memory for {bytes}"),
+            SinkStatus::NeedMoreInput | SinkStatus::Finished => {}
         }
     }
     r.sink.combine(l, &g)?;
@@ -720,4 +720,37 @@ async fn an_aggregate_task_yielding_another_number_of_values_than_groups_fails()
         assert!(err.to_string().contains("values for 2 groups"), "{err}");
         done(r);
     }
+}
+
+#[tokio::test]
+async fn a_blocked_driver_sends_each_row_once() {
+    // Two frames per batch over a window of one: every batch blocks.
+    let r = rig(
+        RelationShape::Grouped { keys: vec![0] },
+        Yield::Count,
+        limits(0, 1),
+        64 << 20,
+    );
+    drive(&r, vec![rows(&[1, 2], None), rows(&[2, 3], None)])
+        .await
+        .unwrap();
+    assert_eq!(
+        r.shared.log(),
+        ["B0:1", "G", "B0:1", "B0:1", "G", "B0:1", "G", "E"]
+    );
+    done(r);
+}
+
+#[tokio::test]
+async fn a_weighted_batch_is_refused() {
+    let r = rig(RelationShape::Map, Yield::Twice, limits(0, 8), 64 << 20);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let (data, _) = rows(&[1, 2], None).into_parts();
+    let retracting = Batch::with_weights(data, krishiv_types::batch::Weights::Const(-1)).unwrap();
+    let err = r.sink.sink(retracting, &mut l, &g).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(err.to_string().contains("weighted"), "{err}");
+    drop((l, g));
+    done(r);
 }

@@ -572,7 +572,6 @@ impl Encoder {
         }
     }
 
-    /// Writes `plan` as the digest of its encoding, computed once per node.
     /// A relation node's Python UDF (by identity) and declared columns.
     fn python_udf(&mut self, udf: &crate::PythonUdfRef, output: &[BoundColumn], bias: u64) {
         self.debug(udf);
@@ -582,6 +581,7 @@ impl Encoder {
         }
     }
 
+    /// Writes `plan` as the digest of its encoding, computed once per node.
     fn plan(&mut self, plan: &LogicalPlan, bias: u64) {
         let key = (NodeKind::Plan, std::ptr::from_ref(plan) as usize, bias);
         let digest = match self.seen.get(&key) {

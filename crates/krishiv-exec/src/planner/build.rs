@@ -584,9 +584,12 @@ impl<'a> Planner<'a> {
                 partition_by,
                 order_by,
             } => {
-                if exprs.iter().any(|e| super::python_udf::has_python_udf(e)) {
+                if exprs
+                    .iter()
+                    .any(|e| super::python_udf::has_python_aggregate_udf(e))
+                {
                     return Err(super::python_relation::later_kind(
-                        "a Python UDF in a window",
+                        "a Python aggregate UDF over a window",
                     ));
                 }
                 let input = self.plan(input)?;

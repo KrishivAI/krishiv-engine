@@ -144,6 +144,10 @@ pub trait PreparedRelationUdf: Send + Sync {
 /// be taken before it takes more frames); each is awaited by one caller at a
 /// time. The work runs off the caller, on the runtime's own threads:
 /// polling only moves frames and batches. Dropping the task cancels it.
+///
+/// Both take `&self` (and the task is `Sync`) so the operator can await
+/// them at once; the operator polls their futures while it holds a lock of
+/// its own, so a runtime must not call back into the operator from them.
 pub trait UdfTask: Send + Sync {
     /// Queues `frame`; waits while the task's bounded input window is full.
     ///

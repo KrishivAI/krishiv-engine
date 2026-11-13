@@ -46,6 +46,8 @@ struct Runtime {
     /// Per `Batch` frame of a grouped kind: `<side>:<key values>:<rows>`
     /// (`-` for the key of a zero-row frame).
     keys: Log,
+    /// Sends a slow task made wait (`slow_*` UDFs).
+    waits: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 type Log = Arc<std::sync::Mutex<Vec<String>>>;
@@ -62,7 +64,8 @@ impl UdfRuntime for Runtime {
         &self,
         spec: &RelationCallSpec,
     ) -> Result<Arc<dyn PreparedRelationUdf>, KrishivError> {
-        let mode = match spec.name.as_str() {
+        let slow = spec.name.starts_with("slow_");
+        let mode = match spec.name.trim_start_matches("slow_") {
             "echo" => Mode::Echo,
             "twice" => Mode::Twice,
             "burst" => Mode::Burst,
@@ -84,6 +87,7 @@ impl UdfRuntime for Runtime {
             log: Arc::clone(&self.log),
             per_task: Arc::clone(&self.per_task),
             keys: Arc::clone(&self.keys),
+            waits: slow.then(|| Arc::clone(&self.waits)),
             names: spec.input_names.clone(),
             key_count: spec.key_count,
         }))
@@ -97,6 +101,7 @@ struct Prepared {
     log: Arc<std::sync::Mutex<Vec<String>>>,
     per_task: Arc<std::sync::Mutex<Vec<Log>>>,
     keys: Log,
+    waits: Option<Arc<std::sync::atomic::AtomicUsize>>,
     names: Vec<Vec<String>>,
     key_count: usize,
 }
@@ -111,6 +116,7 @@ impl PreparedRelationUdf for Prepared {
             output: Arc::clone(&self.output),
             log: Arc::clone(&self.log),
             keys: Arc::clone(&self.keys),
+            waits: self.waits.clone(),
             names: self.names.clone(),
             key_count: self.key_count,
             state: std::sync::Mutex::new(State::default()),
@@ -133,6 +139,7 @@ struct Task {
     output: arrow_schema::SchemaRef,
     log: Arc<std::sync::Mutex<Vec<String>>>,
     keys: Log,
+    waits: Option<Arc<std::sync::atomic::AtomicUsize>>,
     names: Vec<Vec<String>>,
     key_count: usize,
     state: std::sync::Mutex<State>,
@@ -190,6 +197,21 @@ impl Task {
 impl UdfTask for Task {
     fn send(&self, frame: Frame) -> BoxFuture<'_, Result<(), KrishivError>> {
         Box::pin(async move {
+            if let Some(waits) = &self.waits {
+                // A slow task: each frame waits one poll, so the operator's
+                // window fills and the driver blocks until it is woken.
+                let mut first = true;
+                poll_fn(|cx| {
+                    if std::mem::take(&mut first) {
+                        waits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(())
+                    }
+                })
+                .await;
+            }
             let mut s = self.state.lock().unwrap();
             match frame {
                 Frame::Batch { side, batch } => {
@@ -380,6 +402,31 @@ fn a_grouped_map_sees_each_key_once_with_all_its_rows() {
     assert_eq!(log.iter().filter(|e| *e == "G").count(), 9, "{log:?}");
 }
 
+/// A slow task through the real driver: the window fills, the driver
+/// pauses on `Blocked` and is woken, and every row arrives once.
+#[test]
+fn a_slow_task_blocks_the_driver_and_loses_nothing() {
+    let env = env();
+    let (input, cols) = input(&env, "SELECT a, b FROM t");
+    let rt = Arc::new(Runtime::default());
+    let node = LogicalPlan::new(PlanNode::GroupMap {
+        input,
+        keys: vec![col(&cols[0])],
+        udf: udf("slow_count", PythonEvalType::GroupedMapPandas),
+        output: counted(),
+    });
+    let out = run_with(&env, node, Some(Arc::clone(&rt))).unwrap();
+    let rows = lines(&out);
+    assert_eq!(rows.len(), 9, "{rows:?}");
+    assert_eq!(rows.iter().filter(|r| *r == "1").count(), 8, "{rows:?}");
+    let frames = log_of(&rt).len();
+    assert_eq!(
+        rt.waits.load(std::sync::atomic::Ordering::SeqCst),
+        frames,
+        "every frame waited"
+    );
+}
+
 #[test]
 fn a_grouped_map_without_keys_is_one_group() {
     let env = env();
@@ -530,12 +577,21 @@ fn a_python_aggregate_beside_a_builtin_is_refused() {
         grouping: grouping.clone(),
         aggregates,
     });
-    let err = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap_err();
+    // Raised at physical planning, as Spark does (`SparkStrategies`): the
+    // plan itself is valid and optimizes.
+    let plan = krishiv_optimizer::optimize(&Plan::try_new(node).unwrap()).unwrap();
+    let err = krishiv_exec::planner::PhysicalPlanner::plan(
+        &krishiv_exec::planner::DefaultPlanner,
+        &plan,
+        &env.cx(),
+    )
+    .unwrap_err();
     assert_eq!(
         err.error_class(),
         ErrorClass::InvalidPandasUdfPlacement,
         "{err}"
     );
+    assert!(err.to_string().contains("`count`"), "{err}");
 }
 
 /// A Python UDAF call with `DISTINCT`, `FILTER (WHERE ...)` or `WITHIN
@@ -645,6 +701,33 @@ fn python_udtfs_and_window_aggregates_are_refused_until_pr_26c() {
         );
         assert!(err.to_string().contains("PR-26c"), "{text}: {err}");
     }
+}
+
+#[test]
+fn a_scalar_python_udf_in_a_window_is_not_named_a_window_aggregate() {
+    let env = env();
+    let (input, cols) = input(&env, "SELECT a, b FROM t");
+    let scalar = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            id: udf("f", PythonEvalType::ScalarArrow).function_id(),
+            kind: FunctionKind::Scalar,
+            args: vec![col(&cols[1])],
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+            data_type: DataType::Long,
+            nullable: true,
+            deterministic: true,
+        },
+    ))));
+    let window = LogicalPlan::new(PlanNode::Window {
+        input,
+        exprs: vec![alias(scalar, 950, "w")],
+        partition_by: vec![col(&cols[0])],
+        order_by: Vec::new(),
+    });
+    let err = run_with(&env, window, Some(Arc::new(Runtime::default()))).unwrap_err();
+    assert!(!err.to_string().contains("PR-26c"), "{err}");
 }
 
 #[test]
