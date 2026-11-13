@@ -456,8 +456,10 @@ impl RelationSink {
     }
 
     /// A zero-row frame of `side`: a cogroup key without rows on that side
-    /// (Spark gives the UDF an empty DataFrame for it).
+    /// (Spark gives the UDF an empty DataFrame for it). The side counts as
+    /// seen, so a key whose rows span input batches gets it once.
     fn empty_side(&self, d: &mut Driver, side: u8) {
+        d.sides_seen[usize::from(side)] = true;
         d.backlog.push_back(Cut::Rows {
             side,
             rows: RecordBatch::new_empty(Arc::clone(&self.input)),

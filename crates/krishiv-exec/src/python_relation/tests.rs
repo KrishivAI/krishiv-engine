@@ -441,6 +441,31 @@ async fn a_cogroup_key_on_one_side_gets_a_zero_row_frame_for_the_other() {
 }
 
 #[tokio::test]
+async fn a_one_sided_cogroup_key_over_two_batches_gets_one_empty_frame_first() {
+    // Key 1 left only and key 3 right only, each split over two batches.
+    for (side, expected) in [
+        (0, ["B0:1", "B0:1", "B1:0", "G", "E"]),
+        (1, ["B0:0", "B1:1", "B1:1", "G", "E"]),
+    ] {
+        let r = rig(
+            RelationShape::CoGrouped {
+                keys: vec![0],
+                side: 2,
+            },
+            Yield::Count,
+            limits(0, 16),
+            64 << 20,
+        );
+        let key = 1 + 2 * side;
+        drive(&r, vec![rows(&[key], Some(side)), rows(&[key], Some(side))])
+            .await
+            .unwrap();
+        assert_eq!(r.shared.log(), expected, "side {side}");
+        done(r);
+    }
+}
+
+#[tokio::test]
 async fn an_aggregate_lane_gets_one_group_per_key() {
     let r = rig(
         RelationShape::Aggregate { keys: vec![0] },
