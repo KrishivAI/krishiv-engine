@@ -174,7 +174,7 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
 impl Session {
     /// Checks what `statement` (of `class`) writes, creates or drops, and
     /// what it reads without a query, before it runs; an `ADMIN` statement
-    /// needs `Monitor` on the cluster. Names are located as analysis locates
+    /// needs `Manage` on the cluster (ADR 0046 §4). Names are located as analysis locates
     /// them and asked about as written and, unless analysis is
     /// case-sensitive, folded; paths in their qualified form.
     pub(crate) async fn authorize_statement(
@@ -188,12 +188,16 @@ impl Session {
             return Err(e);
         }
         let mut targets = statement_targets(statement);
+        // Every cluster-scope statement needs `Manage` on the cluster (ADR 0046 §4), whatever
+        // else it names.
         if class == StatementClass::Admin
-            && !targets.iter().any(|t| t.object == TargetObject::Cluster)
+            && !targets
+                .iter()
+                .any(|t| t.object == TargetObject::Cluster && t.privilege == Privilege::Manage)
         {
             targets.push(Target {
                 object: TargetObject::Cluster,
-                privilege: Privilege::Monitor,
+                privilege: Privilege::Manage,
             });
         }
         let mut checked: Vec<(Securable, Privilege)> = Vec::new();
@@ -284,13 +288,14 @@ impl Session {
         Ok(views)
     }
 
-    /// `SELECT` on the permanent view `namespace.name`: the statements that
-    /// show a view's definition, columns or properties need it as a query of
-    /// the view does, besides the table-named check made before dispatch.
-    pub(crate) async fn authorize_view_select(
+    /// `privilege` on the permanent view `namespace.name`, besides the table-named check made
+    /// before dispatch: the statements that show a view's definition, columns or properties
+    /// need `Browse` on it (ADR 0046 §4), `SHOW TABLE EXTENDED` `Select`.
+    pub(crate) async fn authorize_view(
         &self,
         namespace: &str,
         name: &str,
+        privilege: Privilege,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
         let parts = [
@@ -304,10 +309,38 @@ impl Session {
             &*self.state.policy,
             &self.state.principal,
             &Securable::View(ident),
-            Privilege::Select,
+            privilege,
         )
         .await;
         audit(self, StatementClass::Read, r)
+    }
+
+    /// The columns of the system table `table` for `DESCRIBE` / `SHOW COLUMNS`: `Browse` on
+    /// `system.<table>` (ADR 0046 §3), not the `Select` a read of its rows needs.
+    pub(crate) async fn system_table_columns(
+        &self,
+        table: &str,
+        env: &QueryEnv,
+    ) -> Result<Vec<(String, krishiv_types::DataType)>, KrishivError> {
+        let parts = ["system".to_owned(), table.to_owned()];
+        let ident = table_ident(&*env.analysis.catalogs, &parts)
+            .ok_or_else(|| unplaceable("an empty name"))?;
+        let r = authorize(
+            &*self.state.policy,
+            &self.state.principal,
+            &Securable::Table(ident),
+            Privilege::Browse,
+        )
+        .await;
+        audit(self, StatementClass::Read, r)?;
+        crate::system::columns(table)
+            .map(|cols| cols.into_iter().map(|c| (c.name, c.data_type)).collect())
+            .ok_or_else(|| {
+                krishiv_common::error::InternalError {
+                    message: format!("system.{table}: no such system table"),
+                }
+                .into()
+            })
     }
 
     /// `parts` (a name written in a statement's target), with a bare temporary relation placed in the session
@@ -723,7 +756,7 @@ impl std::fmt::Debug for ReadOnlyPolicy {
 }
 
 impl ReadOnlyPolicy {
-    /// Read-only over `inner`, which decides every `Select`.
+    /// Read-only over `inner`, which decides every `Select` and `Browse`.
     #[must_use]
     pub fn new(inner: Arc<dyn AccessPolicy>) -> Self {
         Self { inner }
@@ -741,7 +774,8 @@ impl AccessPolicy for ReadOnlyPolicy {
         securable: &'a Securable,
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
-        if privilege != Privilege::Select {
+        // `Browse` (metadata) reads nothing a `Select` would not; the inner policy decides both.
+        if !matches!(privilege, Privilege::Select | Privilege::Browse) {
             return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
                 reason: "the session is read-only".to_owned(),
             })));

@@ -74,9 +74,11 @@ mod analytics;
 mod bind;
 mod builtins;
 mod catalog;
+mod catalog_write;
 mod char_varchar;
 mod coerce;
 mod exprs;
+mod table_change;
 
 /// Whether `name` is an AES function, in any letter case: the key is the
 /// second argument and must not reach a name, a plan or an error (ADR 0042).
@@ -142,8 +144,13 @@ pub use catalog::{
     TableFunctionKind, TableFunctionLookup, TableFunctionRegistry, TableIdent, TableKind,
     TableMeta,
 };
+pub use catalog_write::{CatalogWrite, CreateMode, NamespaceInfo, TableInfo};
 pub use char_varchar::DeclaredType;
 pub use sqlfn::{SqlFunction, SqlParam};
+pub use table_change::{
+    AlterInput, AlterRules, AlteredTable, CatalogCapabilities, ColumnPosition, NamespaceChange,
+    TableChange, TypeWidening, apply_changes,
+};
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, VariableValue, variable_name};
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};

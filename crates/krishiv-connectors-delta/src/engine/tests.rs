@@ -1103,6 +1103,90 @@ fn listing_the_root_without_its_slash_stays_inside() {
     );
 }
 
+/// A panicking kernel call is an `INTERNAL_ERROR`, and the pool thread survives it; the wait
+/// statistics and a dropped pool's threads end cleanly.
+#[test]
+fn a_panicking_call_is_an_internal_error_and_the_pool_survives() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let pool = LogPool::new(1);
+    let live = CancellationToken::new();
+    let e = rt
+        .block_on(pool.run(&live, || -> u8 { panic!("kernel bug") }))
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("panicked"), "{e}");
+    assert_eq!(rt.block_on(pool.run(&live, || 5)).unwrap(), 5);
+    let waits = pool.waits();
+    assert_eq!(waits.count(), 2);
+    assert!(waits.max_ms() <= waits.total_ms());
+    drop(pool);
+}
+
+#[test]
+fn the_process_pool_and_limits_follow_config() {
+    let mut config = krishiv_common::config::Config::new();
+    config
+        .set("krishiv.catalog.maxMetadataBytes", "1m")
+        .unwrap();
+    config.set("krishiv.catalog.maxColumns", "7").unwrap();
+    let limits = DeltaLimits::from_config(&config);
+    assert_eq!(limits.max_metadata_bytes, 1 << 20);
+    assert_eq!(limits.max_columns, 7);
+    assert_eq!(limits.max_depth, MAX_JSON_DEPTH);
+    assert_eq!(
+        DeltaLimits::from_config(&krishiv_common::config::Config::new()),
+        DeltaLimits::default()
+    );
+    let pool = LogPool::process(&config);
+    assert!(std::ptr::eq(pool, LogPool::process(&config)));
+    assert!(pool.threads() >= 1);
+}
+
+#[test]
+fn the_kernel_sees_the_query_cancellation() {
+    let f = Fixture::new();
+    let token = f.engine.kernel_cancellation();
+    assert!(!token.is_cancelled());
+    f.cancel.cancel();
+    assert!(token.is_cancelled());
+    f.rt.block_on(token.cancelled_future());
+}
+
+/// Array and map element types count toward the schema width.
+#[test]
+fn nested_array_and_map_columns_count_toward_the_width() {
+    let limits = DeltaLimits {
+        max_columns: 3,
+        ..DeltaLimits::default()
+    };
+    let st =
+        r#"{"type":"struct","fields":[{"name":"x","type":"long"},{"name":"y","type":"long"}]}"#;
+    let in_array = format!(
+        r#"{{"type":"struct","fields":[{{"name":"a","type":{{"type":"array","elementType":{st},"containsNull":true}}}}]}}"#
+    );
+    let in_map = format!(
+        r#"{{"type":"struct","fields":[{{"name":"m","type":{{"type":"map","keyType":"string","valueType":{st},"valueContainsNull":true}}}},{{"name":"z","type":"long"}}]}}"#
+    );
+    assert!(json::check_schema_string(&limits, "s", &in_array).is_ok());
+    let e = json::check_schema_string(&limits, "s", &in_map).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivCatalogLimitExceeded);
+    // Not JSON: left to the kernel.
+    assert!(json::check_schema_string(&limits, "s", "not json").is_ok());
+}
+
+#[test]
+fn a_foreign_kernel_error_is_internal() {
+    let e = from_kernel(
+        &KernelError::generic_err(std::io::Error::other("disk")),
+        "t",
+    );
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+}
+
 #[path = "parquet_tests.rs"]
 mod parquet;
 
