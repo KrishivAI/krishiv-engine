@@ -701,6 +701,12 @@ mod tls {
         }
         // A key that does not belong to the certificate.
         std::fs::copy(fixture("server2.key"), &key).unwrap();
+        // `copy` carries the fixture's mode over (0664 under umask 002): owner-only again.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
         let e = ServerTls::new(&tls_config(&cert, &key), &MtlsConfig::default()).unwrap_err();
         assert!(e.to_string().contains("does not match"), "{e}");
         // Client certificates asked for with no CA: never served without the verifier.
