@@ -8,8 +8,9 @@
 //!   labelled with the session time zone, geometry, geography and variant
 //!   as `krishiv_connect::arrow` builds them, no Krishiv field metadata;
 //! - batches cut at `maxRecordsPerBatch` rows and at `0.7 × maxBatchSize`
-//!   bytes (the first row always goes; the size is estimated as Spark
-//!   estimates it);
+//!   bytes (the first row always goes; each row's size is added as the
+//!   batch grows, estimated as its `UnsafeRow`, as Spark's
+//!   `ArrowBatchWithSchemaIterator` does);
 //! - each batch one complete Arrow IPC stream (schema, batch,
 //!   end-of-stream), with the buffer compression of
 //!   `spark.sql.execution.arrow.compression.codec`;
@@ -173,20 +174,161 @@ pub fn spark_batch(
 }
 
 /// The rows of `batch` in slices of at most `settings.max_rows` rows and
-/// about `settings.max_bytes` bytes (at least one row each).
+/// about `settings.max_bytes` bytes (at least one row each). As Spark's
+/// `ArrowBatchWithSchemaIterator`, the size of each row is added as the
+/// slice grows, and the slice ends with the row that reaches the limit; a
+/// row's size is estimated as its `UnsafeRow` (`row_sizes`).
 #[must_use]
 pub fn slices(batch: &RecordBatch, settings: &EncodeSettings) -> Vec<RecordBatch> {
     let rows = batch.num_rows();
     if rows == 0 {
         return Vec::new();
     }
-    let bytes = batch.get_array_memory_size();
-    let per_row = bytes.div_ceil(rows).max(1);
-    let by_size = (settings.max_bytes / per_row).max(1);
-    let step = settings.max_rows.map_or(by_size, |r| r.max(1).min(by_size));
-    (0..rows)
-        .step_by(step)
-        .map(|start| batch.slice(start, step.min(rows - start)))
+    let max_rows = settings.max_rows.unwrap_or(usize::MAX).max(1);
+    if settings.max_bytes == 0 && max_rows >= rows {
+        return vec![batch.clone()];
+    }
+    let sizes = row_sizes(batch);
+    let mut out = Vec::new();
+    let (mut start, mut count, mut bytes) = (0, 0, 0_usize);
+    for (row, size) in sizes.iter().enumerate() {
+        count += 1;
+        bytes = bytes.saturating_add(*size);
+        let full = (settings.max_bytes > 0 && bytes >= settings.max_bytes) || count >= max_rows;
+        if full || row + 1 == rows {
+            out.push(batch.slice(start, count));
+            start = row + 1;
+            count = 0;
+            bytes = 0;
+        }
+    }
+    out
+}
+
+/// `bytes` rounded up to a multiple of 8 (`UnsafeRow` words).
+fn words(bytes: usize) -> usize {
+    bytes.div_ceil(8).saturating_mul(8)
+}
+
+/// The estimated size of each row of `batch`: Spark's `UnsafeRow`, a null
+/// bit set, eight bytes a field, then the variable-length part of each
+/// value ([`var_sizes`]).
+fn row_sizes(batch: &RecordBatch) -> Vec<usize> {
+    let fields = batch.num_columns();
+    let fixed = fields.div_ceil(64) * 8 + fields * 8;
+    let mut sizes = vec![fixed; batch.num_rows()];
+    for column in batch.columns() {
+        for (size, var) in sizes.iter_mut().zip(var_sizes(column.as_ref())) {
+            *size = size.saturating_add(var);
+        }
+    }
+    sizes
+}
+
+/// The variable-length bytes each value of `array` adds to an `UnsafeRow`:
+/// none for a fixed-width value, the (word-rounded) bytes of a string or
+/// binary, a nested row for a struct, an `UnsafeArrayData` for an array or
+/// a map. A type without a cheap per-value size takes the array's average.
+fn var_sizes(array: &dyn Array) -> Vec<usize> {
+    let n = array.len();
+    match array.data_type() {
+        ArrowType::Utf8 => array
+            .as_string::<i32>()
+            .iter()
+            .map(|v| words(v.map_or(0, str::len)))
+            .collect(),
+        ArrowType::LargeUtf8 => array
+            .as_string::<i64>()
+            .iter()
+            .map(|v| words(v.map_or(0, str::len)))
+            .collect(),
+        ArrowType::Utf8View => array
+            .as_string_view()
+            .iter()
+            .map(|v| words(v.map_or(0, str::len)))
+            .collect(),
+        ArrowType::Binary => array
+            .as_binary::<i32>()
+            .iter()
+            .map(|v| words(v.map_or(0, <[u8]>::len)))
+            .collect(),
+        ArrowType::LargeBinary => array
+            .as_binary::<i64>()
+            .iter()
+            .map(|v| words(v.map_or(0, <[u8]>::len)))
+            .collect(),
+        ArrowType::BinaryView => array
+            .as_binary_view()
+            .iter()
+            .map(|v| words(v.map_or(0, <[u8]>::len)))
+            .collect(),
+        ArrowType::Decimal128(p, _) if *p > 18 => vec![16; n],
+        ArrowType::Struct(fields) => {
+            let s = array.as_struct();
+            let fixed = fields.len().div_ceil(64) * 8 + fields.len() * 8;
+            let mut sizes = vec![fixed; n];
+            for column in s.columns() {
+                for (size, var) in sizes.iter_mut().zip(var_sizes(column.as_ref())) {
+                    *size = size.saturating_add(var);
+                }
+            }
+            sizes
+        }
+        ArrowType::List(_) => {
+            let l = array.as_list::<i32>();
+            element_sizes(
+                l.offsets().iter().map(|o| usize::try_from(*o).unwrap_or(0)),
+                l.values().as_ref(),
+            )
+        }
+        ArrowType::LargeList(_) => {
+            let l = array.as_list::<i64>();
+            element_sizes(
+                l.offsets().iter().map(|o| usize::try_from(*o).unwrap_or(0)),
+                l.values().as_ref(),
+            )
+        }
+        ArrowType::Map(_, _) => {
+            let m = array.as_map();
+            // Two arrays (keys, values) and the eight bytes of their length.
+            let keys = element_sizes(
+                m.offsets().iter().map(|o| usize::try_from(*o).unwrap_or(0)),
+                m.keys().as_ref(),
+            );
+            let values = element_sizes(
+                m.offsets().iter().map(|o| usize::try_from(*o).unwrap_or(0)),
+                m.values().as_ref(),
+            );
+            keys.iter().zip(values).map(|(k, v)| 8 + k + v).collect()
+        }
+        t if t.is_primitive() || matches!(t, ArrowType::Boolean | ArrowType::Null) => vec![0; n],
+        _ => {
+            let average = array.get_array_memory_size().div_ceil(n.max(1));
+            vec![average; n]
+        }
+    }
+}
+
+/// The `UnsafeArrayData` of each list of `values` between consecutive
+/// `offsets`: a length word, a null bit set, eight bytes an element and the
+/// elements' variable parts.
+fn element_sizes(offsets: impl Iterator<Item = usize>, values: &dyn Array) -> Vec<usize> {
+    let var = var_sizes(values);
+    let mut prefix = Vec::with_capacity(var.len() + 1);
+    prefix.push(0_usize);
+    for v in &var {
+        let last = prefix.last().copied().unwrap_or(0);
+        prefix.push(last.saturating_add(*v));
+    }
+    let offsets: Vec<usize> = offsets.collect();
+    offsets
+        .windows(2)
+        .map(|w| {
+            let (a, b) = (w[0].min(var.len()), w[1].min(var.len()));
+            let len = b.saturating_sub(a);
+            let elements = prefix[b].saturating_sub(prefix[a]);
+            8 + len.div_ceil(64) * 8 + len * 8 + elements
+        })
         .collect()
 }
 

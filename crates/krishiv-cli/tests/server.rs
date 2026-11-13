@@ -286,19 +286,28 @@ fn sc_localhost_runs_spark_range_collect() {
 
 /// Design P3-T011a §5 `pyspark_minimal_reattach`: the stock client asks
 /// for a reattachable execution, gets `ResultComplete`, sends
-/// `ReleaseExecute` after the responses, and logs no error.
+/// `ReleaseExecute` after the responses, and logs no warning or error.
+/// The Connect logger (`pyspark.sql.connect.logging`) is disabled unless
+/// `SPARK_CONNECT_LOG_LEVEL` is set when it is imported; a failed release
+/// is a warning there (`reattach.py`, "ReleaseExecute failed").
 #[test]
 #[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
 fn pyspark_minimal_reattach() {
     pyspark(
-        "import io, logging\n\
+        "import logging, os\n\
+         os.environ['SPARK_CONNECT_LOG_LEVEL'] = 'warning'\n\
+         from pyspark.sql.connect.logging import logger\n\
+         records = []\n\
+         class Keep(logging.Handler):\n\
+         \x20   def emit(self, record):\n\
+         \x20       records.append(record)\n\
+         logger.addHandler(Keep())\n\
          from pyspark.sql import SparkSession\n\
-         log = io.StringIO()\n\
-         logging.getLogger('pyspark').addHandler(logging.StreamHandler(log))\n\
          s = SparkSession.builder.getOrCreate()\n\
          assert [r.id for r in s.range(10).collect()] == list(range(10))\n\
          s.stop()\n\
-         assert 'ERROR' not in log.getvalue() and 'Traceback' not in log.getvalue(), log.getvalue()\n",
+         bad = [r.getMessage() for r in records if r.levelno >= logging.WARNING]\n\
+         assert not bad, bad\n",
     );
 }
 

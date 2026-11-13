@@ -26,7 +26,7 @@ Paths are relative to this crate.
   warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
   credentials), `SettableBy` (`check_settable`; `role_of` makes every principal admin until T002)
 - `src/interrupt.rs` `Interrupt` (design §3.7): `ALL` and `OPERATION_ID` through the session's operations and
-  `Session::cancel`/`interrupt_all`; an interrupted operation stays registered (Spark keeps the `ExecuteHolder`), so a
+  `Session::cancel` per reported id; an interrupted operation stays registered (Spark keeps the `ExecuteHolder`), so a
   reattach gets `OPERATION_CANCELED`; `TAG` is `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until T064
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, its `Replay`, one
   atomic state: running, then finished or cancelled by compare-and-swap; `close` = Spark's `ExecuteHolder.close`)

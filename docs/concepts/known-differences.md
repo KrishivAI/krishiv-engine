@@ -113,6 +113,9 @@ another expression, so:
   162 inferred `isnotnull` are of this kind);
 - Spark adds `isnotnull` for every column a null-rejecting join condition reads (`l_quantity < 0.2 * avg(..)`) and
   for a key equality common to every branch of an `OR`; Krishiv only for top-level `=` keys;
+- a join key's `isnotnull` is not pushed into a subtree that another part of the query reads too (TPC-H q15's
+  `revenue0`, read by the join and by the `max` subquery): the filter would make the two reads differ, and they
+  could no longer be computed once;
 - such a filter can raise in Spark (a cast or arithmetic under ANSI) on rows the query's own predicates never
   evaluate; Krishiv does not raise there.
 
@@ -157,6 +160,33 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
 - An aggregate or window call in a scalar function argument reads its operator's mode.
 - Only `spark.sql.ansi.enabled` is captured; Spark captures every SQL configuration.
 
+## The relation cache is per session
+
+Spark's `CacheManager` lives in the `SharedState` of a `SparkContext` (believed shared by every session of it, not
+yet confirmed against a Spark run): a frame cached in one session reads as cached, and is reused, in another.
+Krishiv keeps `cache()` / `persist()` registrations and their data per session (owner decision 2026-11-12, design
+P3-T083 §3.7), because each session can have its own memory pool (`krishiv.session.memoryLimit`) and a shared
+entry would charge one tenant for another's cache. `isCached` and `storageLevel` in one session do not see a
+`cache()` made in another, and closing a session drops its entries (memory and spill files). Invalidation does
+cross sessions: a write or `REFRESH TABLE` in one session drops what every session cached over the table, as in
+Spark. To be revisited with multi-tenant resource groups (P3-T003).
+
+Storage levels: `_2`/`_3` replication and `OFF_HEAP` are accepted and reported as asked, but one copy is kept, in
+the engine's memory or one local spill file. Spilled and `DISK_ONLY` entries are scratch data in the spill
+directory (`krishiv.spill.*`), deleted with the entry or at the next start after a crash.
+
+## Checkpoint files and where a checkpoint lives
+
+`DataFrame.checkpoint()` writes the rows under `spark.checkpoint.dir` as a Krishiv spill-format file
+and, unlike Spark, deletes the file when the result and every frame derived from it are gone (Spark
+keeps reliable checkpoint files by default, and nothing in Krishiv reads them back from another
+process). The rows are also held by the session, in its relation store (memory-accounted), so a
+reliable checkpoint holds a memory copy; `localCheckpoint(storageLevel=...)` accepts a level but holds
+the rows in the session's memory whatever it is. With `eager = false` the rows are taken when the
+result is first analyzed (its first action, or the first call that needs its schema), not at its
+first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
+do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
+
 ## `krishiv server` (Spark Connect)
 
 - **The Connect listener binds `127.0.0.1` by default.** Spark binds every interface when
@@ -193,6 +223,8 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
   one does. Running operations never wait on it. Spark has no such cap. A server refuses to start with a cap below one
   operation's worst case (`KRISHIV_INVALID_CONFIG_VALUE`). There is no per-principal share yet, so one principal's
   open operations can hold the whole cap.
+- **Column metadata travels in the `schema` response only**: Spark 4.3 also writes each field's user metadata into
+  the Arrow schema of every result batch (`SPARK::metadata::json`); Krishiv's batches carry none.
 - **ReleaseExecute without a release type** fails with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark throws
   an `UnsupportedOperationException` without an error class.
 - **AnalyzePlan.** An `UNSPECIFIED` explain mode fails with `CONNECT_INVALID_PLAN.INVALID_ENUM`, and `json_to_ddl` of a

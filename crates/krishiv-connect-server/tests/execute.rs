@@ -404,7 +404,10 @@ async fn compressed_ipc_buffers_follow_the_session_codec() {
         .manager
         .get_or_create(&Principal::local_user(), SESSION, None, "u")
         .expect("session");
-    for codec in ["zstd", "lz4"] {
+    for (codec, expected) in [
+        ("zstd", arrow_ipc::CompressionType::ZSTD),
+        ("lz4", arrow_ipc::CompressionType::LZ4_FRAME),
+    ] {
         entry
             .session()
             .conf()
@@ -416,7 +419,31 @@ async fn compressed_ipc_buffers_follow_the_session_codec() {
         let b = batches(&responses);
         let read = read_ipc(&b[0].data);
         assert_eq!(read[0].num_rows(), 100, "{codec}");
+        assert_eq!(ipc_codecs(&b[0].data), vec![Some(expected)], "{codec}");
     }
+}
+
+/// The buffer compression of each record batch of an IPC stream.
+fn ipc_codecs(data: &[u8]) -> Vec<Option<arrow_ipc::CompressionType>> {
+    let mut out = Vec::new();
+    let mut pos = 0;
+    while pos + 8 <= data.len() {
+        if data[pos..pos + 4] == [0xff; 4] {
+            pos += 4;
+        }
+        let len = i32::from_le_bytes(data[pos..pos + 4].try_into().expect("length"));
+        let len = usize::try_from(len).expect("length");
+        pos += 4;
+        if len == 0 {
+            break;
+        }
+        let message = arrow_ipc::root_as_message(&data[pos..pos + len]).expect("message");
+        pos += len + usize::try_from(message.bodyLength()).expect("body");
+        if let Some(batch) = message.header_as_record_batch() {
+            out.push(batch.compression().map(|c| c.codec()));
+        }
+    }
+    out
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -491,12 +518,15 @@ async fn compressed_plans_decode_and_a_bomb_fails_before_it_expands() {
         .unwrap_err();
     assert_eq!(error_class(&e), "CONNECT_INVALID_PLAN.CANNOT_PARSE");
     let empty = zstd::bulk::compress(&[], 3).expect("zstd");
+    // An unset operation type: Spark wraps the parse error in CANNOT_PARSE.
     let e = collect(&run.channel, compressed(empty.clone(), 0, zstd_codec))
         .await
         .unwrap_err();
-    assert_eq!(
-        error_class(&e),
-        "CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET"
+    assert_eq!(error_class(&e), "CONNECT_INVALID_PLAN.CANNOT_PARSE");
+    assert!(
+        e.message().contains("OP_TYPE_UNSPECIFIED"),
+        "{}",
+        e.message()
     );
     let command = pb::Command {
         command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),
@@ -593,6 +623,20 @@ async fn eventually(what: &str, mut cond: impl FnMut() -> bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !cond() {
         assert!(tokio::time::Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Waits until the encoder of `op` waits for its client to read (or fails
+/// after 20 s: filling the windows takes a while on a loaded machine).
+async fn blocked_on_the_client(op: &krishiv_connect_server::operation::Operation) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while !op.is_waiting_for_client() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the encoder never waits ({} responses)",
+            op.sent_count()
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
@@ -829,22 +873,10 @@ async fn a_dropped_stream_cancels_the_query_and_frees_its_memory() {
     live.message().await.expect("ok").expect("schema");
     let op = entry.operations().get(OP).expect("live");
     // Backpressure: nothing is read, so the encoder stops once the budget
-    // and the transport's windows are full (about 8 KB per response). On a
-    // loaded machine filling them takes a while: wait until the count holds
-    // still for 300 ms (it never would without backpressure).
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    let ahead = loop {
-        let seen = op.sent_count();
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        if op.sent_count() == seen {
-            break seen;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the encoder never waits ({} responses)",
-            op.sent_count()
-        );
-    };
+    // and the transport's windows are full (about 8 KB per response) and
+    // waits for room (it never would without backpressure).
+    blocked_on_the_client(&op).await;
+    let ahead = op.sent_count();
     // 64 KiB of budget plus the HTTP/2 windows and tonic's buffer, far from
     // the 100 million rows the query would produce.
     assert!(ahead < 2_000, "{ahead} responses produced ahead");
@@ -921,15 +953,7 @@ async fn a_released_operation_does_not_wait_for_a_client_that_reads_nothing() {
     live.message().await.expect("ok").expect("schema");
     let op = entry.operations().get(OP).expect("live");
     // Tiny responses fill the ahead budget and the transport.
-    let mut last = 0;
-    loop {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let now = op.sent_count();
-        if now == last {
-            break;
-        }
-        last = now;
-    }
+    blocked_on_the_client(&op).await;
     let _: pb::ReleaseExecuteResponse = unary(
         &run.channel,
         "ReleaseExecute",
