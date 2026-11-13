@@ -67,13 +67,15 @@ fn u32_be(b: &[u8], at: usize) -> Option<u32> {
 
 /// The deleted positions of the DV blob `blob` (`content_size_in_bytes` bytes
 /// of `location` from `content_offset`), whose manifest entry says it holds
-/// `record_count` positions.
+/// `record_count` positions. The length prefix is checked against the
+/// entry's `content_size_in_bytes`, as Java does.
 ///
 /// # Errors
 /// `KRISHIV_ICEBERG_INVALID_DELETES` with Java's text for a length, magic,
 /// key, cardinality or CRC that does not check.
 pub fn decode_dv(
     blob: &[u8],
+    content_size_in_bytes: i64,
     record_count: u64,
     location: &str,
 ) -> Result<RoaringTreemap, KrishivError> {
@@ -87,7 +89,7 @@ pub fn decode_dv(
         return Err(too_short());
     }
     let declared = u32_be(blob, 0).ok_or_else(too_short)?;
-    let expected = i64::try_from(blob.len()).unwrap_or(i64::MAX) - 8;
+    let expected = content_size_in_bytes.saturating_sub(8);
     // Java reads the length as a signed int.
     #[expect(clippy::cast_possible_wrap, reason = "Java's signed int")]
     let length = i64::from(declared as i32);
@@ -95,6 +97,9 @@ pub fn decode_dv(
         return Err(invalid(format!(
             "Invalid bitmap data length: {length}, expected {expected}"
         )));
+    }
+    if i64::try_from(blob.len()).ok() != Some(content_size_in_bytes) {
+        return Err(too_short());
     }
     let body = &blob[LENGTH_BYTES..blob.len() - CRC_BYTES];
     let (magic, mut bitmap) = body.split_at(MAGIC_BYTES.min(body.len()));
@@ -175,26 +180,44 @@ fn read_bitmap(b: &mut &[u8], location: &str) -> Result<RoaringTreemap, KrishivE
 }
 
 /// The blob of `positions` (the writer side; T027's DV writer and the tests).
-#[must_use]
-pub fn encode_dv(positions: &RoaringTreemap) -> Vec<u8> {
+///
+/// # Errors
+/// `KRISHIV_ICEBERG_INVALID_DELETES` for a position Java cannot hold (a key
+/// of `i32::MAX` or more) or a blob over 2 GB ("Can't serialize index > 2GB",
+/// Java's text).
+pub fn encode_dv(positions: &RoaringTreemap) -> Result<Vec<u8>, KrishivError> {
+    if positions
+        .max()
+        .is_some_and(|m| m >> 32 >= u64::from(i32::MAX.unsigned_abs()))
+    {
+        return Err(invalid(format!(
+            "Invalid position: {}",
+            positions.max().unwrap_or_default()
+        )));
+    }
     let mut body = MAGIC.to_vec();
     // The treemap's own serialisation is the portable roaring64 layout.
-    let mut bitmap = Vec::new();
-    // Writing to a Vec cannot fail.
-    if positions.serialize_into(&mut bitmap).is_err() {
-        bitmap.clear();
-    }
-    body.extend_from_slice(&bitmap);
+    positions
+        .serialize_into(&mut body)
+        .map_err(|e| invalid(format!("Cannot serialize deletion vector: {e}")))?;
+    let length = u32::try_from(body.len())
+        .ok()
+        .filter(|l| *l <= i32::MAX.unsigned_abs() - 8)
+        .ok_or_else(|| invalid("Can't serialize index > 2GB".to_owned()))?;
     let mut out = Vec::with_capacity(body.len() + 8);
-    out.extend_from_slice(&u32::try_from(body.len()).unwrap_or(u32::MAX).to_be_bytes());
+    out.extend_from_slice(&length.to_be_bytes());
     out.extend_from_slice(&body);
     out.extend_from_slice(&crc32(&body).to_be_bytes());
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn len(b: &[u8]) -> i64 {
+        i64::try_from(b.len()).unwrap()
+    }
 
     #[test]
     fn crc32_matches_the_check_value() {
@@ -204,17 +227,17 @@ mod tests {
     #[test]
     fn round_trip_across_keys() {
         let positions: RoaringTreemap = [0u64, 5, 70_000, (3u64 << 32) | 7].into_iter().collect();
-        let blob = encode_dv(&positions);
-        let back = decode_dv(&blob, 4, "dv.puffin").unwrap();
+        let blob = encode_dv(&positions).unwrap();
+        let back = decode_dv(&blob, len(&blob), 4, "dv.puffin").unwrap();
         assert_eq!(back, positions);
     }
 
     #[test]
     fn corrupt_blobs_fail_with_javas_texts() {
         let positions: RoaringTreemap = [1u64, 2, 3].into_iter().collect();
-        let blob = encode_dv(&positions);
+        let blob = encode_dv(&positions).unwrap();
         let msg = |b: &[u8], n: u64| {
-            decode_dv(b, n, "x.puffin")
+            decode_dv(b, len(b), n, "x.puffin")
                 .unwrap_err()
                 .message()
                 .to_owned()
@@ -242,7 +265,7 @@ mod tests {
         // Length: a blob cut short.
         let m = msg(&blob[..blob.len() - 1], 3);
         assert!(m.starts_with("Invalid bitmap data length: "), "{m}");
-        let e = decode_dv(&blob, 4, "x").unwrap_err();
+        let e = decode_dv(&blob, len(&blob), 4, "x").unwrap_err();
         assert_eq!(
             e.error_class(),
             krishiv_common::error::ErrorClass::KrishivIcebergInvalidDeletes

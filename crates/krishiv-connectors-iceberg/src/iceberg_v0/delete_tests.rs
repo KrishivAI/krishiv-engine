@@ -5,7 +5,7 @@
 //! property test `delete_application_matches_model`; DV corruption, a missing
 //! delete file, Java's assignment errors and equality deletes refused.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow_array::{Int32Array, Int64Array, StringArray};
@@ -155,7 +155,7 @@ fn build(files: &[File], partitioned: bool) -> Table {
             }
             Content::Dv { data, positions } => {
                 let bitmap: RoaringTreemap = positions.iter().copied().collect();
-                let blob = encode_dv(&bitmap);
+                let blob = encode_dv(&bitmap).unwrap();
                 let mut bytes = b"PFA1".to_vec();
                 bytes.extend_from_slice(&blob);
                 std::fs::write(path.strip_prefix("file://").unwrap(), &bytes).unwrap();
@@ -503,91 +503,161 @@ fn equality_deletes_are_refused_only_where_they_apply() {
     assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 1, 2]);
 }
 
-/// One step of a generated history.
+/// One step of a generated history (commit `n` has sequence number `n + 1`).
 #[derive(Debug, Clone)]
 enum Op {
-    /// Append a data file of `rows` rows in partition `p`.
-    Append { p: i32, rows: i64 },
-    /// Delete some rows of live files: `picks` are (file index, position)
-    /// candidates, reduced modulo the files that exist.
-    Delete { kind: u8, picks: Vec<(usize, u64)> },
+    /// Append a data file of `rows` rows in partition `p`, with a data
+    /// sequence number `back` below the commit's (a rewrite keeping its
+    /// sequence number), and optionally a position delete of `same` in the
+    /// same commit (the row-delta shape: equal sequence numbers).
+    Append {
+        p: i32,
+        rows: i64,
+        back: i64,
+        same: Option<u64>,
+    },
+    /// A delete of the picked (file index, position) pairs, reduced modulo
+    /// the live files: kind 0 one partition-scoped position delete file
+    /// (filed under the first pick's partition, so picks in other partitions
+    /// are rows Java never applies), 1 file-scoped files, 2 a DV absorbing
+    /// the file's earlier DV, 3 a DV of the new picks only (earlier position
+    /// delete files stay and are replaced). A `stale` position delete has
+    /// data sequence number 1, below every file appended after the first
+    /// commit (it does not apply to them).
+    Delete {
+        kind: u8,
+        stale: bool,
+        picks: Vec<(usize, u64)>,
+    },
 }
 
 fn ops() -> impl Strategy<Value = Vec<Op>> {
     let op = prop_oneof![
-        (0..2i32, 1..6i64).prop_map(|(p, rows)| Op::Append { p, rows }),
-        (0..3u8, prop::collection::vec((0..8usize, 0..8u64), 1..5))
-            .prop_map(|(kind, picks)| Op::Delete { kind, picks }),
+        (0..2i32, 1..6i64, 0..3i64, prop::option::of(0..6u64)).prop_map(|(p, rows, back, same)| {
+            Op::Append {
+                p,
+                rows,
+                back,
+                same,
+            }
+        }),
+        (
+            0..4u8,
+            any::<bool>(),
+            prop::collection::vec((0..8usize, 0..8u64), 1..5)
+        )
+            .prop_map(|(kind, stale, picks)| Op::Delete { kind, stale, picks }),
     ];
-    prop::collection::vec(op, 1..10)
+    prop::collection::vec(op, 1..12)
 }
 
-/// Runs `ops` against a model and writes the files a v2/v3 writer would:
-/// kind 0 a partition-scoped position delete file (rows of every picked file
-/// in one partition), kind 1 a file-scoped one, kind 2 a DV that absorbs the
-/// file's earlier deletes (as Java's DV writer does); once a file has a DV,
-/// its later deletes are DVs too. Returns the files and the ids that survive.
+/// A delete as the model keeps it.
+enum ModelDelete {
+    /// Position delete rows (data file, position), file-scoped to `scoped`
+    /// or scoped to partition `p`.
+    Positions {
+        seq: i64,
+        p: i32,
+        scoped: Option<String>,
+        rows: Vec<(String, u64)>,
+    },
+}
+
+/// Writes `ops` as files and computes, independently of the reader, the ids
+/// that survive under the spec's rules (design note §3.2 with FC S1, M1):
+/// a data file with a DV loses exactly the DV's positions; otherwise it loses
+/// the rows naming it in every position delete file with `seq >= data seq`
+/// that is scoped to it or to its partition.
 fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeSet<i64>) {
     struct Live {
         name: String,
         p: i32,
+        seq: i64,
         first: i64,
         rows: i64,
-        dv: Option<(String, i64)>,
-        deleted: BTreeSet<u64>,
+        /// The current DV's file name and positions.
+        dv: Option<(String, BTreeSet<u64>)>,
     }
     let mut files = Vec::new();
     let mut live: Vec<Live> = Vec::new();
+    let mut model: Vec<ModelDelete> = Vec::new();
     let mut next_id = 0;
     for (n, op) in ops.iter().enumerate() {
-        let seq = i64::try_from(n).unwrap() + 1;
+        let commit = i64::try_from(n).unwrap() + 1;
         match op {
-            Op::Append { p, rows } => {
+            Op::Append {
+                p,
+                rows,
+                back,
+                same,
+            } => {
                 let p = if partitioned { *p } else { 0 };
+                let seq = (commit - back).max(1);
                 let name = format!("d{n}.parquet");
                 files.push(data(&name, p, seq, next_id, *rows));
+                if let Some(pos) = same {
+                    let rows = vec![(name.clone(), *pos)];
+                    files.push(positions(
+                        &format!("same{n}.parquet"),
+                        p,
+                        seq,
+                        &[(name.as_str(), i64::try_from(*pos).unwrap())],
+                        None,
+                    ));
+                    model.push(ModelDelete::Positions {
+                        seq,
+                        p,
+                        scoped: None,
+                        rows,
+                    });
+                }
                 live.push(Live {
                     name,
                     p,
+                    seq,
                     first: next_id,
                     rows: *rows,
                     dv: None,
-                    deleted: BTreeSet::new(),
                 });
                 next_id += rows;
             }
-            Op::Delete { kind, picks } => {
+            Op::Delete { kind, stale, picks } => {
                 if live.is_empty() {
                     continue;
                 }
-                // Positions may be past the end of the file (deleting nothing).
+                let seq = if *stale { 1 } else { commit };
                 let mut by_file: BTreeMap<usize, BTreeSet<u64>> = BTreeMap::new();
                 for (f, pos) in picks {
                     by_file.entry(f % live.len()).or_default().insert(*pos);
                 }
-                let mut position_rows: HashMap<i32, Vec<(String, i64)>> = HashMap::new();
-                for (k, (f, picked)) in by_file.into_iter().enumerate() {
-                    let l = &mut live[f];
-                    if *kind == 2 || l.dv.is_some() {
-                        // A new DV with every earlier delete of the file;
-                        // the old DV leaves the table.
-                        if let Some((old, _)) = l.dv.take() {
-                            files.retain(|x| x.name != old);
-                        }
-                        l.deleted.extend(picked.iter().copied());
-                        let name = format!("dv{n}-{k}.puffin");
-                        let all: Vec<u64> = l.deleted.iter().copied().collect();
-                        files.push(dv(&name, l.p, seq, &l.name, &all));
-                        l.dv = Some((name, seq));
-                    } else {
-                        l.deleted.extend(picked.iter().copied());
-                        let rows = picked
+                match kind {
+                    0 => {
+                        let p = live[*by_file.keys().next().unwrap()].p;
+                        let rows: Vec<(String, u64)> = by_file
                             .iter()
-                            .map(|p| (l.name.clone(), i64::try_from(*p).unwrap()));
-                        if *kind == 1 {
-                            let rows: Vec<_> = rows.collect();
-                            let refs: Vec<(&str, i64)> =
-                                rows.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+                            .flat_map(|(f, ps)| ps.iter().map(|x| (live[*f].name.clone(), *x)))
+                            .collect();
+                        let refs: Vec<(&str, i64)> = rows
+                            .iter()
+                            .map(|(a, b)| (a.as_str(), i64::try_from(*b).unwrap()))
+                            .collect();
+                        files.push(positions(&format!("part{n}.parquet"), p, seq, &refs, None));
+                        model.push(ModelDelete::Positions {
+                            seq,
+                            p,
+                            scoped: None,
+                            rows,
+                        });
+                    }
+                    1 => {
+                        for (k, (f, ps)) in by_file.iter().enumerate() {
+                            let l = &live[*f];
+                            let rows: Vec<(String, u64)> =
+                                ps.iter().map(|x| (l.name.clone(), *x)).collect();
+                            let refs: Vec<(&str, i64)> = rows
+                                .iter()
+                                .map(|(a, b)| (a.as_str(), i64::try_from(*b).unwrap()))
+                                .collect();
                             files.push(positions(
                                 &format!("pos{n}-{k}.parquet"),
                                 l.p,
@@ -595,21 +665,32 @@ fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeSet<i64>) {
                                 &refs,
                                 Some(&l.name),
                             ));
-                        } else {
-                            position_rows.entry(l.p).or_default().extend(rows);
+                            model.push(ModelDelete::Positions {
+                                seq,
+                                p: l.p,
+                                scoped: Some(l.name.clone()),
+                                rows,
+                            });
                         }
                     }
-                }
-                for (p, rows) in position_rows {
-                    let refs: Vec<(&str, i64)> =
-                        rows.iter().map(|(a, b)| (a.as_str(), *b)).collect();
-                    files.push(positions(
-                        &format!("part{n}-{p}.parquet"),
-                        p,
-                        seq,
-                        &refs,
-                        None,
-                    ));
+                    _ => {
+                        // A DV has the commit's sequence number, never below
+                        // its data file's.
+                        for (k, (f, ps)) in by_file.into_iter().enumerate() {
+                            let l = &mut live[f];
+                            let mut all = ps;
+                            if let Some((old, prior)) = l.dv.take() {
+                                files.retain(|x| x.name != old);
+                                if *kind == 2 {
+                                    all.extend(prior);
+                                }
+                            }
+                            let name = format!("dv{n}-{k}.puffin");
+                            let v: Vec<u64> = all.iter().copied().collect();
+                            files.push(dv(&name, l.p, commit, &l.name, &v));
+                            l.dv = Some((name, all));
+                        }
+                    }
                 }
             }
         }
@@ -617,8 +698,31 @@ fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeSet<i64>) {
     let survivors = live
         .iter()
         .flat_map(|l| {
+            let deleted: BTreeSet<u64> = match &l.dv {
+                Some((_, ps)) => ps.clone(),
+                None => model
+                    .iter()
+                    .flat_map(
+                        |ModelDelete::Positions {
+                             seq,
+                             p,
+                             scoped,
+                             rows,
+                         }| {
+                            let applies = *seq >= l.seq
+                                && match scoped {
+                                    Some(s) => *s == l.name,
+                                    None => *p == l.p,
+                                };
+                            rows.iter()
+                                .filter(move |(f, _)| applies && *f == l.name)
+                                .map(|(_, x)| *x)
+                        },
+                    )
+                    .collect(),
+            };
             (0..l.rows)
-                .filter(|r| !l.deleted.contains(&u64::try_from(*r).unwrap()))
+                .filter(move |r| !deleted.contains(&u64::try_from(*r).unwrap()))
                 .map(move |r| l.first + r)
         })
         .collect();
@@ -626,11 +730,14 @@ fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeSet<i64>) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 24, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: 96, ..ProptestConfig::default() })]
 
-    /// Design note §3.3: random histories of appends, partition- and
-    /// file-scoped position deletes and DVs over random partitioned tables
-    /// read the rows an in-memory model keeps.
+    /// Design note §3.3: random histories of appends (some with deletes in
+    /// the same commit or with older sequence numbers), partition- and
+    /// file-scoped position deletes (some older than the data, some naming
+    /// files of other partitions) and DVs (absorbing or replacing older
+    /// deletes) over random partitioned tables read the rows a model of the
+    /// spec's rules keeps.
     #[test]
     fn delete_application_matches_model(ops in ops(), partitioned in any::<bool>()) {
         let (files, survivors) = history(&ops, partitioned);

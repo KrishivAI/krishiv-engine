@@ -28,7 +28,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_schema::{DataType, Field, Schema};
 use futures::{StreamExt, TryStreamExt};
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::FileSelections;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
@@ -36,6 +36,7 @@ use krishiv_io::{
     PushdownExpr, RowSelection, ScalarValue, ScanOptions, ScanRequest, ScanStream,
 };
 use krishiv_memory::{MemoryConfig, Reservation, TreePool};
+use roaring::RoaringTreemap;
 
 use crate::plan::deletes::invalid;
 use crate::plan::{DataFileEntry, DeleteFileEntry, FileFormatKind, TaskDeletes, decode_dv};
@@ -82,10 +83,9 @@ impl FileSelections for DeleteSelections {
 ///
 /// # Errors
 /// The store's error for a delete file that is missing or unreadable;
-/// `KRISHIV_ICEBERG_INVALID_DELETES` for a corrupt DV, a negative or null
-/// position or a delete file of a format other than Parquet (positions) or
-/// Puffin (DVs); `KRISHIV_UNSUPPORTED_FEATURE` is the caller's (equality
-/// deletes).
+/// `KRISHIV_ICEBERG_INVALID_DELETES` for a corrupt DV or a negative or null
+/// position; `KRISHIV_UNSUPPORTED_FEATURE` for an Avro or ORC position
+/// delete file.
 pub(super) async fn load(
     io: &IoContext,
     locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
@@ -149,10 +149,13 @@ async fn read_position_file(
 ) -> Result<HashMap<String, Vec<u64>>, KrishivError> {
     let f = &d.entry.file;
     if f.format != FileFormatKind::Parquet {
-        return Err(invalid(format!(
-            "Cannot read position delete file {}: {:?} is not supported",
-            f.path, f.format
-        )));
+        return Err(KrishivUnsupportedFeature {
+            feature: format!(
+                "reading Iceberg {:?} position delete files ({})",
+                f.format, f.path
+            ),
+        }
+        .into());
     }
     let mut file = locate(&f.path)?;
     file.size = f.size;
@@ -216,7 +219,13 @@ async fn read_position_file(
                 }
                 let p = u64::try_from(pos.value(row))
                     .map_err(|_| invalid(format!("Invalid position: {}", pos.value(row))))?;
-                out.entry(name.to_owned()).or_default().push(p);
+                // One allocation per data file, not per delete row.
+                match out.get_mut(name) {
+                    Some(v) => v.push(p),
+                    None => {
+                        out.insert(name.to_owned(), vec![p]);
+                    }
+                }
             }
         }
         Ok(out)
@@ -231,7 +240,7 @@ async fn read_dv(
     io: &IoContext,
     locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
     dv: &DeleteFileEntry,
-) -> Result<Vec<u64>, KrishivError> {
+) -> Result<RoaringTreemap, KrishivError> {
     let f = &dv.entry.file;
     let (Some(offset), Some(len)) = (f.content_offset, f.content_size_in_bytes) else {
         return Err(invalid(format!(
@@ -239,7 +248,7 @@ async fn read_dv(
             f.path
         )));
     };
-    let (Ok(start), Ok(len)) = (u64::try_from(offset), u64::try_from(len)) else {
+    let (Ok(start), Ok(size)) = (u64::try_from(offset), u64::try_from(len)) else {
         return Err(invalid(format!(
             "Deletion vector {} has the invalid range {offset} + {len}",
             f.path
@@ -250,10 +259,12 @@ async fn read_dv(
     let bytes = io
         .get_ranges(
             &file,
-            std::slice::from_ref(&(start..start.saturating_add(len))),
+            std::slice::from_ref(&(start..start.saturating_add(size))),
         )
         .await?;
-    let blob: Vec<u8> = bytes.iter().flat_map(|b| b.iter().copied()).collect();
-    let positions = decode_dv(&blob, f.record_count, &f.path)?;
-    Ok(positions.iter().collect())
+    let blob = match bytes.as_slice() {
+        [one] => one.clone(),
+        many => bytes::Bytes::from(many.concat()),
+    };
+    decode_dv(&blob, len, f.record_count, &f.path)
 }

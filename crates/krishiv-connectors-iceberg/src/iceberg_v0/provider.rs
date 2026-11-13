@@ -380,6 +380,11 @@ impl ScanPushdown for IcebergScan {
         Arc::clone(&self.parts.table)
     }
 
+    fn supports_selection(&self) -> bool {
+        // Deletes are pushed as selections; Parquet honours them.
+        self.base.supports_selection()
+    }
+
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown {
         // Files are pruned by it (a superset of the matching rows is kept);
         // the filter above the scan stays.
