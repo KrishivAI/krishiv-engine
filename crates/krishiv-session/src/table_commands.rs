@@ -670,6 +670,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            revision: 0,
         };
         self.state.catalog.store.create_table(view, mode)?;
         self.empty_frame().await

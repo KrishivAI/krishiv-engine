@@ -245,6 +245,39 @@ pub struct AlterRules {
     pub reshape: bool,
 }
 
+impl AlterRules {
+    /// The rules of a file-source table: no type changes, no rename or drop
+    /// of a column, no reordering and no tightening. The builders loosen them.
+    #[must_use]
+    pub fn new(case_sensitive: bool) -> Self {
+        Self {
+            case_sensitive,
+            ..Self::default()
+        }
+    }
+
+    /// These rules with `widening` as the accepted type changes.
+    #[must_use]
+    pub fn with_widening(mut self, widening: TypeWidening) -> Self {
+        self.widening = widening;
+        self
+    }
+
+    /// These rules for a format whose columns do (or do not) carry ids.
+    #[must_use]
+    pub fn with_column_ids(mut self, column_ids: bool) -> Self {
+        self.column_ids = column_ids;
+        self
+    }
+
+    /// These rules for a format that can (or cannot) move and relax columns.
+    #[must_use]
+    pub fn with_reshape(mut self, reshape: bool) -> Self {
+        self.reshape = reshape;
+        self
+    }
+}
+
 /// The table `changes` apply to.
 #[derive(Debug, Clone, Copy)]
 pub struct AlterInput<'a> {
@@ -621,12 +654,10 @@ mod tests {
     }
 
     fn full() -> AlterRules {
-        AlterRules {
-            widening: TypeWidening::Iceberg,
-            column_ids: true,
-            reshape: true,
-            ..AlterRules::default()
-        }
+        AlterRules::new(false)
+            .with_widening(TypeWidening::Iceberg)
+            .with_column_ids(true)
+            .with_reshape(true)
     }
 
     fn run(changes: &[TableChange], rules: AlterRules) -> Result<AlteredTable, KrishivError> {

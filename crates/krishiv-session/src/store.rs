@@ -197,9 +197,21 @@ pub(crate) struct CatalogTable {
     /// [`CatalogStore::replace_table`]. `ANALYZE` reads it with the table and publishes its statistics only if it
     /// has not moved, so statistics of rows a concurrent write replaced are never stored.
     pub(crate) data_version: u64,
+    /// Counts the changes of the entry's metadata ([`CatalogStore::replace_table`] adds one). With
+    /// [`incarnation`](Self::incarnation) it is the table's [`version`](Self::version), which the catalog write
+    /// calls take as the version the caller read, so a concurrent change is refused, never overwritten.
+    pub(crate) revision: u64,
 }
 
 impl CatalogTable {
+    /// The table's version for `CatalogWrite::alter_table`: the incarnation (which entry of the name this is) in
+    /// the high bits and the metadata revision in the low 24. A drop and create, or any `replace_table`,
+    /// gives a different one.
+    pub(crate) fn version(&self) -> krishiv_plan::TableVersion {
+        let packed = (self.incarnation << 24) | (self.revision & 0x00FF_FFFF);
+        krishiv_plan::TableVersion(i64::try_from(packed).unwrap_or(i64::MAX))
+    }
+
     /// Records that the table's data changed: its column statistics no longer describe it (`updateTableStats`).
     pub(crate) fn data_changed(&mut self) {
         self.column_stats.clear();
@@ -640,6 +652,7 @@ impl CatalogStore for InMemoryCatalogStore {
         let mut table = table;
         table.incarnation = expected.incarnation;
         table.data_version = table.data_version.max(expected.data_version);
+        table.revision = expected.revision + 1;
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
         self.hub.invalidate_table(&changed);
@@ -775,6 +788,7 @@ mod tests {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            revision: 0,
         }
     }
 

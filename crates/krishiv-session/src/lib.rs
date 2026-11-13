@@ -84,6 +84,7 @@ mod session;
 mod sql_functions;
 mod sql_path;
 mod store;
+mod store_catalog;
 mod system;
 mod table_commands;
 mod telemetry;

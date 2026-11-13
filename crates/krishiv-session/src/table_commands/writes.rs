@@ -675,6 +675,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            revision: 0,
         };
         let layout = LayoutRequest {
             partition_by: &[],
