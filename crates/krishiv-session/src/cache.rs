@@ -153,6 +153,9 @@ struct Registration {
     tables: Vec<String>,
     /// Whether a fill of this key is running (see [`FillClaim`]).
     filling: bool,
+    /// Which registration of its key this is (set by `register`): a claim
+    /// frees only the slot of the registration it was taken on.
+    epoch: u64,
 }
 
 impl std::fmt::Debug for Registration {
@@ -171,6 +174,8 @@ impl std::fmt::Debug for Registration {
 pub(crate) struct FillClaim {
     cache: Arc<RelationCache>,
     key: CacheKey,
+    /// The registration it was taken on ([`Registration::epoch`]).
+    epoch: u64,
 }
 
 impl Drop for FillClaim {
@@ -180,7 +185,9 @@ impl Drop for FillClaim {
             .state
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some(reg) = state.registrations.get_mut(&self.key) {
+        if let Some(reg) = state.registrations.get_mut(&self.key)
+            && reg.epoch == self.epoch
+        {
             reg.filling = false;
         }
     }
@@ -448,6 +455,8 @@ pub(crate) struct RelationCache {
     clock: AtomicU64,
     spills: AtomicU64,
     evictions: AtomicU64,
+    /// The next [`Registration::epoch`].
+    epochs: AtomicU64,
     /// The session's checkpoints (reported in `system.caches`; not entries of this cache).
     pub(crate) checkpoints: Arc<CheckpointStats>,
     /// The consumer's spill hook (the pool holds it weakly).
@@ -499,6 +508,7 @@ impl RelationCache {
             clock: AtomicU64::new(0),
             spills: AtomicU64::new(0),
             evictions: AtomicU64::new(0),
+            epochs: AtomicU64::new(0),
             checkpoints: Arc::default(),
             spill: Arc::clone(&spill),
             disk,
@@ -612,8 +622,9 @@ impl RelationCache {
 
     /// Registers `reg` under `key`; `false` (nothing changes) when the plan
     /// is registered already: the first level wins.
-    fn register(&self, key: &CacheKey, reg: Registration) -> bool {
+    fn register(&self, key: &CacheKey, mut reg: Registration) -> bool {
         let key = unpinned(key);
+        reg.epoch = self.epochs.fetch_add(1, Ordering::Relaxed);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.registrations.contains_key(&key) {
             return false;
@@ -645,9 +656,11 @@ impl RelationCache {
             return None;
         }
         reg.filling = true;
+        let epoch = reg.epoch;
         Some(FillClaim {
             cache: Arc::clone(self),
             key: reg_key,
+            epoch,
         })
     }
 
@@ -1373,6 +1386,7 @@ impl Session {
             keep: frame.keep.clone(),
             tables,
             filling: false,
+            epoch: 0,
         };
         if !self.state.cache.register(&key, registration) {
             tracing::warn!(target: "krishiv::session", "Asked to cache already cached data.");
@@ -1489,6 +1503,7 @@ mod tests {
             keep: Vec::new(),
             tables: vec!["src".to_owned()],
             filling: false,
+            epoch: 0,
         };
         assert!(cache.register(&pinned(1), reg));
         assert!(fill(cache, &pinned(1)).is_some());
@@ -1516,6 +1531,34 @@ mod tests {
         assert!(cache.remove(&pinned(3)));
         let stats = cache.stats();
         assert_eq!((stats.entries, stats.entries_pending), (0, 0));
+    }
+
+    /// A fill claim of a registration that was dropped and made again does not free the slot of
+    /// the new registration's fill (review L3): one fill per key.
+    #[test]
+    fn an_old_fill_claim_does_not_free_a_new_registrations_slot() {
+        let s = session();
+        let cache = &s.state.cache;
+        let reg = || Registration {
+            level: StorageLevel::MEMORY_ONLY,
+            plan: Arc::clone(&s.table("t").plan),
+            keep: Vec::new(),
+            tables: vec!["src".to_owned()],
+            filling: false,
+            epoch: 0,
+        };
+        assert!(cache.register(&pinned(1), reg()));
+        let old = cache.claim_fill(&pinned(1)).unwrap();
+        assert!(cache.remove(&pinned(1)));
+        assert!(cache.register(&pinned(1), reg()));
+        let new = cache.claim_fill(&pinned(1)).unwrap();
+        drop(old);
+        assert!(
+            cache.claim_fill(&pinned(1)).is_none(),
+            "the new registration's fill still runs"
+        );
+        drop(new);
+        assert!(cache.claim_fill(&pinned(1)).is_some());
     }
 
     /// A registry read dropped while it registers a queued `persist` (here: while the frame's
