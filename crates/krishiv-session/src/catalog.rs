@@ -471,6 +471,9 @@ pub(crate) struct FileScans {
     pub(crate) runtime: tokio::runtime::Handle,
 }
 
+/// A snapshot pinned by hidden name, and how many actions pinned it.
+type Pinned = (Arc<dyn TableProvider>, usize);
+
 /// The session catalog as one query sees it: the catalog resolver and the
 /// table providers of its scans.
 pub(crate) struct QueryCatalog {
@@ -478,8 +481,9 @@ pub(crate) struct QueryCatalog {
     cache: Arc<RelationCache>,
     /// The cached snapshots this query's plan was rewritten to scan, by
     /// hidden name: held so a concurrent `CLEAR CACHE` cannot pull them out
-    /// from under the query between substitution and planning.
-    pinned: Mutex<HashMap<String, Arc<MemoryTable>>>,
+    /// from under the query between substitution and planning. Counted:
+    /// each action over the analysis pins and unpins (`SnapshotLease`).
+    pinned: Mutex<HashMap<String, Pinned>>,
     files: Arc<FileReads>,
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
@@ -588,11 +592,25 @@ impl QueryCatalog {
     }
 
     /// Keeps the snapshot `table` for this query's scans of the hidden `name`.
-    pub(crate) fn pin_cached(&self, name: String, table: Arc<MemoryTable>) {
-        self.pinned
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(name, table);
+    pub(crate) fn pin_cached(&self, name: String, table: Arc<dyn TableProvider>) {
+        let mut pinned = self.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        let slot = pinned
+            .entry(name)
+            .or_insert_with(|| (Arc::clone(&table), 0));
+        slot.0 = table;
+        slot.1 += 1;
+    }
+
+    /// Lets go of one pin of the hidden `name` ([`Self::pin_cached`]); the
+    /// last one drops the snapshot from this query's catalog.
+    pub(crate) fn unpin_cached(&self, name: &str) {
+        let mut pinned = self.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(slot) = pinned.get_mut(name) {
+            slot.1 = slot.1.saturating_sub(1);
+            if slot.1 == 0 {
+                pinned.remove(name);
+            }
+        }
     }
 
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
@@ -1209,9 +1227,9 @@ impl TableProviderResolver for QueryCatalog {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .get(last)
-                        .cloned();
+                        .map(|(table, _)| Arc::clone(table));
                     if let Some(cached) = pinned.or_else(|| self.cache.table(last)) {
-                        return Ok(cached as Arc<dyn TableProvider>);
+                        return Ok(cached);
                     }
                     return Err(InternalError {
                         message: format!("the scanned table {last} was not loaded"),

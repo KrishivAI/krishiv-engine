@@ -156,3 +156,18 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
 - A table function's body is pinned in its projections and filters only. Joins, grouping and aggregate arguments, and sort keys inside the body follow the caller's mode (`SELECT max(1 / x)` as a body raises or not by the caller's setting).
 - An aggregate or window call in a scalar function argument reads its operator's mode.
 - Only `spark.sql.ansi.enabled` is captured; Spark captures every SQL configuration.
+
+## The relation cache is per session
+
+Spark's `CacheManager` lives in the `SharedState` of a `SparkContext` (believed shared by every session of it, not
+yet confirmed against a Spark run): a frame cached in one session reads as cached, and is reused, in another.
+Krishiv keeps `cache()` / `persist()` registrations and their data per session (owner decision 2026-11-12, design
+P3-T083 §3.7), because each session can have its own memory pool (`krishiv.session.memoryLimit`) and a shared
+entry would charge one tenant for another's cache. `isCached` and `storageLevel` in one session do not see a
+`cache()` made in another, and closing a session drops its entries (memory and spill files). Invalidation does
+cross sessions: a write or `REFRESH TABLE` in one session drops what every session cached over the table, as in
+Spark. To be revisited with multi-tenant resource groups (P3-T003).
+
+Storage levels: `_2`/`_3` replication and `OFF_HEAP` are accepted and reported as asked, but one copy is kept, in
+the engine's memory or one local spill file. Spilled and `DISK_ONLY` entries are scratch data in the spill
+directory (`krishiv.spill.*`), deleted with the entry or at the next start after a crash.

@@ -216,7 +216,8 @@ fn the_cap_runs_uncached_not_failed() {
         .unwrap();
     register(&s, "t", vec![1, 2]);
     let baseline = s.cache_reserved();
-    let df = s.table("t").cache();
+    // A memory-only level: over the cap it is not stored at all.
+    let df = s.table("t").persist(StorageLevel::MEMORY_ONLY);
     // One byte cannot hold the snapshot: the query still succeeds.
     assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
     // Registered, but no data was stored.
@@ -745,5 +746,169 @@ fn one_fill_per_key() {
     drop(first);
     assert!(s.cache_reserved() > 0);
     block_on(df.unpersist()).unwrap();
+    assert_eq!(s.cache_reserved(), 0);
+}
+
+/// A spill directory under `dir` (the spill manager creates it private: a
+/// temporary directory may be writable by others).
+fn spill_dir(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    dir.path().join("spill")
+}
+
+/// A session spilling under `dir`, with `pairs` set.
+fn disk_session(dir: &tempfile::TempDir, pairs: &[(&str, &str)]) -> Session {
+    let mut builder =
+        Session::builder().config("krishiv.spill.dir", spill_dir(dir).to_str().unwrap());
+    for (k, v) in pairs {
+        builder = builder.config(*k, *v);
+    }
+    let s = builder.build().unwrap();
+    register(&s, "t", (0..5000).collect());
+    s
+}
+
+/// The `.spill` files under `dir`.
+fn spill_files(dir: &std::path::Path) -> usize {
+    let mut n = 0;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            n += spill_files(&path);
+        } else if path.extension().is_some_and(|x| x == "spill") {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// The relation row of `system.caches`: entries, memory bytes, disk bytes,
+/// pending registrations, spills, evictions.
+fn relation_row(s: &Session) -> [i64; 6] {
+    let batches = block_on(async {
+        s.sql(
+            "SELECT entries, memory_bytes, disk_bytes, entries_pending, spills, evictions \
+             FROM system.caches WHERE cache = 'relation'",
+        )
+        .await?
+        .collect()
+        .await
+    })
+    .unwrap();
+    let b = &batches[0];
+    let v = |i: usize| {
+        b.column(i)
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(0)
+    };
+    [v(0), v(1), v(2), v(3), v(4), v(5)]
+}
+
+/// `DISK_ONLY` writes the snapshot to a spill file at the fill: no pool
+/// memory stays held, later actions (a derived frame's filter and projection
+/// too) read the file, and `unpersist` deletes it.
+#[test]
+fn disk_only_entries_live_in_a_spill_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = disk_session(&dir, &[]);
+    let baseline = s.cache_reserved();
+    let df = s.table("t").persist(StorageLevel::DISK_ONLY);
+    assert_eq!(relation_row(&s)[3], 1, "registered, no data yet");
+    assert_eq!(block_on(df.count()).unwrap(), 5000);
+    assert_eq!(s.cache_reserved(), baseline);
+    let [entries, memory, disk, pending, _, _] = relation_row(&s);
+    assert_eq!((entries, memory, pending), (1, 0, 0));
+    assert!(disk > 0);
+    assert_eq!(spill_files(dir.path()), 1);
+    // Read back whole, and through a derived frame.
+    assert_eq!(
+        ids(&block_on(df.collect()).unwrap()),
+        (0..5000).collect::<Vec<_>>()
+    );
+    let derived = df.filter(col("id").lt(lit(10))).select(vec![col("id")]);
+    assert_eq!(
+        ids(&block_on(derived.collect()).unwrap()),
+        (0..10).collect::<Vec<_>>()
+    );
+    // A limit over the file.
+    assert_eq!(block_on(df.limit(3).count()).unwrap(), 3);
+    let df = block_on(df.unpersist()).unwrap();
+    assert_eq!(spill_files(dir.path()), 0);
+    assert_eq!(relation_row(&s)[2], 0);
+    assert_eq!(block_on(df.count()).unwrap(), 5000);
+}
+
+/// A disk entry is the snapshot of the first run: a query-clock column reads
+/// the same values from the file.
+#[test]
+fn a_disk_entry_returns_the_values_of_the_first_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = disk_session(&dir, &[]);
+    block_on(s.sql("SET spark.sql.session.timeZone = UTC")).unwrap();
+    let df = block_on(s.sql("SELECT id, current_timestamp() AS ts FROM t"))
+        .unwrap()
+        .persist(StorageLevel::DISK_ONLY);
+    let first = rendered(&block_on(df.collect()).unwrap());
+    assert!(relation_row(&s)[2] > 0);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    assert_eq!(rendered(&block_on(df.collect()).unwrap()), first);
+}
+
+/// `MEMORY_AND_DISK` over `krishiv.cache.maxBytes` goes to disk instead of
+/// running uncached.
+#[test]
+fn memory_and_disk_over_the_cap_is_written_to_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = disk_session(&dir, &[("krishiv.cache.maxBytes", "1b")]);
+    let baseline = s.cache_reserved();
+    let df = s.table("t").cache();
+    assert_eq!(block_on(df.count()).unwrap(), 5000);
+    let [entries, memory, disk, _, _, _] = relation_row(&s);
+    assert_eq!((entries, memory), (1, 0));
+    assert!(disk > 0);
+    assert_eq!(s.cache_reserved(), baseline);
+    assert_eq!(
+        ids(&block_on(df.collect()).unwrap()),
+        (0..5000).collect::<Vec<_>>()
+    );
+    // A memory-only level over the same cap stays uncached.
+    let other = s
+        .table("t")
+        .filter(col("id").gt(lit(-1)))
+        .persist(StorageLevel::MEMORY_ONLY);
+    assert_eq!(block_on(other.count()).unwrap(), 5000);
+    assert_eq!(relation_row(&s)[0], 1);
+}
+
+/// A disk write the spill cap refuses stores nothing: the query succeeds,
+/// the registration stays without data.
+#[test]
+fn a_refused_disk_write_runs_uncached_not_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = disk_session(&dir, &[("krishiv.spill.maxBytes", "1b")]);
+    let df = s.table("t").persist(StorageLevel::DISK_ONLY);
+    assert_eq!(block_on(df.count()).unwrap(), 5000);
+    let [entries, memory, disk, pending, _, _] = relation_row(&s);
+    assert_eq!((entries, memory, disk, pending), (0, 0, 0, 1));
+    assert_eq!(s.cache_reserved(), 0);
+    assert_eq!(spill_files(dir.path()), 0);
+    assert!(block_on(df.is_cached()).unwrap());
+}
+
+/// Closing the session drops its entries: the memory and the spill files.
+#[test]
+fn closing_the_session_removes_its_spill_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = disk_session(&dir, &[]);
+    let df = s.table("t").persist(StorageLevel::DISK_ONLY);
+    assert_eq!(block_on(df.count()).unwrap(), 5000);
+    let mem = s.table("t").filter(col("id").gt(lit(1))).cache();
+    assert_eq!(block_on(mem.count()).unwrap(), 4998);
+    assert_eq!(spill_files(dir.path()), 1);
+    assert!(s.cache_reserved() > 0);
+    s.close();
+    assert_eq!(spill_files(dir.path()), 0);
     assert_eq!(s.cache_reserved(), 0);
 }

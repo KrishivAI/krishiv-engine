@@ -23,25 +23,29 @@ use krishiv_plan::{
     ReadSource, SetOperation,
 };
 
+use crate::cache::SnapshotLease;
 use crate::catalog::TempTable;
 use crate::column::Column;
+use crate::run_site::DF_SOURCE;
 use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_files, typed_paths};
-use crate::{cache::RelationCache, run_site::DF_SOURCE};
 
 mod fill_stream;
 mod geo_gate;
 mod traced;
 
-use fill_stream::FillStream;
+pub(crate) use fill_stream::{CacheFill, FillKind};
 
 /// A storage level for [`DataFrame::persist`], as PySpark's
-/// `StorageLevel`. Every level maps to memory: the relation cache holds
-/// Arrow batches under the `relation_cache` pool, so a level asking for
-/// disk behaves like its memory-only counterpart for now (disk levels
-/// spill there later).
+/// `StorageLevel`. Memory levels keep the snapshot as Arrow batches under the
+/// `relation_cache` pool and drop it under memory pressure (the next use
+/// refills it); `MEMORY_AND_DISK` moves it to a spill file instead, and so
+/// does a snapshot over `krishiv.cache.maxBytes`; `DISK_ONLY` writes it to a
+/// spill file when it fills. Off-heap and replication are accepted and
+/// reported as asked: one copy is kept, in the engine's memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StorageLevel {
-    /// Keep entries on disk (accepted; stored in memory for now).
+    /// Keep entries on disk (when they do not fit in memory, or always
+    /// without `use_memory`).
     pub use_disk: bool,
     /// Keep entries in memory.
     pub use_memory: bool,
@@ -75,7 +79,7 @@ impl StorageLevel {
         replication: 2,
         ..Self::MEMORY_ONLY
     };
-    /// `MEMORY_AND_DISK`: one in-memory copy (`cache`'s level).
+    /// `MEMORY_AND_DISK`: in memory, moved to disk under pressure (`cache`'s level).
     pub const MEMORY_AND_DISK: Self = Self {
         use_disk: true,
         ..Self::MEMORY_ONLY
@@ -85,14 +89,14 @@ impl StorageLevel {
         use_disk: true,
         ..Self::MEMORY_ONLY_2
     };
-    /// `DISK_ONLY`: accepted as `MEMORY_ONLY`.
+    /// `DISK_ONLY`: written to a spill file when it fills.
     pub const DISK_ONLY: Self = Self {
         use_disk: true,
         use_memory: false,
         deserialized: false,
         ..Self::MEMORY_ONLY
     };
-    /// `DISK_ONLY_2`: accepted as `MEMORY_ONLY`.
+    /// `DISK_ONLY_2`: accepted as `DISK_ONLY`.
     pub const DISK_ONLY_2: Self = Self {
         replication: 2,
         ..Self::DISK_ONLY
@@ -156,62 +160,6 @@ pub enum ExplainMode {
 pub(crate) struct Analysis {
     pub(crate) env: Arc<QueryEnv>,
     pub(crate) analyzed: Arc<AnalyzedPlan>,
-}
-
-/// What an action stores into the relation cache when its stream completes.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "one short-lived value per action; boxing adds an allocation for nothing"
-)]
-pub(crate) enum CacheFill {
-    /// This frame asked for no cache, or the whole plan already hit.
-    No,
-    /// Materialize the stream's batches under `key` when it completes.
-    Fill {
-        key: CacheKey,
-        fallback: SchemaRef,
-        reads_files: bool,
-        tables: Vec<String>,
-        /// The cache's invalidation generation before the query was analyzed.
-        generation: u64,
-        /// The query's own `krishiv.cache.maxBytes`.
-        cap: usize,
-        /// The registration's fill slot: one fill per key runs at a time.
-        claim: crate::cache::FillClaim,
-    },
-}
-
-impl CacheFill {
-    /// `stream`, filling `cache` when it ends cleanly (see [`FillStream`]).
-    fn fill(self, stream: RecordBatchStream, cache: &Arc<RelationCache>) -> RecordBatchStream {
-        match self {
-            Self::No => stream,
-            Self::Fill {
-                key,
-                fallback,
-                reads_files,
-                tables,
-                generation,
-                cap,
-                claim,
-            } => Box::pin(FillStream {
-                inner: stream,
-                cache: Arc::clone(cache),
-                key,
-                schema: None,
-                fallback,
-                reads_files,
-                tables,
-                batches: Vec::new(),
-                bytes: 0,
-                cap,
-                generation,
-                reservation: Some(cache.reserve_fill()),
-                claim: Some(claim),
-                filled: false,
-            }),
-        }
-    }
 }
 
 /// A lazy query: its rows are computed by actions (`collect`,
@@ -1213,23 +1161,23 @@ impl DataFrame {
 
     /// The analyzed plan with cached subplans replaced by scans of their
     /// snapshots (the plan that is planned and run), or `None` when no
-    /// subplan is cached.
+    /// subplan is cached, and the snapshots it reads, held by the action.
     pub(crate) fn cache_substituted(
         &self,
         a: &Arc<Analysis>,
-    ) -> Result<Option<AnalyzedPlan>, KrishivError> {
-        let Some(sub) = self.session.state.cache.substitute(&a.analyzed) else {
-            return Ok(None);
+    ) -> Result<(Option<AnalyzedPlan>, SnapshotLease), KrishivError> {
+        let cache = &self.session.state.cache;
+        let Some(sub) = cache.substitute(&a.analyzed) else {
+            return Ok((None, SnapshotLease::default()));
         };
         // The query keeps its snapshots: clearing the cache before it is
-        // planned must not fail it.
-        for (name, table) in sub.tables {
-            a.env.catalog.pin_cached(name, table);
-        }
-        Ok(Some(AnalyzedPlan {
+        // planned must not fail it, nor free memory it still reads.
+        let lease = SnapshotLease::pin(&a.env.catalog, cache, sub.tables);
+        let plan = AnalyzedPlan {
             plan: krishiv_plan::Plan::try_new(sub.plan)?,
             ..(*a.analyzed).clone()
-        }))
+        };
+        Ok((Some(plan), lease))
     }
 
     /// The physical plan with every cached (sub)plan substituted, and what
@@ -1245,8 +1193,10 @@ impl DataFrame {
         self.session.fill_registered_subtrees(&a.analyzed).await;
         let key = CacheKey::of(&a.analyzed);
         let hit = self.session.state.cache.lookup(&key).is_some();
+        let mut lease = SnapshotLease::default();
         let planned = match self.cache_substituted(a) {
-            Ok(owned) => {
+            Ok((owned, held)) => {
+                lease = held;
                 let analyzed = owned.as_ref().unwrap_or(&a.analyzed);
                 self.session.physical(analyzed, &a.env).await
             }
@@ -1271,8 +1221,8 @@ impl DataFrame {
         } else {
             self.session.state.cache.claim_fill(&key)
         };
-        let fill = match claim {
-            None => CacheFill::No,
+        let kind = match claim {
+            None => FillKind::No,
             Some(claim) => {
                 let fields: Vec<_> = a
                     .analyzed
@@ -1280,7 +1230,14 @@ impl DataFrame {
                     .iter()
                     .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
                     .collect();
-                CacheFill::Fill {
+                let disk = self
+                    .session
+                    .state
+                    .cache
+                    .level_of(&key)
+                    .is_some_and(|l| l.use_disk);
+                FillKind::Fill {
+                    disk,
                     key,
                     fallback: Arc::new(Schema::new(fields)),
                     reads_files: a.analyzed.reads_files,
@@ -1297,7 +1254,7 @@ impl DataFrame {
                 }
             }
         };
-        Ok((physical, fill))
+        Ok((physical, CacheFill { kind, lease }))
     }
 
     /// Runs the query and returns its rows. Dropping the future cancels
@@ -1366,8 +1323,8 @@ impl DataFrame {
         self.persist(StorageLevel::MEMORY_AND_DISK)
     }
 
-    /// Caches this frame's rows at `level` (PySpark's `persist`): every
-    /// level maps to memory for now (see [`StorageLevel`]). Persisting a plan
+    /// Caches this frame's rows at `level` (PySpark's `persist`; where each
+    /// level keeps them: [`StorageLevel`]). Persisting a plan
     /// that is already cached keeps the first level (Spark logs a warning),
     /// and [`StorageLevel::NONE`] does nothing.
     ///

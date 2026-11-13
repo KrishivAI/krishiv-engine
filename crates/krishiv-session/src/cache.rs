@@ -20,22 +20,35 @@
 //! when the pinned table versions of its query equal those it was cached under). Substitution
 //! replaces the matching subtree by a scan of an in-memory table, the same
 //! [`MemoryTable`] provider reads of created DataFrames use; no plan node is
-//! added and nothing is shared between sessions.
+//! added and nothing is shared between sessions (a recorded difference from
+//! Spark's shared `CacheManager`: `docs/concepts/known-differences.md`).
 //!
-//! The cache is all-or-nothing and capped by `krishiv.cache.maxBytes` (read
-//! from each query's configuration): when a snapshot would exceed the cap it
-//! is not stored and the query runs uncached, never failing. Entries are
-//! dropped by `unpersist`, `CLEAR CACHE`, `UNCACHE TABLE`, `REFRESH TABLE`
+//! The cache is all-or-nothing. `krishiv.cache.maxBytes` (read from each
+//! query's configuration) caps the bytes it holds in memory: a snapshot of a
+//! memory-only level that would exceed it is not stored and the query runs
+//! uncached, never failing; a level that uses disk is written to disk instead
+//! (design P3-T083 §3.2). `DISK_ONLY` levels are written to disk when they
+//! fill. A disk entry is one spill file in a spill scope of its own (the
+//! runtime's spill directory, under `krishiv.spill.maxBytes`), read back by
+//! [`SpilledTable`] a batch at a time under the reading query's memory; a
+//! refused write stores nothing. Under memory pressure the arbitrator asks
+//! the `relation_cache` consumer to spill ([`tier::CacheSpill`]): entries no
+//! running query reads, least recently used first, move to disk
+//! (`MEMORY_AND_DISK`) or are evicted (`MEMORY_ONLY`: the registration stays
+//! and the next use refills it). A snapshot a query reads keeps its pool
+//! bytes until that query ends, whatever happens to the entry.
+//!
+//! Entries are dropped by `unpersist`, `CLEAR CACHE`, `UNCACHE TABLE`, `REFRESH TABLE`
 //! and `REFRESH path`, by the catalog calls behind them, and by the engine's
 //! own writes: a successful file write drops the entries reading files. An
 //! external change to a cached path is deliberately invisible: the key
 //! carries no file version, as in Spark. Replacing or dropping a temporary
 //! table or view drops the entries that read it, and an invalidation that
 //! runs while a fill is in flight keeps that fill from being stored.
-//! Entries are never evicted otherwise: they stay until dropped or the cap
-//! refuses new ones. A data invalidation (a write, `REFRESH`) keeps the
+//! A data invalidation (a write, `REFRESH`) keeps the
 //! registrations, which refill on use; `CLEAR CACHE`, `UNCACHE TABLE` and
-//! replacing or dropping a temporary view drop them too.
+//! replacing or dropping a temporary view drop them too. Dropping an entry
+//! drops its spill scope (the directory and its file) once no query reads it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -45,8 +58,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use krishiv_common::config::{CACHE_MAX_BYTES, Config, ConfigValue};
-use krishiv_exec::planner::MemoryTable;
-use krishiv_memory::{ConsumerId, MemoryPool};
+use krishiv_exec::planner::{MemoryTable, SpilledTable, TableProvider};
+use krishiv_memory::{ConsumerId, MemoryPool, Reservation, Spillable};
 use krishiv_plan::analyzer::AnalyzedPlan;
 use krishiv_plan::cache::{CacheKey, normalized_subtree_hash};
 use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, ReadSource, Scan};
@@ -55,6 +68,11 @@ use krishiv_types::batch::Batch;
 use crate::StorageLevel;
 use crate::dataframe::DataFrame;
 use crate::session::Session;
+
+mod tier;
+
+pub(crate) use tier::CacheDisk;
+use tier::{CacheSpill, HeldTable, PoolHold, Tier};
 
 /// What a registration keeps alive beside its plan (table providers and the like).
 type KeepAlive = Vec<Arc<dyn std::any::Any + Send + Sync>>;
@@ -135,10 +153,16 @@ pub(crate) fn is_cache_name(name: &str) -> bool {
 pub(crate) struct CacheEntry {
     /// The hidden table name its scans read.
     pub(crate) name: String,
-    /// The snapshot, as the in-memory table its scans read.
-    pub(crate) table: Arc<MemoryTable>,
-    /// Bytes reserved from the pool for the snapshot.
+    /// The snapshot, in memory or on disk.
+    tier: Tier,
+    /// The level it was registered at: whether pressure spills or evicts it.
+    level: StorageLevel,
+    /// Bytes of the snapshot in memory (0 on disk), counted against the cap.
     pub(crate) bytes: usize,
+    /// Bytes of its spill file (0 in memory).
+    disk_bytes: u64,
+    /// The cache clock at its last use, for least-recently-used spills.
+    last_used: AtomicU64,
     /// Whether the cached plan reads files by path.
     pub(crate) reads_files: bool,
     /// The table names (lower-case last parts) the cached plan reads. Pins
@@ -172,6 +196,28 @@ pub(crate) struct FillLimits {
     pub(crate) cap: usize,
     /// The bytes held while the result streams.
     pub(crate) reservation: FillReservation,
+}
+
+/// A filled snapshot for [`RelationCache::store`].
+#[derive(Debug)]
+pub(crate) struct Snapshot {
+    pub(crate) key: CacheKey,
+    pub(crate) schema: SchemaRef,
+    pub(crate) batches: Vec<RecordBatch>,
+    /// Whether the cached plan reads files by path.
+    pub(crate) reads_files: bool,
+    /// The table names (lower-case last parts) the cached plan reads.
+    pub(crate) tables: Vec<String>,
+}
+
+/// An entry about to be installed.
+struct Placed {
+    tier: Tier,
+    level: StorageLevel,
+    bytes: usize,
+    disk_bytes: u64,
+    reads_files: bool,
+    tables: Vec<String>,
 }
 
 /// Bytes a running fill holds in the `relation_cache` pool consumer, so the
@@ -213,8 +259,15 @@ impl Drop for FillReservation {
 /// What `system.caches` shows of the relation cache.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RelationStats {
+    /// Entries holding data, in memory or on disk.
     pub(crate) entries: u64,
-    pub(crate) bytes: u64,
+    /// Registrations holding no data (not filled yet, being filled, or evicted).
+    pub(crate) entries_pending: u64,
+    pub(crate) memory_bytes: u64,
+    pub(crate) disk_bytes: u64,
+    /// Entries moved to disk, and entries dropped, under memory pressure.
+    pub(crate) spills: u64,
+    pub(crate) evictions: u64,
     pub(crate) hits: u64,
     pub(crate) misses: u64,
     pub(crate) invalidations: u64,
@@ -291,6 +344,14 @@ pub(crate) struct RelationCache {
     /// while the cache held entries but found none.
     hits: AtomicU64,
     misses: AtomicU64,
+    /// Ticks at every store and hit: the entries' recency.
+    clock: AtomicU64,
+    spills: AtomicU64,
+    evictions: AtomicU64,
+    /// The consumer's spill hook (the pool holds it weakly).
+    spill: Arc<CacheSpill>,
+    /// Where disk entries go; `None` keeps every entry in memory (unit tests).
+    disk: Option<CacheDisk>,
     state: Mutex<CacheState>,
     /// Held while the pending registrations are analyzed, so a reader that
     /// finds the queue taken waits for the registrations instead of missing them.
@@ -305,13 +366,23 @@ impl RelationCache {
         Self::on(
             memory,
             &Invalidation::new(Arc::clone(crate::result_cache::global())),
+            None,
         )
     }
 
-    /// An empty cache under `memory`, registered with the runtime's `hub`.
-    pub(crate) fn on(memory: &Arc<dyn MemoryPool>, hub: &Arc<Invalidation>) -> Arc<Self> {
+    /// An empty cache under `memory`, registered with the runtime's `hub`,
+    /// writing disk entries through `disk`.
+    pub(crate) fn on(
+        memory: &Arc<dyn MemoryPool>,
+        hub: &Arc<Invalidation>,
+        disk: Option<CacheDisk>,
+    ) -> Arc<Self> {
         let pool = memory.child("relation_cache", None);
-        let consumer = pool.register("relation_cache", None);
+        let spill = CacheSpill::new(disk.as_ref().map(|d| Arc::clone(&d.executor)));
+        let consumer = pool.register(
+            "relation_cache",
+            Some(Arc::clone(&spill) as Arc<dyn Spillable>),
+        );
         let cache = Arc::new(Self {
             hub: Arc::clone(hub),
             pool,
@@ -320,9 +391,15 @@ impl RelationCache {
             generation: AtomicU64::new(0),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
+            clock: AtomicU64::new(0),
+            spills: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
+            spill: Arc::clone(&spill),
+            disk,
             state: Mutex::new(CacheState::default()),
             registering: futures::lock::Mutex::new(()),
         });
+        let _ = spill.cache.set(Arc::downgrade(&cache));
         hub.relations
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -369,10 +446,33 @@ impl RelationCache {
     }
 
     /// The snapshot the hidden table `name` reads, if cached.
-    pub(crate) fn table(&self, name: &str) -> Option<Arc<MemoryTable>> {
+    pub(crate) fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let key = state.names.get(name)?;
-        state.entries.get(key).map(|e| Arc::clone(&e.table))
+        state.entries.get(key).map(|e| e.tier.provider())
+    }
+
+    fn tick(&self) -> u64 {
+        self.clock.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Publishes the bytes a spill could free now: in-memory entries no
+    /// query reads. Called after every change of the entries and when a
+    /// query lets go of the snapshots it read.
+    fn publish_spillable(&self, state: &CacheState) {
+        let bytes = state
+            .entries
+            .values()
+            .filter(|e| e.tier.unread_in_memory())
+            .map(|e| e.bytes)
+            .fold(0_usize, usize::saturating_add);
+        self.spill.signal.set_spillable_bytes(bytes);
+    }
+
+    /// A query let go of (or took) the snapshots it reads.
+    pub(crate) fn readers_changed(&self) {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        self.publish_spillable(&state);
     }
 
     /// Queues `plan` to be registered at `level` by the next read of the
@@ -474,21 +574,20 @@ impl RelationCache {
             .then(|| (Arc::clone(&reg.plan), reg.keep.clone()))
     }
 
-    /// Stores the snapshot (`schema`, `batches`) under `key` and returns the
-    /// hidden table name its scans read. When the snapshot would exceed the
-    /// `cap` (the fill query's own `krishiv.cache.maxBytes`; 0 disables
-    /// caching), an invalidation ran since the fill
-    /// started (`generation`), or two of its columns share a name (a scan finds its columns by
-    /// name, so it could not tell them apart), stores nothing and returns
-    /// `None`: the query runs uncached, it never fails. Replaces any entry
-    /// already stored under `key`.
-    pub(crate) fn insert(
-        &self,
-        key: CacheKey,
-        schema: SchemaRef,
-        batches: Vec<RecordBatch>,
-        reads_files: bool,
-        tables: Vec<String>,
+    /// Stores the snapshot under its key and returns the hidden table name
+    /// its scans read. A memory level is kept in memory when it fits the
+    /// `cap` (the fill query's own `krishiv.cache.maxBytes`), else refused; a
+    /// level that uses disk is written to a spill file when it does not fit,
+    /// or always when it does not use memory (`DISK_ONLY`). Stores nothing
+    /// and returns `None` (the query ran uncached, it never fails) when the
+    /// cap is 0 (caching disabled), an invalidation ran since the fill
+    /// started (`generation`), the key is no longer registered, a disk write
+    /// fails (the spill cap, the file system), or two of its columns share a
+    /// name (a scan finds its columns by name, so it could not tell them
+    /// apart). Replaces any entry already stored under the key.
+    pub(crate) async fn store(
+        self: Arc<Self>,
+        snapshot: Snapshot,
         limits: FillLimits,
     ) -> Option<String> {
         // Any early return drops the reservation, which releases the bytes.
@@ -497,29 +596,90 @@ impl RelationCache {
             cap,
             reservation,
         } = limits;
+        let Snapshot {
+            key,
+            schema,
+            batches,
+            reads_files,
+            tables,
+        } = snapshot;
         let mut names = std::collections::HashSet::new();
         if !schema.fields().iter().all(|f| names.insert(f.name())) {
             return None;
         }
         let bytes = reservation.bytes;
+        let batches: Vec<Batch> = batches.into_iter().map(Batch::new).collect();
+        let level = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            // A cap of 0 disables caching, the empty result included. The
+            // generation is read under the state lock, which every
+            // invalidation also holds while it bumps it.
+            if cap == 0 || generation != self.generation() {
+                return None;
+            }
+            let level = state.registrations.get(&key)?.level;
+            let old = state.entries.get(&key).map(|e| e.bytes).unwrap_or(0);
+            let fits = state.used.saturating_sub(old).saturating_add(bytes) <= cap;
+            let to_disk = level.use_disk && (!level.use_memory || !fits) && self.disk.is_some();
+            if !to_disk {
+                if !fits {
+                    return None;
+                }
+                let held = HeldTable {
+                    table: MemoryTable::new(Arc::clone(&schema), batches.clone()),
+                    schema,
+                    batches,
+                    _hold: PoolHold {
+                        pool: Arc::clone(&self.pool),
+                        consumer: self.consumer,
+                        bytes: reservation.adopt(),
+                    },
+                };
+                let entry = Placed {
+                    tier: Tier::Memory(Arc::new(held)),
+                    level,
+                    bytes,
+                    disk_bytes: 0,
+                    reads_files,
+                    tables,
+                };
+                return Some(self.install(&mut state, key, entry));
+            }
+            level
+        };
+        let disk = self.disk.as_ref()?;
+        let scratch = Reservation::new(Arc::clone(&self.pool), self.consumer);
+        let file = match disk.write(Arc::clone(&schema), batches, scratch).await {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::warn!(target: "krishiv::session", %error, "a cached relation could not be written to disk; it stays uncached");
+                return None;
+            }
+        };
+        // The rows are on disk: the memory the fill buffered goes back.
+        drop(reservation);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        // A cap of 0 disables caching, the empty result included. The
-        // generation is read under the state lock, which every invalidation
-        // also holds while it bumps it.
-        if cap == 0 || generation != self.generation() || !state.registrations.contains_key(&key) {
+        if generation != self.generation() || !state.registrations.contains_key(&key) {
             return None;
         }
-        let old = state.entries.get(&key).map(|e| e.bytes).unwrap_or(0);
-        if (state.used.saturating_sub(old)).saturating_add(bytes) > cap {
-            return None;
-        }
-        reservation.adopt();
+        let entry = Placed {
+            disk_bytes: file.bytes(),
+            tier: Tier::Disk(Arc::new(SpilledTable::new(file))),
+            level,
+            bytes: 0,
+            reads_files,
+            tables,
+        };
+        Some(self.install(&mut state, key, entry))
+    }
+
+    /// Puts `entry` under `key` (replacing any entry there, which keeps its
+    /// hidden name: plans substituted earlier still read the same name, and
+    /// each holds the table it resolved) and returns the hidden name.
+    fn install(&self, state: &mut CacheState, key: CacheKey, entry: Placed) -> String {
         if let Some(old) = state.entries.get(&key) {
-            self.pool.release(self.consumer, old.bytes);
             state.used = state.used.saturating_sub(old.bytes);
         }
-        // A replaced entry keeps its hidden name: plans substituted earlier
-        // still read the same name, and the plan holds the table it resolved.
         let name = match state
             .names
             .iter()
@@ -532,20 +692,102 @@ impl RelationCache {
                 self.hidden.fetch_add(1, Ordering::AcqRel)
             ),
         };
-        let entry = Arc::new(CacheEntry {
-            name: name.clone(),
-            table: Arc::new(MemoryTable::new(
-                schema,
-                batches.into_iter().map(Batch::new).collect(),
-            )),
-            bytes,
-            reads_files,
-            tables,
-        });
-        state.used = state.used.saturating_add(bytes);
+        state.used = state.used.saturating_add(entry.bytes);
         state.names.insert(name.clone(), key.clone());
-        state.entries.insert(key, entry);
-        Some(name)
+        state.entries.insert(
+            key,
+            Arc::new(CacheEntry {
+                name: name.clone(),
+                tier: entry.tier,
+                level: entry.level,
+                bytes: entry.bytes,
+                disk_bytes: entry.disk_bytes,
+                last_used: AtomicU64::new(self.tick()),
+                reads_files: entry.reads_files,
+                tables: entry.tables,
+            }),
+        );
+        self.publish_spillable(state);
+        name
+    }
+
+    /// Frees at least `target` bytes of the cache's memory if it can: the
+    /// in-memory entries no query reads, least recently used first, move to
+    /// disk (levels that use disk) or are evicted (memory-only levels, or a
+    /// refused write). Returns the bytes freed. The writes run on the
+    /// blocking pool; an entry dropped or replaced while it is written keeps
+    /// what happened to it (the file is discarded).
+    pub(crate) async fn spill_for(self: &Arc<Self>, target: usize) -> usize {
+        let mut freed = 0_usize;
+        let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while freed < target {
+            let victim = {
+                let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                state
+                    .entries
+                    .iter()
+                    .filter(|(_, e)| e.tier.unread_in_memory() && !tried.contains(&e.name))
+                    .min_by_key(|(_, e)| e.last_used.load(Ordering::Relaxed))
+                    .map(|(k, e)| (k.clone(), Arc::clone(e)))
+            };
+            let Some((key, entry)) = victim else {
+                break;
+            };
+            tried.insert(entry.name.clone());
+            let Tier::Memory(held) = &entry.tier else {
+                continue;
+            };
+            let file = match (&self.disk, entry.level.use_disk) {
+                (Some(disk), true) => {
+                    let scratch = Reservation::new(Arc::clone(&self.pool), self.consumer);
+                    disk.write(Arc::clone(&held.schema), held.batches.clone(), scratch)
+                        .await
+                        .map_err(|error| {
+                            tracing::warn!(target: "krishiv::session", %error, "a cached relation could not be spilled; it is evicted");
+                        })
+                        .ok()
+                }
+                _ => None,
+            };
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if !state
+                .entries
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                continue;
+            }
+            if entry.tier.unread_in_memory() {
+                freed = freed.saturating_add(entry.bytes);
+            }
+            state.used = state.used.saturating_sub(entry.bytes);
+            match file {
+                Some(file) => {
+                    self.spills.fetch_add(1, Ordering::Relaxed);
+                    let disk = Arc::new(CacheEntry {
+                        name: entry.name.clone(),
+                        disk_bytes: file.bytes(),
+                        tier: Tier::Disk(Arc::new(SpilledTable::new(file))),
+                        level: entry.level,
+                        bytes: 0,
+                        last_used: AtomicU64::new(entry.last_used.load(Ordering::Relaxed)),
+                        reads_files: entry.reads_files,
+                        tables: entry.tables.clone(),
+                    });
+                    state.entries.insert(key, disk);
+                }
+                None => {
+                    self.evictions.fetch_add(1, Ordering::Relaxed);
+                    state.entries.remove(&key);
+                    state.names.retain(|_, k| k != &key);
+                }
+            }
+            self.publish_spillable(&state);
+            drop(state);
+            // The last holder of the snapshot: its pool bytes go back now.
+            drop(entry);
+        }
+        freed
     }
 
     /// Drops the registration of `key` and its entry; whether one existed.
@@ -558,7 +800,10 @@ impl RelationCache {
         };
         state.names.retain(|_, k| k != key);
         state.used = state.used.saturating_sub(entry.bytes);
-        self.pool.release(self.consumer, entry.bytes);
+        self.publish_spillable(&state);
+        // Dropped under the lock: its pool bytes (or its spill scope) go
+        // now, unless a running query still reads it.
+        drop(entry);
         true
     }
 
@@ -567,18 +812,21 @@ impl RelationCache {
         self.hub.clear();
     }
 
+    /// Drops every registration and entry of this cache (its session closed).
+    pub(crate) fn close(&self) {
+        self.clear_local();
+    }
+
     /// Drops every entry of this cache.
     fn clear_local(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
-        for entry in state.entries.values() {
-            self.pool.release(self.consumer, entry.bytes);
-        }
         state.entries.clear();
         state.names.clear();
         state.registrations.clear();
         state.pending.clear();
         state.used = 0;
+        self.publish_spillable(&state);
     }
 
     /// Drops the entries reading the table `name` (any spelling): what they
@@ -607,10 +855,10 @@ impl RelationCache {
         for key in &stale {
             if let Some(entry) = state.entries.remove(key) {
                 state.used = state.used.saturating_sub(entry.bytes);
-                self.pool.release(self.consumer, entry.bytes);
             }
         }
         state.names.retain(|_, k| !stale.contains(k));
+        self.publish_spillable(&state);
     }
 
     /// Drops the registrations and entries reading the table `name` (any
@@ -641,10 +889,10 @@ impl RelationCache {
             state.registrations.remove(key);
             if let Some(entry) = state.entries.remove(key) {
                 state.used = state.used.saturating_sub(entry.bytes);
-                self.pool.release(self.consumer, entry.bytes);
             }
         }
         state.names.retain(|_, k| !stale.contains(k));
+        self.publish_spillable(&state);
         state
             .pending
             .retain(|p| !unresolved_tables(&p.plan).iter().any(|t| matches(t)));
@@ -665,17 +913,26 @@ impl RelationCache {
             }
         });
         state.used = state.used.saturating_sub(freed);
-        self.pool.release(self.consumer, freed);
         let live: Vec<CacheKey> = state.entries.keys().cloned().collect();
         state.names.retain(|_, k| live.contains(k));
+        self.publish_spillable(&state);
     }
 
     /// The cache's size and counters now, for `system.caches`.
     pub(crate) fn stats(&self) -> RelationStats {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let pending = state
+            .registrations
+            .keys()
+            .filter(|k| !state.entries.contains_key(*k))
+            .count();
         RelationStats {
             entries: state.entries.len() as u64,
-            bytes: state.used as u64,
+            entries_pending: pending as u64,
+            memory_bytes: state.used as u64,
+            disk_bytes: state.entries.values().map(|e| e.disk_bytes).sum(),
+            spills: self.spills.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
             hits: self.hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
             invalidations: self.generation.load(Ordering::Acquire),
@@ -720,7 +977,7 @@ impl RelationCache {
         let policy = analyzed.context.policy;
         let conf = analyzed.context.conf;
         let root = Arc::clone(analyzed.plan.root());
-        let mut tables: Vec<(String, Arc<MemoryTable>)> = Vec::new();
+        let mut tables: Vec<(String, Arc<dyn TableProvider>)> = Vec::new();
         let out: Arc<LogicalPlan> = Arc::clone(&root)
             .transform_down(&mut |node| {
                 let key = CacheKey {
@@ -732,10 +989,10 @@ impl RelationCache {
                 };
                 let found = {
                     let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                    state
-                        .entries
-                        .get(&key)
-                        .map(|e| (e.name.clone(), Arc::clone(&e.table)))
+                    state.entries.get(&key).map(|e| {
+                        e.last_used.store(self.tick(), Ordering::Relaxed);
+                        (e.name.clone(), e.tier.provider())
+                    })
                 };
                 let Some((name, table)) = found else {
                     return Ok::<_, Infallible>(node);
@@ -775,7 +1032,58 @@ impl RelationCache {
 /// scans read.
 pub(crate) struct Substituted {
     pub(crate) plan: Arc<LogicalPlan>,
-    pub(crate) tables: Vec<(String, Arc<MemoryTable>)>,
+    pub(crate) tables: Vec<(String, Arc<dyn TableProvider>)>,
+}
+
+/// The snapshots one action reads, held until it ends: its query's catalog
+/// keeps them pinned by hidden name (planning and instantiation resolve the
+/// names there), and the snapshots stay alive, so an entry spilled, evicted
+/// or dropped meanwhile keeps its pool bytes (or its file) until the action
+/// lets go. Dropping the lease unpins them and republishes what the cache
+/// could spill.
+#[derive(Default)]
+pub(crate) struct SnapshotLease {
+    catalog: Option<Arc<crate::catalog::QueryCatalog>>,
+    names: Vec<String>,
+    tables: Vec<Arc<dyn TableProvider>>,
+    cache: std::sync::Weak<RelationCache>,
+}
+
+impl SnapshotLease {
+    /// Pins `tables` (by hidden name) in `catalog` for one action.
+    pub(crate) fn pin(
+        catalog: &Arc<crate::catalog::QueryCatalog>,
+        cache: &Arc<RelationCache>,
+        tables: Vec<(String, Arc<dyn TableProvider>)>,
+    ) -> Self {
+        let mut lease = Self {
+            catalog: Some(Arc::clone(catalog)),
+            names: Vec::with_capacity(tables.len()),
+            tables: Vec::with_capacity(tables.len()),
+            cache: Arc::downgrade(cache),
+        };
+        for (name, table) in tables {
+            catalog.pin_cached(name.clone(), Arc::clone(&table));
+            lease.names.push(name);
+            lease.tables.push(table);
+        }
+        cache.readers_changed();
+        lease
+    }
+}
+
+impl Drop for SnapshotLease {
+    fn drop(&mut self) {
+        if let Some(catalog) = &self.catalog {
+            for name in &self.names {
+                catalog.unpin_cached(name);
+            }
+        }
+        self.tables.clear();
+        if let Some(cache) = self.cache.upgrade() {
+            cache.readers_changed();
+        }
+    }
 }
 
 /// The bytes of `batch` that are its own: slices of a shared buffer count
