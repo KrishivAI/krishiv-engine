@@ -159,6 +159,12 @@ jobs:
       id-token: write # Codecov OIDC upload (no secret)
     env:
       RUSTC_WRAPPER: "" # no sccache here: instrumented builds are not cacheable
+      # 2026-11-13: the all-features instrumented build filled the runner's disk even after the
+      # cleanup below (119 GB free at the start; "No space left on device", ld Bus error), as the
+      # test binaries grew with the P3 code. Coverage reads the instrumentation's own mapping, not
+      # DWARF, so no debug info at all.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -584,7 +590,9 @@ jobs:
       - name: Pinned tools (sccache, cargo-semver-checks)
         uses: $/.github/actions/install-tool
         with:
-          tool: sccache@0.18.0,cargo-semver-checks@0.43.0
+          # 0.43.0 cannot read the rustdoc JSON (format v61) of the pinned 1.99 toolchain: "unsupported
+          # rustdoc format v61 (supported: v43, v45, v53, v55)"; 0.51.0 checked main against v0.2.0.
+          tool: sccache@0.18.0,cargo-semver-checks@0.51.0
       - name: Check against the last release tag
         run: |
           base=$(git tag --list 'v*' --sort=-v:refname | grep -v -- '-' | head -n1 || true)
