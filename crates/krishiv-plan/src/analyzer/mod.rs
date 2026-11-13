@@ -77,6 +77,7 @@ mod catalog;
 mod char_varchar;
 mod coerce;
 mod exprs;
+mod table_change;
 
 /// Whether `name` is an AES function, in any letter case: the key is the
 /// second argument and must not reach a name, a plan or an error (ADR 0042).
@@ -144,6 +145,9 @@ pub use catalog::{
 };
 pub use char_varchar::DeclaredType;
 pub use sqlfn::{SqlFunction, SqlParam};
+pub use table_change::{
+    CatalogCapabilities, ColumnPosition, NamespaceChange, TableChange, apply_column_changes, widens,
+};
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, VariableValue, variable_name};
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
