@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The Connect listener end to end over a raw tonic client: session RPCs,
-//! limits, refusals and graceful shutdown (design P3-T001 §5). The PySpark
-//! tests need `ExecutePlan` (T011a) and live in `krishiv-cli`.
+//! limits, refusals and graceful shutdown (design P3-T001 §5). `ExecutePlan`
+//! is `tests/execute.rs`; the PySpark tests live in `krishiv-cli`.
 #![expect(
     clippy::expect_used,
     reason = "integration-test helpers are outside #[test] fns"
@@ -557,14 +557,6 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
         draining.store(drain, Ordering::Release);
         let results: Vec<(&str, tonic::Status)> = vec![
             (
-                "ExecutePlan",
-                service
-                    .execute_plan(Request::new(decoded()))
-                    .await
-                    .err()
-                    .expect("err"),
-            ),
-            (
                 "AnalyzePlan",
                 service
                     .analyze_plan(Request::new(decoded()))
@@ -590,21 +582,6 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
                     .unwrap_err(),
             ),
             (
-                "ReattachExecute",
-                service
-                    .reattach_execute(Request::new(decoded()))
-                    .await
-                    .err()
-                    .expect("err"),
-            ),
-            (
-                "ReleaseExecute",
-                service
-                    .release_execute(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
                 "FetchErrorDetails",
                 service
                     .fetch_error_details(Request::new(decoded()))
@@ -626,6 +603,26 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
                     .unwrap_err(),
             ),
         ];
+        if drain {
+            // The RPCs T011a implements refuse too while draining.
+            let e = service
+                .execute_plan(Request::new(decoded()))
+                .await
+                .err()
+                .expect("err");
+            assert_eq!(e.code(), Code::Unavailable);
+            let e = service
+                .reattach_execute(Request::new(decoded()))
+                .await
+                .err()
+                .expect("err");
+            assert_eq!(e.code(), Code::Unavailable);
+            let e = service
+                .release_execute(Request::new(decoded()))
+                .await
+                .unwrap_err();
+            assert_eq!(e.code(), Code::Unavailable);
+        }
         for (rpc, status) in results {
             assert_eq!(status.code(), code, "{rpc}");
             if drain {

@@ -18,6 +18,9 @@ use crate::support;
 
 /// `(query, table, column)` Spark infers and Krishiv does not.
 const MISSING: &[(&str, &str, &str)] = &[
+    // The join key of a subtree the subquery reads too: kept off the shared
+    // `revenue0` body so it is computed once (the join drops a null key anyway).
+    ("q15", "lineitem", "l_suppkey"),
     // From a non-equality join condition (`l_quantity < 0.2 * avg(..)`).
     ("q17", "lineitem", "l_quantity"),
     // The key equality is common to every branch of an `OR`.

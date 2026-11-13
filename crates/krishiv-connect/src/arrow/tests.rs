@@ -201,11 +201,14 @@ fn variant_columns_convert_to_the_connect_form() {
     let out = super::variant_column(&column).unwrap();
     let field = super::variant_field("v", true);
     assert_eq!(out.data_type(), field.data_type());
+    // Spark tags the `metadata` child, not the struct (`ArrowUtils`).
+    assert_eq!(field.metadata().get("variant"), None);
+    let s = out.as_any().downcast_ref::<StructArray>().unwrap();
     assert_eq!(
-        field.metadata().get("variant").map(String::as_str),
+        s.fields()[1].metadata().get("variant").map(String::as_str),
         Some("true")
     );
-    let s = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert_eq!(s.fields()[0].metadata().get("variant"), None);
     let names: Vec<&str> = s.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(names, ["value", "metadata"]);
     assert_eq!(

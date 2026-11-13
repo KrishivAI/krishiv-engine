@@ -351,14 +351,16 @@ fn caches_counts_the_relation_cache_and_the_file_metadata_cache() {
         &s,
         "SELECT concat_ws('|', cache, CAST(entries AS STRING), CAST(hits >= 0 AS STRING)) FROM system.caches ORDER BY cache",
     );
-    assert_eq!(r.len(), 2, "{r:?}");
+    assert_eq!(r.len(), 3, "{r:?}");
     assert!(
-        r[0].starts_with("file_metadata|") && r[1].starts_with("relation|"),
+        r[0].starts_with("checkpoint|")
+            && r[1].starts_with("file_metadata|")
+            && r[2].starts_with("relation|"),
         "{r:?}"
     );
-    let n: u64 = r[0].split('|').nth(1).unwrap().parse().unwrap();
-    assert!(n >= 1, "file metadata entries: {r:?}");
     let n: u64 = r[1].split('|').nth(1).unwrap().parse().unwrap();
+    assert!(n >= 1, "file metadata entries: {r:?}");
+    let n: u64 = r[2].split('|').nth(1).unwrap().parse().unwrap();
     assert!(n >= 1, "relation entries: {r:?}");
 }
 
