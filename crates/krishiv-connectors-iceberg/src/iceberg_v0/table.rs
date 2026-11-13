@@ -17,7 +17,7 @@ use super::types::spark_schema;
 
 /// An Iceberg table's metadata, read through a [`StorageRegistration`].
 pub struct IcebergTable {
-    table: Table,
+    pub(super) table: Table,
 }
 
 impl fmt::Debug for IcebergTable {

@@ -294,3 +294,90 @@ fn bridge_carries_an_empty_batch() {
         sample_batch!(arrow_array, arrow_schema).schema()
     );
 }
+
+/// A schema with the C Data Interface flag bits besides nullable set: an ordered
+/// dictionary (`ARROW_FLAG_DICTIONARY_ORDERED`) and a map with sorted keys
+/// (`ARROW_FLAG_MAP_KEYS_SORTED`), each nullable and not.
+macro_rules! flag_schema {
+    ($schema:ident) => {{
+        use $schema::{DataType, Field, Schema};
+        let ordered = Field::new_dictionary("ordered", DataType::Int16, DataType::Utf8, false)
+            .with_dict_is_ordered(true);
+        let unordered = Field::new_dictionary("unordered", DataType::Int8, DataType::Utf8, true);
+        let sorted = Field::new_map(
+            "sorted",
+            "entries",
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int64, true),
+            true,
+            false,
+        );
+        let unsorted = Field::new_map(
+            "unsorted",
+            "entries",
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+            false,
+            true,
+        );
+        Schema::new(vec![ordered, unordered, sorted, unsorted])
+    }};
+}
+
+#[test]
+fn bridge_keeps_flag_bits() {
+    let bridged = schema_58_to_60(&flag_schema!(arrow_schema_58)).unwrap();
+    let native = flag_schema!(arrow_schema);
+    assert_eq!(bridged, native);
+    assert!(bridged.field(0).dict_is_ordered().unwrap());
+    assert!(!bridged.field(1).dict_is_ordered().unwrap());
+    let arrow_schema::DataType::Map(_, sorted) = bridged.field(2).data_type() else {
+        panic!("sorted is a map");
+    };
+    assert!(*sorted);
+}
+
+#[test]
+fn bridge_keeps_sorted_map_keys_in_a_batch() {
+    fn batch58(sorted: bool) -> arrow_array_58::RecordBatch {
+        use arrow_array_58::builder::{Int64Builder, MapBuilder, StringBuilder};
+        let mut b = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        b.keys().append_value("a");
+        b.values().append_value(1);
+        b.keys().append_value("b");
+        b.values().append_null();
+        b.append(true).unwrap();
+        b.append(false).unwrap();
+        let map = b.finish();
+        let arrow_schema_58::DataType::Map(entries, _) =
+            arrow_array_58::Array::data_type(&map).clone()
+        else {
+            unreachable!()
+        };
+        let data = arrow_array_58::Array::into_data(map)
+            .into_builder()
+            .data_type(arrow_schema_58::DataType::Map(entries, sorted))
+            .build()
+            .unwrap();
+        let col = arrow_array_58::make_array(data);
+        let schema = arrow_schema_58::Schema::new(vec![arrow_schema_58::Field::new(
+            "m",
+            arrow_array_58::Array::data_type(&col).clone(),
+            true,
+        )]);
+        arrow_array_58::RecordBatch::try_new(Arc::new(schema), vec![col]).unwrap()
+    }
+    for sorted in [true, false] {
+        let bridged = record_batch_58_to_60(&batch58(sorted)).unwrap();
+        let arrow_schema::DataType::Map(_, s) = bridged.schema().field(0).data_type().clone()
+        else {
+            panic!("a map");
+        };
+        assert_eq!(s, sorted);
+        assert_eq!(
+            bridged.column(0).data_type(),
+            bridged.schema().field(0).data_type()
+        );
+        assert_eq!(bridged.num_rows(), 2);
+    }
+}

@@ -4,6 +4,9 @@
 //! (`research/p3/t022a-iceberg-spark-types.md`). Field nullability is the field's
 //! `optional`, a list's `containsNull` its element's, a map's `valueContainsNull`
 //! its value's; a doc becomes the `comment` metadata; field ids are not carried.
+//! This is the Spark 4.x mapping (Spark 3.5 has no `variant`). Column default values
+//! (format v3) are refused until Spark's `EXISTS_DEFAULT` / `CURRENT_DEFAULT` metadata
+//! and the fill of missing columns exist.
 
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
@@ -69,6 +72,15 @@ pub(crate) fn spark_type(t: &Type) -> Result<DataType, KrishivError> {
 /// # Errors
 /// As [`spark_type`].
 pub(crate) fn spark_field(f: &NestedField) -> Result<StructField, KrishivError> {
+    if f.initial_default.is_some() || f.write_default.is_some() {
+        // Spark shows them as `EXISTS_DEFAULT`/`CURRENT_DEFAULT` SQL text and fills
+        // missing columns with them; neither is built yet, so refuse rather than read
+        // the column as NULL.
+        return Err(unsupported(format!(
+            "Iceberg column default values (column {})",
+            f.name
+        )));
+    }
     let field = StructField::new(f.name.clone(), spark_type(&f.field_type)?, !f.required);
     Ok(match &f.doc {
         Some(doc) => field.with_metadata(Metadata::with_comment(doc.clone())),

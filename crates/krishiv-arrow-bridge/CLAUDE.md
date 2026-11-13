@@ -13,8 +13,10 @@ cross; Krishiv reads data files itself.
 - `src/lib.rs` the public surface: `schema_58_to_60`, `record_batch_58_to_60` (safe), the `arrow58` re-exports.
 - `src/unsafe_move.rs` the crate's only `unsafe`: the C Data Interface move (`from_raw`) of schema and array, and the
   `from_ffi` import; compile-time size/alignment checks of both majors' FFI structs.
+- `src/sorted.rs` (safe) puts back the map keys-sorted flag Arrow 58's export drops (its field export replaces the
+  flags the type export set): on the imported schema, and on the imported array data (relabelled, validated).
 - `tests/bridge.rs` `ffi_layout` (both majors against the specification's structs) and the `bridge_roundtrip` cases,
-  written as a macro over an Arrow major.
+  written as a macro over an Arrow major; `bridge_keeps_flag_bits` and `bridge_keeps_sorted_map_keys_in_a_batch`.
 
 ## Invariants
 - `unsafe` only in `src/unsafe_move.rs`; each block has `// SAFETY:`; runs under Miri in CI (`ci.yml` miri job).

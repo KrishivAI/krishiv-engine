@@ -13,7 +13,11 @@ use super::storage::{KrishivStorageFactory, StorageRegistration, from_iceberg};
 /// A scheduler with the local file system registered as `file://` and a
 /// registration whose relative paths resolve under `dir`.
 fn local(dir: &std::path::Path) -> (Arc<IoScheduler>, StorageRegistration) {
-    let sched = IoScheduler::new(IoConfig::default());
+    // The I/O runtime is the test's own (iceberg-rust's `Runtime` needs one).
+    let sched = match tokio::runtime::Handle::try_current() {
+        Ok(h) => IoScheduler::with_runtime(IoConfig::default(), h),
+        Err(_) => IoScheduler::new(IoConfig::default()),
+    };
     let id = StoreId::new("file://");
     let store = Arc::new(object_store::local::LocalFileSystem::new());
     sched.register_store(id.clone(), store as Arc<dyn ObjectStore>);
@@ -311,8 +315,33 @@ async fn load_maps_schema_and_bridges_inspect_tables() {
     ]});
     assert_eq!(json, expected);
 
-    // `bridge_roundtrip` for the inspect tables: Arrow 60 batches out of iceberg-rust's
-    // Arrow 58 ones, the values intact.
+    // `bridge_roundtrip` for the inspect tables: each Arrow 60 batch equals iceberg-rust's
+    // own Arrow 58 batch, schema and every column (Debug renders both majors alike).
+    for (bridged, theirs) in [
+        (
+            table.snapshots().await.unwrap(),
+            table.table.inspect().snapshots().scan().await.unwrap(),
+        ),
+        (
+            table.manifests().await.unwrap(),
+            table.table.inspect().manifests().scan().await.unwrap(),
+        ),
+    ] {
+        use futures::TryStreamExt;
+        let theirs: Vec<_> = theirs.try_collect().await.unwrap();
+        assert_eq!(bridged.len(), theirs.len());
+        for (b, t) in bridged.iter().zip(&theirs) {
+            assert_eq!(format!("{:?}", b.schema()), format!("{:?}", t.schema()));
+            assert_eq!(b.num_columns(), t.num_columns());
+            for i in 0..b.num_columns() {
+                assert_eq!(
+                    format!("{:?}", b.column(i)),
+                    format!("{:?}", t.column(i)),
+                    "column {i}"
+                );
+            }
+        }
+    }
     let snapshots = table.snapshots().await.unwrap();
     assert_eq!(
         snapshots
@@ -360,5 +389,60 @@ async fn bad_metadata_fails_load() {
     let missing = super::table::IcebergTable::load(&reg, &format!("{loc}.none"), "db", "t")
         .await
         .unwrap_err();
-    assert!(missing.to_string().contains("File not found"), "{missing}");
+    // Spark's class, not an internal error (review S1).
+    assert!(
+        missing
+            .to_string()
+            .contains("FAILED_READ_FILE.FILE_NOT_EXIST"),
+        "{missing}"
+    );
+}
+
+#[tokio::test]
+async fn runtime_needs_the_io_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let sched = IoScheduler::new(IoConfig::default());
+    let paths = Arc::new(LocalPaths::new(
+        StoreId::new("file://"),
+        dir.path().to_string_lossy().into_owned(),
+    ));
+    let reg = StorageRegistration::new(sched.context(), paths);
+    // No fallback to the calling task's runtime, which may be a compute worker.
+    let e = reg.runtime().unwrap_err();
+    assert!(e.to_string().contains("I/O scheduler's runtime"), "{e}");
+}
+
+#[test]
+fn names_differ_from_another_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_sched, reg) = local(dir.path());
+    // `krishiv-<per-process random>-<n>`: the same counter in a process with the same
+    // pid (a container's pid 1) is another name.
+    let (token, n) = reg
+        .name()
+        .strip_prefix("krishiv-")
+        .unwrap()
+        .split_once('-')
+        .unwrap();
+    assert_eq!(token.len(), 16);
+    let other = format!(
+        "krishiv-{:016x}-{n}",
+        u64::from_str_radix(token, 16).unwrap() ^ 1
+    );
+    let factory: &dyn iceberg::io::StorageFactory = &KrishivStorageFactory { name: other };
+    assert!(factory.build(&iceberg::io::StorageConfig::new()).is_err());
+}
+
+#[test]
+fn column_defaults_are_refused() {
+    use iceberg::spec::{Literal, NestedField, PrimitiveType, Type};
+    for f in [
+        NestedField::optional(1, "a", Type::Primitive(PrimitiveType::Int))
+            .with_initial_default(Literal::int(1)),
+        NestedField::optional(1, "a", Type::Primitive(PrimitiveType::Int))
+            .with_write_default(Literal::int(1)),
+    ] {
+        let e = super::types::spark_field(&f).unwrap_err();
+        assert!(e.to_string().contains("column default values"), "{e}");
+    }
 }

@@ -26,7 +26,7 @@ use iceberg::io::{
     StorageConfig, StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Runtime};
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{FailedReadFileFileNotExist, InternalError, KrishivError};
 use krishiv_exec::files::{LocatedPath, PathLocator};
 use krishiv_io::{FileRef, IoContext};
 use serde::{Deserialize, Serialize};
@@ -49,12 +49,23 @@ impl fmt::Debug for Registered {
 static REGISTRY: LazyLock<RwLock<HashMap<String, Registered>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 static NEXT_NAME: AtomicU64 = AtomicU64::new(0);
+/// A random value per process: names stay unique where pids repeat (every container's
+/// first process is pid 1), so a `FileIO` serialised in another process never
+/// resolves here.
+static PROCESS_TOKEN: LazyLock<u64> = LazyLock::new(|| {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u32(std::process::id());
+    h.finish()
+});
 
 /// Krishiv's I/O made available to iceberg-rust under a process-unique name, for as
 /// long as this value lives. Every request iceberg-rust makes for a table loaded
 /// through it ([`crate::IcebergTable::load`]) runs through `io`, with paths placed by
 /// `paths` (the session's path placement, so the same stores and rules as a read by
-/// path). Load tables on the I/O side, never on a compute worker.
+/// path). Load tables on the I/O side, never on a compute worker. A table already
+/// loaded keeps its storage (and so the `IoContext`) after this value is dropped; new
+/// loads and deserialised `FileIO`s under the name fail.
 #[derive(Debug)]
 pub struct StorageRegistration {
     name: String,
@@ -65,8 +76,8 @@ impl StorageRegistration {
     #[must_use]
     pub fn new(io: IoContext, paths: Arc<dyn PathLocator>) -> Self {
         let name = format!(
-            "krishiv-{}-{}",
-            std::process::id(),
+            "krishiv-{:016x}-{}",
+            *PROCESS_TOKEN,
             NEXT_NAME.fetch_add(1, Ordering::Relaxed)
         );
         REGISTRY
@@ -90,17 +101,23 @@ impl StorageRegistration {
         .build()
     }
 
-    /// iceberg-rust's `Runtime` for this registration: Krishiv's I/O runtime when the
-    /// scheduler has one, else the runtime of the calling task. iceberg-rust spawns
-    /// its own I/O there, never on a compute worker.
+    /// iceberg-rust's `Runtime` for this registration: the scheduler's I/O runtime for
+    /// both of iceberg-rust's handles (its manifest decoding is metadata-sized), so
+    /// nothing it spawns lands on a compute worker.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` when the scheduler has no I/O runtime
+    /// (`krishiv_io::IoScheduler::with_runtime`) or the name is gone.
     pub(crate) fn runtime(&self) -> Result<Runtime, KrishivError> {
-        let handle = resolve(&self.name)
-            .map_err(from_iceberg)?
-            .io
-            .scheduler()
-            .runtime()
-            .cloned();
-        let _entered = handle.as_ref().map(tokio::runtime::Handle::enter);
+        let registered = resolve(&self.name).map_err(from_iceberg)?;
+        let Some(handle) = registered.io.scheduler().runtime() else {
+            return Err(InternalError {
+                message: "iceberg-rust needs the I/O scheduler's runtime; this scheduler has none"
+                    .to_owned(),
+            }
+            .into());
+        };
+        let _entered = handle.enter();
         Runtime::try_current().map_err(from_iceberg)
     }
 }
@@ -200,20 +217,28 @@ impl KrishivStorage {
         Ok((r, at))
     }
 
-    /// The file at `location` as listed now (size and version), or `None`.
-    async fn file(&self, location: &str) -> iceberg::Result<Option<(IoContext, FileRef)>> {
+    /// The file at `location` as listed now (size and version).
+    async fn file(&self, location: &str) -> iceberg::Result<(IoContext, FileRef)> {
         let (r, at) = self.locate(location)?;
-        let meta = r.io.head(&at.store, &at.path).await.map_err(to_iceberg)?;
-        Ok(meta.map(|m| (r.io.clone(), FileRef::from_meta(at.store, &m))))
+        match r.io.head(&at.store, &at.path).await.map_err(to_iceberg)? {
+            Some(m) => Ok((r.io.clone(), FileRef::from_meta(at.store, &m))),
+            None => Err(not_found(location, &at.display)),
+        }
     }
 }
 
-fn not_found(location: &str) -> Error {
-    // The kind and wording iceberg-rust's own storages use for a missing file.
+fn not_found(location: &str, display: &str) -> Error {
+    // The kind and wording iceberg-rust's own storages use for a missing file, with
+    // Spark's class underneath for `from_iceberg`.
+    let k: KrishivError = FailedReadFileFileNotExist {
+        path: display.to_owned(),
+    }
+    .into();
     Error::new(
         ErrorKind::DataInvalid,
         format!("File not found: {location}"),
     )
+    .with_source(k)
 }
 
 #[async_trait]
@@ -226,7 +251,7 @@ impl Storage for KrishivStorage {
     }
 
     async fn metadata(&self, path: &str) -> iceberg::Result<FileMetadata> {
-        let (_, file) = self.file(path).await?.ok_or_else(|| not_found(path))?;
+        let (_, file) = self.file(path).await?;
         Ok(FileMetadata { size: file.size })
     }
 
@@ -235,11 +260,11 @@ impl Storage for KrishivStorage {
         r.io.get_object(&at.store, &at.path)
             .await
             .map_err(to_iceberg)?
-            .ok_or_else(|| not_found(path))
+            .ok_or_else(|| not_found(path, &at.display))
     }
 
     async fn reader(&self, path: &str) -> iceberg::Result<Box<dyn FileRead>> {
-        let (io, file) = self.file(path).await?.ok_or_else(|| not_found(path))?;
+        let (io, file) = self.file(path).await?;
         Ok(Box::new(KrishivFileRead { io, file }))
     }
 
@@ -295,7 +320,9 @@ impl Storage for KrishivStorage {
 }
 
 /// Range reads of one file, pinned to the version listed when it was opened: a file
-/// replaced underneath fails the read (`KRISHIV_FILE_CHANGED_DURING_READ`).
+/// replaced underneath fails the read (`KRISHIV_FILE_CHANGED_DURING_READ`). The bytes
+/// are not reserved from a memory pool; the catalog parse limits of PR-16
+/// (`krishiv.catalog.maxMetadataBytes`) bound them.
 struct KrishivFileRead {
     io: IoContext,
     file: FileRef,

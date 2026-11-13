@@ -25,6 +25,7 @@
 //! The crate is deleted once iceberg-rust and the workspace share an Arrow
 //! major (apache/iceberg-rust#3257).
 
+mod sorted;
 mod unsafe_move;
 
 use std::sync::Arc;
@@ -60,7 +61,8 @@ pub fn schema_58_to_60(schema: &arrow_schema_58::Schema) -> Result<Schema> {
     let exported = arrow_schema_58::ffi::FFI_ArrowSchema::try_from(schema)
         .map_err(|e| arrow_error("export schema", e))?;
     let moved = unsafe_move::schema(exported);
-    Schema::try_from(&moved).map_err(|e| arrow_error("import schema", e))
+    let imported = Schema::try_from(&moved).map_err(|e| arrow_error("import schema", e))?;
+    Ok(sorted::restore_schema(schema, &imported))
 }
 
 /// Moves an Arrow 58 record batch to Arrow 60 without copying its buffers.
@@ -82,6 +84,16 @@ pub fn record_batch_58_to_60(batch: &arrow_array_58::RecordBatch) -> Result<Reco
         .validate_full()
         .map_err(|e| arrow_error("validate batch", e))?;
     let (_, columns, _) = StructArray::from(imported).into_parts();
+    // Map keys-sorted flags, which Arrow 58's export drops (`sorted`).
+    let columns = columns
+        .into_iter()
+        .zip(schema.fields())
+        .map(|(c, f)| {
+            sorted::retype(c.to_data(), f.data_type())
+                .map(arrow_array::make_array)
+                .map_err(|e| arrow_error("restore map flags", e))
+        })
+        .collect::<Result<Vec<_>>>()?;
     RecordBatch::try_new_with_options(
         schema,
         columns,
