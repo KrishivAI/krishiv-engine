@@ -435,8 +435,138 @@ def probe_unknown_reader_features(spark: SparkSession, out: str, record_name: st
         f.write("\n")
 
 
+def outcome(spark: SparkSession, sql: str, path: str, rows: bool = False) -> dict:
+    """What the oracle does with ``sql``: its error, or success (with the rows when asked), the
+    table path elided as ``<path>``."""
+    record: dict = {"sql": sql.replace(path, "<path>")}
+    try:
+        df = spark.sql(sql)
+        got = df.collect()
+        record["error"] = None
+        if rows:
+            record["columns"] = [f.name for f in df.schema.fields]
+            record["rows"] = [[typed(r[i]) for i in range(len(r))] for r in got]
+    except Exception as e:  # the oracle's error is the record
+        record["error"] = oracle_error(e, path)
+    return record
+
+
+def session_probes(spark: SparkSession, out: str) -> None:
+    """Delta tables through the session (PR-08b part 2): ``SESSION.json`` records, for one
+    oracle table, ``DESCRIBE`` of a ``USING delta LOCATION`` table without a column list, the
+    schema-mismatch error, the outcome of each write and DDL Krishiv refuses until PR-37a, the
+    unknown-reader-feature refusal through a catalog table and through a path (the two
+    ``tableNameOrPath`` forms) and a corrupt commit file. ``session-appends`` is a table of three
+    commits whose last one the snapshot-cache tests append while a query runs."""
+    base = os.path.join(out, "session-base")
+    spark.sql(
+        f"CREATE TABLE delta.`{base}` (id BIGINT, name STRING, amount DECIMAL(10, 2), "
+        "ts TIMESTAMP, p STRING) USING delta PARTITIONED BY (p)"
+    )
+    spark.sql(
+        f"INSERT INTO delta.`{base}` VALUES (1, 'a', 1.50, TIMESTAMP'2024-01-01 00:00:00', 'x'), "
+        "(2, NULL, NULL, NULL, 'y')"
+    )
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+    }
+    record["create_without_columns"] = outcome(spark, f"CREATE TABLE d USING delta LOCATION '{base}'", base)
+    record["describe"] = outcome(spark, "DESCRIBE d", base, rows=True)
+    record["select"] = outcome(spark, "SELECT * FROM d ORDER BY id", base, rows=True)
+    record["create_matching_columns"] = outcome(
+        spark,
+        f"CREATE TABLE same (id BIGINT, name STRING, amount DECIMAL(10, 2), ts TIMESTAMP, p STRING) "
+        f"USING delta LOCATION '{base}'",
+        base,
+    )
+    record["create_matching_columns_partitioned"] = outcome(
+        spark,
+        f"CREATE TABLE same2 (id BIGINT, name STRING, amount DECIMAL(10, 2), ts TIMESTAMP, p STRING) "
+        f"USING delta PARTITIONED BY (p) LOCATION '{base}'",
+        base,
+    )
+    record["describe_matching_columns"] = outcome(spark, "DESCRIBE same2", base, rows=True)
+    record["schema_mismatch"] = outcome(
+        spark, f"CREATE TABLE m (id BIGINT, other STRING) USING delta LOCATION '{base}'", base
+    )
+    record["schema_mismatch_type"] = outcome(
+        spark,
+        f"CREATE TABLE m2 (id INT, name STRING, amount DECIMAL(10, 2), ts TIMESTAMP, p STRING) "
+        f"USING delta LOCATION '{base}'",
+        base,
+    )
+    missing = os.path.join(out, "session-missing")
+    empty = os.path.join(out, "session-empty")
+    os.makedirs(empty, exist_ok=True)
+    record["create_missing_location"] = outcome(spark, f"CREATE TABLE gone USING delta LOCATION '{missing}'", missing)
+    record["create_empty_location"] = outcome(spark, f"CREATE TABLE hollow USING delta LOCATION '{empty}'", empty)
+    shutil.rmtree(missing, ignore_errors=True)
+    shutil.rmtree(empty, ignore_errors=True)
+    record["create_missing_location_with_columns"] = outcome(
+        spark, f"CREATE TABLE gone2 (id BIGINT) USING delta LOCATION '{missing}'", missing
+    )
+    shutil.rmtree(missing, ignore_errors=True)
+    record["create_without_location"] = outcome(spark, "CREATE TABLE managed (id BIGINT) USING delta", base)
+    record["ctas"] = outcome(spark, "CREATE TABLE c USING delta AS SELECT 1 AS id", base)
+    record["insert"] = outcome(spark, "INSERT INTO d VALUES (3, 'c', 3.00, NULL, 'x')", base)
+    record["alter_add_columns"] = outcome(spark, "ALTER TABLE d ADD COLUMNS (extra INT)", base)
+    record["alter_set_properties"] = outcome(spark, "ALTER TABLE d SET TBLPROPERTIES ('k' = 'v')", base)
+
+    refused = os.path.join(out, "session-refused")
+    spark.sql(
+        f"CREATE TABLE delta.`{refused}` (id BIGINT) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')"
+    )
+    spark.sql(f"INSERT INTO delta.`{refused}` VALUES (1)")
+    spark.sql(f"CREATE TABLE refused USING delta LOCATION '{refused}'")
+    proto = protocol(refused)
+    proto["readerFeatures"] = [*proto["readerFeatures"], "krishivProbeFeature"]
+    proto["writerFeatures"] = [*proto["writerFeatures"], "krishivProbeFeature"]
+    with open(os.path.join(refused, "_delta_log", f"{2:020}.json"), "w") as f:
+        f.write(json.dumps({"protocol": proto}) + "\n")
+    record["refused_catalog_table"] = outcome(spark, "SELECT * FROM refused", refused)
+    record["refused_qualified_catalog_table"] = outcome(spark, "SELECT * FROM default.refused", refused)
+    record["refused_path_sql"] = outcome(spark, f"SELECT * FROM delta.`{refused}`", refused)
+    record["refused_path_trailing_slash"] = outcome(spark, f"SELECT * FROM delta.`{refused}/`", refused)
+    try:
+        spark.read.format("delta").load(refused).collect()
+        record["refused_path_reader"] = {"error": None}
+    except Exception as e:
+        record["refused_path_reader"] = {"error": oracle_error(e, refused)}
+    shutil.rmtree(refused, ignore_errors=True)
+
+    corrupt = os.path.join(out, "session-corrupt")
+    spark.sql(f"CREATE TABLE delta.`{corrupt}` (id BIGINT) USING delta")
+    spark.sql(f"INSERT INTO delta.`{corrupt}` VALUES (1)")
+    with open(os.path.join(corrupt, "_delta_log", f"{1:020}.json"), "w") as f:
+        f.write("{not json\n")
+    for crc in [n for n in os.listdir(os.path.join(corrupt, "_delta_log")) if n.endswith(".crc")]:
+        os.remove(os.path.join(corrupt, "_delta_log", crc))
+    record["corrupt_commit"] = outcome(spark, f"SELECT * FROM delta.`{corrupt}`", corrupt)
+    shutil.rmtree(corrupt, ignore_errors=True)
+    for name in ("d", "same2", "managed", "c"):
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+    shutil.rmtree(base, ignore_errors=True)
+
+    appends = os.path.join(out, "session-appends")
+    spark.sql(f"CREATE TABLE delta.`{appends}` (id BIGINT, v STRING) USING delta")
+    spark.sql(f"INSERT INTO delta.`{appends}` VALUES (1, 'a'), (2, 'b')")
+    spark.sql(f"INSERT INTO delta.`{appends}` VALUES (3, 'c')")
+    write_scan_expected(spark, appends, {"feature": "appends"})
+    with open(os.path.join(out, "SESSION.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 def main(out: str, which: str = "checkpoint") -> None:
     spark = session()
+    if which == "session":
+        session_probes(spark, out)
+        drop_hadoop_crc(out)
+        spark.stop()
+        return
     if which == "review":
         deletion_vectors(spark, os.path.join(out, "deletion-vectors"))
         probe_unknown_reader_feature(spark, out)
