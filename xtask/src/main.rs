@@ -29,7 +29,7 @@ use xtask::qerror;
 use xtask::quarantine;
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... | metrics-gate | docs-config [PATH] | docs-errors [PATH] | docs-metrics [PATH] | docs-sql [--check] | docs-examples [--check] | docs-python [--check] | docs-rust [--check] | docs-compat [--report FILE] [--data FILE] [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | budgets --precheck [--base REF] [--repo DIR] | budgets --cache-main [--repo DIR] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [--check FLOORS [--previous SUMMARY]] [PATH] | coverage-scope --base REF [--head REF] [--repo DIR] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|pr-size-value|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | quarantine [--list] | file-size [--write-baseline [--base REF] [--only PATH]...] | map CRATE | maps-check [--report] | tokio-console-check | check-format-neutral [ROOT] | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures F]>";
+const USAGE: &str = "usage: cargo xtask <layering | qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... | metrics-gate | docs-config [PATH] | docs-errors [PATH] | docs-metrics [PATH] | docs-sql [--check] | docs-examples [--check] | docs-python [--check] | docs-rust [--check] | docs-compat [--report FILE] [--data FILE] [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | budgets --precheck [--base REF] [--repo DIR] | budgets --cache-main [--repo DIR] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [--check FLOORS [--previous SUMMARY]] [PATH] | coverage-scope --base REF [--head REF] [--repo DIR] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|pr-size-value|changes|dco --base REF [--head REF] [--repo DIR] | changelog check --base REF [--head REF] [--labels a,b] | changelog pending | changelog assemble VERSION [--highlights FILE] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | connect-coverage [--check] | quarantine [--list] | file-size [--write-baseline [--base REF] [--only PATH]...] | map CRATE | maps-check [--report] | tokio-console-check | check-format-neutral [ROOT] | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures F]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -46,6 +46,8 @@ fn main() -> ExitCode {
         ["precheck", flags @ ..] => precheck::run_precheck(&workspace_root(), flags),
         ["codeql-proxy", flags @ ..] => codeql_proxy::run(&workspace_root(), flags),
         ["registry-coverage"] => registry_coverage::run(&workspace_root()),
+        ["connect-coverage"] => xtask::connect_coverage::run(&workspace_root(), false),
+        ["connect-coverage", "--check"] => xtask::connect_coverage::run(&workspace_root(), true),
         ["docs-compat", flags @ ..] => compat::run(&workspace_root(), flags),
         ["quarantine", flags @ ..] => quarantine::run(&workspace_root(), flags),
         ["file-size", flags @ ..] => file_size::run(&workspace_root(), flags),
@@ -79,6 +81,14 @@ fn main() -> ExitCode {
         ["dco", flags @ ..] => {
             DiffArgs::parse(flags, &workspace_root()).and_then(|a| policy::run_dco(&a))
         }
+        ["changelog", "pending"] => xtask::changelog::run_pending(&workspace_root()),
+        ["changelog", "assemble", version] => {
+            xtask::changelog::run_assemble(&workspace_root(), version, None)
+        }
+        ["changelog", "assemble", version, "--highlights", file] => {
+            xtask::changelog::run_assemble(&workspace_root(), version, Some(Path::new(file)))
+        }
+        ["changelog", "check", flags @ ..] => run_changelog_check(flags),
         ["workflow-lint"] => policy::run_workflow_lint(&workspace_root().join(".github/workflows")),
         ["workflow-lint", dir] => policy::run_workflow_lint(Path::new(dir)),
         ["spdx"] => policy::run_spdx(&workspace_root()),
@@ -602,4 +612,21 @@ fn measure_budgets(root: &Path, build_time: bool) -> Result<(Budgets, PathBuf), 
         wheel_bytes: None,
     };
     Ok((now, target_dir))
+}
+
+/// `changelog check`: `--labels` carries the pull request's labels, comma separated; the rest is `--base/--head`.
+fn run_changelog_check(flags: &[&str]) -> Result<(), String> {
+    let mut diff = Vec::new();
+    let mut labels = Vec::new();
+    let mut it = flags.iter();
+    while let Some(flag) = it.next() {
+        let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
+        if *flag == "--labels" {
+            labels = value.split(',').map(str::trim).collect();
+        } else {
+            diff.extend([*flag, *value]);
+        }
+    }
+    let args = DiffArgs::parse(&diff, &workspace_root())?;
+    xtask::changelog::run_check(&args, &labels)
 }

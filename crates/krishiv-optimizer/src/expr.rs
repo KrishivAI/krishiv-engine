@@ -577,6 +577,17 @@ pub(crate) fn equality(e: &Expr) -> Option<[&BoundColumn; 2]> {
     (a.id != b.id && a.data_type == b.data_type && !a.data_type.is_nested()).then_some([a, b])
 }
 
+/// The classes of the column equalities `a = b` (same type) among `preds`.
+pub(crate) fn equality_classes<'a>(preds: impl IntoIterator<Item = &'a Arc<Expr>>) -> Classes {
+    let mut classes = Classes::default();
+    for p in preds {
+        if let Some([a, b]) = equality(p) {
+            classes.union([a.id, b.id]);
+        }
+    }
+    classes
+}
+
 /// Union-find over attributes, for the equalities that a set of joined
 /// inputs already holds.
 #[derive(Default)]
