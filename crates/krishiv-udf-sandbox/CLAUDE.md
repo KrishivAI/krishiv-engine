@@ -4,6 +4,9 @@
 pool (`krishiv-udf-pool`, P3-T014) and by the binary's hidden trampoline subcommand; never by the PyO3 module.
 **The pool must start workers from one long-lived thread:** the parent-death signal fires when the thread that
 started the trampoline exits, not when the server does.
+It must also not put the trampoline in a process group of its own (`Command::process_group`): the trampoline calls
+`setsid`, which fails for a group leader. Each worker then leads its own session and process group, so the pool tracks
+and signals workers by pid, never by group.
 
 ## Purpose
 The OS sandbox for Python UDF workers in server mode (P3-T014b; design `design/P3-T014-connect-udfs-sandbox.md` §4 in
