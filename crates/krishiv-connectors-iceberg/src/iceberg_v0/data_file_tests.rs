@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use iceberg::spec::{
-    FormatVersion, ManifestWriterBuilder, NestedField, PartitionKey, PartitionSpec, PrimitiveType,
-    Schema, SchemaRef, SortOrder, TableMetadata, TableMetadataBuilder, Transform, Type,
+    FormatVersion, ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema,
+    SchemaRef, SortOrder, Struct, TableMetadata, TableMetadataBuilder, Transform, Type,
 };
 use krishiv_io::{ColumnPath, ColumnStatistics, FileStatistics, Precision, ScalarValue as S};
 
@@ -65,12 +65,30 @@ fn metadata(props: &[(&str, &str)]) -> TableMetadata {
     .metadata
 }
 
-/// The partition key of the table's default spec with `values`.
-fn key(m: &TableMetadata, values: &[Option<S>]) -> PartitionKey {
-    let schema = m.current_schema();
-    let spec = m.default_partition_spec().as_ref().clone();
-    let data = partition_tuple(&spec, schema, values).unwrap();
-    PartitionKey::new(spec, Arc::clone(schema), data)
+/// The tuple of the table's default spec with `values`.
+fn key(m: &TableMetadata, values: &[Option<S>]) -> Struct {
+    partition_tuple(m.default_partition_spec(), m.current_schema(), values).unwrap()
+}
+
+/// Where `locs` puts `f.parquet` in the partition `k` of `m`'s default spec.
+fn at(locs: &DataLocations, m: &TableMetadata, k: &Struct) -> String {
+    locs.location(
+        m.default_partition_spec(),
+        m.current_schema(),
+        k,
+        "f.parquet",
+    )
+    .unwrap()
+}
+
+/// Where `locs` puts `f.parquet` under an unpartitioned spec.
+fn unpartitioned(locs: &DataLocations, m: &TableMetadata) -> String {
+    let spec = PartitionSpec::builder(Arc::clone(m.current_schema()))
+        .with_spec_id(1)
+        .build()
+        .unwrap();
+    locs.location(&spec, m.current_schema(), &Struct::empty(), "f.parquet")
+        .unwrap()
 }
 
 /// 2017-07-05 as days from 1970-01-01.
@@ -91,28 +109,22 @@ fn partition_paths_as_java() {
     // Java's `PartitionSpec.partitionToPath`: `URLEncoder.encode` of the name and
     // of the transform's human string (a date as ISO, a space as `+`).
     assert_eq!(
-        locs.location(Some(&k), "f.parquet"),
+        at(&locs, &m, &k),
         "s3://bucket/db/t/data/ts_day=2017-07-05/name=a+b%2Fc%3Dd/id_bucket=3/f.parquet"
     );
     let nulls = key(&m, &[None, None, Some(S::Int32(0))]);
     assert_eq!(
-        locs.location(Some(&nulls), "f.parquet"),
+        at(&locs, &m, &nulls),
         "s3://bucket/db/t/data/ts_day=null/name=null/id_bucket=0/f.parquet"
     );
-    assert_eq!(
-        locs.location(None, "f.parquet"),
-        "s3://bucket/db/t/data/f.parquet"
-    );
+    assert_eq!(unpartitioned(&locs, &m), "s3://bucket/db/t/data/f.parquet");
 }
 
 #[test]
 fn data_path_properties_as_java() {
     let m = metadata(&[("write.data.path", "s3://other/place/")]);
     let locs = DataLocations::for_table(&m).unwrap();
-    assert_eq!(
-        locs.location(None, "f.parquet"),
-        "s3://other/place/f.parquet"
-    );
+    assert_eq!(unpartitioned(&locs, &m), "s3://other/place/f.parquet");
 
     // Object storage (`Boolean.parseBoolean`: any case): the low 20 bits of
     // the Murmur3 hash (seed 0) of the partition path and file name, as binary
@@ -125,7 +137,7 @@ fn data_path_properties_as_java() {
     let name = "ts_day=2017-07-05/name=null/id_bucket=1/f.parquet";
     let hash = java_hash_dirs(name);
     assert_eq!(
-        locs.location(Some(&k), "f.parquet"),
+        at(&locs, &m, &k),
         format!("s3://bucket/db/t/data/{hash}/{name}")
     );
 
@@ -135,9 +147,7 @@ fn data_path_properties_as_java() {
         ("write.object-storage.partitioned-paths", "false"),
     ]);
     assert_eq!(
-        DataLocations::for_table(&m)
-            .unwrap()
-            .location(Some(&k), "f.parquet"),
+        at(&DataLocations::for_table(&m).unwrap(), &m, &k),
         format!(
             "s3://bucket/db/t/data/{}-f.parquet",
             java_hash_dirs("f.parquet")
@@ -150,9 +160,7 @@ fn data_path_properties_as_java() {
         ("write.data.path", "s3://other/place"),
     ]);
     assert_eq!(
-        DataLocations::for_table(&m)
-            .unwrap()
-            .location(None, "f.parquet"),
+        unpartitioned(&DataLocations::for_table(&m).unwrap(), &m),
         format!(
             "s3://other/place/{}/db/t/f.parquet",
             java_hash_dirs("f.parquet")
@@ -162,9 +170,7 @@ fn data_path_properties_as_java() {
     // Any other value is false.
     let m = metadata(&[(OBJECT_STORE_ENABLED, "yes")]);
     assert_eq!(
-        DataLocations::for_table(&m)
-            .unwrap()
-            .location(None, "f.parquet"),
+        unpartitioned(&DataLocations::for_table(&m).unwrap(), &m),
         "s3://bucket/db/t/data/f.parquet"
     );
 }
@@ -193,6 +199,34 @@ fn file_names_are_unique_per_task_and_count() {
     );
     assert_ne!(file_name(0, 1, "w", 0), file_name(0, 2, "w", 0));
     assert_ne!(file_name(0, 1, "w", 0), file_name(0, 1, "w", 1));
+}
+
+/// A tuple that does not fit its spec is an error, never one of iceberg-rust's
+/// panics (review 36a S1); a custom location provider is refused (S4).
+#[test]
+fn locations_refuse_what_iceberg_rust_would_panic_on() {
+    let m = metadata(&[]);
+    let locs = DataLocations::for_table(&m).unwrap();
+    let spec = m.default_partition_spec();
+    let schema = m.current_schema();
+    let short = Struct::from_iter([Some(iceberg::spec::Literal::int(1))]);
+    assert!(locs.location(spec, schema, &short, "f").is_err());
+    // A long where the day field holds a date.
+    let wrong = Struct::from_iter([
+        Some(iceberg::spec::Literal::long(1)),
+        None,
+        Some(iceberg::spec::Literal::int(1)),
+    ]);
+    assert!(locs.location(spec, schema, &wrong, "f").is_err());
+
+    let m = metadata(&[("write.location-provider.impl", "com.example.Provider")]);
+    let e = DataLocations::for_table(&m).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(e.to_string().contains("com.example.Provider"), "{e}");
 }
 
 #[test]

@@ -5,6 +5,7 @@
 //! `prune`). Every transform other than `bucket` is monotone: `a <= b` implies
 //! `t(a) <= t(b)`, which is what the projection relies on.
 
+use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::ScalarValue;
 
 use super::bounds::min_be_bytes;
@@ -40,6 +41,46 @@ pub fn apply(
             temporal(transform, value)
         }
         Transform::Void | Transform::Unknown => None,
+    }
+}
+
+/// The partition value `transform` gives a row whose source column (of type
+/// `source`) holds `value` (`None`: null), for a write (design note §6.1).
+/// Unlike [`apply`], whose `None` means "cannot tell" and keeps a file, this
+/// separates a null partition value (`void`, or a null source) from a
+/// transform Krishiv cannot compute, which must fail the write rather than put
+/// the row in the null partition.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` naming the transform and the source type.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the write task of PR-36a (later commit) calls it")
+)]
+pub(crate) fn partition_value(
+    transform: Transform,
+    source: &IcebergType,
+    value: Option<&ScalarValue>,
+) -> Result<Option<ScalarValue>, KrishivError> {
+    if matches!(transform, Transform::Void) {
+        return Ok(None);
+    }
+    let unsupported = || -> KrishivError {
+        KrishivUnsupportedFeature {
+            feature: format!(
+                "writing the Iceberg partition transform {transform:?} of a {source:?} column"
+            ),
+        }
+        .into()
+    };
+    if matches!(transform, Transform::Unknown) {
+        return Err(unsupported());
+    }
+    match value {
+        None => Ok(None),
+        Some(v) => apply(transform, source, v)
+            .map(Some)
+            .ok_or_else(unsupported),
     }
 }
 

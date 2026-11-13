@@ -30,7 +30,7 @@
 //! Manifests are not split at `commit.manifest.target-size-bytes` and not
 //! merged (`commit.manifest-merge.enabled`) yet: PR-36a's later commit.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use iceberg::io::FileIO;
@@ -40,8 +40,9 @@ use iceberg::spec::{
     TableMetadata, UNASSIGNED_SEQUENCE_NUMBER,
 };
 use iceberg::{TableRequirement, TableUpdate};
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 
+use super::data_file::check_partition;
 use super::scan::{read_manifest_files, snapshot_refs};
 use super::storage::from_iceberg;
 
@@ -50,6 +51,12 @@ pub(crate) const WRITE_METADATA_PATH: &str = "write.metadata.path";
 
 /// `write.summary.partition-limit`.
 const PARTITION_SUMMARY_LIMIT: &str = "write.summary.partition-limit";
+
+/// Java's `SnapshotSummary.CHANGED_PARTITION_COUNT_PROP`.
+const CHANGED_PARTITION_COUNT: &str = "changed-partition-count";
+
+/// Java's `SnapshotSummary.PARTITION_SUMMARY_PROP`.
+const PARTITION_SUMMARIES_INCLUDED: &str = "partition-summaries-included";
 
 /// The summary key of a write's idempotency key (ADR 0014 item 5).
 pub(crate) const WRITE_ID_PROP: &str = "krishiv.write-id";
@@ -90,8 +97,18 @@ pub(crate) fn metadata_dir(metadata: &TableMetadata) -> String {
     dir.trim_end_matches('/').to_owned()
 }
 
-/// What one write adds, once for all its attempts.
-#[derive(Debug, Clone)]
+/// `write.summary.partition-limit` (default 0: no partition summaries).
+fn partition_summary_limit(metadata: &TableMetadata) -> u64 {
+    metadata
+        .properties()
+        .get(PARTITION_SUMMARY_LIMIT)
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+/// What one write adds, once for all its attempts. Not `Clone`: it owns the
+/// attempt counter, so no two attempts share a manifest-list path.
+#[derive(Debug)]
 pub(crate) struct NewManifests {
     /// The snapshot id chosen for the write (§6.2: one per write).
     pub(crate) snapshot_id: i64,
@@ -101,6 +118,8 @@ pub(crate) struct NewManifests {
     pub(crate) manifests: Vec<ManifestFile>,
     /// The summary of the added files (added-* and partition summaries).
     pub(crate) added: HashMap<String, String>,
+    /// Attempts prepared so far (Java's `SnapshotProducer.attempt`).
+    attempts: u32,
 }
 
 /// Writes the manifests of `files` (data files, each with the id of the spec of
@@ -108,8 +127,10 @@ pub(crate) struct NewManifests {
 /// under the snapshot id `snapshot_id` (module docs).
 ///
 /// # Errors
-/// An internal error for a file of a spec the table lacks; iceberg-rust's
-/// write failures, with their Krishiv class when the storage raised one.
+/// An internal error for a file of a spec the table lacks or whose partition
+/// tuple does not fit its spec ([`check_partition`], checked before any
+/// iceberg-rust call, which would panic); iceberg-rust's write failures, with
+/// their Krishiv class when the storage raised one.
 pub(crate) async fn write_new_manifests(
     io: &FileIO,
     metadata: &TableMetadata,
@@ -124,13 +145,10 @@ pub(crate) async fn write_new_manifests(
         by_spec.entry(spec_id).or_default().push(f);
     }
     let mut summary = SnapshotSummaryCollector::default();
-    if let Some(limit) = metadata
-        .properties()
-        .get(PARTITION_SUMMARY_LIMIT)
-        .and_then(|v| v.parse::<u64>().ok())
-    {
-        summary.set_partition_summary_limit(limit);
-    }
+    summary.set_partition_summary_limit(partition_summary_limit(metadata));
+    // Java's `changed-partition-count` counts every partition path, the
+    // unpartitioned "" included; iceberg-rust's collector skips unpartitioned files.
+    let mut changed: HashSet<String> = HashSet::new();
     let mut manifests = Vec::with_capacity(by_spec.len());
     for (n, (spec_id, files)) in by_spec.into_iter().enumerate() {
         let spec = metadata.partition_spec_by_id(spec_id).ok_or_else(|| {
@@ -138,6 +156,10 @@ pub(crate) async fn write_new_manifests(
                 "a data file of partition spec {spec_id}, which the table lacks"
             ))
         })?;
+        for f in &files {
+            check_partition(spec, &schema, f.partition())?;
+            changed.insert(spec.partition_to_path(f.partition(), Arc::clone(&schema)));
+        }
         let path = format!("{dir}/{commit_uuid}-m{n}.avro");
         let output = io.new_output(&path).map_err(from_iceberg)?;
         let builder = ManifestWriterBuilder::new(
@@ -159,11 +181,23 @@ pub(crate) async fn write_new_manifests(
         }
         manifests.push(writer.write_manifest_file().await.map_err(from_iceberg)?);
     }
+    let mut added = summary.build();
+    // Java's `SnapshotSummary.Builder.build`: the count always, and
+    // `partition-summaries-included` when partition summaries were written.
+    added.insert(
+        CHANGED_PARTITION_COUNT.to_owned(),
+        changed.len().to_string(),
+    );
+    let limit = partition_summary_limit(metadata);
+    if !changed.is_empty() && u64::try_from(changed.len()).unwrap_or(u64::MAX) <= limit {
+        added.insert(PARTITION_SUMMARIES_INCLUDED.to_owned(), "true".to_owned());
+    }
     Ok(NewManifests {
         snapshot_id,
         commit_uuid: commit_uuid.to_owned(),
         manifests,
-        added: summary.build(),
+        added,
+        attempts: 0,
     })
 }
 
@@ -189,20 +223,25 @@ pub(crate) struct Attempt {
     pub(crate) updates: Vec<TableUpdate>,
 }
 
-/// The attempt `attempt` (1, 2, ...) of the append `new` to the branch
-/// `ids.branch` of `metadata`, at `timestamp_ms` (module docs).
+/// The next attempt (1, 2, ..., counted in `new`, so a list path is never
+/// reused: a request of an earlier attempt may still land, §7.2.1) of the
+/// append `new` to the branch `ids.branch` of `metadata`, at `timestamp_ms`
+/// (module docs). A branch that does not exist yet starts from the current
+/// snapshot, as Java's `SnapshotUtil.latestSnapshot`, with its `total-*` from
+/// 0 (Java's summary reads the branch's own previous snapshot, which it lacks).
+/// A resend of the same attempt reuses the returned [`Attempt`].
 ///
 /// # Errors
-/// `branch` naming a tag; an internal error when the metadata's refs cannot
-/// be read; the base manifest list's read errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` when `branch` names a tag (Java's text); an
+/// internal error when the metadata's refs cannot be read or the branch points
+/// at a snapshot the metadata lacks; the base manifest list's read errors
 /// (`KRISHIV_CATALOG_LIMIT_EXCEEDED` past `max_metadata_bytes`); iceberg-rust's
 /// write failures.
 pub(crate) async fn prepare_attempt(
     io: &FileIO,
     metadata: &TableMetadata,
-    new: &NewManifests,
+    new: &mut NewManifests,
     ids: WriteIds<'_>,
-    attempt: u32,
     timestamp_ms: i64,
     max_metadata_bytes: u64,
 ) -> Result<Attempt, KrishivError> {
@@ -219,9 +258,12 @@ pub(crate) async fn prepare_attempt(
     if let Some(r) = &base_ref
         && !r.is_branch()
     {
-        return Err(internal(format!(
-            "{branch} is a tag, not a branch; a write needs a branch"
-        )));
+        return Err(KrishivUnsupportedFeature {
+            feature: format!(
+                "{branch} is a tag, not a branch. Tags cannot be targets for producing snapshots"
+            ),
+        }
+        .into());
     }
     // A dangling ref is refused: read as "no base", the list would drop every
     // file the branch holds.
@@ -232,8 +274,13 @@ pub(crate) async fn prepare_attempt(
                 r.snapshot_id
             ))
         })?),
-        None => None,
+        None => metadata.current_snapshot(),
     };
+    // The totals continue the branch's own previous snapshot only.
+    let previous = base_ref
+        .is_some()
+        .then(|| parent.map(|p| &p.summary().additional_properties))
+        .flatten();
     let version = metadata.format_version();
     let base_manifests = match parent {
         Some(p) => {
@@ -249,6 +296,8 @@ pub(crate) async fn prepare_attempt(
         FormatVersion::V2 | FormatVersion::V3 => metadata.last_sequence_number() + 1,
     };
     let first_row_id = metadata.next_row_id();
+    new.attempts += 1;
+    let attempt = new.attempts;
     let path = format!(
         "{}/snap-{snapshot_id}-{attempt}-{}.avro",
         metadata_dir(metadata),
@@ -283,24 +332,26 @@ pub(crate) async fn prepare_attempt(
     list.close().await.map_err(from_iceberg)?;
 
     let mut props = new.added.clone();
-    let previous = parent.map(|p| &p.summary().additional_properties);
     for (total, added, removed) in TOTALS {
-        let before = match previous {
+        // Java's `updateTotal`: a total the previous snapshot lacks, an
+        // unparseable value or a negative result leaves the key out.
+        let before: u64 = match previous {
             Some(prev) => match prev.get(total).and_then(|v| v.parse::<u64>().ok()) {
                 Some(v) => v,
                 None => continue,
             },
             None => 0,
         };
-        let get = |k: &str| {
-            props
-                .get(k)
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(0)
+        let get = |k: &str| match props.get(k) {
+            Some(v) => v.parse::<u64>().ok(),
+            None => Some(0),
         };
-        let after = before
-            .saturating_add(get(added))
-            .saturating_sub(get(removed));
+        let (Some(add), Some(remove)) = (get(added), get(removed)) else {
+            continue;
+        };
+        let Some(after) = before.checked_add(add).and_then(|v| v.checked_sub(remove)) else {
+            continue;
+        };
         props.insert(total.to_owned(), after.to_string());
     }
     props.insert("engine-name".to_owned(), "krishiv".to_owned());

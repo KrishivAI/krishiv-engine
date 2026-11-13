@@ -148,10 +148,11 @@ fn append(
 ) -> (NewManifests, Attempt) {
     let io = env.reg.file_io();
     env.rt.block_on(async {
-        let new = write_new_manifests(&io, m, files, snapshot_id, &format!("uuid-{snapshot_id}"))
-            .await
-            .unwrap();
-        let a = prepare_attempt(&io, m, &new, ids(write_id), 1, now(m), MAX)
+        let mut new =
+            write_new_manifests(&io, m, files, snapshot_id, &format!("uuid-{snapshot_id}"))
+                .await
+                .unwrap();
+        let a = prepare_attempt(&io, m, &mut new, ids(write_id), now(m), MAX)
             .await
             .unwrap();
         (new, a)
@@ -290,7 +291,7 @@ fn a_stale_attempt_is_refused_and_rebuilt_on_the_new_base() {
     let loc0 = t.metadata_location().unwrap().to_owned();
     let a = file(&env, &m0, "a.parquet", 1, &[(1, "a")]);
     let b = file(&env, &m0, "b.parquet", 1, &[(2, "b")]);
-    let (new_b, stale) = append(&env, &m0, vec![b], 202, "w-b");
+    let (mut new_b, stale) = append(&env, &m0, vec![b], 202, "w-b");
     let (_, other) = append(&env, &m0, vec![a], 201, "w-a");
     let (m1, loc1) = commit(&env, &m0, &loc0, &other, 1);
 
@@ -303,9 +304,8 @@ fn a_stale_attempt_is_refused_and_rebuilt_on_the_new_base() {
         .block_on(prepare_attempt(
             &io,
             &m1,
-            &new_b,
+            &mut new_b,
             ids("w-b"),
-            2,
             now(&m1),
             MAX,
         ))
@@ -356,4 +356,206 @@ fn v3_appends_assign_row_lineage() {
     );
     assert_eq!(m2.next_row_id(), 3);
     assert_eq!(rows(&env, &loc2), ["1|1|a1", "2|1|a2", "3|2|b"]);
+}
+
+/// A write to a branch that does not exist yet starts from the current
+/// snapshot (Java's `SnapshotUtil.latestSnapshot`), with totals from 0 and a
+/// null `assert-ref-snapshot-id`; `main` is unchanged. A tag is refused with
+/// Java's text (review 36a S2, N1).
+#[test]
+fn a_new_branch_starts_from_the_current_snapshot_and_tags_are_refused() {
+    let env = env();
+    let t = create(&env, 2);
+    let m0 = t.metadata().clone();
+    let loc0 = t.metadata_location().unwrap().to_owned();
+    let a = file(&env, &m0, "a.parquet", 1, &[(1, "a")]);
+    let (_, first) = append(&env, &m0, vec![a], 401, "w-1");
+    let (m1, loc1) = commit(&env, &m0, &loc0, &first, 1);
+
+    let io = env.reg.file_io();
+    let b = file(&env, &m1, "b.parquet", 2, &[(2, "b")]);
+    let dev = env.rt.block_on(async {
+        let mut new = write_new_manifests(&io, &m1, vec![b], 402, "uuid-402")
+            .await
+            .unwrap();
+        let ids = WriteIds {
+            branch: "dev",
+            write_id: "w-2",
+            query_id: None,
+        };
+        prepare_attempt(&io, &m1, &mut new, ids, now(&m1), MAX)
+            .await
+            .unwrap()
+    });
+    assert!(dev.requirements.iter().any(|r| matches!(
+        r,
+        iceberg::TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id: None } if r#ref == "dev"
+    )));
+    assert_eq!(dev.snapshot.parent_snapshot_id(), Some(401));
+    let p = &dev.snapshot.summary().additional_properties;
+    assert_eq!(p["total-records"], "1", "{p:?}");
+    assert!(!p.contains_key(QUERY_ID_PROP));
+    let (m2, loc2) = commit(&env, &m1, &loc1, &dev, 2);
+    assert_eq!(m2.current_snapshot_id(), Some(401));
+    let table = env
+        .rt
+        .block_on(IcebergTable::load(&env.reg, &loc2, "db", "t"))
+        .unwrap();
+    let on_dev = env
+        .provider(&table, &VersionSpec::Ref("dev".to_owned()))
+        .unwrap();
+    assert_eq!(
+        render(
+            &provider_session(on_dev)
+                .run("SELECT id FROM t ORDER BY id")
+                .unwrap()
+        ),
+        ["1", "2"]
+    );
+    assert_eq!(rows(&env, &loc2), ["1|1|a"]);
+
+    // A tag at the first snapshot cannot be written.
+    let tagged = TableMetadataBuilder::new_from_metadata(m2, Some(loc2))
+        .set_ref(
+            "v1",
+            iceberg::spec::SnapshotReference::new(
+                401,
+                iceberg::spec::SnapshotRetention::Tag {
+                    max_ref_age_ms: None,
+                },
+            ),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+    let c = file(&env, &tagged, "c.parquet", 1, &[(3, "c")]);
+    let e = env.rt.block_on(async {
+        let mut new = write_new_manifests(&io, &tagged, vec![c], 403, "uuid-403")
+            .await
+            .unwrap();
+        let ids = WriteIds {
+            branch: "v1",
+            write_id: "w-3",
+            query_id: None,
+        };
+        prepare_attempt(&io, &tagged, &mut new, ids, now(&tagged), MAX)
+            .await
+            .unwrap_err()
+    });
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+    );
+    assert!(e.to_string().contains("v1 is a tag, not a branch"), "{e}");
+}
+
+/// Each prepared attempt writes its own manifest list (the counter lives in
+/// `NewManifests`), so a request of an earlier attempt that lands late still
+/// names its own list (review 36a S3).
+#[test]
+fn attempts_never_share_a_manifest_list() {
+    let env = env();
+    let t = create(&env, 2);
+    let m0 = t.metadata().clone();
+    let a = file(&env, &m0, "a.parquet", 1, &[(1, "a")]);
+    let io = env.reg.file_io();
+    let lists = env.rt.block_on(async {
+        let mut new = write_new_manifests(&io, &m0, vec![a], 501, "uuid-501")
+            .await
+            .unwrap();
+        let mut lists = Vec::new();
+        for _ in 0..3 {
+            let a = prepare_attempt(&io, &m0, &mut new, ids("w"), now(&m0), MAX)
+                .await
+                .unwrap();
+            lists.push(a.snapshot.manifest_list().to_owned());
+        }
+        lists
+    });
+    assert!(
+        lists[0].ends_with("/metadata/snap-501-1-uuid-501.avro"),
+        "{lists:?}"
+    );
+    assert!(
+        lists[1].ends_with("/metadata/snap-501-2-uuid-501.avro"),
+        "{lists:?}"
+    );
+    assert!(
+        lists[2].ends_with("/metadata/snap-501-3-uuid-501.avro"),
+        "{lists:?}"
+    );
+}
+
+/// A file whose tuple does not fit its spec is an error before iceberg-rust's
+/// summary and manifest code, which panics on it (review 36a S1); an
+/// unpartitioned append counts one changed partition, as Java's summary
+/// (N2).
+#[test]
+fn manifests_check_tuples_and_count_partitions_as_java() {
+    let env = env();
+    let t = create(&env, 2);
+    let m = t.metadata().clone();
+    let io = env.reg.file_io();
+    let (spec_id, good) = file(&env, &m, "a.parquet", 1, &[(1, "a")]);
+    let mut bad = iceberg::spec::DataFileBuilder::default();
+    bad.content(iceberg::spec::DataContentType::Data)
+        .file_path(env.at("bad.parquet"))
+        .file_format(iceberg::spec::DataFileFormat::Parquet)
+        .file_size_in_bytes(1)
+        .record_count(1)
+        .partition(iceberg::spec::Struct::empty());
+    let bad = bad.build().unwrap();
+    let e = env
+        .rt
+        .block_on(write_new_manifests(
+            &io,
+            &m,
+            vec![(spec_id, good.clone()), (spec_id, bad.clone())],
+            601,
+            "uuid-601",
+        ))
+        .unwrap_err();
+    assert!(e.to_string().contains("partition tuple of 0 values"), "{e}");
+
+    let new = env
+        .rt
+        .block_on(write_new_manifests(
+            &io,
+            &m,
+            vec![(spec_id, good)],
+            602,
+            "u",
+        ))
+        .unwrap();
+    assert_eq!(new.added["changed-partition-count"], "1");
+    assert!(!new.added.contains_key("partition-summaries-included"));
+
+    // An unpartitioned table: the "" partition.
+    let schema = ixn_schema();
+    let flat = TableMetadataBuilder::new(
+        schema,
+        PartitionSpec::unpartition_spec(),
+        iceberg::spec::SortOrder::unsorted_order(),
+        env.at("flat"),
+        FormatVersion::V2,
+        std::collections::HashMap::from([(
+            "write.summary.partition-limit".to_owned(),
+            "10".to_owned(),
+        )]),
+    )
+    .unwrap()
+    .build()
+    .unwrap()
+    .metadata;
+    std::fs::create_dir_all(env.dir.path().join("flat/metadata")).unwrap();
+    let new = env
+        .rt
+        .block_on(write_new_manifests(&io, &flat, vec![(0, bad)], 603, "u"))
+        .unwrap();
+    assert_eq!(new.added["changed-partition-count"], "1");
+    assert_eq!(new.added["added-records"], "1");
+    // Within the limit: the flag is set, the empty partition key is not.
+    assert_eq!(new.added["partition-summaries-included"], "true");
+    assert!(!new.added.keys().any(|k| k.starts_with("partitions.")));
 }

@@ -16,18 +16,27 @@
 //! deprecated properties (`write.object-storage.path`,
 //! `write.folder-storage.path`) when it writes; Krishiv honours them, as
 //! iceberg-rust does (a stated divergence). Partition directories are
-//! `name=value` pairs, URL-encoded, with each transform's human string.
+//! `name=value` pairs, URL-encoded, with each transform's human string. A
+//! table with a custom `write.location-provider.impl` (a Java class) is
+//! refused. `write.object-storage.partitioned-paths` must be a boolean
+//! (iceberg-rust's parse; Java reads anything but `true` as false).
+//!
+//! Every partition tuple is checked against its spec before iceberg-rust sees
+//! it ([`check_partition`]): its path and summary code panics on a mismatch.
+//! Column sizes are not recorded (`FileStatistics` has no chunk sizes yet;
+//! Java writes them for every column with metrics).
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use iceberg::spec::{
     DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, Literal, PartitionKey,
-    PartitionSpec, PrimitiveType, SchemaRef, Struct, TableMetadata,
+    PartitionSpec, PrimitiveType, SchemaRef, Struct, TableMetadata, Type,
 };
 use iceberg::writer::file_writer::location_generator::{
     DefaultLocationGenerator, LocationGenerator, ObjectStorageLocationGenerator,
 };
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::ScalarValue;
 
 use super::scan::iceberg_type;
@@ -37,6 +46,9 @@ use crate::plan::file_metrics::FileMetrics;
 
 /// `write.object-storage.enabled` (Java's `TableProperties.OBJECT_STORE_ENABLED`).
 pub(crate) const OBJECT_STORE_ENABLED: &str = "write.object-storage.enabled";
+
+/// `write.location-provider.impl` (a Java `LocationProvider` class).
+pub(crate) const LOCATION_PROVIDER_IMPL: &str = "write.location-provider.impl";
 
 /// Where a write's data files go.
 #[derive(Debug, Clone)]
@@ -51,9 +63,18 @@ impl DataLocations {
     /// The data locations of the table `metadata` describes (module docs).
     ///
     /// # Errors
-    /// A table property iceberg-rust cannot parse (`write.object-storage.partitioned-paths`
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a custom location provider; a table
+    /// property iceberg-rust cannot parse (`write.object-storage.partitioned-paths`
     /// that is not a boolean), as an internal error naming its message.
     pub(crate) fn for_table(metadata: &TableMetadata) -> Result<Self, KrishivError> {
+        if let Some(class) = metadata.properties().get(LOCATION_PROVIDER_IMPL) {
+            return Err(KrishivUnsupportedFeature {
+                feature: format!(
+                    "writing an Iceberg table whose {LOCATION_PROVIDER_IMPL} is {class}"
+                ),
+            }
+            .into());
+        }
         let object_store = metadata
             .properties()
             .get(OBJECT_STORE_ENABLED)
@@ -65,20 +86,70 @@ impl DataLocations {
         })
     }
 
-    /// The location of the file `name` in the partition `key` (`None` or an
-    /// unpartitioned spec: no partition directories).
-    pub(crate) fn location(&self, key: Option<&PartitionKey>, name: &str) -> String {
-        match self {
-            Self::Default(g) => g.generate_location(key, name),
-            Self::ObjectStore(g) => g.generate_location(key, name),
-        }
+    /// The location of the file `name` with the partition tuple `partition` of
+    /// `spec` over `schema` (an unpartitioned spec: no partition directories).
+    ///
+    /// # Errors
+    /// [`check_partition`]'s.
+    pub(crate) fn location(
+        &self,
+        spec: &PartitionSpec,
+        schema: &SchemaRef,
+        partition: &Struct,
+        name: &str,
+    ) -> Result<String, KrishivError> {
+        check_partition(spec, schema, partition)?;
+        let key = PartitionKey::new(spec.clone(), Arc::clone(schema), partition.clone());
+        Ok(match self {
+            Self::Default(g) => g.generate_location(Some(&key), name),
+            Self::ObjectStore(g) => g.generate_location(Some(&key), name),
+        })
     }
 }
 
-/// The name of the `n`th data file task `task` of the write `write_id` wrote
-/// (design note §7.1, Java's `OutputFileFactory` shape:
-/// `<partition>-<task>-<write id>-<n>.parquet`, the numbers zero-padded to five
-/// digits as Java's).
+/// Whether `partition` is a tuple of `spec` over `schema`: the spec binds to
+/// the schema, one value per field, each null or a primitive of the field's
+/// type. iceberg-rust's partition paths, summaries and manifest partition
+/// summaries panic otherwise.
+///
+/// # Errors
+/// An internal error naming the mismatch: tuples come from [`partition_tuple`]
+/// over the same spec, so a mismatch is a bug.
+pub(crate) fn check_partition(
+    spec: &PartitionSpec,
+    schema: &SchemaRef,
+    partition: &Struct,
+) -> Result<(), KrishivError> {
+    let ty = spec.partition_type(schema).map_err(from_iceberg)?;
+    let values: Vec<_> = partition.iter().collect();
+    if ty.fields().len() != values.len() {
+        return Err(internal(format!(
+            "partition tuple of {} values for spec {} of {} fields",
+            values.len(),
+            spec.spec_id(),
+            ty.fields().len()
+        )));
+    }
+    for (field, value) in ty.fields().iter().zip(values) {
+        let fits = match (field.field_type.as_ref(), value) {
+            (Type::Primitive(_), None) => true,
+            (Type::Primitive(p), Some(Literal::Primitive(v))) => p.compatible(v),
+            _ => false,
+        };
+        if !fits {
+            return Err(internal(format!(
+                "partition value {value:?} of field {} is not a {}",
+                field.name, field.field_type
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The name of the `n`th data file (from 1, as Java's counter) task `task` of
+/// the write `write_id` wrote (design note §7.1, Java's `OutputFileFactory`
+/// shape: `<partition>-<task>-<write id>-<n>.parquet`, the numbers zero-padded
+/// to five digits as Java's).
 pub(crate) fn file_name(partition: u32, task: u64, write_id: &str, n: u32) -> String {
     format!("{partition:05}-{task}-{write_id}-{n:05}.parquet")
 }

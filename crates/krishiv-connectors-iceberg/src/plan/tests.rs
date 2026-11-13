@@ -1221,7 +1221,54 @@ fn bucket_transform_vectors() {
             );
         }
     }
+    // Appendix B's `time` and `timestamp_ns` rows are not here: Krishiv has no
+    // value of either type yet (no `ScalarValue` for them), so it cannot bucket
+    // them, and a write of one fails (`partition_value`).
+    assert_eq!(
+        transform::bucket_hash(&T::Time, &S::Int64(81_068_000_000)),
+        None
+    );
+    assert_eq!(
+        transform::bucket_hash(&T::TimestampNs, &S::TimestampMicros(micros)),
+        None
+    );
     // Types the spec does not bucket.
     assert_eq!(transform::bucket_hash(&T::Boolean, &S::Boolean(true)), None);
     assert_eq!(transform::bucket_hash(&T::Double, &S::Float64(1.0)), None);
+}
+
+/// A write's partition values: `void` and a null source are null; a
+/// transform Krishiv cannot compute fails instead of writing the null
+/// partition (review 36a S5).
+#[test]
+fn partition_values_for_writes() {
+    use IcebergType as T;
+    use ScalarValue as S;
+    use transform::partition_value as pv;
+    assert_eq!(
+        pv(Transform::Void, &T::Long, Some(&S::Int64(1))).unwrap(),
+        None
+    );
+    assert_eq!(pv(Transform::Day, &T::Date, None).unwrap(), None);
+    assert_eq!(
+        pv(Transform::Day, &T::Date, Some(&S::Date32(17_486))).unwrap(),
+        Some(S::Date32(17_486))
+    );
+    assert_eq!(
+        pv(Transform::Bucket(16), &T::Int, Some(&S::Int32(34))).unwrap(),
+        Some(S::Int32(2_017_239_379 % 16))
+    );
+    for (t, ty, v) in [
+        (Transform::Bucket(4), T::Double, S::Float64(1.0)),
+        (Transform::Unknown, T::Long, S::Int64(1)),
+        // A literal of another type than the source.
+        (Transform::Identity, T::Long, S::Int32(1)),
+    ] {
+        let e = pv(t, &ty, Some(&v)).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+            "{e}"
+        );
+    }
 }
