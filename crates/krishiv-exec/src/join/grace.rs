@@ -1563,6 +1563,7 @@ mod loom_model {
                     Next::Task(_) => break true,
                     Next::Done => break false,
                     Next::Wait => {}
+                    Next::Lost(e) => panic!("the build rows were lost: {e}"),
                 }
                 block_on(changed);
             };

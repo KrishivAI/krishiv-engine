@@ -670,16 +670,23 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
     key: "krishiv.deterministicOrder",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(false)),
-    doc: "Make a query's result reproducible: every pipeline runs on one driver, so partial \
-          states (a decimal `sum` or `avg`, whose overflow can depend on the order of the \
-          merges) are merged in the order the input arrives and a query without `ORDER BY` \
-          returns its rows in the same order on every run, byte for byte, for the engine's \
-          own scans. The key hashes take a fixed seed, so an operator that spills splits \
-          its rows the same way on every run. Costs the parallelism of the query: meant for \
-          reproducing a result, comparing two builds, and tests. Memory pressure from other queries in the process \
+    doc: "Make a query's result reproducible, aiming at the same bytes at any thread count (a \
+          float sum under a window, a sort-merge join or a very large grouping can still differ, \
+          because those size their buckets by the thread count). A scan \
+          pipeline whose source can be split deterministically runs one driver per logical \
+          partition (up to 16), morsels are dealt to them by ordinal, and their partial states \
+          are combined in partition order, so partial states (a decimal `sum` or `avg`, whose \
+          overflow can depend on the order of the merges) merge the same way and a query \
+          without `ORDER BY` returns its rows in the same order on every run, byte for byte, \
+          for the engine's own scans. Any other pipeline (a sink that is not lane-safe, a \
+          source that reports no positions, a pushed `LIMIT`, an operator with work after its \
+          input, a memory limit under 4 GiB) runs on one driver. The key hashes take a fixed \
+          seed, so an operator that spills splits its rows the same way on every run. Costs \
+          parallelism where it falls back to one driver: meant for reproducing a result, \
+          comparing two builds, and tests. Memory pressure from other queries in the process \
           can still change when an operator spills, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
-          probing a union) take turns, one after another, so they lose their overlap too. Off by \
+          probing a union) take turns in branch order, so they lose their overlap too. Off by \
           default.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
