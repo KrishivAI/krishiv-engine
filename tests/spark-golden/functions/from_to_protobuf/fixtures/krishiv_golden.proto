@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: Apache-2.0
+// Krishiv-authored message definitions for the from_protobuf / to_protobuf goldens.
+// Build: protoc --include_imports --descriptor_set_out=krishiv_golden.desc krishiv_golden.proto
+syntax = "proto3";
+
+package krishiv.golden;
+
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  RED = 1;
+  GREEN = 2;
+}
+
+message Scalars {
+  int32 i32 = 1;
+  int64 i64 = 2;
+  uint32 u32 = 3;
+  uint64 u64 = 4;
+  sint32 s32 = 5;
+  sint64 s64 = 6;
+  fixed32 f32 = 7;
+  fixed64 f64 = 8;
+  sfixed32 sf32 = 9;
+  sfixed64 sf64 = 10;
+  float flt = 11;
+  double dbl = 12;
+  bool flag = 13;
+  string str = 14;
+  bytes bin = 15;
+  Color color = 16;
+}
+
+message Inner {
+  string name = 1;
+  int32 n = 2;
+}
+
+message Outer {
+  Inner inner = 1;
+  repeated int32 nums = 2;
+  repeated Inner inners = 3;
+  map<string, int32> counts = 4;
+  optional int32 opt = 5;
+  oneof choice {
+    string a = 6;
+    int64 b = 7;
+  }
+}
+
+message Node {
+  int32 v = 1;
+  Node next = 2;
+}
