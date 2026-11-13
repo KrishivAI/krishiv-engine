@@ -290,7 +290,7 @@ impl Alter<'_> {
         if self.rules.case_sensitive {
             a == b
         } else {
-            a.eq_ignore_ascii_case(b)
+            krishiv_types::equals_ignore_case(a, b)
         }
     }
 
@@ -761,6 +761,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(names(&t), ["a", "b", "A", "p"]);
+    }
+
+    #[test]
+    fn case_insensitive_matching_is_unicode_aware_like_the_analyzers() {
+        let (id, empty) = (table(), BTreeMap::new());
+        let columns = [TableColumn::new("\u{c4}", DataType::Integer, true)];
+        let input = AlterInput {
+            table: &id,
+            columns: &columns,
+            comments: &empty,
+            defaults: &empty,
+            partition_columns: &[],
+        };
+        let comment = TableChange::UpdateColumnComment {
+            path: path("\u{e4}"),
+            comment: Some("c".into()),
+        };
+        let t = apply_changes(&input, std::slice::from_ref(&comment), full()).unwrap();
+        assert_eq!(
+            t.comments["\u{c4}"], "c",
+            "addressed as written, stored by name"
+        );
+        let dup = TableChange::AddColumn {
+            path: path("\u{e4}"),
+            data_type: DataType::Long,
+            declared: None,
+            nullable: true,
+            comment: None,
+            position: None,
+            default: None,
+        };
+        let e = apply_changes(&input, std::slice::from_ref(&dup), full()).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::ColumnAlreadyExists);
+        let sensitive = AlterRules {
+            case_sensitive: true,
+            ..full()
+        };
+        assert!(apply_changes(&input, &[comment], sensitive).is_err());
+        assert!(apply_changes(&input, &[dup], sensitive).is_ok());
     }
 
     #[test]
