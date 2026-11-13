@@ -51,13 +51,14 @@ use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit,
 };
 use krishiv_common::error::{
-    CastOverflow, FailedReadFileNoHint, KrishivError, LegacyErrorTemp2093,
+    CastOverflow, FailedReadFileNoHint, KrishivError, KrishivUnsupportedFeature,
+    LegacyErrorTemp2093,
 };
 
 use crate::error::{FormatError, Result, internal};
 use crate::request::{
     ColumnPath, FieldMapping, PushdownExpr, ROW_INDEX_COLUMN, RowLevel, ScalarValue, ScanRequest,
-    project_schema,
+    WithoutFieldIds, project_schema,
 };
 
 /// Arrow field-metadata key of a field id (Parquet's, as arrow-rs reads it).
@@ -97,6 +98,9 @@ struct Resolver {
     file: SchemaRef,
     mapping: FieldMapping,
     path: String,
+    /// The file has no field id and the mapping reads such files by
+    /// position ([`WithoutFieldIds::Position`]).
+    positional: bool,
 }
 
 /// Maps a table-level request to one file and its batches back (see the
@@ -120,18 +124,31 @@ impl SchemaMapper {
     /// type change of a projected column; `FAILED_READ_FILE.NO_HINT` caused
     /// by `_LEGACY_ERROR_TEMP_2093` for an ambiguous case-insensitive match.
     pub fn new(req: &ScanRequest, file_schema: SchemaRef, path: &str) -> Result<Self> {
+        let without_ids = match req.mapping {
+            FieldMapping::FieldIdOr(w) if !has_field_ids(file_schema.fields()) => Some(w),
+            _ => None,
+        };
+        if without_ids == Some(WithoutFieldIds::Refuse) {
+            return Err(KrishivUnsupportedFeature {
+                feature: format!(
+                    "reading the file {path}, which has no field ids, through a name mapping"
+                ),
+            }
+            .into());
+        }
         let resolver = Arc::new(Resolver {
             table: Arc::clone(&req.table_schema),
             file: file_schema,
             mapping: req.mapping.clone(),
             path: path.to_owned(),
+            positional: without_ids == Some(WithoutFieldIds::Position),
         });
         let projected = project_schema(&req.table_schema, &req.projection)?;
         let mut file_projection = Vec::new();
         let mut file_order: Vec<String> = Vec::new();
         let mut columns = Vec::with_capacity(projected.fields().len());
         for tf in projected.fields() {
-            let Some(j) = resolver.find(resolver.file.fields(), tf)? else {
+            let Some(j) = resolver.find(resolver.file.fields(), tf, true)? else {
                 columns.push(Plan::Null);
                 continue;
             };
@@ -288,6 +305,23 @@ fn with_row_index(schema: SchemaRef, row_index: bool, _nullable: bool) -> Schema
     Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
+/// Whether any field of `fields`, at any depth, has a field id.
+fn has_field_ids(fields: &Fields) -> bool {
+    fields.iter().any(|f| {
+        f.metadata().contains_key(FIELD_ID_KEY)
+            || match f.data_type() {
+                DataType::Struct(c) => has_field_ids(c),
+                DataType::List(e)
+                | DataType::LargeList(e)
+                | DataType::ListView(e)
+                | DataType::LargeListView(e)
+                | DataType::FixedSizeList(e, _)
+                | DataType::Map(e, _) => has_field_ids(&Fields::from(vec![Arc::clone(e)])),
+                _ => false,
+            }
+    })
+}
+
 fn as_nullable_schema(s: &Schema) -> Schema {
     Schema::new_with_metadata(
         s.fields()
@@ -395,8 +429,9 @@ fn leaf_castable(file: &DataType, table: &DataType) -> bool {
 }
 
 impl Resolver {
-    /// The file field among `children` that `table_field` maps to.
-    fn find(&self, children: &Fields, table_field: &Field) -> Result<Option<usize>> {
+    /// The file field among `children` (the file's top-level columns when
+    /// `top`) that `table_field` maps to.
+    fn find(&self, children: &Fields, table_field: &Field, top: bool) -> Result<Option<usize>> {
         let by_meta = |key: &str, tf: &Field| -> Option<usize> {
             let id = tf.metadata().get(key)?;
             children
@@ -432,10 +467,19 @@ impl Resolver {
                 hits.first().copied()
             }
             // A table field without an id is matched by name (Spark 4.2).
-            FieldMapping::FieldId => match table_field.metadata().get(FIELD_ID_KEY) {
-                Some(_) => by_meta(FIELD_ID_KEY, table_field),
-                None => children.iter().position(|f| f.name() == table_field.name()),
-            },
+            FieldMapping::FieldId | FieldMapping::FieldIdOr(_) => {
+                match table_field.metadata().get(FIELD_ID_KEY) {
+                    // Fallback ids: the k-th top-level column has id k; nested
+                    // fields have none.
+                    Some(id) if self.positional => top
+                        .then(|| id.parse::<usize>().ok())
+                        .flatten()
+                        .and_then(|k| k.checked_sub(1))
+                        .filter(|k| *k < children.len()),
+                    Some(_) => by_meta(FIELD_ID_KEY, table_field),
+                    None => children.iter().position(|f| f.name() == table_field.name()),
+                }
+            }
             FieldMapping::DeltaColumnMapping { by_id: true } => by_meta(DELTA_ID, table_field),
             FieldMapping::DeltaColumnMapping { by_id: false } => {
                 let name = table_field
@@ -469,7 +513,7 @@ impl Resolver {
                 for child in tc {
                     let mut child_at = at.to_vec();
                     child_at.push(child.name().clone());
-                    let pick = match self.find(fc, child)? {
+                    let pick = match self.find(fc, child, false)? {
                         None => None,
                         Some(j) => self
                             .resolve(child, &fc[j], &child_at, prune)?
@@ -577,7 +621,7 @@ impl Resolver {
                 fchildren = fc;
             }
             let tf = tchildren.iter().find(|f| f.name() == name)?;
-            let Ok(found) = self.find(&fchildren, tf) else {
+            let Ok(found) = self.find(&fchildren, tf, i == 0) else {
                 return None;
             };
             let Some(j) = found else {

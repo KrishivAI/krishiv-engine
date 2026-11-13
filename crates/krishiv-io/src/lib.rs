@@ -30,6 +30,7 @@
 pub mod avro;
 mod commit;
 pub mod commit_log;
+mod constants;
 pub mod csv;
 mod error;
 mod format;
@@ -80,6 +81,7 @@ pub use options::{
 pub use registry::{FormatRegistry, SPARK_FILE_SOURCES, is_spark_file_source};
 pub use take::{RowFile, TakeRequest, TakeStream, take};
 
+pub use constants::{FileConstants, scalar_column};
 pub use partition::{
     DEFAULT_PARTITION, check_partition_column,
     discover::{Segment, constant_column, file_values, parse_segment, partition_columns},
@@ -89,7 +91,7 @@ pub use partition::{
 pub use request::{
     CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,
     ROW_INDEX_COLUMN, RowFilterPolicy, RowLevel, RowSelection, ScalarValue, ScanRequest,
-    project_batch, project_schema,
+    WithoutFieldIds, project_batch, project_schema,
 };
 pub use runtime_filter::{
     DisabledReason, FilterCounts, FilterForm, FilterId, FilterSnapshot, KeyFilter,

@@ -58,9 +58,9 @@ use krishiv_io::split::{
     FilePartition, KeptUnit, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile,
 };
 use krishiv_io::{
-    ByteRange, ColumnPath, FileFormat, FileMetadata, FileRef, FormatOptions, IoContext,
-    MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions, ScanRequest,
-    ScanStream, ScanUnitMetrics, SchemaMapper, TakeRequest, TakeStream,
+    ByteRange, ColumnPath, FileConstants, FileFormat, FileMetadata, FileRef, FormatOptions,
+    IoContext, MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions,
+    ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, TakeRequest, TakeStream,
 };
 use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
@@ -103,10 +103,14 @@ pub struct FileScan {
     format_options: FormatOptions,
     scan_options: ScanOptions,
     partitions: Partitions,
-    /// The partition columns (the last columns of `table`): constant per
-    /// file, read from the `name=value` directories above it, never from
-    /// the file.
+    /// The partition columns: constant per file, never read from the file:
+    /// from the `name=value` directories above it (the last columns of
+    /// `table`), or from `constants`.
     partition_columns: Arc<[FieldRef]>,
+    /// Each file's values of the partition columns, when a table format
+    /// gives them (Iceberg identity partitions, Delta partition values);
+    /// `None` reads them from the directories.
+    constants: Option<Arc<FileConstants>>,
     /// The smallest morsel: `spark.sql.files.openCostInBytes`.
     min_morsel_bytes: u64,
 }
@@ -142,6 +146,7 @@ impl FileScan {
             scan_options,
             partitions: Partitions::Plan(splits),
             partition_columns: Arc::from([]),
+            constants: None,
             min_morsel_bytes: splits.open_cost_in_bytes,
         }
     }
@@ -152,6 +157,23 @@ impl FileScan {
     #[must_use]
     pub fn with_partition_columns(mut self, columns: Vec<FieldRef>) -> Self {
         self.partition_columns = columns.into();
+        self.constants = None;
+        self
+    }
+
+    /// The same scan with `columns` (columns of the table, anywhere in it)
+    /// read from `constants` instead of the files: a table format's
+    /// per-file values, which win over a column the file has and fill one
+    /// it lacks. Every file of the scan needs values in `constants`, in
+    /// the order of `columns`.
+    #[must_use]
+    pub fn with_file_constants(
+        mut self,
+        columns: Vec<FieldRef>,
+        constants: Arc<FileConstants>,
+    ) -> Self {
+        self.partition_columns = columns.into();
+        self.constants = Some(constants);
         self
     }
 
@@ -466,6 +488,8 @@ pub struct FileScanSource {
     mapped: SchemaRef,
     /// The partition columns as the table types them.
     partition_fields: Arc<[FieldRef]>,
+    /// Their values per file, when not from the directories.
+    constants: Option<Arc<FileConstants>>,
     /// Where each column of `mapped` comes from; empty without partition
     /// columns (the decoded batch is `mapped`).
     layout: Vec<Slot>,
@@ -814,6 +838,7 @@ impl FileScanSource {
             scan_options: scan.scan_options,
             output,
             partition_fields,
+            constants: scan.constants.clone(),
             layout,
             mapped,
             runtime: p.dynamic,
@@ -1205,6 +1230,28 @@ impl FileScanSource {
     fn partition_values(&self, file: &FileRef) -> Result<Vec<ArrayRef>> {
         if self.layout.is_empty() {
             return Ok(Vec::new());
+        }
+        if let Some(constants) = &self.constants {
+            let values = constants.get(&file.path).ok_or_else(|| {
+                internal(format!(
+                    "no constant column values for {}",
+                    file.display_path()
+                ))
+            })?;
+            if values.len() != self.partition_fields.len() {
+                return Err(internal(format!(
+                    "{} constant values for {} columns of {}",
+                    values.len(),
+                    self.partition_fields.len(),
+                    file.display_path()
+                )));
+            }
+            return self
+                .partition_fields
+                .iter()
+                .zip(values)
+                .map(|(field, v)| krishiv_io::scalar_column(field, v, 1))
+                .collect();
         }
         let texts = krishiv_io::file_values(&file.path, self.partition_fields.len())?;
         self.partition_fields
