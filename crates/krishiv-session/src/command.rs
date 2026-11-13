@@ -371,7 +371,7 @@ impl Session {
                     .map(str::to_owned),
             },
         );
-        self.state.cache.invalidate_table(&v.name.value);
+        self.state.cache.forget_table(&v.name.value);
         self.empty_frame().await
     }
 
@@ -389,7 +389,7 @@ impl Session {
                 .exists(&v.name.value, env.analysis.conf.case_sensitive)
         {
             self.state.catalog.drop_table(&v.name.value);
-            self.state.cache.invalidate_table(&v.name.value);
+            self.state.cache.forget_table(&v.name.value);
         } else {
             self.drop_bare_stored_view(&v.name.value, v.if_exists, env)?;
         }
@@ -437,8 +437,8 @@ impl Session {
     }
 
     /// Runs `CACHE [LAZY] TABLE name [AS query]`, `CLEAR CACHE` and `UNCACHE TABLE [IF EXISTS] name`,
-    /// all returning an empty frame as in Spark. `CACHE TABLE` reads the relation once into the
-    /// cache (`LAZY` and `OPTIONS` change nothing observable here); with `AS query` it first creates
+    /// all returning an empty frame as in Spark. `CACHE TABLE` registers the relation and reads it once into the
+    /// cache (`LAZY` only registers; `OPTIONS` change nothing observable here); with `AS query` it first creates
     /// the temporary view `name`.
     ///
     /// # Errors
@@ -470,6 +470,7 @@ impl Session {
                 }
             }
             CacheKind::Cache {
+                lazy,
                 name,
                 query,
                 options,
@@ -498,8 +499,8 @@ impl Session {
                     let create = format!("{prefix}{body}");
                     Box::pin(self.sql_here_spanned(&create, spans)).await?;
                 }
-                // The relation is cached by reading it once: `LAZY` is the same here, since a
-                // snapshot is taken the first time anything reads it either way.
+                // Registered at once (`is_cached` answers from the call on); `LAZY` stops there,
+                // else one `count()` reads every batch into the cache without keeping the rows.
                 let frame = self
                     .table(
                         &parts
@@ -509,8 +510,19 @@ impl Session {
                             .join("."),
                     )
                     .cache();
-                // Counting reads every batch into the cache without keeping the rows.
-                frame.count().await?;
+                let filled = if *lazy {
+                    frame.is_cached().await.map(drop)
+                } else {
+                    frame.count().await.map(drop)
+                };
+                if let Err(error) = filled {
+                    // A failed `CACHE TABLE` leaves nothing cached, nor the view `AS query` made.
+                    let _ = frame.unpersist().await;
+                    if let (Some(_), [view]) = (query, parts.as_slice()) {
+                        let _ = self.drop_temp_view(view);
+                    }
+                    return Err(error);
+                }
             }
             _ => {
                 return Err(crate::session::internal("unknown CACHE form".to_owned()));

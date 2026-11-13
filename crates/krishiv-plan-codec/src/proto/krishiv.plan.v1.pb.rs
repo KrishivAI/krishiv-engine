@@ -1389,7 +1389,8 @@ pub struct DataType {
     /// feature: collated_strings
     /// `KIND_COLLATED_STRING` only: the collation's canonical name (never
     /// `UTF8_BINARY`, which is `KIND_STRING`). Ids index an ICU build's
-    /// table, so they never travel.
+    /// table, so they never travel. The INDETERMINATE collation is `null`
+    /// (feature `indeterminate_collation`).
     #[prost(string, tag = "10")]
     pub collation: ::prost::alloc::string::String,
 }
@@ -1916,6 +1917,13 @@ pub enum AggregateFunction {
     /// A session aggregate UDF, by name and version (`AggregateExpr.udaf`).
     /// feature: rust_udaf
     Udf = 46,
+    /// `max` of a collated string: `MAX_BY` of the value by its collation key,
+    /// keeping the first of equal keys.
+    /// feature: collated_min_max
+    MaxByKeyFirst = 47,
+    /// `min` of a collated string, as `MAX_BY_KEY_FIRST`.
+    /// feature: collated_min_max
+    MinByKeyFirst = 48,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1971,6 +1979,8 @@ impl AggregateFunction {
             Self::MaxBy => "AGGREGATE_FUNCTION_MAX_BY",
             Self::MinBy => "AGGREGATE_FUNCTION_MIN_BY",
             Self::Udf => "AGGREGATE_FUNCTION_UDF",
+            Self::MaxByKeyFirst => "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST",
+            Self::MinByKeyFirst => "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2023,6 +2033,8 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_MAX_BY" => Some(Self::MaxBy),
             "AGGREGATE_FUNCTION_MIN_BY" => Some(Self::MinBy),
             "AGGREGATE_FUNCTION_UDF" => Some(Self::Udf),
+            "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST" => Some(Self::MaxByKeyFirst),
+            "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST" => Some(Self::MinByKeyFirst),
             _ => None,
         }
     }

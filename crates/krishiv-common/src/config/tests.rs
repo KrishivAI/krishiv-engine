@@ -862,7 +862,7 @@ fn join_enumerator_entries_default_and_parse() {
 }
 
 #[test]
-fn the_w1_rule_keys_default_off_and_are_user_settable() {
+fn the_w1_rule_keys_default_on_and_are_user_settable() {
     let mut c = Config::new();
     for (key, entry) in [
         ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
@@ -871,9 +871,9 @@ fn the_w1_rule_keys_default_off_and_are_user_settable() {
             &SHARE_REPEATED_SUBTREES,
         ),
     ] {
-        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(false));
-        c.set(key, "true").unwrap();
         assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(true));
+        c.set(key, "false").unwrap();
+        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(false));
     }
 }
 
@@ -1362,5 +1362,67 @@ fn server_entries_parse_default_and_take_sparks_names() {
     );
     assert!(c.set("krishiv.connect.maxSessions", "0").is_err());
     assert!(c.set("krishiv.connect.port", "-1").is_err());
+    assert_eq!(
+        Config::new()
+            .get(&CONNECT_MAX_OPERATIONS_PER_SESSION)
+            .and_then(ConfigValue::as_int),
+        Some(100)
+    );
+    assert_eq!(
+        Config::new()
+            .get(&CONNECT_EXECUTE_AHEAD_BYTES)
+            .and_then(ConfigValue::as_size),
+        Some(64 << 20)
+    );
+    c.set("krishiv.connect.maxOperationsPerSession", "3")
+        .unwrap();
+    c.set("krishiv.connect.execute.aheadBytes", "1m").unwrap();
+    assert_eq!(
+        c.get(&CONNECT_MAX_OPERATIONS_PER_SESSION)
+            .and_then(ConfigValue::as_int),
+        Some(3)
+    );
+    assert_eq!(
+        c.get(&CONNECT_EXECUTE_AHEAD_BYTES)
+            .and_then(ConfigValue::as_size),
+        Some(1 << 20)
+    );
+    assert!(
+        c.set("krishiv.connect.maxOperationsPerSession", "0")
+            .is_err()
+    );
+    assert_eq!(
+        CONNECT_MAX_OPERATIONS_PER_SESSION.settable_by,
+        SettableBy::Startup
+    );
     assert_eq!(CONNECT_PORT.settable_by, SettableBy::Startup);
+}
+
+/// P3-T021: the Delta log pool and the catalog parse limits.
+#[test]
+fn delta_and_catalog_limit_entries_parse_and_default() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&DELTA_LOG_THREADS).and_then(ConfigValue::as_int),
+            c.get(&CATALOG_MAX_METADATA_BYTES)
+                .and_then(ConfigValue::as_size),
+            c.get(&CATALOG_MAX_COLUMNS).and_then(ConfigValue::as_int),
+        )
+    };
+    assert_eq!(get(&c), (Some(4), Some(256 << 20), Some(10_000)));
+    c.set("krishiv.delta.logThreads", "8").unwrap();
+    c.set("krishiv.catalog.maxMetadataBytes", "1g").unwrap();
+    c.set("krishiv.catalog.maxColumns", "50000").unwrap();
+    assert_eq!(get(&c), (Some(8), Some(1 << 30), Some(50_000)));
+    assert!(c.set("krishiv.delta.logThreads", "0").is_err());
+    assert!(c.set("krishiv.catalog.maxColumns", "-1").is_err());
+    assert!(c.set("krishiv.catalog.maxMetadataBytes", "lots").is_err());
+    for e in [
+        &DELTA_LOG_THREADS,
+        &CATALOG_MAX_METADATA_BYTES,
+        &CATALOG_MAX_COLUMNS,
+    ] {
+        assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
+    }
 }

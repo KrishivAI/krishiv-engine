@@ -130,6 +130,9 @@ pub(crate) struct SessionState {
     pub(crate) conf: Arc<ConfStore>,
     pub(crate) catalog: Arc<SessionCatalog>,
     pub(crate) cache: Arc<RelationCache>,
+    /// Analyses the session's queries and keeps the last root's resolution, so a client that grows a plan
+    /// step by step does not pay for the whole prefix again (design P3-T013a).
+    pub(crate) analyzer: krishiv_plan::analyzer::CachingAnalyzer,
     pub(crate) variables: Arc<SessionVariables>,
     pub(crate) profile: SparkProfile,
     /// Fixed for the session's life: caches and fingerprints never mix
@@ -157,7 +160,9 @@ pub(crate) struct SessionState {
     /// The session's number on its runtime.
     pub(crate) number: u64,
     /// Set by [`Session::close`]: the session takes no new statement.
-    closed: AtomicBool,
+    pub(crate) closed: AtomicBool,
+    /// What `system.sessions` shows that changes per call.
+    pub(crate) activity: crate::sessions::Activity,
     /// The session's memory pool: the runtime's root, or a pool of its own
     /// under the root (`krishiv.session.memoryLimit`).
     pub(crate) memory: Arc<dyn MemoryPool>,
@@ -186,6 +191,13 @@ pub(crate) struct SessionState {
 
 impl Drop for SessionState {
     fn drop(&mut self) {
+        self.runtime.sessions.retire(self.number, || {
+            crate::sessions::SessionRow::of(
+                self,
+                Some(crate::sessions::End::Closed("client_gone")),
+                0,
+            )
+        });
         self.runtime.forget_session(self.number);
     }
 }
@@ -881,9 +893,9 @@ impl Session {
                 table: Arc::new(table),
             },
         );
-        // Replacing a table drops what was cached from the old one, as
-        // replacing a temporary view does in Spark.
-        self.state.cache.invalidate_table(name);
+        // Replacing a table drops what was cached from the old one, and the
+        // registrations over it, as replacing a temporary view does in Spark.
+        self.state.cache.forget_table(name);
         Ok(())
     }
 
@@ -979,7 +991,7 @@ impl Session {
             return false;
         }
         let dropped = self.state.catalog.drop_table(name);
-        self.state.cache.invalidate_table(name);
+        self.state.cache.forget_table(name);
         dropped
     }
 
@@ -1005,7 +1017,7 @@ impl Session {
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     pub fn uncache_table(&self, name: &str) {
-        self.state.cache.invalidate_table(name);
+        self.state.cache.forget_table(name);
     }
 
     /// Drops the cached relations reading the table `name` (Spark's
@@ -1212,6 +1224,7 @@ impl Session {
                 io: Arc::clone(&self.state.io),
                 relations: Arc::clone(&self.state.cache),
                 metrics: Arc::clone(&self.state.runtime.metrics),
+                sessions: self.state.runtime.session_view(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1347,7 +1360,7 @@ impl Session {
         // steps: `analyze_in` runs on the deepest stacks, where the size of
         // its own future counts.
         let (analyzed, body_views) = Box::pin(async {
-            let analyzed = DefaultAnalyzer.analyze(&plan, &env.analysis).await;
+            let analyzed = self.state.analyzer.analyze(&plan, &env.analysis).await;
             (analyzed, self.authorize_body_reads(env).await)
         })
         .await;
@@ -1604,6 +1617,8 @@ impl Session {
             principal: Arc::clone(&self.state.principal),
             tags: self.state.queries.tags_now(),
             class: WorkloadClass::Interactive,
+            source: None,
+            statement_class: None,
             estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);
@@ -1679,6 +1694,7 @@ impl Session {
                 .await?
                 .into_parts(),
         };
+        self.state.activity.query_started();
         let id = QueryId(self.state.runtime.reserve(
             self.state.number,
             self.state.queries.session_id(),

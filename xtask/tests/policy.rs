@@ -224,14 +224,11 @@ fn ci_policy_wiring() {
         "the failure notice must run after a failed dependency, on the schedule only"
     );
     assert!(job(&ci, "nightly-failure-notice").contains("issues: write"));
-    // A release or a published binary needs the latest nightly run green on its commit.
-    for wf in ["publish-testpypi.yml", "binaries.yml"] {
-        let text = read(&format!(".github/workflows/{wf}"));
-        assert!(
-            text.contains(".github/scripts/require-green-nightly.sh"),
-            "{wf} must require a green nightly run"
-        );
-    }
+    // A published binary needs the latest nightly run green on its commit.
+    assert!(
+        read(".github/workflows/binaries.yml").contains(".github/scripts/require-green-nightly.sh"),
+        "binaries.yml must require a green nightly run"
+    );
     // Diff coverage tests only the packages the PR touches and their dependents.
     let coverage = read(".github/workflows/coverage.yml");
     for needle in [
@@ -885,6 +882,20 @@ fn release_publishing_is_manual_and_gated() {
         assert!(
             wf.contains("github.ref == 'refs/heads/main'") && wf.contains("refs/tags/v"),
             "{file}: only main or a v* tag may publish"
+        );
+        // Publishing needs every gate of ci.yml green on the exact ref being published: a `ci` job calls the
+        // reusable workflow (as nightly.yml does) and the publish job needs it; no earlier nightly is trusted.
+        assert!(
+            job(&wf, "ci").contains("    uses: $/.github/workflows/ci.yml\n"),
+            "{file}: the `ci` job must call ci.yml on this ref"
+        );
+        assert!(
+            publish.contains("    needs: ci\n"),
+            "{file}: the publish job must need the `ci` job"
+        );
+        assert!(
+            !wf.contains("require-green-nightly.sh"),
+            "{file}: a scheduled run is not evidence about this ref"
         );
         // Each upload goes where its file says, and only the crates.io job holds a token.
         match file {

@@ -1,4 +1,4 @@
-**Version:** 0.2.0-alpha
+**Version:** 0.2.0
 
 # Module `krishiv_types`
 
@@ -483,6 +483,12 @@ Invariants, upheld by every constructor and operation:
 `PartialEq` is structural equality (same data, schema and weight
 representation), not Z-set equality; compare Z-sets after consolidation.
 
+A batch also carries an optional *split*: the index of the scan split
+(morsel) its rows were read from. A seeded random function draws from its
+split's stream, so a row gets the same value whichever driver runs it
+(Spark's partition index). The split is not part of equality and is
+dropped by every operation that mixes rows ([`Self::concat`]).
+
 ```rust
 pub struct Batch {
     // Some fields omitted
@@ -523,6 +529,16 @@ pub struct Batch {
   pub fn data(self: &Self) -> &RecordBatch { /* ... */ }
   ```
   The data columns.
+
+- ```rust
+  pub fn split(self: &Self) -> Option<u32> { /* ... */ }
+  ```
+  The scan split these rows were read from, if known.
+
+- ```rust
+  pub fn with_split(self: Self, split: Option<u32>) -> Self { /* ... */ }
+  ```
+  This batch tagged as read from scan split `split`.
 
 - ```rust
   pub fn weights(self: &Self) -> &Weights { /* ... */ }
@@ -608,13 +624,12 @@ pub struct Batch {
 
 - **PartialEq**
   - ```rust
-    fn eq(self: &Self, other: &Batch) -> bool { /* ... */ }
+    fn eq(self: &Self, other: &Self) -> bool { /* ... */ }
     ```
 
 - **Read**
 - **RefUnwindSafe**
 - **Send**
-- **StructuralPartialEq**
 - **Sync**
 - **ToOwned**
   - ```rust

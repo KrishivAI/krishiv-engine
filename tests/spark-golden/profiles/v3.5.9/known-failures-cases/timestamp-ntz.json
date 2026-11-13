@@ -1,11 +1,7 @@
 {
   "cases": {
     "other-version": [
-      6,
-      8
-    ],
-    "query-features": [
-      5
+      6
     ]
   },
   "file": "timestamp-ntz",
