@@ -264,3 +264,169 @@ fn scalars_become_arrays_and_back() {
     }
     let _unused: Arc<dyn Array> = Arc::new(Int32Array::from(vec![1]));
 }
+
+/// Every Arrow layout of a Delta type reads back as that type; other types are refused.
+#[test]
+fn arrow_layouts_map_to_kernel_types() {
+    let item = Arc::new(ArrowField::new("element", ArrowType::Utf8, true));
+    let strings = ArrayType::new(DataType::STRING, true);
+    for (arrow, kernel) in [
+        (ArrowType::LargeUtf8, DataType::STRING),
+        (ArrowType::Utf8View, DataType::STRING),
+        (ArrowType::Int16, DataType::SHORT),
+        (ArrowType::Int8, DataType::BYTE),
+        (ArrowType::Null, DataType::VOID),
+        (ArrowType::Float32, DataType::FLOAT),
+        (
+            ArrowType::LargeList(Arc::clone(&item)),
+            strings.clone().into(),
+        ),
+        (
+            ArrowType::ListView(Arc::clone(&item)),
+            strings.clone().into(),
+        ),
+        (ArrowType::LargeListView(Arc::clone(&item)), strings.into()),
+        (
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8)),
+            DataType::STRING,
+        ),
+    ] {
+        assert_eq!(to_kernel_type(&arrow).unwrap(), kernel, "{arrow}");
+    }
+    assert!(to_kernel_type(&ArrowType::UInt32).is_err());
+    let bad_map = ArrowType::Map(
+        Arc::new(ArrowField::new(
+            "entries",
+            ArrowType::Struct(vec![ArrowField::new("k", ArrowType::Utf8, false)].into()),
+            false,
+        )),
+        false,
+    );
+    assert!(to_kernel_type(&bad_map).is_err());
+    let field = ArrowField::new("m", bad_map, true);
+    assert!(to_kernel_field(&field).is_err());
+}
+
+#[test]
+fn malformed_field_ids_are_refused() {
+    let key = delta_kernel::schema::ColumnMetadataKey::ColumnMappingNestedIds.as_ref();
+    let list = ArrayType::new(DataType::STRING, true);
+    let not_object = StructField::nullable("a", list.clone())
+        .with_metadata([(key, MetadataValue::String("x".to_owned()))]);
+    assert!(to_arrow_field(&not_object).is_err());
+    let not_int = StructField::nullable("a", list).with_metadata([(
+        key,
+        MetadataValue::Other(serde_json::json!({ "a.element": "seven" })),
+    )]);
+    assert!(to_arrow_field(&not_int).is_err());
+    let field = ArrowField::new("x", ArrowType::Int32, true).with_metadata(
+        std::collections::HashMap::from([("PARQUET:field_id".to_owned(), "seven".to_owned())]),
+    );
+    assert!(to_kernel_field(&field).is_err());
+}
+
+/// `scalar_at` reads every primitive layout, a null as a typed null, and refuses the rest.
+#[test]
+fn scalar_at_reads_every_layout() {
+    use arrow_array::{
+        BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
+        Float64Array, Int8Array, Int16Array, Int64Array, LargeBinaryArray, LargeStringArray,
+        StringViewArray,
+    };
+    let cases: Vec<(Arc<dyn Array>, Scalar)> = vec![
+        (Arc::new(Int8Array::from(vec![1])), Scalar::Byte(1)),
+        (Arc::new(Int16Array::from(vec![2])), Scalar::Short(2)),
+        (Arc::new(Int64Array::from(vec![3])), Scalar::Long(3)),
+        (Arc::new(Float32Array::from(vec![1.5])), Scalar::Float(1.5)),
+        (Arc::new(Float64Array::from(vec![2.5])), Scalar::Double(2.5)),
+        (
+            Arc::new(BooleanArray::from(vec![true])),
+            Scalar::Boolean(true),
+        ),
+        (Arc::new(Date32Array::from(vec![10])), Scalar::Date(10)),
+        (
+            Arc::new(TimestampMicrosecondArray::from(vec![5]).with_timezone("UTC")),
+            Scalar::Timestamp(5),
+        ),
+        (
+            Arc::new(TimestampMicrosecondArray::from(vec![6])),
+            Scalar::TimestampNtz(6),
+        ),
+        (
+            Arc::new(
+                Decimal128Array::from(vec![1234])
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ),
+            Scalar::decimal(1234, 10, 2).unwrap(),
+        ),
+        (
+            Arc::new(LargeStringArray::from(vec!["l"])),
+            Scalar::String("l".to_owned()),
+        ),
+        (
+            Arc::new(StringViewArray::from(vec!["v"])),
+            Scalar::String("v".to_owned()),
+        ),
+        (
+            Arc::new(BinaryArray::from(vec![&b"b"[..]])),
+            Scalar::Binary(b"b".to_vec()),
+        ),
+        (
+            Arc::new(LargeBinaryArray::from(vec![&b"lb"[..]])),
+            Scalar::Binary(b"lb".to_vec()),
+        ),
+        (
+            Arc::new(BinaryViewArray::from(vec![&b"bv"[..]])),
+            Scalar::Binary(b"bv".to_vec()),
+        ),
+    ];
+    for (array, expected) in cases {
+        assert_eq!(scalar_at(array.as_ref(), 0).unwrap(), expected);
+    }
+    let nulls = Int32Array::from(vec![None::<i32>]);
+    assert_eq!(
+        scalar_at(&nulls, 0).unwrap(),
+        Scalar::Null(DataType::INTEGER)
+    );
+    assert!(scalar_at(&nulls, 1).is_err(), "out of bounds");
+    let list =
+        arrow_array::ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1)])]);
+    assert!(scalar_at(&list, 0).is_err(), "not primitive");
+}
+
+/// Scalars of every primitive and nested type, and typed nulls of nested types, become arrays.
+#[test]
+fn scalars_of_every_type_become_arrays() {
+    let st = StructType::try_new([
+        StructField::nullable("a", DataType::SHORT),
+        StructField::nullable("m", MapType::new(DataType::STRING, DataType::STRING, true)),
+    ])
+    .unwrap();
+    let scalars = [
+        Scalar::Short(1),
+        Scalar::Byte(2),
+        Scalar::Float(1.5),
+        Scalar::Double(2.5),
+        Scalar::Date(3),
+        Scalar::Binary(b"x".to_vec()),
+        Scalar::Struct(
+            StructData::try_new(
+                st.fields().cloned().collect(),
+                vec![
+                    Scalar::Short(4),
+                    Scalar::Null(MapType::new(DataType::STRING, DataType::STRING, true).into()),
+                ],
+            )
+            .unwrap(),
+        ),
+        Scalar::Null(st.into()),
+        Scalar::Null(MapType::new(DataType::STRING, DataType::STRING, true).into()),
+        Scalar::Null(ArrayType::new(DataType::STRING, true).into()),
+    ];
+    for scalar in scalars {
+        let array = scalar_to_array(&scalar, 3).unwrap();
+        assert_eq!(array.len(), 3, "{scalar:?}");
+        assert_eq!(array.null_count() == 3, scalar.is_null(), "{scalar:?}");
+    }
+}

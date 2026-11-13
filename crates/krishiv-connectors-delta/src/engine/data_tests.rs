@@ -487,3 +487,99 @@ fn a_null_struct_hides_its_children() {
     assert_eq!(seen[3], ["Some([\"t\"])", "None", "Some([\"t\"])"]);
     assert_eq!(seen[4], ["Some(7)", "None", "Some(9)"]);
 }
+
+/// Large and view layouts of strings and lists read like the plain ones.
+#[test]
+fn large_and_view_layouts_read_like_plain_ones() {
+    use arrow_array::{LargeListArray, ListViewArray};
+    use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+    let item = Arc::new(Field::new("element", ArrowType::Utf8, true));
+    let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+    let large_list = LargeListArray::new(
+        Arc::clone(&item),
+        OffsetBuffer::new(ScalarBuffer::from(vec![0i64, 2, 3])),
+        Arc::clone(&values),
+        None,
+    );
+    let list_view = ListViewArray::new(
+        Arc::clone(&item),
+        ScalarBuffer::from(vec![1i32, 0]),
+        ScalarBuffer::from(vec![2i32, 1]),
+        values,
+        Some(vec![true, false].into()),
+    );
+    let data = KrishivEngineData::new(batch(vec![
+        (
+            "ls",
+            Arc::new(LargeStringArray::from(vec![Some("x"), None])) as ArrayRef,
+        ),
+        ("vs", Arc::new(StringViewArray::from(vec![Some("y"), None]))),
+        ("ll", Arc::new(large_list)),
+        ("lv", Arc::new(list_view)),
+    ]));
+    let list = || ArrayType::new(DataType::STRING, true).into();
+    let seen = visit(
+        &data,
+        &[
+            ("ls", DataType::STRING),
+            ("vs", DataType::STRING),
+            ("ll", list()),
+            ("lv", list()),
+        ],
+    )
+    .unwrap();
+    assert_eq!(seen[0], ["Some(\"x\")", "None"]);
+    assert_eq!(seen[1], ["Some(\"y\")", "None"]);
+    assert_eq!(seen[2], ["Some([\"a\", \"b\"])", "Some([\"c\"])"]);
+    assert_eq!(seen[3], ["Some([\"b\", \"c\"])", "None"]);
+}
+
+/// A getter asked for another type than its leaf's fails; unsupported and mismatched leaf
+/// types, and names and types of different lengths, fail at resolve time.
+#[test]
+fn getters_refuse_the_wrong_type() {
+    let ints = Int32Array::from(vec![1]);
+    let g = Getter::resolve(&["i".to_owned()], &DataType::INTEGER, &ints).unwrap();
+    assert!(g.get_long(0, "i").is_err());
+    assert!(g.get_str(0, "i").is_err());
+    assert!(g.get_binary(0, "i").is_err());
+    assert!(g.get_list(0, "i").is_err());
+    assert!(g.get_map(0, "i").is_err());
+    assert!(g.get_struct_list(0, "i").is_err());
+    let mut v = columns(&[("i", DataType::INTEGER)]);
+    assert!(g.visit_elems_of_row(0, &[], &mut v).is_err());
+    assert!(Getter::resolve(&["i".to_owned()], &DataType::BINARY, &ints).is_err());
+    let st: DataType = StructType::try_new([StructField::nullable("a", DataType::INTEGER)])
+        .unwrap()
+        .into();
+    let e = Getter::resolve(&["i".to_owned()], &st, &ints)
+        .err()
+        .unwrap();
+    assert!(e.to_string().contains("Unsupported type"), "{e}");
+    let cols: Vec<ArrayRef> = vec![Arc::new(ints.clone())];
+    let fields = vec![Arc::new(Field::new("i", ArrowType::Int32, true))];
+    let e = getters(&cols, &fields, &[ColumnName::new(["i"])], &[])
+        .err()
+        .unwrap();
+    assert!(e.to_string().contains("column names"), "{e}");
+}
+
+#[test]
+fn has_field_follows_struct_paths() {
+    let data = nested();
+    for (path, has) in [
+        (vec!["add", "path"], true),
+        (vec!["add"], true),
+        (vec!["v"], true),
+        (vec!["nope"], false),
+        (vec!["add", "nope"], false),
+        (vec!["v", "x"], false),
+    ] {
+        assert_eq!(
+            data.has_field(&ColumnName::new(path.clone())),
+            has,
+            "{path:?}"
+        );
+    }
+    assert!(!data.has_field(&ColumnName::new(Vec::<String>::new())));
+}
