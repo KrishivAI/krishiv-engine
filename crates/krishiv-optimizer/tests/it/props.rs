@@ -679,6 +679,19 @@ fn a_swapped_equality_pushed_into_a_join_is_a_repeat() {
     );
 }
 
+/// Seed 17412558634505325946 of `random_queries_reach_the_lowest_operator`:
+/// the `ON` conjunct `x1.a IN (3, 1)` of a `RIGHT OUTER JOIN` whose
+/// null-supplying side is `x1 JOIN x2 ON x1.a = x2.a` was pushed to `x1`; a
+/// second optimization moved it across the inner equality to `x2` as well,
+/// which the first had not, so the plan was not a fixed point.
+#[test]
+fn an_outer_join_on_conjunct_crosses_an_inner_equality_once() {
+    fixed_point_with_rows(
+        17_412_558_634_505_325_946,
+        &Gen::new(17_412_558_634_505_325_946).top(),
+    );
+}
+
 /// Seed 11649424267131205810 of `random_queries_reach_the_lowest_operator`:
 /// join ordering derived the class equality `c0 = c2` over an input
 /// `Project [(a + 1) AS c0, ..., a AS c2]` and estimated it as column =

@@ -437,8 +437,17 @@ fn run(
         // After the rewrite batch, which moves `WHERE` equalities into the
         // joins (comma joins are cross joins before it); the batch runs
         // again to push what the rule added, only when it added something.
+        // What it added can turn an outer join inner or one-sided (an `isnotnull` on
+        // its null-supplied side), which lets the batch move that join's `ON`
+        // conjuncts into the side they read; the rule then runs over the joins
+        // below them in join ordering (or once more after restriction), not
+        // only in a second optimization.
         let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
-        let root = inferred;
+        let root = if Arc::ptr_eq(&inferred, &root) {
+            inferred
+        } else {
+            batch(inferred, "Rewrite", &mut t)?
+        };
         let root = t.once("AlgebraicSum", &root, |r| {
             sum_rewrite::rewrite(Arc::clone(r))
         })?;
