@@ -565,6 +565,9 @@ pub(crate) struct Shared {
 pub(crate) struct ProbeSelectSpec {
     /// The fused filter's predicate, over the probe input.
     pub(crate) predicate: Option<Arc<dyn Predicate>>,
+    /// The same predicate over only the columns it reads (`None`: the
+    /// copy of a selective row stage's rows holds every column).
+    pub(crate) narrow: Option<crate::operators::select::Narrow>,
     /// The runtime filters whose row stage the scan handed to the probe.
     pub(crate) row_stage: Option<crate::operators::RuntimeFilters>,
     /// The probe input's columns of each batch received (a fused
@@ -1031,6 +1034,25 @@ impl HashJoin {
             .select
             .get_or_insert_with(ProbeSelectSpec::default)
             .columns = Some(columns);
+        Ok(self)
+    }
+
+    /// The same join evaluating its fused filter over only the columns it
+    /// reads where it copies a selective row stage's rows (design P2-E3 U2).
+    /// Call before the join is shared.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a join already shared.
+    pub(crate) fn with_narrow_probe_filter(
+        mut self,
+        narrow: crate::operators::select::Narrow,
+    ) -> Result<Self> {
+        let shared = Arc::get_mut(&mut self.0)
+            .ok_or_else(|| internal("a probe filter added to a shared join".to_owned()))?;
+        shared
+            .select
+            .get_or_insert_with(ProbeSelectSpec::default)
+            .narrow = Some(narrow);
         Ok(self)
     }
 
