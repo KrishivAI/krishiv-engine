@@ -160,7 +160,9 @@ pub(crate) struct SessionState {
     /// The session's number on its runtime.
     pub(crate) number: u64,
     /// Set by [`Session::close`]: the session takes no new statement.
-    closed: AtomicBool,
+    pub(crate) closed: AtomicBool,
+    /// What `system.sessions` shows that changes per call.
+    pub(crate) activity: crate::sessions::Activity,
     /// The session's memory pool: the runtime's root, or a pool of its own
     /// under the root (`krishiv.session.memoryLimit`).
     pub(crate) memory: Arc<dyn MemoryPool>,
@@ -189,6 +191,13 @@ pub(crate) struct SessionState {
 
 impl Drop for SessionState {
     fn drop(&mut self) {
+        self.runtime.sessions.retire(self.number, || {
+            crate::sessions::SessionRow::of(
+                self,
+                Some(crate::sessions::End::Closed("client_gone")),
+                0,
+            )
+        });
         self.runtime.forget_session(self.number);
     }
 }
@@ -484,8 +493,8 @@ impl Session {
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
-        let result = self
-            .on_executor(async move {
+        let (result, cancelled) = self
+            .on_executor_reasoned(async move {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
                 use tracing::Instrument as _;
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
@@ -504,13 +513,17 @@ impl Session {
         if let Err(error) = &result
             && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
         {
-            self.state.queries.record_refused(
+            let id = self.state.queries.record_refused(
                 crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
                 Some(krishiv_sql::redact_sql(query).as_str()),
                 None,
                 error,
                 self.operation_id(),
             );
+            // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
+            if let Some(reason) = cancelled {
+                self.state.queries.note_cancel_reason(&id, reason);
+            }
         }
         result
     }
@@ -1109,17 +1122,38 @@ impl Session {
         &self,
         work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
     ) -> Result<T, KrishivError> {
+        // Boxed: the work is held once, not in both futures (`clippy::large_futures` at the callers).
+        self.on_executor_reasoned(Box::pin(work)).await.0
+    }
+
+    /// [`Self::on_executor`], also returning the reason the action was ended
+    /// with before any query of it was reserved, if it was (for the row of a
+    /// statement that ended before its query existed).
+    pub(crate) async fn on_executor_reasoned<T: Send + 'static>(
+        &self,
+        work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
+    ) -> (Result<T, KrishivError>, Option<crate::CancelReason>) {
         let (tx, rx) = tokio::sync::oneshot::channel();
+        // Registered from here on: `cancel` and `interrupt_all` reach the
+        // action during analysis and planning too (`action.rs`).
+        let action = self.state.runtime.actions.begin(
+            self.state.number,
+            self.operation_id().map(crate::QueryId::as_str),
+        );
+        let reason = action.reason();
         let task = self.state.runtime.executor.spawn(
             WorkloadClass::Interactive,
             Box::pin(async move {
                 // The caller may be gone; its result is then not needed.
-                let _ = tx.send(work.await);
+                let _ = tx.send(action.run(work).await);
             }),
         );
         let _abort = AbortOnDrop(task);
-        rx.await
-            .map_err(|_| internal("a session task ended without a result".to_owned()))?
+        let result = match rx.await {
+            Ok(result) => result,
+            Err(_) => Err(internal("a session task ended without a result".to_owned())),
+        };
+        (result, reason.ended_with())
     }
 
     /// A fresh DataFrame plan id.
@@ -1215,6 +1249,7 @@ impl Session {
                 io: Arc::clone(&self.state.io),
                 relations: Arc::clone(&self.state.cache),
                 metrics: Arc::clone(&self.state.runtime.metrics),
+                sessions: self.state.runtime.session_view(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1607,6 +1642,8 @@ impl Session {
             principal: Arc::clone(&self.state.principal),
             tags: self.state.queries.tags_now(),
             class: WorkloadClass::Interactive,
+            source: None,
+            statement_class: None,
             estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);
@@ -1682,6 +1719,7 @@ impl Session {
                 .await?
                 .into_parts(),
         };
+        self.state.activity.query_started();
         let id = QueryId(self.state.runtime.reserve(
             self.state.number,
             self.state.queries.session_id(),

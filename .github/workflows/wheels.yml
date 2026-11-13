@@ -254,6 +254,13 @@ jobs:
           for v in $VERSIONS; do
             .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
           done
+      # P3-T074: the docs examples and notebooks on macOS arm64 (the abi3 wheel, Python 3.11 and 3.14).
+      - name: Docs examples and notebooks
+        if: matrix.flavour == 'abi3'
+        run: |
+          for v in 3.11 3.14; do
+            .github/scripts/docs-examples-test.sh dist "$(uv python find "$v")"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-macos-arm64-${{ matrix.flavour }}

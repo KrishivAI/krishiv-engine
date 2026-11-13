@@ -23,13 +23,14 @@ pub use lakehouse::{CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, DELTA_LOG_T
 pub use optimizer::{SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW};
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use server::{
-    CONNECT_ADDRESS, CONNECT_HANDSHAKE_TIMEOUT, CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
-    CONNECT_HTTP2_MAX_HEADER_LIST_BYTES, CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
-    CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME, CONNECT_KEEPALIVE_TIMEOUT,
-    CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE, CONNECT_MAX_SESSIONS,
-    CONNECT_MAX_SESSIONS_PER_PRINCIPAL, CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT,
-    CONNECT_SESSION_MAINTENANCE_INTERVAL, CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS,
-    SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
+    CONNECT_ADDRESS, CONNECT_EXECUTE_AHEAD_BYTES, CONNECT_HANDSHAKE_TIMEOUT,
+    CONNECT_HTTP2_MAX_CONCURRENT_STREAMS, CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
+    CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS, CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME,
+    CONNECT_KEEPALIVE_TIMEOUT, CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE,
+    CONNECT_MAX_OPERATIONS_PER_SESSION, CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
+    CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT, CONNECT_SESSION_MAINTENANCE_INTERVAL,
+    CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
+    SERVER_SHUTDOWN_TIMEOUT,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -136,6 +137,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &CONNECT_MAX_PLAN_DEPTH,
     &LATE_FETCH_MAX_ROWS,
     &CTE_RECURSION_LEVEL_LIMIT,
     &CTE_RECURSION_ROW_LIMIT,
@@ -173,6 +175,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CONNECT_SESSION_TOMBSTONES,
     &CONNECT_MAX_SESSIONS,
     &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
+    &CONNECT_MAX_OPERATIONS_PER_SESSION,
+    &CONNECT_EXECUTE_AHEAD_BYTES,
     &CONNECT_MAX_CONNECTIONS,
     &CONNECT_HANDSHAKE_TIMEOUT,
     &CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
@@ -1393,6 +1397,22 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `krishiv.connect.maxPlanDepth`.
+pub static CONNECT_MAX_PLAN_DEPTH: ConfigEntry = ConfigEntry {
+    key: "krishiv.connect.maxPlanDepth",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(1024)),
+    doc: "Deepest message nesting a Spark Connect plan may have: a plan nested deeper is rejected \
+          while it is decoded, before anything recurses into it (Spark's default for \
+          `spark.connect.grpc.marshallerRecursionLimit` is also 1024). A relation or expression \
+          costs two levels, so the default allows about 500 chained operators. Values above 4096 are \
+          lowered to 4096, the most the decode stack is sized for.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
 };
 
 /// `krishiv.exec.lateFetch.maxRows`.

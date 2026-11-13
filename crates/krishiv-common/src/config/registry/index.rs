@@ -64,6 +64,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
+    ("krishiv.connect.maxPlanDepth", &CONNECT_MAX_PLAN_DEPTH),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
     ("krishiv.resultCache.maxBytes", &RESULT_CACHE_MAX_BYTES),
@@ -192,6 +193,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.legacy.timeParserPolicy",
         &LEGACY_TIME_PARSER_POLICY,
+    ),
+    (
+        "krishiv.connect.execute.aheadBytes",
+        &CONNECT_EXECUTE_AHEAD_BYTES,
     ),
     (
         "krishiv.io.credentials.refreshSkew",
@@ -328,6 +333,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.sources.bucketing.maxBuckets",
         &BUCKETING_MAX_BUCKETS,
+    ),
+    (
+        "krishiv.connect.maxOperationsPerSession",
+        &CONNECT_MAX_OPERATIONS_PER_SESSION,
     ),
     (
         "krishiv.connect.maxSessionsPerPrincipal",

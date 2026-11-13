@@ -8,6 +8,8 @@ Nothing is published to PyPI yet: build the wheel from the repository (`maturin 
 pip install "krishiv[pyarrow]"
 ```
 
+Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. The `pyarrow` extra is needed for `collect()` and `toArrow()`, which return Arrow data.
+
 SQL and DataFrames:
 
 ```python
@@ -61,3 +63,8 @@ by_region.explain(analyze=True)  # runs the query and prints each operator's met
 plan = spark.sql("EXPLAIN ANALYZE SELECT region, sum(amount) FROM orders GROUP BY region").collect()[0][0]
 assert plan.startswith("== Physical Plan (analyzed) ==")
 ```
+
+## Next
+
+- [Notebooks and sample data](../guides/notebooks-and-datasets.md): three notebooks over generated order data.
+- [Migrate a PySpark job](../guides/pyspark-migration.md): what differs from Spark and the workarounds.
