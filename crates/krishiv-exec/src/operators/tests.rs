@@ -851,6 +851,8 @@ fn scan_reports_inconsistent_state_as_internal_errors() {
             super::RowStageSettings::default(),
         )),
         partition: 0,
+        lane: None,
+        taken: 0,
         base: 0,
     };
     let e = scan.next_piece(&mut local, 4, 0).unwrap_err();

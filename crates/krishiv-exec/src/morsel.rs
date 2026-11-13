@@ -55,6 +55,76 @@ impl MorselCursor {
     }
 }
 
+impl MorselCursor {
+    /// The `j`-th claim of lane `lane` out of `lanes` (T094 G1, logical
+    /// partitions): the lane owns the claim ordinals `lane, lane + lanes,
+    /// lane + 2 * lanes, ...`, so which morsels a lane reads never depends on
+    /// which thread ran first. The caller keeps `j` (its own counter); no
+    /// shared state is touched. `None` once the lane's ordinals pass `len`
+    /// (or `lanes` is zero).
+    pub fn claim_strided(&self, lane: usize, lanes: usize, j: usize) -> Option<(u64, usize)> {
+        let i = j.checked_mul(lanes)?.checked_add(lane)?;
+        if lanes == 0 || lane >= lanes || i >= self.len {
+            return None;
+        }
+        Some((i as u64, self.order.as_ref().map_or(i, |o| o[i])))
+    }
+}
+
+impl MorselCursor {
+    /// The next claim of a driver: from the shared sequence, or, for a
+    /// logical-partition driver (`lane` is `(lane, lanes)`, see
+    /// [`claim_strided`](Self::claim_strided)), from its own lane, with `taken`
+    /// counting the claims it made.
+    pub fn claim_for(
+        &self,
+        lane: Option<(usize, usize)>,
+        taken: &mut usize,
+    ) -> Option<(u64, usize)> {
+        let Some((lane, lanes)) = lane else {
+            return self.claim_ordered();
+        };
+        let got = self.claim_strided(lane, lanes, *taken)?;
+        *taken += 1;
+        Some(got)
+    }
+}
+
+/// The combine order of the logical-partition drivers of one pipeline
+/// (T094 G1): lane `k` may combine its sink state only after lanes `0..k` have.
+#[derive(Debug)]
+pub(crate) struct CombineOrder {
+    next: AtomicUsize,
+    event: Event,
+}
+
+impl CombineOrder {
+    pub(crate) fn new() -> Self {
+        Self {
+            next: AtomicUsize::new(0),
+            event: Event::default(),
+        }
+    }
+
+    /// Completes once every lane below `lane` has combined or left.
+    pub(crate) async fn wait(&self, lane: usize) {
+        loop {
+            let listener = self.event.listen();
+            if self.next.load(Ordering::Acquire) >= lane {
+                return;
+            }
+            listener.await;
+        }
+    }
+
+    /// `lane` combined, failed or was aborted: the next lane may go. Lanes
+    /// call this in order, so the counter only ever steps by one.
+    pub(crate) fn pass(&self, lane: usize) {
+        self.next.fetch_max(lane + 1, Ordering::AcqRel);
+        self.event.notify();
+    }
+}
+
 /// A Fisher-Yates shuffle of `0..len` driven by SplitMix64.
 fn permutation(len: usize, seed: u64) -> Vec<usize> {
     let mut state = seed;

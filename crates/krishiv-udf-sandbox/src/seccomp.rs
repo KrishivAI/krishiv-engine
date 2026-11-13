@@ -13,7 +13,8 @@
 //!   namespaces, keyrings, `userfaultfd`, kernel modules and `kexec`, `open_by_handle_at`, path `truncate`
 //!   (Landlock restricts it only from ABI 3) and read-only opens with `O_TRUNC`, file metadata changes (mode,
 //!   owner, extended attributes, times: Landlock has no right for them), clearing the parent-death signal,
-//!   datagram socket pairs, terminal input injection (`TIOCSTI`, `TIOCLINUX`), signals to
+//!   datagram socket pairs, every `ioctl` outside a small allowlist of queries (terminal input injection,
+//!   file attribute changes), signals to
 //!   any other process, and changing any other process's limits, priority, scheduling, CPU affinity, I/O
 //!   priority or memory placement (the kernel allows all of these between processes of one uid, and
 //!   Landlock has no hook for them);
@@ -242,9 +243,30 @@ const O_TRUNC: u64 = 0o1000;
 /// `PRIO_PROCESS` (`setpriority`) and `IOPRIO_WHO_PROCESS` (`ioprio_set`).
 const PRIO_PROCESS: u64 = 0;
 const IOPRIO_WHO_PROCESS: u64 = 1;
-/// `TIOCSTI` and `TIOCLINUX` (asm-generic ioctls, the same on x86_64 and aarch64): pushing input into, or
-/// controlling, a terminal the worker inherited.
-const TERMINAL_INJECTION: [u64; 2] = [0x5412, 0x541C];
+/// The only `ioctl` requests a worker may make: queries and per-descriptor flags. Every other request is `EPERM`.
+/// An allowlist, not a denylist, because Landlock does not mediate `ioctl` on regular files, and a same-uid
+/// worker holding a read-only descriptor could otherwise change file attributes (`FS_IOC_SETFLAGS`,
+/// `FS_IOC_FSSETXATTR`), enable fs-verity, deduplicate extents (`FIDEDUPERANGE`) or use one of the many
+/// filesystem-specific requests (btrfs, xfs, ext4); terminal input injection (`TIOCSTI`, `TIOCLINUX`) falls out
+/// too. The numbers are the asm-generic ones, the same on x86_64 and aarch64; the kernel reads the request as
+/// an `unsigned int`, so the comparison is on the low 32 bits.
+const IOCTL_ALLOWED: [u64; 15] = [
+    0x5401,      // TCGETS: isatty, tcgetattr
+    0x540F,      // TIOCGPGRP
+    0x5411,      // TIOCOUTQ (SIOCOUTQ on a socket)
+    0x5413,      // TIOCGWINSZ: os.get_terminal_size
+    0x541B,      // FIONREAD (SIOCINQ on a socket)
+    0x5421,      // FIONBIO
+    0x5450,      // FIONCLEX
+    0x5451,      // FIOCLEX
+    0x5452,      // FIOASYNC
+    0x5460,      // FIOQSIZE
+    0x0002,      // FIGETBSZ
+    0x8008_6601, // FS_IOC_GETFLAGS
+    0x8004_6601, // FS_IOC32_GETFLAGS
+    0x801C_581F, // FS_IOC_FSGETXATTR
+    0xC020_660B, // FS_IOC_FIEMAP (read-only extent map)
+];
 
 fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, SandboxError> {
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
@@ -278,19 +300,15 @@ fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, 
         libc::SYS_ioprio_set,
         self_only_who(IOPRIO_WHO_PROCESS, spec.own_pid)?,
     );
+    // One rule whose conditions all hold (the request is none of the allowed ones): refused.
     rules.insert(
         libc::SYS_ioctl,
-        TERMINAL_INJECTION
-            .iter()
-            .map(|&request| {
-                rule(vec![condition(
-                    1,
-                    SeccompCmpArgLen::Dword,
-                    SeccompCmpOp::Eq,
-                    request,
-                )?])
-            })
-            .collect::<Result<_, _>>()?,
+        vec![rule(
+            IOCTL_ALLOWED
+                .iter()
+                .map(|&request| condition(1, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, request))
+                .collect::<Result<_, _>>()?,
+        )?],
     );
 
     // The parent-death signal armed by the trampoline must stay: clearing it (`prctl(PR_SET_PDEATHSIG, 0)`

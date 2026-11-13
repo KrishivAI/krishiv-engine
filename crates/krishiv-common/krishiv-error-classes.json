@@ -147,6 +147,12 @@
     ],
     "sqlState" : "42602"
   },
+  "KRISHIV_SESSION_LIMIT" : {
+    "message" : [
+      "Cannot open a new session: <limitName> allows at most <limit> live sessions. Release a session (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
+  },
   "KRISHIV_SPILL_CAP_EXCEEDED" : {
     "message" : [
       "Spilling <requestedBytes> more bytes would exceed the spill limit of <capBytes> bytes (<usedBytes> bytes are in use). Increase \"krishiv.spill.maxBytes\" or run fewer spilling queries at once."

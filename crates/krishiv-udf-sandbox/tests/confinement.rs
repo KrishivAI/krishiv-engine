@@ -341,6 +341,24 @@ check("write_private", lambda: open({private:?}, "w").write("x"))
 check("pdeathsig_clear", lambda: libc_call("prctl", 1, 0, 0, 0, 0))
 check("pair_dgram", lambda: socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM))
 check("pair_stream", lambda: socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM))
+def setflags_read_only():
+    import fcntl, struct
+    fd = os.open({readable:?}, os.O_RDONLY)
+    try:
+        # FS_IOC_SETFLAGS with FS_NODUMP_FL: Landlock does not mediate ioctl on regular files.
+        fcntl.ioctl(fd, 0x40086602, struct.pack("l", 0x40))
+    finally:
+        os.close(fd)
+check("ioctl_setflags", setflags_read_only)
+def fionread_pipe():
+    import fcntl, termios
+    r, w = os.pipe()
+    os.write(w, b"abc")
+    n = int.from_bytes(fcntl.ioctl(r, termios.FIONREAD, b"\0\0\0\0"), "little")
+    if n != 3:
+        raise ValueError(n)
+check("ioctl_fionread", fionread_pipe)
+check("isatty", lambda: os.isatty(0))
 "#,
         outside = outside,
         outside_dir = d.outside,
@@ -359,6 +377,7 @@ check("pair_stream", lambda: socket.socketpair(socket.AF_UNIX, socket.SOCK_STREA
         "removexattr",
         "truncate_read_only",
         "pair_dgram",
+        "ioctl_setflags",
         // OSError(1, ...) is a PermissionError.
         "pdeathsig_clear",
     ] {
@@ -370,6 +389,12 @@ check("pair_stream", lambda: socket.socketpair(socket.AF_UNIX, socket.SOCK_STREA
         "a truncating write in the private directory still works"
     );
     assert_eq!(o.get("pair_stream"), "ok");
+    assert_eq!(
+        o.get("ioctl_fionread"),
+        "ok",
+        "an allowed ioctl query still works"
+    );
+    assert_eq!(o.get("isatty"), "ok");
     assert_eq!(mode(&outside), outside_mode);
     assert_eq!(mode(&readable), readable_mode);
     assert_eq!(mode(&d.outside), outside_dir_mode);
