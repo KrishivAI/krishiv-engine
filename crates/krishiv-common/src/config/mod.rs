@@ -20,11 +20,14 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
-use crate::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig};
+use crate::error::{
+    KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig, KrishivUnsupportedFeature,
+};
 
 mod build_projection;
 mod direct_keys;
 mod join_cost;
+mod legacy;
 mod partition_types;
 mod registry;
 mod registry_join;
@@ -535,6 +538,26 @@ impl Config {
             }
             .into())
         } else {
+            // A Spark legacy setting Krishiv does not honour: a Spark default changes nothing, any other value
+            // asks for behaviour it does not have (P3 PR-05).
+            if key.starts_with("spark.sql.legacy.") {
+                match legacy::check(key, value) {
+                    legacy::Verdict::Refuse { since } => {
+                        return Err(KrishivUnsupportedFeature {
+                            feature: format!(
+                                "the Spark setting \"{key}\" = \"{value}\" (legacy behaviour, Spark {since}); \
+                                 leave it unset or at its default"
+                            ),
+                        }
+                        .into());
+                    }
+                    legacy::Verdict::Accept => {
+                        self.unregistered.insert(key.to_owned(), value.to_owned());
+                        return Ok(None);
+                    }
+                    legacy::Verdict::Handled | legacy::Verdict::Unknown => {}
+                }
+            }
             // One warning per key: re-setting a key already seen stays silent.
             if self
                 .unregistered
