@@ -3,6 +3,7 @@
 //! `Drop`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::mem;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -74,6 +75,40 @@ pub(crate) fn children<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
     }
 }
 
+/// A hasher for keys that are addresses: one multiply, not SipHash. The walks hash every node of a plan
+/// (and, for a plan that shares its columns, the same node once per use), so the hash is on the hot path of
+/// every analyzer pass; addresses are not attacker-chosen, so a keyed hash buys nothing. Same idea as the
+/// optimizer's `AddrHasher` (a lower layer-peer crate, so not shared).
+#[derive(Default)]
+pub(crate) struct PtrHasher(u64);
+
+impl Hasher for PtrHasher {
+    fn finish(&self) -> u64 {
+        // The multiply leaves the entropy in the high bits and aligned addresses have zero low bits, but
+        // the table indexes by the low bits: rotate them down.
+        self.0.rotate_left(26)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.write_u64(u64::from(*b));
+        }
+    }
+
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+
+    fn write_usize(&mut self, v: usize) {
+        self.write_u64(v as u64);
+    }
+}
+
+/// A set of addresses.
+pub(crate) type PtrSet<T> = HashSet<T, BuildHasherDefault<PtrHasher>>;
+/// A map keyed by addresses.
+pub(crate) type PtrMap<K, V> = HashMap<K, V, BuildHasherDefault<PtrHasher>>;
+
 /// Visits every distinct node under `root` once, in pre-order, with an
 /// explicit stack: a subtree shared through `Arc` is visited once, so the
 /// walk is linear in distinct nodes even when a plan is a DAG. Stops at the
@@ -82,7 +117,7 @@ pub(crate) fn visit_distinct<'a>(
     root: Node<'a>,
     mut f: impl FnMut(Node<'a>) -> ControlFlow<()>,
 ) -> ControlFlow<()> {
-    let mut seen = HashSet::new();
+    let mut seen: PtrSet<*const ()> = PtrSet::default();
     let mut stack = vec![root];
     let mut next = Vec::new();
     while let Some(node) = stack.pop() {
@@ -101,7 +136,7 @@ pub(crate) fn visit_distinct<'a>(
 /// distinct node, so a shared subtree is measured once however many paths
 /// reach it, and at the depth of the deepest one.
 pub(crate) fn too_deep(root: Node<'_>) -> bool {
-    let mut height: HashMap<*const (), usize> = HashMap::new();
+    let mut height: PtrMap<*const (), usize> = PtrMap::default();
     let mut stack = vec![(root, false)];
     let mut next = Vec::new();
     while let Some((node, expanded)) = stack.pop() {
