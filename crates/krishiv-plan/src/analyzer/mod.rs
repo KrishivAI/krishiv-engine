@@ -958,6 +958,7 @@ impl Analyzer for DefaultAnalyzer {
 #[derive(Default)]
 pub struct CachingAnalyzer {
     last: std::sync::Mutex<Option<Arc<prefix::PrefixEntry>>>,
+    warm_starts: std::sync::atomic::AtomicU64,
 }
 
 impl fmt::Debug for CachingAnalyzer {
@@ -972,6 +973,12 @@ impl CachingAnalyzer {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// How many analyses so far started from the kept prefix (for metrics and tests).
+    #[must_use]
+    pub fn warm_starts(&self) -> u64 {
+        self.warm_starts.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 impl Analyzer for CachingAnalyzer {
@@ -980,7 +987,11 @@ impl Analyzer for CachingAnalyzer {
         plan: &'a Plan,
         ctx: &'a AnalysisContext,
     ) -> BoxFuture<'a, Result<AnalyzedPlan, AnalysisError>> {
-        Box::pin(analyze_with(plan, ctx, Some(&self.last)))
+        Box::pin(analyze_with(
+            plan,
+            ctx,
+            Some((&self.last, &self.warm_starts)),
+        ))
     }
 }
 
@@ -989,7 +1000,7 @@ type PrefixSlot = std::sync::Mutex<Option<Arc<prefix::PrefixEntry>>>;
 async fn analyze_with(
     plan: &Plan,
     ctx: &AnalysisContext,
-    slot: Option<&PrefixSlot>,
+    slot: Option<(&PrefixSlot, &std::sync::atomic::AtomicU64)>,
 ) -> Result<AnalyzedPlan, AnalysisError> {
     let started = std::time::Instant::now();
     let policy = legacy::CtePolicy {
@@ -1016,12 +1027,16 @@ async fn analyze_with(
     let resolving = std::time::Instant::now();
     let context = fingerprint(ctx, bindings.epochs.clone());
     let warm = slot
-        .and_then(|s| s.lock().ok().and_then(|g| g.clone()))
+        .and_then(|(s, _)| s.lock().ok().and_then(|g| g.clone()))
         .filter(|e| e.fingerprint.as_ref() == Some(&context));
-    let (root, output, securables, warnings, output_declared, output_comments, entry) =
-        resolve::resolve(plan, ctx, &bindings, warm.as_deref())?;
+    let (root, output, securables, warnings, output_declared, output_comments, entry, warm_started) =
+        resolve::resolve(plan, ctx, &bindings, warm.as_deref(), slot.is_some())?;
     unexecutable::check(&root, ctx.conf.time_type)?;
-    if let Some(slot) = slot {
+    let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+    if let Some((slot, starts)) = slot {
+        if warm_started {
+            starts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         // Only a finished analysis is kept; any other leaves the slot as it was.
         if let Ok(mut g) = slot.lock() {
             *g = entry.map(|mut e| {
@@ -1030,7 +1045,6 @@ async fn analyze_with(
             });
         }
     }
-    let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
     let bind::Bindings {
         pins,
         epochs: _,

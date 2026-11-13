@@ -587,8 +587,13 @@ fn unoptimised(plan: &Plan, keyed: Arc<LogicalPlan>) -> Result<Plan, KrishivErro
 /// [`constraints::infer_join_filters`] at every join, bottom up.
 fn infer_join_filters(root: &Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut memo = constraints::Memo::for_root(root);
-    dag::rewrite_up(Arc::clone(root), &mut |p| {
-        Ok(constraints::infer_join_filters(p, &mut memo))
+    dag::rewrite_up_traced(Arc::clone(root), &mut |original, p| {
+        // A shared relation rebuilt by this pass (a join inside it got its
+        // own filters) is still shared.
+        memo.carry_shared(original, &p);
+        let out = constraints::infer_join_filters(p, &mut memo);
+        memo.carry_shared(original, &out);
+        Ok(out)
     })
 }
 

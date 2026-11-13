@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use crate::analyzer::prefix::WARM_STARTS;
 use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
     AnalysisContext, Analyzer, CachingAnalyzer, DefaultAnalyzer, DenyAll, MemoryCatalog, Principal,
@@ -64,16 +63,12 @@ fn chain(steps: i64) -> LogicalPlan {
     plan
 }
 
-fn starts() -> usize {
-    WARM_STARTS.with(std::cell::Cell::get)
-}
-
 /// Analyses `plan` warm (through `cache`) and cold, and asserts the same result or the same error.
 fn same(cache: &CachingAnalyzer, plan: LogicalPlan, c: &AnalysisContext) -> bool {
     let p = Plan::try_new(plan).unwrap();
-    let before = starts();
+    let before = cache.warm_starts();
     let warm = block_on(cache.analyze(&p, c));
-    let hit = starts() > before;
+    let hit = cache.warm_starts() > before;
     let cold = block_on(DefaultAnalyzer.analyze(&p, c));
     match (warm, cold) {
         (Ok(w), Ok(k)) => {
@@ -151,4 +146,124 @@ fn steps_that_join_or_move_the_prefix_stay_exact() {
     same(&cache, chain(4), &c);
     let twice = chain(4).join(chain(4), JoinKind::Inner, JoinCondition::None);
     assert!(!same(&cache, twice, &c));
+}
+
+/// `chain(steps)` with step 1's expression carrying a SQL span that starts at `start` (the same text
+/// with different whitespace in front).
+fn spanned(steps: i64, start: u32) -> LogicalPlan {
+    let span = crate::Span {
+        start,
+        end: start + 1,
+    };
+    let mut plan = LogicalPlan::table(["t"]).with_origin(Origin::plan(PlanId(0)));
+    for i in 1..=steps {
+        let prev = if i == 1 {
+            "a".to_owned()
+        } else {
+            format!("c{}", i - 1)
+        };
+        let mut expr = add(col(&prev, i - 1), int(1));
+        if i == 1 {
+            expr = expr.with_origin(Origin::sql(crate::SourceId(0), span));
+        }
+        plan = LogicalPlan::new(PlanNode::WithColumns {
+            input: Arc::new(plan),
+            columns: vec![(format!("c{i}"), Arc::new(expr))],
+        })
+        .with_origin(Origin::plan(PlanId(i)));
+    }
+    plan
+}
+
+/// Equal identity keys but different origins (spans are not in the key): a miss, so the warm result
+/// keeps the new text's spans.
+#[test]
+fn different_origins_are_a_miss() {
+    let c = ctx(&["a", "b", "c"]);
+    let cache = CachingAnalyzer::new();
+    assert!(!same(&cache, spanned(3, 0), &c));
+    assert!(!same(&cache, spanned(4, 7), &c), "another span is a miss");
+    assert!(same(&cache, spanned(5, 7), &c), "the same spans hit");
+}
+
+/// A step that looks below the prefix root (QUALIFY reads its projection's input) finds what a cold
+/// run finds.
+#[test]
+fn a_qualify_over_the_prefix_reads_below_it() {
+    let c = ctx(&["a", "b", "c"]);
+    let cache = CachingAnalyzer::new();
+    let plain = |e: &str| Expr::new(ExprNode::Column(ColumnRef::new(vec![e.to_owned()])));
+    let select = || LogicalPlan::table(["t"]).project(vec![plain("a"), plain("b")]);
+    same(&cache, select(), &c);
+    let qualified = LogicalPlan::new(PlanNode::Filter {
+        input: Arc::new(select()),
+        predicate: Arc::new(Expr::function(
+            "qualify",
+            vec![super::dsl::eq(
+                Expr::new(ExprNode::Window(crate::WindowExpr {
+                    function: Arc::new(Expr::function("row_number", vec![])),
+                    window: crate::WindowSpecRef::Spec(crate::WindowSpec {
+                        partition_by: Vec::new(),
+                        order_by: vec![super::dsl::asc(plain("a"))],
+                        frame: None,
+                    }),
+                })),
+                int(1),
+            )],
+        )),
+    })
+    // Only a SQL filter is a QUALIFY.
+    .with_origin(Origin::sql(
+        crate::SourceId(0),
+        crate::Span { start: 0, end: 1 },
+    ));
+    assert!(same(&cache, qualified, &c), "the qualify step starts warm");
+}
+
+/// A step that reads, through the same `Arc`, a relation inside the prefix gets the instance a cold
+/// run gives it.
+#[test]
+fn a_shared_relation_inside_the_prefix_reads_as_cold() {
+    let c = ctx(&["a", "b", "c"]);
+    let cache = CachingAnalyzer::new();
+    let t = Arc::new(LogicalPlan::table(["t"]));
+    let p = Arc::new(LogicalPlan::new(PlanNode::WithColumns {
+        input: Arc::clone(&t),
+        columns: vec![("d".to_owned(), Arc::new(int(1)))],
+    }));
+    same(&cache, LogicalPlan::clone(&p), &c);
+    let joined = LogicalPlan::new(PlanNode::Join {
+        left: p,
+        right: t,
+        kind: JoinKind::Inner,
+        condition: JoinCondition::None,
+    });
+    same(&cache, joined, &c);
+}
+
+/// A pinned version that moved with the same schema is a miss.
+#[test]
+fn a_moved_version_is_a_miss() {
+    let versioned = |v: i64| {
+        let cols = ["a", "b"]
+            .iter()
+            .map(|n| TableColumn::new((*n).to_owned(), krishiv_types::DataType::Integer, true))
+            .collect();
+        context(
+            MemoryCatalog::new("spark_catalog").with_table(
+                &["default"],
+                "t",
+                cols,
+                Some(crate::TableVersion(v)),
+            ),
+            ResolutionConf::default(),
+        )
+    };
+    let cache = CachingAnalyzer::new();
+    assert!(!same(&cache, chain(3), &versioned(7)));
+    assert!(same(&cache, chain(4), &versioned(7)));
+    assert!(
+        !same(&cache, chain(5), &versioned(8)),
+        "version 8 is a miss"
+    );
 }

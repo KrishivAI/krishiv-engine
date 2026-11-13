@@ -194,6 +194,8 @@ pub(super) struct Resolver<'a> {
     pub(super) keys: HashMap<usize, u128>,
     /// The input holds a node the prefix cache does not serve (a resolved scan, SQL text, a read by path).
     pub(super) uncacheable: bool,
+    /// This resolution started from a prefix entry.
+    pub(super) warm_started: bool,
     /// The names of the tables the input reads, as written.
     pub(super) read_tables: Vec<Vec<String>>,
     /// One shared expression per column id, used wherever a projection passes that column through
@@ -217,7 +219,7 @@ pub(super) struct Resolver<'a> {
     pub(super) secret: std::collections::HashSet<usize>,
     pub(super) secret_scope: bool,
     op_outer: Option<usize>,
-    root_env: Option<Arc<Env>>,
+    pub(super) root_env: Option<Arc<Env>>,
     /// Constant folding's values over this pass (see `fold::Memo`).
     pub(super) folds: std::cell::RefCell<super::fold::Memo>,
     /// The SQL function whose body is being resolved: what its parameters
@@ -245,6 +247,7 @@ type Resolved = (
     Vec<Option<String>>,
     Vec<Option<String>>,
     Option<super::prefix::PrefixEntry>,
+    bool,
 );
 
 pub(super) fn resolve(
@@ -252,6 +255,7 @@ pub(super) fn resolve(
     ctx: &AnalysisContext,
     b: &Bindings,
     warm: Option<&super::prefix::PrefixEntry>,
+    caching: bool,
 ) -> Result<Resolved, AnalysisError> {
     let mut other = ctx.clone();
     other.conf.ansi = !ctx.conf.ansi;
@@ -267,6 +271,7 @@ pub(super) fn resolve(
         canon: HashMap::new(),
         keys: HashMap::new(),
         uncacheable: false,
+        warm_started: false,
         read_tables: Vec::new(),
         pass_exprs: HashMap::new(),
         columns: vec![BTreeSet::new(); b.securables.len()],
@@ -299,7 +304,12 @@ pub(super) fn resolve(
     if let Some(error) = r.pending_nondeterministic.take() {
         return Err(error);
     }
-    let entry = r.export_prefix(plan.root(), &rel, start_id);
+    // Only a caching analyzer keeps the entry; the plain one skips the copies.
+    let entry = if caching {
+        r.export_prefix(plan.root(), start_id)
+    } else {
+        None
+    };
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
@@ -335,7 +345,16 @@ pub(super) fn resolve(
             columns,
         })
         .collect();
-    Ok((root, output, uses, warnings, declared, comments, entry))
+    Ok((
+        root,
+        output,
+        uses,
+        warnings,
+        declared,
+        comments,
+        entry,
+        r.warm_started,
+    ))
 }
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its

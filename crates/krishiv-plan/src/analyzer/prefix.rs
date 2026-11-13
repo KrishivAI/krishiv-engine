@@ -18,12 +18,6 @@ use super::resolve::{Env, Rel, Resolver};
 use super::{ContextFingerprint, Privilege, Securable};
 use crate::{AttrId, LogicalPlan, PlanNode};
 
-#[cfg(test)]
-thread_local! {
-    /// Warm starts on this thread (tests assert that a hit happened, or did not).
-    pub(crate) static WARM_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 /// The resolution of an analysed root, and what a later analysis must find unchanged to reuse it.
 #[derive(Clone)]
 pub(super) struct PrefixEntry {
@@ -31,10 +25,18 @@ pub(super) struct PrefixEntry {
     pub(super) fingerprint: Option<ContextFingerprint>,
     /// The identity key of the root.
     key: u128,
+    /// The input root itself: a later prefix must equal it, origins included (an identity key leaves
+    /// out origins, and a resolved plan keeps the SQL spans and view source ids of its input).
+    input: Arc<LogicalPlan>,
+    /// The resolution of every relation under the root in the root's environment, and of every
+    /// relation without outer references in the root's CTE scope, by identity key: a later step may look
+    /// below the prefix root (QUALIFY reads a grandchild) or read a relation equal to one inside it (a
+    /// self-join instance), and finds what a cold run finds.
+    memo: HashMap<u128, Rel>,
+    closed: HashMap<u128, Rel>,
     /// The first free id when the root was resolved, and the next one after.
     start_id: u64,
     end_id: u64,
-    rel: Rel,
     declared: HashMap<AttrId, Arc<str>>,
     comments: HashMap<AttrId, Arc<str>>,
     pass_exprs: HashMap<AttrId, Arc<crate::Expr>>,
@@ -51,7 +53,6 @@ impl Resolver<'_> {
     pub(super) fn export_prefix(
         &self,
         root: &Arc<LogicalPlan>,
-        rel: &Rel,
         start_id: u64,
     ) -> Option<PrefixEntry> {
         if self.uncacheable
@@ -63,6 +64,15 @@ impl Resolver<'_> {
             return None;
         }
         let key = *self.keys.get(&addr(&**root))?;
+        let env = self.root_env.as_ref()?;
+        let by_key = |m: &HashMap<(usize, usize), Rel>, scope: usize| -> HashMap<u128, Rel> {
+            m.iter()
+                .filter(|((_, s), _)| *s == scope)
+                .filter_map(|((a, _), r)| self.keys.get(a).map(|k| (*k, r.clone())))
+                .collect()
+        };
+        let memo = by_key(&self.memo, env.id);
+        let closed = by_key(&self.closed, env.ctes_id);
         let mut tables = Vec::new();
         let mut seen = HashSet::new();
         for name in &self.read_tables {
@@ -77,9 +87,11 @@ impl Resolver<'_> {
         Some(PrefixEntry {
             fingerprint: None,
             key,
+            input: Arc::clone(root),
+            memo,
+            closed,
             start_id,
             end_id: self.next_id,
-            rel: rel.clone(),
             declared: self.declared.clone(),
             comments: self.comments.clone(),
             pass_exprs: self.pass_exprs.clone(),
@@ -122,14 +134,30 @@ impl Resolver<'_> {
         {
             return;
         }
-        let rep = self.rep(&prefix);
-        self.memo.insert((addr(&*rep), env.id), entry.rel.clone());
-        if entry.rel.outer.is_none() {
-            self.closed
-                .insert((addr(&*rep), env.ctes_id), entry.rel.clone());
+        // Origins too (spans, view source ids): the resolution keeps the input's.
+        if *prefix != *entry.input {
+            return;
         }
-        #[cfg(test)]
-        WARM_STARTS.with(|c| c.set(c.get() + 1));
+        let mut nodes = Vec::new();
+        let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(&prefix), |n| {
+            if let crate::walk::Node::Plan(p) = n {
+                nodes.push(addr(p));
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+        for a in nodes {
+            let (Some(k), Some(rep)) = (self.keys.get(&a), self.canon.get(&a)) else {
+                continue;
+            };
+            let at = addr(&**rep);
+            if let Some(r) = entry.memo.get(k) {
+                self.memo.insert((at, env.id), r.clone());
+            }
+            if let Some(r) = entry.closed.get(k) {
+                self.closed.insert((at, env.ctes_id), r.clone());
+            }
+        }
+        self.warm_started = true;
         self.next_id = entry.end_id;
         self.declared = entry.declared.clone();
         self.comments = entry.comments.clone();

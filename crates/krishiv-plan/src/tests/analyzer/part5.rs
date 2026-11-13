@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::analyzer::CachingAnalyzer;
-use crate::analyzer::prefix::WARM_STARTS;
 
 /// `plan` with a `withColumn` above it, then a `limit`.
 fn grown(plan: LogicalPlan) -> LogicalPlan {
@@ -16,15 +15,10 @@ fn grown(plan: LogicalPlan) -> LogicalPlan {
     .limit(Arc::new(int(10)))
 }
 
-fn starts() -> usize {
-    WARM_STARTS.with(std::cell::Cell::get)
-}
-
 /// Analyses `plan`, then it grown once and twice, through one cache and cold; the number of warm
 /// starts.
 fn warm_like_cold(name: &str, plan: LogicalPlan, ctx: &AnalysisContext) -> usize {
     let cache = CachingAnalyzer::new();
-    let before = starts();
     let once = grown(plan.clone());
     for p in [plan, once.clone(), grown(once)] {
         let p = Plan::try_new(p).unwrap();
@@ -45,7 +39,7 @@ fn warm_like_cold(name: &str, plan: LogicalPlan, ctx: &AnalysisContext) -> usize
             (w, k) => panic!("{name}: warm {:?} but cold {:?}", w.err(), k.err()),
         }
     }
-    starts() - before
+    usize::try_from(cache.warm_starts()).unwrap()
 }
 
 #[test]

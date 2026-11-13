@@ -30,6 +30,7 @@ Paths are relative to this crate.
 - Input and output are resolved plans with the same output attributes; the optimised plan is a fixed point.
 - A rule returns its input `Arc` when it changes nothing (that is how a batch detects its fixed point) and
   rewrites a shared subtree once (`dag::Rewriter`), subquery plans included; never copy a shared subtree.
+- Inferred join filters leave out an `isnotnull` on a side whose push path (single-input operators) reaches a body read twice that `ShareCte` could share: an `Arc` with several parents (carried through the pass's own rebuilds, `dag::rewrite_up_traced`) or a `Shift` body equal to another instance's; the join drops a null key anyway, and the copies stay equal (TPC-H q15's `revenue0`, the #598 regression). Literal comparisons still move.
 - Inferred join filters keep `optimize` a fixed point: a side that already implies a candidate (`constraints::held`: through aliases, `cse_*` projections, `Shift`, positional unions, grouped aggregates, joins, row-preserving nodes; a literal `false`) gets nothing, and a side with nothing to add is returned as it is.
 - Only deterministic predicates move; folding never changes what a query returns or raises (no overflow,
   no division, no time-zone-dependent cast; a raising call stays in the plan).
