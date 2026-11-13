@@ -100,6 +100,19 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 - `#![forbid(unsafe_code)]`. No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE
   (iceberg-rust's own failures map to `INTERNAL_ERROR` naming its message until PR-17's catalog classes).
 
+## Known limits (PR-25d review)
+- **Equality-delete narrowing not ported:** Java's `DeleteFileIndex.canContainEqDeletesForFile` (skip an equality
+  delete whose key bounds cannot overlap the data file's) is not applied; every strictly newer equality delete of the
+  partition (or global) is assigned. Correct (more deletes read, none dropped); deferred to PR-25d step 2, which needs
+  the Java source at `apache-iceberg-1.12.0` (it could not be fetched in step 1; not ported from memory).
+- **Delete files re-read per built scan:** each `build` loads its own `DeleteState`, so a self-join or CTE reading a
+  table twice reads and charges its shared delete files twice, and every distributed task re-reads the global
+  (unpartitioned-spec) equality deletes. Design §3.3's "read once per scan" holds per built source. Follow-up: a
+  per-provider (`Weak`) or per-worker cache of loaded key sets and selections keyed by delete path.
+- **Planning memory:** decoded manifest entries are not charged to a query reservation while a plan runs (`open` has no
+  query context); the manifest cache bounds only what is kept.
+- `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
+
 ## ADRs (in `../krishiv-internal/adr/`)
 0014, 0028 (iceberg `skip-tree`, `anyhow` wrapper), 0029 (the bridge crate)
 
