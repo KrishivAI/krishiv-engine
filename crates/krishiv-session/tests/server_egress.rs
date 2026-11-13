@@ -327,6 +327,33 @@ fn an_endpoint_write_option_needs_manage() {
     assert_eq!(write(&[]), Ok(0));
 }
 
+/// The write options are checked before the target's store is built: building a GCS store reads
+/// the key file it names, so a non-admin naming one gets the denial, never the builder's error
+/// about the file.
+#[cfg(feature = "cloud")]
+#[test]
+fn a_key_file_write_option_is_refused_before_the_store_reads_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .principal(Principal::new("w", PrincipalKind::User))
+        .access_policy(Arc::new(WriterWithoutManage))
+        .build()
+        .unwrap();
+    let missing = tmp.path().join("no-such-key.json");
+    let w = block_on(s.sql("SELECT 1 AS a"))
+        .unwrap()
+        .write()
+        .mode("overwrite")
+        .option(
+            "fs.gs.auth.service.account.json.keyfile",
+            missing.to_str().unwrap(),
+        );
+    assert_eq!(
+        outcome(block_on(w.csv("gs://bucket/out")).map(|()| 0)),
+        Err(DENIED.to_owned())
+    );
+}
+
 /// `http(s)://` locations are refused for every role until an admin lists one in
 /// `allowedPrefixes` (the one opt-in); then the role decides.
 #[test]

@@ -27,12 +27,12 @@ impl Session {
         crate::access::physical(at)
     }
 
-    /// Before anything is written or replaced (an overwrite deletes first):
-    /// `Modify` and `Create` on the path, both whether or not it exists, so a
-    /// denial never tells whether it does.
-    pub(crate) async fn authorize_write_path(
+    /// A write's options, before its target is located: locating builds the
+    /// store from them (a key file is read then), so a server-scoped option is
+    /// refused before any store sees it. `USAGE` on the secrets the encoder
+    /// resolves, then `Manage` for a server-scoped store key.
+    pub(crate) async fn authorize_write_options(
         &self,
-        at: &krishiv_exec::files::LocatedPath,
         options: &BTreeMap<String, OptionValue>,
         table_options: &BTreeMap<String, OptionValue>,
     ) -> Result<(), KrishivError> {
@@ -53,7 +53,17 @@ impl Session {
                 .filter(|(k, v)| table_options.get(*k) != Some(*v))
                 .map(|(k, _)| k.as_str()),
         )
-        .await?;
+        .await
+    }
+
+    /// Before anything is written or replaced (an overwrite deletes first):
+    /// `Modify` and `Create` on the path, both whether or not it exists, so a
+    /// denial never tells whether it does. The options were checked before the
+    /// path was located (`authorize_write_options`).
+    pub(crate) async fn authorize_write_path(
+        &self,
+        at: &krishiv_exec::files::LocatedPath,
+    ) -> Result<(), KrishivError> {
         let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
         for privilege in [Privilege::Modify, Privilege::Create] {
             let r = authorize(
@@ -213,11 +223,12 @@ impl Session {
         let dynamic =
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
+        self.authorize_write_options(&options, &table_options)
+            .await?;
         let at = self.locate_write_path(text, &options, env)?;
         // The query's own context: its counters are the write's bytes.
         let io = env.io.clone();
-        self.authorize_write_path(&at, &options, &table_options)
-            .await?;
+        self.authorize_write_path(&at).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
