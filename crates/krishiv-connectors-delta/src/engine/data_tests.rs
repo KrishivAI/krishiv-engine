@@ -419,3 +419,71 @@ fn engine_data_round_trips_through_a_box() {
     assert_eq!(KrishivEngineData::from(st).batch(), &b);
     let _ = Schema::new(Fields::empty());
 }
+
+/// A null struct row hides its children, even where they hold values (valid Arrow): an absent
+/// action must not look present. Two levels: `a` is null at row 1, `a.b` at row 0.
+#[test]
+fn a_null_struct_hides_its_children() {
+    let mut map = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+    for _ in 0..3 {
+        map.keys().append_value("k");
+        map.values().append_value("v");
+        map.append(true).unwrap();
+    }
+    let map = map.finish();
+    let mut list = ListBuilder::new(StringBuilder::new());
+    for _ in 0..3 {
+        list.values().append_value("t");
+        list.append(true);
+    }
+    let list = list.finish();
+    let b = StructArray::new(
+        Fields::from(vec![
+            Field::new("s", ArrowType::Utf8, true),
+            Field::new("n", ArrowType::Int64, true),
+        ]),
+        vec![
+            Arc::new(StringArray::from(vec!["x", "y", "z"])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![1, 2, 3])),
+        ],
+        Some(vec![false, true, true].into()),
+    );
+    let a = StructArray::new(
+        Fields::from(vec![
+            Field::new("b", b.data_type().clone(), true),
+            Field::new("m", map.data_type().clone(), true),
+            Field::new("l", list.data_type().clone(), true),
+            Field::new("i", ArrowType::Int32, true),
+        ]),
+        vec![
+            Arc::new(b) as ArrayRef,
+            Arc::new(map),
+            Arc::new(list),
+            Arc::new(Int32Array::from(vec![7, 8, 9])),
+        ],
+        Some(vec![true, false, true].into()),
+    );
+    let data = KrishivEngineData::new(batch(vec![("a", Arc::new(a) as ArrayRef)]));
+    let seen = visit(
+        &data,
+        &[
+            ("a.b.s", DataType::STRING),
+            ("a.b.n", DataType::LONG),
+            (
+                "a.m",
+                MapType::new(DataType::STRING, DataType::STRING, true).into(),
+            ),
+            ("a.l", ArrayType::new(DataType::STRING, true).into()),
+            ("a.i", DataType::INTEGER),
+        ],
+    )
+    .unwrap();
+    assert_eq!(seen[0], ["None", "None", "Some(\"z\")"]);
+    assert_eq!(seen[1], ["None", "None", "Some(3)"]);
+    assert_eq!(
+        seen[2],
+        ["Some([(\"k\", \"v\")])", "None", "Some([(\"k\", \"v\")])"]
+    );
+    assert_eq!(seen[3], ["Some([\"t\"])", "None", "Some([\"t\"])"]);
+    assert_eq!(seen[4], ["Some(7)", "None", "Some(9)"]);
+}

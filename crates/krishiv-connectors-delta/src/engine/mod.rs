@@ -228,8 +228,12 @@ impl DeltaEngine {
     /// drained inside `f`: pulled later on a runtime worker, its handler I/O is refused as off the
     /// pool (`INTERNAL_ERROR`; a debug assertion in debug builds).
     ///
+    /// A call that has started returns its own outcome, a commit that landed included, even when
+    /// the query is cancelled meanwhile.
+    ///
     /// # Errors
-    /// `OPERATION_CANCELED` when the query is cancelled first; `INTERNAL_ERROR` if `f` panics.
+    /// `OPERATION_CANCELED` when the query is cancelled before the call starts; `INTERNAL_ERROR`
+    /// if `f` panics.
     pub async fn delta_blocking<T, F>(&self, f: F) -> Result<T, KrishivError>
     where
         T: Send + 'static,

@@ -951,17 +951,13 @@ fn a_commit_put_in_flight_finishes_after_a_cancel() {
         Some(Arc::clone(&store) as Arc<dyn ObjectStore>),
     );
     let u = f.url("_delta_log/00000000000000000000.json");
+    // Through `delta_blocking`, with the query's own token: neither the handler's I/O nor the
+    // pool's wait for the started call may drop the outcome.
     let engine = f.engine.clone();
-    // The pool is driven with a live token, so what is tested is the handler's own I/O.
-    let live = CancellationToken::new();
-    let call = f.rt.spawn({
-        let pool = f.pool;
-        async move {
-            pool.run(&live, move || {
-                engine.storage().put(&u, Bytes::from_static(b"{}"), false)
-            })
+    let call = f.rt.spawn(async move {
+        engine
+            .delta_blocking(move |e| e.storage().put(&u, Bytes::from_static(b"{}"), false))
             .await
-        }
     });
     put_started.recv().unwrap();
     f.cancel.cancel();

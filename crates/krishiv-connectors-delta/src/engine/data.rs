@@ -34,6 +34,7 @@ use arrow_array::{
     LargeStringArray, MapArray, OffsetSizeTrait, RecordBatch, StringArray, StringViewArray,
     StructArray, TimestampMicrosecondArray,
 };
+use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType as ArrowType, FieldRef, Schema as ArrowSchema};
 use arrow_select::filter::filter_record_batch;
 use delta_kernel::engine_data::{
@@ -228,7 +229,7 @@ fn getters<'a>(
     }
     let mut found: Vec<Option<Getter<'a>>> = (0..names.len()).map(|_| None).collect();
     let mut path = Vec::new();
-    resolve(columns, fields, &mut path, &slots, &mut found)?;
+    resolve(columns, fields, None, &mut path, &slots, &mut found)?;
     found
         .into_iter()
         .zip(names)
@@ -240,9 +241,13 @@ fn getters<'a>(
         .collect()
 }
 
+/// Finds the requested leaves under `columns`. `parents` is the combined validity of the
+/// structs above them: a null struct row hides its children's values, which Arrow allows to be
+/// non-null.
 fn resolve<'a>(
     columns: &'a [ArrayRef],
     fields: &'a [FieldRef],
+    parents: Option<&NullBuffer>,
     path: &mut Vec<String>,
     slots: &HashMap<&[String], Slot<'a>>,
     found: &mut [Option<Getter<'a>>],
@@ -252,11 +257,21 @@ fn resolve<'a>(
         match slots.get(path.as_slice()) {
             Some(Slot::Parent) => {
                 if let Some(st) = column.as_struct_opt() {
-                    resolve(st.columns(), st.fields(), path, slots, found)?;
+                    let nulls = NullBuffer::union(parents, st.nulls());
+                    resolve(
+                        st.columns(),
+                        st.fields(),
+                        nulls.as_ref(),
+                        path,
+                        slots,
+                        found,
+                    )?;
                 }
             }
             Some(Slot::Awaiting(i, data_type)) => {
-                found[*i] = Some(Getter::resolve(path, data_type, column.as_ref())?);
+                let mut getter = Getter::resolve(path, data_type, column.as_ref())?;
+                getter.parents = parents.cloned();
+                found[*i] = Some(getter);
             }
             None => {}
         }
@@ -398,13 +413,18 @@ enum Leaf<'a> {
 /// The `GetData` of one requested leaf.
 struct Getter<'a> {
     leaf: Leaf<'a>,
+    /// The combined validity of the structs above the leaf.
+    parents: Option<NullBuffer>,
 }
 
 impl<'a> Getter<'a> {
     /// The getter of `column` at `path`, checked against the declared `data_type`.
     fn resolve(path: &[String], data_type: &DataType, column: &'a dyn Array) -> KernelResult<Self> {
         if column.data_type() == &ArrowType::Null {
-            return Ok(Self { leaf: Leaf::Null });
+            return Ok(Self {
+                leaf: Leaf::Null,
+                parents: None,
+            });
         }
         let leaf = match data_type {
             &DataType::BOOLEAN => column.as_boolean_opt().map(Leaf::Bool).ok_or("bool"),
@@ -482,13 +502,22 @@ impl<'a> Getter<'a> {
                 )));
             }
         };
-        leaf.map(|leaf| Self { leaf }).map_err(|expected| {
+        leaf.map(|leaf| Self {
+            leaf,
+            parents: None,
+        })
+        .map_err(|expected| {
             KernelError::UnexpectedColumnType(format!(
                 "Type mismatch on {}: expected {expected}, got {}",
                 ColumnName::new(path),
                 column.data_type()
             ))
         })
+    }
+
+    /// Whether no struct above the leaf is null at `row`.
+    fn shown(&self, row: usize) -> bool {
+        self.parents.as_ref().is_none_or(|n| n.is_valid(row))
     }
 
     fn mismatch<T>(&self, field: &str, asked: &str) -> KernelResult<Option<T>> {
@@ -503,7 +532,7 @@ macro_rules! primitive_get {
         fn $name(&'b self, row: usize, field: &str) -> KernelResult<Option<$t>> {
             match &self.leaf {
                 Leaf::Null => Ok(None),
-                Leaf::$variant(a) => Ok(a.is_valid(row).then(|| a.value(row))),
+                Leaf::$variant(a) => Ok((self.shown(row) && a.is_valid(row)).then(|| a.value(row))),
                 _ => self.mismatch(field, stringify!($t)),
             }
         }
@@ -525,7 +554,7 @@ impl<'b, 'a: 'b> GetData<'b> for Getter<'a> {
     fn get_str(&'b self, row: usize, field: &str) -> KernelResult<Option<&'b str>> {
         match &self.leaf {
             Leaf::Null => Ok(None),
-            Leaf::Str(s) => Ok(s.str(row)),
+            Leaf::Str(s) => Ok(if self.shown(row) { s.str(row) } else { None }),
             _ => self.mismatch(field, "&str"),
         }
     }
@@ -534,7 +563,7 @@ impl<'b, 'a: 'b> GetData<'b> for Getter<'a> {
         match &self.leaf {
             Leaf::Null => Ok(None),
             Leaf::Binary(a) => {
-                if !a.is_valid(row) {
+                if !self.shown(row) || !a.is_valid(row) {
                     return Ok(None);
                 }
                 let a: &'b dyn Array = *a;
@@ -550,8 +579,7 @@ impl<'b, 'a: 'b> GetData<'b> for Getter<'a> {
     fn get_list(&'b self, row: usize, field: &str) -> KernelResult<Option<ListItem<'b>>> {
         match &self.leaf {
             Leaf::Null => Ok(None),
-            Leaf::StringList(list, values) => Ok(list
-                .is_valid(row)
+            Leaf::StringList(list, values) => Ok((self.shown(row) && list.is_valid(row))
                 .then(|| ListItem::new(values, list.range(row)))),
             _ => self.mismatch(field, "ListItem"),
         }
@@ -560,8 +588,7 @@ impl<'b, 'a: 'b> GetData<'b> for Getter<'a> {
     fn get_map(&'b self, row: usize, field: &str) -> KernelResult<Option<MapItem<'b>>> {
         match &self.leaf {
             Leaf::Null => Ok(None),
-            Leaf::Map(map, keys, values) => Ok(map
-                .is_valid(row)
+            Leaf::Map(map, keys, values) => Ok((self.shown(row) && map.is_valid(row))
                 .then(|| MapItem::new(keys, values, list_range(map.value_offsets(), row)))),
             _ => self.mismatch(field, "MapItem"),
         }
@@ -570,7 +597,9 @@ impl<'b, 'a: 'b> GetData<'b> for Getter<'a> {
     fn get_struct_list(&'b self, row: usize, field: &str) -> KernelResult<Option<StructList<'b>>> {
         match &self.leaf {
             Leaf::Null => Ok(None),
-            Leaf::StructList(list, _) => Ok(list.is_valid(row).then(|| StructList::new(self, row))),
+            Leaf::StructList(list, _) => {
+                Ok((self.shown(row) && list.is_valid(row)).then(|| StructList::new(self, row)))
+            }
             _ => self.mismatch(field, "StructList"),
         }
     }

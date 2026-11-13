@@ -170,10 +170,11 @@ impl LogPool {
         &self.waits
     }
 
-    /// Runs `f` on a pool thread once a slot is free. The wait for the slot and the call itself
-    /// end early with `OPERATION_CANCELED` when `cancel` fires; a call already running keeps its
-    /// slot until the kernel returns (every handler call checks the token first, so it returns
-    /// soon).
+    /// Runs `f` on a pool thread once a slot is free. The wait for the slot ends early with
+    /// `OPERATION_CANCELED` when `cancel` fires. A call that has started is always awaited to
+    /// its real outcome: it may have put a commit, and a commit that landed must not be reported
+    /// as cancelled. It still ends soon after a cancel, because every handler call checks the
+    /// token first and reads race it.
     ///
     /// # Errors
     /// `OPERATION_CANCELED`; `INTERNAL_ERROR` if `f` panics or the pool has no thread.
@@ -194,20 +195,16 @@ impl LogPool {
         let job: Job = Box::new(move || {
             let _slot = permit;
             let out = std::panic::catch_unwind(AssertUnwindSafe(f));
-            // The caller may have stopped waiting (cancelled); the result is then dropped here.
+            // The caller's future may have been dropped; the result is then dropped here.
             let _unread = done.send(out);
         });
         self.jobs
             .send(job)
             .map_err(|_| internal("the Delta log pool has no thread"))?;
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(canceled()),
-            out = result => match out {
-                Ok(Ok(value)) => Ok(value),
-                Ok(Err(_)) => Err(internal("a Delta kernel call panicked")),
-                Err(_) => Err(internal("a Delta kernel call ended without a result")),
-            },
+        match result.await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(_)) => Err(internal("a Delta kernel call panicked")),
+            Err(_) => Err(internal("a Delta kernel call ended without a result")),
         }
     }
 }
