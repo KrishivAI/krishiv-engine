@@ -611,8 +611,6 @@ impl Driver {
         self.finish_operators(finish_from).await?;
         let sink = &run.pipeline.sink.1;
         let k = run.pipeline.operators.len() + 1;
-        let local = self.slots.get_mut().slot(k)?.local.take();
-        let local = local.ok_or_else(|| internal("sink state combined twice".to_owned()))?;
         // Logical partitions combine in lane order, so partial aggregates, builds and
         // runs merge the same way on every run. The guard is made after this lane's turn
         // came, and lets the next lane go when its combine ends or fails. A lane that fails
@@ -621,7 +619,10 @@ impl Driver {
         let _lane = match (&run.combine_order, run.lanes) {
             (Some(order), Some((first, _))) if !sink.combine_unordered() => {
                 let lane = (self.partition - first) as usize;
-                order.wait(lane).await;
+                // The sink state stays in its slot while this lane waits, and spill
+                // requests are still served, so a lane waiting here can free memory
+                // for the lane it waits on.
+                pause(&run, Some((&self.owner, &self.slots)), order.wait(lane)).await?;
                 Some(LanePass {
                     order: Arc::clone(order),
                     lane,
@@ -629,6 +630,8 @@ impl Driver {
             }
             _ => None,
         };
+        let local = self.slots.get_mut().slot(k)?.local.take();
+        let local = local.ok_or_else(|| internal("sink state combined twice".to_owned()))?;
         sink.combine(local, &run.sink_global)?;
         drop(_lane);
         if run.countdown.arrive() {
