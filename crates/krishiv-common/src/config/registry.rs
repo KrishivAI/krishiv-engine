@@ -77,6 +77,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &QUERY_MAX_EXECUTION_TIME,
     &QUERY_MAX_QUEUED_TIME,
     &CACHE_MAX_BYTES,
+    &CACHE_DEFAULT_STORAGE_LEVEL,
+    &CHECKPOINT_DIR,
     &DETERMINISTIC_ORDER,
     &RESULT_CACHE_ENABLED,
     &RESULT_CACHE_TTL,
@@ -696,6 +698,49 @@ pub static CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
+};
+
+/// Storage level of `cache()`, `persist()` and `CACHE TABLE`.
+pub static CACHE_DEFAULT_STORAGE_LEVEL: ConfigEntry = ConfigEntry {
+    key: "krishiv.cache.defaultStorageLevel",
+    value_type: ValueType::Enum(&[
+        "NONE",
+        "DISK_ONLY",
+        "DISK_ONLY_2",
+        "DISK_ONLY_3",
+        "MEMORY_ONLY",
+        "MEMORY_ONLY_2",
+        "MEMORY_ONLY_SER",
+        "MEMORY_ONLY_SER_2",
+        "MEMORY_AND_DISK",
+        "MEMORY_AND_DISK_2",
+        "MEMORY_AND_DISK_SER",
+        "MEMORY_AND_DISK_SER_2",
+        "OFF_HEAP",
+    ]),
+    default: Some(ConfigValue::String(Cow::Borrowed("MEMORY_AND_DISK"))),
+    doc: "The storage level `DataFrame.cache()`, `catalog.cacheTable` and `CACHE TABLE` use \
+          (`persist()` with no level too). Replication (`_2`, `_3`) is accepted and reported as \
+          asked; one copy is kept.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.defaultCacheStorageLevel"),
+};
+
+/// Directory of reliable checkpoints.
+pub static CHECKPOINT_DIR: ConfigEntry = ConfigEntry {
+    key: "krishiv.checkpoint.dir",
+    value_type: ValueType::String,
+    default: None,
+    doc: "The directory `DataFrame.checkpoint()` writes its snapshot under (Spark's \
+          `setCheckpointDir`). Unset: `checkpoint()` fails with `_LEGACY_ERROR_TEMP_3016`, \
+          `localCheckpoint()` needs no directory. Unlike Spark, the files are deleted when the \
+          checkpointed DataFrame and every frame derived from it are gone.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.checkpoint.dir"),
 };
 
 /// Reproducible results: one driver per pipeline.

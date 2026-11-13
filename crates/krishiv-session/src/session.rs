@@ -884,9 +884,9 @@ impl Session {
                 table: Arc::new(table),
             },
         );
-        // Replacing a table drops what was cached from the old one, as
-        // replacing a temporary view does in Spark.
-        self.state.cache.invalidate_table(name);
+        // Replacing a table drops what was cached from the old one, and the
+        // registrations over it, as replacing a temporary view does in Spark.
+        self.state.cache.forget_table(name);
         Ok(())
     }
 
@@ -982,7 +982,7 @@ impl Session {
             return false;
         }
         let dropped = self.state.catalog.drop_table(name);
-        self.state.cache.invalidate_table(name);
+        self.state.cache.forget_table(name);
         dropped
     }
 
@@ -1008,7 +1008,7 @@ impl Session {
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     pub fn uncache_table(&self, name: &str) {
-        self.state.cache.invalidate_table(name);
+        self.state.cache.forget_table(name);
     }
 
     /// Drops the cached relations reading the table `name` (Spark's
