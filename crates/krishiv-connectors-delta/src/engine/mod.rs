@@ -208,6 +208,23 @@ impl DeltaEngine {
         self.shared.root.url()
     }
 
+    /// The table root, confining every path read under it.
+    pub(crate) fn root(&self) -> &TableRoot {
+        &self.shared.root
+    }
+
+    /// The query's I/O.
+    #[must_use]
+    pub fn io(&self) -> &IoContext {
+        &self.shared.io
+    }
+
+    /// The store holding the table.
+    #[must_use]
+    pub fn store(&self) -> &StoreId {
+        &self.shared.store
+    }
+
     /// The storage handler.
     #[must_use]
     pub fn storage(&self) -> Arc<KrishivStorageHandler> {
