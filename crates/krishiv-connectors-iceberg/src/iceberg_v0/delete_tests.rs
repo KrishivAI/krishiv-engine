@@ -529,12 +529,25 @@ fn equality_deletes_remove_rows_of_older_files() {
     assert_eq!(t.ids("SELECT id FROM t").unwrap(), [2, 10, 11, 13]);
     assert_eq!(t.ids("SELECT count(*) FROM t").unwrap(), [4]);
     assert_eq!(t.ids("SELECT id FROM t WHERE id > 10").unwrap(), [11, 13]);
-    // A limit is not pushed below the deletes: file a keeps one row of five,
-    // so a scan that stopped after a's batch would give one row.
+    // A limit is not pushed below the deletes (deleted rows would count
+    // towards it); the equality columns and the file ordinal are read.
     assert_eq!(
         t.ids("SELECT count(*) FROM (SELECT id FROM t LIMIT 2)")
             .unwrap(),
         [2]
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let inner = p
+        .equality_inner_pushdowns(krishiv_exec::ScanPushdowns {
+            projection: Some(vec![krishiv_io::ColumnPath::new("p")]),
+            limit: Some(2),
+            ..krishiv_exec::ScanPushdowns::default()
+        })
+        .unwrap();
+    assert_eq!(inner.limit, None);
+    assert_eq!(
+        inner.projection.unwrap(),
+        ["p", "id", super::eq_deletes::FILE_ORDINAL].map(krishiv_io::ColumnPath::new)
     );
     // A column the query does not read is still the key.
     assert_eq!(t.ids("SELECT p FROM t").unwrap(), [0, 0, 0, 0]);

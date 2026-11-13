@@ -222,6 +222,16 @@ impl IcebergTableProvider {
     }
 }
 
+#[cfg(test)]
+impl IcebergTableProvider {
+    /// The pushdowns the inner file scan of an equality-delete scan gets for
+    /// `p` (`None`: the scan has no equality deletes).
+    pub(super) fn equality_inner_pushdowns(&self, p: ScanPushdowns) -> Option<ScanPushdowns> {
+        let eq = self.scan.equality.as_ref()?;
+        Some(self.scan.with_equality_columns(self.scan.mapped(p), eq).0)
+    }
+}
+
 impl TableProvider for IcebergTableProvider {
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
         Ok(Arc::clone(&self.scan) as Arc<dyn ScanPushdown>)
