@@ -46,7 +46,7 @@ jobs:
     needs: nightly-green
     if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 330
     environment:
       name: crates-io
       url: https://crates.io/crates/krishiv
@@ -78,6 +78,18 @@ jobs:
               continue
             fi
             echo "::group::$crate $version"
-            cargo publish -p "$crate" --locked # zizmor: ignore[use-trusted-publishing] scoped token in the gated crates-io environment
+            # crates.io limits how fast new crate names are created (429 "try again after <date>"): wait and retry.
+            for attempt in $(seq 1 40); do
+              log="$RUNNER_TEMP/publish-$crate.log"
+              if cargo publish -p "$crate" --locked >"$log" 2>&1; then cat "$log"; break; fi # zizmor: ignore[use-trusted-publishing] scoped token in the gated crates-io environment
+              cat "$log"
+              grep -q '429 Too Many Requests' "$log" || exit 1
+              [ "$attempt" -lt 40 ] || exit 1
+              after=$(grep -oE 'try again after [^.]+GMT' "$log" | head -1 | sed 's/try again after //')
+              wait=$(( $( date -d "$after" +%s 2>/dev/null || echo $(( $(date +%s) + 600 )) ) - $(date +%s) + 20 ))
+              [ "$wait" -gt 20 ] || wait=60
+              echo "rate limited on $crate (attempt $attempt): waiting ${wait}s until $after"
+              sleep "$wait"
+            done
             echo "::endgroup::"
           done < .github/scripts/publish-crates.txt
