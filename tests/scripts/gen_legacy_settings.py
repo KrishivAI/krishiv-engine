@@ -80,7 +80,7 @@ def main() -> None:
     for key in keys:
         assert key.startswith(PREFIX), key
         defaults = []
-        first = None
+        first = ""
         for version, reg in per_release.items():
             if key in reg:
                 first = first or version
