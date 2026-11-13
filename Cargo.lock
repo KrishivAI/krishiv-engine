@@ -2313,6 +2313,7 @@ dependencies = [
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
+ "krishiv-memory",
  "object_store",
  "serde_json",
  "tempfile",

@@ -120,6 +120,12 @@ impl Fixture {
         std::fs::write(path, text).unwrap();
     }
 
+    fn write_bytes(&self, rel: &str, bytes: &[u8]) {
+        let path = self.dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
     fn url(&self, rel: &str) -> Url {
         self.root.join(rel).unwrap()
     }
@@ -1119,3 +1125,6 @@ fn listing_the_root_without_its_slash_stays_inside() {
         ["_delta_log/00000000000000000000.json"]
     );
 }
+
+#[path = "parquet_tests.rs"]
+mod parquet;
