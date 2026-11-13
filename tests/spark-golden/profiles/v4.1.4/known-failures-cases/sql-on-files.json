@@ -1,14 +1,7 @@
 {
   "cases": {
-    "files": [
-      2,
-      7,
-      12,
-      17
-    ],
     "other-version": [
-      9,
-      22
+      9
     ],
     "sql-commands": [
       6,

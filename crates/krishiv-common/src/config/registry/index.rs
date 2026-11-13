@@ -31,6 +31,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
+    ("krishiv.delta.logThreads", &DELTA_LOG_THREADS),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.io.cache.enabled", &IO_CACHE_ENABLED),
     ("krishiv.io.coalesceBytes", &IO_COALESCE_BYTES),
@@ -41,6 +42,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.catalog.maxColumns", &CATALOG_MAX_COLUMNS),
     ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
     ("krishiv.exec.join.strategy", &EXEC_JOIN_STRATEGY),
@@ -101,6 +103,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
     ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
     ("spark.sql.storeAssignmentPolicy", &STORE_ASSIGNMENT_POLICY),
+    (
+        "krishiv.catalog.maxMetadataBytes",
+        &CATALOG_MAX_METADATA_BYTES,
+    ),
     (
         "krishiv.connect.handshakeTimeout",
         &CONNECT_HANDSHAKE_TIMEOUT,
