@@ -397,3 +397,62 @@ fn trim_ignores_a_segment_another_engine_removed() {
     trim(dir.path(), 1).unwrap();
     assert_eq!(read_history(dir.path()).unwrap().len(), 1);
 }
+
+#[test]
+fn an_unaliased_literal_projection_is_masked_in_the_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder()
+        .config("krishiv.history.path", dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    run(
+        &session,
+        &format!("SELECT '{SECRET_TEXT}' FROM range(0, 5)"),
+    );
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = read_history(dir.path()).unwrap();
+    assert!(
+        !stored[0].profile.contains(SECRET_TEXT),
+        "a literal-derived output name was stored"
+    );
+}
+
+#[test]
+fn mask_word_replaces_whole_words_only() {
+    assert_eq!(
+        super::mask_word("a, alias, a_b, a", "a"),
+        "?, alias, a_b, ?"
+    );
+    assert_eq!(super::mask_word("x", "hunter2"), "x");
+}
+
+#[test]
+fn a_failed_segment_write_leaves_no_temporary_file() {
+    let dir = tempfile::tempdir().unwrap();
+    // The final name is a directory, so the rename fails after the file was written.
+    std::fs::create_dir(dir.path().join("history-v1.parquet")).unwrap();
+    let profile = String::new();
+    assert!(write_segment(dir.path(), "history-v1.parquet", &[row(1, profile)]).is_err());
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty());
+}
+
+#[test]
+fn the_detailed_flag_follows_the_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path(), "64m");
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    run(&session, "SELECT count(*) FROM range(0, 100)");
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = read_history(dir.path()).unwrap();
+    assert!(
+        !QueryProfile::from_json(&stored[0].profile)
+            .unwrap()
+            .detailed
+    );
+}

@@ -35,6 +35,30 @@ pub fn mask_literals(sql: &str) -> String {
     sanitized(sql, usize::MAX)
 }
 
+/// The bodies of the string literals in `sql` (quotes and dollar tags removed, escapes left as written): the
+/// text a generated output name can carry, so a caller that masks literals can mask those names too.
+#[must_use]
+pub fn string_literal_bodies(sql: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for t in tokenize(sql) {
+        let text = t.span.text(sql);
+        let body = match t.kind {
+            TokenKind::String | TokenKind::DoubleQuoted => {
+                text.get(1..text.len().saturating_sub(1))
+            }
+            TokenKind::DollarString => text.strip_prefix('$').and_then(|rest| {
+                let tag = rest.find('$')? + 2;
+                text.get(tag..text.len().checked_sub(tag)?)
+            }),
+            _ => None,
+        };
+        if let Some(b) = body.filter(|b| !b.is_empty()) {
+            out.push(b.to_owned());
+        }
+    }
+    out
+}
+
 fn sanitized(sql: &str, limit: usize) -> String {
     let mut out = String::with_capacity(sql.len().min(limit));
     let mut pending_space = false;

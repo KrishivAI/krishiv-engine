@@ -217,6 +217,8 @@ pub(crate) struct QueryFold {
 pub(crate) struct HistoryJob {
     pub(crate) plan: krishiv_exec::planner::PhysicalPlan,
     pub(crate) sql: Option<String>,
+    /// Whether the query ran with detailed metrics (probe lengths and the like).
+    pub(crate) detailed: bool,
     pub(crate) identity: krishiv_exec::profile::ProfileIdentity,
     pub(crate) trace: Option<serde_json::Value>,
 }
@@ -303,6 +305,7 @@ impl QueryFold {
             },
             error_class,
             sql: job.sql,
+            detailed: job.detailed,
             duration_ns: i64::try_from(wall.as_nanos()).unwrap_or(i64::MAX),
             plan: job.plan,
             metrics,

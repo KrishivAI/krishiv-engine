@@ -62,6 +62,7 @@ pub(crate) struct HistoryEntry {
     pub(crate) state: &'static str,
     pub(crate) error_class: Option<String>,
     pub(crate) sql: Option<String>,
+    pub(crate) detailed: bool,
     pub(crate) duration_ns: i64,
     pub(crate) plan: PhysicalPlan,
     pub(crate) metrics: QueryMetrics,
@@ -280,12 +281,17 @@ fn internal(message: String) -> KrishivError {
 }
 
 fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
-    let mut profile = QueryProfile::new(&e.plan, e.metrics, true);
+    let mut profile = QueryProfile::new(&e.plan, e.metrics, e.detailed);
     profile.trace = e.trace;
     profile.identity = Some(e.identity.clone());
     let mut sql = e.sql;
     if mask {
-        mask_plan(&mut profile.plan);
+        // A generated output name (`SELECT 'x'` is named `x`) prints the literal's text into the plan.
+        let names = sql
+            .as_deref()
+            .map(krishiv_sql::string_literal_bodies)
+            .unwrap_or_default();
+        mask_plan(&mut profile.plan, &names);
         sql = sql.map(|t| krishiv_sql::mask_literals(&t));
     }
     let sql = sql.map(|t| cut(t, SQL_MAX));
@@ -304,11 +310,36 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
 }
 
 /// Replaces the literals in every node's argument text with `?`.
-fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode) {
-    node.detail = krishiv_sql::mask_literals(&node.detail);
-    for child in &mut node.children {
-        mask_plan(child);
+/// Then every whole-word occurrence of a string literal's text (`names`), which a generated output name carries.
+fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode, names: &[String]) {
+    let mut detail = krishiv_sql::mask_literals(&node.detail);
+    for name in names {
+        detail = mask_word(&detail, name);
     }
+    node.detail = detail;
+    for child in &mut node.children {
+        mask_plan(child, names);
+    }
+}
+
+/// `text` with each occurrence of `word` that is not part of a longer word replaced by `?`.
+fn mask_word(text: &str, word: &str) -> String {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(word) {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + word.len()..].chars().next();
+        out.push_str(&rest[..at]);
+        if before.is_some_and(is_word) || after.is_some_and(is_word) {
+            out.push_str(word);
+        } else {
+            out.push('?');
+        }
+        rest = &rest[at + word.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `text` cut to at most `max` bytes at a character boundary.
@@ -377,20 +408,24 @@ fn write_segment(dir: &Path, name: &str, rows: &[StoredProfile]) -> Result<(), S
     .map_err(|e| e.to_string())?;
     let tmp = dir.join(format!(".{name}.tmp"));
     let file = File::create(&tmp).map_err(|e| e.to_string())?;
-    let props = WriterProperties::builder()
-        .set_key_value_metadata(Some(vec![KeyValue::new(
-            VERSION_KEY.to_owned(),
-            SCHEMA_VERSION.to_string(),
-        )]))
-        .build();
-    let mut writer =
-        ArrowWriter::try_new(file, schema(), Some(props)).map_err(|e| e.to_string())?;
-    writer.write(&batch).map_err(|e| e.to_string())?;
-    writer.close().map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, dir.join(name)).map_err(|e| {
+    // Any failure below removes the temporary file: it is outside `list_segments`, so nothing else would.
+    let written = (|| {
+        let props = WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![KeyValue::new(
+                VERSION_KEY.to_owned(),
+                SCHEMA_VERSION.to_string(),
+            )]))
+            .build();
+        let mut writer =
+            ArrowWriter::try_new(file, schema(), Some(props)).map_err(|e| e.to_string())?;
+        writer.write(&batch).map_err(|e| e.to_string())?;
+        writer.close().map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, dir.join(name)).map_err(|e| e.to_string())
+    })();
+    if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
-        e.to_string()
-    })
+    }
+    written
 }
 
 /// The segments of `dir`, oldest first, with their sizes.

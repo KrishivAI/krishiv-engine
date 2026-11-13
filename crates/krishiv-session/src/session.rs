@@ -1712,6 +1712,7 @@ impl Session {
                     crate::query_fold::HistoryJob {
                         plan: physical.clone(),
                         sql: env.text.as_deref().map(str::to_owned),
+                        detailed,
                         identity: krishiv_exec::profile::ProfileIdentity {
                             principal: who.principal,
                             tags: self.state.queries.tags().into_iter().collect(),
