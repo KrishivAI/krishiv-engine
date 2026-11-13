@@ -11,10 +11,16 @@ const _: () = assert!(SMALL_GROUPS.is_power_of_two());
 /// groups: the wrapping sum of `v` and the row count of each group, in
 /// stack arrays indexed by `g & 7` (no bounds test, no per-row state
 /// test). Wrapping adds commute, so the totals equal the per-row loop's.
+/// `narrow` (the batch's `Σ |v|` fits an `i64`, `helpers::fits64_moves`) adds
+/// on 64-bit lanes, exact under that bound, instead of 128-bit ones.
 pub(super) fn small_totals<N: DecimalNative>(
     groups: &[u32],
     v: &[N],
+    narrow: bool,
 ) -> ([i128; SMALL_GROUPS], [i64; SMALL_GROUPS]) {
+    if narrow {
+        return small_totals64(groups, v);
+    }
     // Two lanes (even and odd rows) break the dependency chain through a
     // group's running total when consecutive rows share a group.
     let mut acc = [[0_i128; SMALL_GROUPS]; 2];
@@ -39,6 +45,34 @@ pub(super) fn small_totals<N: DecimalNative>(
     )
 }
 
+/// [`small_totals`] on 64-bit lanes: each value's low 64 bits (the whole
+/// value, under the caller's bound).
+fn small_totals64<N: DecimalNative>(
+    groups: &[u32],
+    v: &[N],
+) -> ([i128; SMALL_GROUPS], [i64; SMALL_GROUPS]) {
+    let mut acc = [[0_i64; SMALL_GROUPS]; 2];
+    let mut rows = [[0_i64; SMALL_GROUPS]; 2];
+    let (gp, gr) = groups.as_chunks::<2>();
+    let (vp, vr) = v.as_chunks::<2>();
+    for (g2, v2) in gp.iter().zip(vp) {
+        for k in 0..2 {
+            let g = g2[k] as usize & (SMALL_GROUPS - 1);
+            acc[k][g] = acc[k][g].wrapping_add(v2[k].low64().0);
+            rows[k][g] += 1;
+        }
+    }
+    for (&g, x) in gr.iter().zip(vr) {
+        let g = g as usize & (SMALL_GROUPS - 1);
+        acc[0][g] = acc[0][g].wrapping_add(x.low64().0);
+        rows[0][g] += 1;
+    }
+    (
+        std::array::from_fn(|g| i128::from(acc[0][g]).wrapping_add(i128::from(acc[1][g]))),
+        std::array::from_fn(|g| rows[0][g] + rows[1][g]),
+    )
+}
+
 /// The proven dense fold (see `DecFold::sum`) of a table of at most
 /// [`SMALL_GROUPS`] groups, through [`small_totals`]; the totals are added
 /// to the table at the end. `st` (`sum`'s state, no group overflowed on
@@ -50,12 +84,13 @@ fn fold_small<N: DecimalNative>(
     sum: &mut [i128],
     count: Option<&mut [i64]>,
     st: &mut [u8],
+    narrow: bool,
 ) {
     debug_assert!(
         groups.iter().all(|&g| (g as usize) < sum.len()),
         "a group id past the table"
     );
-    let (acc, rows) = small_totals(groups, v);
+    let (acc, rows) = small_totals(groups, v, narrow);
     for (g, s) in sum.iter_mut().enumerate() {
         *s = s.wrapping_add(acc[g]);
     }
@@ -82,9 +117,10 @@ pub(super) fn dense_sum<N: DecimalNative>(
     v: &[N],
     sum: &mut [i128],
     st: &mut [u8],
+    narrow: bool,
 ) {
     if sum.len() <= SMALL_GROUPS && st.iter().all(|&s| s != 2) {
-        return fold_small(groups, v, sum, None, st);
+        return fold_small(groups, v, sum, None, st, narrow);
     }
     for (&g, x) in groups.iter().zip(v) {
         let g = g as usize;
@@ -101,9 +137,10 @@ pub(super) fn dense_avg<N: DecimalNative>(
     v: &[N],
     sum: &mut [i128],
     count: &mut [i64],
+    narrow: bool,
 ) {
     if sum.len() <= SMALL_GROUPS {
-        return fold_small(groups, v, sum, Some(count), &mut []);
+        return fold_small(groups, v, sum, Some(count), &mut [], narrow);
     }
     for (&g, x) in groups.iter().zip(v) {
         let g = g as usize;
@@ -200,16 +237,23 @@ mod tests {
                     vec![0_u8; n_groups],
                 );
                 reference(&groups, &v, &mut s1, &mut c1, &mut t1);
-                let (mut s2, mut c2) = (vec![7_i128; n_groups], vec![2_i64; n_groups]);
-                fold_small(&groups, &v, &mut s2, Some(&mut c2), &mut []);
-                assert_eq!(
-                    (s1.clone(), c1),
-                    (s2, c2),
-                    "avg: {n_groups} groups, {len} rows"
-                );
-                let (mut s3, mut t3) = (vec![7_i128; n_groups], vec![0_u8; n_groups]);
-                fold_small(&groups, &v, &mut s3, None, &mut t3);
-                assert_eq!((s1, t1), (s3, t3), "sum: {n_groups} groups, {len} rows");
+                // Σ |v| is far below 2^63 here, so both lane widths apply.
+                for narrow in [false, true] {
+                    let (mut s2, mut c2) = (vec![7_i128; n_groups], vec![2_i64; n_groups]);
+                    fold_small(&groups, &v, &mut s2, Some(&mut c2), &mut [], narrow);
+                    assert_eq!(
+                        (s1.clone(), c1.clone()),
+                        (s2, c2),
+                        "avg: {n_groups} groups, {len} rows, narrow {narrow}"
+                    );
+                    let (mut s3, mut t3) = (vec![7_i128; n_groups], vec![0_u8; n_groups]);
+                    fold_small(&groups, &v, &mut s3, None, &mut t3, narrow);
+                    assert_eq!(
+                        (s1.clone(), t1.clone()),
+                        (s3, t3),
+                        "sum: {n_groups} groups, {len} rows, narrow {narrow}"
+                    );
+                }
             }
         }
     }
@@ -218,11 +262,11 @@ mod tests {
     fn an_overflowed_group_stays_overflowed_and_big_tables_use_the_row_loop() {
         let mut sum = [5_i128, 0];
         let mut st = [1_u8, 2];
-        dense_sum(&[0, 1, 0], &[1_i64, 9, 2], &mut sum, &mut st);
+        dense_sum(&[0, 1, 0], &[1_i64, 9, 2], &mut sum, &mut st, true);
         assert_eq!((sum, st), ([8, 0], [1, 2]));
         let groups: Vec<u32> = (0..20).collect();
         let (mut s, mut c) = (vec![0_i128; 20], vec![0_i64; 20]);
-        dense_avg(&groups, &[3_i64; 20], &mut s, &mut c);
+        dense_avg(&groups, &[3_i64; 20], &mut s, &mut c, true);
         assert!(s.iter().all(|&x| x == 3) && c.iter().all(|&x| x == 1));
     }
 
@@ -230,10 +274,33 @@ mod tests {
     fn wraps_like_the_per_row_loop() {
         let v = [i64::MAX, i64::MAX, i64::MIN];
         let mut a = [i128::MAX - 5];
-        fold_small(&[0, 0, 0], &v, &mut a, None, &mut [0]);
+        fold_small(&[0, 0, 0], &v, &mut a, None, &mut [0], false);
         let want = (i128::MAX - 5)
             .wrapping_add(i128::from(i64::MAX) * 2)
             .wrapping_add(i128::from(i64::MIN));
         assert_eq!(a[0], want);
+    }
+
+    /// On 64-bit lanes an `i128` value within the bound is totalled from its
+    /// low 64 bits, negatives included, and agrees with the 128-bit lanes.
+    #[test]
+    fn narrow_totals_of_wide_carriers_match() {
+        let v: Vec<i128> = (0..103_i128).map(|i| (i - 51) * 1_000_000_007).collect();
+        let groups: Vec<u32> = (0..103).map(|i| i % 3).collect();
+        assert_eq!(
+            small_totals(&groups, &v, true),
+            small_totals(&groups, &v, false)
+        );
+    }
+
+    /// `narrow` holds exactly up to `i64::MAX`.
+    #[test]
+    fn narrow_bound_is_i64_max() {
+        assert!(super::super::fits64_moves(u128::from(
+            i64::MAX.cast_unsigned()
+        )));
+        assert!(!super::super::fits64_moves(
+            u128::from(i64::MAX.cast_unsigned()) + 1
+        ));
     }
 }

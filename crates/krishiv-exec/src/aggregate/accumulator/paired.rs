@@ -14,7 +14,7 @@
 
 use super::small_fold::{SMALL_GROUPS, small_totals};
 use super::{Accumulator, AggInput, AggregateExpr, AggregateFunction, DataType, Decimals, Kind};
-use super::{arg, decimals, proven, refresh_max};
+use super::{arg, decimals, fits64_moves, proven_moves, refresh_max};
 use crate::error::Result;
 use arrow_array::{Array, ArrayRef};
 use krishiv_kernels::decimal::DecimalNative;
@@ -175,15 +175,15 @@ fn fold<N: DecimalNative>(
     sum: &mut [i128],
     state: &mut [u8],
 ) -> bool {
-    if !proven(true, bound, max_sum, v, None, Some(&Weights::Const(1))) {
+    let Some(moves) = proven_moves(true, bound, max_sum, v, None, Some(&Weights::Const(1))) else {
         return false;
-    }
+    };
     if avg_sum.len() <= SMALL_GROUPS && sum.len() == avg_sum.len() {
         debug_assert!(
             groups.iter().all(|&g| (g as usize) < avg_sum.len()),
             "a group id past the table"
         );
-        let (acc, rows) = small_totals(groups, v);
+        let (acc, rows) = small_totals(groups, v, fits64_moves(moves));
         for (g, ((a, c), (s, st))) in avg_sum
             .iter_mut()
             .zip(count.iter_mut())
