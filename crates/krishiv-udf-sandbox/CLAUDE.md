@@ -55,6 +55,15 @@ Paths are relative to this crate.
   `os.closerange(3, ...)`; the interpreter must run with `-I`; and PR-26b carries the test that a descriptor the
   server opened without close-on-exec does not reach a UDF (`udf_clean_env_and_fds`). The trampoline itself is
   started by `Command`, whose descriptors are close-on-exec.
+- File metadata cannot change anywhere: `chmod`/`chown`/`*xattr`/`utime*` families (path, `fd` and `*at` forms,
+  `fchmodat2`, `setxattrat`, `removexattrat`) are `EPERM`, since Landlock has no right for them and a same-uid
+  worker could otherwise `chmod 0` server files it cannot open. The private directory is included (`os.utime`,
+  `shutil.copystat` fail there).
+- No truncation outside the private directory on any ABI: a read-only `open`/`openat` with `O_TRUNC` is `EPERM`,
+  `openat2` is `ENOSYS` (its flags cannot be inspected), path `truncate` is `EPERM`.
+- The parent-death signal stays armed: `prctl(PR_SET_PDEATHSIG, ...)` is `EPERM` after the trampoline sets it.
+- Socket pairs are connection-oriented only: datagram (and `SOCK_RAW`, a datagram pair for `AF_UNIX`) and RDM pairs
+  are `EPERM`, since a datagram endpoint can `sendto` any writable pathname socket (Landlock scopes those from ABI 9).
 - The worker runs in its own session (`setsid`): no controlling terminal, no terminal signals from the server's
   process group; `TIOCSTI`/`TIOCLINUX` on an inherited terminal are refused as well.
 - `enter_and_exec` and `confine_current_thread` run only in a process that exists to become the worker, never in the
