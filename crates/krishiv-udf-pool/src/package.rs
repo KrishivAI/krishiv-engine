@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The worker package the server ships inside its own binary, and the bootstrap that starts it.
 //!
-//! The files are `python/krishiv/_udf/*.py`, the same ones the wheel ships (`worker/krishiv/_udf/` holds
-//! symbolic links to them, so there is one copy). They are written under a stub `krishiv/__init__.py` that
+//! The files are `python/krishiv/_udf/*.py`, the same ones the wheel ships (`worker/krishiv/_udf` is a
+//! symbolic link to that directory, so there is one copy). They are written under a stub `krishiv/__init__.py` that
 //! marks the pool worker (`_host.py`), so worker interpreters need `pyspark-client`, `pyarrow` and `pandas`
 //! but no `krishiv` wheel (design `P3-T014-connect-udfs-sandbox.md` §3.1).
 

@@ -22,8 +22,9 @@ Paths are relative to this crate.
   runs on a thread of its own and is cancelled (worker killed) when its future is dropped
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`
 - `src/package.rs` the embedded worker package and the `-c` bootstrap
-- `worker/krishiv/_udf/*.py` symbolic links to `python/krishiv/_udf/*.py` (one copy of the Python code; `cargo
-  package` copies the targets). The worker program is `python/krishiv/_udf/pool_worker.py`; `_host.py` switches the
+- `worker/krishiv/_udf` a symbolic link to `python/krishiv/_udf` (one copy of the Python code; `cargo package`
+  copies the files through it; one link rather than one per file, so ruff, which lints them under `python/`, does
+  not lint them again without that config). The worker program is `python/krishiv/_udf/pool_worker.py`; `_host.py` switches the
   wrappers' names between the `krishiv` facade (in-process) and `pyspark` (here)
 - `tests/pool.rs` real workers: needs `KRISHIV_TEST_UDF_PYTHON` (Python >= 3.11 with `pyspark-client`, `pyarrow`,
   `pandas`); without it the tests pass with a note unless `KRISHIV_UDF_POOL_REQUIRED` is set (the CI job sets both)
@@ -32,7 +33,7 @@ Paths are relative to this crate.
 - A new message: both sides (`pool_worker.py` and `worker.rs`) and the module doc of `pool_worker.py`. A change a
   worker of the previous build cannot read raises `WIRE_VERSION` (the worker is part of the same binary, so the
   version guards mixed packages, not stored data).
-- A new file in the worker package: a symbolic link under `worker/krishiv/_udf/` and an entry in `package::FILES`.
+- A new file in the worker package: an entry in `package::FILES` (the file itself lives in `python/krishiv/_udf/`).
 - Relation kinds, UDTF analyze and archives (PR-26c), Connect decode and registered functions (PR-26d) build on
   `SessionUdfs` and `Worker`.
 
