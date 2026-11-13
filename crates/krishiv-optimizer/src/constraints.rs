@@ -34,12 +34,14 @@
 //! already implies is never added again ([`held`]), so a second `optimize`
 //! adds nothing.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal,
-    LogicalPlan, PlanNode, ResolvedExpr, normalized_subtree_hash,
+    LogicalPlan, PlanNode, ResolvedExpr,
 };
 use krishiv_types::DataType;
 
@@ -461,29 +463,60 @@ pub(crate) struct Memo {
     worth: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool)>,
 }
 
+/// A cheap fingerprint of `plan`'s relation tree (node kinds and shape, not
+/// expressions), memoised by address in `memo`: equal plans have equal
+/// fingerprints.
+fn shape(plan: &Arc<LogicalPlan>, memo: &mut HashMap<*const LogicalPlan, u64>) -> u64 {
+    let mut stack = vec![(Arc::clone(plan), false)];
+    while let Some((p, expanded)) = stack.pop() {
+        let key = Arc::as_ptr(&p);
+        if memo.contains_key(&key) {
+            continue;
+        }
+        if expanded {
+            let mut h = DefaultHasher::new();
+            std::mem::discriminant(&p.node).hash(&mut h);
+            p.for_each_child(&mut |c| {
+                memo.get(&Arc::as_ptr(c)).copied().unwrap_or(0).hash(&mut h);
+            });
+            memo.insert(key, h.finish());
+        } else {
+            stack.push((Arc::clone(&p), true));
+            p.for_each_child(&mut |c| {
+                if !memo.contains_key(&Arc::as_ptr(c)) {
+                    stack.push((Arc::clone(c), false));
+                }
+            });
+        }
+    }
+    memo.get(&Arc::as_ptr(plan)).copied().unwrap_or(0)
+}
+
 impl Memo {
     /// A memo for one pass over `root`, knowing which of its relations
     /// more than one path reaches.
     pub(crate) fn for_root(root: &Arc<LogicalPlan>) -> Self {
         let mut parents: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, u32)> = HashMap::new();
-        // The bodies of the `Shift`s (instances of one CTE or view), by
-        // normalized hash: equal bodies under two or more instances are read
-        // twice even when an earlier pass rebuilt them into separate `Arc`s
-        // (join ordering re-plans a join inside each copy apart).
-        let mut instances: HashMap<u128, Vec<Arc<LogicalPlan>>> = HashMap::new();
+        // The bodies of the `Shift`s (instances of one CTE or view), with how
+        // many `Shift`s read each: equal bodies under two or more instances
+        // are read twice even when an earlier pass rebuilt them into separate
+        // `Arc`s (join ordering re-plans a join inside each copy apart).
+        let mut bodies: Vec<(Arc<LogicalPlan>, u32)> = Vec::new();
+        let mut body_at: HashMap<*const LogicalPlan, usize> = HashMap::new();
         let mut stack = vec![Arc::clone(root)];
         let mut seen: HashSet<*const LogicalPlan> = HashSet::new();
         while let Some(p) = stack.pop() {
             if !seen.insert(Arc::as_ptr(&p)) {
                 continue;
             }
-            if let PlanNode::Shift { input, .. } = &p.node
-                && crate::share_cte::worth_sharing(input)
-            {
-                instances
-                    .entry(normalized_subtree_hash(input))
-                    .or_default()
-                    .push(Arc::clone(input));
+            if let PlanNode::Shift { input, .. } = &p.node {
+                let at = *body_at.entry(Arc::as_ptr(input)).or_insert_with(|| {
+                    bodies.push((Arc::clone(input), 0));
+                    bodies.len() - 1
+                });
+                if let Some(slot) = bodies.get_mut(at) {
+                    slot.1 = slot.1.saturating_add(1);
+                }
             }
             let mut children = Vec::new();
             p.for_each_expr(&mut |e| children.extend(subquery_plans(e)));
@@ -504,13 +537,27 @@ impl Memo {
             .filter(|(_, (_, n))| *n > 1)
             .map(|(k, (p, _))| (k, (Arc::clone(&p), p)))
             .collect();
-        for group in instances.into_values().filter(|g| g.len() > 1) {
-            for (i, body) in group.iter().enumerate() {
-                let twin = group
-                    .iter()
-                    .enumerate()
-                    .any(|(j, other)| i != j && (Arc::ptr_eq(body, other) || **body == **other));
-                if twin {
+        // Twins are found by `==` within groups of equal shape (a cheap
+        // fingerprint of the relation tree); `worth_sharing` is asked only of
+        // a body with a twin.
+        let mut shapes: HashMap<*const LogicalPlan, u64> = HashMap::new();
+        let mut groups: HashMap<u64, Vec<(Arc<LogicalPlan>, u32)>> = HashMap::new();
+        if bodies.len() > 1 || bodies.iter().any(|(_, n)| *n > 1) {
+            for (body, n) in bodies {
+                groups
+                    .entry(shape(&body, &mut shapes))
+                    .or_default()
+                    .push((body, n));
+            }
+        }
+        for group in groups.into_values() {
+            for (i, (body, n)) in group.iter().enumerate() {
+                let twin = *n > 1
+                    || group
+                        .iter()
+                        .enumerate()
+                        .any(|(j, (other, _))| i != j && **body == **other);
+                if twin && crate::share_cte::worth_sharing(body) {
                     shared.insert(Arc::as_ptr(body), (Arc::clone(body), Arc::clone(body)));
                 }
             }
