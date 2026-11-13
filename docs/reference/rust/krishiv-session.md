@@ -46,14 +46,14 @@ assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
 
 ## Module `auth`
 
-Server authentication (P3-T002; design `design/P3-T002-authentication.md`, ADR 0046).
+Server authentication (the role model and the token chain).
 
 One [`Authenticator`] turns what a transport received (a bearer token today; client
 certificates in a later unit) into an [`Authenticated`] principal with a [`Role`]. The Spark
 Connect listener, the admin HTTP server, `/metrics` and the UI all call the same
 [`ServerAuth`]; none keeps a token of its own.
 
-What a role may do is not decided here: that is ADR 0046's matrix, applied by the session's
+What a role may do is not decided here: that is the role matrix, applied by the session's
 access policy.
 
 - [`AuthConfig`] reads the `krishiv.auth.*` settings (and Spark's
@@ -72,7 +72,7 @@ pub mod auth { /* ... */ }
 
 #### Enum `Role`
 
-A server role (ADR 0046 §1): a total order, so a check is `role >= required`.
+A server role: a total order, so a check is `role >= required`.
 
 ```rust
 pub enum Role {
@@ -648,7 +648,7 @@ pub struct Authenticated {
 | Name | Type | Documentation |
 |------|------|---------------|
 | `principal` | `krishiv_common::principal::Principal` | Who the request acts for. |
-| `role` | `Option<Role>` | The role; `None` when the credential maps to no role (every request is then refused by<br>the policy, ADR 0046 §2). |
+| `role` | `Option<Role>` | The role; `None` when the credential maps to no role (every request is then refused by<br>the policy). |
 | `method` | `Method` | How it authenticated. |
 
 ##### Implementations
