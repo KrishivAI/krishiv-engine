@@ -93,3 +93,77 @@ fn a_long_handle_is_bounded_as_spark_bounds_it() {
     assert!(!info.metadata.contains_key("messageParameters"));
     assert!(info.metadata.contains_key("sqlState"));
 }
+
+#[test]
+fn exception_classes_pick_the_python_exception_spark_would_raise() {
+    use krishiv_common::error::ErrorClass;
+
+    use super::exception_classes;
+    let first = |c: ErrorClass| exception_classes(c)[0];
+    assert_eq!(
+        first(ErrorClass::InvalidCursorDisconnected),
+        "org.apache.spark.SparkSQLException"
+    );
+    assert_eq!(
+        first(ErrorClass::ConnectInvalidPlanPlanSizeLargerThanMax),
+        "org.apache.spark.SparkSQLException"
+    );
+    assert_eq!(
+        first(ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet),
+        "org.apache.spark.sql.connect.common.InvalidPlanInput"
+    );
+    assert_eq!(
+        first(ErrorClass::KrishivOperationLimit),
+        "org.apache.spark.SparkException"
+    );
+    assert_eq!(
+        first(ErrorClass::OperationCanceled),
+        "org.apache.spark.SparkSQLException"
+    );
+    assert_eq!(
+        exception_classes(ErrorClass::CastInvalidInput)[1],
+        "java.lang.NumberFormatException"
+    );
+    assert_eq!(
+        exception_classes(ErrorClass::DivideByZero)[1],
+        "java.lang.ArithmeticException"
+    );
+    assert_eq!(
+        exception_classes(ErrorClass::KrishivInvalidOperationTag)[1],
+        "java.lang.IllegalArgumentException"
+    );
+    assert_eq!(
+        exception_classes(ErrorClass::KrishivUnsupportedFeature)[1],
+        "java.lang.UnsupportedOperationException"
+    );
+    assert_eq!(
+        first(ErrorClass::UnresolvedColumnWithSuggestion),
+        "org.apache.spark.sql.AnalysisException"
+    );
+    assert_eq!(
+        first(ErrorClass::ParseSyntaxError),
+        "org.apache.spark.sql.catalyst.parser.ParseException"
+    );
+    // Every list ends as ErrorUtils.allClasses ends it.
+    for c in [ErrorClass::DivideByZero, ErrorClass::InvalidHandleFormat] {
+        let list = exception_classes(c);
+        assert_eq!(
+            &list[list.len() - 3..],
+            &[
+                "java.lang.Exception",
+                "java.lang.Throwable",
+                "java.lang.Object"
+            ]
+        );
+    }
+}
+
+#[test]
+fn an_operation_limit_is_resource_exhausted() {
+    let e: KrishivError = krishiv_common::error::KrishivOperationLimit {
+        limit_name: "krishiv.connect.maxOperationsPerSession".to_owned(),
+        limit: "1".to_owned(),
+    }
+    .into();
+    assert_eq!(status_of(&e).code(), Code::ResourceExhausted);
+}

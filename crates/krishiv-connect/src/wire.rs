@@ -103,6 +103,16 @@ impl<M: Message + Default + Send + Scrub> std::fmt::Debug for Decoded<M> {
     }
 }
 
+impl<M: Message + Default + Send + Scrub> Decoded<M> {
+    /// Whether the message nests deeper than a caller's stack takes: a
+    /// recursive pass over it (encoding it again, cloning it) must then run
+    /// on a big stack, as its decoding and its drop do.
+    #[must_use]
+    pub fn is_deep(&self) -> bool {
+        self.deep
+    }
+}
+
 impl<M: Message + Default + Send + Scrub> Deref for Decoded<M> {
     type Target = M;
 

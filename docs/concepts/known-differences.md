@@ -160,6 +160,33 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
 - An aggregate or window call in a scalar function argument reads its operator's mode.
 - Only `spark.sql.ansi.enabled` is captured; Spark captures every SQL configuration.
 
+## The relation cache is per session
+
+Spark's `CacheManager` lives in the `SharedState` of a `SparkContext` (believed shared by every session of it, not
+yet confirmed against a Spark run): a frame cached in one session reads as cached, and is reused, in another.
+Krishiv keeps `cache()` / `persist()` registrations and their data per session (owner decision 2026-11-12, design
+P3-T083 §3.7), because each session can have its own memory pool (`krishiv.session.memoryLimit`) and a shared
+entry would charge one tenant for another's cache. `isCached` and `storageLevel` in one session do not see a
+`cache()` made in another, and closing a session drops its entries (memory and spill files). Invalidation does
+cross sessions: a write or `REFRESH TABLE` in one session drops what every session cached over the table, as in
+Spark. To be revisited with multi-tenant resource groups (P3-T003).
+
+Storage levels: `_2`/`_3` replication and `OFF_HEAP` are accepted and reported as asked, but one copy is kept, in
+the engine's memory or one local spill file. Spilled and `DISK_ONLY` entries are scratch data in the spill
+directory (`krishiv.spill.*`), deleted with the entry or at the next start after a crash.
+
+## Checkpoint files and where a checkpoint lives
+
+`DataFrame.checkpoint()` writes the rows under `spark.checkpoint.dir` as a Krishiv spill-format file
+and, unlike Spark, deletes the file when the result and every frame derived from it are gone (Spark
+keeps reliable checkpoint files by default, and nothing in Krishiv reads them back from another
+process). The rows are also held by the session, in its relation store (memory-accounted), so a
+reliable checkpoint holds a memory copy; `localCheckpoint(storageLevel=...)` accepts a level but holds
+the rows in the session's memory whatever it is. With `eager = false` the rows are taken when the
+result is first analyzed (its first action, or the first call that needs its schema), not at its
+first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
+do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
+
 ## `krishiv server` (Spark Connect)
 
 - **The Connect listener binds `127.0.0.1` by default.** Spark binds every interface when
@@ -171,9 +198,30 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
   in Spark. Clients pick random session ids, so this does not happen in practice. A session id another principal holds
   answers `INVALID_HANDLE.SESSION_NOT_FOUND`.
 - **An idle session running a query is kept.** Spark releases a session by its last access alone; Krishiv also keeps
-  one whose query is still running.
+  one whose query is still running or whose results are still being sent.
 - **A request over `spark.connect.grpc.maxInboundMessageSize` is refused with `OUT_OF_RANGE`**, read from the message
   length before the body; Spark (grpc-java) answers `RESOURCE_EXHAUSTED`.
 - **`krishiv.connect.session.idleTimeout`** replaces `spark.connect.session.manager.defaultSessionTimeout`, whose
   "never" is `-1`; Krishiv's is `0s`. `krishiv server` refuses Spark's key, and any other `spark.connect.*` key it
   does not read, rather than ignore it.
+- **Too many operations in one session** fail with `KRISHIV_OPERATION_LIMIT` (`RESOURCE_EXHAUSTED`) past
+  `krishiv.connect.maxOperationsPerSession`; Spark has no such cap.
+- **An invalid operation tag** fails with `KRISHIV_INVALID_OPERATION_TAG` (SQLSTATE 22023) and Spark's message; Spark
+  sends an `INTERNAL` status without an error class.
+- **Results arrive in the engine's batches** (4,096 rows by default), cut further at Spark's
+  `spark.connect.grpc.arrow.maxBatchSize` and `spark.sql.execution.arrow.maxRecordsPerBatch` but never merged.
+- **Timestamps are labelled UTC when `spark.sql.session.timeZone` is unset**; Spark labels them with the JVM's zone.
+  The instants are the same.
+- **Geometry, geography and variant columns** get Spark's Arrow shape at the top level of a result only, not inside a
+  struct, array or map.
+- **The `metrics` response of ExecutePlan is empty** until the operator tree is wired through.
+- **Reattaching to an operation that is still sending** answers `INVALID_CURSOR.DISCONNECTED` to the new stream, and
+  ExecutePlan re-sent with a live operation id answers the same; Spark ends the old stream and replays from the start.
+  The stock client reattaches only after a dropped connection, when Krishiv has already cancelled the operation.
+- **Column metadata travels in the `schema` response only**: Spark 4.3 also writes each field's user metadata into
+  the Arrow schema of every result batch (`SPARK::metadata::json`); Krishiv's batches carry none.
+- **A connection that breaks while results are streaming fails the query**: Krishiv cancels the operation and the
+  client's reattach answers `INVALID_HANDLE.OPERATION_NOT_FOUND`, where Spark keeps the sent responses and resumes the
+  stream. Krishiv's replay buffer and resume come in a later release.
+- **ReleaseExecute without a release type** fails with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark throws
+  an `UnsupportedOperationException` without an error class.
