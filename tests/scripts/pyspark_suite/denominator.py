@@ -18,10 +18,13 @@ class Denominator:
     denominator: int
     cap: int  # 20% of (collected - spark_skips)
     by_reason: dict[str, int]
+    # Skipped on the Spark oracle at run time under the same client (e.g. `skipIf(is_remote_only())`, "Requires JVM
+    # access"): the same treatment as `spark_skips`, outside the cap, reported on its own (review pass 2 N9).
+    conditional_skips: int = 0
 
     @property
     def excluded_share(self) -> float:
-        base = self.collected - self.spark_skips
+        base = self.collected - self.spark_skips - self.conditional_skips
         return (self.manifest + self.oracle_env) / base if base else 0.0
 
     @property
@@ -41,9 +44,14 @@ def compute(
     spark_skips: set[str],
     oracle_env: set[str],
     manifest: list[Entry],
+    conditional_skips: set[str] | None = None,
 ) -> tuple[Denominator, set[str]]:
-    """Return the parts and the set of test ids that make up the denominator."""
-    after_skips = collected - spark_skips
+    """Return the parts and the set of test ids that make up the denominator.
+
+    `conditional_skips`: ids the oracle skipped at run time (see `oracle_skips`); a static skip is not counted twice.
+    """
+    cond = (conditional_skips or set()) & collected - spark_skips
+    after_skips = collected - spark_skips - cond
     after_oracle = after_skips - oracle_env
     by_reason: dict[str, int] = {}
     excluded: set[str] = set()
@@ -65,5 +73,6 @@ def compute(
         denominator=len(remaining),
         cap=int(EXCLUSION_CAP * len(after_skips)),
         by_reason=dict(sorted(by_reason.items())),
+        conditional_skips=len(cond),
     )
     return parts, remaining

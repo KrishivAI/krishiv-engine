@@ -58,3 +58,16 @@ def parse(xml_path: Path, version: str, file: str) -> list[Record]:
                 break
         out.append(Record(version, file, cls, case.get("name") or "", status, ms, reason))
     return out
+
+
+def oracle_skips(oracle_dir: Path, version: str) -> set[str]:
+    """Ids the Spark oracle skipped, from the per-file JUnit XML of an oracle run (`<rel with / as __>.xml`).
+
+    These are the conditional skips: tests Spark itself does not run under this client package. Only `skip`
+    records count; a failure on the oracle is an ORACLE_ENV matter, not a skip.
+    """
+    out: set[str] = set()
+    for xml in sorted(oracle_dir.glob("*.xml")):
+        rel = xml.stem.replace("__", "/")
+        out |= {r.test_id for r in parse(xml, version, rel) if r.status == "skip"}
+    return out

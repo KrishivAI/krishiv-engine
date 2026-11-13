@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from pyspark_suite import manifest as mf
 from pyspark_suite.denominator import compute
-from pyspark_suite.junit import parse
+from pyspark_suite.junit import oracle_skips, parse
 from pyspark_suite.report import dashboard, ratchet_regressions, summarize
 from pyspark_suite.static_count import census
 
@@ -165,3 +165,27 @@ def test_collection_error_is_a_file_failure() -> None:
     rec = Record("4.3.0", "a.py", "", "a", "error", 0)
     out = summarize(den, {"a.py::A::t"}, [rec], source="run")
     assert out["file_failures"] == ["a.py"]
+
+
+def test_conditional_skips_leave_the_denominator_outside_the_cap(tmp_path):
+    # The runner names a file's XML `<rel with / as __>.xml`.
+    G = "pyspark.sql.tests.connect.sub.test_g.GTests"
+    (tmp_path / "sub__test_g.py.xml").write_text(
+        "<testsuites><testsuite>"
+        f'<testcase classname="{G}" name="test_jvm" time="0"><skipped/></testcase>'
+        f'<testcase classname="{G}" name="test_bad" time="0"><failure message="x"/></testcase>'
+        "</testsuite></testsuites>"
+    )
+    cond = oracle_skips(tmp_path, "4.3.0")
+    assert cond == {"sub/test_g.py::GTests::test_jvm"}
+    collected = {f"a.py::T::t{i}" for i in range(8)} | cond | {"sub/test_g.py::GTests::test_bad", "b.py::T::skipme"}
+    den, remaining = compute("4.3.0", collected, {"b.py::T::skipme"}, set(), [], cond)
+    assert (den.collected, den.spark_skips, den.conditional_skips, den.denominator) == (11, 1, 1, 9)
+    assert den.cap == int(0.2 * 9)
+    assert den.as_dict()["conditional_skips"] == 1
+    assert not (remaining & cond)
+
+
+def test_no_oracle_run_means_no_conditional_skips():
+    den, _ = compute("4.3.0", {"a.py::T::t"}, set(), set(), [])
+    assert den.conditional_skips == 0
