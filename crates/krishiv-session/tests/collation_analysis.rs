@@ -1547,3 +1547,25 @@ fn lcase_search_over_an_aggregate_is_planned_as_an_aggregate() {
         "2"
     );
 }
+
+/// The CASE-like `decode(expr, search, result, ...)` is typed by its result positions and compares
+/// by collation in Spark (4.2.0: `typeof(decode(1, 1, 'a', 'b' COLLATE utf8_lcase))` is
+/// `string collate UTF8_LCASE`, and `decode(...) = 'A'` is true); the engine refuses a collated
+/// operand instead of answering as bytes. The two-argument charset decoder and plain strings are
+/// unaffected.
+#[test]
+fn case_like_decode_over_a_collated_string_is_refused() {
+    for sql in [
+        "select typeof(decode(1, 1, 'a' collate utf8_lcase, 'b'))",
+        "select typeof(decode(1, 1, 'a', 'b' collate utf8_lcase))",
+        "select cast(decode(1, 1, 'a', 'b' collate utf8_lcase) = 'A' as string)",
+        "select cast(decode('a' collate utf8_lcase, 'A', 'p', 'q') as string)",
+    ] {
+        assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
+    }
+    assert_eq!(one("select cast(decode(2, 1, 'a', 'b') as string)"), "b");
+    assert_eq!(
+        one("select cast(decode(encode('a' collate utf8_lcase, 'utf-8'), 'utf-8') as string)"),
+        "a"
+    );
+}

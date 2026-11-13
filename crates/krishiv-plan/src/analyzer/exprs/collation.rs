@@ -876,6 +876,17 @@ impl Resolver<'_> {
         if let Some(c) = chosen
             && !c.is_utf8_binary()
         {
+            if name == "decode" && n >= 3 {
+                // The CASE-like `decode(expr, search, result, ...)` is not the charset decoder
+                // of the binary-result list: Spark types it by its result positions
+                // (`string collate UTF8_LCASE` for `decode(1, 1, 'a', 'b' COLLATE utf8_lcase)`)
+                // and compares `expr` with each `search` by collation. Until it is lowered to a
+                // CASE here, a collated operand is refused rather than typed and matched as bytes.
+                return Err(unsupported(
+                    "decode over a collated string".to_owned(),
+                    e.origin,
+                ));
+            }
             if DEPENDS.contains(&name.as_str()) {
                 match collated_rewrite(&name, n, c) {
                     Some(rw) => rewrite = rw,
