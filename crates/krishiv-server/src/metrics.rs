@@ -104,7 +104,14 @@ pub fn router_with_metrics_auth(
     snapshot: SnapshotProvider,
     token: Option<&str>,
 ) -> Router {
-    let router = crate::router();
+    crate::router().merge(metrics_route(enabled, snapshot, token))
+}
+
+/// The `/metrics` route alone (no fallback), for merging into another
+/// router (`krishiv server`'s admin router); auth as
+/// [`router_with_metrics_auth`].
+pub fn metrics_route(enabled: bool, snapshot: SnapshotProvider, token: Option<&str>) -> Router {
+    let router = Router::new();
     if !enabled {
         return router.route("/metrics", get(metrics_disabled));
     }

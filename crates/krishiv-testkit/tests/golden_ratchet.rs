@@ -42,6 +42,7 @@ fn matches_the_frozen_baseline(mut engine: SessionEngine) -> R {
     let manifest = ExclusionManifest::load(&ExclusionManifest::default_path())?;
     assert!(manifest.frozen, "the exclusion manifest is frozen");
     let set = GoldenSet::scan(&GoldenSet::tag_dir(DEFAULT_TAG))?;
+    manifest.validate(&set)?;
     let result = run(&mut engine, &set, &manifest)?;
     assert!(result.failed_files.is_empty(), "{:?}", result.failed_files);
     let timeouts: Vec<String> = result

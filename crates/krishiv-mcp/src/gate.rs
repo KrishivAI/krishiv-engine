@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The read-only gate (ADR 0025, design `P2-T095` section 2.3), three layers:
 //! the statement must parse as exactly one statement of class `Read`
-//! ([`check_read`]); the call's session denies every privilege but `Select`
+//! ([`check_read`]); the call's session denies every privilege but `Select` and `Browse`
 //! through the normal access path ([`SetupLock`]); and the server has no
 //! write tool.
 
@@ -59,7 +59,7 @@ impl SetupLock {
         }
     }
 
-    /// From now on only `Select` is allowed.
+    /// From now on only `Select` and `Browse` are allowed.
     pub fn lock(&self) {
         self.locked.store(true, Ordering::Release);
     }

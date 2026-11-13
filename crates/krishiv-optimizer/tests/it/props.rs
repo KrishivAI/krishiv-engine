@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use krishiv_optimizer::{optimize, optimize_with};
+use krishiv_optimizer::{optimize, optimize_as_written, optimize_with};
 use krishiv_plan::{
     AttrId, Builtin, Expr, ExprNode, FunctionId, Grouping, JoinCondition, JoinKind, LogicalPlan,
     PlanNode, ResolvedExpr,
@@ -676,6 +676,48 @@ fn a_swapped_equality_pushed_into_a_join_is_a_repeat() {
     fixed_point_with_rows(
         2_091_781_642_927_400_886,
         &Gen::new(2_091_781_642_927_400_886).top(),
+    );
+}
+
+/// Seed 17412558634505325946 of `random_queries_reach_the_lowest_operator`:
+/// the inferred `isnotnull` on `x3` narrows the `FULL JOIN` to a right outer
+/// join whose null-supplying side is `x1 JOIN x2 ON x1.a = x2.a`; its `ON`
+/// conjunct `x1.a IN (3, 1)` was pushed to `x1` only in the final tidy; a
+/// second optimization moved it across the inner equality to `x2` as well,
+/// which the first had not, so the plan was not a fixed point.
+#[test]
+fn an_outer_join_on_conjunct_crosses_an_inner_equality_once() {
+    fixed_point_with_rows(
+        17_412_558_634_505_325_946,
+        &Gen::new(17_412_558_634_505_325_946).top(),
+    );
+}
+
+/// The same query without join ordering (`optimize_as_written`, no
+/// statistics): the inferred filters and the rewrite batch alternate until the
+/// rule adds nothing, so a second run of the same path leaves the plan alone.
+#[test]
+fn as_written_an_outer_join_on_conjunct_crosses_an_inner_equality_once() {
+    let seed = 17_412_558_634_505_325_946_u64;
+    let sql = Gen::new(seed).top();
+    let plan = support::resolve(&sql, &support::ctx());
+    let optimized = optimize_as_written(&plan).unwrap();
+    assert_eq!(
+        optimized.root().resolved_output(),
+        plan.root().resolved_output()
+    );
+    let again = optimize_as_written(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{sql}: not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let db = data::small(seed);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root()),
+        "{sql}"
     );
 }
 

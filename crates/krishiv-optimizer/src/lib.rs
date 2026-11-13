@@ -127,7 +127,8 @@ pub struct RuleStep {
     /// The batch it ran in: `ImpliedJoinFilters`, `Rewrite`, `Restrict`,
     /// `JoinOrder` (join ordering alternating with restriction; a `Rewrite`
     /// batch also runs inside it after an outer join turned inner, its rounds
-    /// counting from 1 each time), `Prune`, `Tidy` or `Cse`.
+    /// counting from 1 each time; a `Rewrite` batch also follows
+    /// `InferJoinFilters` whenever that rule changed the plan), `Prune`, `Tidy` or `Cse`.
     pub batch: &'static str,
     /// The round of a fixed-point batch, from 1.
     pub round: usize,
@@ -141,8 +142,8 @@ pub struct RuleStep {
 }
 
 /// The default of `krishiv.optimizer.shareRepeatedSubtrees` when no
-/// configuration value is set (off until the P3 W1 flip, unit 6).
-const SHARE_REPEATED_SUBTREES_DEFAULT: bool = false;
+/// configuration value is set (on since the P3 W1 flip, unit 6).
+const SHARE_REPEATED_SUBTREES_DEFAULT: bool = true;
 
 /// A test-only switch per optimizer rule: which rewrites run. All are on
 /// by default; the differential harnesses turn one off at a time and
@@ -419,8 +420,10 @@ fn run(
         } else {
             root = batch(root, "Rewrite", &mut t)?;
         }
+        // Join ordering's settings: the window rule's guard orders with them too.
+        let joins = join_settings(udfs.map(|(_, config)| config), tracing);
         // P3 W1 shape (a): a correlated aggregate subquery over the outer block's own
-        // relations becomes a window (`krishiv.optimizer.subqueryAsWindow`, off by default).
+        // relations becomes a window (`krishiv.optimizer.subqueryAsWindow`, on by default).
         let window = options.subquery_as_window
             && udfs.is_some_and(|(_, config)| {
                 config
@@ -435,6 +438,7 @@ fn run(
                     Arc::clone(r),
                     stats.unwrap_or(&NoStatistics),
                     options.stats_propagation,
+                    joins,
                 )?;
                 notes = n;
                 Ok(after)
@@ -447,8 +451,17 @@ fn run(
         // After the rewrite batch, which moves `WHERE` equalities into the
         // joins (comma joins are cross joins before it); the batch runs
         // again to push what the rule added, only when it added something.
+        // What it added can turn an outer join inner or one-sided (an `isnotnull` on
+        // its null-supplied side), which lets the batch move that join's `ON`
+        // conjuncts into the side they read; the rule then runs over the joins
+        // below them in join ordering (or once more after restriction), not
+        // only in a second optimization.
         let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
-        let root = inferred;
+        let root = if Arc::ptr_eq(&inferred, &root) {
+            inferred
+        } else {
+            batch(inferred, "Rewrite", &mut t)?
+        };
         let root = t.once("AlgebraicSum", &root, |r| {
             sum_rewrite::rewrite(Arc::clone(r))
         })?;
@@ -461,7 +474,6 @@ fn run(
         let mut root = t.once("Restrict", &root, |r| {
             restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
         })?;
-        let joins = join_settings(udfs.map(|(_, config)| config), tracing);
         if let Some(stats) = stats {
             root = order_and_restrict(root, stats, options.stats_propagation, joins, &mut t)?;
         }
@@ -483,8 +495,19 @@ fn run(
         // Without join ordering, once more after restriction (its semi
         // joins); with it, `order_and_restrict` already ran the rule on the
         // final joins. Tidying pushes what it adds.
+        // The rule and the batch alternate until the rule adds nothing, as in
+        // `order_and_restrict`: what it adds can make another outer join
+        // one-sided, whose `ON` conjuncts the batch then moves.
         let root = if stats.is_none() {
-            t.once("InferJoinFilters", &root, infer_join_filters)?
+            let mut root = root;
+            for _ in 1..=MAX_ITERATIONS {
+                let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
+                if Arc::ptr_eq(&inferred, &root) {
+                    break;
+                }
+                root = batch(inferred, "Rewrite", &mut t)?;
+            }
+            root
         } else {
             root
         };
@@ -604,9 +627,14 @@ fn unoptimised(plan: &Plan, keyed: Arc<LogicalPlan>) -> Result<Plan, KrishivErro
 
 /// [`constraints::infer_join_filters`] at every join, bottom up.
 fn infer_join_filters(root: &Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let mut memo = constraints::Memo::default();
-    dag::rewrite_up(Arc::clone(root), &mut |p| {
-        Ok(constraints::infer_join_filters(p, &mut memo))
+    let mut memo = constraints::Memo::for_root(root);
+    dag::rewrite_up_traced(Arc::clone(root), &mut |original, p| {
+        // A shared relation rebuilt by this pass (a join inside it got its
+        // own filters) is still shared.
+        memo.carry_shared(original, &p);
+        let out = constraints::infer_join_filters(p, &mut memo);
+        memo.carry_shared(original, &out);
+        Ok(out)
     })
 }
 

@@ -159,7 +159,7 @@ pub(super) struct Level {
 
 /// A scope environment: the CTEs visible and the enclosing queries.
 pub(super) struct Env {
-    id: usize,
+    pub(super) id: usize,
     pub(super) ctes: Vec<(String, Rel)>,
     /// Identifies `ctes`: environments with one CTE scope resolve a
     /// relation without outer references alike.
@@ -181,15 +181,27 @@ pub(super) struct Resolver<'a> {
     /// The recursive CTEs being resolved, innermost last: each loop's id
     /// and the attributes its recursive term reads (see `recursive`).
     pub(super) loops: Vec<(u32, Vec<Attr>)>,
-    memo: HashMap<(usize, usize), Rel>,
+    pub(super) memo: HashMap<(usize, usize), Rel>,
     /// Relations without outer references, by (relation, CTE scope): they
     /// resolve alike in every environment with that CTE scope, so a plan
     /// reached both as a child and inside a subquery is resolved once.
-    closed: HashMap<(usize, usize), Rel>,
+    pub(super) closed: HashMap<(usize, usize), Rel>,
     /// Each relation's representative among the relations equal to it
     /// (`encode::identity_keys`): resolution does not depend on how the
     /// input shares subtrees, so equal input keys give equal plans.
-    canon: HashMap<usize, Arc<LogicalPlan>>,
+    pub(super) canon: HashMap<usize, Arc<LogicalPlan>>,
+    /// The identity key of every relation of the input, kept from the first `canonicalize` (the root's).
+    pub(super) keys: HashMap<usize, u128>,
+    /// The input holds a node the prefix cache does not serve (a resolved scan, SQL text, a read by path).
+    pub(super) uncacheable: bool,
+    /// This resolution started from a prefix entry.
+    pub(super) warm_started: bool,
+    /// The names of the tables the input reads, as written.
+    pub(super) read_tables: Vec<Vec<String>>,
+    /// One shared expression per column id, used wherever a projection passes that column through
+    /// unchanged. A chain of `withColumn` steps then holds one expression per column instead of one per
+    /// column per step, and passes that skip an expression already seen skip it.
+    pub(super) pass_exprs: HashMap<AttrId, Arc<crate::Expr>>,
     pub(super) columns: Vec<BTreeSet<String>>,
     /// The lambda scopes pushed by the higher-order calls whose bodies
     /// bind now, innermost last (see `hof`).
@@ -207,7 +219,7 @@ pub(super) struct Resolver<'a> {
     pub(super) secret: std::collections::HashSet<usize>,
     pub(super) secret_scope: bool,
     op_outer: Option<usize>,
-    root_env: Option<Arc<Env>>,
+    pub(super) root_env: Option<Arc<Env>>,
     /// Constant folding's values over this pass (see `fold::Memo`).
     pub(super) folds: std::cell::RefCell<super::fold::Memo>,
     /// The SQL function whose body is being resolved: what its parameters
@@ -234,12 +246,16 @@ type Resolved = (
     Vec<String>,
     Vec<Option<String>>,
     Vec<Option<String>>,
+    Option<super::prefix::PrefixEntry>,
+    bool,
 );
 
 pub(super) fn resolve(
     plan: &Plan,
     ctx: &AnalysisContext,
     b: &Bindings,
+    warm: Option<&super::prefix::PrefixEntry>,
+    caching: bool,
 ) -> Result<Resolved, AnalysisError> {
     let mut other = ctx.clone();
     other.conf.ansi = !ctx.conf.ansi;
@@ -253,6 +269,11 @@ pub(super) fn resolve(
         memo: HashMap::new(),
         closed: HashMap::new(),
         canon: HashMap::new(),
+        keys: HashMap::new(),
+        uncacheable: false,
+        warm_started: false,
+        read_tables: Vec::new(),
+        pass_exprs: HashMap::new(),
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
         expr_depth: 0,
@@ -272,12 +293,23 @@ pub(super) fn resolve(
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
     r.next_id = first_free_id(plan.root())?;
+    let start_id = r.next_id;
     let env = r.env(Vec::new(), 0, Vec::new());
     r.root_env = Some(Arc::clone(&env));
+    r.canonicalize(plan.root());
+    if let Some(entry) = warm {
+        r.seed_prefix(entry, plan.root(), &env);
+    }
     let rel = r.rel(plan.root(), &env)?;
     if let Some(error) = r.pending_nondeterministic.take() {
         return Err(error);
     }
+    // Only a caching analyzer keeps the entry; the plain one skips the copies.
+    let entry = if caching {
+        r.export_prefix(plan.root(), start_id)
+    } else {
+        None
+    };
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
@@ -313,7 +345,16 @@ pub(super) fn resolve(
             columns,
         })
         .collect();
-    Ok((root, output, uses, warnings, declared, comments))
+    Ok((
+        root,
+        output,
+        uses,
+        warnings,
+        declared,
+        comments,
+        entry,
+        r.warm_started,
+    ))
 }
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its
@@ -411,11 +452,12 @@ impl Resolver<'_> {
     }
 
     /// Records the representative of every relation under `root`.
-    fn canonicalize(&mut self, root: &Arc<LogicalPlan>) {
+    pub(super) fn canonicalize(&mut self, root: &Arc<LogicalPlan>) {
         if self.canon.contains_key(&addr(&**root)) {
             return;
         }
         let keys = crate::encode::identity_keys(root);
+        let first_call = self.keys.is_empty();
         let mut first: HashMap<u128, Arc<LogicalPlan>> = HashMap::new();
         let mut stack = vec![Arc::clone(root)];
         let mut exprs: Vec<Arc<crate::Expr>> = Vec::new();
@@ -430,6 +472,17 @@ impl Resolver<'_> {
                 None => Arc::clone(&p),
             };
             self.canon.insert(addr(&*p), rep);
+            if first_call {
+                match &p.node {
+                    PlanNode::Scan(_)
+                    | PlanNode::Sql { .. }
+                    | PlanNode::Read(ReadSource::Files { .. }) => self.uncacheable = true,
+                    PlanNode::Read(ReadSource::Table { name, .. }) => {
+                        self.read_tables.push(name.clone());
+                    }
+                    _ => {}
+                }
+            }
             p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
             p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
             while let Some(e) = exprs.pop() {
@@ -442,9 +495,25 @@ impl Resolver<'_> {
                 e.for_each_child(&mut |c| exprs.push(Arc::clone(c)));
             }
         }
+        if first_call {
+            self.keys = keys.into_iter().map(|(p, k)| (p as usize, k)).collect();
+        }
     }
 
-    fn rep(&self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    /// The shared expression that passes `col` through a projection (see `pass_exprs`).
+    pub(super) fn pass_expr(&mut self, col: &BoundColumn) -> Arc<Expr> {
+        let shared = self
+            .pass_exprs
+            .entry(col.id)
+            .or_insert_with(|| col_expr(col, Origin::UNKNOWN));
+        // The same id names the same column; a different shape builds its own expression.
+        match &shared.node {
+            ExprNode::Resolved(crate::ResolvedExpr::Column(c)) if c == col => Arc::clone(shared),
+            _ => col_expr(col, Origin::UNKNOWN),
+        }
+    }
+
+    pub(super) fn rep(&self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         self.canon
             .get(&addr(&**p))
             .cloned()
@@ -1096,7 +1165,7 @@ impl Resolver<'_> {
                         name: news[i].0.clone(),
                     })));
                 }
-                None => exprs.push(col_expr(&a.col, Origin::UNKNOWN)),
+                None => exprs.push(self.pass_expr(&a.col)),
             }
         }
         for (i, (name, b)) in news.iter().enumerate() {
