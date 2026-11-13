@@ -13,7 +13,7 @@
 //!   [`CACHE_TTL`] after its last access (`SessionHolder`, lines 117-124
 //!   and 654-657), and gives each out **once** (`FetchErrorDetailsHandler`,
 //!   lines 43-53: read, then invalidated).
-//! - The response ([`details`], `ErrorUtils.throwableToProtoErrors`, lines
+//! - The response (`details`, `ErrorUtils.throwableToProtoErrors`, lines
 //!   78-187): the error and its causes, at most [`MAX_CHAIN`], root index
 //!   0, each with its message, the Java class hierarchy Spark would raise
 //!   (`status::exception_classes`), the class, SQLSTATE, message parameters

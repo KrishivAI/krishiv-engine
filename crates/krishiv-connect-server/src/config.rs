@@ -8,7 +8,7 @@
 //!   set a key is the registry's `SettableBy` (ADR 0046 §8, threat model
 //!   T-Z3): a `Startup` key is `CANNOT_MODIFY_STATIC_CONFIG` for every role,
 //!   an `Admin` key `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) for a viewer or
-//!   operator ([`check_settable`]).
+//!   operator (`check_settable`).
 //! - `get(keys)`: an unset key without a default is `SQL_CONF_NOT_FOUND`
 //!   (Spark's `SQLConf.getConfString`, `SQLConf.scala:9801-9808`).
 //! - `get_with_default`: a set value, else the caller's default (a

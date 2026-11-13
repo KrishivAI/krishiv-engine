@@ -142,6 +142,9 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
     let by_prefix: &[(&str, &[&str])] = &[
         ("INVALID_HANDLE.", SPARK_SQL_EXCEPTION),
         ("INVALID_CURSOR.", SPARK_SQL_EXCEPTION),
+        // `SparkConnectSessionManager.validateCloneTargetSession` (v4.3.0
+        // lines 183-205).
+        ("INVALID_CLONE_SESSION_REQUEST.", SPARK_SQL_EXCEPTION),
         (
             "CONNECT_INVALID_PLAN.PLAN_SIZE_LARGER_THAN_MAX",
             SPARK_SQL_EXCEPTION,

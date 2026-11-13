@@ -13,7 +13,10 @@
 //! id gets.
 //!
 //! No lock is held across an `await`, nor while a session is built or
-//! closed: the map lock guards lookups and inserts only.
+//! closed: the map lock guards lookups and inserts only. The one exception
+//! is each session's statement gate ([`SessionEntry::shared`]), a tokio
+//! `RwLock` built to be held across an `await`: `CloneSession` takes it
+//! exclusively around the copy (`clone`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -117,6 +120,9 @@ pub struct SessionEntry {
     artifacts: Arc<SessionArtifacts>,
     /// Milliseconds since the manager's epoch at the last lookup.
     last_access: AtomicU64,
+    /// Held shared by the RPCs that change the session's state while they
+    /// do, exclusively by `CloneSession` around its copy.
+    gate: tokio::sync::RwLock<()>,
 }
 
 impl SessionEntry {
@@ -158,6 +164,21 @@ impl SessionEntry {
     #[must_use]
     pub fn artifacts(&self) -> &Arc<SessionArtifacts> {
         &self.artifacts
+    }
+
+    /// The statement gate, shared: the RPCs that change the session's state
+    /// (`ExecutePlan` until its query is started, `AnalyzePlan`, `Config`;
+    /// the commands of T012) hold it while they do, so a `CloneSession` of
+    /// this session copies it between two of them, never in the middle of
+    /// one. Each RPC holds the gate of its own session only and takes no
+    /// other lock while it waits for it, so it cannot deadlock.
+    pub async fn shared(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
+        self.gate.read().await
+    }
+
+    /// The statement gate, exclusively (`CloneSession` around its copy).
+    pub(crate) async fn exclusive(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
+        self.gate.write().await
     }
 
     /// Closes the session's operations, then the session (its queries
@@ -308,6 +329,19 @@ impl SessionManager {
         u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
+    /// A new entry for `session`, not yet in the map.
+    fn new_entry(&self, session: Session, client_user_id: &str) -> Arc<SessionEntry> {
+        Arc::new(SessionEntry {
+            errors: Arc::new(SessionErrors::new(session.conf())),
+            artifacts: Arc::default(),
+            session,
+            client_user_id: client_user_id.to_owned(),
+            operations: Arc::default(),
+            last_access: AtomicU64::new(self.now_ms()),
+            gate: tokio::sync::RwLock::new(()),
+        })
+    }
+
     fn key(principal: &Principal, session_id: &str) -> Key {
         Key {
             principal: principal.clone(),
@@ -345,14 +379,7 @@ impl SessionManager {
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
         let session = (self.factory)(principal)?;
-        let entry = Arc::new(SessionEntry {
-            errors: Arc::new(SessionErrors::new(session.conf())),
-            artifacts: Arc::default(),
-            session,
-            client_user_id: client_user_id.to_owned(),
-            operations: Arc::default(),
-            last_access: AtomicU64::new(self.now_ms()),
-        });
+        let entry = self.new_entry(session, client_user_id);
         let raced = {
             let mut inner = self.lock();
             if let Some(existing) = inner.live.get(&key).map(Arc::clone) {
@@ -757,6 +784,8 @@ impl SessionManager {
         Some(entry)
     }
 }
+
+mod clone;
 
 #[cfg(test)]
 mod tests;

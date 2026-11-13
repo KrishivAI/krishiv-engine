@@ -300,7 +300,34 @@ impl ArtifactStore {
 /// A cached `cache/<hash>` artifact and the pool bytes it holds.
 struct Cached {
     data: Bytes,
+    /// What it counts against the quotas (its bytes and overhead).
+    charge: u64,
     _reservation: Reservation,
+}
+
+/// An installed file artifact (a `CloneSession` copies it).
+#[derive(Debug, Clone)]
+struct Installed {
+    name: ArtifactName,
+    bytes: u64,
+    /// What it counts against the quotas (its bytes and overhead).
+    charge: u64,
+}
+
+/// What a `CloneSession` copies of a session's artifacts: the installed
+/// ones when it was taken (never a transfer still in progress). Holds the
+/// source's directory open until the copy is done.
+pub(crate) struct ArtifactSnapshot {
+    dir: Option<Arc<SessionDir>>,
+    files: Vec<Installed>,
+    cache: Vec<(String, Bytes, u64)>,
+}
+
+impl ArtifactSnapshot {
+    /// Whether there is nothing to copy.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.files.is_empty() && self.cache.is_empty()
+    }
 }
 
 #[derive(Default)]
@@ -309,6 +336,8 @@ struct State {
     /// Bytes counted against `maxBytes`: staged and installed.
     used: u64,
     cache: HashMap<String, Cached>,
+    /// The installed files, in the order installed.
+    files: Vec<Installed>,
     consumer: Option<Arc<ConsumerHandle>>,
     /// The server-wide count `used` is also held in.
     total: Option<Arc<ServerQuota>>,
@@ -366,6 +395,7 @@ impl SessionArtifacts {
         let (dir, cache) = {
             let mut s = self.lock();
             s.closed = true;
+            s.files.clear();
             if let Some(total) = s.total.take() {
                 total.release(s.used);
             }
@@ -461,6 +491,7 @@ impl SessionArtifacts {
         &self,
         hash: &str,
         data: Bytes,
+        charge: u64,
         reservation: Reservation,
     ) -> Result<bool, KrishivError> {
         let mut s = self.lock();
@@ -474,6 +505,7 @@ impl SessionArtifacts {
             hash.to_owned(),
             Cached {
                 data,
+                charge,
                 _reservation: reservation,
             },
         );
@@ -482,6 +514,152 @@ impl SessionArtifacts {
 
     fn is_closed(&self) -> bool {
         self.lock().closed
+    }
+
+    /// Records an installed file (unless the session closed meanwhile).
+    fn record_installed(&self, installed: Installed) {
+        let mut s = self.lock();
+        if !s.closed {
+            s.files.push(installed);
+        }
+    }
+
+    /// The installed artifacts now (`CloneSession`); `None` once closed.
+    pub(crate) fn snapshot(&self) -> Option<ArtifactSnapshot> {
+        let s = self.lock();
+        if s.closed {
+            return None;
+        }
+        Some(ArtifactSnapshot {
+            dir: s.dir.clone(),
+            files: s.files.clone(),
+            cache: s
+                .cache
+                .iter()
+                .map(|(hash, c)| (hash.clone(), c.data.clone(), c.charge))
+                .collect(),
+        })
+    }
+
+    /// Copies the artifacts of `snapshot` into this (new) session's
+    /// artifacts, each counted against this session's quota and the
+    /// server's before its bytes are written, cached blobs reserved again
+    /// from the pool (blocking; on the blocking pool). On a failure what it
+    /// copied stays counted here: the caller closes this session, which
+    /// returns it all and removes the directory.
+    ///
+    /// # Errors
+    /// `KRISHIV_ARTIFACT_LIMIT` past a quota, the pool's refusal for a
+    /// cached blob, `INVALID_HANDLE.SESSION_CLOSED` once this session is
+    /// closed, `INTERNAL_ERROR` for a file system failure.
+    pub(crate) fn copy_from(
+        self: &Arc<Self>,
+        snapshot: &ArtifactSnapshot,
+        store: &ArtifactStore,
+        pool: &Arc<dyn MemoryPool>,
+    ) -> Result<(), KrishivError> {
+        for (hash, data, charge) in &snapshot.cache {
+            let name = format!("cache/{hash}");
+            self.reserve(*charge, store, &name)?;
+            let mut reservation = self.consumer(pool).reservation();
+            let put = reservation
+                .try_grow(data.len())
+                .map_err(KrishivError::from)
+                .and_then(|()| self.put_cached(hash, data.clone(), *charge, reservation));
+            match put {
+                Ok(true) => {}
+                Ok(false) => self.release(*charge),
+                Err(e) => {
+                    self.release(*charge);
+                    return Err(e);
+                }
+            }
+        }
+        if snapshot.files.is_empty() {
+            return Ok(());
+        }
+        let Some(source) = &snapshot.dir else {
+            return Err(InternalError {
+                message: "CloneSession: installed artifacts without a directory".to_owned(),
+            }
+            .into());
+        };
+        for file in &snapshot.files {
+            self.copy_file(store, source, file)?;
+        }
+        Ok(())
+    }
+
+    /// Copies one installed file of `source` here: counted first, staged,
+    /// installed as an upload is.
+    fn copy_file(
+        self: &Arc<Self>,
+        store: &ArtifactStore,
+        source: &SessionDir,
+        file: &Installed,
+    ) -> Result<(), KrishivError> {
+        let raw = file.name.path().to_owned();
+        self.reserve(file.charge, store, &raw)?;
+        let made = self.dir(store).and_then(|dir| {
+            let staged = uuid_text(random_uuid()?);
+            let out = dir
+                .create_staged(&staged)
+                .map_err(|e| io_failure("stage a cloned artifact", &e))?;
+            Ok((dir, staged, out))
+        });
+        let (dir, staged_name, out) = match made {
+            Ok(made) => made,
+            Err(e) => {
+                self.release(file.charge);
+                return Err(e);
+            }
+        };
+        // From here dropping `staged` removes the staged file and returns
+        // the charge.
+        let mut staged = Staged {
+            raw,
+            name: file.name.clone(),
+            sink: Sink::File {
+                dir,
+                staged: staged_name,
+                file: None,
+            },
+            crc_ok: true,
+            first_chunk: false,
+            chunks: None,
+            written: 0,
+            reserved: file.charge,
+            owner: Arc::clone(self),
+        };
+        let segments: Vec<&str> = file.name.segments().collect();
+        let input = source
+            .open_installed(&segments)
+            .map_err(|e| io_failure("read an artifact to clone", &e))?;
+        let mut out = out;
+        let copied = io::copy(&mut io::Read::take(input, file.bytes), &mut out)
+            .map_err(|e| io_failure("copy an artifact", &e))?;
+        if copied != file.bytes {
+            return Err(InternalError {
+                message: format!(
+                    "CloneSession: artifact {} has {copied} bytes, {} were installed",
+                    staged.raw, file.bytes
+                ),
+            }
+            .into());
+        }
+        staged.written = copied;
+        if let Sink::File { file: slot, .. } = &mut staged.sink {
+            *slot = Some(out);
+        }
+        staged.complete()?;
+        if staged.install()? {
+            Ok(())
+        } else {
+            Err(InternalError {
+                message: format!("CloneSession: artifact {} was already there", staged.raw),
+            }
+            .into())
+        }
     }
 }
 
@@ -695,7 +873,9 @@ impl Staged {
                 let Some(reservation) = reservation.take() else {
                     return Ok(false);
                 };
-                let added = self.owner.put_cached(&hash, data, reservation)?;
+                let added = self
+                    .owner
+                    .put_cached(&hash, data, self.reserved, reservation)?;
                 if added {
                     self.reserved = 0;
                 }
@@ -708,6 +888,11 @@ impl Staged {
                     .map_err(|e| io_failure("install an artifact", &e))?;
                 match outcome {
                     Install::Added => {
+                        self.owner.record_installed(Installed {
+                            name: self.name.clone(),
+                            bytes: self.written,
+                            charge: self.reserved,
+                        });
                         self.reserved = 0;
                         Ok(true)
                     }

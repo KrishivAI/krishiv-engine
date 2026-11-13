@@ -164,6 +164,9 @@ impl Registered {
 impl Drop for Registered {
     fn drop(&mut self) {
         if let Some(op) = self.op.take() {
+            // It failed before its stream started (GetStatus: FAILED).
+            op.fail();
+            op.mark_ended();
             op.close();
             self.operations.remove(&op);
         }
@@ -544,6 +547,7 @@ async fn encode(
     // The query's stream is gone by now (dropped with `produce`).
     drop(df);
     settle(&op, &sender.errors, outcome);
+    op.mark_ended();
 }
 
 /// Ends `op`'s stream after its encoder stopped with `outcome`. The
@@ -560,7 +564,9 @@ fn settle(op: &Operation, errors: &SessionErrors, outcome: Result<(), Stop>) {
             op.replay().finish(None);
         }
         Err(Stop::Failed(e)) => {
-            let error = if op.finish() {
+            // Failed now, or finished before (its last response failed):
+            // the error stands; an interrupt that came first wins.
+            let error = if op.fail() || !op.is_cancelled() {
                 e
             } else {
                 OperationCanceled {}.into()

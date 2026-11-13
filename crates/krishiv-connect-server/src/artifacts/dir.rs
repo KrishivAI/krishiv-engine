@@ -217,6 +217,32 @@ impl SessionDir {
     }
 }
 
+impl SessionDir {
+    /// Opens the installed regular file at the relative path `segments` for
+    /// reading, every segment without following a link (`CloneSession`).
+    pub(crate) fn open_installed(&self, segments: &[&str]) -> io::Result<File> {
+        let Some((leaf, parents)) = segments.split_last() else {
+            return Err(io::Error::from(io::ErrorKind::NotFound));
+        };
+        let mut parent: Option<OwnedFd> = None;
+        for segment in parents {
+            let cur = parent.as_ref().map_or(self.fd.as_fd(), AsFd::as_fd);
+            parent = Some(openat(cur, *segment, DIR_FLAGS, Mode::empty())?);
+        }
+        let cur = parent.as_ref().map_or(self.fd.as_fd(), AsFd::as_fd);
+        let read = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK;
+        let fd = openat(cur, *leaf, read, Mode::empty())?;
+        let st = fstat(&fd)?;
+        if rustix::fs::FileType::from_raw_mode(st.st_mode) != rustix::fs::FileType::RegularFile {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "an installed artifact is not a regular file",
+            ));
+        }
+        Ok(File::from(fd))
+    }
+}
+
 impl Drop for SessionDir {
     fn drop(&mut self) {
         remove_tree(std::mem::take(&mut self.path));

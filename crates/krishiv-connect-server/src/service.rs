@@ -11,8 +11,11 @@
 //! (`crate::config`) and `Interrupt` (`crate::interrupt`). PR-15b adds
 //! `AddArtifacts` and `ArtifactStatus` (`crate::artifacts`) and
 //! `FetchErrorDetails` (`crate::errors`); an error sent once a session is
-//! known carries an `errorId` (`SessionEntry::errors`). `CloneSession` and
-//! `GetStatus` answer `UNIMPLEMENTED` until PR-15c.
+//! known carries an `errorId` (`SessionEntry::errors`). PR-15c adds
+//! `CloneSession` (`SessionManager::clone_session`) and `GetStatus`
+//! (`crate::get_status`). The RPCs that change a session's state hold its
+//! statement gate shared (`SessionEntry::shared`) while they do, so a clone
+//! never copies a session in the middle of one.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,9 +36,10 @@ use crate::codec::WireCodec;
 use crate::execute::ResponseBudget;
 use crate::manager::{SessionEntry, SessionManager};
 use crate::operation::ExecuteLimits;
+use crate::operation::{random_uuid, replay::uuid_text};
 use crate::sender::{self, SenderCaps};
 use crate::status::status_of;
-use crate::{analyze, config, errors, execute, interrupt};
+use crate::{analyze, config, errors, execute, get_status, interrupt};
 
 /// The generated server side of `spark.connect.SparkConnectService`.
 #[expect(
@@ -154,13 +158,6 @@ impl ConnectService {
             .get_or_create(principal, session_id, observed, user)
             .map_err(|e| status_of(&e))
     }
-
-    fn unimplemented(&self, rpc: &str) -> Status {
-        match self.admit() {
-            Err(s) => s,
-            Ok(()) => Status::unimplemented(format!("{rpc} is not supported by this server yet")),
-        }
-    }
 }
 
 impl SparkConnectService for ConnectService {
@@ -195,9 +192,12 @@ impl SparkConnectService for ConnectService {
                 .errors()
                 .status(&InvalidHandleOperationAbandoned { handle: id.clone() }.into()));
         }
+        // Until the query is started (the encoder runs without it).
+        let gate = entry.shared().await;
         let stream = execute::execute_plan(&entry, &request, &self.limits, &self.budget)
             .await
             .map_err(|e| entry.errors().status(&e))?;
+        drop(gate);
         Ok(Response::new(stream))
     }
 
@@ -216,6 +216,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        let _gate = entry.shared().await;
         analyze::analyze_plan(&entry, &request, &self.limits)
             .await
             .map(Response::new)
@@ -237,6 +238,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        let _gate = entry.shared().await;
         config::config(&entry, &request, &principal, config::role_of(&principal))
             .map(Response::new)
             .map_err(|e| entry.errors().status(&e))
@@ -470,17 +472,59 @@ impl SparkConnectService for ConnectService {
         Ok(Response::new(response))
     }
 
+    /// Spark's `SparkConnectCloneSessionHandler` and
+    /// `SparkConnectSessionManager.cloneSession` (v4.3.0 lines 145-180):
+    /// the source is looked up (its server-side id checked), the target is
+    /// `new_session_id` or a fresh UUID (`SessionManager::clone_session`).
     async fn clone_session(
         &self,
-        _request: Request<Decoded<pb::CloneSessionRequest>>,
+        request: Request<Decoded<pb::CloneSessionRequest>>,
     ) -> Result<Response<pb::CloneSessionResponse>, Status> {
-        Err(self.unimplemented("CloneSession"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let source = self
+            .manager
+            .get(
+                &principal,
+                &request.session_id,
+                request.client_observed_server_side_session_id.as_deref(),
+            )
+            .map_err(|e| status_of(&e))?;
+        let target = match &request.new_session_id {
+            Some(id) => id.clone(),
+            None => uuid_text(random_uuid().map_err(|e| source.errors().status(&e))?),
+        };
+        let clone = self
+            .manager
+            .clone_session(&self.artifacts, &principal, &source, &target)
+            .await
+            .map_err(|e| source.errors().status(&e))?;
+        Ok(Response::new(pb::CloneSessionResponse {
+            session_id: request.session_id.clone(),
+            server_side_session_id: source.server_side_id().to_owned(),
+            new_session_id: target,
+            new_server_side_session_id: clone.server_side_id().to_owned(),
+        }))
     }
 
+    /// Spark's `SparkConnectGetStatusHandler`: the session is looked up
+    /// (its server-side id checked), the states read (`crate::get_status`).
     async fn get_status(
         &self,
-        _request: Request<Decoded<pb::GetStatusRequest>>,
+        request: Request<Decoded<pb::GetStatusRequest>>,
     ) -> Result<Response<pb::GetStatusResponse>, Status> {
-        Err(self.unimplemented("GetStatus"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self
+            .manager
+            .get(
+                &principal,
+                &request.session_id,
+                request.client_observed_server_side_session_id.as_deref(),
+            )
+            .map_err(|e| status_of(&e))?;
+        Ok(Response::new(get_status::get_status(&entry, &request)))
     }
 }
