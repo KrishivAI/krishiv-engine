@@ -58,7 +58,9 @@ guards, made by the maintainer.
 workflow, as `nightly.yml` does; the wheel matrix is part of it) and uploads those wheels to TestPyPI once that run
 is green. `publish-pypi.yml` and `publish-crates.yml` have the same `ci` job: a publish never relies on an earlier
 scheduled nightly, so dispatch on the exact tag or `main` commit and expect the full CI time before the approval
-prompt. It is gated twice:
+prompt. The `ci` job holds `id-token: write` (ci.yml's jobs declare it), so the trusted publishers on pypi.org
+(`krishiv`, `krishiv-compat`) and test.pypi.org must name the `pypi` / `testpypi` environment: the environment is
+what keeps a build step from minting an upload token. The upload is gated twice:
 
 1. It runs only when dispatched by hand, on `main` or a `v*` tag.
 2. Its upload job targets the `testpypi` GitHub environment. The maintainer

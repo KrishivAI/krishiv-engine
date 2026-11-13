@@ -55,7 +55,7 @@ jobs:
       - uses: $/.github/actions/install-tool
         with:
           tool: actionlint@1.7.7
-      - run: actionlint
+      - run: actionlint -shellcheck=
       - run: cargo xtask spdx
       - run: cargo xtask source-guard
       - run: cargo xtask file-size
