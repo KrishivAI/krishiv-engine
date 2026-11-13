@@ -191,10 +191,16 @@ pub(crate) fn select_by_name(array: ArrayRef, expected: &DataType) -> KernelResu
             if !changed {
                 return Ok(array);
             }
-            // Never empty: a struct of no fields is always in order and unchanged.
+            // The length is given: every source field may be projected away (a struct of no
+            // fields), and the struct keeps its rows and nulls.
             Ok(Arc::new(
-                StructArray::try_new(out_fields.into(), columns, st.nulls().cloned())
-                    .map_err(arrow_err)?,
+                StructArray::try_new_with_length(
+                    out_fields.into(),
+                    columns,
+                    st.nulls().cloned(),
+                    st.len(),
+                )
+                .map_err(arrow_err)?,
             ))
         }
         (DataType::Array(a), ArrowType::List(f)) => {

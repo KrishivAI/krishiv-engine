@@ -883,3 +883,13 @@ fn an_optional_match_does_not_cover_a_missing_required_patch() {
     let e = err(eval(&Expr::StructPatch(p), Some(&xy)));
     assert!(e.to_string().contains("non-optional field patches"), "{e}");
 }
+
+/// A struct read as a struct of no fields keeps its row count and nulls (Codex on #728).
+#[test]
+fn a_struct_read_as_an_empty_struct_keeps_its_rows() {
+    let empty = struct_of(&[]);
+    let out = evaluate_expression(&ctx(), &col("s"), &nested_batch(), Some(&empty)).unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(out.as_struct().num_columns(), 0);
+    assert_eq!(out.null_count(), 1);
+}
