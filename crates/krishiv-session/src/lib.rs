@@ -42,6 +42,7 @@
 #![forbid(unsafe_code)]
 
 mod access;
+mod action;
 mod admission;
 mod arrow_values;
 pub mod auth;
