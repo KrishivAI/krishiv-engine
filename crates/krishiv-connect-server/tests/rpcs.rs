@@ -311,10 +311,9 @@ async fn analyze_explain_tree_string_and_flags() {
         panic!("is local");
     };
     assert!(!l.is_local);
-    // Codex review (#738): Spark answers true for SQL `VALUES` (its analyzer
-    // makes a `LocalRelation`); Krishiv parses SQL text during analysis and
-    // lowers the rows, so it answers false (a recorded known difference).
-    // A query over rows is not local in either.
+    // Codex review (#738): SQL text is parsed during analysis, so a SQL
+    // `VALUES` is not an inline table when `is_local` asks (Spark's answer
+    // for it is to be checked against 4.2/4.3 before this changes).
     for query in [
         "VALUES (1), (2)",
         "SELECT * FROM VALUES (1), (2)",

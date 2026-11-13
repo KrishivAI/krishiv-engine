@@ -236,8 +236,7 @@ do not see it, as in Spark. `system.caches` lists the session's live checkpoints
   columns, or in join hints are not the same in Krishiv and are in Spark. `semantic_hash` values are Krishiv's own
   (equal for plans `same_semantics` calls equal, within one server), not Spark's. `ddl_parse` refuses the clauses only
   a table schema takes (`DEFAULT`, `GENERATED`), and its parse errors are those of the text as a data type, where Spark
-  reports the table-schema parse. `spark_version` is the session profile's release line (`4.2.0`). `is_local` is false
-  for a SQL `VALUES` relation (`spark.sql("VALUES (1), (2)")`), which Spark answers true.
+  reports the table-schema parse. `spark_version` is the session profile's release line (`4.2.0`).
 - **Config.** Secret-looking keys and values (Spark 4.3's `spark.redaction.regex` default) are hidden for 4.2 sessions
   too; Spark 4.2 shows them. The pattern is the default only (Spark reads `spark.redaction.regex` from the startup
   configuration). Krishiv also hides what its own secret classifier finds, where Spark 4.3 shows it: keys such as

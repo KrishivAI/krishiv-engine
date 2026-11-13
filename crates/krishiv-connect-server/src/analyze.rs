@@ -7,7 +7,7 @@
 //! - `schema`: the analyzed schema, the same `DataType` `ExecutePlan` sends;
 //! - `explain`: `DataFrame::explain` in the requested mode;
 //! - `tree_string`: Spark's `StructType.treeString` (`analyze::types`);
-//! - `is_local`: whether the analyzed root is an inline table (Spark's
+//! - `is_local`: whether the translated root is an inline table (Spark's
 //!   `LocalRelation`); `is_streaming`: always false (no streaming sources);
 //! - `input_files`: the paths of the file scans, as written;
 //! - `spark_version`: the session profile's release (`4.2.0` for 4.2);
@@ -118,9 +118,9 @@ async fn analyze(
             // analyzer lowers inline rows to `OneRowRelation` (as for
             // `SELECT 1`), so the question is asked of the translated plan
             // (an inline table, as `LocalRelation` will translate in T012);
-            // SQL `VALUES` is SQL text until analysis and answers false (a
-            // known difference). The plan is still analyzed so that an
-            // invalid one fails as in Spark.
+            // SQL `VALUES` is SQL text until analysis and answers false.
+            // The plan is still analyzed so that an invalid one fails as in
+            // Spark.
             let empty = pb::Plan::default();
             let logical = request_plan(session, l.plan.as_ref().unwrap_or(&empty), limits).await?;
             let is_local = matches!(logical.root().node, PlanNode::InlineTable { .. });
