@@ -257,6 +257,8 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("peak_memory_bytes", Long, true),
             ("error_class", Text, true),
             ("workload_class", Text, true),
+            ("resource_group", Text, true),
+            ("queued_ns", Long, true),
             ("cpu_ns", Long, true),
             ("rows_produced", Long, true),
             ("bytes_read", Long, true),
@@ -578,6 +580,8 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.peak_memory_bytes)),
             text(rows.iter().map(|r| r.error_class.as_deref())),
             text(rows.iter().map(|r| r.workload_class)),
+            text(rows.iter().map(|r| r.resource_group.as_deref())),
+            long(rows.iter().map(|r| r.queued_ns)),
             long(rows.iter().map(|r| r.cpu_ns)),
             long(rows.iter().map(|r| r.rows_produced)),
             long(rows.iter().map(|r| r.bytes_read)),
@@ -716,6 +720,11 @@ pub(crate) struct QueryRow {
     /// the history doesn't copy them.
     pub(crate) operators: Arc<[OperatorRow]>,
     pub(crate) workload_class: Option<&'static str>,
+    /// The resource group the controller placed the query in (`None` without one).
+    pub(crate) resource_group: Option<String>,
+    /// How long admission held the query queued, in nanoseconds (`None` for a query that never
+    /// reached admission; 0 when it started at once).
+    pub(crate) queued_ns: Option<i64>,
     /// Busy time of its drivers.
     pub(crate) cpu_ns: Option<i64>,
     pub(crate) rows_produced: Option<i64>,
@@ -999,6 +1008,8 @@ impl QueryLog {
             policy,
             operators: Arc::default(),
             workload_class: None,
+            resource_group: None,
+            queued_ns: None,
             cpu_ns: None,
             rows_produced: None,
             bytes_read: None,
@@ -1112,9 +1123,13 @@ impl QueryLog {
     }
 
     /// Stamps the start of live row `id`: admission let it run.
-    pub(crate) fn mark_started(&self, id: &str) {
+    pub(crate) fn mark_started(&self, id: &str, group: Option<&str>) {
         self.history.update(&self.session_id, id, |row| {
             row.started_ms = Some(now_ms());
+            // Time from submission to admission: what the controller held the query.
+            row.queued_ns =
+                Some(i64::try_from(row.submitted_at.elapsed().as_nanos()).unwrap_or(i64::MAX));
+            row.resource_group = group.map(str::to_owned);
         });
     }
 
@@ -1427,7 +1442,7 @@ impl Session {
     /// The permit of a query that reads only `system.*` (never queued behind the load it
     /// inspects): it starts at once, so its row has a start time.
     pub(crate) fn exempt_permit(&self, log_id: &str) -> crate::admission::Permit {
-        self.state.queries.mark_started(log_id);
+        self.state.queries.mark_started(log_id, None);
         crate::admission::Permit::unlimited()
     }
 

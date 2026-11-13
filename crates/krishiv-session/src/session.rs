@@ -1642,7 +1642,7 @@ impl Session {
         queued.open = false;
         match admitted {
             Ok(permit) => {
-                self.state.queries.mark_started(log_id);
+                self.state.queries.mark_started(log_id, permit.group());
                 Ok(permit)
             }
             Err(error) => {

@@ -54,6 +54,7 @@ pub struct QueryRequest {
 pub struct Permit {
     memory_budget: Option<usize>,
     slot: Option<Box<dyn std::any::Any + Send + Sync>>,
+    group: Option<String>,
 }
 
 impl Permit {
@@ -62,6 +63,7 @@ impl Permit {
         Self {
             memory_budget: None,
             slot: None,
+            group: None,
         }
     }
 
@@ -71,6 +73,7 @@ impl Permit {
         Self {
             memory_budget: None,
             slot: Some(Box::new(slot)),
+            group: None,
         }
     }
 
@@ -79,6 +82,19 @@ impl Permit {
     pub fn with_memory_budget(mut self, bytes: usize) -> Self {
         self.memory_budget = Some(bytes);
         self
+    }
+
+    /// This permit naming the resource group the controller placed the query in
+    /// (`system.queries.resource_group`).
+    pub fn with_group(mut self, group: impl Into<String>) -> Self {
+        self.group = Some(group.into());
+        self
+    }
+
+    /// The resource group the controller placed the query in, if it named one.
+    #[must_use]
+    pub fn group(&self) -> Option<&str> {
+        self.group.as_deref()
     }
 
     /// The slot guard this permit holds, if it is a `T` (how a session reaches its controller's

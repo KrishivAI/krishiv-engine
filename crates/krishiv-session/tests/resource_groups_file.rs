@@ -102,3 +102,42 @@ async fn the_limit_holds_across_the_sessions_of_a_runtime() {
     }
     panic!("the slot never came back: {last:?}");
 }
+
+#[tokio::test]
+async fn system_queries_shows_the_group_and_the_queued_time() {
+    use arrow_array::cast::AsArray;
+    let path = write_file("rows", ONE_SLOT);
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let s = Session::builder()
+        .runtime(rt)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    s.sql("select 1")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let batches = s
+        .sql(
+            "select resource_group, queued_ns from system.queries where resource_group is not null",
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
+    assert_eq!(rows, 1, "one admitted query has a group");
+    let b = &batches[0];
+    assert_eq!(b.column(0).as_string::<i32>().value(0), "root");
+    assert!(
+        b.column(1)
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(0)
+            >= 0
+    );
+}
