@@ -47,6 +47,8 @@ const DELETE_FILE_CONCURRENCY: usize = 8;
 /// The bytes a deleted position is charged: it is collected as a `u64`
 /// before it becomes a selection.
 const POSITION_BYTES: usize = 8;
+/// The bytes a range of a selection is charged (`Range<u64>`).
+const RANGE_BYTES: usize = std::mem::size_of::<std::ops::Range<u64>>();
 /// At most this many data paths are pushed as the `file_path IN (...)`
 /// row-group filter of one position delete file (pruning only).
 const MAX_PUSHED_PATHS: usize = 256;
@@ -140,18 +142,35 @@ pub(super) async fn load(
         deleted.entry(path).or_default().extend(p);
         charges.push(charge);
     }
+    // While the selections are built, each data file's positions are sorted
+    // in a copy and become ranges (one per position, plus one): charged up
+    // front, then trimmed to what the selections hold once the positions
+    // are gone.
+    let positions = deleted
+        .values()
+        .map(|p| p.len().saturating_add(1))
+        .fold(0_usize, usize::saturating_add);
+    let mut held = mem.reservation();
+    held.grow(positions.saturating_mul(POSITION_BYTES + RANGE_BYTES))
+        .await?;
     let mut out = DeleteSelections::default();
+    // A selection's ranges are allocated for its positions plus one (its
+    // capacity, which `RowSelection` does not expose; dedup only lowers it).
+    let mut ranges = 0_usize;
     for (data, file, _) in tasks {
         if let Some(p) = deleted.remove(&data.file.path) {
+            ranges = ranges.saturating_add(p.len().saturating_add(1).saturating_mul(RANGE_BYTES));
             // `excluding` sorts and dedups; the selection is unbounded so a
             // wrong record count in the manifest never drops a row.
             out.by_file
                 .insert(key(file), RowSelection::excluding(u64::MAX, p));
         }
     }
-    // The selections hold at most a run per position: the positions' charge
-    // covers them.
-    Ok((out, charges))
+    drop((deleted, charges));
+    if let Some(extra) = held.size().checked_sub(ranges) {
+        held.shrink(extra);
+    }
+    Ok((out, vec![held]))
 }
 
 /// The positions of a v2 position delete file `d` that name one of `paths`,
@@ -272,6 +291,14 @@ async fn read_dv(
             f.path
         )));
     };
+    // A range past the end of the file is invalid, not a memory request
+    // (review 25d N5): checked before it is charged.
+    if start.checked_add(size).is_none_or(|end| end > f.size) {
+        return Err(invalid(format!(
+            "Deletion vector {} has the invalid range {offset} + {len}",
+            f.path
+        )));
+    }
     let mut file = locate(&f.path)?;
     file.size = f.size;
     // The blob while it is decoded; the positions once they are.

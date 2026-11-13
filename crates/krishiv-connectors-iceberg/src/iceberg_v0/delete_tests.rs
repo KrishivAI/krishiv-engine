@@ -895,6 +895,29 @@ fn a_second_plan_reads_manifests_from_the_cache() {
     assert!(e.message().contains("-m.avro"), "{e}");
 }
 
+/// Position-delete selections are charged at their size (review 25d S1):
+/// a range per position, 16 bytes, while the selections live.
+#[test]
+fn position_selections_are_charged_at_their_size() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let rows: Vec<(&str, i64)> = (0..10_000).map(|i| ("a.parquet", i * 2)).collect();
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            positions("d.parquet", 0, 2, &rows, None),
+        ],
+        false,
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let state = p.delete_state(&pool).unwrap();
+    t.env.rt.block_on(state.ensure()).unwrap();
+    let ranges = 10_000 * std::mem::size_of::<std::ops::Range<u64>>();
+    assert!(pool.reserved() >= ranges, "{} < {ranges}", pool.reserved());
+    drop(state);
+    assert_eq!(pool.reserved(), 0);
+}
+
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
 #[derive(Debug, Clone)]
 enum Op {
