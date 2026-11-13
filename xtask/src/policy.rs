@@ -53,6 +53,16 @@ impl DiffArgs {
         }
     }
 
+    /// Paths the range adds (renames count as added), for the changelog-fragment check.
+    ///
+    /// # Errors
+    /// Returns the git failure message.
+    pub fn git_added_files(&self) -> Result<Vec<String>, String> {
+        let range = format!("{}...{}", self.base, self.head);
+        let out = self.git(&["diff", "--name-only", "--diff-filter=AR", &range])?;
+        Ok(out.lines().map(str::to_owned).collect())
+    }
+
     /// `git diff -U0` of the range, for line-level reports.
     ///
     /// # Errors
