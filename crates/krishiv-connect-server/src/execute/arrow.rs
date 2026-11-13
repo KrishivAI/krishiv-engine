@@ -177,7 +177,7 @@ pub fn spark_batch(
 /// about `settings.max_bytes` bytes (at least one row each). As Spark's
 /// `ArrowBatchWithSchemaIterator`, the size of each row is added as the
 /// slice grows, and the slice ends with the row that reaches the limit; a
-/// row's size is estimated as its `UnsafeRow` ([`row_sizes`]).
+/// row's size is estimated as its `UnsafeRow` (`row_sizes`).
 #[must_use]
 pub fn slices(batch: &RecordBatch, settings: &EncodeSettings) -> Vec<RecordBatch> {
     let rows = batch.num_rows();
