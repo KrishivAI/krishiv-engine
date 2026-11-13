@@ -145,16 +145,7 @@ impl Session {
                     }
                     .into());
                 }
-                // A server-scoped store key is `Manage` on the cluster (P3-T067b), asked before the
-                // value is stored, so a refused `SET` leaves the configuration as it was.
-                if krishiv_io::is_server_scoped_option(key) {
-                    self.authorize_store_options(
-                        krishiv_sql::StatementClass::Session,
-                        &self.state.conf.snapshot(),
-                        std::iter::once(key.as_str()),
-                    )
-                    .await?;
-                }
+                self.authorize_set_store_key(key).await?;
                 // The assignment sets through the session configuration,
                 // so validation and error classes are its own; the row
                 // shows the value as written, as in Spark.

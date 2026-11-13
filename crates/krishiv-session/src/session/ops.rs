@@ -95,6 +95,20 @@ impl Session {
         crate::access::audit(self, class, r)
     }
 
+    /// `SET key = ..` of a server-scoped store key is `Manage` on the cluster (P3-T067b); any
+    /// other key passes. Asked before the value is stored, so a refused `SET` changes nothing.
+    pub(crate) async fn authorize_set_store_key(&self, key: &str) -> Result<(), KrishivError> {
+        if !krishiv_io::is_server_scoped_option(key) {
+            return Ok(());
+        }
+        self.authorize_store_options(
+            StatementClass::Session,
+            &self.state.conf.snapshot(),
+            std::iter::once(key),
+        )
+        .await
+    }
+
     /// The file format named `format`, which must be one the engine writes:
     /// the Spark file sources it does not write fail with
     /// `KRISHIV_UNSUPPORTED_FEATURE`.
