@@ -817,11 +817,22 @@ async fn a_dropped_stream_cancels_the_query_and_frees_its_memory() {
     live.message().await.expect("ok").expect("schema");
     let op = entry.operations().get(OP).expect("live");
     // Backpressure: nothing is read, so the encoder stops once the budget
-    // and the transport's windows are full (about 8 KB per response).
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let ahead = op.sent_count();
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(op.sent_count(), ahead, "the encoder waits");
+    // and the transport's windows are full (about 8 KB per response). On a
+    // loaded machine filling them takes a while: wait until the count holds
+    // still for 300 ms (it never would without backpressure).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let ahead = loop {
+        let seen = op.sent_count();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        if op.sent_count() == seen {
+            break seen;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the encoder never waits ({} responses)",
+            op.sent_count()
+        );
+    };
     // 64 KiB of budget plus the HTTP/2 windows and tonic's buffer, far from
     // the 100 million rows the query would produce.
     assert!(ahead < 2_000, "{ahead} responses produced ahead");
