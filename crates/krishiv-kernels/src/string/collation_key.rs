@@ -76,6 +76,7 @@ pub fn push_collation_key(
 /// The ICU sort key of `s`: the collator of the collation's locale at Spark's strength (`_CI`
 /// secondary, `_AI` primary, `_CS_AI` primary with the case level on), kept per thread.
 #[cfg(feature = "collations-icu")]
+#[inline(never)]
 fn icu_key(
     collation: Collation,
     ci: bool,
