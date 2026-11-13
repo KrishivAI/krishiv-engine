@@ -940,12 +940,13 @@ impl Resolver<'_> {
                     strength_of(&k.shown(), &mut memo),
                     Some((_, Strength::Default))
                 );
-                // `btrim` is Spark's runtime-replaceable call: its own arguments are shown as
-                // written, the replacement is the one that casts.
+                // `btrim` and `nvl2` are Spark's runtime-replaceable calls: their own arguments
+                // are shown as written, the replacement is the one that casts (`nvl2`: Spark
+                // 4.2.0 run, follow-up S3).
                 if let (Some(own), Some(want)) = (own, chosen)
                     && own != want
                     && literal
-                    && name != "btrim"
+                    && !matches!(name.as_str(), "btrim" | "nvl2")
                     && !matches!(
                         name.as_str(),
                         "encode" | "decode" | "to_binary" | "try_to_binary"

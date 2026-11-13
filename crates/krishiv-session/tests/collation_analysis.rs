@@ -1599,3 +1599,41 @@ fn a_written_cast_to_string_ends_the_inherited_collation() {
         assert_eq!(one(sql), want, "{sql}");
     }
 }
+
+/// Follow-up S3 (Spark 4.2.0 local run, 2026-11-13): the column name of `nvl2` shows its arguments
+/// as written, a collated one as `collate(x, name)`, and no implicit cast.
+#[test]
+fn nvl2_column_names_show_the_arguments_as_written() {
+    let s = Session::new().unwrap();
+    for (sql, want) in [
+        (
+            "select nvl2('a' collate utf8_lcase, 'x', 'y')",
+            "nvl2(collate(a, utf8_lcase), x, y)",
+        ),
+        (
+            "select nvl2('a', 'x' collate utf8_lcase, 'y')",
+            "nvl2(a, collate(x, utf8_lcase), y)",
+        ),
+        (
+            "select nvl2('a', 'x', 'y' collate unicode_ci)",
+            "nvl2(a, x, collate(y, unicode_ci))",
+        ),
+        (
+            "select nvl2(null, 'x' collate utf8_lcase, 'y' collate utf8_lcase)",
+            "nvl2(NULL, collate(x, utf8_lcase), collate(y, utf8_lcase))",
+        ),
+        (
+            "select nvl2('a' collate utf8_lcase, 'x' collate unicode_ci, 'y')",
+            "nvl2(collate(a, utf8_lcase), collate(x, unicode_ci), y)",
+        ),
+    ] {
+        let df = block_on(s.sql(sql)).unwrap();
+        let names: Vec<String> = block_on(df.schema())
+            .unwrap()
+            .fields()
+            .iter()
+            .map(|f| f.name().to_owned())
+            .collect();
+        assert_eq!(names, [want], "{sql}");
+    }
+}
