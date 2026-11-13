@@ -154,8 +154,8 @@ pub fn call_udf(name: &str, args: impl IntoIterator<Item = Column>) -> Column {
     call_function(name, args)
 }
 
-/// A call of an unregistered Python UDF (a DataFrame-side `udf(...)`,
-/// design P2-T059 unit 2c (a)): `def` at `version` (top bit set), shown as
+/// A call of an unregistered Python UDF (a DataFrame-side `udf(...)`):
+/// `def` at `version` (top bit set), shown as
 /// `def.name(args)` and resolvable only through this call, never by name
 /// from SQL. The runtime the session holds must know `(def.name, version)`.
 ///
