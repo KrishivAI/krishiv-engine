@@ -18,7 +18,9 @@ REGIONS = ["east", "west", "north", "south"]
 SEGMENTS = ["consumer", "business", "public"]
 
 
-def generate(out: pathlib.Path, orders: int = 200_000, customers: int = 5_000, seed: int = 42) -> list[pathlib.Path]:
+def generate(
+    out: pathlib.Path, orders: int = 200_000, customers: int = 5_000, seed: int = 42
+) -> list[pathlib.Path]:
     rng = random.Random(seed)
     out.mkdir(parents=True, exist_ok=True)
     cust = pa.table(
@@ -34,9 +36,9 @@ def generate(out: pathlib.Path, orders: int = 200_000, customers: int = 5_000, s
             "customer_id": [rng.randrange(customers) for _ in range(orders)],
             "amount": [round(rng.uniform(1, 500), 2) for _ in range(orders)],
             # Day number in 2025 (1..365), as a date32.
-            "order_date": pa.array([20089 + rng.randrange(365) for _ in range(orders)], type=pa.int32()).cast(
-                pa.date32()
-            ),
+            "order_date": pa.array(
+                [20089 + rng.randrange(365) for _ in range(orders)], type=pa.int32()
+            ).cast(pa.date32()),
         }
     )
     paths = [out / "customers.parquet", out / "orders.parquet"]
