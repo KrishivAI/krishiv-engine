@@ -97,6 +97,16 @@ impl<M: Message + Default + Send + Scrub> std::fmt::Debug for Decoded<M> {
     }
 }
 
+impl<M: Message + Default + Send + Scrub> Decoded<M> {
+    /// Whether the message nests deeper than a caller's stack takes: a
+    /// recursive pass over it (encoding it again, cloning it) must then run
+    /// on a big stack, as its decoding and its drop do.
+    #[must_use]
+    pub fn is_deep(&self) -> bool {
+        self.deep
+    }
+}
+
 impl<M: Message + Default + Send + Scrub> Deref for Decoded<M> {
     type Target = M;
 
@@ -148,6 +158,30 @@ pub fn decode_relation(bytes: &[u8]) -> Result<Decoded<Relation>, KrishivError> 
 /// As [`decode_plan`].
 pub fn decode_expression(bytes: &[u8]) -> Result<Decoded<Expression>, KrishivError> {
     decode(layout::EXPRESSION, bytes)
+}
+
+/// The request message of a `SparkConnectService` RPC: a root the decoder
+/// can start from. Implemented (generated) for every RPC request and
+/// nothing else.
+pub trait Request: Message + Default + Send + Scrub + sealed::Sealed {
+    /// The message's id in the generated layout table.
+    #[doc(hidden)]
+    const ROOT: u16;
+}
+
+/// Keeps [`Request`] to the generated implementations.
+pub(crate) mod sealed {
+    /// Only the generated layout implements it.
+    pub trait Sealed {}
+}
+
+/// Decodes the request of an RPC (a gRPC codec's one decode path); see
+/// [`decode_plan`] for the bounds.
+///
+/// # Errors
+/// As [`decode_plan`].
+pub fn decode_request<M: Request>(bytes: &[u8]) -> Result<Decoded<M>, KrishivError> {
+    decode(M::ROOT, bytes)
 }
 
 fn decode<M: Message + Default + Send + Scrub>(

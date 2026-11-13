@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Server authentication (P3-T002; design `design/P3-T002-authentication.md`, ADR 0046).
+//! Server authentication (the role model and the token chain).
 //!
 //! One [`Authenticator`] turns what a transport received (a bearer token today; client
 //! certificates in a later unit) into an [`Authenticated`] principal with a [`Role`]. The Spark
 //! Connect listener, the admin HTTP server, `/metrics` and the UI all call the same
 //! [`ServerAuth`]; none keeps a token of its own.
 //!
-//! What a role may do is not decided here: that is ADR 0046's matrix, applied by the session's
+//! What a role may do is not decided here: that is the role matrix, applied by the session's
 //! access policy.
 //!
 //! - [`AuthConfig`] reads the `krishiv.auth.*` settings (and Spark's
@@ -18,6 +18,7 @@
 //!   credential) and its failure counters.
 
 mod config;
+mod roles;
 mod secret_ref;
 mod server;
 mod throttle;
@@ -33,12 +34,13 @@ use futures::future::BoxFuture;
 use krishiv_common::principal::Principal;
 
 pub use config::{AuthConfig, ThrottleConfig, TokenSpec, is_auth_key};
+pub use roles::RolePolicy;
 pub use secret_ref::SecretRef;
 pub use server::{FailureCount, ServerAuth};
 pub use throttle::FailureThrottle;
 pub use tokens::StaticTokens;
 
-/// A server role (ADR 0046 §1): a total order, so a check is `role >= required`.
+/// A server role: a total order, so a check is `role >= required`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Role {
     /// Sees metadata and its own work.
@@ -218,7 +220,7 @@ pub struct Authenticated {
     /// Who the request acts for.
     pub principal: Principal,
     /// The role; `None` when the credential maps to no role (every request is then refused by
-    /// the policy, ADR 0046 §2).
+    /// the policy).
     pub role: Option<Role>,
     /// How it authenticated.
     pub method: Method,

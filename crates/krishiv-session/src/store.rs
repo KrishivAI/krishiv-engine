@@ -24,7 +24,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use krishiv_common::error::{KrishivError, SchemaNotFound, TableOrViewAlreadyExists};
+use krishiv_common::error::{
+    KrishivError, KrishivUnsupportedFeature, SchemaNotFound, TableOrViewAlreadyExists,
+};
 use krishiv_types::DataType;
 use std::sync::Arc;
 
@@ -660,9 +662,17 @@ impl CatalogStore for InMemoryCatalogStore {
         let key = (table.namespace.clone(), table.name.clone());
         let mut state = self.lock();
         // Checked under the lock the insert takes, so a namespace dropped meanwhile cannot be left holding a table.
-        if !state.namespaces.contains_key(&table.namespace) {
+        let Some(namespace) = state.namespaces.get(&table.namespace) else {
             return Err(SchemaNotFound {
                 schema_name: format!("`{}`", table.namespace),
+            }
+            .into());
+        };
+        // A table in a schema with a DEFAULT COLLATION would keep UTF8_BINARY semantics for its string columns
+        // until namespace defaults are applied, so none is created there (the SQL create refuses it too).
+        if namespace.collation.is_some() {
+            return Err(KrishivUnsupportedFeature {
+                feature: "a table or view in a schema with a DEFAULT COLLATION".to_owned(),
             }
             .into());
         }
@@ -880,6 +890,31 @@ mod tests {
         assert!(
             s.create_table(table("db", "t"), CreateMode::ErrorIfExists)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn a_table_cannot_be_created_in_a_namespace_with_a_default_collation() {
+        let s = InMemoryCatalogStore::default();
+        s.create_namespace(
+            "ci",
+            NamespaceMeta {
+                collation: Some("UTF8_LCASE".into()),
+                ..NamespaceMeta::default()
+            },
+        );
+        let e = s
+            .create_table(table("ci", "t"), CreateMode::ErrorIfExists)
+            .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+        );
+        assert!(s.table("ci", "t").is_none());
+        s.create_namespace("plain", NamespaceMeta::default());
+        assert!(
+            s.create_table(table("plain", "t"), CreateMode::ErrorIfExists)
+                .unwrap()
         );
     }
 

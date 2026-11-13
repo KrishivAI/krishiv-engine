@@ -1267,6 +1267,24 @@ mod tests {
     }
 
     #[test]
+    fn a_namespace_with_a_default_collation_takes_no_table() {
+        let f = fixture();
+        let c = &f.catalog;
+        let meta = NamespaceMeta {
+            collation: Some("UTF8_LCASE".into()),
+            ..NamespaceMeta::default()
+        };
+        assert!(c.store.create_namespace("ci", meta));
+        let e = block_on(c.create_table(info("ci", "t"), CreateMode::ErrorIfExists)).unwrap_err();
+        assert_eq!(class(&e), ErrorClass::KrishivUnsupportedFeature);
+        assert!(c.store.table("ci", "t").is_none());
+        assert!(
+            !managed_location(f.warehouse.path(), "ci", "t").exists(),
+            "and no directory is left behind"
+        );
+    }
+
+    #[test]
     fn global_temp_is_not_a_permanent_namespace() {
         let f = fixture();
         let e = block_on(

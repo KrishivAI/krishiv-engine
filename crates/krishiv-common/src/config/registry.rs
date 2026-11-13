@@ -15,10 +15,23 @@ use super::{
 
 mod python;
 pub use python::{ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS};
+mod lakehouse;
 mod optimizer;
 mod result_cache;
+mod server;
+pub use lakehouse::{CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, DELTA_LOG_THREADS};
 pub use optimizer::{SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW};
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
+pub use server::{
+    CONNECT_ADDRESS, CONNECT_EXECUTE_AHEAD_BYTES, CONNECT_HANDSHAKE_TIMEOUT,
+    CONNECT_HTTP2_MAX_CONCURRENT_STREAMS, CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
+    CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS, CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME,
+    CONNECT_KEEPALIVE_TIMEOUT, CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE,
+    CONNECT_MAX_OPERATIONS_PER_SESSION, CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
+    CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT, CONNECT_SESSION_MAINTENANCE_INTERVAL,
+    CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
+    SERVER_SHUTDOWN_TIMEOUT,
+};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -65,6 +78,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &QUERY_MAX_EXECUTION_TIME,
     &QUERY_MAX_QUEUED_TIME,
     &CACHE_MAX_BYTES,
+    &CACHE_DEFAULT_STORAGE_LEVEL,
+    &CHECKPOINT_DIR,
     &DETERMINISTIC_ORDER,
     &RESULT_CACHE_ENABLED,
     &RESULT_CACHE_TTL,
@@ -89,6 +104,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &LEAF_NODE_DEFAULT_PARALLELISM,
     &IO_MAX_CONCURRENT_REQUESTS,
     &IO_BLOCKING_THREADS,
+    &DELTA_LOG_THREADS,
+    &CATALOG_MAX_METADATA_BYTES,
+    &CATALOG_MAX_COLUMNS,
     &IO_COALESCE_BYTES,
     &IO_COALESCE_WASTE_BYTES,
     &IO_COALESCE_WASTE_DIVISOR,
@@ -145,6 +163,27 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &NDV_SAMPLING_ROWS,
     &NDV_SAMPLING_TIMEOUT,
     &JOIN_COST,
+    &CONNECT_PORT,
+    &CONNECT_ADDRESS,
+    &CONNECT_MAX_INBOUND_MESSAGE_SIZE,
+    &CONNECT_KEEPALIVE_ENABLED,
+    &CONNECT_KEEPALIVE_TIME,
+    &CONNECT_KEEPALIVE_TIMEOUT,
+    &CONNECT_SESSION_IDLE_TIMEOUT,
+    &CONNECT_SESSION_MAINTENANCE_INTERVAL,
+    &CONNECT_SESSION_TOMBSTONES,
+    &CONNECT_MAX_SESSIONS,
+    &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
+    &CONNECT_MAX_OPERATIONS_PER_SESSION,
+    &CONNECT_EXECUTE_AHEAD_BYTES,
+    &CONNECT_MAX_CONNECTIONS,
+    &CONNECT_HANDSHAKE_TIMEOUT,
+    &CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
+    &CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
+    &CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
+    &SERVER_SHUTDOWN_TIMEOUT,
+    &SERVER_ALLOW_CORE_DUMPS,
+    &SERVER_METRICS_PUBLIC,
 ];
 
 /// ANSI SQL mode (Spark 4 default: on).
@@ -662,6 +701,49 @@ pub static CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
+};
+
+/// Storage level of `cache()`, `persist()` and `CACHE TABLE`.
+pub static CACHE_DEFAULT_STORAGE_LEVEL: ConfigEntry = ConfigEntry {
+    key: "krishiv.cache.defaultStorageLevel",
+    value_type: ValueType::Enum(&[
+        "NONE",
+        "DISK_ONLY",
+        "DISK_ONLY_2",
+        "DISK_ONLY_3",
+        "MEMORY_ONLY",
+        "MEMORY_ONLY_2",
+        "MEMORY_ONLY_SER",
+        "MEMORY_ONLY_SER_2",
+        "MEMORY_AND_DISK",
+        "MEMORY_AND_DISK_2",
+        "MEMORY_AND_DISK_SER",
+        "MEMORY_AND_DISK_SER_2",
+        "OFF_HEAP",
+    ]),
+    default: Some(ConfigValue::String(Cow::Borrowed("MEMORY_AND_DISK"))),
+    doc: "The storage level `DataFrame.cache()`, `catalog.cacheTable` and `CACHE TABLE` use \
+          (`persist()` with no level too). Replication (`_2`, `_3`) is accepted and reported as \
+          asked; one copy is kept.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.defaultCacheStorageLevel"),
+};
+
+/// Directory of reliable checkpoints.
+pub static CHECKPOINT_DIR: ConfigEntry = ConfigEntry {
+    key: "krishiv.checkpoint.dir",
+    value_type: ValueType::String,
+    default: None,
+    doc: "The directory `DataFrame.checkpoint()` writes its snapshot under (Spark's \
+          `setCheckpointDir`). Unset: `checkpoint()` fails with `_LEGACY_ERROR_TEMP_3016`, \
+          `localCheckpoint()` needs no directory. Unlike Spark, the files are deleted when the \
+          checkpointed DataFrame and every frame derived from it are gone.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.checkpoint.dir"),
 };
 
 /// Reproducible results: one driver per pipeline.
