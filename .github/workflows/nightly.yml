@@ -8,6 +8,8 @@ name: Nightly (heavy)
 on:
   schedule:
     - cron: "0 2 * * *"
+    # One-off extra runs on 2026-11-13 for the v0.2.0 release (publish needs a green scheduled nightly); remove after.
+    - cron: "17 8,10 13 11 *"
   workflow_dispatch:
 
 permissions:
