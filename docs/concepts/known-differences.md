@@ -190,3 +190,20 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
   The stock client reattaches only after a dropped connection, when Krishiv has already cancelled the operation.
 - **ReleaseExecute without a release type** fails with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark throws
   an `UnsupportedOperationException` without an error class.
+- **AnalyzePlan.** An `UNSPECIFIED` explain mode fails with `CONNECT_INVALID_PLAN.INVALID_ENUM`, and `json_to_ddl` of a
+  type that is not a struct with `INVALID_SCHEMA.NON_STRUCT_TYPE`; Spark sends `INTERNAL` without an error class for
+  both. `persist`, `unpersist` and `get_storage_level` fail with
+  `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` until DataFrame caching lands. `input_files` lists the paths
+  the file scans read, qualified (`file:/data/t`), not the files under them. `semantic_hash` values are Krishiv's own
+  (equal for plans `same_semantics` calls equal, within one server), not Spark's. `ddl_parse` refuses the clauses only
+  a table schema takes (`DEFAULT`, `GENERATED`), and its parse errors are those of the text as a data type, where Spark
+  reports the table-schema parse. `spark_version` is the session profile's release line (`4.2.0`).
+- **Config.** Secret-looking keys and values (Spark 4.3's `spark.redaction.regex` default) are hidden for 4.2 sessions
+  too; Spark 4.2 shows them. The pattern is the default only (Spark reads `spark.redaction.regex` from the startup
+  configuration). `set` of a key without a value fails with `INVALID_CONF_VALUE.REQUIREMENT`, and a request without an
+  operation with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark sends `INTERNAL` without an error class.
+  `is_modifiable` answers `true` for a key outside the engine's registry, where Spark answers `false` for a key it does
+  not know. `get_all` lists a registered key under its Spark name when it has one, else under its `krishiv.*` name.
+  Setting a key the registry marks admin-only answers `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) for a non-admin role
+  (no role exists before authentication, so the local user is the admin).
+- **Interrupt by tag** fails with `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until operation tags can be interrupted.
