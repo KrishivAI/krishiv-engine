@@ -49,6 +49,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "connect_artifact_name"
+path = "fuzz_targets/connect_artifact_name.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "parquet_read"
 path = "fuzz_targets/parquet_read.rs"
 test = false
