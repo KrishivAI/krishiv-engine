@@ -51,6 +51,11 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: $/.github/actions/setup-mold
       - run: cargo xtask workflow-lint
+      # An invalid workflow file (bad expression, unknown input, wrong `needs`) fails the PR here, not on the run.
+      - uses: $/.github/actions/install-tool
+        with:
+          tool: actionlint@1.7.7
+      - run: actionlint
       - run: cargo xtask spdx
       - run: cargo xtask source-guard
       - run: cargo xtask file-size
