@@ -1318,7 +1318,8 @@ pub static CONNECT_MAX_PLAN_DEPTH: ConfigEntry = ConfigEntry {
     doc: "Deepest message nesting a Spark Connect plan may have: a plan nested deeper is rejected \
           while it is decoded, before anything recurses into it (Spark's default for \
           `spark.connect.grpc.marshallerRecursionLimit` is also 1024). A relation or expression \
-          costs two levels, so the default allows about 500 chained operators.",
+          costs two levels, so the default allows about 500 chained operators. Values above 4096 are \
+          lowered to 4096, the most the decode stack is sized for.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",

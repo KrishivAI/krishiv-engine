@@ -53,6 +53,11 @@ use crate::stack::{INLINE_LEVELS, on_deep_stack};
 /// operators or nested expressions.
 pub const MAX_NESTING: usize = 1024;
 
+/// The largest cap `krishiv.connect.maxPlanDepth` can raise the limit to. The decode thread's
+/// stack is fixed (16 MiB release, 64 MiB debug, about 3 KiB a level in debug), so a larger
+/// value could let prost overflow it; a configured value above this is lowered to it.
+pub const MAX_NESTING_LIMIT: usize = 4096;
+
 /// The most bytes of a message accepted: Spark's default maximum inbound
 /// gRPC message size (`spark.connect.grpc.maxInboundMessageSize`).
 pub const MAX_PLAN_BYTES: usize = 128 * 1024 * 1024;
@@ -192,7 +197,7 @@ impl DecodeOptions {
             .and_then(krishiv_common::config::ConfigValue::as_int)
             .and_then(|v| usize::try_from(v).ok())
             .filter(|&v| v > 0)
-            .unwrap_or(MAX_NESTING);
+            .map_or(MAX_NESTING, |v| v.min(MAX_NESTING_LIMIT));
         Self {
             version,
             max_nesting,

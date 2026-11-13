@@ -674,6 +674,14 @@ fn the_cap_comes_from_krishiv_connect_max_plan_depth() {
         DecodeOptions::from_config(&config, ClientVersion::V4_3).max_nesting,
         64
     );
+    // A cap above what the decode stack is sized for is lowered to MAX_NESTING_LIMIT.
+    config
+        .set("krishiv.connect.maxPlanDepth", "1000000")
+        .unwrap();
+    assert_eq!(
+        DecodeOptions::from_config(&config, ClientVersion::V4_3).max_nesting,
+        super::MAX_NESTING_LIMIT
+    );
     // Zero and negative caps are refused when set.
     assert!(config.set("krishiv.connect.maxPlanDepth", "0").is_err());
     assert!(config.set("krishiv.connect.maxPlanDepth", "-5").is_err());
