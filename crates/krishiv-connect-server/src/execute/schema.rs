@@ -7,10 +7,12 @@ use arrow_schema::Schema;
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::data_type::{self as dt, Kind};
-use krishiv_types::{DataType, DayTimeField, StructField, YearMonthField};
+use krishiv_types::arrow::SPARK_METADATA_KEY;
+use krishiv_types::{DataType, DayTimeField, Metadata, StructField, YearMonthField};
 
 /// The result schema as a Connect struct type. Each field's Spark type is
-/// read from its Arrow field ([`DataType::from_arrow_field`]).
+/// read from its Arrow field ([`DataType::from_arrow_field`]), its user
+/// metadata from [`SPARK_METADATA_KEY`] (Spark sends non-empty metadata).
 ///
 /// # Errors
 /// The error of a field whose Spark type cannot be read.
@@ -20,7 +22,13 @@ pub fn proto_schema(schema: &Schema) -> Result<pb::DataType, KrishivError> {
         .iter()
         .map(|f| {
             let t = DataType::from_arrow_field(f)?;
-            Ok(StructField::new(f.name(), t, f.is_nullable()))
+            // The user metadata (a column comment, ...) rides in its own
+            // key, apart from the engine's annotations of the field.
+            let metadata = match f.metadata().get(SPARK_METADATA_KEY) {
+                Some(json) => krishiv_types::parse_metadata(json)?,
+                None => Metadata::empty(),
+            };
+            Ok(StructField::new(f.name(), t, f.is_nullable()).with_metadata(metadata))
         })
         .collect::<Result<Vec<_>, KrishivError>>()?;
     proto_type(&DataType::Struct(krishiv_types::StructType::new(fields)))

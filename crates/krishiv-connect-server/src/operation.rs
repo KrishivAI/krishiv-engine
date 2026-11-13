@@ -165,6 +165,8 @@ pub struct Operation {
     /// only these).
     sent: Mutex<HashSet<String>>,
     cancelled: AtomicBool,
+    /// Whether the encoder waits for the client ([`Self::is_waiting_for_client`]).
+    waiting: AtomicBool,
     cancel: Notify,
     /// The memory consumer its buffered responses are reserved from.
     responses: OnceLock<Arc<ConsumerHandle>>,
@@ -186,6 +188,7 @@ impl Operation {
             reattachable,
             sent: Mutex::new(HashSet::new()),
             cancelled: AtomicBool::new(false),
+            waiting: AtomicBool::new(false),
             cancel: Notify::new(),
             responses: OnceLock::new(),
         }
@@ -253,6 +256,20 @@ impl Operation {
             .len()
     }
 
+    /// Whether the operation's encoder is waiting for its client to read:
+    /// its responses fill the ahead budget or the channel (backpressure).
+    #[must_use]
+    pub fn is_waiting_for_client(&self) -> bool {
+        self.waiting.load(Ordering::Acquire)
+    }
+
+    /// Marks the encoder as waiting for its client until the guard drops
+    /// (also when the wait is cancelled).
+    pub(crate) fn waiting_for_client(&self) -> WaitingForClient<'_> {
+        self.waiting.store(true, Ordering::Release);
+        WaitingForClient(self)
+    }
+
     /// Asks the operation to stop: its stream ends with
     /// `OPERATION_CANCELED`. Idempotent.
     pub fn cancel(&self) {
@@ -275,6 +292,16 @@ impl Operation {
             return;
         }
         self.cancel.notified().await;
+    }
+}
+
+/// The encoder of an operation waits for its client while this lives
+/// ([`Operation::waiting_for_client`]).
+pub(crate) struct WaitingForClient<'a>(&'a Operation);
+
+impl Drop for WaitingForClient<'_> {
+    fn drop(&mut self) {
+        self.0.waiting.store(false, Ordering::Release);
     }
 }
 

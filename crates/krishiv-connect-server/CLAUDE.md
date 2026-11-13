@@ -17,6 +17,7 @@ Paths are relative to this crate.
   `ReleaseExecute` (design P3-T011a §3.4: no replay buffer until PR-15a), `ReleaseSession`; the other RPCs are
   `UNIMPLEMENTED` until PR-11b/PR-15; a draining server answers `UNAVAILABLE` ("server shutting down")
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, sent response ids,
+  whether its encoder waits for the client,
   cancel) and `Operations`, the per-session map in `SessionEntry` (`krishiv.connect.maxOperationsPerSession`,
   `KRISHIV_OPERATION_LIMIT`); `ExecuteLimits` (`aheadBytes`, plan and batch sizes); tag checks
   (`KRISHIV_INVALID_OPERATION_TAG`)
