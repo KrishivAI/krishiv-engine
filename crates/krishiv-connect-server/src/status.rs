@@ -195,14 +195,15 @@ pub fn status_of(error: &KrishivError) -> Status {
         metadata,
     };
     // Spark sends INTERNAL for every SparkThrowable; a session limit is a
-    // refusal before admission (threat model T-D4), RESOURCE_EXHAUSTED.
-    let code = if matches!(
-        class,
-        ErrorClass::KrishivSessionLimit | ErrorClass::KrishivOperationLimit
-    ) {
-        Code::ResourceExhausted
-    } else {
-        Code::Internal
+    // refusal before admission (threat model T-D4), RESOURCE_EXHAUSTED; an
+    // access denial is PERMISSION_DENIED (ADR 0046 §8), with the same
+    // ErrorInfo, which PySpark reads whatever the code.
+    let code = match class {
+        ErrorClass::KrishivSessionLimit | ErrorClass::KrishivOperationLimit => {
+            Code::ResourceExhausted
+        }
+        ErrorClass::KrishivInsufficientPermissions => Code::PermissionDenied,
+        _ => Code::Internal,
     };
     let message = abbreviate(&error.to_string(), MAX_MESSAGE);
     let details = RpcStatus {

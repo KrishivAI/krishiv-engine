@@ -26,7 +26,7 @@ use krishiv_session::auth::Authenticated;
 use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::auth::ConnectAuth;
+use crate::auth::{Check, ConnectAuth, Rpc, check_rpc};
 use crate::codec::WireCodec;
 use crate::execute;
 use crate::manager::SessionManager;
@@ -98,19 +98,32 @@ impl ConnectService {
         }
     }
 
-    /// Admits and authenticates `request`: the caller every RPC runs as.
-    async fn caller<T>(&self, request: &Request<T>) -> Result<Authenticated, Status> {
+    /// Admits `request` and returns its caller (authenticated by
+    /// [`crate::auth::AuthLayer`] before the body was read), after the
+    /// ADR 0046 §3b class of `rpc`. A class that needs more than the
+    /// session lookup or the analyzer (a privilege, the write path, a side
+    /// effect) is refused until the RPC that needs it applies it: fail
+    /// closed, so a newly implemented RPC cannot skip its check.
+    fn caller<T>(&self, request: &Request<T>, rpc: Rpc) -> Result<Authenticated, Status> {
         self.admit()?;
-        self.auth.caller(request).await
+        let caller = self.auth.caller(request)?;
+        match check_rpc(rpc) {
+            Check::OwnSession | Check::Plan => Ok(caller),
+            Check::Privilege { .. } | Check::Write | Check::SideEffect | Check::Unsupported(_) => {
+                Err(Status::unimplemented(format!(
+                    "{rpc:?} is not supported by this server yet"
+                )))
+            }
+        }
     }
 
     /// `UNIMPLEMENTED`, once `request` is admitted and authenticated: an
     /// unauthenticated client learns nothing about what the server
     /// implements.
-    async fn unimplemented<T>(&self, request: &Request<T>, rpc: &str) -> Status {
-        match self.caller(request).await {
+    fn unimplemented<T>(&self, request: &Request<T>, rpc: Rpc) -> Status {
+        match self.caller(request, rpc) {
             Err(s) => s,
-            Ok(_) => Status::unimplemented(format!("{rpc} is not supported by this server yet")),
+            Ok(_) => Status::unimplemented(format!("{rpc:?} is not supported by this server yet")),
         }
     }
 }
@@ -126,7 +139,7 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ExecutePlanRequest>>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
-        let caller = self.caller(&request).await?;
+        let caller = self.caller(&request, Rpc::ExecutePlan)?;
         let request = request.into_inner();
         let user = request
             .user_context
@@ -151,35 +164,35 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::AnalyzePlanRequest>>,
     ) -> Result<Response<pb::AnalyzePlanResponse>, Status> {
-        Err(self.unimplemented(&request, "AnalyzePlan").await)
+        Err(self.unimplemented(&request, Rpc::AnalyzePlan))
     }
 
     async fn config(
         &self,
         request: Request<Decoded<pb::ConfigRequest>>,
     ) -> Result<Response<pb::ConfigResponse>, Status> {
-        Err(self.unimplemented(&request, "Config").await)
+        Err(self.unimplemented(&request, Rpc::Config))
     }
 
     async fn add_artifacts(
         &self,
         request: Request<Streaming<Decoded<pb::AddArtifactsRequest>>>,
     ) -> Result<Response<pb::AddArtifactsResponse>, Status> {
-        Err(self.unimplemented(&request, "AddArtifacts").await)
+        Err(self.unimplemented(&request, Rpc::AddArtifacts))
     }
 
     async fn artifact_status(
         &self,
         request: Request<Decoded<pb::ArtifactStatusesRequest>>,
     ) -> Result<Response<pb::ArtifactStatusesResponse>, Status> {
-        Err(self.unimplemented(&request, "ArtifactStatus").await)
+        Err(self.unimplemented(&request, Rpc::ArtifactStatus))
     }
 
     async fn interrupt(
         &self,
         request: Request<Decoded<pb::InterruptRequest>>,
     ) -> Result<Response<pb::InterruptResponse>, Status> {
-        Err(self.unimplemented(&request, "Interrupt").await)
+        Err(self.unimplemented(&request, Rpc::Interrupt))
     }
 
     /// Spark's `SparkConnectReattachExecuteHandler`, minimal (design
@@ -193,7 +206,7 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ReattachExecuteRequest>>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
-        let caller = self.caller(&request).await?;
+        let caller = self.caller(&request, Rpc::ReattachExecute)?;
         let request = request.into_inner();
         let entry = self
             .manager
@@ -224,7 +237,7 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ReleaseExecuteRequest>>,
     ) -> Result<Response<pb::ReleaseExecuteResponse>, Status> {
-        let caller = self.caller(&request).await?;
+        let caller = self.caller(&request, Rpc::ReleaseExecute)?;
         let request = request.into_inner();
         let entry = self
             .manager
@@ -277,7 +290,7 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ReleaseSessionRequest>>,
     ) -> Result<Response<pb::ReleaseSessionResponse>, Status> {
-        let caller = self.caller(&request).await?;
+        let caller = self.caller(&request, Rpc::ReleaseSession)?;
         let request = request.into_inner();
         let server_side =
             self.manager
@@ -292,20 +305,20 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::FetchErrorDetailsRequest>>,
     ) -> Result<Response<pb::FetchErrorDetailsResponse>, Status> {
-        Err(self.unimplemented(&request, "FetchErrorDetails").await)
+        Err(self.unimplemented(&request, Rpc::FetchErrorDetails))
     }
 
     async fn clone_session(
         &self,
         request: Request<Decoded<pb::CloneSessionRequest>>,
     ) -> Result<Response<pb::CloneSessionResponse>, Status> {
-        Err(self.unimplemented(&request, "CloneSession").await)
+        Err(self.unimplemented(&request, Rpc::CloneSession))
     }
 
     async fn get_status(
         &self,
         request: Request<Decoded<pb::GetStatusRequest>>,
     ) -> Result<Response<pb::GetStatusResponse>, Status> {
-        Err(self.unimplemented(&request, "GetStatus").await)
+        Err(self.unimplemented(&request, Rpc::GetStatus))
     }
 }

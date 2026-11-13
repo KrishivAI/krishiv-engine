@@ -12,15 +12,20 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use krishiv_common::config::Config;
+use krishiv_common::principal::{Principal, PrincipalKind};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::command::CommandType;
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::relation::RelType;
 use krishiv_connect_server::{
-    ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager,
+    ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, role_sessions,
 };
-use krishiv_session::auth::{AuthConfig, Authenticated, Role, RolePolicy, ServerAuth};
-use krishiv_session::{PolicyVersion, Session};
+use krishiv_session::BoxFuture;
+use krishiv_session::Session;
+use krishiv_session::auth::{
+    AuthConfig, AuthFailure, Authenticated, Authenticator, Credentials, Method, Role, ServerAuth,
+};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -30,6 +35,7 @@ use tonic::transport::Channel;
 const SESSION: &str = "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d10";
 const VIEWER: &str = "viewer-token-0123456789abcdefghijklmnopqrstuv";
 const ADMIN: &str = "admin-token-0123456789abcdefghijklmnopqrstuvw";
+const OPERATOR: &str = "operator-token-0123456789abcdefghijklmnopqrstu";
 
 struct Running {
     manager: Arc<SessionManager>,
@@ -46,30 +52,46 @@ fn secret(dir: &Path, name: &str, token: &str) -> String {
     format!("file:{}", path.display())
 }
 
-/// A server with two tokens, `carol` (viewer) and `dana` (admin), whose sessions are built as
-/// `krishiv server` builds them: the caller's principal under its role's policy.
+/// A server with three tokens, `carol` (viewer), `olga` (operator) and `dana` (admin), whose
+/// sessions are built by the factory `krishiv server` uses (`role_sessions`), with local paths
+/// confined to `<dir>/data`.
 async fn start() -> Running {
     let dir = tempfile::tempdir().expect("tempdir");
     let v = secret(dir.path(), "v", VIEWER);
+    let o = secret(dir.path(), "o", OPERATOR);
     let a = secret(dir.path(), "a", ADMIN);
     let config = AuthConfig::from_settings([
         ("krishiv.auth.tokens.v.secret", v.as_str()),
         ("krishiv.auth.tokens.v.principal", "carol"),
         ("krishiv.auth.tokens.v.role", "viewer"),
+        ("krishiv.auth.tokens.o.secret", o.as_str()),
+        ("krishiv.auth.tokens.o.principal", "olga"),
+        ("krishiv.auth.tokens.o.role", "operator"),
         ("krishiv.auth.tokens.a.secret", a.as_str()),
         ("krishiv.auth.tokens.a.principal", "dana"),
         ("krishiv.auth.tokens.a.role", "admin"),
     ])
     .expect("auth config");
     let auth = Arc::new(ServerAuth::new(&config).expect("auth"));
-    let base = Session::new().expect("session");
-    let manager = Arc::new(SessionManager::new(
-        Box::new(move |caller: &Authenticated| {
-            let policy = RolePolicy::new(caller.role, Role::Admin, PolicyVersion(0));
-            Ok(base.new_session_as(caller.principal.clone(), Arc::new(policy)))
-        }),
-        SessionLimits::default(),
-    ));
+    start_with(auth, dir).await
+}
+
+async fn start_with(auth: Arc<dyn Authenticator>, dir: tempfile::TempDir) -> Running {
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).expect("data dir");
+    let mut config = Config::new();
+    config
+        .set(
+            "krishiv.io.local.allowedRoots",
+            &data
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string(),
+        )
+        .expect("allowed roots");
+    let factory = role_sessions(Session::new().expect("session"), &config).expect("factory");
+    let manager = Arc::new(SessionManager::new(factory, SessionLimits::default()));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let server = ConnectServer::new(Arc::clone(&manager), ConnectServerConfig::default())
@@ -279,12 +301,9 @@ async fn sessions_belong_to_the_authenticated_principal() {
         .manager
         .get_if_present(
             &Authenticated::new(
-                krishiv_common::principal::Principal::new(
-                    "carol",
-                    krishiv_common::principal::PrincipalKind::User,
-                ),
+                Principal::new("carol", PrincipalKind::User),
                 Some(Role::Viewer),
-                krishiv_session::auth::Method::Token,
+                Method::Token,
             ),
             SESSION,
         )
@@ -345,4 +364,122 @@ async fn release_as(run: &Running, token: &str) {
     )
     .await
     .expect("release");
+}
+
+fn sql(query: &str) -> pb::Plan {
+    pb::Plan {
+        op_type: Some(OpType::Root(Box::new(pb::Relation {
+            common: None,
+            rel_type: Some(RelType::Sql(pb::Sql {
+                query: query.to_owned(),
+                ..Default::default()
+            })),
+        }))),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sessions_get_the_role_policy_and_the_path_confinement() {
+    let run = start().await;
+    // A viewer reads no rows, even of a file inside the allowed roots.
+    let s = execute(&run.channel, sql("SELECT * FROM range(1)"), Some(VIEWER))
+        .await
+        .expect("a plan that reads no table needs no privilege");
+    assert!(!s.is_empty());
+    release_as(&run, VIEWER).await;
+    // An operator may read rows, but not by a path outside `krishiv.io.local.allowedRoots`.
+    let outside = run._dir.path().join("outside.parquet");
+    let s = execute(
+        &run.channel,
+        sql(&format!("SELECT * FROM parquet.`{}`", outside.display())),
+        Some(OPERATOR),
+    )
+    .await
+    .expect_err("confined");
+    assert_eq!(s.code(), Code::PermissionDenied);
+    assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    // Inside the roots the same read gets past the policy (the file does not exist).
+    let inside = run._dir.path().join("data").join("missing.parquet");
+    let s = execute(
+        &run.channel,
+        sql(&format!("SELECT * FROM parquet.`{}`", inside.display())),
+        Some(OPERATOR),
+    )
+    .await
+    .expect_err("no such file");
+    assert_ne!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+}
+
+/// An authenticator whose callers map to no role (an OIDC subject in no role list, a
+/// certificate principal in none).
+struct NoRole;
+
+impl Authenticator for NoRole {
+    fn authenticate<'a>(
+        &'a self,
+        _credentials: &'a Credentials<'a>,
+    ) -> BoxFuture<'a, Result<Authenticated, AuthFailure>> {
+        Box::pin(async {
+            Ok(Authenticated::new(
+                Principal::new("nobody", PrincipalKind::User),
+                None,
+                Method::Oidc,
+            ))
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_caller_with_no_role_gets_no_session() {
+    let run = start_with(Arc::new(NoRole), tempfile::tempdir().expect("tempdir")).await;
+    // ADR 0046 §2: refused when the session would be created, before anything is built.
+    let s = execute(&run.channel, range(3), Some("any"))
+        .await
+        .expect_err("no role");
+    assert_eq!(s.code(), Code::PermissionDenied);
+    assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    let s = unary::<_, pb::ReleaseSessionResponse>(
+        &run.channel,
+        "ReleaseSession",
+        release(),
+        Some("any"),
+    )
+    .await
+    .expect_err("no role");
+    assert_eq!(s.code(), Code::PermissionDenied);
+    assert_eq!(run.manager.counts().live, 0);
+}
+
+/// Sends `body` (a message that is no `ExecutePlanRequest`: field 1 as a varint where a
+/// string is expected) as an `ExecutePlan`.
+async fn undecodable(channel: &Channel, token: Option<&str>) -> tonic::Status {
+    let body = prost_types::Duration {
+        seconds: 5,
+        nanos: 0,
+    };
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    match grpc
+        .server_streaming(
+            with_token(body, token),
+            path("ExecutePlan"),
+            tonic_prost::ProstCodec::<prost_types::Duration, pb::ExecutePlanResponse>::default(),
+        )
+        .await
+    {
+        Ok(mut s) => s.get_mut().message().await.expect_err("refused"),
+        Err(status) => status,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authentication_comes_before_the_body_is_decoded() {
+    let run = start().await;
+    // Without a credential the body is never decoded: the answer is about the credential.
+    let s = undecodable(&run.channel, None).await;
+    assert_eq!(s.code(), Code::Unauthenticated, "{s:?}");
+    // With one, the same body reaches the decoder and fails there.
+    let s = undecodable(&run.channel, Some(VIEWER)).await;
+    assert_ne!(s.code(), Code::Unauthenticated, "{s:?}");
+    assert_ne!(s.code(), Code::Ok);
 }

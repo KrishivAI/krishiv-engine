@@ -294,9 +294,6 @@ impl Session {
         Ok(views)
     }
 
-    /// `privilege` on the permanent view `namespace.name`, besides the table-named check made
-    /// before dispatch: the statements that show a view's definition, columns or properties
-    /// need `Browse` on it (ADR 0046 §4), `SHOW TABLE EXTENDED` `Select`.
     /// Checks that this session's principal holds `privilege` on `securable` under the
     /// session's policy, outside any statement: what a server checks for a request before it
     /// runs one (the Connect request classes of ADR 0046 §3b). Fails closed as every check
@@ -320,6 +317,9 @@ impl Session {
         audit(self, class, r)
     }
 
+    /// `privilege` on the permanent view `namespace.name`, besides the table-named check made
+    /// before dispatch: the statements that show a view's definition, columns or properties
+    /// need `Browse` on it (ADR 0046 §4), `SHOW TABLE EXTENDED` `Select`.
     pub(crate) async fn authorize_view(
         &self,
         namespace: &str,

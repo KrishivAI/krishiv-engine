@@ -16,11 +16,14 @@ Paths are relative to this crate.
 - `src/service.rs` `ConnectService`, Krishiv's implementation: `ExecutePlan`, the minimal `ReattachExecute` /
   `ReleaseExecute` (design P3-T011a §3.4: no replay buffer until PR-15a), `ReleaseSession`; the other RPCs are
   `UNIMPLEMENTED` until PR-11b/PR-15; a draining server answers `UNAVAILABLE` ("server shutting down")
-- `src/auth.rs` (P3-T002, design `design/P3-T002-authentication.md` §3.1/§3.6, ADR 0046 §3b/§5) `ConnectAuth`:
-  every RPC (the unimplemented ones too) authenticates through the server's one `Authenticator` (`ServerAuth`,
-  shared with the admin listener): the `authorization` metadata (two entries or a non-`Bearer` scheme are
-  malformed) and the peer address; failures `UNAUTHENTICATED` with Spark's messages, throttled or unavailable
-  `UNAVAILABLE`, no peer address refused; auth off = the local user. `SessionOwner` (method, kind, tenant, name,
+- `src/auth.rs` (P3-T002, design `design/P3-T002-authentication.md` §3.1/§3.6, ADR 0046 §2/§3b/§5) `ConnectAuth`;
+  `src/auth/layer.rs` `AuthLayer`, the tower layer in front of the router: every RPC (the unimplemented ones too)
+  authenticates from its headers before the body is decoded, through the server's one `Authenticator`
+  (`ServerAuth`, shared with the admin listener): the `authorization` header (two entries or a non-`Bearer` scheme
+  are malformed) and the peer address; failures `UNAUTHENTICATED` with Spark's messages, throttled or unavailable
+  `UNAVAILABLE`, no peer address refused, a caller with no role `PERMISSION_DENIED` (42501, audited) before any
+  session; the result rides in the request extensions (`ConnectAuth::caller` fails closed without it); auth off =
+  the local user. `role_sessions` is the production session factory (`PathPrefixPolicy(RolePolicy(role))`). `SessionOwner` (method, kind, tenant, name,
   no groups) is the session key. `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
   no wildcard arm (a new proto arm fails to compile); `enforce` asks the session's policy for a
   `Check::Privilege` (`Session::authorize_privilege`, one `krishiv::audit` record per denial); `tests/auth.rs`
@@ -36,7 +39,8 @@ Paths are relative to this crate.
   `src/execute/schema.rs` the `schema` response (`DataTypeProtoConverter.toConnectProtoType`)
 - `src/codec.rs` `WireCodec`: requests decode only through `wire::decode_request` (bounded size, count, depth, fields)
 - `src/status.rs` `status_of`: a `KrishivError` as Spark's gRPC status (`INTERNAL`, `google.rpc.ErrorInfo` with
-  `classes`, `sqlState`, `errorClass`, `messageParameters`; `ErrorUtils.buildStatusFromThrowable`, v4.3.0);
+  `classes`, `sqlState`, `errorClass`, `messageParameters`; `ErrorUtils.buildStatusFromThrowable`, v4.3.0;
+  `KRISHIV_INSUFFICIENT_PERMISSIONS` is `PERMISSION_DENIED`, ADR 0046 §8);
   `exception_classes` picks the Java class list PySpark's `convert_exception` reads (Spark's own for the Connect
   classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT` and `KRISHIV_OPERATION_LIMIT`
   are `RESOURCE_EXHAUSTED`
@@ -46,7 +50,7 @@ Paths are relative to this crate.
   holding a live operation; `busy()` is what shutdown waits for), `krishiv.connect.maxSessions` /
   `maxSessionsPerPrincipal`
 - `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper task, shutdown order
-- `tests/server.rs`, `tests/execute.rs` end to end over a raw tonic client
+- `tests/server.rs`, `tests/execute.rs`, `tests/auth.rs` end to end over a raw tonic client
 
 ## Invariants
 - **Sessions are keyed by the authenticated caller's `SessionOwner`**, never by `UserContext.user_id` (ADR 0046
@@ -54,9 +58,11 @@ Paths are relative to this crate.
   as unknown. Groups are not in the key; the method is (a token and an OIDC subject of one name are two owners).
 - **A session's policy is its caller's role at creation, for life**: a caller whose role differs never gets that
   session; it is closed without a tombstone and the lookup goes on as for a free id (a create builds a new one,
-  a client that saw the old id gets `INVALID_HANDLE.SESSION_CHANGED`). `ReleaseSession` ends it whatever the role.
-- **Every RPC authenticates before anything else but the drain check**, once per RPC (tokens expire, connections
-  outlive them).
+  a client that saw the old id gets `INVALID_HANDLE.SESSION_CHANGED`, an RPC that creates nothing
+  `SESSION_NOT_FOUND`). `ReleaseSession` ends it whatever the role.
+- **Every RPC authenticates before its body is decoded** (`AuthLayer`), once per RPC (tokens expire, connections
+  outlive them); a class `check_rpc` gives that needs more than the session lookup or the analyzer is refused
+  until its RPC applies it (fail closed).
 - **No lock across an `await`**, and none while a session is built or closed: the manager's mutex guards map
   lookups and inserts only. A racing create of the same key keeps the first and closes the loser.
 - **Decode only through `wire`** (`#![deny(clippy::disallowed_methods)]`): the codec is the one decode path.

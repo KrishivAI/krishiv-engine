@@ -20,7 +20,9 @@ pub mod server;
 pub mod service;
 pub mod status;
 
-pub use auth::{Check, ConnectAuth, Rpc, SessionOwner, check_command, check_rpc};
+pub use auth::{
+    AuthLayer, Check, ConnectAuth, Rpc, SessionOwner, check_command, check_rpc, role_sessions,
+};
 pub use manager::{ManagerCounts, SessionEntry, SessionLimits, SessionManager};
 pub use operation::{ExecuteLimits, Operation, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};

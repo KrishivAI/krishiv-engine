@@ -26,11 +26,12 @@ use krishiv_common::config::{
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
+    role_sessions,
 };
 use krishiv_server::guard::{Guard, TokenGuard};
 use krishiv_server::session_guard::SessionGuard;
-use krishiv_session::auth::{AuthConfig, Authenticated, Role, RolePolicy, ServerAuth, is_auth_key};
-use krishiv_session::{AccessPolicy, EngineRuntime, PathPrefixPolicy, PolicyVersion, Session};
+use krishiv_session::auth::{AuthConfig, ServerAuth, is_auth_key};
+use krishiv_session::{EngineRuntime, Session};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -151,31 +152,6 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     result
 }
 
-/// The session factory of an authenticated server: each caller's session acts for its
-/// principal under `PathPrefixPolicy(RolePolicy(role))` (design P3-T002 §3.6), on `base`'s
-/// runtime. Client code needs admin until the T014b sandbox merges (ADR 0046 N1). The path
-/// confinement is checked once here, so a bad `krishiv.io.*` root fails at startup.
-fn caller_sessions(
-    base: Session,
-    config: &Config,
-) -> Result<Box<krishiv_connect_server::manager::SessionFactory>, String> {
-    let confine = {
-        let config = config.clone();
-        move |inner: Arc<dyn AccessPolicy>| PathPrefixPolicy::from_config(&config, inner)
-    };
-    confine(Arc::new(RolePolicy::new(
-        None,
-        Role::Admin,
-        PolicyVersion(0),
-    )))
-    .map_err(|e| e.to_string())?;
-    Ok(Box::new(move |caller: &Authenticated| {
-        let role = RolePolicy::new(caller.role, Role::Admin, PolicyVersion(0));
-        let policy = confine(Arc::new(role))?;
-        Ok(base.new_session_as(caller.principal.clone(), Arc::new(policy)))
-    }))
-}
-
 fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: bool) -> bool {
     config
         .get(entry)
@@ -202,7 +178,10 @@ async fn run_listeners(
     let auth = Arc::new(auth);
     let limits = SessionLimits::from_config(config);
     let manager = Arc::new(if authenticated {
-        SessionManager::new(caller_sessions(base, config)?, limits)
+        SessionManager::new(
+            role_sessions(base, config).map_err(|e| e.to_string())?,
+            limits,
+        )
     } else {
         SessionManager::from_base(base, limits)
     });

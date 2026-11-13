@@ -18,7 +18,10 @@
 //! (a role list changed, an OIDC group claim changed) never gets that
 //! session: it is closed, without a tombstone, and the lookup goes on as if
 //! the id were free, so a create builds a new session under the new role and
-//! a client that saw the old one gets `INVALID_HANDLE.SESSION_CHANGED`.
+//! a client that saw the old one gets `INVALID_HANDLE.SESSION_CHANGED`; an
+//! RPC that creates nothing gets `INVALID_HANDLE.SESSION_NOT_FOUND`. Two
+//! clients of one owner using one session id under different roles at once
+//! replace each other's session on every request (each keeps its own role).
 //!
 //! No lock is held across an `await`, nor while a session is built or
 //! closed: the map lock guards lookups and inserts only.

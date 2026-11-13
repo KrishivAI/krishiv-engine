@@ -31,7 +31,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tonic::transport::Server;
 use tonic::transport::server::{Connected, TcpConnectInfo};
 
-use crate::auth::ConnectAuth;
+use crate::auth::{AuthLayer, ConnectAuth};
 use crate::manager::SessionManager;
 use crate::operation::ExecuteLimits;
 use crate::service::{ConnectService, SparkConnectServiceServer};
@@ -224,7 +224,7 @@ impl ConnectServer {
             auth,
         } = self;
         let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining))
-            .with_auth(auth)
+            .with_auth(Arc::clone(&auth))
             .with_limits(config.execute.clone());
         let service = SparkConnectServiceServer::from_arc(Arc::new(service))
             .max_decoding_message_size(config.max_inbound_message_size)
@@ -241,6 +241,8 @@ impl ConnectServer {
             .http2_keepalive_interval(keepalive_interval)
             .http2_keepalive_timeout(keepalive_timeout)
             .tcp_nodelay(true)
+            // Authentication runs on the headers, before the body is decoded.
+            .layer(AuthLayer::new(Arc::clone(&auth)))
             .add_service(service);
 
         // Aborted on drop, so a caller that cancels `serve` leaves no task

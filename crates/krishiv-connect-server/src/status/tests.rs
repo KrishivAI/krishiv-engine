@@ -167,3 +167,22 @@ fn an_operation_limit_is_resource_exhausted() {
     .into();
     assert_eq!(status_of(&e).code(), Code::ResourceExhausted);
 }
+
+#[test]
+fn an_access_denial_is_permission_denied_with_its_class() {
+    let e: KrishivError = krishiv_common::error::KrishivInsufficientPermissions {
+        principal: "`carol`".to_owned(),
+        privilege: "USAGE".to_owned(),
+        securable: "system `udf`".to_owned(),
+    }
+    .into();
+    let status = status_of(&e);
+    assert_eq!(status.code(), Code::PermissionDenied);
+    let (rpc, info) = details(&status);
+    assert_eq!(rpc.code, Code::PermissionDenied as i32);
+    assert_eq!(
+        info.metadata["errorClass"],
+        "KRISHIV_INSUFFICIENT_PERMISSIONS"
+    );
+    assert_eq!(info.metadata["sqlState"], "42501");
+}

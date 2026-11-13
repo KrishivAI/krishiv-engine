@@ -8,9 +8,10 @@ use krishiv_common::principal::PrincipalKind;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::command::CommandType;
 use krishiv_connect::proto::v4_3::ml_command::Command as MlCommandType;
+use krishiv_session::auth::Authenticated;
 use krishiv_session::auth::{AuthConfig, Method, Role, ServerAuth};
 use krishiv_session::{Privilege, Securable, StatementClass};
-use tonic::transport::server::TcpConnectInfo;
+use tonic::codegen::http::HeaderMap;
 use tonic::{Code, Request};
 
 use super::{Check, ConnectAuth, Rpc, SessionOwner, check_command, check_rpc};
@@ -49,18 +50,22 @@ fn peer(last: u8) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 1, 2, last)), 50_000)
 }
 
-/// A request from `peer` with the `authorization` values `headers`.
-fn request(peer: Option<SocketAddr>, headers: &[&str]) -> Request<()> {
-    let mut r = Request::new(());
-    for h in headers {
-        r.metadata_mut()
-            .append("authorization", h.parse().expect("ascii"));
+/// The headers of a request with the `authorization` values `values`.
+fn headers(values: &[&str]) -> HeaderMap {
+    let mut h = HeaderMap::new();
+    for v in values {
+        h.append("authorization", v.parse().expect("ascii"));
     }
-    r.extensions_mut().insert(TcpConnectInfo {
-        local_addr: None,
-        remote_addr: peer,
-    });
-    r
+    h
+}
+
+/// Authenticates a request from `peer` with the `authorization` values `values`.
+fn authenticate(
+    auth: &ConnectAuth,
+    peer: Option<SocketAddr>,
+    values: &[&str],
+) -> Result<Authenticated, tonic::Status> {
+    block_on(auth.authenticate(&headers(values), peer))
 }
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -71,7 +76,7 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 fn off_is_the_local_user_without_a_credential() {
     let auth = ConnectAuth::off();
     assert!(!auth.is_enabled());
-    let caller = block_on(auth.caller(&Request::new(()))).expect("local");
+    let caller = auth.caller(&Request::new(())).expect("local");
     assert_eq!(
         caller.principal.name,
         krishiv_common::principal::Principal::local_user().name
@@ -85,8 +90,8 @@ fn a_token_names_its_principal_and_role() {
     let dir = tempfile::tempdir().expect("dir");
     let auth = token_auth(dir.path());
     assert!(auth.is_enabled());
-    let caller = block_on(auth.caller(&request(Some(peer(1)), &[&format!("Bearer {TOKEN}")])))
-        .expect("authenticated");
+    let caller =
+        authenticate(&auth, Some(peer(1)), &[&format!("Bearer {TOKEN}")]).expect("authenticated");
     assert_eq!(caller.principal.name, "carol");
     assert_eq!(caller.principal.kind, PrincipalKind::User);
     assert_eq!(caller.role, Some(Role::Viewer));
@@ -97,9 +102,7 @@ fn a_token_names_its_principal_and_role() {
 fn failures_are_spark_unauthenticated_messages() {
     let dir = tempfile::tempdir().expect("dir");
     let auth = token_auth(dir.path());
-    let status = |headers: &[&str]| {
-        block_on(auth.caller(&request(Some(peer(2)), headers))).expect_err("refused")
-    };
+    let status = |values: &[&str]| authenticate(&auth, Some(peer(2)), values).expect_err("refused");
     let missing = status(&[]);
     assert_eq!(missing.code(), Code::Unauthenticated);
     assert_eq!(missing.message(), "No authentication token provided");
@@ -122,8 +125,7 @@ fn failures_are_spark_unauthenticated_messages() {
 fn a_request_without_a_peer_address_is_refused() {
     let dir = tempfile::tempdir().expect("dir");
     let auth = token_auth(dir.path());
-    let s = block_on(auth.caller(&request(None, &[&format!("Bearer {TOKEN}")])))
-        .expect_err("fails closed");
+    let s = authenticate(&auth, None, &[&format!("Bearer {TOKEN}")]).expect_err("fails closed");
     assert_eq!(s.code(), Code::Unauthenticated);
 }
 
@@ -134,23 +136,22 @@ fn a_throttled_peer_is_unavailable() {
     let mut last = None;
     // The default throttle blocks a peer after 20 failures a minute.
     for _ in 0..25 {
-        last = block_on(auth.caller(&request(Some(peer(3)), &["Bearer wrong"]))).err();
+        last = authenticate(&auth, Some(peer(3)), &["Bearer wrong"]).err();
     }
     let s = last.expect("refused");
     assert_eq!(s.code(), Code::Unavailable);
     // Even the right token waits out the block, and another peer is unaffected.
-    let blocked = block_on(auth.caller(&request(Some(peer(3)), &[&format!("Bearer {TOKEN}")])));
+    let blocked = authenticate(&auth, Some(peer(3)), &[&format!("Bearer {TOKEN}")]);
     assert_eq!(blocked.expect_err("blocked").code(), Code::Unavailable);
-    block_on(auth.caller(&request(Some(peer(4)), &[&format!("Bearer {TOKEN}")])))
-        .expect("other peer");
+    authenticate(&auth, Some(peer(4)), &[&format!("Bearer {TOKEN}")]).expect("other peer");
 }
 
 #[test]
 fn the_owner_leaves_out_groups_and_keeps_the_method() {
     let dir = tempfile::tempdir().expect("dir");
     let auth = token_auth(dir.path());
-    let caller = block_on(auth.caller(&request(Some(peer(5)), &[&format!("Bearer {TOKEN}")])))
-        .expect("authenticated");
+    let caller =
+        authenticate(&auth, Some(peer(5)), &[&format!("Bearer {TOKEN}")]).expect("authenticated");
     let mut grouped = caller.clone();
     grouped.principal.groups = vec!["bi".to_owned()];
     assert_eq!(SessionOwner::of(&caller), SessionOwner::of(&grouped));
@@ -199,7 +200,10 @@ fn every_command_has_its_class() {
     assert_eq!(check_command(&pb::Command::default()), Check::Plan);
     let cases: Vec<(CommandType, Check)> = vec![
         (CommandType::SqlCommand(Box::default()), Check::Plan),
-        (CommandType::CheckpointCommand(Box::default()), Check::Plan),
+        (
+            CommandType::CheckpointCommand(Box::default()),
+            Check::SideEffect,
+        ),
         (CommandType::WriteOperation(Box::default()), Check::Write),
         (CommandType::WriteOperationV2(Box::default()), Check::Write),
         (
@@ -311,4 +315,17 @@ fn enforce_asks_the_session_policy() {
         )),
     );
     block_on(super::enforce(&udf_usage(), &admin)).expect("admin sends client code");
+}
+
+#[test]
+fn with_authentication_on_a_request_without_the_layers_caller_is_refused() {
+    // The service reads the caller the layer attached; without one it fails closed.
+    let dir = tempfile::tempdir().expect("dir");
+    let auth = token_auth(dir.path());
+    let s = auth.caller(&Request::new(())).expect_err("no layer ran");
+    assert_eq!(s.code(), Code::Unauthenticated);
+    let mut attached = Request::new(());
+    let carol = authenticate(&auth, Some(peer(6)), &[&format!("Bearer {TOKEN}")]).expect("token");
+    attached.extensions_mut().insert(carol.clone());
+    assert_eq!(auth.caller(&attached).expect("attached"), carol);
 }
