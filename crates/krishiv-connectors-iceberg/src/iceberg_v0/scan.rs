@@ -297,7 +297,12 @@ async fn read_capped(
     };
     check_size(what, location, size, max)?;
     let bytes = input.read().await.map_err(from_iceberg)?;
-    check_size(what, location, bytes.len() as u64, max)?;
+    check_size(
+        what,
+        location,
+        u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        max,
+    )?;
     Ok(bytes)
 }
 
@@ -520,7 +525,7 @@ async fn manifest_entries(
     if let (Some((c, limit)), Some(k)) = (cache, key) {
         let cached = Cached {
             entries: Arc::clone(&entries),
-            read_bytes: bytes.len() as u64,
+            read_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         };
         c.insert(k, cached, limit);
     }
