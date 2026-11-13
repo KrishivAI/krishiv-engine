@@ -197,19 +197,16 @@ pub(crate) struct CatalogTable {
     /// [`CatalogStore::replace_table`]. `ANALYZE` reads it with the table and publishes its statistics only if it
     /// has not moved, so statistics of rows a concurrent write replaced are never stored.
     pub(crate) data_version: u64,
-    /// Counts the changes of the entry's metadata ([`CatalogStore::replace_table`] adds one). With
-    /// [`incarnation`](Self::incarnation) it is the table's [`version`](Self::version), which the catalog write
-    /// calls take as the version the caller read, so a concurrent change is refused, never overwritten.
-    pub(crate) revision: u64,
+    /// The entry's version for `CatalogWrite::alter_table`: taken from the store's epoch, under its lock, when
+    /// the entry is created or replaced, so no two entries (or states of one) share it. A caller that read one
+    /// stamp and finds another has been overtaken by a change, a drop and create, or an `ANALYZE`.
+    pub(crate) stamp: u64,
 }
 
 impl CatalogTable {
-    /// The table's version for `CatalogWrite::alter_table`: the incarnation (which entry of the name this is) in
-    /// the high bits and the metadata revision in the low 24. A drop and create, or any `replace_table`,
-    /// gives a different one.
+    /// The table's version for `CatalogWrite::alter_table` (see [`stamp`](Self::stamp)).
     pub(crate) fn version(&self) -> krishiv_plan::TableVersion {
-        let packed = (self.incarnation << 24) | (self.revision & 0x00FF_FFFF);
-        krishiv_plan::TableVersion(i64::try_from(packed).unwrap_or(i64::MAX))
+        krishiv_plan::TableVersion(i64::try_from(self.stamp).unwrap_or(i64::MAX))
     }
 
     /// Records that the table's data changed: its column statistics no longer describe it (`updateTableStats`).
@@ -633,6 +630,7 @@ impl CatalogStore for InMemoryCatalogStore {
         // The epoch moves under the state lock on every create, so each created entry gets its own value.
         let mut table = table;
         table.incarnation = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        table.stamp = table.incarnation;
         state.tables.insert(key, Arc::new(table));
         // What the result cache holds for this table is stale (it also covers the results
         // computed between a table's data being written and its partitions being registered).
@@ -652,9 +650,8 @@ impl CatalogStore for InMemoryCatalogStore {
         let mut table = table;
         table.incarnation = expected.incarnation;
         table.data_version = table.data_version.max(expected.data_version);
-        table.revision = expected.revision + 1;
+        table.stamp = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
         state.tables.insert(key, Arc::new(table));
-        self.epoch.fetch_add(1, Ordering::AcqRel);
         self.hub.invalidate_table(&changed);
         true
     }
@@ -788,7 +785,7 @@ mod tests {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
-            revision: 0,
+            stamp: 0,
         }
     }
 

@@ -6,9 +6,16 @@
 //! existing caller; the store's own methods stay what the session uses until
 //! the commands move onto the traits.
 //!
-//! A table's version is [`CatalogTable::version`]: the incarnation and the
-//! metadata revision, so `alter_table` fails on a table that changed or was
-//! dropped and created again since it was read, as `replace_table` always did.
+//! A table's version is [`CatalogTable::version`], the store's stamp of the
+//! entry: `alter_table` fails on a table that changed (or was dropped and
+//! created again, or analyzed) since it was read, as `replace_table` always
+//! did; the class is `INTERNAL_ERROR`, as the session raises today.
+//!
+//! The catalog authorizes nothing: the caller checks the policy (the session
+//! does so per path before it calls). What it does check is the safety of a
+//! delete: only a managed table's directory, inside the warehouse root the
+//! table was created under, never through a link, and before any metadata
+//! changes, so a refused delete leaves the table in place.
 #![cfg_attr(
     not(test),
     expect(
@@ -18,13 +25,15 @@
 )]
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    InternalError, KrishivError, SchemaAlreadyExists, SchemaNotEmpty, SchemaNotFound,
-    TableOrViewNotFound, UnsupportedFeatureCatalogOperation,
+    DataSourceNotFound, InternalError, KrishivError, LocationAlreadyExists, SchemaAlreadyExists,
+    SchemaNotEmpty, SchemaNotFound, TableOrViewNotFound, UnresolvedColumnWithSuggestion,
+    UnsupportedFeatureCatalogOperation,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::TableVersion;
 use krishiv_plan::analyzer::{
     AlterInput, AlterRules, BoxFuture, Catalog, CatalogCapabilities, CatalogWrite, CreateMode,
@@ -38,8 +47,75 @@ use crate::store::{
     CatalogStore, CatalogTable, DropNamespaceError, NamespaceMeta, StoreColumn, TableLayout,
     managed_location,
 };
+use crate::table_commands::{PROVIDERS, check_new_name};
 
-/// The in-memory store as a catalog named `spark_catalog`.
+fn internal(message: String) -> KrishivError {
+    InternalError { message }.into()
+}
+
+/// The directory whose files a delete of `table` removes, after every check
+/// (a managed table, inside the root it was created under, not that root, no
+/// link at the end, resolved paths): `None` when there is nothing to delete.
+/// Run before the metadata changes. The session's own `deletable_dir`, less
+/// the policy check.
+fn deletable_dir(table: &CatalogTable) -> Result<Option<PathBuf>, KrishivError> {
+    if !table.managed || table.view.is_some() {
+        return Ok(None);
+    }
+    let location = &table.location;
+    let meta = match location.symlink_metadata() {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(internal(format!(
+                "cannot inspect {}: {e}",
+                location.display()
+            )));
+        }
+    };
+    let root = table
+        .root
+        .canonicalize()
+        .map_err(|e| internal(format!("cannot resolve the warehouse: {e}")))?;
+    let canonical = location
+        .canonicalize()
+        .map_err(|e| internal(format!("cannot resolve {}: {e}", location.display())))?;
+    if meta.file_type().is_symlink() || !canonical.starts_with(&root) || canonical == root {
+        return Err(internal(format!(
+            "refusing to delete {}: it is not a directory inside the warehouse",
+            location.display()
+        )));
+    }
+    Ok(Some(canonical))
+}
+
+/// Deletes a directory; one that is already gone is fine.
+fn remove_dir(dir: &Path) -> Result<(), KrishivError> {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(internal(format!("cannot delete {}: {e}", dir.display()))),
+    }
+}
+
+fn to_column(c: &StoreColumn) -> TableColumn {
+    TableColumn {
+        name: c.name.clone(),
+        data_type: c.data_type.clone(),
+        nullable: c.nullable,
+        char_varchar: c.char_varchar.clone(),
+    }
+}
+
+fn concurrent(id: &TableIdent) -> KrishivError {
+    internal(format!(
+        "{id} was changed by another statement while this one ran; retry"
+    ))
+}
+
+/// The in-memory store as a catalog named `spark_catalog`. Names fold as
+/// `case_sensitive` says, which the session fixes per query, so a catalog is
+/// made for one query's view of the configuration.
 pub(crate) struct StoreCatalog {
     store: Arc<dyn CatalogStore>,
     /// Where managed tables live.
@@ -129,43 +205,58 @@ impl StoreCatalog {
         }
     }
 
-    /// Deletes a managed table's directory, only inside the root it was created under and never through a link.
-    fn remove_data(table: &CatalogTable) -> Result<(), KrishivError> {
-        if !table.managed || table.view.is_some() {
-            return Ok(());
-        }
-        let inside = table.location.starts_with(&table.root) && table.location != table.root;
-        let linked = std::fs::symlink_metadata(&table.location)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
-        if !inside || linked {
-            return Ok(());
-        }
-        match std::fs::remove_dir_all(&table.location) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(InternalError {
-                message: format!("deleting {}: {e}", table.location.display()),
+    /// The new table's columns with the partition columns last, in
+    /// partition order, spelled as the table spells them.
+    fn arranged(&self, info: &TableInfo) -> Result<(Vec<StoreColumn>, Vec<String>), KrishivError> {
+        check_column_name_duplication(
+            info.columns.iter().map(|c| c.name.as_str()),
+            self.case_sensitive,
+        )?;
+        let same = |a: &str, b: &str| {
+            if self.case_sensitive {
+                a == b
+            } else {
+                krishiv_types::equals_ignore_case(a, b)
             }
-            .into()),
+        };
+        let store_column = |c: &TableColumn| StoreColumn {
+            name: c.name.clone(),
+            data_type: c.data_type.clone(),
+            nullable: c.nullable,
+            default: None,
+            comment: None,
+            char_varchar: c.char_varchar.clone(),
+        };
+        let mut partitions = Vec::new();
+        for written in &info.partition_columns {
+            let Some(column) = info.columns.iter().find(|c| same(&c.name, written)) else {
+                return Err(UnresolvedColumnWithSuggestion {
+                    object_name: format!("`{}`", written.replace('`', "``")),
+                    proposal: info
+                        .columns
+                        .iter()
+                        .map(|c| format!("`{}`", c.name.replace('`', "``")))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                }
+                .into());
+            };
+            partitions.push(column.name.clone());
         }
+        check_column_name_duplication(partitions.iter().map(String::as_str), self.case_sensitive)?;
+        let mut columns: Vec<StoreColumn> = info
+            .columns
+            .iter()
+            .filter(|c| !partitions.iter().any(|p| same(p, &c.name)))
+            .map(store_column)
+            .collect();
+        for p in &partitions {
+            if let Some(c) = info.columns.iter().find(|c| same(&c.name, p)) {
+                columns.push(store_column(c));
+            }
+        }
+        Ok((columns, partitions))
     }
-}
-
-fn to_column(c: &StoreColumn) -> TableColumn {
-    TableColumn {
-        name: c.name.clone(),
-        data_type: c.data_type.clone(),
-        nullable: c.nullable,
-        char_varchar: c.char_varchar.clone(),
-    }
-}
-
-fn concurrent(id: &TableIdent) -> KrishivError {
-    InternalError {
-        message: format!("{id} was changed by another statement while this one ran; retry"),
-    }
-    .into()
 }
 
 impl Catalog for StoreCatalog {
@@ -189,10 +280,12 @@ impl Catalog for StoreCatalog {
         Some(self)
     }
 
+    /// The table at its current version: this catalog keeps no history, so a
+    /// `version` other than the current one finds nothing.
     fn load_table<'a>(
         &'a self,
         id: &'a TableIdent,
-        _: Option<TableVersion>,
+        version: Option<TableVersion>,
         form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         Box::pin(async move {
@@ -207,6 +300,7 @@ impl Catalog for StoreCatalog {
             Ok(self
                 .store
                 .table(&namespace, &name)
+                .filter(|t| version.is_none_or(|v| v == t.version()))
                 .map(|t| self.to_meta(&t)))
         })
     }
@@ -220,6 +314,7 @@ impl CatalogWrite for StoreCatalog {
     ) -> BoxFuture<'a, Result<(), KrishivError>> {
         Box::pin(async move {
             let name = self.namespace(namespace)?;
+            check_new_name(&name)?;
             let meta = NamespaceMeta {
                 collation: None,
                 comment: info.comment,
@@ -244,6 +339,14 @@ impl CatalogWrite for StoreCatalog {
     ) -> BoxFuture<'a, Result<(), KrishivError>> {
         Box::pin(async move {
             let name = self.namespace(namespace)?;
+            if changes.iter().any(|c| {
+                !matches!(
+                    c,
+                    NamespaceChange::SetProperty { .. } | NamespaceChange::RemoveProperty { .. }
+                )
+            }) {
+                return Err(self.unsupported("this namespace change"));
+            }
             let apply = |meta: &mut NamespaceMeta| {
                 for change in changes {
                     match change {
@@ -268,6 +371,10 @@ impl CatalogWrite for StoreCatalog {
         })
     }
 
+    /// Drops the namespace; with `cascade` its managed tables' directories
+    /// too. Every directory is checked before the metadata changes; a delete
+    /// that fails after it does not stop the others, and the first failure is
+    /// returned.
     fn drop_namespace<'a>(
         &'a self,
         namespace: &'a [String],
@@ -275,20 +382,38 @@ impl CatalogWrite for StoreCatalog {
     ) -> BoxFuture<'a, Result<(), KrishivError>> {
         Box::pin(async move {
             let name = self.namespace(namespace)?;
-            match self.store.drop_namespace(&name, cascade) {
-                Ok(tables) => tables.iter().try_for_each(|t| Self::remove_data(t)),
-                Err(DropNamespaceError::Missing) => Err(SchemaNotFound {
-                    schema_name: format!("`{name}`"),
-                }
-                .into()),
-                Err(DropNamespaceError::NotEmpty) => Err(SchemaNotEmpty {
-                    schema_name: format!("`{name}`"),
-                }
-                .into()),
-                Err(DropNamespaceError::Default) => {
-                    Err(self.unsupported("dropping the default namespace"))
+            if cascade {
+                for table in self.store.tables_in(&name) {
+                    deletable_dir(&table)?;
                 }
             }
+            let tables = match self.store.drop_namespace(&name, cascade) {
+                Ok(tables) => tables,
+                Err(DropNamespaceError::Missing) => {
+                    return Err(SchemaNotFound {
+                        schema_name: format!("`{name}`"),
+                    }
+                    .into());
+                }
+                Err(DropNamespaceError::NotEmpty) => {
+                    return Err(SchemaNotEmpty {
+                        schema_name: format!("`{name}`"),
+                    }
+                    .into());
+                }
+                Err(DropNamespaceError::Default) => {
+                    return Err(self.unsupported("dropping the default namespace"));
+                }
+            };
+            let mut first = None;
+            for table in &tables {
+                let removed =
+                    deletable_dir(table).and_then(|dir| dir.map_or(Ok(()), |dir| remove_dir(&dir)));
+                if let Err(e) = removed {
+                    first.get_or_insert(e);
+                }
+            }
+            first.map_or(Ok(()), Err)
         })
     }
 
@@ -298,63 +423,80 @@ impl CatalogWrite for StoreCatalog {
         mode: CreateMode,
     ) -> BoxFuture<'a, Result<bool, KrishivError>> {
         Box::pin(async move {
+            let store_mode = match mode {
+                CreateMode::ErrorIfExists => StoreCreateMode::ErrorIfExists,
+                CreateMode::IgnoreIfExists => StoreCreateMode::IfNotExists,
+                _ => return Err(self.unsupported("this create mode")),
+            };
             let (namespace, name) = self.table(&info.ident)?;
+            check_new_name(&name)?;
             if !self.store.has_namespace(&namespace) {
                 return Err(SchemaNotFound {
                     schema_name: format!("`{namespace}`"),
                 }
                 .into());
             }
-            let external = info.location.is_some();
+            let mut properties = info.properties.clone();
+            let written = properties.remove("provider");
+            let provider = written.clone().unwrap_or_else(|| "parquet".to_owned());
+            if !PROVIDERS.contains(&provider.to_lowercase().as_str()) {
+                return Err(DataSourceNotFound { provider }.into());
+            }
+            if info.location.as_deref().is_some_and(str::is_empty) {
+                return Err(self.unsupported("an empty location"));
+            }
+            let (columns, partition_columns) = self.arranged(&info)?;
+            let managed = info.location.is_none();
             let location = info.location.as_deref().map_or_else(
                 || managed_location(&self.warehouse, &namespace, &name),
                 |l| PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             );
-            let provider = info
-                .properties
-                .get("provider")
-                .cloned()
-                .unwrap_or_else(|| "parquet".to_owned());
-            let columns = info
-                .columns
-                .iter()
-                .map(|c| StoreColumn {
-                    name: c.name.clone(),
-                    data_type: c.data_type.clone(),
-                    nullable: c.nullable,
-                    default: None,
-                    comment: None,
-                    char_varchar: c.char_varchar.clone(),
-                })
-                .collect();
+            let exists = self.store.table(&namespace, &name).is_some();
+            if managed && !exists && location.exists() {
+                return Err(LocationAlreadyExists {
+                    identifier: info.ident.to_string(),
+                    location: location.display().to_string(),
+                }
+                .into());
+            }
             let table = CatalogTable {
                 namespace,
                 name,
-                managed: !external,
-                provider_written: provider.clone(),
-                provider,
-                location,
+                managed,
+                provider_written: written.unwrap_or_else(|| provider.clone()),
+                provider: provider.to_lowercase(),
+                location: location.clone(),
                 columns,
                 options: BTreeMap::new(),
-                properties: info.properties,
+                properties,
                 comment: info.comment,
                 created_ms: crate::table_commands::now_ms(),
                 root: self.warehouse.clone(),
                 view: None,
                 layout: TableLayout {
-                    partition_columns: info.partition_columns,
+                    partition_columns,
                     ..TableLayout::default()
                 },
                 column_stats: BTreeMap::new(),
                 incarnation: 0,
                 data_version: 0,
-                revision: 0,
+                stamp: 0,
             };
-            let mode = match mode {
-                CreateMode::IgnoreIfExists => StoreCreateMode::IfNotExists,
-                _ => StoreCreateMode::ErrorIfExists,
-            };
-            self.store.create_table(table, mode)
+            let (namespace, name) = (table.namespace.clone(), table.name.clone());
+            let created = self.store.create_table(table, store_mode)?;
+            // Spark makes a managed table's directory when it creates the table; an external
+            // table's location is made by its first write.
+            if created
+                && managed
+                && let Err(e) = std::fs::create_dir_all(&location)
+            {
+                self.store.drop_table(&namespace, &name);
+                return Err(internal(format!(
+                    "cannot create {}: {e}",
+                    location.display()
+                )));
+            }
+            Ok(created)
         })
     }
 
@@ -389,8 +531,8 @@ impl CatalogWrite for StoreCatalog {
                 .collect();
             let table_id = TableIdent {
                 catalog: CATALOG.to_owned(),
-                namespace: vec![namespace],
-                name,
+                namespace: vec![namespace.clone()],
+                name: name.clone(),
             };
             let input = AlterInput {
                 table: &table_id,
@@ -414,37 +556,54 @@ impl CatalogWrite for StoreCatalog {
                 })
                 .collect();
             for (key, value) in altered.properties {
-                match value {
-                    Some(v) => changed.properties.insert(key, v),
-                    None => changed.properties.remove(&key),
-                };
+                // Spark's `comment` property is the table's comment.
+                if key.eq_ignore_ascii_case("comment") {
+                    changed.comment = value;
+                } else if let Some(v) = value {
+                    changed.properties.insert(key, v);
+                } else {
+                    changed.properties.remove(&key);
+                }
             }
+            let fallback = self.to_meta(&changed);
             if !self.store.replace_table(&current, changed) {
                 return Err(concurrent(id));
             }
-            self.store
-                .table(&table_id.namespace[0], &table_id.name)
-                .map(|t| self.to_meta(&t))
-                .ok_or_else(|| Self::not_found(id))
+            // The change is committed: a table dropped since is no failure of this call.
+            Ok(self.store.table(&namespace, &name).map_or_else(
+                || TableMeta {
+                    version: None,
+                    ..fallback
+                },
+                |t| self.to_meta(&t),
+            ))
         })
     }
 
+    /// Drops the table. A managed table's directory is deleted with it
+    /// (Spark has no trash, so `purge` changes nothing here), an external
+    /// table's never; the delete is checked before the metadata changes.
     fn drop_table<'a>(
         &'a self,
         id: &'a TableIdent,
-        purge: bool,
+        _purge: bool,
     ) -> BoxFuture<'a, Result<bool, KrishivError>> {
         Box::pin(async move {
             let (namespace, name) = self.table(id)?;
-            match self.store.drop_table(&namespace, &name) {
-                None => Ok(false),
-                Some(table) => {
-                    if purge {
-                        Self::remove_data(&table)?;
-                    }
-                    Ok(true)
-                }
+            let Some(current) = self.store.table(&namespace, &name) else {
+                return Ok(false);
+            };
+            if current.view.is_some() {
+                return Err(self.unsupported("dropping a view as a table"));
             }
+            let dir = deletable_dir(&current)?;
+            if self.store.drop_table(&namespace, &name).is_none() {
+                return Ok(false);
+            }
+            if let Some(dir) = dir {
+                remove_dir(&dir)?;
+            }
+            Ok(true)
         })
     }
 
@@ -717,22 +876,19 @@ mod tests {
     }
 
     #[test]
-    fn purge_deletes_a_managed_tables_files_and_an_external_ones_stay() {
+    fn a_managed_tables_files_go_with_it_and_an_external_ones_stay() {
         let f = fixture();
         let c = &f.catalog;
         block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
         block_on(c.create_table(info("db", "m"), CreateMode::ErrorIfExists)).unwrap();
         let managed = c.store.table("db", "m").unwrap().location.clone();
-        std::fs::create_dir_all(&managed).unwrap();
+        assert!(
+            managed.is_dir(),
+            "a managed table's directory is made with it"
+        );
         std::fs::write(managed.join("part.parquet"), b"x").unwrap();
-        // Without purge the data stays.
-        let kept = ident("db", "keep");
-        block_on(c.create_table(info("db", "keep"), CreateMode::ErrorIfExists)).unwrap();
-        let kept_dir = c.store.table("db", "keep").unwrap().location.clone();
-        std::fs::create_dir_all(&kept_dir).unwrap();
-        assert!(block_on(c.drop_table(&kept, false)).unwrap());
-        assert!(kept_dir.exists());
-        assert!(block_on(c.drop_table(&ident("db", "m"), true)).unwrap());
+        // There is no trash: `purge` or not, the data goes.
+        assert!(block_on(c.drop_table(&ident("db", "m"), false)).unwrap());
         assert!(!managed.exists());
 
         let outside = tempfile::tempdir().unwrap();
@@ -746,6 +902,224 @@ mod tests {
             outside.path().join("f").exists(),
             "an external table's data is never deleted"
         );
+    }
+
+    #[test]
+    fn a_name_that_could_leave_the_warehouse_is_refused_at_create() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        for bad in ["..", ".", "", "a/b", "a b", "..%2f"] {
+            let e =
+                block_on(c.create_table(info("db", bad), CreateMode::ErrorIfExists)).unwrap_err();
+            assert!(
+                matches!(
+                    class(&e),
+                    ErrorClass::InvalidAttributeNameSyntax
+                        | ErrorClass::InvalidSchemaOrRelationName
+                ),
+                "{bad:?}: {e}"
+            );
+            let e = block_on(c.create_namespace(&ns(bad), NamespaceInfo::default())).unwrap_err();
+            assert!(
+                matches!(
+                    class(&e),
+                    ErrorClass::InvalidAttributeNameSyntax
+                        | ErrorClass::InvalidSchemaOrRelationName
+                ),
+                "{bad:?}: {e}"
+            );
+        }
+        assert!(c.store.tables_in("db").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_delete_through_a_link_or_outside_the_root_is_refused_and_changes_nothing() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("keep"), b"x").unwrap();
+
+        // The table's directory is replaced by a link to somewhere else.
+        block_on(c.create_table(info("db", "linked"), CreateMode::ErrorIfExists)).unwrap();
+        let dir = c.store.table("db", "linked").unwrap().location.clone();
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(outside.path(), &dir).unwrap();
+        let e = block_on(c.drop_table(&ident("db", "linked"), true)).unwrap_err();
+        assert_eq!(class(&e), ErrorClass::InternalError);
+        assert!(e.to_string().contains("refusing to delete"), "{e}");
+        assert!(c.store.table("db", "linked").is_some(), "the table stays");
+        assert!(outside.path().join("keep").exists());
+
+        // So does dropping the namespace: nothing changes, not even the tables before the bad one.
+        block_on(c.create_table(info("db", "fine"), CreateMode::ErrorIfExists)).unwrap();
+        let fine = c.store.table("db", "fine").unwrap().location.clone();
+        let e = block_on(c.drop_namespace(&ns("db"), true)).unwrap_err();
+        assert_eq!(class(&e), ErrorClass::InternalError);
+        assert!(c.store.has_namespace("db") && fine.is_dir());
+        assert!(outside.path().join("keep").exists());
+
+        // A table whose directory is outside the root it was created under.
+        std::fs::remove_file(&dir).unwrap();
+        assert!(block_on(c.drop_table(&ident("db", "linked"), true)).unwrap());
+        let mut stray = (*c.store.table("db", "fine").unwrap()).clone();
+        stray.location = outside.path().to_path_buf();
+        let current = c.store.table("db", "fine").unwrap();
+        assert!(c.store.replace_table(&current, stray));
+        let e = block_on(c.drop_table(&ident("db", "fine"), true)).unwrap_err();
+        assert!(e.to_string().contains("refusing to delete"), "{e}");
+        assert!(outside.path().join("keep").exists());
+    }
+
+    #[test]
+    fn create_checks_what_create_table_checks() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        let create = |i: TableInfo| block_on(c.create_table(i, CreateMode::ErrorIfExists));
+
+        let mut bad_provider = info("db", "p");
+        bad_provider
+            .properties
+            .insert("provider".into(), "nope".into());
+        assert_eq!(
+            class(&create(bad_provider).unwrap_err()),
+            ErrorClass::DataSourceNotFound
+        );
+
+        let mut empty = info("db", "e");
+        empty.location = Some(String::new());
+        assert_eq!(
+            class(&create(empty).unwrap_err()),
+            ErrorClass::UnsupportedFeatureCatalogOperation
+        );
+
+        let mut dup = info("db", "d");
+        dup.columns
+            .push(TableColumn::new("A", DataType::Long, true));
+        assert_eq!(
+            class(&create(dup).unwrap_err()),
+            ErrorClass::ColumnAlreadyExists
+        );
+
+        let mut missing = info("db", "m");
+        missing.partition_columns = vec!["nope".into()];
+        assert_eq!(
+            class(&create(missing).unwrap_err()),
+            ErrorClass::UnresolvedColumnWithSuggestion
+        );
+
+        // A managed directory that exists already is not taken over.
+        let taken = managed_location(f.warehouse.path(), "db", "t");
+        std::fs::create_dir_all(&taken).unwrap();
+        assert_eq!(
+            class(&create(info("db", "t")).unwrap_err()),
+            ErrorClass::LocationAlreadyExists
+        );
+        assert!(c.store.table("db", "t").is_none());
+
+        // The partition columns go last, in partition order, spelled as the table spells them.
+        let mut info3 = TableInfo::new(
+            ident("db", "x"),
+            vec![
+                TableColumn::new("P2", DataType::Integer, true),
+                TableColumn::new("a", DataType::Integer, true),
+                TableColumn::new("p1", DataType::Integer, true),
+                TableColumn::new("b", DataType::Integer, true),
+            ],
+        );
+        info3.partition_columns = vec!["p1".into(), "p2".into()];
+        assert!(create(info3).unwrap());
+        let t = c.store.table("db", "x").unwrap();
+        let names: Vec<_> = t.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["a", "b", "p1", "P2"]);
+        assert_eq!(t.layout.partition_columns, ["p1", "P2"]);
+
+        let mut csv = info("db", "csv");
+        csv.properties.insert("provider".into(), "CSV".into());
+        csv.comment = Some("hello".into());
+        create(csv).unwrap();
+        let t = c.store.table("db", "csv").unwrap();
+        assert_eq!(
+            (t.provider.as_str(), t.provider_written.as_str()),
+            ("csv", "CSV")
+        );
+        assert!(!t.properties.contains_key("provider"));
+        assert_eq!(t.comment.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn a_view_is_not_a_table_to_alter_or_drop() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "v"), CreateMode::ErrorIfExists)).unwrap();
+        let mut view = (*c.store.table("db", "v").unwrap()).clone();
+        view.view = Some(crate::store::ViewDef {
+            sql: "SELECT 1".into(),
+            namespace: "db".into(),
+            path: Vec::new(),
+            query_columns: Vec::new(),
+            identifier_spans: Vec::new(),
+            written: "SELECT 1".into(),
+            schema_mode: None,
+        });
+        let current = c.store.table("db", "v").unwrap();
+        assert!(c.store.replace_table(&current, view));
+        let id = ident("db", "v");
+        let version = load(c, &id).unwrap().version.unwrap();
+        for e in [
+            block_on(c.drop_table(&id, true)).unwrap_err(),
+            block_on(c.alter_table(&id, version, &[])).unwrap_err(),
+        ] {
+            assert_eq!(class(&e), ErrorClass::UnsupportedFeatureCatalogOperation);
+        }
+        assert!(c.store.table("db", "v").is_some());
+    }
+
+    #[test]
+    fn the_comment_property_is_the_table_comment_and_a_load_at_another_version_finds_nothing() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).unwrap();
+        let id = ident("db", "t");
+        let v1 = load(c, &id).unwrap().version.unwrap();
+        block_on(c.alter_table(
+            &id,
+            v1,
+            &[TableChange::SetProperty {
+                key: "Comment".into(),
+                value: "hi".into(),
+            }],
+        ))
+        .unwrap();
+        let t = c.store.table("db", "t").unwrap();
+        assert_eq!(t.comment.as_deref(), Some("hi"));
+        assert!(!t.properties.contains_key("Comment"));
+        let v2 = t.version();
+        assert_ne!(v1, v2);
+        assert!(
+            block_on(c.load_table(&id, Some(v1), form()))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            block_on(c.load_table(&id, Some(v2), form()))
+                .unwrap()
+                .is_some()
+        );
+        block_on(c.alter_table(
+            &id,
+            v2,
+            &[TableChange::RemoveProperty {
+                key: "comment".into(),
+            }],
+        ))
+        .unwrap();
+        assert!(c.store.table("db", "t").unwrap().comment.is_none());
     }
 
     #[test]

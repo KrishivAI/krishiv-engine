@@ -58,7 +58,7 @@ use crate::store::{
 };
 
 /// The file formats a table can have.
-const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
+pub(crate) const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
 /// The short name of a data source written fully qualified, as Spark maps its built-in classes
 /// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
@@ -88,7 +88,7 @@ fn valid_name(name: &str) -> bool {
 
 /// `INVALID_SCHEMA_OR_RELATION_NAME` (and for `.` and `..`, which Spark's parser rejects as attribute names,
 /// `INVALID_ATTRIBUTE_NAME_SYNTAX`) unless `name` is a valid new table or namespace name.
-fn check_new_name(name: &str) -> Result<(), KrishivError> {
+pub(crate) fn check_new_name(name: &str) -> Result<(), KrishivError> {
     if valid_name(name) {
         Ok(())
     } else if name.chars().all(|c| c == '.') && !name.is_empty() {
@@ -670,7 +670,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
-            revision: 0,
+            stamp: 0,
         };
         self.state.catalog.store.create_table(view, mode)?;
         self.empty_frame().await
