@@ -13,7 +13,7 @@ use krishiv_common::error::{ArithmeticOverflow, KrishivError, ScalarSubqueryTooM
 use krishiv_memory::SpillSignal;
 use krishiv_types::batch::{Batch, Weights};
 
-use super::build::{BuildGlobal, Level0, nanos};
+use super::build::{BuildGlobal, Built, Level0, nanos};
 use super::grace::{self, Flush, Part, WRITE_SLICE, choose, reserve_chunks, spill_parts};
 use super::keys::{Hashing, MAX_RADIX_BITS};
 use super::table::{JoinTable, NONE, RowArena};
@@ -535,19 +535,24 @@ struct ProbeLocal {
     selected: Option<Option<Selection>>,
 }
 
+/// The build's level-0 tables as one driver holds them: taken from `built`
+/// on first use, then this driver's own reference until it leaves.
+fn held_level0<'a>(held: &'a mut Option<Arc<Level0>>, built: &Built) -> Result<&'a Level0> {
+    if held.is_none() {
+        *held = built.level0();
+    }
+    held.as_deref()
+        .ok_or_else(|| internal("hash join build released before its probe ended".to_owned()))
+}
+
 impl ProbeLocal {
     /// The build's level-0 tables, held from now on by this driver.
     fn level0(&mut self) -> Result<&Level0> {
-        if self.level0.is_none() {
-            let built = self
-                .build
-                .built()
-                .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
-            self.level0 = built.level0();
-        }
-        self.level0
-            .as_deref()
-            .ok_or_else(|| internal("hash join build released before its probe ended".to_owned()))
+        let built = self
+            .build
+            .built()
+            .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
+        held_level0(&mut self.level0, built)
     }
 
     /// Done with the build's tables: drops this driver's reference, and
@@ -645,12 +650,7 @@ impl ProbeOp {
                 return Ok(OperatorOutput::NeedMoreInput(kept));
             }
         }
-        if l.level0.is_none() {
-            l.level0 = built.level0();
-        }
-        let level0 = l.level0.as_deref().ok_or_else(|| {
-            internal("hash join build released before its probe ended".to_owned())
-        })?;
+        let level0 = held_level0(&mut l.level0, built)?;
         let tables = Tables::Level0(&level0.tables, built.spilled);
         if l.cursor.is_none() {
             if input.num_rows() == 0 {

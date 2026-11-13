@@ -243,11 +243,20 @@ impl IdleBuild {
         let built = st.built.take()?;
         // The tables' memory goes back with the tables (`Level0`), not with
         // the build: a probe that ends releases it for the sink above.
-        if let Some(l0) = lock(&built.level0).as_mut().and_then(Arc::get_mut) {
+        // No clone of the tables exists before the seal, so `get_mut` holds.
+        let mut level0 = lock(&built.level0);
+        let present = level0.is_some();
+        let unique = level0.as_mut().and_then(Arc::get_mut);
+        debug_assert!(
+            unique.is_some() || !present,
+            "hash join level-0 tables shared before the build sealed"
+        );
+        if let Some(l0) = unique {
             for m in &mut st.memory {
                 l0._memory.append(m);
             }
         }
+        drop(level0);
         drop(st);
         self.hook.set_idle(false);
         self.hook.set_spillable_bytes(0);
