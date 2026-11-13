@@ -84,7 +84,8 @@ Paths are relative to this crate.
   below one operation's worst case (`ExecuteLimits::validate`). Dropping a non-reattachable operation's stream (seen at once) cancels its
   query and removes it; a reattachable one detaches and stays until `release_all`, its session's release, or
   `detachedTimeout` (then tombstoned: `OPERATION_ABANDONED`). Live operations, detached or finished but unreleased,
-  keep a session busy.
+  keep a session from the idle sweep; shutdown waits only for operations still running or read by an attached
+  client (`Operation::is_active`).
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)

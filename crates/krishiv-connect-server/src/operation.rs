@@ -385,6 +385,15 @@ impl Operation {
         self.state.load(Ordering::Acquire) == CANCELLED
     }
 
+    /// Whether shutdown waits for the operation: its query still runs, or
+    /// a client is attached and reading its responses. A finished or
+    /// interrupted operation nobody reads (detached, unreleased) does not
+    /// count: shutdown closes it with its session.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.state.load(Ordering::Acquire) == RUNNING || self.replay.is_attached()
+    }
+
     /// Resolves once [`Self::cancel`] runs (one waiter: the operation's
     /// encoder).
     pub async fn cancelled(&self) {
@@ -509,6 +518,13 @@ impl Operations {
     #[must_use]
     pub fn all(&self) -> Vec<Arc<Operation>> {
         self.lock().values().map(Arc::clone).collect()
+    }
+
+    /// The number of live operations shutdown waits for
+    /// ([`Operation::is_active`]).
+    #[must_use]
+    pub fn active(&self) -> usize {
+        self.lock().values().filter(|op| op.is_active()).count()
     }
 
     /// The number of live operations.

@@ -587,14 +587,16 @@ impl SessionManager {
         entries.len()
     }
 
-    /// The running queries plus the live operations of all live sessions:
-    /// zero once nothing is left to finish (shutdown waits for it).
+    /// The running queries plus the active operations (still running, or
+    /// read by an attached client) of all live sessions: zero once nothing
+    /// is left to finish (shutdown waits for it). A detached operation that
+    /// has ended does not count; closing its session releases it.
     #[must_use]
     pub fn busy(&self) -> usize {
         let entries: Vec<Arc<SessionEntry>> = self.lock().live.values().map(Arc::clone).collect();
         entries
             .iter()
-            .map(|e| e.session.running_queries() + e.operations.len())
+            .map(|e| e.session.running_queries() + e.operations.active())
             .sum()
     }
 
