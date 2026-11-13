@@ -67,7 +67,7 @@ fn fits(source: &IcebergType, value: &ScalarValue) -> bool {
 
 /// Murmur3 of the value's bucket serialisation (spec appendix B), as a signed
 /// 32-bit value.
-fn bucket_hash(source: &IcebergType, value: &ScalarValue) -> Option<i32> {
+pub(crate) fn bucket_hash(source: &IcebergType, value: &ScalarValue) -> Option<i32> {
     use IcebergType as T;
     use ScalarValue as S;
     let bytes: Vec<u8> = match (source, value) {
