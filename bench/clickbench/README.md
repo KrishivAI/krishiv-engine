@@ -53,12 +53,13 @@ entries use do the same conversion in `create.sql`. They are the same adaptation
 applies (`bench/src/krishiv_bench/clickbench_queries.py`, which also checks results against DuckDB's).
 
 ## Status
-The folder has not been run against the full dataset. It is the entry for P3-T091; the first full run, its
-`results/<date>/<machine>.json` and any submission to ClickBench come from that task. The wheel version defaults to the
-0.2.0 release (`KRISHIV_VERSION`).
+The entry for P3-T091; any submission to ClickBench and its `results/<date>/<machine>.json` come from T093 (the
+c6a.4xlarge run). The wheel version defaults to the 0.2.0 release (`KRISHIV_VERSION`).
 
-Checked so far (2026-11-13): `benchmark.sh` end to end, with a wheel built from `main` (`KRISHIV_WHEEL`), on a 5,000-row
-synthetic `hits.parquet` and four of the adapted queries (count, filter, the q29 regular expression, the minute
-grouping): the output has the `Load time`, `Data size` and `[a, b, c],` lines and the regular expression returns the
-expected domains. Not checked: the other 39 queries, the real file, the cold-cache path (it needs `sudo`), and
-ClickBench's own driver (`../lib/benchmark-common.sh`).
+Checked (2026-11-13, perf-1): `benchmark.sh` end to end on the bench server (Ryzen 5 3600, 64 GB, NVMe) against the
+real `hits.parquet` (14,779,976,446 bytes, linked with `HITS_PARQUET`), with a 0.2.0 wheel built from `v0.2.0`
+(`KRISHIV_WHEEL`): all 43 queries x 3 runs return, no `null`, and each query's row count equals the T091 run's
+(`compat-0.2.md` in krishiv-internal, where the answers were also checked against DuckDB's). The server had no
+password-free `sudo`, so the cold path printed its `no-cold` warning and was not exercised; its load was 17-31 from
+other work, so those times are not a measurement. Not checked: the cold path with `sudo`, and ClickBench's own driver
+(`../lib/benchmark-common.sh`).
