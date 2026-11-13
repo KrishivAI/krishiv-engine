@@ -40,8 +40,9 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "test-util"] }
 
 [features]
-# Runs the ICU collation goldens (`tests/golden_icu.rs`) and leaves the default ratchet, whose
-# baseline lists the ICU rows as failures, to the default-feature build (ADR 0043).
+# ICU collations are default-on in the product (ADR 0043 D5), so the harness runs with them: the
+# ratchet baseline no longer lists the ICU rows as failures, and `tests/golden_icu.rs` runs.
+default = ["collations-icu"]
 collations-icu = ["krishiv-session/collations-icu"]
 
 [dev-dependencies]
