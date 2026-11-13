@@ -13,9 +13,15 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use krishiv_common::error::{ErrorClass, KrishivError, KrishivUnsupportedFeature, PathNotFound};
+use krishiv_common::config::{
+    Config, ConfigValue, IO_LOCAL_ALLOWED_ROOTS, IO_OBJECT_STORE_ALLOWED_PREFIXES,
+};
+use krishiv_common::error::{
+    ErrorClass, KrishivError, KrishivInvalidConfigValue, KrishivUnsupportedFeature, PathNotFound,
+};
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::files::LocatedPath;
+use krishiv_io::{StoreId, parse_object_url};
 use krishiv_plan::SourceId;
 use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
@@ -614,8 +620,9 @@ pub(crate) fn still_physical(session: &Session, at: &LocatedPath) -> Result<(), 
 /// A path is compared in the qualified form reads and writes use
 /// (`file:/a/b`, `.` and `..` already resolved), after resolving symbolic
 /// links in the part of it that exists, against the roots with their links
-/// resolved. Anything else is denied: other schemes (`s3://`, ...), paths
-/// with credentials, any path containing `%` (percent-encoded text would
+/// resolved. Object-store paths are allowed only under the prefixes of
+/// [`Self::with_object_prefixes`] (none by default). Anything else is
+/// denied: other schemes, paths with credentials, any path containing `%` (percent-encoded text would
 /// not be decoded the way the comparison reads it, so even a literal `%`
 /// in a file name is refused) and relative or unresolved paths. Session
 /// writes go to the resolved directory, which is opened once and then used
@@ -638,13 +645,22 @@ pub(crate) fn still_physical(session: &Session, at: &LocatedPath) -> Result<(), 
 #[derive(Clone)]
 pub struct PathPrefixPolicy {
     roots: Vec<PathBuf>,
+    prefixes: Vec<ObjectPrefix>,
     inner: Arc<dyn AccessPolicy>,
+}
+
+/// One allowed object-store prefix: a store and the whole key segments under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObjectPrefix {
+    store: StoreId,
+    segments: Vec<String>,
 }
 
 impl std::fmt::Debug for PathPrefixPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PathPrefixPolicy")
             .field("roots", &self.roots)
+            .field("prefixes", &self.prefixes)
             .finish_non_exhaustive()
     }
 }
@@ -669,16 +685,78 @@ impl PathPrefixPolicy {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { roots, inner })
+        Ok(Self {
+            roots,
+            prefixes: Vec::new(),
+            inner,
+        })
     }
 
-    /// Whether the qualified path `path` lies under a root.
+    /// Also allows object-store paths under `prefixes` (`s3://bucket/prefix`, `gs://bucket`,
+    /// `abfss://container@account/prefix`): a path is allowed when it names the same store
+    /// (`s3` and `s3a` are one) and its key starts with the prefix's whole segments, so
+    /// `s3://b/data` allows `s3://b/data/x` but not `s3://b/data2` (ADR 0046 §3a).
+    ///
+    /// # Errors
+    /// `KRISHIV_INVALID_CONFIG_VALUE` for a prefix that is not an object-store URL with a
+    /// bucket, or that holds credentials, `%`, a query or fragment, or a `.`, `..` or empty
+    /// segment.
+    pub fn with_object_prefixes<S: AsRef<str>>(
+        mut self,
+        prefixes: impl IntoIterator<Item = S>,
+    ) -> Result<Self, KrishivError> {
+        for prefix in prefixes {
+            let prefix = prefix.as_ref();
+            let parsed = parse_object_prefix(prefix).ok_or_else(|| {
+                KrishivError::from(KrishivInvalidConfigValue {
+                    value: format!("'{prefix}'"),
+                    key: format!("\"{}\"", IO_OBJECT_STORE_ALLOWED_PREFIXES.key),
+                    reason: "expected an object-store prefix such as s3://bucket/prefix, without \
+                             credentials, `%`, a query, or `.`, `..` or empty segments"
+                        .to_owned(),
+                })
+            })?;
+            self.prefixes.push(parsed);
+        }
+        Ok(self)
+    }
+
+    /// The server-mode confinement of ADR 0046 §3a around `inner`: local paths under
+    /// `krishiv.io.local.allowedRoots`, object-store paths under
+    /// `krishiv.io.objectStore.allowedPrefixes` (both comma separated, default empty, so
+    /// nothing by path), and nothing else, for every role.
+    ///
+    /// # Errors
+    /// `PATH_NOT_FOUND` for a root that does not exist; `KRISHIV_INVALID_CONFIG_VALUE` for a
+    /// prefix [`Self::with_object_prefixes`] refuses.
+    pub fn from_config(
+        config: &Config,
+        inner: Arc<dyn AccessPolicy>,
+    ) -> Result<Self, KrishivError> {
+        let list = |entry| match config.get(entry) {
+            Some(ConfigValue::String(raw)) => raw
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
+        };
+        Self::new(list(&IO_LOCAL_ALLOWED_ROOTS), inner)?
+            .with_object_prefixes(list(&IO_OBJECT_STORE_ALLOWED_PREFIXES))
+    }
+
+    /// Whether the qualified path `path` lies under a root or an object-store prefix.
     fn allows(&self, path: &OptionValue) -> bool {
         let Some(text) = path.as_plain() else {
             return false;
         };
         let Some(local) = text.strip_prefix("file:") else {
-            return false;
+            return parse_object_prefix(text).is_some_and(|p| {
+                self.prefixes
+                    .iter()
+                    .any(|a| a.store == p.store && p.segments.starts_with(&a.segments))
+            });
         };
         let local = Path::new(local);
         let normal = local.is_absolute()
@@ -690,6 +768,35 @@ impl PathPrefixPolicy {
         }
         resolve_links(local).is_some_and(|p| self.roots.iter().any(|r| p.starts_with(r)))
     }
+}
+
+/// `text` as an object-store store and key segments, if it is a plain object-store URL: a
+/// bucket, no credentials, no `%` (percent-encoded text would not be compared the way the
+/// store reads it), no query or fragment, and no `.`, `..` or empty key segment (the URL
+/// parser would fold them, so the text written would not be the key compared). A trailing
+/// `/` is allowed.
+fn parse_object_prefix(text: &str) -> Option<ObjectPrefix> {
+    if text.contains(['%', '?', '#']) {
+        return None;
+    }
+    let (_, rest) = text.split_once("://")?;
+    let key = rest.split_once('/').map_or("", |(_, key)| key);
+    let key = key.strip_suffix('/').unwrap_or(key);
+    if !key.is_empty() && key.split('/').any(|s| matches!(s, "" | "." | "..")) {
+        return None;
+    }
+    let url = parse_object_url(text).ok()?;
+    let segments = url
+        .key
+        .as_ref()
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    Some(ObjectPrefix {
+        store: url.store_id,
+        segments,
+    })
 }
 
 /// `path` with the symbolic links of its longest existing prefix resolved

@@ -1265,3 +1265,23 @@ fn fuse_probe_select_defaults_on_and_parses() {
         Some(&ConfigValue::Bool(false))
     );
 }
+
+#[test]
+fn path_confinement_entries_default_to_empty_and_are_startup_only() {
+    let mut c = Config::new();
+    for entry in [&IO_LOCAL_ALLOWED_ROOTS, &IO_OBJECT_STORE_ALLOWED_PREFIXES] {
+        assert_eq!(c.get(entry), None, "{}", entry.key);
+        assert_eq!(entry.scope, Scope::Cluster, "{}", entry.key);
+        assert_eq!(entry.settable_by, SettableBy::Startup, "{}", entry.key);
+    }
+    c.set(
+        "krishiv.io.objectStore.allowedPrefixes",
+        "s3://lake/data, gs://shared",
+    )
+    .unwrap();
+    assert_eq!(
+        c.get(&IO_OBJECT_STORE_ALLOWED_PREFIXES)
+            .and_then(ConfigValue::as_str),
+        Some("s3://lake/data, gs://shared")
+    );
+}

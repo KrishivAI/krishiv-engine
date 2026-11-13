@@ -98,6 +98,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_METADATA_CACHE_BYTES,
     &IO_CACHE_ENABLED,
     &IO_CACHE_PATH,
+    &IO_LOCAL_ALLOWED_ROOTS,
+    &IO_OBJECT_STORE_ALLOWED_PREFIXES,
     &IO_CACHE_DISK_BYTES,
     &IO_CACHE_BLOCK_BYTES,
     &IO_CACHE_MEMORY_BYTES,
@@ -1079,6 +1081,40 @@ pub static IO_CACHE_PATH: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.local.allowedRoots`.
+pub static IO_LOCAL_ALLOWED_ROOTS: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.local.allowedRoots",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Server mode (authentication configured) only: a comma-separated list of existing local \
+          directories that reads and writes by path may use, for every role, admin included \
+          (ADR 0046 §3a). A path is compared after `.`, `..` and symbolic links are resolved. \
+          Unset or empty: no local path is allowed. Embedded use and a server without \
+          authentication do not read it.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.objectStore.allowedPrefixes`.
+pub static IO_OBJECT_STORE_ALLOWED_PREFIXES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.objectStore.allowedPrefixes",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Server mode (authentication configured) only: a comma-separated list of object-store \
+          prefixes (`s3://bucket/prefix`, `gs://bucket`, `abfss://container@account/prefix`) that \
+          reads and writes by path may use, for every role, admin included (ADR 0046 §3a). A \
+          prefix matches whole key segments (`s3://b/data` does not match `s3://b/data2`); `s3` \
+          and `s3a` name the same store. It is also the one opt-in for the server's own \
+          (ambient) credentials. Unset or empty: no object-store path is allowed. Embedded use \
+          and a server without authentication do not read it.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
     spark_alias: None,
 };
 
