@@ -52,10 +52,14 @@ jobs:
       - uses: $/.github/actions/setup-mold
       - run: cargo xtask workflow-lint
       # An invalid workflow file (bad expression, unknown input, wrong `needs`) fails the PR here, not on the run.
-      - uses: $/.github/actions/install-tool
-        with:
-          tool: actionlint@1.7.7
-      - run: actionlint -shellcheck=
+      # install-action does not list actionlint: the release binary, pinned by version and sha256.
+      - name: Install actionlint 1.7.7
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/actionlint.tgz" https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  $RUNNER_TEMP/actionlint.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tgz" -C "$RUNNER_TEMP" actionlint
+      - name: actionlint
+        run: '"$RUNNER_TEMP/actionlint" -shellcheck='
       - run: cargo xtask spdx
       - run: cargo xtask source-guard
       - run: cargo xtask file-size
