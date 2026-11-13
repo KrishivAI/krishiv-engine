@@ -889,10 +889,27 @@ impl Resolver<'_> {
             } else if ICU_CASE.contains(&name.as_str())
                 && matches!(c.family(), CollationFamily::Icu { .. })
             {
-                return Err(unsupported(
-                    format!("{name} over a collated string"),
-                    e.origin,
-                ));
+                // `upper`/`lower` map in the collation's language (`__icu_case`); `initcap`
+                // needs word segmentation and stays refused.
+                let upper = match name.as_str() {
+                    "upper" | "ucase" => Some(1),
+                    "lower" | "lcase" => Some(0),
+                    _ => None,
+                };
+                match (upper, i32::try_from(c.id())) {
+                    (Some(upper), Ok(id)) if n == 1 => {
+                        rewrite = Some(Rewrite {
+                            name: "__icu_case",
+                            args: vec![RwArg::Int(upper), RwArg::Int(id), RwArg::Kid(0)],
+                        });
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            format!("{name} over a collated string"),
+                            e.origin,
+                        ));
+                    }
+                }
             }
         }
         // The call runs on plain strings: the carrier is one.

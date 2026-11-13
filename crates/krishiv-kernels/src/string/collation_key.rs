@@ -88,7 +88,6 @@ fn icu_key(
 
     use icu_collator::options::{CaseLevel, CollatorOptions, Strength};
     use icu_collator::{Collator, CollatorBorrowed, CollatorPreferences};
-    use icu_locale_core::Locale;
 
     thread_local! {
         static COLLATORS: RefCell<HashMap<u32, Option<CollatorBorrowed<'static>>>> = RefCell::new(HashMap::new());
@@ -96,25 +95,7 @@ fn icu_key(
     COLLATORS.with(|cache| {
         let mut cache = cache.borrow_mut();
         let collator = cache.entry(collation.id()).or_insert_with(|| {
-            let name = collation.icu_locale()?;
-            // Spark spells the locale `language[_Script][_ALPHA3]`; ICU reads the alpha-2 region
-            // (`fr_CAN` is `fr-CA`, whose French sorts the accents backwards).
-            let locale = if name == "UNICODE" {
-                Locale::UNKNOWN
-            } else {
-                let mut tag = String::new();
-                for (i, part) in name.split('_').enumerate() {
-                    if i > 0 {
-                        tag.push('-');
-                    }
-                    if part.len() == 3 && i > 0 && part.chars().all(|c| c.is_ascii_uppercase()) {
-                        tag.push_str(region_alpha2(part)?);
-                    } else {
-                        tag.push_str(part);
-                    }
-                }
-                tag.parse::<Locale>().ok()?
-            };
+            let locale = icu_locale_of(collation)?;
             let mut options = CollatorOptions::default();
             let (strength, case_level) = match (ci, ai) {
                 (false, false) => (Strength::Tertiary, CaseLevel::Off),
@@ -133,6 +114,81 @@ fn icu_key(
             .write_sort_key_to(s, out)
             .map_err(|_| KernelError::internal("ICU sort key".to_owned()))
     })
+}
+
+/// The ICU locale of an ICU collation: Spark spells it `language[_Script][_ALPHA3]`; ICU reads the
+/// alpha-2 region (`fr_CAN` is `fr-CA`, whose French sorts the accents backwards).
+#[cfg(feature = "collations-icu")]
+fn icu_locale_of(collation: Collation) -> Option<icu_locale_core::Locale> {
+    use icu_locale_core::Locale;
+    let name = collation.icu_locale()?;
+    if name == "UNICODE" {
+        return Some(Locale::UNKNOWN);
+    }
+    let mut tag = String::new();
+    for (i, part) in name.split('_').enumerate() {
+        if i > 0 {
+            tag.push('-');
+        }
+        if part.len() == 3 && i > 0 && part.chars().all(|c| c.is_ascii_uppercase()) {
+            tag.push_str(region_alpha2(part)?);
+        } else {
+            tag.push_str(part);
+        }
+    }
+    tag.parse::<Locale>().ok()
+}
+
+/// `upper(s)` / `lower(s)` under an ICU collation: ICU's full case mapping in the collation's
+/// language (`tr` maps `i` to `İ` and `I` to `ı`; `ß` upper-cases to `SS`).
+///
+/// # Errors
+/// `INTERNAL_ERROR` when the collation is not an ICU one or the build has no ICU data.
+#[cfg(feature = "collations-icu")]
+pub(super) fn icu_case_map(
+    collation: Collation,
+    upper: bool,
+    s: &str,
+) -> Result<String, KernelError> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use icu_casemap::CaseMapper;
+    use icu_locale_core::LanguageIdentifier;
+
+    thread_local! {
+        static LANGS: RefCell<HashMap<u32, Option<LanguageIdentifier>>> = RefCell::new(HashMap::new());
+    }
+    LANGS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let lang = cache
+            .entry(collation.id())
+            .or_insert_with(|| icu_locale_of(collation).map(|l| l.id))
+            .as_ref()
+            .ok_or_else(|| {
+                KernelError::internal(format!("no ICU data for {}", collation.name()))
+            })?;
+        let mapper = CaseMapper::new();
+        Ok(if upper {
+            mapper.uppercase_to_string(s, lang)
+        } else {
+            mapper.lowercase_to_string(s, lang)
+        }
+        .into_owned())
+    })
+}
+
+/// Without the `collations-icu` feature an ICU collation has no case mapping.
+#[cfg(not(feature = "collations-icu"))]
+pub(super) fn icu_case_map(
+    collation: Collation,
+    _upper: bool,
+    _s: &str,
+) -> Result<String, KernelError> {
+    Err(KernelError::internal(format!(
+        "no case mapping for {}",
+        collation.name()
+    )))
 }
 
 /// The alpha-2 code of a country Spark's ICU collation names carry (`collations()`).

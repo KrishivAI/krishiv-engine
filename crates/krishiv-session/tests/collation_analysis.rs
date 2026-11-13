@@ -266,7 +266,7 @@ fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
         "SELECT split_part('aAb' COLLATE unicode_ci, 'x', 1)".to_owned(),
         "SELECT substring_index('aAb' COLLATE unicode_ci, 'x', 1)".to_owned(),
         "SELECT 'a ' COLLATE utf8_binary_rtrim LIKE 'a'".to_owned(),
-        "SELECT upper('a' COLLATE unicode_ci)".to_owned(),
+        "SELECT initcap('a' COLLATE unicode_ci)".to_owned(),
     ] {
         assert_eq!(
             class(&sql),
@@ -1441,6 +1441,33 @@ fn icu_keys_reach_greatest_and_least() {
         "B"
     );
     assert_eq!(one("select least('b' collate unicode_ci, 'A', 'a')"), "A");
+}
+
+/// `upper`/`lower` under an ICU collation map in the collation's language (Spark 4.2.0 local run,
+/// 2026-11-13); `initcap` stays refused.
+#[cfg(feature = "collations-icu")]
+#[test]
+fn icu_upper_and_lower_follow_spark() {
+    for (sql, want) in [
+        ("select upper('iİıI' collate unicode)", "IİII"),
+        ("select lower('iİıI' collate unicode)", "ii\u{307}ıi"),
+        ("select upper('iİıI' collate unicode_ci)", "IİII"),
+        ("select lower('İ' collate unicode_ci)", "i\u{307}"),
+        ("select upper('iıİI' collate tr)", "İIİI"),
+        ("select lower('iıİI' collate tr)", "iıiı"),
+        ("select lower('iıİI' collate tr_ci)", "iıiı"),
+        ("select upper('ß' collate unicode)", "SS"),
+        ("select upper('iıİI' collate lt)", "IIİI"),
+        ("select lower('ΑΣ' collate unicode)", "ας"),
+        ("select upper('iıİI' collate az)", "İIİI"),
+        ("select lower('IJ' collate nl)", "ij"),
+    ] {
+        assert_eq!(one(sql), want, "{sql}");
+    }
+    assert_eq!(
+        class("select initcap('ab' collate unicode)"),
+        ErrorClass::KrishivUnsupportedFeature
+    );
 }
 
 /// ADR 0043 Decision 6: `approx_count_distinct` of an ICU collation stays refused with the feature.
