@@ -503,6 +503,7 @@ fn platform() -> String {
 pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
     vec![
         ("mimalloc", cfg!(feature = "mimalloc")),
+        ("server", cfg!(feature = "server")),
         ("ui", cfg!(feature = "ui")),
         ("kafka", cfg!(feature = "kafka")),
         ("iceberg", cfg!(feature = "iceberg")),
@@ -525,6 +526,9 @@ fn enabled_features() -> Vec<&'static str> {
     let mut out = Vec::new();
     if cfg!(feature = "mimalloc") {
         out.push("mimalloc");
+    }
+    if cfg!(feature = "server") {
+        out.push("server");
     }
     if cfg!(feature = "ui") {
         out.push("ui");

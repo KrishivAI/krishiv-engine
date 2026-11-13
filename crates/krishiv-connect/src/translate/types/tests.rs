@@ -151,9 +151,12 @@ fn unsupported_and_unset_kinds() {
         Kind::VarChar(dt::VarChar::default()),
     ] {
         let e = data_type(&proto_type(kind)).expect_err("unsupported");
-        assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+        );
         assert!(
-            e.message().contains("spark.connect.DataType."),
+            e.message().contains("spark.connect.DataType"),
             "{}",
             e.message()
         );

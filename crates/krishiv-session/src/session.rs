@@ -130,6 +130,9 @@ pub(crate) struct SessionState {
     pub(crate) conf: Arc<ConfStore>,
     pub(crate) catalog: Arc<SessionCatalog>,
     pub(crate) cache: Arc<RelationCache>,
+    /// Analyses the session's queries and keeps the last root's resolution, so a client that grows a plan
+    /// step by step does not pay for the whole prefix again (design P3-T013a).
+    pub(crate) analyzer: krishiv_plan::analyzer::CachingAnalyzer,
     pub(crate) variables: Arc<SessionVariables>,
     pub(crate) profile: SparkProfile,
     /// Fixed for the session's life: caches and fingerprints never mix
@@ -881,9 +884,9 @@ impl Session {
                 table: Arc::new(table),
             },
         );
-        // Replacing a table drops what was cached from the old one, as
-        // replacing a temporary view does in Spark.
-        self.state.cache.invalidate_table(name);
+        // Replacing a table drops what was cached from the old one, and the
+        // registrations over it, as replacing a temporary view does in Spark.
+        self.state.cache.forget_table(name);
         Ok(())
     }
 
@@ -979,7 +982,7 @@ impl Session {
             return false;
         }
         let dropped = self.state.catalog.drop_table(name);
-        self.state.cache.invalidate_table(name);
+        self.state.cache.forget_table(name);
         dropped
     }
 
@@ -1005,7 +1008,7 @@ impl Session {
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     pub fn uncache_table(&self, name: &str) {
-        self.state.cache.invalidate_table(name);
+        self.state.cache.forget_table(name);
     }
 
     /// Drops the cached relations reading the table `name` (Spark's
@@ -1183,7 +1186,18 @@ impl Session {
         let scans = FileScans {
             io: io.clone(),
             config: Arc::clone(&config),
-            slots: u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1),
+            // File partitions are cut for this many slots. Under `krishiv.deterministicOrder` it
+            // is a constant, never the machine's thread count: a morsel never spans a partition,
+            // so the partitions decide which rows a lane reads (T094 G1).
+            slots: if config
+                .get(&krishiv_common::config::DETERMINISTIC_ORDER)
+                .and_then(krishiv_common::config::ConfigValue::as_bool)
+                .unwrap_or(false)
+            {
+                16
+            } else {
+                u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1)
+            },
             runtime: self.state.runtime.executor.io_handle().clone(),
         };
         let catalog = Arc::new(QueryCatalog::new(
@@ -1336,7 +1350,7 @@ impl Session {
         // steps: `analyze_in` runs on the deepest stacks, where the size of
         // its own future counts.
         let (analyzed, body_views) = Box::pin(async {
-            let analyzed = DefaultAnalyzer.analyze(&plan, &env.analysis).await;
+            let analyzed = self.state.analyzer.analyze(&plan, &env.analysis).await;
             (analyzed, self.authorize_body_reads(env).await)
         })
         .await;

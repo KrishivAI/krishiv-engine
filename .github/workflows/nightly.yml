@@ -7,7 +7,10 @@ name: Nightly (heavy)
 # cargo-fuzz target of `fuzz/` (mutation testing is `mutants.yml`).
 on:
   schedule:
-    - cron: "0 2 * * *"
+    # Off the hour: the top of the hour is when scheduled runs are delayed or dropped most.
+    - cron: "23 22 * * *"
+    # One-off extra runs on 2026-11-13 for the v0.2.0 release (binaries.yml and release.yml still need a green scheduled nightly; publishing no longer does); remove after.
+    - cron: "17 8,10 13 11 *"
   workflow_dispatch:
 
 permissions:
@@ -157,6 +160,12 @@ jobs:
       id-token: write # Codecov OIDC upload (no secret)
     env:
       RUSTC_WRAPPER: "" # no sccache here: instrumented builds are not cacheable
+      # 2026-11-13: the all-features instrumented build filled the runner's disk even after the
+      # cleanup below (119 GB free at the start; "No space left on device", ld Bus error), as the
+      # test binaries grew with the P3 code. Coverage reads the instrumentation's own mapping, not
+      # DWARF, so no debug info at all.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -393,13 +402,15 @@ jobs:
       MINIO_IMAGE: cgr.dev/chainguard/minio@sha256:a1ac4589a5f8136b616e667b48a0bea9719bb10bd45799ea946f24bbedfafde4
       AZURITE_IMAGE: mcr.microsoft.com/azure-storage/azurite@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5 # 3.37.0
       AZ_CLI_IMAGE: mcr.microsoft.com/azure-cli@sha256:a4e2660b4099b76f02001a9316a0eb0dc56e330b5f7d1d1312c932200645bf26
-      # 22 queries over S3 and over the files take about a minute in a debug build (SF1, 12 cores).
-      KRISHIV_TPCH_DIR: ${{ runner.temp }}/tpch-sf1
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      # 22 queries over S3 and over the files take about a minute in a debug build (SF1, 12 cores).
+      # `runner.*` is not available in job-level `env`, so the path is set from a step.
+      - name: TPC-H directory
+        run: echo "KRISHIV_TPCH_DIR=$RUNNER_TEMP/tpch-sf1" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -582,7 +593,9 @@ jobs:
       - name: Pinned tools (sccache, cargo-semver-checks)
         uses: $/.github/actions/install-tool
         with:
-          tool: sccache@0.18.0,cargo-semver-checks@0.43.0
+          # 0.43.0 cannot read the rustdoc JSON (format v61) of the pinned 1.99 toolchain: "unsupported
+          # rustdoc format v61 (supported: v43, v45, v53, v55)"; 0.51.0 checked main against v0.2.0.
+          tool: sccache@0.18.0,cargo-semver-checks@0.51.0
       - name: Check against the last release tag
         run: |
           base=$(git tag --list 'v*' --sort=-v:refname | grep -v -- '-' | head -n1 || true)

@@ -28,6 +28,8 @@ reedline = { workspace = true }
 krishiv-server = { path = "../krishiv-server", version = "=0.2.0", optional = true }
 krishiv-session = { path = "../krishiv-session", version = "=0.2.0", optional = true }
 krishiv-mcp = { path = "../krishiv-mcp", version = "=0.2.0", optional = true }
+krishiv-connect-server = { path = "../krishiv-connect-server", version = "=0.2.0", optional = true }
+axum = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"], optional = true }
 serde_json = { workspace = true }
 mimalloc = { workspace = true, optional = true }
@@ -53,7 +55,23 @@ mcp = ["krishiv/mcp", "dep:krishiv-mcp", "dep:tokio"]
 python = ["krishiv/python"]
 collations-icu = ["krishiv/collations-icu"]
 wasm-udf = ["krishiv/wasm-udf"]
-ui = ["krishiv/ui", "dep:krishiv-server", "krishiv-server/session", "dep:krishiv-session"]
+# `krishiv server`: Spark Connect (gRPC) and the admin server (healthz, readyz, metrics).
+server = [
+    "dep:krishiv-server",
+    "krishiv-server/session",
+    "krishiv-server/metrics-prometheus",
+    "dep:krishiv-session",
+    "dep:krishiv-connect-server",
+    "dep:axum",
+    "dep:tokio",
+    "tokio/net",
+    "tokio/signal",
+    "tokio/sync",
+    "tokio/macros",
+    "tokio/time",
+]
+# The web UI on the admin server.
+ui = ["krishiv/ui", "server"]
 celeborn = ["krishiv/celeborn"]
 mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc", "dep:krishiv-memory"]
 # Live async-task diagnostics over `tokio-console` (P2-T129): off by default;

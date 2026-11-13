@@ -13,6 +13,9 @@ on:
       - "crates/krishiv-cli/src/check_compat/functions.json"
       - "crates/krishiv-functions/**"
       - "crates/krishiv-common/**"
+      - "crates/krishiv-connect/**"
+      - "xtask/src/connect_coverage.rs"
+      - "tests/connect/**"
       - "crates/krishiv-testkit/src/bin/doc-examples.rs"
       - "python/**"
       - ".vale.ini"
@@ -87,6 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo xtask docs-sql --check
+          cargo xtask connect-coverage --check
           python3 tests/scripts/gen_compat_matrix.py --check
           cargo xtask docs-examples --check
           cargo xtask docs-python --check
