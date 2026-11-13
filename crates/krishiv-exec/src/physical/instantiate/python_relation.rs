@@ -195,6 +195,7 @@ impl Instantiation<'_> {
         };
         let udf = self.prepare_relation(&plan.udf, &spec)?;
         let lane = RelationLane {
+            name: plan.udf.name.clone(),
             udf,
             sides,
             names: plan.sides.iter().map(|s| s.names.clone()).collect(),
@@ -271,6 +272,7 @@ impl Instantiation<'_> {
             let prepared = self.prepare_relation(&udf, &spec)?;
             fields.push(Field::new(&name, canonical, true));
             lanes.push(RelationLane {
+                name: udf.name.clone(),
                 udf: prepared,
                 names: vec![arg_names],
                 sides: vec![

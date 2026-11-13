@@ -51,6 +51,8 @@ use krishiv_types::DataType;
 
 use crate::error::Result;
 
+mod lane;
+mod pair;
 pub(crate) mod sink;
 
 pub use sink::{

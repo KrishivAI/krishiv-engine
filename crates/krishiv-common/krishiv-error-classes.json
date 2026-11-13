@@ -105,6 +105,12 @@
     "sqlState" : "58030",
     "audience" : "operator"
   },
+  "KRISHIV_PYTHON_UDF_RESULT_MISMATCH" : {
+    "message" : [
+      "The Python UDF <name> returned a result that does not match what it declares: <reason>. Make the function return the declared columns, in their declared types, and for a grouped aggregate one value per group."
+    ],
+    "sqlState" : "39000"
+  },
   "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
     "message" : [
       "The query was aborted to free memory for other work: it held <heldBytes> bytes, the most of any query, and spilling did not free enough memory in time. Increase \"krishiv.memory.limit\" or run fewer concurrent queries."

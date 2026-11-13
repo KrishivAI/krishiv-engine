@@ -45,6 +45,8 @@ struct Shared {
     fail_at: std::sync::Mutex<Option<usize>>,
     /// Tasks dropped (cancelled or finished).
     dropped: std::sync::atomic::AtomicUsize,
+    /// Result batches the operator read from the tasks.
+    taken: std::sync::atomic::AtomicUsize,
 }
 
 impl Shared {
@@ -67,6 +69,10 @@ enum Yield {
     Nothing,
     /// One row per group: its row count (`BIGINT`).
     Count,
+    /// Two rows per group (an aggregate UDF yielding too many values).
+    CountTwice,
+    /// Each batch back this many times.
+    Burst(usize),
 }
 
 struct Fake {
@@ -146,15 +152,24 @@ impl UdfTask for Task {
             match frame {
                 Frame::Batch { batch, .. } => {
                     s.rows += i64::try_from(batch.num_rows()).unwrap();
-                    if matches!(self.yields, Yield::Twice) {
+                    let copies = match self.yields {
+                        Yield::Twice => 2,
+                        Yield::Burst(n) => n,
+                        Yield::Nothing | Yield::Count | Yield::CountTwice => 0,
+                    };
+                    for _ in 0..copies {
                         s.out.push_back(batch.clone());
-                        s.out.push_back(batch);
                     }
                 }
                 Frame::EndGroup => {
-                    if matches!(self.yields, Yield::Count) {
-                        let n = std::mem::take(&mut s.rows);
-                        s.out.push_back(count(n));
+                    let n = std::mem::take(&mut s.rows);
+                    match self.yields {
+                        Yield::Count => s.out.push_back(count(n)),
+                        Yield::CountTwice => {
+                            s.out.push_back(count(n));
+                            s.out.push_back(count(n));
+                        }
+                        _ => {}
                     }
                 }
                 Frame::End => s.ended = true,
@@ -170,7 +185,10 @@ impl UdfTask for Task {
             self.ready.register(cx.waker());
             let mut s = self.state.lock().unwrap();
             match s.out.pop_front() {
-                Some(b) => Poll::Ready(Ok(Some(b))),
+                Some(b) => {
+                    self.shared.taken.fetch_add(1, Ordering::SeqCst);
+                    Poll::Ready(Ok(Some(b)))
+                }
                 None if s.ended => Poll::Ready(Ok(None)),
                 None => Poll::Pending,
             }
@@ -228,7 +246,7 @@ fn rig(shape: RelationShape, yields: Yield, limits: RelationLimits, limit: usize
     let names = || vec!["k".to_owned(), "v".to_owned()];
     let sides = if cogroup { 2 } else { 1 };
     let (client, output) = match yields {
-        Yield::Count => (
+        Yield::Count | Yield::CountTwice => (
             vec![ArrowType::Int64],
             match shape {
                 RelationShape::Aggregate { .. } => vec![
@@ -238,7 +256,7 @@ fn rig(shape: RelationShape, yields: Yield, limits: RelationLimits, limit: usize
                 _ => vec![Field::new("n", ArrowType::Int64, true)],
             },
         ),
-        Yield::Twice | Yield::Nothing => (
+        Yield::Twice | Yield::Nothing | Yield::Burst(_) => (
             vec![ArrowType::Int32, ArrowType::Int64],
             vec![
                 Field::new("k", ArrowType::Int32, true),
@@ -247,6 +265,7 @@ fn rig(shape: RelationShape, yields: Yield, limits: RelationLimits, limit: usize
         ),
     };
     let lane = RelationLane {
+        name: "f".to_owned(),
         udf: Arc::new(Fake {
             shared: Arc::clone(&shared),
             yields,
@@ -583,6 +602,7 @@ async fn a_result_of_another_width_fails_the_phase() {
     // The task yields `n BIGINT` where `k, v` were declared.
     let shared = Arc::new(Shared::default());
     let lane = RelationLane {
+        name: "f".to_owned(),
         udf: Arc::new(Fake {
             shared: Arc::clone(&shared),
             yields: Yield::Count,
@@ -613,9 +633,91 @@ async fn a_result_of_another_width_fails_the_phase() {
     )
     .unwrap();
     let err = drive(&r, vec![rows(&[1, 2], None)]).await.unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivPythonUdfResultMismatch,
+        "{err}"
+    );
     assert!(
         err.to_string().contains("columns where 2 were declared"),
         "{err}"
     );
     done(r);
+}
+
+#[tokio::test]
+async fn the_window_bounds_the_frames_and_the_rest_waits_in_the_backlog() {
+    let r = rig(RelationShape::Map, Yield::Nothing, limits(1, 2), 64 << 20);
+    r.shared.closed.store(true, Ordering::SeqCst);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let SinkStatus::Blocked(wait) = r
+        .sink
+        .sink(rows(&[1, 2, 3, 4, 5], None), &mut l, &g)
+        .unwrap()
+    else {
+        panic!("five frames over a window of two must block");
+    };
+    // Two frames in flight (one being sent), three rows cut and waiting.
+    assert_eq!(super::sink::queued(&mut l).unwrap(), (vec![2], 3));
+    r.shared.open_gate();
+    tokio::time::timeout(Duration::from_secs(5), wait)
+        .await
+        .unwrap();
+    r.sink.combine(l, &g).unwrap();
+    r.sink.finalize(&g, &r.ctx).await.unwrap();
+    assert_eq!(
+        r.shared.log(),
+        ["B0:1", "B0:1", "B0:1", "B0:1", "B0:1", "E"]
+    );
+    drop(g);
+    done(r);
+}
+
+#[tokio::test]
+async fn a_result_the_pool_refuses_stops_the_task_s_reads_until_reserved() {
+    let limit = 256 << 10;
+    let r = rig(RelationShape::Map, Yield::Burst(64), limits(0, 8), limit);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let keys: Vec<i32> = (0..1000).collect();
+    let status = r.sink.sink(rows(&keys, None), &mut l, &g).unwrap();
+    assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
+    // Each result is reserved as it is read: 64 copies of the input do
+    // not fit, so the task's reads stop at the refused one.
+    let taken = r.shared.taken.load(Ordering::SeqCst);
+    assert!(taken > 0 && taken < 64, "{taken} results read");
+    assert!(r.root.reserved() <= limit);
+    // The next call asks the driver for memory before it takes its input.
+    let status = r.sink.sink(rows(&[1], None), &mut l, &g).unwrap();
+    assert!(
+        matches!(status, SinkStatus::NeedMemory { .. }),
+        "{status:?}"
+    );
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), taken);
+    drop((l, g));
+    assert_eq!(r.shared.dropped.load(Ordering::SeqCst), 1);
+    done(r);
+}
+
+#[tokio::test]
+async fn an_aggregate_task_yielding_another_number_of_values_than_groups_fails() {
+    // Too many values fail as soon as they outnumber the groups.
+    for (yields, values) in [(Yield::CountTwice, " values"), (Yield::Nothing, "0 values")] {
+        let r = rig(
+            RelationShape::Aggregate { keys: vec![0] },
+            yields,
+            limits(0, 16),
+            64 << 20,
+        );
+        let err = drive(&r, vec![rows(&[5, 5, 7], None)]).await.unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::KrishivPythonUdfResultMismatch,
+            "{err}"
+        );
+        assert!(err.to_string().contains(values), "{err}");
+        assert!(err.to_string().contains("values for 2 groups"), "{err}");
+        done(r);
+    }
 }

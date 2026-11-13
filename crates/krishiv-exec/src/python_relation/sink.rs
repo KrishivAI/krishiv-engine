@@ -7,12 +7,13 @@
 //! in a shared plan's list (`crate::shared`: memory under the driver's
 //! consumer, spilled under pressure) that a `SharedSource` reads after
 //! `finalize`. Compute workers never run Python and never wait inside
-//! `sink`: each driver opens one [`UdfTask`] per lane (one UDF; an
-//! aggregate has a lane per call) at its first frame, queues frames, and
-//! while a lane's bounded window of frames in flight is full returns
-//! [`SinkStatus::Blocked`], whose future moves frames and results until
-//! the window has room. Unlike `PythonEval`, output rows are not aligned to
-//! input rows: a task's batches are stored as it yields them.
+//! `sink`: each driver opens one [`UdfTask`](super::UdfTask) per lane (one
+//! UDF; an aggregate has a lane per call) at its first frame, queues frames,
+//! and while a lane's bounded window of frames in flight is full returns
+//! [`SinkStatus::Blocked`], whose future moves frames and results until the
+//! window has room. Unlike `PythonEval`, output rows are not aligned to
+//! input rows: a task's batches are stored as it yields them, by `sink` and
+//! then by `finalize` while the tasks finish.
 //!
 //! **Groups.** The planner sorts a grouped input by its keys after a hash
 //! exchange on them (one partition without keys), so each driver sees a
@@ -21,19 +22,27 @@
 //! with [`Frame::EndGroup`]. A cogroup's input is both relations in one
 //! stream sorted by key then side: a key's left rows, then its right rows;
 //! a side without rows for a key gets one zero-row frame.
-//! Rows are held until a frame is full (`maxRecordsPerBatch`, and
-//! `maxBytesPerBatch` when set) or its group or side ends, as Spark cuts a
-//! group's Arrow stream; a group is never held whole.
+//! Rows are cut into frames of `maxRecordsPerBatch` rows (and
+//! `maxBytesPerBatch` bytes when set) or at the end of their group or side,
+//! as Spark cuts a group's Arrow stream; a group is never held whole.
 //!
-//! **Memory.** Held rows and queued frames are reserved in the driver's
-//! consumer (a refused batch returns `NeedMemory` before anything changes,
-//! so the retry is exact); a frame's reservation is released once the task
-//! took it. Results wait in the lane's queue until the next `sink` call
-//! stores them; an aggregate keeps one key row per group until `finalize`.
+//! **Window.** The window bounds the frames queued per lane and is checked
+//! frame by frame: input rows cut but not framed yet wait in the driver's
+//! backlog (raw rows, reserved), are framed as the window frees, and the
+//! driver is `Blocked` while a lane's window is full.
+//!
+//! **Memory (I11).** Every byte the sink holds is reserved in the driver's
+//! consumer: input rows held or in the backlog, queued frames (the chunk's
+//! rows shared by the lanes' frames, released by the last lane's task to
+//! take it, and the copies made for the client forms), the results a task
+//! yielded until they are stored (`lane.rs`: a refused result stops the
+//! task's reads until reserved), and an aggregate's pending group keys
+//! (`pair.rs`). A refusal in `sink` returns `NeedMemory` before the input
+//! is taken, so the retry is exact; `finalize` waits for the memory.
 //!
 //! **Errors and cancellation.** The first failure of a task fails the
 //! query. Dropping the state (query end, cancel, error) drops every task,
-//! which cancels it.
+//! which cancels it, and every reservation.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -46,11 +55,13 @@ use arrow_row::OwnedRow;
 use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use futures::future::BoxFuture;
 use futures::task::noop_waker_ref;
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivPythonUdfResultMismatch};
 use krishiv_memory::{Reservation, SpillScope};
 use krishiv_types::batch::Batch;
 
-use super::{Frame, PreparedRelationUdf, UdfTask};
+use super::lane::{FrameMem, Lane};
+use super::pair::{self, Pending};
+use super::{Frame, PreparedRelationUdf};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
@@ -101,6 +112,8 @@ impl RelationShape {
 /// frames, per side (expressions over the input; a column read for a map or
 /// grouped kind, an argument for an aggregate).
 pub struct RelationLane {
+    /// The UDF's name, for errors.
+    pub name: String,
     /// The prepared call site.
     pub udf: Arc<dyn PreparedRelationUdf>,
     /// Each side's frame columns, evaluated over the input.
@@ -115,6 +128,7 @@ pub struct RelationLane {
 impl fmt::Debug for RelationLane {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RelationLane")
+            .field("name", &self.name)
             .field("sides", &self.sides)
             .field("names", &self.names)
             .field("client", &self.client)
@@ -236,127 +250,31 @@ impl RelationSink {
     }
 }
 
-/// A lane's queues, shared by the driver and the lane's pump.
-#[derive(Default)]
-struct LaneIo {
-    /// Frames not taken by the task yet, each with its reservation.
-    inbound: VecDeque<(Frame, Reservation)>,
-    /// The reservation of the frame the task is taking.
-    sending: Option<Reservation>,
-    /// Batches the task yielded, not stored yet.
-    outputs: VecDeque<RecordBatch>,
+/// Input rows cut into what a lane's task gets, not framed yet.
+enum Cut {
+    /// Rows of one side (zero for a cogroup side without rows), with the
+    /// reservation of their bytes.
+    Rows {
+        side: u8,
+        rows: RecordBatch,
+        memory: Reservation,
+    },
+    EndGroup,
+    End,
 }
 
-impl LaneIo {
-    fn in_flight(&self) -> usize {
-        self.inbound.len() + usize::from(self.sending.is_some())
-    }
-}
-
-/// The future that moves a lane's frames to its task and its results back.
-enum Pump {
-    /// No frame yet: the task is not open.
-    Idle,
-    Running(BoxFuture<'static, Result<()>>),
-    Done(Result<()>),
-}
-
-/// One lane of one driver.
-#[derive(Clone)]
-struct Lane {
-    io: Arc<Mutex<LaneIo>>,
-    pump: Arc<Mutex<Pump>>,
-}
-
-impl Lane {
-    fn new() -> Self {
-        Self {
-            io: Arc::new(Mutex::new(LaneIo::default())),
-            pump: Arc::new(Mutex::new(Pump::Idle)),
-        }
-    }
-
-    /// Polls the pump; its outcome once it ended (`None` while it runs or
-    /// before the task opened).
-    fn poll(pump: &Mutex<Pump>, cx: &mut Context<'_>) -> Option<Result<()>> {
-        let mut p = lock(pump);
-        if let Pump::Running(f) = &mut *p
-            && let Poll::Ready(r) = f.as_mut().poll(cx)
-        {
-            *p = Pump::Done(r);
-        }
-        match &*p {
-            Pump::Done(r) => Some(r.clone()),
-            Pump::Idle | Pump::Running(_) => None,
-        }
-    }
-
-    fn opened(&self) -> bool {
-        !matches!(*lock(&self.pump), Pump::Idle)
-    }
-
-    /// Queues `frame`, opening the task first if it is not.
-    fn queue(&self, udf: &dyn PreparedRelationUdf, frame: Frame, r: Reservation) -> Result<()> {
-        {
-            let mut p = lock(&self.pump);
-            if matches!(*p, Pump::Idle) {
-                let task = udf.open()?;
-                *p = Pump::Running(pump(task, Arc::clone(&self.io)));
-            }
-        }
-        lock(&self.io).inbound.push_back((frame, r));
-        Ok(())
-    }
-}
-
-/// Sends the queued frames to `task` while it reads the task's results.
-fn pump(task: Box<dyn UdfTask>, io: Arc<Mutex<LaneIo>>) -> BoxFuture<'static, Result<()>> {
-    Box::pin(async move {
-        let task = task;
-        let send = async {
-            loop {
-                // Never woken: whoever queues a frame polls the pump next.
-                let frame = poll_fn(|_| {
-                    let mut q = lock(&io);
-                    match q.inbound.pop_front() {
-                        Some((frame, r)) => {
-                            q.sending = Some(r);
-                            Poll::Ready(frame)
-                        }
-                        None => Poll::Pending,
-                    }
-                })
-                .await;
-                let end = matches!(frame, Frame::End);
-                task.send(frame).await?;
-                lock(&io).sending = None;
-                if end {
-                    return Ok::<(), KrishivError>(());
-                }
-            }
-        };
-        let receive = async {
-            while let Some(batch) = task.next().await? {
-                lock(&io).outputs.push_back(batch);
-            }
-            Ok(())
-        };
-        futures::future::try_join(send, receive).await.map(drop)
-    })
-}
-
-/// One driver's state.
-struct RelLocal {
-    store: LocalState,
+/// One driver's state (and, after `combine`, what `finalize` finishes).
+struct Driver {
     lanes: Vec<Lane>,
-    /// A finished batch the store could not take yet (it asked for memory).
-    ready: Option<Batch>,
+    /// A finished batch the store could not take yet (it asked for
+    /// memory), with the memory of the results it came from.
+    ready: Option<(Batch, Vec<Reservation>)>,
     partition: u32,
     /// The key of the open group's last row seen.
     current: Option<OwnedRow>,
     /// A group is open (grouped shapes).
     group_open: bool,
-    /// Rows of the open group (and side) not sent yet.
+    /// Rows of the open group (and side) not cut yet.
     held: Vec<RecordBatch>,
     held_rows: usize,
     held_side: u8,
@@ -364,23 +282,35 @@ struct RelLocal {
     sides_seen: [bool; 2],
     /// The reservation of the held rows' bytes.
     held_bytes: Reservation,
-    /// An aggregate's group keys, one row per group, in group order.
-    key_rows: Vec<RecordBatch>,
-    key_bytes: Vec<Reservation>,
+    /// Cut, waiting for room in the lanes' windows.
+    backlog: VecDeque<Cut>,
+    /// Memory reserved for the next frame's copies (`finalize` waits for
+    /// it; `sink` asks the driver for it).
+    spare: Reservation,
+    /// An aggregate's groups waiting for their values.
+    pending: Pending,
 }
 
-/// What a driver left at `combine`.
-struct Leftover {
-    lanes: Vec<Lane>,
-    ready: Option<Batch>,
-    key_rows: Vec<RecordBatch>,
-    _key_bytes: Vec<Reservation>,
+/// What [`RelationSink::flush`] stopped at.
+enum Flushed {
+    /// The backlog is empty.
+    All,
+    /// A lane's window is full.
+    Window,
+    /// The next frame's copies need this many more bytes.
+    Memory(usize),
+}
+
+/// One driver's sink state.
+struct RelLocal {
+    store: LocalState,
+    driver: Driver,
 }
 
 /// The global state: the store's, and what drivers left.
 struct RelGlobal {
     store: GlobalState,
-    leftover: Mutex<Vec<Leftover>>,
+    leftover: Mutex<Vec<Driver>>,
 }
 
 /// A run of input rows within one group and side.
@@ -445,22 +375,29 @@ impl RelationSink {
     }
 
     /// The frame of `lane` over `rows` (one side): its columns evaluated,
-    /// in their client forms.
+    /// in their client forms; and the bytes of the columns copied to reach
+    /// them.
     fn frame(
-        &self,
         lane: &RelationLane,
         side: u8,
         rows: &RecordBatch,
         partition: u32,
-    ) -> Result<Frame> {
+    ) -> Result<(Frame, usize)> {
         let exprs = &lane.sides[usize::from(side)];
         let names = &lane.names[usize::from(side)];
         let mut fields = Vec::with_capacity(exprs.len());
         let mut columns = Vec::with_capacity(exprs.len());
+        let mut copied = 0;
         for (e, name) in exprs.iter().zip(names) {
             let a = e.evaluate_in(rows, partition)?;
             let client = krishiv_types::arrow::client_arrow_type(a.data_type());
-            let a = crate::carrier::recarried_array(&a, &client)?;
+            let a = if a.data_type() == &client {
+                a
+            } else {
+                let moved = crate::carrier::recarried_array(&a, &client)?;
+                copied += moved.get_array_memory_size();
+                moved
+            };
             fields.push(Field::new(name, client, e.nullable()));
             columns.push(a);
         }
@@ -468,18 +405,18 @@ impl RelationSink {
         let batch =
             RecordBatch::try_new_with_options(Arc::new(Schema::new(fields)), columns, &options)
                 .map_err(|e| internal(format!("Python UDF frame: {e}")))?;
-        Ok(Frame::Batch { side, batch })
+        Ok((Frame::Batch { side, batch }, copied))
     }
 
-    /// Sends the held rows in frames of at most `maxRecordsPerBatch` rows
+    /// Cuts the held rows into frames of at most `maxRecordsPerBatch` rows
     /// (and `maxBytesPerBatch` bytes); with `all` the rows left over too
     /// (the end of a group or side).
-    fn send_held(&self, l: &mut RelLocal, all: bool) -> Result<()> {
-        if l.held_rows == 0 {
+    fn cut_held(&self, d: &mut Driver, all: bool) -> Result<()> {
+        if d.held_rows == 0 {
             return Ok(());
         }
-        let held = std::mem::take(&mut l.held);
-        let rows = std::mem::take(&mut l.held_rows);
+        let held = std::mem::take(&mut d.held);
+        let rows = std::mem::take(&mut d.held_rows);
         let data = if held.len() == 1 {
             held.into_iter()
                 .next()
@@ -503,36 +440,29 @@ impl RelationSink {
             let len = step.min(rows - offset);
             if len < step && !all {
                 // Too few for a full frame: held for the next input.
-                l.held.push(data.slice(offset, len));
-                l.held_rows = len;
+                d.held.push(data.slice(offset, len));
+                d.held_rows = len;
                 break;
             }
-            let chunk = data.slice(offset, len);
-            let share = l.held_bytes.size() * len / (rows - offset);
-            let mut part = Some(l.held_bytes.split(share));
-            for (lane, state) in self.lanes.iter().zip(&l.lanes) {
-                let frame = self.frame(lane, l.held_side, &chunk, l.partition)?;
-                // The chunk's bytes go with the first lane's frame.
-                let r = match part.take() {
-                    Some(r) => r,
-                    None => l.held_bytes.split(0),
-                };
-                state.queue(lane.udf.as_ref(), frame, r)?;
-            }
+            let share = d.held_bytes.size() * len / (rows - offset);
+            d.backlog.push_back(Cut::Rows {
+                side: d.held_side,
+                rows: data.slice(offset, len),
+                memory: d.held_bytes.split(share),
+            });
             offset += len;
         }
         Ok(())
     }
 
-    /// Sends every lane a zero-row frame of `side`: a cogroup key without
-    /// rows on that side (Spark gives the UDF an empty DataFrame for it).
-    fn empty_side(&self, l: &mut RelLocal, side: u8) -> Result<()> {
-        let empty = RecordBatch::new_empty(Arc::clone(&self.input));
-        for (lane, state) in self.lanes.iter().zip(&l.lanes) {
-            let frame = self.frame(lane, side, &empty, l.partition)?;
-            state.queue(lane.udf.as_ref(), frame, l.held_bytes.split(0))?;
-        }
-        Ok(())
+    /// A zero-row frame of `side`: a cogroup key without rows on that side
+    /// (Spark gives the UDF an empty DataFrame for it).
+    fn empty_side(&self, d: &mut Driver, side: u8) {
+        d.backlog.push_back(Cut::Rows {
+            side,
+            rows: RecordBatch::new_empty(Arc::clone(&self.input)),
+            memory: d.held_bytes.split(0),
+        });
     }
 
     fn cogrouped(&self) -> bool {
@@ -540,80 +470,101 @@ impl RelationSink {
     }
 
     /// Ends the open group: its held rows (a cogroup's empty right side),
-    /// then `EndGroup` to every lane.
-    fn end_group(&self, l: &mut RelLocal) -> Result<()> {
-        self.send_held(l, true)?;
-        if self.cogrouped() && !l.sides_seen[1] {
-            self.empty_side(l, 1)?;
+    /// then `EndGroup`.
+    fn end_group(&self, d: &mut Driver) -> Result<()> {
+        self.cut_held(d, true)?;
+        if self.cogrouped() && !d.sides_seen[1] {
+            self.empty_side(d, 1);
         }
-        for (lane, state) in self.lanes.iter().zip(&l.lanes) {
-            let r = l.held_bytes.split(0);
-            state.queue(lane.udf.as_ref(), Frame::EndGroup, r)?;
-        }
+        d.backlog.push_back(Cut::EndGroup);
         Ok(())
     }
 
-    /// Feeds `batch` (reserved in `held_bytes`) to the lanes.
-    fn feed(
-        &self,
-        l: &mut RelLocal,
-        batch: &RecordBatch,
-        runs: Vec<Run>,
-        keys: Vec<RecordBatch>,
-    ) -> Result<()> {
+    /// Cuts `batch` (reserved in `held_bytes`) into the backlog.
+    fn feed(&self, d: &mut Driver, batch: &RecordBatch, runs: Vec<Run>) -> Result<()> {
         let grouped = self.encoder.is_some();
-        let mut keys = keys.into_iter();
         for run in runs {
             if run.new_group {
-                if l.group_open {
-                    self.end_group(l)?;
+                if d.group_open {
+                    self.end_group(d)?;
                 }
-                l.group_open = true;
-                l.sides_seen = [false; 2];
-                if let Some(k) = keys.next() {
-                    l.key_rows.push(k);
-                }
-            } else if grouped && !l.group_open {
+                d.group_open = true;
+                d.sides_seen = [false; 2];
+            } else if grouped && !d.group_open {
                 return Err(internal("Python UDF rows before their group".to_owned()));
             }
-            if run.side != l.held_side {
-                self.send_held(l, true)?;
-                l.held_side = run.side;
+            if run.side != d.held_side {
+                self.cut_held(d, true)?;
+                d.held_side = run.side;
             }
-            if self.cogrouped() && run.side == 1 && !l.sides_seen[0] {
+            if self.cogrouped() && run.side == 1 && !d.sides_seen[0] {
                 // A key on the right only: its empty left side first.
-                self.empty_side(l, 0)?;
+                self.empty_side(d, 0);
             }
-            l.sides_seen[usize::from(run.side)] = true;
-            l.held.push(batch.slice(run.start, run.len));
-            l.held_rows += run.len;
-            self.send_held(l, false)?;
+            d.sides_seen[usize::from(run.side)] = true;
+            d.held.push(batch.slice(run.start, run.len));
+            d.held_rows += run.len;
+            self.cut_held(d, false)?;
         }
         Ok(())
     }
 
-    /// The copied key row of each run starting a group (an aggregate's).
-    fn key_rows(&self, batch: &RecordBatch, runs: &[Run]) -> Result<Vec<RecordBatch>> {
-        let (RelationShape::Aggregate { keys }, Some(schema)) = (&self.shape, &self.key_schema)
-        else {
-            return Ok(Vec::new());
-        };
-        let projected = batch
-            .project(keys)
-            .map_err(|e| internal(format!("aggregate keys: {e}")))?;
-        let projected = RecordBatch::try_new_with_options(
-            Arc::clone(schema),
-            projected.columns().to_vec(),
-            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
-        )
-        .map_err(|e| internal(format!("aggregate keys: {e}")))?;
-        runs.iter()
-            .filter(|r| r.new_group)
-            .map(|r| {
-                arrow_select::concat::concat_batches(schema, [&projected.slice(r.start, 1)])
-                    .map_err(|e| internal(format!("aggregate keys: {e}")))
-            })
-            .collect()
+    /// Frames the backlog into the lanes while every lane's window has
+    /// room. Nothing changes for a frame whose copies the pool refuses.
+    fn flush(&self, d: &mut Driver) -> Result<Flushed> {
+        loop {
+            if d.lanes
+                .iter()
+                .any(|l| lock(&l.io).in_flight() >= self.window)
+            {
+                return Ok(Flushed::Window);
+            }
+            let Some(cut) = d.backlog.front() else {
+                return Ok(Flushed::All);
+            };
+            match cut {
+                Cut::Rows { side, rows, .. } => {
+                    let mut frames = Vec::with_capacity(self.lanes.len());
+                    for lane in &self.lanes {
+                        frames.push(Self::frame(lane, *side, rows, d.partition)?);
+                    }
+                    let copied: usize = frames.iter().map(|(_, c)| c).sum();
+                    let more = copied.saturating_sub(d.spare.size());
+                    if more > 0 && d.spare.try_grow(more).is_err() {
+                        return Ok(Flushed::Memory(more));
+                    }
+                    let Some(Cut::Rows { memory, .. }) = d.backlog.pop_front() else {
+                        return Err(internal("the Python UDF backlog changed".to_owned()));
+                    };
+                    let shared = Arc::new(Mutex::new(memory));
+                    for ((lane, state), (frame, copied)) in
+                        self.lanes.iter().zip(&d.lanes).zip(frames)
+                    {
+                        let memory = FrameMem {
+                            _shared: Some(Arc::clone(&shared)),
+                            _own: d.spare.split(copied),
+                        };
+                        state.queue(lane.udf.as_ref(), frame, memory)?;
+                    }
+                }
+                Cut::EndGroup | Cut::End => {
+                    let end = matches!(cut, Cut::End);
+                    d.backlog.pop_front();
+                    for (lane, state) in self.lanes.iter().zip(&d.lanes) {
+                        // A task never opened (no rows) gets no `End`.
+                        if end && !state.opened() {
+                            continue;
+                        }
+                        let frame = if end { Frame::End } else { Frame::EndGroup };
+                        let memory = FrameMem {
+                            _shared: None,
+                            _own: d.spare.split(0),
+                        };
+                        state.queue(lane.udf.as_ref(), frame, memory)?;
+                    }
+                }
+            }
+        }
     }
 
     /// A task's batch as an output batch: its columns checked against the
@@ -622,11 +573,14 @@ impl RelationSink {
     /// the engine's own guard.
     fn output(&self, lane: &RelationLane, batch: &RecordBatch) -> Result<Batch> {
         if batch.num_columns() != lane.client.len() {
-            return Err(internal(format!(
-                "a Python UDF returned {} columns where {} were declared",
-                batch.num_columns(),
-                lane.client.len()
-            )));
+            return Err(mismatch(
+                lane,
+                format!(
+                    "{} columns where {} were declared",
+                    batch.num_columns(),
+                    lane.client.len()
+                ),
+            ));
         }
         let mut columns = Vec::with_capacity(batch.num_columns());
         for ((c, client), field) in batch
@@ -635,79 +589,49 @@ impl RelationSink {
             .zip(&lane.client)
             .zip(self.schema.fields())
         {
-            columns.push(recarried(c, client, field.data_type())?);
+            columns.push(recarried(lane, c, client, field.data_type())?);
         }
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
         let out = RecordBatch::try_new_with_options(Arc::clone(&self.schema), columns, &options)
-            .map_err(|e| internal(format!("a Python UDF result does not fit its schema: {e}")))?;
+            .map_err(|e| mismatch(lane, format!("{e}")))?;
         Ok(Batch::new(out))
     }
 
-    /// An aggregate driver's rows: each group's keys, then each lane's value
-    /// of it.
-    fn aggregate_rows(&self, key_rows: &[RecordBatch], lanes: &[Lane]) -> Result<Option<Batch>> {
-        let Some(schema) = &self.key_schema else {
-            return Ok(None);
-        };
-        if key_rows.is_empty() {
-            return Ok(None);
+    /// The next finished output batch of a driver, with the memory of the
+    /// results it came from: a lane's next result (map and grouped shapes)
+    /// or the groups every lane has a value for (aggregate).
+    fn next_output(&self, d: &mut Driver) -> Result<Option<(Batch, Vec<Reservation>)>> {
+        if let (RelationShape::Aggregate { .. }, Some(key_schema)) = (&self.shape, &self.key_schema)
+        {
+            return pair::joined(
+                &mut d.pending,
+                key_schema,
+                &self.schema,
+                &self.lanes,
+                &d.lanes,
+            );
         }
-        let groups = key_rows.iter().map(RecordBatch::num_rows).sum::<usize>();
-        let keys = arrow_select::concat::concat_batches(schema, key_rows)
-            .map_err(|e| internal(format!("aggregate keys: {e}")))?;
-        let mut columns: Vec<ArrayRef> = keys.columns().to_vec();
-        let width = columns.len();
-        for (i, (lane, state)) in self.lanes.iter().zip(lanes).enumerate() {
-            let outputs: Vec<RecordBatch> = lock(&state.io).outputs.drain(..).collect();
-            let values: Vec<&ArrayRef> = outputs
-                .iter()
-                .map(|b| {
-                    if b.num_columns() == 1 {
-                        Ok(b.column(0))
-                    } else {
-                        Err(internal(format!(
-                            "a Python aggregate UDF returned {} columns",
-                            b.num_columns()
-                        )))
-                    }
-                })
-                .collect::<Result<_>>()?;
-            let refs: Vec<&dyn Array> = values.iter().map(|a| AsRef::as_ref(*a)).collect();
-            let client = lane
-                .client
-                .first()
-                .ok_or_else(|| internal("an aggregate lane without a type".to_owned()))?;
-            let column = if refs.is_empty() {
-                arrow_array::new_empty_array(client)
-            } else {
-                arrow_select::concat::concat(&refs)
-                    .map_err(|e| internal(format!("aggregate results: {e}")))?
-            };
-            if column.len() != groups {
-                return Err(internal(format!(
-                    "a Python aggregate UDF returned {} rows for {groups} groups",
-                    column.len()
-                )));
+        for (lane, state) in self.lanes.iter().zip(&d.lanes) {
+            let next = lock(&state.io).outputs.pop_front();
+            if let Some((batch, memory)) = next {
+                return Ok(Some((self.output(lane, &batch)?, vec![memory])));
             }
-            let field = self
-                .schema
-                .fields()
-                .get(width + i)
-                .ok_or_else(|| internal("an aggregate result out of its schema".to_owned()))?;
-            columns.push(recarried(&column, client, field.data_type())?);
         }
-        let options = RecordBatchOptions::new().with_row_count(Some(groups));
-        let out = RecordBatch::try_new_with_options(Arc::clone(&self.schema), columns, &options)
-            .map_err(|e| internal(format!("a Python aggregate result: {e}")))?;
-        Ok(Some(Batch::new(out)))
+        Ok(None)
     }
 
     /// Stores `batch` in the list, or keeps it for the retry after the
     /// memory the store asked for.
-    fn store(&self, l: &mut RelLocal, batch: Batch, g: &RelGlobal) -> Result<Option<SinkStatus>> {
+    fn store(
+        &self,
+        l: &mut RelLocal,
+        batch: Batch,
+        memory: Vec<Reservation>,
+        g: &RelGlobal,
+    ) -> Result<Option<SinkStatus>> {
         match self.store.sink(batch.clone(), &mut l.store, &g.store)? {
             SinkStatus::NeedMemory { bytes } => {
-                l.ready = Some(batch);
+                l.driver.ready = Some((batch, memory));
                 Ok(Some(SinkStatus::NeedMemory { bytes }))
             }
             _ => Ok(None),
@@ -716,26 +640,119 @@ impl RelationSink {
 
     /// Moves each lane's frames and results without waiting; the first
     /// failure of a lane.
-    fn progress(l: &RelLocal) -> Result<()> {
+    fn progress(d: &Driver) -> Result<()> {
         let mut cx = Context::from_waker(noop_waker_ref());
-        for lane in &l.lanes {
-            if let Some(Err(e)) = Lane::poll(&lane.pump, &mut cx) {
+        for lane in &d.lanes {
+            if let Some(Err(e)) = lane.poll(&mut cx) {
                 return Err(e);
             }
         }
         Ok(())
     }
+
+    /// Stores what the driver's tasks yielded, reserving refused results
+    /// first; a status to return if the pool or the store asked for memory.
+    fn store_results(&self, l: &mut RelLocal, g: &RelGlobal) -> Result<Option<SinkStatus>> {
+        if let Some((ready, memory)) = l.driver.ready.take()
+            && let Some(status) = self.store(l, ready, memory, g)?
+        {
+            return Ok(Some(status));
+        }
+        Self::progress(&l.driver)?;
+        while let Some((batch, memory)) = self.next_output(&mut l.driver)? {
+            if let Some(status) = self.store(l, batch, memory, g)? {
+                return Ok(Some(status));
+            }
+        }
+        for lane in &l.driver.lanes {
+            if let Some(bytes) = lane.try_take_refused() {
+                return Ok(Some(SinkStatus::NeedMemory { bytes }));
+            }
+        }
+        // The pumps read on past a result just reserved.
+        Self::progress(&l.driver)?;
+        Ok(None)
+    }
+
+    /// Takes `input` into the backlog: `NeedMemory` (nothing changed) if
+    /// the pool refuses its bytes.
+    fn take_input(&self, d: &mut Driver, input: Batch) -> Result<Option<SinkStatus>> {
+        if !input.is_unweighted() {
+            // A retracting row sent to Python would come back as an insert.
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: "a weighted (change-stream) input to a Python UDF relation".to_owned(),
+            }
+            .into());
+        }
+        let input = crate::operators::owned_rows(input)?;
+        let data = input.data();
+        let (runs, last) = self.runs(data, d.current.as_ref())?;
+        let keys = match (&self.shape, &self.key_schema) {
+            (RelationShape::Aggregate { keys }, Some(schema)) => {
+                let starts: Vec<u32> = runs
+                    .iter()
+                    .filter(|r| r.new_group)
+                    .map(|r| u32::try_from(r.start))
+                    .collect::<std::result::Result<_, _>>()
+                    .map_err(|_| internal("a batch over u32 rows".to_owned()))?;
+                pair::key_rows(data, keys, schema, &starts)?
+            }
+            _ => None,
+        };
+        let key_bytes = keys.as_ref().map_or(0, RecordBatch::get_array_memory_size);
+        let bytes = data.get_array_memory_size() + key_bytes;
+        if d.held_bytes.try_grow(bytes).is_err() {
+            return Ok(Some(SinkStatus::NeedMemory { bytes }));
+        }
+        if let Some(keys) = keys {
+            let memory = d.held_bytes.split(key_bytes);
+            d.pending.push(keys, memory);
+        }
+        self.feed(d, data, runs)?;
+        d.current = last;
+        Ok(None)
+    }
+}
+
+/// A result that does not match what the UDF declared.
+pub(super) fn mismatch(lane: &RelationLane, reason: String) -> KrishivError {
+    KrishivPythonUdfResultMismatch {
+        name: lane.name.clone(),
+        reason,
+    }
+    .into()
 }
 
 /// `c` checked to be `client`, moved to the canonical `canonical`.
-fn recarried(c: &ArrayRef, client: &ArrowType, canonical: &ArrowType) -> Result<ArrayRef> {
+pub(super) fn recarried(
+    lane: &RelationLane,
+    c: &ArrayRef,
+    client: &ArrowType,
+    canonical: &ArrowType,
+) -> Result<ArrayRef> {
     if c.data_type() != client {
-        return Err(internal(format!(
-            "a Python UDF returned {} where {client} was declared",
-            c.data_type()
-        )));
+        return Err(mismatch(
+            lane,
+            format!("{} where {client} was declared", c.data_type()),
+        ));
     }
     crate::carrier::recarried_array(c, canonical)
+}
+
+/// The future of a `Blocked` driver: ready once every lane's window has
+/// room, a lane ended (its failure is the next call's), or a result waits
+/// for memory (the next call asks for it).
+fn blocked(lanes: Vec<Lane>, window: usize) -> BoxFuture<'static, ()> {
+    Box::pin(poll_fn(move |cx| {
+        let mut room = true;
+        for lane in &lanes {
+            if lane.poll(cx).is_some() || lock(&lane.io).refused.is_some() {
+                return Poll::Ready(());
+            }
+            room &= lock(&lane.io).in_flight() < window;
+        }
+        if room { Poll::Ready(()) } else { Poll::Pending }
+    }))
 }
 
 impl Sink for RelationSink {
@@ -755,18 +772,25 @@ impl Sink for RelationSink {
         let consumer = ctx.consumer().consumer();
         Ok(Box::new(RelLocal {
             store: self.store.local_state(ctx, &g.store)?,
-            lanes: self.lanes.iter().map(|_| Lane::new()).collect(),
-            ready: None,
-            partition: ctx.partition(),
-            current: None,
-            group_open: false,
-            held: Vec::new(),
-            held_rows: 0,
-            held_side: 0,
-            sides_seen: [false; 2],
-            held_bytes: consumer.reservation(),
-            key_rows: Vec::new(),
-            key_bytes: Vec::new(),
+            driver: Driver {
+                lanes: self
+                    .lanes
+                    .iter()
+                    .map(|_| Lane::new(consumer.reservation()))
+                    .collect(),
+                ready: None,
+                partition: ctx.partition(),
+                current: None,
+                group_open: false,
+                held: Vec::new(),
+                held_rows: 0,
+                held_side: 0,
+                sides_seen: [false; 2],
+                held_bytes: consumer.reservation(),
+                backlog: VecDeque::new(),
+                spare: consumer.reservation(),
+                pending: Pending::default(),
+            },
         }))
     }
 
@@ -778,63 +802,28 @@ impl Sink for RelationSink {
     ) -> Result<SinkStatus> {
         let g = global_ref::<RelGlobal>(global, "PythonRelation")?;
         let l = local_mut::<RelLocal>(local, "PythonRelation")?;
-        // Store what finished first: a `NeedMemory` here leaves the input
-        // unsent, so the retry with the same batch is exact.
-        if let Some(ready) = l.ready.take()
-            && let Some(status) = self.store(l, ready, g)?
-        {
+        // Results and the backlog first: a `NeedMemory` here leaves the
+        // input untaken, so the retry with the same batch is exact.
+        if let Some(status) = self.store_results(l, g)? {
             return Ok(status);
         }
-        Self::progress(l)?;
-        if !matches!(self.shape, RelationShape::Aggregate { .. }) {
-            loop {
-                let next = l.lanes.iter().zip(&self.lanes).find_map(|(state, lane)| {
-                    lock(&state.io).outputs.pop_front().map(|b| (lane, b))
-                });
-                let Some((lane, batch)) = next else { break };
-                let batch = self.output(lane, &batch)?;
-                if let Some(status) = self.store(l, batch, g)? {
-                    return Ok(status);
-                }
-            }
+        if let Flushed::Memory(bytes) = self.flush(&mut l.driver)? {
+            return Ok(SinkStatus::NeedMemory { bytes });
         }
         if input.num_rows() > 0 {
-            let input = crate::operators::owned_rows(input)?;
-            let data = input.data();
-            let (runs, last) = self.runs(data, l.current.as_ref())?;
-            let keys = self.key_rows(data, &runs)?;
-            let key_bytes: usize = keys.iter().map(RecordBatch::get_array_memory_size).sum();
-            let bytes = data.get_array_memory_size();
-            if l.held_bytes.try_grow(bytes + key_bytes).is_err() {
-                return Ok(SinkStatus::NeedMemory {
-                    bytes: bytes + key_bytes,
-                });
+            if let Some(status) = self.take_input(&mut l.driver, input)? {
+                return Ok(status);
             }
-            let part = l.held_bytes.split(key_bytes);
-            l.key_bytes.push(part);
-            self.feed(l, data, runs, keys)?;
-            l.current = last;
-            Self::progress(l)?;
+            // A refusal here waits for the next call, which asks for it.
+            self.flush(&mut l.driver)?;
+            Self::progress(&l.driver)?;
         }
-        let full = l
-            .lanes
+        let d = &l.driver;
+        if d.lanes
             .iter()
-            .any(|lane| lock(&lane.io).in_flight() >= self.window);
-        if full {
-            let lanes: Vec<Lane> = l.lanes.clone();
-            let window = self.window;
-            return Ok(SinkStatus::Blocked(Box::pin(poll_fn(move |cx| {
-                let mut room = true;
-                for lane in &lanes {
-                    // A lane that ended (or failed) frees the driver: the
-                    // next `sink` call returns its failure.
-                    if Lane::poll(&lane.pump, cx).is_some() {
-                        return Poll::Ready(());
-                    }
-                    room &= lock(&lane.io).in_flight() < window;
-                }
-                if room { Poll::Ready(()) } else { Poll::Pending }
-            }))));
+            .any(|lane| lock(&lane.io).in_flight() >= self.window)
+        {
+            return Ok(SinkStatus::Blocked(blocked(d.lanes.clone(), self.window)));
         }
         Ok(SinkStatus::NeedMoreInput)
     }
@@ -844,34 +833,18 @@ impl Sink for RelationSink {
         let l = local
             .downcast::<RelLocal>()
             .map_err(|_| internal("wrong local state for PythonRelation".to_owned()))?;
-        let mut l = *l;
-        // The input ended: the open group ends, then the partition.
-        if l.group_open {
-            self.end_group(&mut l)?;
+        let RelLocal { store, mut driver } = *l;
+        // The input ended: the open group ends, then the partition. What the
+        // windows do not take now, `finalize` frames.
+        if driver.group_open {
+            self.end_group(&mut driver)?;
         } else {
-            self.send_held(&mut l, true)?;
+            self.cut_held(&mut driver, true)?;
         }
-        for (lane, state) in self.lanes.iter().zip(&l.lanes) {
-            if state.opened() {
-                let r = l.held_bytes.split(0);
-                state.queue(lane.udf.as_ref(), Frame::End, r)?;
-            }
-        }
-        RelationSink::progress(&l)?;
-        let RelLocal {
-            store,
-            lanes,
-            ready,
-            key_rows,
-            key_bytes,
-            ..
-        } = l;
-        lock(&g.leftover).push(Leftover {
-            lanes,
-            ready,
-            key_rows,
-            _key_bytes: key_bytes,
-        });
+        driver.backlog.push_back(Cut::End);
+        self.flush(&mut driver)?;
+        Self::progress(&driver)?;
+        lock(&g.leftover).push(driver);
         self.store.combine(store, &g.store)
     }
 
@@ -882,53 +855,27 @@ impl Sink for RelationSink {
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let g = global_ref::<RelGlobal>(global, "PythonRelation")?;
-            let leftover = std::mem::take(&mut *lock(&g.leftover));
-            // Every task at once: the first failure (or a cancel) ends the
-            // wait, and the error drops the other tasks, which cancels them.
-            let mut cancelled = std::pin::pin!(ctx.query().cancelled());
-            poll_fn(|cx| {
-                if cancelled.as_mut().poll(cx).is_ready() {
-                    return Poll::Ready(Err(ctx.query().cancellation()));
-                }
-                let mut all = true;
-                for lane in leftover.iter().flat_map(|d| &d.lanes) {
-                    match Lane::poll(&lane.pump, cx) {
-                        Some(Err(e)) => return Poll::Ready(Err(e)),
-                        Some(Ok(())) => {}
-                        None => all &= !lane.opened(),
-                    }
-                }
-                if all {
-                    Poll::Ready(Ok(()))
-                } else {
-                    Poll::Pending
-                }
-            })
-            .await?;
-            for driver in leftover {
+            let mut drivers = std::mem::take(&mut *lock(&g.leftover));
+            // Every task at once; results are stored as they arrive. The
+            // first failure (or a cancel) ends the phase, and the error
+            // drops the other tasks, which cancels them.
+            loop {
                 ctx.query().check_cancelled()?;
-                let mut batches: Vec<Batch> = driver.ready.into_iter().collect();
-                if matches!(self.shape, RelationShape::Aggregate { .. }) {
-                    batches.extend(self.aggregate_rows(&driver.key_rows, &driver.lanes)?);
-                } else {
-                    for (lane, state) in self.lanes.iter().zip(&driver.lanes) {
-                        let outputs: Vec<RecordBatch> = lock(&state.io).outputs.drain(..).collect();
-                        for b in &outputs {
-                            batches.push(self.output(lane, b)?);
-                        }
-                    }
+                let mut done = true;
+                for d in &mut drivers {
+                    done &= self.finish_step(d, g, ctx).await?;
                 }
-                if batches.is_empty() {
-                    continue;
+                if done {
+                    break;
                 }
-                let bytes = batches
-                    .iter()
-                    .map(|b| b.data().get_array_memory_size())
-                    .sum();
-                let mut reservation = ctx.consumer().reservation();
-                reservation.grow(bytes).await.map_err(KrishivError::from)?;
-                self.store.add_part(&g.store, batches, reservation)?;
+                self.wait(&drivers, ctx).await?;
             }
+            if matches!(self.shape, RelationShape::Aggregate { .. }) {
+                for d in &drivers {
+                    pair::check_complete(&d.pending, &self.lanes, &d.lanes)?;
+                }
+            }
+            drop(drivers);
             self.store.finalize(&g.store, ctx).await
         })
     }
@@ -944,6 +891,97 @@ impl Sink for RelationSink {
             self.store.spill(&mut l.store, target, ctx).await
         })
     }
+}
+
+impl RelationSink {
+    /// One step of a finished driver in `finalize`: the backlog framed as
+    /// far as the windows allow (waiting for the copies' memory), the
+    /// results stored (written to a spill file when the pool has no room),
+    /// then refused results reserved. Whether the driver
+    /// is done: no backlog, every task ended, every result stored.
+    async fn finish_step(&self, d: &mut Driver, g: &RelGlobal, ctx: &TaskContext) -> Result<bool> {
+        while let Flushed::Memory(bytes) = self.flush(d)? {
+            d.spare.grow(bytes).await.map_err(KrishivError::from)?;
+        }
+        let mut batches = Vec::new();
+        let mut held = Vec::new();
+        if let Some((batch, memory)) = d.ready.take() {
+            batches.push(batch);
+            held.extend(memory);
+        }
+        while let Some((batch, memory)) = self.next_output(d)? {
+            batches.push(batch);
+            held.extend(memory);
+        }
+        if !batches.is_empty() {
+            let bytes = batches
+                .iter()
+                .map(|b| b.data().get_array_memory_size())
+                .sum();
+            // Kept in memory if the pool has room, else written out: the
+            // list can spill only once the store finalized.
+            let mut reservation = ctx.consumer().reservation();
+            if reservation.try_grow(bytes).is_ok() {
+                self.store.add_part(&g.store, batches, reservation)?;
+            } else {
+                drop(reservation);
+                self.store.add_spilled_part(&g.store, batches, ctx).await?;
+            }
+        }
+        drop(held);
+        // The results' memory is free again: a refused result next.
+        for lane in &d.lanes {
+            lane.take_refused().await?;
+        }
+        Ok(d.backlog.is_empty()
+            && d.ready.is_none()
+            && d.lanes
+                .iter()
+                .all(|l| l.finished() && !lock(&l.io).has_results()))
+    }
+
+    /// Waits until a driver can move: a lane yielded, failed, ended or
+    /// freed room in its window for a backlog; or the query was cancelled.
+    async fn wait(&self, drivers: &[Driver], ctx: &TaskContext) -> Result<()> {
+        let mut cancelled = std::pin::pin!(ctx.query().cancelled());
+        poll_fn(|cx| {
+            if cancelled.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(Err(ctx.query().cancellation()));
+            }
+            let mut ready = false;
+            let mut all_done = true;
+            for d in drivers {
+                let mut room = true;
+                for lane in &d.lanes {
+                    if let Some(Err(e)) = lane.poll(cx) {
+                        return Poll::Ready(Err(e));
+                    }
+                    all_done &= lane.finished();
+                    let q = lock(&lane.io);
+                    ready |= q.has_results();
+                    room &= q.in_flight() < self.window;
+                }
+                ready |= room && !d.backlog.is_empty();
+                all_done &= d.backlog.is_empty() && d.ready.is_none();
+            }
+            if ready || all_done {
+                Poll::Ready(Ok(()))
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
+    }
+}
+
+/// Per lane the frames in flight, and the cuts in the backlog, of a
+/// driver's state.
+#[cfg(test)]
+pub(super) fn queued(local: &mut LocalState) -> Result<(Vec<usize>, usize)> {
+    let l = local_mut::<RelLocal>(local, "PythonRelation")?;
+    let d = &l.driver;
+    let lanes = d.lanes.iter().map(|l| lock(&l.io).in_flight()).collect();
+    Ok((lanes, d.backlog.len()))
 }
 
 /// The global state a relation node's reader takes its list from: the

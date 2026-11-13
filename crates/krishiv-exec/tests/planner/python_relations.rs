@@ -31,6 +31,8 @@ enum Mode {
     Echo,
     /// Each batch back twice.
     Twice,
+    /// Each batch back eight times.
+    Burst,
     /// One `BIGINT` per group (per partition without groups): its rows.
     Count,
 }
@@ -63,6 +65,7 @@ impl UdfRuntime for Runtime {
         let mode = match spec.name.as_str() {
             "echo" => Mode::Echo,
             "twice" => Mode::Twice,
+            "burst" => Mode::Burst,
             _ => Mode::Count,
         };
         assert_eq!(spec.input_names.len(), spec.input_types.len(), "{spec:?}");
@@ -197,10 +200,12 @@ impl UdfTask for Task {
                         RecordBatch::try_new(Arc::clone(&self.output), batch.columns().to_vec());
                     match self.mode {
                         Mode::Echo => s.out.push_back(back.unwrap()),
-                        Mode::Twice => {
+                        Mode::Twice | Mode::Burst => {
                             let back = back.unwrap();
-                            s.out.push_back(back.clone());
-                            s.out.push_back(back);
+                            let n = if self.mode == Mode::Twice { 2 } else { 8 };
+                            for _ in 0..n {
+                                s.out.push_back(back.clone());
+                            }
                         }
                         Mode::Count => {}
                     }
@@ -660,26 +665,27 @@ fn a_worker_without_a_runtime_refuses_the_plan() {
     );
 }
 
-#[test]
-fn a_skewed_group_runs_through_the_spilling_sort_in_bounded_memory() {
+/// A table `big (k INT, v BIGINT)` of `rows` rows keyed by `key`, `node`
+/// over its scan planned and run under a 4 MiB limit with a spill
+/// directory: the results, and the spill files written.
+fn run_big(
+    rows: i32,
+    key: impl Fn(i32) -> i32,
+    node: impl FnOnce(Arc<LogicalPlan>, &BoundColumn) -> LogicalPlan,
+) -> (Vec<RecordBatch>, u64) {
     use krishiv_exec::planner::{MemoryTable, MemoryTables};
     use krishiv_memory::{MemoryConfig, SpillConfig, SpillManager, TreePool};
     use krishiv_types::batch::Batch;
 
-    const ROWS: i32 = 300_000;
     let schema = Arc::new(Schema::new(vec![
         Field::new("k", ArrowType::Int32, false),
         Field::new("v", ArrowType::Int64, false),
     ]));
-    // One key of 270k rows (90%), the rest in keys of 100 rows; the
-    // brief's 1M/900k shape shrunk to stay near 10 s in debug builds.
-    let batches: Vec<Batch> = (0..ROWS)
+    let batches: Vec<Batch> = (0..rows)
         .step_by(8192)
         .map(|start| {
-            let end = (start + 8192).min(ROWS);
-            let k: Int32Array = (start..end)
-                .map(|i| if i < 270_000 { 0 } else { 1 + i / 100 })
-                .collect();
+            let end = (start + 8192).min(rows);
+            let k: Int32Array = (start..end).map(&key).collect();
             let v: Int64Array = (start..end).map(i64::from).collect();
             Batch::new(
                 RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(v)]).unwrap(),
@@ -704,13 +710,7 @@ fn a_skewed_group_runs_through_the_spilling_sort_in_bounded_memory() {
         output: vec![k.clone(), v],
         version: None,
     }));
-    let node = LogicalPlan::new(PlanNode::GroupMap {
-        input: Arc::new(scan),
-        keys: vec![col(&k)],
-        udf: udf("count", PythonEvalType::GroupedMapArrow),
-        output: counted(),
-    });
-    let plan = Plan::try_new(node).unwrap();
+    let plan = Plan::try_new(node(Arc::new(scan), &k)).unwrap();
     let cx = krishiv_exec::planner::PlanningContext::new(
         Arc::clone(&tables) as _,
         Arc::new(krishiv_common::config::Config::new()),
@@ -738,6 +738,34 @@ fn a_skewed_group_runs_through_the_spilling_sort_in_bounded_memory() {
     });
     let (out, query) = super::run_in(&runnable, &root);
     let out = out.unwrap();
+    let files: u64 = query
+        .metrics()
+        .operators
+        .values()
+        .map(|o| o.metrics.spill_files)
+        .sum();
+    drop(query);
+    assert_eq!(krishiv_memory::MemoryPool::reserved(&*root), 0);
+    (out, files)
+}
+
+#[test]
+fn a_skewed_group_runs_through_the_spilling_sort_in_bounded_memory() {
+    const ROWS: i32 = 300_000;
+    // One key of 270k rows (90%), the rest in keys of 100 rows; the
+    // brief's 1M/900k shape shrunk to stay near 10 s in debug builds.
+    let (out, files) = run_big(
+        ROWS,
+        |i| if i < 270_000 { 0 } else { 1 + i / 100 },
+        |scan, k| {
+            LogicalPlan::new(PlanNode::GroupMap {
+                input: scan,
+                keys: vec![col(k)],
+                udf: udf("count", PythonEvalType::GroupedMapArrow),
+                output: counted(),
+            })
+        },
+    );
     let mut counts: Vec<i64> = out
         .iter()
         .flat_map(|b| {
@@ -753,13 +781,31 @@ fn a_skewed_group_runs_through_the_spilling_sort_in_bounded_memory() {
     assert_eq!(counts.len(), 301);
     assert_eq!(counts.last(), Some(&270_000));
     assert_eq!(counts.iter().sum::<i64>(), i64::from(ROWS));
-    let files: u64 = query
-        .metrics()
-        .operators
-        .values()
-        .map(|o| o.metrics.spill_files)
-        .sum();
     assert!(files > 0, "the sort did not spill");
-    drop(query);
-    assert_eq!(krishiv_memory::MemoryPool::reserved(&*root), 0);
+}
+
+/// A task yielding eight times its input under a 4 MiB limit: its results
+/// are reserved as they arrive, so the store spills them and the task waits
+/// for memory instead of piling up results nobody accounts for.
+#[test]
+fn a_task_yielding_far_more_than_its_input_runs_in_bounded_memory() {
+    const ROWS: i32 = 100_000;
+    let (out, files) = run_big(
+        ROWS,
+        |i| i % 7,
+        |scan, k| {
+            LogicalPlan::new(PlanNode::MapPartitions {
+                input: scan,
+                udf: udf("burst", PythonEvalType::MapArrowIter),
+                output: vec![
+                    bound(900, "k", k.data_type.clone()),
+                    bound(901, "v", DataType::Long),
+                ],
+                barrier: false,
+            })
+        },
+    );
+    let rows: usize = out.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(rows, 8 * ROWS as usize);
+    assert!(files > 0, "the results did not spill");
 }
