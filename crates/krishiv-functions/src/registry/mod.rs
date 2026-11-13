@@ -17,6 +17,7 @@ mod array_edit;
 mod array_scan;
 mod array_set;
 mod array_shape;
+mod avro;
 mod bitwise;
 mod catalog;
 mod collection;

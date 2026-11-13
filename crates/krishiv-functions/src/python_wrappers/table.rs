@@ -21,6 +21,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>>", "operator"),
     ("if", "no PySpark function"),
     (
+        "from_avro",
+        "PySpark has it in `pyspark.sql.avro.functions`, not `pyspark.sql.functions`",
+    ),
+    (
+        "to_avro",
+        "PySpark has it in `pyspark.sql.avro.functions`, not `pyspark.sql.functions`",
+    ),
+    (
         "stack",
         "generator: rewritten by the analyzer, no PySpark function",
     ),

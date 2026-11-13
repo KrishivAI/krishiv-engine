@@ -2398,6 +2398,7 @@ dependencies = [
  "fancy-regex",
  "getrandom 0.4.3",
  "krishiv-common",
+ "krishiv-io",
  "krishiv-kernels",
  "krishiv-types",
  "krishiv-udf-sdk",

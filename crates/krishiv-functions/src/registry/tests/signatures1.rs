@@ -25,6 +25,13 @@ fn every_definition_is_in_sparks_catalog() {
         if d.name == "raise_error" {
             assert!(s.deterministic.is_none() && s.kind.is_none());
             assert!(!d.deterministic);
+        } else if matches!(d.name, "from_avro" | "to_avro") {
+            // The `spark-avro` module is not on the probe image's classpath, so
+            // Spark rejected every probe of these two: the catalog has their
+            // arity and first release but not their determinism or kind (so the
+            // registry treats them as non-deterministic, which only costs folding).
+            assert!(s.deterministic.is_none() && s.kind.is_none(), "{}", d.name);
+            assert!(!d.deterministic, "{}", d.name);
         } else {
             assert_eq!(Some(d.deterministic), s.deterministic, "{}", d.name);
             assert_eq!(s.kind, Some(d.kind), "{}", d.name);
