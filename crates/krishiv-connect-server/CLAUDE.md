@@ -7,7 +7,8 @@
 The Spark Connect gRPC server: the tonic service, the session manager keyed by (authenticated principal, session
 id), the limits applied before admission, and graceful shutdown. Decoding and translation stay in `krishiv-connect`;
 the admin HTTP server (`/healthz`, `/readyz`, `/metrics`, UI) is `krishiv-server`; the process around both is
-`krishiv server` in `krishiv-cli`.
+`krishiv server` in `krishiv-cli`, which runs Krishiv single-node (deployment modes: embedded, single-node,
+distributed; clients connect over Spark Connect).
 
 ## Key files
 Paths are relative to this crate.
