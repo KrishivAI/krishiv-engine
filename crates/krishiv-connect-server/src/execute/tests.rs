@@ -394,6 +394,48 @@ fn ipc_streams_chunks_and_codecs() {
     assert_eq!(empty.num_rows(), 0);
 }
 
+fn running_op() -> crate::operation::Operation {
+    crate::operation::Operation::new(
+        crate::operation::new_operation_id().unwrap(),
+        [0; 32],
+        Arc::from(Vec::new()),
+        true,
+    )
+}
+
+fn failure() -> krishiv_common::error::KrishivError {
+    krishiv_common::error::InternalError {
+        message: "boom".to_owned(),
+    }
+    .into()
+}
+
+#[test]
+fn a_failed_operation_is_finished_before_its_error_is_sent() {
+    let op = running_op();
+    let sent = super::settle(&op, Err(super::Stop::Failed(failure())));
+    assert_eq!(sent.unwrap().error_class().name(), "INTERNAL_ERROR");
+    // Its error is on the way: an interrupt now interrupts nothing.
+    assert!(!op.cancel());
+}
+
+#[test]
+fn a_gone_client_finishes_the_operation() {
+    let op = running_op();
+    assert!(super::settle(&op, Err(super::Stop::Gone)).is_none());
+    assert!(!op.cancel());
+}
+
+#[test]
+fn an_interrupt_before_the_end_wins_over_the_error() {
+    // Spark: an error raised after the interrupt is replaced by
+    // OPERATION_CANCELED (`ExecuteThreadRunner.scala:150-178`).
+    let op = running_op();
+    assert!(op.cancel());
+    let sent = super::settle(&op, Err(super::Stop::Failed(failure())));
+    assert_eq!(sent.unwrap().error_class().name(), "OPERATION_CANCELED");
+}
+
 #[tokio::test]
 #[expect(
     clippy::disallowed_methods,

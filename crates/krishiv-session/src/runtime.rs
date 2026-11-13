@@ -87,6 +87,8 @@ pub struct EngineRuntime {
     live: Mutex<LiveSet>,
     /// The sessions, live and recently ended (`system.sessions`).
     pub(crate) sessions: Arc<crate::sessions::SessionRegistry>,
+    /// The session actions running now, cancellable before their query exists.
+    pub(crate) actions: Arc<crate::action::Actions>,
     /// The I/O scheduler: pacing, the file-metadata and block caches and
     /// the local store, one for every session (design P2-E1 R3). Stores built
     /// from a session's `fs.*` settings carry a fingerprint of them in their
@@ -276,6 +278,7 @@ impl EngineRuntime {
             deadlines: OnceLock::new(),
             live: Mutex::new(LiveSet::default()),
             sessions: Arc::default(),
+            actions: Arc::default(),
             io,
             private,
         };
@@ -362,7 +365,9 @@ impl EngineRuntime {
                 session_id: Arc::from(session_id),
                 id: Arc::from(id),
                 query: None,
-                pending: None,
+                // The action running it hands over: a cancellation it already took is kept.
+                // Lock order: `live` (held here) -> the action's state (`action.rs`).
+                pending: crate::action::hand_over(session, id),
             },
         );
         index
@@ -412,12 +417,51 @@ impl EngineRuntime {
     }
 
     /// Cancels, with `reason`, every running query `pick` selects (by
-    /// session number and row id); the ids of those it cancelled. A query
+    /// session number and row id), and every statement still being analyzed
+    /// or planned (`action.rs`, by operation id); the ids of those it cancelled
+    /// (a statement the caller gave no id is ended but not listed). A query
     /// whose context does not exist yet keeps the reason for `attach`.
     pub(crate) fn cancel_where(
         &self,
         reason: CancelReason,
         pick: impl Fn(u64, &str) -> bool,
+    ) -> Vec<QueryId> {
+        self.cancel_counted(reason, &pick).0
+    }
+
+    /// [`Self::cancel_where`], also counting what it ended: the queries and
+    /// the statements still being analyzed, with an id or without.
+    fn cancel_counted(
+        &self,
+        reason: CancelReason,
+        pick: &impl Fn(u64, &str) -> bool,
+    ) -> (Vec<QueryId>, usize) {
+        let mut ids = self.cancel_queries(reason, pick);
+        // Actions still analyzing or planning, and the rows of those that
+        // handed over after the walk above (a reservation racing this cancel).
+        // One registry pass for all of them (nested actions repeat rows).
+        let actions = self.actions.cancel_where(reason, pick);
+        if !actions.rows.is_empty() {
+            let rows: std::collections::HashSet<(u64, &str)> =
+                actions.rows.iter().map(|(s, r)| (*s, &**r)).collect();
+            ids.extend(self.cancel_queries(reason, &|s, q| rows.contains(&(s, q))));
+        }
+        let mut seen = std::collections::HashSet::new();
+        ids.retain(|id| seen.insert(id.as_str().to_owned()));
+        let ended = ids.len() + actions.ended;
+        for id in actions.ids {
+            if seen.insert(id.to_string()) {
+                ids.push(QueryId::minted(id.to_string()));
+            }
+        }
+        (ids, ended)
+    }
+
+    /// [`Self::cancel_where`] over the registered queries only.
+    fn cancel_queries(
+        &self,
+        reason: CancelReason,
+        pick: &impl Fn(u64, &str) -> bool,
     ) -> Vec<QueryId> {
         let mut pending = Vec::new();
         let picked: Vec<(Arc<QueryContext>, Arc<str>, Arc<str>)> = {
@@ -466,15 +510,16 @@ impl EngineRuntime {
             .is_empty()
     }
 
-    /// Closes session `session`: cancels its running queries with `reason`
-    /// and refuses any it attaches later; the number cancelled.
+    /// Closes session `session`: cancels its running queries and the
+    /// statements it is still analyzing with `reason` and refuses any query it
+    /// attaches later; the number of both it ended.
     pub(crate) fn cancel_session(&self, session: u64, reason: CancelReason) -> usize {
         self.live
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .closed
             .insert(session);
-        self.cancel_where(reason, |s, _| s == session).len()
+        self.cancel_counted(reason, &|s, _| s == session).1
     }
 
     /// The queries each session is running now, counted in one pass.
@@ -736,5 +781,54 @@ mod tests {
             .filter(|g| g.name == "krishiv.cache.size")
             .count();
         assert_eq!(gauges, 1);
+    }
+
+    /// A reservation made inside an action hands it over: a cancel then ends
+    /// the reserved query through the registry, names it once (the operation
+    /// id is the row id) and leaves the action to its work; a cancel taken
+    /// before the reservation is the reservation's pending reason.
+    #[test]
+    fn a_reservation_inside_an_action_takes_its_cancellation() {
+        let rt = EngineRuntime::builder().build().unwrap();
+        fn block<T>(f: impl std::future::Future<Output = T>) -> T {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(f)
+        }
+        // Reserved first, then cancelled: one id, and attach sees the reason.
+        let guard = rt.actions.begin(7, Some("op"));
+        let r = Arc::clone(&rt);
+        let (index, ids) = block(guard.run(async move {
+            let index = r.reserve(7, "s7", "op");
+            let ids = r.cancel_where(CancelReason::User, |s, _| s == 7);
+            Ok::<_, KrishivError>((index, ids))
+        }))
+        .unwrap();
+        assert_eq!(ids.len(), 1, "{ids:?}");
+        let query = QueryContext::new(
+            QueryId(index),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            rt.memory().child("q", None),
+        );
+        assert_eq!(
+            rt.attach(index, &query, None),
+            Attached::Cancelled(CancelReason::User)
+        );
+        // Cancelled first (Admin), then reserved: the reservation keeps the reason.
+        let guard = rt.actions.begin(8, Some("op2"));
+        let ids = rt.cancel_where(CancelReason::Admin, |s, _| s == 8);
+        assert_eq!(ids.len(), 1);
+        let r = Arc::clone(&rt);
+        let out = block(guard.run(async move { Ok::<_, KrishivError>(r.reserve(8, "s8", "op2")) }));
+        // The race ended the action before the work was polled.
+        assert_eq!(
+            out.unwrap_err().error_class().name(),
+            "KRISHIV_QUERY_KILLED"
+        );
+        // A closed session counts the statement it ended, id or not.
+        let _guard = rt.actions.begin(9, None);
+        assert_eq!(rt.cancel_session(9, CancelReason::ClientGone), 1);
     }
 }

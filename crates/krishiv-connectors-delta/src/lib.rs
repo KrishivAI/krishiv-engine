@@ -25,8 +25,9 @@
 //! (a parse limit), `KRISHIV_UNSUPPORTED_FEATURE` (a commit on a store without conditional put).
 //!
 //! # Engine
-//! [`engine::DeltaEngine`] gives the kernel Krishiv's storage and JSON handlers over `IoContext`
-//! and runs every kernel call on the process's bounded log pool ([`engine::pool::LogPool`]).
+//! [`engine::DeltaEngine`] is the kernel's `Engine`: Krishiv's storage, JSON and Parquet handlers
+//! over `IoContext` and an evaluator over Arrow compute. Every kernel call runs on the process's
+//! bounded log pool ([`engine::pool::LogPool`]) through [`engine::DeltaEngine::delta_blocking`].
 
 #![forbid(unsafe_code)]
 
