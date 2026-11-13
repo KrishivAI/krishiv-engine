@@ -163,6 +163,43 @@ impl ClientVersion {
     }
 }
 
+/// How to decode: the client's declared version and the deepest nesting accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecodeOptions {
+    /// The version the client declares ([`ClientVersion`]).
+    pub version: ClientVersion,
+    /// The deepest message nesting accepted (`krishiv.connect.maxPlanDepth`); a plan nested one
+    /// level deeper is rejected with `FAILED_TO_PARSE_TOO_COMPLEX`.
+    pub max_nesting: usize,
+}
+
+impl Default for DecodeOptions {
+    fn default() -> Self {
+        Self {
+            version: ClientVersion::default(),
+            max_nesting: MAX_NESTING,
+        }
+    }
+}
+
+impl DecodeOptions {
+    /// The options for a client declaring `version`, with the depth cap from `config`
+    /// (`krishiv.connect.maxPlanDepth`).
+    #[must_use]
+    pub fn from_config(config: &krishiv_common::config::Config, version: ClientVersion) -> Self {
+        let max_nesting = config
+            .get(&krishiv_common::config::CONNECT_MAX_PLAN_DEPTH)
+            .and_then(krishiv_common::config::ConfigValue::as_int)
+            .and_then(|v| usize::try_from(v).ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(MAX_NESTING);
+        Self {
+            version,
+            max_nesting,
+        }
+    }
+}
+
 /// Fields the 4.3 protos added to messages that exist in 4.2 (message name, field number, the
 /// field's name upper-cased, as Spark prints a oneof arm): a client declaring 4.2 or older that
 /// sends one gets `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` (SQLSTATE 56K00).
@@ -198,19 +235,19 @@ const FIELDS_SINCE_4_3: &[(&str, u32, &str)] = &[
 /// Spark Connect 4.3 does not define, `CONNECT_INVALID_PLAN.CANNOT_PARSE` for
 /// malformed bytes.
 pub fn decode_plan(bytes: &[u8]) -> Result<Decoded<Plan>, KrishivError> {
-    decode_plan_for(bytes, ClientVersion::default())
+    decode_plan_with(bytes, &DecodeOptions::default())
 }
 
-/// Decodes a [`Plan`] from a client that declares `version`.
+/// Decodes a [`Plan`] with `options`: the client's declared version and the depth cap.
 ///
 /// # Errors
 /// As [`decode_plan`], and `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` for a field
 /// `version` does not define.
-pub fn decode_plan_for(
+pub fn decode_plan_with(
     bytes: &[u8],
-    version: ClientVersion,
+    options: &DecodeOptions,
 ) -> Result<Decoded<Plan>, KrishivError> {
-    decode(layout::PLAN, bytes, version)
+    decode(layout::PLAN, bytes, options)
 }
 
 /// Decodes a [`Relation`]; see [`decode_plan`] for the errors.
@@ -218,18 +255,18 @@ pub fn decode_plan_for(
 /// # Errors
 /// As [`decode_plan`].
 pub fn decode_relation(bytes: &[u8]) -> Result<Decoded<Relation>, KrishivError> {
-    decode_relation_for(bytes, ClientVersion::default())
+    decode_relation_with(bytes, &DecodeOptions::default())
 }
 
-/// Decodes a [`Relation`] from a client that declares `version`; see [`decode_plan_for`].
+/// Decodes a [`Relation`] with `options`; see [`decode_plan_with`].
 ///
 /// # Errors
-/// As [`decode_plan_for`].
-pub fn decode_relation_for(
+/// As [`decode_plan_with`].
+pub fn decode_relation_with(
     bytes: &[u8],
-    version: ClientVersion,
+    options: &DecodeOptions,
 ) -> Result<Decoded<Relation>, KrishivError> {
-    decode(layout::RELATION, bytes, version)
+    decode(layout::RELATION, bytes, options)
 }
 
 /// Decodes an [`Expression`]; see [`decode_plan`] for the errors.
@@ -237,26 +274,26 @@ pub fn decode_relation_for(
 /// # Errors
 /// As [`decode_plan`].
 pub fn decode_expression(bytes: &[u8]) -> Result<Decoded<Expression>, KrishivError> {
-    decode_expression_for(bytes, ClientVersion::default())
+    decode_expression_with(bytes, &DecodeOptions::default())
 }
 
-/// Decodes an [`Expression`] from a client that declares `version`; see [`decode_plan_for`].
+/// Decodes an [`Expression`] with `options`; see [`decode_plan_with`].
 ///
 /// # Errors
-/// As [`decode_plan_for`].
-pub fn decode_expression_for(
+/// As [`decode_plan_with`].
+pub fn decode_expression_with(
     bytes: &[u8],
-    version: ClientVersion,
+    options: &DecodeOptions,
 ) -> Result<Decoded<Expression>, KrishivError> {
-    decode(layout::EXPRESSION, bytes, version)
+    decode(layout::EXPRESSION, bytes, options)
 }
 
 fn decode<M: Message + Default + Send + Scrub>(
     root: u16,
     bytes: &[u8],
-    version: ClientVersion,
+    options: &DecodeOptions,
 ) -> Result<Decoded<M>, KrishivError> {
-    let deep = check(root, bytes, version)? > INLINE_LEVELS;
+    let deep = check(root, bytes, options)? > INLINE_LEVELS;
     // The one call of prost's decoder: the walk above bounded it.
     #[expect(
         clippy::disallowed_methods,
@@ -358,7 +395,7 @@ fn malformed(why: &str) -> KrishivError {
 }
 
 /// Walks `bytes`; returns the deepest nesting.
-fn check(root: u16, bytes: &[u8], version: ClientVersion) -> Result<usize, KrishivError> {
+fn check(root: u16, bytes: &[u8], options: &DecodeOptions) -> Result<usize, KrishivError> {
     scan(
         &layout::MESSAGES,
         root,
@@ -367,8 +404,8 @@ fn check(root: u16, bytes: &[u8], version: ClientVersion) -> Result<usize, Krish
             bytes: MAX_PLAN_BYTES,
             messages: MAX_MESSAGES,
             decoded: MAX_DECODED_BYTES,
-            nesting: MAX_NESTING,
-            version,
+            nesting: options.max_nesting,
+            version: options.version,
         },
     )
     .map_err(KrishivError::from)

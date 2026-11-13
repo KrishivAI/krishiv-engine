@@ -491,6 +491,13 @@ fn the_4_3_additions_decode_in_the_superset() {
     );
 }
 
+const fn opts(version: ClientVersion) -> DecodeOptions {
+    DecodeOptions {
+        version,
+        max_nesting: MAX_NESTING,
+    }
+}
+
 #[test]
 fn client_version_comes_from_the_client_type() {
     for (client_type, want) in [
@@ -571,20 +578,20 @@ fn a_field_newer_than_the_declared_version_is_56k00() {
         ClientVersion::V4_2,
     ] {
         parameters(
-            &decode_relation_for(&zip, version).expect_err("zip"),
+            &decode_relation_with(&zip, &opts(version)).expect_err("zip"),
             "spark.connect.Relation",
             "ZIP",
             48,
         );
         for (number, name) in [(29, "TIMESTAMP_NTZ_NANOS"), (30, "TIMESTAMP_LTZ_NANOS")] {
             parameters(
-                &decode_expression_for(&literal(number), version).expect_err("literal"),
+                &decode_expression_with(&literal(number), &opts(version)).expect_err("literal"),
                 "spark.connect.Expression.Literal",
                 name,
                 number,
             );
             parameters(
-                &decode_expression_for(&cast(number), version).expect_err("cast type"),
+                &decode_expression_with(&cast(number), &opts(version)).expect_err("cast type"),
                 "spark.connect.DataType",
                 name,
                 number,
@@ -618,9 +625,73 @@ fn a_field_newer_than_the_declared_version_is_56k00() {
         }
     }
     // A 4.3 client, and the default profile, are accepted.
-    decode_relation_for(&zip, ClientVersion::V4_3).expect("4.3 zip");
+    decode_relation_with(&zip, &opts(ClientVersion::V4_3)).expect("4.3 zip");
     decode_relation(&zip).expect("default profile");
-    decode_expression_for(&cast(29), ClientVersion::V4_3).expect("4.3 cast");
+    decode_expression_with(&cast(29), &opts(ClientVersion::V4_3)).expect("4.3 cast");
     // A field every version has is not gated.
-    decode_relation_for(&sql_leaf(), ClientVersion::V3_5).expect("sql");
+    decode_relation_with(&sql_leaf(), &opts(ClientVersion::V3_5)).expect("sql");
+}
+
+fn capped(max_nesting: usize) -> DecodeOptions {
+    DecodeOptions {
+        max_nesting,
+        ..DecodeOptions::default()
+    }
+}
+
+#[test]
+fn the_depth_cap_is_configurable_and_exact() {
+    // A cap of 64: depth 64 decodes, depth 65 fails, however the default stands.
+    let at = filter_chain(31, &table_leaf()); // 31 * 2 + 2 = 64
+    decode_relation_with(&at, &capped(64)).expect("depth 64 at a cap of 64");
+    let over = filter_chain(32, &sql_leaf()); // 32 * 2 + 1 = 65
+    let err = decode_relation_with(&over, &capped(64)).expect_err("depth 65 at a cap of 64");
+    assert_eq!(class(&err), ErrorClass::FailedToParseTooComplex);
+    // The same plan is fine under the default cap, and a larger cap accepts deeper plans.
+    decode_relation(&over).expect("default cap");
+    let deeper = filter_chain(1_000, &sql_leaf());
+    decode_relation_with(&deeper, &capped(2_048)).expect("depth 2001 at a cap of 2048");
+    assert!(decode_relation_with(&deeper, &capped(2_000)).is_err());
+    // 100,000 levels built as raw bytes are rejected by the walk, whatever the cap is.
+    let hostile = filter_chain(100_000, &sql_leaf());
+    let err = decode_relation_with(&hostile, &capped(64)).expect_err("hostile depth");
+    assert_eq!(class(&err), ErrorClass::FailedToParseTooComplex);
+}
+
+#[test]
+fn the_cap_comes_from_krishiv_connect_max_plan_depth() {
+    use krishiv_common::config::Config;
+    let mut config = Config::new();
+    assert_eq!(
+        DecodeOptions::from_config(&config, ClientVersion::V4_2),
+        DecodeOptions {
+            version: ClientVersion::V4_2,
+            max_nesting: 1024
+        }
+    );
+    config.set("krishiv.connect.maxPlanDepth", "64").unwrap();
+    assert_eq!(
+        DecodeOptions::from_config(&config, ClientVersion::V4_3).max_nesting,
+        64
+    );
+    // Zero and negative caps are refused when set.
+    assert!(config.set("krishiv.connect.maxPlanDepth", "0").is_err());
+    assert!(config.set("krishiv.connect.maxPlanDepth", "-5").is_err());
+}
+
+#[test]
+fn decoding_and_dropping_a_plan_at_the_cap_fits_a_256_kb_stack() {
+    // The decoder moves a deep message to a big-stack thread for decoding and for dropping, so the
+    // caller's stack stays small whatever the cap is.
+    let bytes = filter_chain(MAX_NESTING / 2 - 1, &table_leaf());
+    let handle = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let rel = decode_relation(&bytes).expect("decodes at the cap");
+            let size = rel.encoded_len();
+            drop(rel);
+            size
+        })
+        .expect("spawn");
+    assert!(handle.join().expect("no stack overflow") > 0);
 }

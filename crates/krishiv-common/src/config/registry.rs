@@ -119,6 +119,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &CONNECT_MAX_PLAN_DEPTH,
     &LATE_FETCH_MAX_ROWS,
     &CTE_RECURSION_LEVEL_LIMIT,
     &CTE_RECURSION_ROW_LIMIT,
@@ -1307,6 +1308,21 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `krishiv.connect.maxPlanDepth`.
+pub static CONNECT_MAX_PLAN_DEPTH: ConfigEntry = ConfigEntry {
+    key: "krishiv.connect.maxPlanDepth",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(1024)),
+    doc: "Deepest message nesting a Spark Connect plan may have: a plan nested deeper is rejected \
+          while it is decoded, before anything recurses into it (Spark's default for \
+          `spark.connect.grpc.marshallerRecursionLimit` is also 1024). A relation or expression \
+          costs two levels, so the default allows about 500 chained operators.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
 };
 
 /// `krishiv.exec.lateFetch.maxRows`.
