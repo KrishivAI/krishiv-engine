@@ -450,6 +450,11 @@ impl Alter<'_> {
             }
             .into());
         }
+        // A column placed among the others shifts what a positional format reads (a CSV row's tokens),
+        // so it needs the same rule as moving one; appending before the partition columns does not.
+        if position.is_some() && !self.rules.reshape {
+            return Err(self.table_operation("ADD COLUMN ... FIRST | AFTER"));
+        }
         let at = self.insertion_point(position.as_ref())?;
         let mut column = TableColumn::new(name, data_type.clone(), *nullable);
         column.char_varchar.clone_from(declared);
@@ -1041,6 +1046,26 @@ mod tests {
             flat,
         );
         assert_eq!(class, ErrorClass::UnsupportedFeatureTableOperation);
+    }
+
+    #[test]
+    fn a_column_added_among_the_others_needs_the_reshape_rule() {
+        let flat = AlterRules {
+            reshape: false,
+            ..full()
+        };
+        for position in [ColumnPosition::First, ColumnPosition::After("a".into())] {
+            let e = run(&[add("c", Some(position.clone()))], flat).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::UnsupportedFeatureTableOperation
+            );
+            assert!(e.to_string().contains("ADD COLUMN"), "{e}");
+            run(&[add("c", Some(position))], full()).unwrap();
+        }
+        // Appending (before the partition columns) shifts nothing and stays allowed.
+        let t = run(&[add("c", None)], flat).unwrap();
+        assert_eq!(names(&t), ["a", "b", "c", "p"]);
     }
 
     #[test]

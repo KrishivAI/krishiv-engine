@@ -235,7 +235,9 @@ impl StoreCatalog {
             .map(|c| StoreColumn {
                 name: c.name.clone(),
                 data_type: c.data_type.clone(),
-                nullable: c.nullable,
+                // File-source tables are nullable whatever the definition says: nothing is enforced on write,
+                // and a non-nullable flag would let the optimizer fold `IS NULL` over files that hold NULLs.
+                nullable: true,
                 default: None,
                 comment: None,
                 char_varchar: c.char_varchar.clone(),
@@ -492,19 +494,25 @@ impl CatalogWrite for StoreCatalog {
                 data_version: 0,
                 stamp: 0,
             };
-            let (namespace, name) = (table.namespace.clone(), table.name.clone());
-            let created = self.store.create_table(table, store_mode)?;
-            // Spark makes a managed table's directory when it creates the table; an external
-            // table's location is made by its first write.
-            if created
-                && managed
-                && let Err(e) = std::fs::create_dir_all(&location)
-            {
-                self.store.drop_table(&namespace, &name);
-                return Err(internal(format!(
-                    "cannot create {}: {e}",
-                    location.display()
-                )));
+            // The directory first, as `Session::add_table` does: a drop that sees the entry finds its
+            // files, and a failed registration removes only the directory this call made.
+            let made = managed
+                .then(|| std::fs::create_dir_all(&location))
+                .transpose();
+            let made = made
+                .map(|made| made.is_some())
+                .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
+            let created = match self.store.create_table(table, store_mode) {
+                Ok(created) => created,
+                Err(e) => {
+                    if made {
+                        let _ = std::fs::remove_dir_all(&location);
+                    }
+                    return Err(e);
+                }
+            };
+            if !created && made {
+                let _ = std::fs::remove_dir_all(&location);
             }
             Ok(created)
         })
@@ -559,7 +567,8 @@ impl CatalogWrite for StoreCatalog {
                 .map(|c| StoreColumn {
                     name: c.name.clone(),
                     data_type: c.data_type.clone(),
-                    nullable: c.nullable,
+                    // Nullable, as at create; an added column is NULL in the files written before it.
+                    nullable: true,
                     default: altered.defaults.get(&c.name).cloned(),
                     comment: altered.comments.get(&c.name).cloned(),
                     char_varchar: c.char_varchar.clone(),
@@ -1163,6 +1172,70 @@ mod tests {
                 .replace_table_entry(&current, (*current).clone())
                 .is_none()
         );
+    }
+
+    #[test]
+    fn file_source_columns_are_nullable_whatever_the_definition_says() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        let mut strict = info("db", "t");
+        strict.columns[0].nullable = false;
+        block_on(c.create_table(strict, CreateMode::ErrorIfExists)).unwrap();
+        let id = ident("db", "t");
+        let before = load(c, &id).unwrap();
+        assert!(
+            before.columns.iter().all(|c| c.nullable),
+            "{:?}",
+            before.columns
+        );
+        let not_null = TableChange::AddColumn {
+            path: ns("b"),
+            data_type: DataType::Long,
+            declared: None,
+            nullable: false,
+            comment: None,
+            position: None,
+            default: None,
+        };
+        let after = block_on(c.alter_table(&id, before.version.unwrap(), &[not_null])).unwrap();
+        assert!(
+            after.columns.iter().all(|c| c.nullable),
+            "{:?}",
+            after.columns
+        );
+    }
+
+    #[test]
+    fn a_cascading_namespace_drop_invalidates_the_caches_of_its_tables() {
+        let results = Arc::new(crate::result_cache::ResultCache::default());
+        let hub = crate::cache::Invalidation::new(Arc::clone(&results));
+        let store: Arc<dyn CatalogStore> = Arc::new(InMemoryCatalogStore::with_hub(hub));
+        let warehouse = tempfile::tempdir().unwrap();
+        let c = StoreCatalog::new(store, warehouse.path().to_path_buf(), false);
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).unwrap();
+        let before = results.generation();
+        block_on(c.drop_namespace(&ns("db"), true)).unwrap();
+        assert!(
+            results.generation() > before,
+            "the dropped table's caches are invalidated"
+        );
+    }
+
+    #[test]
+    fn the_directory_exists_when_the_table_does_and_a_refused_create_leaves_none() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).unwrap();
+        let dir = managed_location(f.warehouse.path(), "db", "t");
+        assert!(dir.is_dir());
+        // A second create of the name is refused before it touches the directory.
+        std::fs::write(dir.join("keep"), b"x").unwrap();
+        assert!(block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).is_err());
+        assert!(!block_on(c.create_table(info("db", "t"), CreateMode::IgnoreIfExists)).unwrap());
+        assert!(dir.join("keep").exists());
     }
 
     #[test]

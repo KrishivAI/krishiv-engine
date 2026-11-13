@@ -609,6 +609,12 @@ impl CatalogStore for InMemoryCatalogStore {
             .collect();
         state.namespaces.remove(namespace);
         self.epoch.fetch_add(1, Ordering::AcqRel);
+        // What the caches hold over a dropped table is stale, for every caller of this drop.
+        let dropped: Vec<Arc<CatalogTable>> = dropped;
+        for t in &dropped {
+            self.hub
+                .invalidate_table(&format!("{}.{}", t.namespace, t.name));
+        }
         Ok(dropped)
     }
 
