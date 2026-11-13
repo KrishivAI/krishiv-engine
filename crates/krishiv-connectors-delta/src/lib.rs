@@ -21,7 +21,12 @@
 //!   `DELTA_CONCURRENT_DELETE_DELETE`, `DELTA_PROTOCOL_CHANGED`, `DELTA_METADATA_CHANGED`,
 //!   `DELTA_CONCURRENT_TRANSACTION`, `DELTA_MAX_COMMIT_RETRIES_EXCEEDED`.
 //!
-//! Kernel errors map to Krishiv's classes in [`error`].
+//! Kernel errors map to Krishiv's classes in [`error`]. Krishiv's own: `KRISHIV_CATALOG_LIMIT_EXCEEDED`
+//! (a parse limit), `KRISHIV_UNSUPPORTED_FEATURE` (a commit on a store without conditional put).
+//!
+//! # Engine
+//! [`engine::DeltaEngine`] gives the kernel Krishiv's storage and JSON handlers over `IoContext`
+//! and runs every kernel call on the process's bounded log pool ([`engine::pool::LogPool`]).
 
 #![forbid(unsafe_code)]
 

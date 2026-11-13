@@ -80,6 +80,9 @@ arrow-ord = { version = "60", default-features = false }
 arrow-row = { version = "60", default-features = false }
 arrow-data = { version = "60", default-features = false }
 arrow-ipc = { version = "60", default-features = false }
+# The Delta connector's JsonHandler (commit files, `parse_json`, the commit write; P3-T021
+# design note section 3.2); brings arrow-cast.
+arrow-json = { version = "60", default-features = false }
 arrow-flight = { version = "60", default-features = false }
 parquet = { version = "60", default-features = false }
 # object_store is pinned to the version delta_kernel 0.30 builds against (ADR 0028
@@ -90,6 +93,9 @@ parquet = { version = "60", default-features = false }
 # the default build. OpenSSL stays banned (deny.toml). On a bump, re-list
 # `ClientConfigKey` in krishiv-store's `http_clients.rs` `KEYS` (it is non-exhaustive).
 object_store = { version = "=0.14.2", default-features = false }
+# Table URLs of the Delta connector (the kernel's `Url`); already in the tree through
+# object_store and delta_kernel.
+url = { version = "2.5", default-features = false, features = ["std"] }
 # Header types for the Hugging Face bearer token (T195); already in the tree through
 # object_store's reqwest. Only under krishiv-io/cloud.
 http = { version = "1", default-features = false }

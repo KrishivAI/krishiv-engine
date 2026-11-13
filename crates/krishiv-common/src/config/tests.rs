@@ -1281,3 +1281,32 @@ fn fuse_probe_select_defaults_on_and_parses() {
         Some(&ConfigValue::Bool(false))
     );
 }
+
+/// P3-T021: the Delta log pool and the catalog parse limits.
+#[test]
+fn delta_and_catalog_limit_entries_parse_and_default() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&DELTA_LOG_THREADS).and_then(ConfigValue::as_int),
+            c.get(&CATALOG_MAX_METADATA_BYTES)
+                .and_then(ConfigValue::as_size),
+            c.get(&CATALOG_MAX_COLUMNS).and_then(ConfigValue::as_int),
+        )
+    };
+    assert_eq!(get(&c), (Some(4), Some(256 << 20), Some(10_000)));
+    c.set("krishiv.delta.logThreads", "8").unwrap();
+    c.set("krishiv.catalog.maxMetadataBytes", "1g").unwrap();
+    c.set("krishiv.catalog.maxColumns", "50000").unwrap();
+    assert_eq!(get(&c), (Some(8), Some(1 << 30), Some(50_000)));
+    assert!(c.set("krishiv.delta.logThreads", "0").is_err());
+    assert!(c.set("krishiv.catalog.maxColumns", "-1").is_err());
+    assert!(c.set("krishiv.catalog.maxMetadataBytes", "lots").is_err());
+    for e in [
+        &DELTA_LOG_THREADS,
+        &CATALOG_MAX_METADATA_BYTES,
+        &CATALOG_MAX_COLUMNS,
+    ] {
+        assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
+    }
+}

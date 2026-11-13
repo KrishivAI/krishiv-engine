@@ -6,7 +6,7 @@
 //! `src/engine/arrow_data.rs` and `src/engine/arrow_get_data.rs`, Apache-2.0, copyright the
 //! Delta Lake project authors), which is compiled only with the kernel's Arrow features. The
 //! kernel implements `GetData` on Arrow's array types directly; here the orphan rule needs a
-//! local [`Getter`] that borrows the array, resolved once per visit.
+//! local `Getter` that borrows the array, resolved once per visit.
 //!
 //! Contract (`dk:src/engine_data.rs`):
 //! - `visit_rows` resolves every requested leaf path (nested structs included), checks the
