@@ -31,7 +31,7 @@ use std::sync::Arc;
 use krishiv_common::error::{
     DataSourceNotFound, InternalError, KrishivError, LocationAlreadyExists, SchemaAlreadyExists,
     SchemaNotEmpty, SchemaNotFound, TableOrViewAlreadyExists, TableOrViewNotFound,
-    UnresolvedColumnWithSuggestion, UnsupportedFeatureCatalogOperation,
+    UnsupportedFeatureCatalogOperation,
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::TableVersion;
@@ -47,7 +47,7 @@ use crate::store::{
     CatalogStore, CatalogTable, DropNamespaceError, NamespaceMeta, StoreColumn, TableLayout,
     managed_location,
 };
-use crate::table_commands::{PROVIDERS, check_new_name};
+use crate::table_commands::{PROVIDERS, TableName, check_new_name};
 
 fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
@@ -205,57 +205,56 @@ impl StoreCatalog {
         }
     }
 
-    /// The new table's columns with the partition columns last, in
-    /// partition order, spelled as the table spells them.
-    fn arranged(&self, info: &TableInfo) -> Result<(Vec<StoreColumn>, Vec<String>), KrishivError> {
+    /// The new table's columns and layout, checked as `CREATE TABLE` checks them: no repeated column, the
+    /// declared schema writable by `provider`, and (through the session's `table_layout`) partition columns
+    /// that exist, are not repeated, are not every column and have a partitionable type, moved last in
+    /// partition order and spelled as the table spells them.
+    fn arranged(
+        &self,
+        info: &TableInfo,
+        namespace: &str,
+        name: &str,
+        provider: &str,
+    ) -> Result<(Vec<StoreColumn>, TableLayout), KrishivError> {
         check_column_name_duplication(
             info.columns.iter().map(|c| c.name.as_str()),
             self.case_sensitive,
         )?;
-        let same = |a: &str, b: &str| {
-            if self.case_sensitive {
-                a == b
-            } else {
-                krishiv_types::equals_ignore_case(a, b)
-            }
-        };
-        let store_column = |c: &TableColumn| StoreColumn {
-            name: c.name.clone(),
-            data_type: c.data_type.clone(),
-            nullable: c.nullable,
-            default: None,
-            comment: None,
-            char_varchar: c.char_varchar.clone(),
-        };
-        let mut partitions = Vec::new();
-        for written in &info.partition_columns {
-            let Some(column) = info.columns.iter().find(|c| same(&c.name, written)) else {
-                return Err(UnresolvedColumnWithSuggestion {
-                    object_name: format!("`{}`", written.replace('`', "``")),
-                    proposal: info
-                        .columns
-                        .iter()
-                        .map(|c| format!("`{}`", c.name.replace('`', "``")))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                }
-                .into());
-            };
-            partitions.push(column.name.clone());
-        }
-        check_column_name_duplication(partitions.iter().map(String::as_str), self.case_sensitive)?;
+        krishiv_io::check_declared_schema(
+            provider,
+            &arrow_schema::Schema::new(
+                info.columns
+                    .iter()
+                    .map(|c| c.data_type.to_arrow_field(&c.name, true))
+                    .collect::<Vec<_>>(),
+            ),
+        )?;
         let mut columns: Vec<StoreColumn> = info
             .columns
             .iter()
-            .filter(|c| !partitions.iter().any(|p| same(p, &c.name)))
-            .map(store_column)
+            .map(|c| StoreColumn {
+                name: c.name.clone(),
+                data_type: c.data_type.clone(),
+                nullable: c.nullable,
+                default: None,
+                comment: None,
+                char_varchar: c.char_varchar.clone(),
+            })
             .collect();
-        for p in &partitions {
-            if let Some(c) = info.columns.iter().find(|c| same(&c.name, p)) {
-                columns.push(store_column(c));
-            }
-        }
-        Ok((columns, partitions))
+        let table = TableName {
+            namespace: namespace.to_owned(),
+            name: name.to_owned(),
+            written: info.ident.to_string(),
+            bare: false,
+        };
+        let layout = crate::partitions::table_layout(
+            &table,
+            &mut columns,
+            &info.partition_columns,
+            None,
+            self.case_sensitive,
+        )?;
+        Ok((columns, layout))
     }
 }
 
@@ -459,7 +458,8 @@ impl CatalogWrite for StoreCatalog {
             if info.location.as_deref().is_some_and(str::is_empty) {
                 return Err(self.unsupported("an empty location"));
             }
-            let (columns, partition_columns) = self.arranged(&info)?;
+            let (columns, layout) =
+                self.arranged(&info, &namespace, &name, &provider.to_lowercase())?;
             let managed = info.location.is_none();
             let location = info.location.as_deref().map_or_else(
                 || managed_location(&self.warehouse, &namespace, &name),
@@ -486,10 +486,7 @@ impl CatalogWrite for StoreCatalog {
                 created_ms: crate::table_commands::now_ms(),
                 root: self.warehouse.clone(),
                 view: None,
-                layout: TableLayout {
-                    partition_columns,
-                    ..TableLayout::default()
-                },
+                layout,
                 column_stats: BTreeMap::new(),
                 incarnation: 0,
                 data_version: 0,
@@ -1015,8 +1012,46 @@ mod tests {
         missing.partition_columns = vec!["nope".into()];
         assert_eq!(
             class(&create(missing).unwrap_err()),
-            ErrorClass::UnresolvedColumnWithSuggestion
+            ErrorClass::ColumnNotDefinedInTable
         );
+
+        // Partition-layout rules of CREATE TABLE: not every column, only partitionable types.
+        let mut all = info("db", "all");
+        all.partition_columns = vec!["a".into(), "p".into()];
+        assert_eq!(
+            class(&create(all).unwrap_err()),
+            ErrorClass::AllPartitionColumnsNotAllowed
+        );
+        let mut complex = TableInfo::new(
+            ident("db", "cx"),
+            vec![
+                TableColumn::new("a", DataType::Integer, true),
+                TableColumn::new(
+                    "arr",
+                    DataType::Array(Arc::new(krishiv_types::ArrayType::new(
+                        DataType::Integer,
+                        true,
+                    ))),
+                    true,
+                ),
+            ],
+        );
+        complex.partition_columns = vec!["arr".into()];
+        assert_eq!(
+            class(&create(complex).unwrap_err()),
+            ErrorClass::InvalidPartitionColumnDataType
+        );
+
+        // A schema the provider cannot write fails before anything is published.
+        let interval = TableInfo::new(
+            ident("db", "iv"),
+            vec![TableColumn::new("i", DataType::CalendarInterval, true)],
+        );
+        assert!(create(interval).is_err());
+        for refused in ["m", "all", "cx", "iv"] {
+            assert!(c.store.table("db", refused).is_none(), "{refused}");
+            assert!(!managed_location(f.warehouse.path(), "db", refused).exists());
+        }
 
         // A managed directory that exists already is not taken over.
         let taken = managed_location(f.warehouse.path(), "db", "t");
