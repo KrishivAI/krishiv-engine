@@ -11,6 +11,13 @@
     ],
     "sqlState" : "54000"
   },
+  "KRISHIV_CATALOG_LOCATION_REFUSED" : {
+    "message" : [
+      "The catalog <catalog> returned a location for <relationName> that Krishiv does not allow (<rule>), so the table was not loaded. This is a fault of the catalog, not a permission you can be granted: an administrator needs to check what the catalog returns for this table."
+    ],
+    "sqlState" : "58030",
+    "audience" : "operator"
+  },
   "KRISHIV_COMMIT_LOG_CORRUPT" : {
     "message" : [
       "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
