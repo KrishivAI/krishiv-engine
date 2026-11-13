@@ -76,9 +76,22 @@ impl DiffArgs {
     /// The text of `path` at the head of the range.
     ///
     /// # Errors
-    /// Returns the git failure message.
+    /// Returns the git failure message, or a message when the blob is not valid UTF-8 (the
+    /// release reader uses `read_to_string`, so the check must reject what it would).
     pub fn git_show_head(&self, path: &str) -> Result<String, String> {
-        self.git(&["show", &format!("{}:{path}", self.head)])
+        let spec = format!("{}:{path}", self.head);
+        let out = Command::new("git")
+            .args(["show", &spec])
+            .current_dir(&self.repo)
+            .output()
+            .map_err(|e| format!("failed to run git: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "git show {spec} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        String::from_utf8(out.stdout).map_err(|_| format!("{path} is not valid UTF-8"))
     }
 
     /// `git diff -U0` of the range, for line-level reports.

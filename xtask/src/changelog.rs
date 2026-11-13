@@ -79,7 +79,7 @@ pub fn check(
         .find(|p| read(p).is_none_or(|t| t.trim().is_empty()))
     {
         return Err(format!(
-            "{empty} is empty: write one or two lines a user can read"
+            "{empty} is empty or not valid UTF-8: write one or two lines of UTF-8 text a user can read"
         ));
     }
     if !fragments.is_empty() || labels.contains(&EXEMPT_LABEL) {
@@ -106,7 +106,7 @@ pub fn check_modified(
         .find(|p| read(p).is_none_or(|t| t.trim().is_empty()))
     {
         Some(empty) => Err(format!(
-            "{empty} is empty after this change: write one or two lines a user can read, or delete the fragment"
+            "{empty} is empty or not valid UTF-8 after this change: write one or two lines of UTF-8 text a user can read, or delete the fragment"
         )),
         None => Ok(()),
     }
@@ -462,6 +462,13 @@ mod tests {
         write(root, "changelog.d/7.added.md", " \n");
         git(&["add", "."]);
         git(&["commit", "-q", "-m", "emptied"]);
+        assert!(run_check(&args, &[EXEMPT_LABEL]).is_err());
+        // A UTF-16 fragment is non-empty bytes but `read_fragments` cannot read it.
+        let mut utf16 = vec![0xFF, 0xFE]; // BOM, as editors write it
+        utf16.extend("Seven.".encode_utf16().flat_map(u16::to_le_bytes));
+        std::fs::write(root.join("changelog.d/7.added.md"), utf16).unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "utf16"]);
         assert!(run_check(&args, &[EXEMPT_LABEL]).is_err());
     }
 
