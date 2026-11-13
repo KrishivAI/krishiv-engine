@@ -740,3 +740,12 @@ fn options_built_by_hand_cannot_exceed_the_ceiling() {
     let err = decode_relation_with(&hostile, &opts).expect_err("past the ceiling");
     assert_eq!(class(&err), ErrorClass::FailedToParseTooComplex);
 }
+
+#[test]
+fn prost_keeps_no_recursion_limit_because_the_pre_walk_is_the_bound() {
+    // Owner decision 2026-11-13 (P3-E10-02): prost's fixed limit of 100 rejects ordinary plans, so
+    // `krishiv.connect.maxPlanDepth` (checked by the iterative walk) is the limit. Removing the
+    // feature would break real clients; this test makes that a deliberate change.
+    let manifest = include_str!("../../Cargo.toml");
+    assert!(manifest.contains("no-recursion-limit"));
+}
