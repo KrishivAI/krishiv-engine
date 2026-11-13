@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! An Iceberg table loaded from its metadata file through Krishiv's I/O
-//! (metadata only: no scan, no commit; those are P3-T026/T027).
+//! An Iceberg table loaded from its metadata file through Krishiv's I/O: its
+//! schema, `inspect` tables, the snapshot a read sees and its scan plan
+//! (P3-T026; commits are T027).
 
 use std::fmt;
 
@@ -12,8 +13,11 @@ use iceberg::table::Table;
 use krishiv_common::error::KrishivError;
 use krishiv_types::StructType;
 
+use super::scan;
 use super::storage::{StorageRegistration, from_iceberg};
 use super::types::spark_schema;
+use crate::plan::{ManifestFilter, PruneOptions, ScanPlan, TableSnapshot, VersionSpec};
+use krishiv_io::PushdownExpr;
 
 /// An Iceberg table's metadata, read through a [`StorageRegistration`].
 pub struct IcebergTable {
@@ -66,6 +70,36 @@ impl IcebergTable {
     /// `iceberg_v0::types`).
     pub fn schema(&self) -> Result<StructType, KrishivError> {
         spark_schema(self.table.metadata().current_schema())
+    }
+
+    /// The snapshot `version` reads and the schema it reads with (see
+    /// [`crate::plan::VersionSpec`] for the rules and Iceberg's error texts).
+    ///
+    /// # Errors
+    /// An unknown snapshot id, ref or a timestamp before the first snapshot, with
+    /// Iceberg's message; `KRISHIV_UNSUPPORTED_FEATURE` for a column type Spark
+    /// refuses.
+    pub fn snapshot(&self, version: &VersionSpec) -> Result<TableSnapshot, KrishivError> {
+        scan::table_snapshot(self.table.metadata(), version)
+    }
+
+    /// The data files of `snapshot` that may hold rows matching `predicate`
+    /// (in the snapshot schema's names and types), and its live delete files.
+    /// Reads the manifest list and the surviving manifests (at most 8 at once)
+    /// through the storage; run it on the I/O side.
+    ///
+    /// # Errors
+    /// The I/O error of a read (its class kept); `INTERNAL_ERROR` for a manifest
+    /// list or manifest that cannot be parsed or breaks the spec;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for an encrypted manifest.
+    pub async fn plan(
+        &self,
+        snapshot: &TableSnapshot,
+        predicate: Option<&PushdownExpr>,
+        filter: ManifestFilter,
+        options: PruneOptions,
+    ) -> Result<ScanPlan, KrishivError> {
+        scan::plan(self.table.file_io(), snapshot, predicate, filter, options).await
     }
 
     /// The `snapshots` metadata table (Spark's `<table>.snapshots`), Arrow 60.

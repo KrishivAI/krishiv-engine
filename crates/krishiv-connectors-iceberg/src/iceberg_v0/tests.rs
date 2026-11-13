@@ -12,7 +12,7 @@ use super::storage::{KrishivStorageFactory, StorageRegistration, from_iceberg};
 
 /// A scheduler with the local file system registered as `file://` and a
 /// registration whose relative paths resolve under `dir`.
-fn local(dir: &std::path::Path) -> (Arc<IoScheduler>, StorageRegistration) {
+pub(super) fn local(dir: &std::path::Path) -> (Arc<IoScheduler>, StorageRegistration) {
     // The I/O runtime is the test's own (iceberg-rust's `Runtime` needs one).
     let sched = match tokio::runtime::Handle::try_current() {
         Ok(h) => IoScheduler::with_runtime(IoConfig::default(), h),
