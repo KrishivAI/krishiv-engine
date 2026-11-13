@@ -844,17 +844,19 @@ def spark_shell(container: str, script: str, data: str = "") -> list[str]:
         subprocess.run(
             ["docker", "exec", "-i", container, "sh", "-c", f"cat > {path}"], input=text, text=True, check=True
         )
-    cmd = [
-        "docker",
-        "exec",
-        container,
-        "sh",
-        "-c",
-        "/opt/spark/bin/spark-shell --master 'local[1]' --driver-memory 2g -I /tmp/krishiv_script.scala "
-        "2>/dev/null; rm -f /tmp/krishiv_script.scala /tmp/krishiv_cases.jsonl",
-    ]
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, check=True).stdout
-    lines = [line for line in out.splitlines() if line.startswith("@@")]
+    # `-I FILE` runs silently on some releases (4.0.5): then the same script is fed on stdin, where the REPL
+    # prefixes a prompt to some lines (`scala> @@END`).
+    shell = "/opt/spark/bin/spark-shell --master 'local[1]' --driver-memory 2g"
+    for how in (f"{shell} -I /tmp/krishiv_script.scala", f"{shell} < /tmp/krishiv_script.scala"):
+        cmd = ["docker", "exec", container, "sh", "-c", f"{how} 2>/dev/null; true"]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, check=True).stdout
+        lines = [m.group(1) for line in out.splitlines() if (m := re.match(r"^(?:scala> )*(@@.*)$", line))]
+        if "@@END" in lines:
+            break
+    subprocess.run(
+        ["docker", "exec", container, "sh", "-c", "rm -f /tmp/krishiv_script.scala /tmp/krishiv_cases.jsonl"],
+        check=False,
+    )
     if "@@END" not in lines:
         raise SystemExit("spark-shell script did not complete:\n" + out[-2000:])
     return lines
