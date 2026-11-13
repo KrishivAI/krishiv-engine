@@ -14,7 +14,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_types::StructType;
 
 use super::scan;
-use super::storage::{StorageRegistration, from_iceberg};
+use super::storage::{Registered, StorageRegistration, from_iceberg};
 use super::types::spark_schema;
 use crate::plan::{ManifestFilter, PruneOptions, ScanPlan, TableSnapshot, VersionSpec};
 use krishiv_io::PushdownExpr;
@@ -22,6 +22,8 @@ use krishiv_io::PushdownExpr;
 /// An Iceberg table's metadata, read through a [`StorageRegistration`].
 pub struct IcebergTable {
     pub(super) table: Table,
+    /// The I/O and path placement data files are read through.
+    pub(super) registered: Registered,
 }
 
 impl fmt::Debug for IcebergTable {
@@ -60,7 +62,8 @@ impl IcebergTable {
             .readonly(true)
             .build()
             .map_err(from_iceberg)?;
-        Ok(Self { table })
+        let registered = storage.registered()?;
+        Ok(Self { table, registered })
     }
 
     /// The current schema as Spark's Iceberg integration shows it.

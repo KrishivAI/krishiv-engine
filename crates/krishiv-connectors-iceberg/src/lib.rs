@@ -12,5 +12,6 @@
 mod iceberg_v0;
 pub mod plan;
 
+pub use iceberg_v0::provider::IcebergTableProvider;
 pub use iceberg_v0::storage::StorageRegistration;
 pub use iceberg_v0::table::IcebergTable;

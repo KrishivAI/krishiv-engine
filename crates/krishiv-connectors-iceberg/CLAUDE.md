@@ -3,23 +3,32 @@
 **Layer:** L5 (may depend only on crates in L5 or lower; `cargo xtask layering`).  
 **Real code since:** P3-T022a (PR-06): iceberg-rust 0.11's file access over Krishiv's I/O, metadata loading, the
 Spark type mapping and the bridged `inspect` tables. Scan planning since P3-T026 (PR-25a). Catalog clients are PR-17
-(T022b); delete application, the `TableProvider` and caches are PR-25b–d; commits T027.
+(T022b); the `TableProvider` over append-only tables since PR-25a step 2; delete application and caches are
+PR-25b–d; commits T027.
 
 ## Purpose
 Iceberg table connector. The only crate that depends on `iceberg` (iceberg-rust, Arrow 58).
 
 ## Layout
-`src/lib.rs` the public items (`StorageRegistration`, `IcebergTable`, module `plan`) · `src/iceberg_v0/` (private; every item
+`src/lib.rs` the public items (`StorageRegistration`, `IcebergTable`, `IcebergTableProvider`, module `plan`) · `src/iceberg_v0/` (private; every item
 that names `iceberg`): `storage.rs` iceberg's `Storage`/`StorageFactory` (`#[typetag::serde]`, tag `krishiv`)
 over `krishiv-io`'s `IoContext`, the process registry of registration names, `iceberg::Runtime` on the
 scheduler's I/O runtime, error mapping both ways (a Krishiv error keeps its class through iceberg-rust) ·
 `types.rs` Iceberg → Spark types (Iceberg's `TypeToSparkType`, apache-iceberg 1.12.0) · `table.rs`
 `IcebergTable` (load from a metadata location, schema, `snapshots`/`manifests` as Arrow 60, `snapshot(VersionSpec)`,
-`plan`) · `scan.rs` metadata → `TableSnapshot` (refs read from the metadata's serialisation: iceberg-rust has no
+`plan`) · `provider.rs` `IcebergTableProvider` (design note §3.1): a pinned snapshot's data files as the file list
+of `krishiv-exec`'s `FileScan` (Parquet, Spark split planning), columns by field id with Java's positional fallback
+for files without ids (`FieldMapping::FieldIdOr`; refused under a name mapping until 25c), identity-partition
+columns constant in every file's spec read from the manifest (`FileConstants`, FC S4), a snapshot with delete
+files refused (25b), pushed filters pruning files through `Pruner` when the scan is built (still applied above);
+`types.rs` also builds the Arrow table schema carrying every Iceberg id · `scan.rs` metadata → `TableSnapshot` (refs read from the metadata's serialisation: iceberg-rust has no
 accessor and its `snapshot_for_ref` panics on a dangling ref), manifest list and manifests fetched through the
 `FileIO` and parsed with iceberg-rust's public parsers into `plan` values, up to 8 manifests at once · `tests.rs`,
 `scan_tests.rs` (manifests written by iceberg-rust's `ManifestWriterBuilder`, transforms against iceberg-rust's,
-an in-memory-catalog table planned and time-travelled).
+an in-memory-catalog table planned and time-travelled), `provider_tests.rs` (SQL through the executor: identity
+partitions from the manifest, files without ids, delete files refused, time travel, the 22 TPC-H queries over
+Iceberg equal to the same Parquet files), `baseline_tests.rs` (ignored: the §2.3 planning baseline, 1,000
+manifests × 100 entries, timed as fetch/parse/map/prune).
 `src/plan/` (public, Krishiv-owned types only; design note `P3-T026-T027-iceberg-scan-and-commit.md` §2): `types.rs`
 `IcebergType`, `SchemaField` (primitive columns reachable through structs), `PartitionSpecInfo`/`Transform` ·
 `snapshot.rs` `VersionSpec` (connector-local until PR-07's `TableVersionSpec`), resolution with Iceberg's error texts
@@ -44,7 +53,7 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 - Pruning keeps every file that may hold a matching row under Spark's semantics: a float column that may hold NaN
   is never pruned by bounds, a string/binary upper bound at the truncation length is a prefix, a bound that does
   not decode is dropped (never the file), unknown transforms and columns keep. Time-travel errors carry Iceberg's
-  `IllegalArgumentException` texts (class: `INTERNAL_ERROR` until a Krishiv class exists).
+  `IllegalArgumentException` texts (class `KRISHIV_TIME_TRAVEL_NOT_FOUND`, SQLSTATE 42K0E).
 - `#![forbid(unsafe_code)]`. No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE
   (iceberg-rust's own failures map to `INTERNAL_ERROR` naming its message until PR-17's catalog classes).
 

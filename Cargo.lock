@@ -2815,6 +2815,8 @@ name = "krishiv-connectors-iceberg"
 version = "0.2.0"
 dependencies = [
  "arrow-array 60.1.0",
+ "arrow-schema 60.1.0",
+ "arrow-select 60.1.0",
  "async-trait",
  "bytes",
  "futures",
@@ -2823,8 +2825,13 @@ dependencies = [
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
+ "krishiv-memory",
+ "krishiv-optimizer",
+ "krishiv-plan",
+ "krishiv-sql",
  "krishiv-types",
  "object_store",
+ "parquet 60.1.0",
  "proptest",
  "serde",
  "serde_json",

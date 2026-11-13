@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
@@ -28,7 +29,14 @@ tokio = { workspace = true, features = ["rt"] }
 typetag = { workspace = true }
 
 [dev-dependencies]
+arrow-select = { workspace = true }
+krishiv-memory = { path = "../krishiv-memory" }
+krishiv-optimizer = { path = "../krishiv-optimizer" }
+krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
+krishiv-sql = { path = "../krishiv-sql" }
 object_store = { workspace = true }
+# Writes the Parquet files of the provider tests (with and without field ids).
+parquet = { workspace = true, features = ["arrow"] }
 proptest = { workspace = true, features = ["std"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
