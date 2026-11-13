@@ -695,13 +695,13 @@ fn decoding_and_dropping_a_plan_at_the_cap_fits_a_256_kb_stack() {
     let handle = std::thread::Builder::new()
         .stack_size(256 * 1024)
         .spawn(move || {
+            // Only decode and drop run here: both hop to the big-stack thread, unlike prost's
+            // recursive `encoded_len`, which is deliberately not called.
             let rel = decode_relation(&bytes).expect("decodes at the cap");
-            let size = rel.encoded_len();
             drop(rel);
-            size
         })
         .expect("spawn");
-    assert!(handle.join().expect("no stack overflow") > 0);
+    handle.join().expect("no stack overflow");
 }
 
 #[test]
