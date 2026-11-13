@@ -1,5 +1,5 @@
 ---
-description: Move a PySpark job to Krishiv: setup, unsupported functions with workarounds, and behaviour differences.
+description: Move a PySpark job to Krishiv: unsupported functions, workarounds and behaviour differences.
 ---
 
 <!-- SPDX-License-Identifier: Apache-2.0 -->
