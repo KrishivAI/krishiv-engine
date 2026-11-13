@@ -128,6 +128,31 @@ pub fn krishiv_session::agent::session_zone(core::option::Option<&str>) -> core:
 pub fn krishiv_session::agent::spark_float(f64) -> alloc::string::String
 pub fn krishiv_session::agent::spark_float32(f32) -> alloc::string::String
 pub mod krishiv_session::auth
+#[non_exhaustive] pub enum krishiv_session::auth::Alg
+pub krishiv_session::auth::Alg::Es256
+pub krishiv_session::auth::Alg::Es384
+pub krishiv_session::auth::Alg::Rs256
+pub krishiv_session::auth::Alg::Rs384
+pub krishiv_session::auth::Alg::Rs512
+impl krishiv_session::auth::Alg
+pub const krishiv_session::auth::Alg::ALL: [Self; 5]
+pub fn krishiv_session::auth::Alg::as_str(self) -> &'static str
+pub fn krishiv_session::auth::Alg::parse(&str) -> core::option::Option<Self>
+impl core::clone::Clone for krishiv_session::auth::Alg
+pub fn krishiv_session::auth::Alg::clone(&self) -> krishiv_session::auth::Alg
+impl core::cmp::Eq for krishiv_session::auth::Alg
+impl core::cmp::Ord for krishiv_session::auth::Alg
+pub fn krishiv_session::auth::Alg::cmp(&self, &krishiv_session::auth::Alg) -> core::cmp::Ordering
+impl core::cmp::PartialEq for krishiv_session::auth::Alg
+pub fn krishiv_session::auth::Alg::eq(&self, &krishiv_session::auth::Alg) -> bool
+impl core::cmp::PartialOrd for krishiv_session::auth::Alg
+pub fn krishiv_session::auth::Alg::partial_cmp(&self, &krishiv_session::auth::Alg) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for krishiv_session::auth::Alg
+pub fn krishiv_session::auth::Alg::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::auth::Alg
+pub fn krishiv_session::auth::Alg::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_session::auth::Alg
+impl core::marker::StructuralPartialEq for krishiv_session::auth::Alg
 #[non_exhaustive] pub enum krishiv_session::auth::AuthFailure
 pub krishiv_session::auth::AuthFailure::Expired
 pub krishiv_session::auth::AuthFailure::Invalid
@@ -284,11 +309,13 @@ impl core::marker::Copy for krishiv_session::auth::Surface
 impl core::marker::StructuralPartialEq for krishiv_session::auth::Surface
 #[non_exhaustive] pub struct krishiv_session::auth::AuthConfig
 pub krishiv_session::auth::AuthConfig::mtls: krishiv_session::auth::MtlsConfig
+pub krishiv_session::auth::AuthConfig::oidc: krishiv_session::auth::OidcConfig
 pub krishiv_session::auth::AuthConfig::roles: krishiv_session::auth::RoleLists
 pub krishiv_session::auth::AuthConfig::throttle: krishiv_session::auth::ThrottleConfig
 pub krishiv_session::auth::AuthConfig::tokens: alloc::vec::Vec<krishiv_session::auth::TokenSpec>
 impl krishiv_session::auth::AuthConfig
 pub fn krishiv_session::auth::AuthConfig::from_settings<'a>(impl core::iter::traits::collect::IntoIterator<Item = (&'a str, &'a str)>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::auth::AuthConfig::has_bearer_method(&self) -> bool
 pub fn krishiv_session::auth::AuthConfig::is_configured(&self) -> bool
 impl core::clone::Clone for krishiv_session::auth::AuthConfig
 pub fn krishiv_session::auth::AuthConfig::clone(&self) -> krishiv_session::auth::AuthConfig
@@ -384,6 +411,31 @@ pub fn krishiv_session::auth::MtlsConfig::default() -> krishiv_session::auth::Mt
 impl core::fmt::Debug for krishiv_session::auth::MtlsConfig
 pub fn krishiv_session::auth::MtlsConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::auth::MtlsConfig
+#[non_exhaustive] pub struct krishiv_session::auth::OidcConfig
+pub krishiv_session::auth::OidcConfig::algorithms: alloc::vec::Vec<krishiv_session::auth::Alg>
+pub krishiv_session::auth::OidcConfig::allow_insecure_issuer: bool
+pub krishiv_session::auth::OidcConfig::audience: core::option::Option<alloc::string::String>
+pub krishiv_session::auth::OidcConfig::clock_skew: core::time::Duration
+pub krishiv_session::auth::OidcConfig::issuer: core::option::Option<alloc::string::String>
+pub krishiv_session::auth::OidcConfig::jwks_refresh: core::time::Duration
+pub krishiv_session::auth::OidcConfig::jwks_uri: core::option::Option<alloc::string::String>
+pub krishiv_session::auth::OidcConfig::principal_claim: alloc::string::String
+pub krishiv_session::auth::OidcConfig::role_claim: alloc::string::String
+pub krishiv_session::auth::OidcConfig::roles: krishiv_session::auth::RoleLists
+impl krishiv_session::auth::OidcConfig
+pub fn krishiv_session::auth::OidcConfig::discovery_uri(&self) -> core::option::Option<alloc::string::String>
+pub fn krishiv_session::auth::OidcConfig::is_on(&self) -> bool
+pub fn krishiv_session::auth::OidcConfig::uri_allowed(&self, &str) -> bool
+impl core::clone::Clone for krishiv_session::auth::OidcConfig
+pub fn krishiv_session::auth::OidcConfig::clone(&self) -> krishiv_session::auth::OidcConfig
+impl core::cmp::Eq for krishiv_session::auth::OidcConfig
+impl core::cmp::PartialEq for krishiv_session::auth::OidcConfig
+pub fn krishiv_session::auth::OidcConfig::eq(&self, &krishiv_session::auth::OidcConfig) -> bool
+impl core::default::Default for krishiv_session::auth::OidcConfig
+pub fn krishiv_session::auth::OidcConfig::default() -> Self
+impl core::fmt::Debug for krishiv_session::auth::OidcConfig
+pub fn krishiv_session::auth::OidcConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::OidcConfig
 pub struct krishiv_session::auth::RoleLists
 impl krishiv_session::auth::RoleLists
 pub fn krishiv_session::auth::RoleLists::role_of(&self, &str) -> core::option::Option<krishiv_session::auth::Role>
@@ -857,7 +909,9 @@ pub fn krishiv_session::OptimizerStep::fmt(&self, &mut core::fmt::Formatter<'_>)
 impl core::marker::StructuralPartialEq for krishiv_session::OptimizerStep
 pub struct krishiv_session::PathPrefixPolicy
 impl krishiv_session::PathPrefixPolicy
+pub fn krishiv_session::PathPrefixPolicy::from_config(&krishiv_common::config::Config, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::PathPrefixPolicy::new<P: core::convert::AsRef<std::path::Path>>(impl core::iter::traits::collect::IntoIterator<Item = P>, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::PathPrefixPolicy::with_object_prefixes<S: core::convert::AsRef<str>>(self, impl core::iter::traits::collect::IntoIterator<Item = S>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::PathPrefixPolicy
 pub fn krishiv_session::PathPrefixPolicy::clone(&self) -> krishiv_session::PathPrefixPolicy
 impl core::fmt::Debug for krishiv_session::PathPrefixPolicy
