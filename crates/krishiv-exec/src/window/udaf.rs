@@ -28,7 +28,11 @@ use crate::aggregate::{AggInput, AggregateExpr, AggregateFunction, UdafEnv, accu
 use crate::error::{Result, internal};
 
 /// The most frame rows one chunk of a sliding frame folds at once.
+#[cfg(not(test))]
 const CHUNK: usize = 1 << 16;
+/// Small in tests, so frames wider than a chunk are cheap to test.
+#[cfg(test)]
+const CHUNK: usize = 1 << 10;
 
 /// Whether `a` is an aggregate UDF call.
 pub(super) const fn is_udf(a: &AggregateExpr) -> bool {
@@ -88,6 +92,18 @@ impl<'a> Charge<'a> {
     /// refused growth), if it refused one.
     pub(super) const fn refused(&self) -> Option<usize> {
         self.refused
+    }
+
+    /// Brings the charge to at least `size` (never down).
+    ///
+    /// # Errors
+    /// As [`Self::to`].
+    fn at_least(&mut self, size: usize) -> Result<()> {
+        if self.base.saturating_add(size) > self.held {
+            self.to(size)
+        } else {
+            Ok(())
+        }
     }
 
     /// Brings the charge to `size`.
@@ -297,10 +313,13 @@ fn sliding(
             }
         }
         flush(&mut acc, &mut members, &mut groups)?;
-        charge.to(acc.size())?;
+        // The charge keeps the largest chunk's state until the evaluation
+        // ends (the chunks' states come and go): a retry's credit is not
+        // handed back to the pool between chunks, and a refusal names what
+        // the largest chunk needs.
+        charge.at_least(acc.size())?;
         let ids: Vec<u32> = (0..last - first).map(id).collect::<Result<_>>()?;
         values.push(acc.evaluate(&ids)?);
-        charge.to(0)?;
         first = last;
     }
     concat(&values)

@@ -169,7 +169,7 @@ pub(super) fn evaluate_with(
     legacy: bool,
     zone: &krishiv_kernels::datetime::ZoneRef,
     udafs: Option<&crate::aggregate::UdafEnv>,
-    mut pool: Option<&mut krishiv_memory::Reservation>,
+    pool: Option<&mut krishiv_memory::Reservation>,
 ) -> Result<std::result::Result<Vec<ArrayRef>, usize>> {
     let mut unit = Unit::new(slices)?;
     if has_range_offsets(plan)
@@ -189,7 +189,7 @@ pub(super) fn evaluate_with(
     // ones before held, and released with the evaluation: a refusal names
     // the evaluation's whole need, and a retry's credit is not handed back
     // to the pool between functions.
-    let mut charge = super::udaf::Charge::new(pool.as_deref_mut());
+    let mut charge = super::udaf::Charge::new(pool);
     for f in &plan.functions {
         columns.push(match &f.function {
             WindowFunction::Aggregate(a) if super::udaf::is_udf(a) => {

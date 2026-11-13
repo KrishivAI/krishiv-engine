@@ -180,6 +180,11 @@ enum OnNeed {
     Grant,
     /// Gives `bytes` back from the hog and parks exactly that as credit.
     GrantExact,
+    /// As `GrantExact`, then the hog takes every byte the pool has free
+    /// again (another consumer fills the pool after the grant).
+    GrantRefill,
+    /// As `GrantExact`, crediting 64 KiB more than asked.
+    GrantMore,
     /// Asks the window to spill (its buffered rows); others free 1 MiB.
     Spill,
     /// Grants nothing (the driver found no memory).
@@ -196,6 +201,9 @@ enum Phase {
 struct Run {
     out: Vec<Batch>,
     needs: Vec<(Phase, usize)>,
+    /// The consumer's credit after the last `flush` (before the harness
+    /// releases it).
+    credit_left: usize,
 }
 
 /// Drives `op` over `input` as the driver does: the same batch again after
@@ -208,29 +216,54 @@ async fn drive(
     hog: &mut Reservation,
     policy: &mut dyn FnMut(Phase) -> OnNeed,
 ) -> crate::Result<Run> {
+    drive_over(op, ctx, &input(), hog, policy).await
+}
+
+/// [`drive`] over `input`.
+async fn drive_over(
+    op: &Window,
+    ctx: &TaskContext,
+    input: &[Batch],
+    hog: &mut Reservation,
+    policy: &mut dyn FnMut(Phase) -> OnNeed,
+) -> crate::Result<Run> {
     let budget = 10_000;
     let mut calls = 0;
     let mut local = op.local_state(ctx)?;
     let mut run = Run {
         out: Vec::new(),
         needs: Vec::new(),
+        credit_left: 0,
     };
     let mut answer =
         |phase: Phase, bytes: usize, local: &mut LocalState, run: &mut Run| -> Option<OnNeed> {
             run.needs.push((phase, bytes));
             let how = policy(phase);
             match how {
-                OnNeed::Grant | OnNeed::GrantExact => {
+                OnNeed::Grant | OnNeed::GrantExact | OnNeed::GrantRefill | OnNeed::GrantMore => {
+                    let credit = if how == OnNeed::GrantMore {
+                        bytes + (64 << 10)
+                    } else {
+                        bytes
+                    };
                     let give = if how == OnNeed::Grant {
                         hog.size()
                     } else {
-                        // The bytes asked for, rounded up past the pool's quantum.
-                        (bytes + (32 << 10)).min(hog.size())
+                        // The bytes credited, rounded up past the pool's quantum.
+                        (credit + (32 << 10)).min(hog.size())
                     };
                     hog.shrink(give);
                     let mut r = ctx.consumer().reservation();
-                    r.try_grow(bytes).unwrap();
-                    r.shrink_to_credit(bytes);
+                    r.try_grow(credit).unwrap();
+                    r.shrink_to_credit(credit);
+                    if how == OnNeed::GrantRefill {
+                        let mut step = 64 << 20;
+                        while step > 0 {
+                            if hog.try_grow(step).is_err() {
+                                step /= 2;
+                            }
+                        }
+                    }
                     None
                 }
                 OnNeed::Spill => {
@@ -243,11 +276,11 @@ async fn drive(
                 OnNeed::Nothing => Some(how),
             }
         };
-    for b in input_of(ctx) {
+    for b in input {
         loop {
             calls += 1;
             assert!(calls < budget, "the window loops");
-            match op.execute(&b, &mut local)? {
+            match op.execute(b, &mut local)? {
                 OperatorOutput::NeedMoreInput(o) => {
                     run.out.extend(o);
                     break;
@@ -293,13 +326,10 @@ async fn drive(
             }
         }
     }
+    run.credit_left = ctx.consumer().consumer().credit();
     drop(local);
     ctx.consumer().consumer().release_credit();
     Ok(run)
-}
-
-fn input_of(_: &TaskContext) -> Vec<Batch> {
-    input()
 }
 
 /// The output of `frame` on an unconstrained pool.
@@ -531,10 +561,116 @@ fn two_udafs_of_one_evaluation_ask_for_their_states_together() {
         let want = reference_of(&window_of(functions(), None, PER_ROW), 2).await;
         let op = window_of(functions(), None, PER_ROW);
         let (_root, ctx, mut hog) = tight(48 << 10);
-        let run = drive(&op, &ctx, &mut hog, &mut |_| OnNeed::GrantExact)
+        let run = drive(&op, &ctx, &mut hog, &mut |_| OnNeed::GrantRefill)
             .await
             .unwrap();
         assert!(!run.needs.is_empty());
         assert_eq!(outputs(&run.out, 2), want);
+    });
+}
+
+#[test]
+fn a_granted_end_of_input_request_returns_what_it_left() {
+    runtime().block_on(async {
+        let frame = WindowFrame::whole(FrameUnits::Rows);
+        let want = reference(frame).await;
+        let op = window(frame, None);
+        let (_root, ctx, mut hog) = tight_with(200 << 10, at_the_end());
+        let run = drive(&op, &ctx, &mut hog, &mut |_| OnNeed::GrantMore)
+            .await
+            .unwrap();
+        assert_eq!(
+            run.needs.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+            vec![Phase::Flush]
+        );
+        assert_eq!(outputs(&run.out, 1), want);
+        assert_eq!(run.credit_left, 0, "the unused credit went back");
+    });
+}
+
+#[test]
+fn a_sliding_frame_wider_than_a_chunk_keeps_its_credit_across_chunks() {
+    runtime().block_on(async {
+        // One partition of 3,000 rows and frames of 1,501 rows: each unit
+        // folds in several chunks of `CHUNK` (1,024 in tests) frame rows.
+        let rows: Vec<Row> = (0..3_000)
+            .map(|i| (Some(0), Some(i), i, Some(i % 7)))
+            .collect();
+        let input: Vec<Batch> = rows.chunks(100).map(batch).collect();
+        let frame = WindowFrame {
+            units: FrameUnits::Rows,
+            lower: FrameBound::Offset(-1_500),
+            upper: FrameBound::CurrentRow,
+        };
+        let want = {
+            let op = window(frame, None);
+            let (_root, ctx) = task_with(1 << 30, config());
+            let pool = Arc::clone(ctx.query().pool());
+            let mut hog = Reservation::new(Arc::clone(&pool), pool.register("hog", None));
+            let run = drive_over(&op, &ctx, &input, &mut hog, &mut |_| {
+                unreachable!("no refusal")
+            })
+            .await
+            .unwrap();
+            outputs(&run.out, 1)
+        };
+        // After each grant the pool fills again. (A chunk's bytes handed
+        // back to the pool would only be lost to another consumer taking
+        // them between two chunks, which one driver here cannot show; this
+        // covers the frames wider than a chunk and their retries.)
+        let op = window(frame, None);
+        let (_root, ctx, mut hog) = tight_with(48 << 10, at_the_end());
+        let run = drive_over(&op, &ctx, &input, &mut hog, &mut |_| OnNeed::GrantRefill)
+            .await
+            .unwrap();
+        assert!(!run.needs.is_empty());
+        assert_eq!(outputs(&run.out, 1), want);
+    });
+}
+
+#[test]
+fn a_refusal_names_the_states_of_every_udaf_of_the_evaluation() {
+    runtime().block_on(async {
+        // Two whole-partition UDAFs over one partition of 300 rows: each state
+        // is 300 * PER_ROW. The pool holds one but not both, so the second is
+        // refused, and the request covers both (the first one's state stays
+        // charged until the evaluation ends).
+        let op = window_of(
+            vec![
+                (grow(), WindowFrame::whole(FrameUnits::Rows)),
+                (grow(), WindowFrame::whole(FrameUnits::Rows)),
+            ],
+            None,
+            PER_ROW,
+        );
+        let rows: Vec<Row> = (0..300)
+            .map(|i| (Some(0), Some(i), i, Some(i % 7)))
+            .collect();
+        let b = batch(&rows);
+        let part_start: Vec<bool> = (0..300).map(|i| i == 0).collect();
+        let peer_start = vec![true; 300];
+        let slices = [eval::Slice {
+            batch: b.data(),
+            offset: 0,
+            len: 300,
+            part_start: &part_start,
+            peer_start: &peer_start,
+        }];
+        let state = 300 * PER_ROW;
+        let (_root, ctx, _hog) = tight(state + state / 2);
+        let mut window = ctx.consumer().reservation();
+        let got = eval::evaluate_with(
+            &op.env.plan,
+            &slices,
+            false,
+            false,
+            &super::utc_zone(),
+            op.env.udafs.as_ref(),
+            Some(&mut window),
+        )
+        .unwrap();
+        assert_eq!(got.err(), Some(2 * state));
+        // Nothing stays charged after the refusal.
+        assert_eq!(window.size(), 0);
     });
 }
