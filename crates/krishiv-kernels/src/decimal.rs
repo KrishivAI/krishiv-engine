@@ -38,7 +38,7 @@
 //! and errors are those of the checked path.
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::Decimal128Type;
+use arrow_array::types::{Decimal64Type, Decimal128Type};
 use arrow_array::{Array, ArrayRef, Decimal128Array, Int64Array, PrimitiveArray};
 use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
 
@@ -591,12 +591,17 @@ impl<'p, Op, R, const L_UNIT: bool, const R_UNIT: bool> Lane64<'p, Op, R, L_UNIT
     }
 }
 
-impl<N: DecimalNative, Op: BinaryOp, R: DecimalOut, const L_UNIT: bool, const R_UNIT: bool>
-    LaneOp<N> for Lane64<'_, Op, R, L_UNIT, R_UNIT>
+impl<A, B, Op, R, const L_UNIT: bool, const R_UNIT: bool> LaneOp<A, B>
+    for Lane64<'_, Op, R, L_UNIT, R_UNIT>
+where
+    A: DecimalNative,
+    B: DecimalNative,
+    Op: BinaryOp,
+    R: DecimalOut,
 {
     type Out = R;
     #[inline(always)]
-    fn wrapping(self, a: N, b: N) -> R {
+    fn wrapping(self, a: A, b: B) -> R {
         let (a, b) = (a.low64().0, b.low64().0);
         let a = if L_UNIT {
             a
@@ -611,7 +616,7 @@ impl<N: DecimalNative, Op: BinaryOp, R: DecimalOut, const L_UNIT: bool, const R_
         R::of64(Op::wrapping(a, b))
     }
     #[inline(always)]
-    fn checked(self, a: N, b: N) -> (R, bool) {
+    fn checked(self, a: A, b: B) -> (R, bool) {
         let ((a, wa), (b, wb)) = (a.low64(), b.low64());
         let (a, fa) = if L_UNIT {
             (a, false)
@@ -628,8 +633,37 @@ impl<N: DecimalNative, Op: BinaryOp, R: DecimalOut, const L_UNIT: bool, const R_
         (R::of64(v), bad)
     }
     #[inline(always)]
-    fn fault(self, a: N, b: N) -> Option<Fault> {
+    fn fault(self, a: A, b: B) -> Option<Fault> {
         self.plan.eval(a.wide(), b.wide()).err()
+    }
+}
+
+/// The 64-bit lanes as a try (E2 step 3): every row [`Lane64::checked`]
+/// flags counts as a fault, so a raising policy stops at the first
+/// non-NULL row the 64-bit lanes might not compute exactly (an operand
+/// outside 64 bits, an overflowing rescale or result, or a result at the
+/// 64-bit range check). A batch that finishes has, on every non-NULL row,
+/// the exact result and one inside the result precision: what the checked
+/// lanes return, with no error and no NULL under any policy. This replaces
+/// the separate pass of [`batch_proof`] for batches whose values are small
+/// (the common case on wide types), and it masks NULL slots, which the
+/// proof cannot.
+#[derive(Clone, Copy)]
+struct Exact64<L>(L);
+
+impl<A, B, L: LaneOp<A, B>> LaneOp<A, B> for Exact64<L> {
+    type Out = L::Out;
+    #[inline(always)]
+    fn wrapping(self, a: A, b: B) -> L::Out {
+        self.0.wrapping(a, b)
+    }
+    #[inline(always)]
+    fn checked(self, a: A, b: B) -> (L::Out, bool) {
+        self.0.checked(a, b)
+    }
+    #[inline(always)]
+    fn fault(self, a: A, b: B) -> Option<Fault> {
+        self.0.checked(a, b).1.then_some(Fault::Overflow)
     }
 }
 
@@ -874,6 +908,15 @@ where
 {
     check_plan::<O>(l, r, plan.left, plan.right, plan.overflow_impossible())?;
     carrier.check(plan.out.0)?;
+    if plan.storage == DecimalStorage::I128 {
+        let tried = match carrier {
+            DecimalCarrier::Decimal64 => try_lanes64::<Op, i64>(l, r, plan, carrier, ctx)?,
+            DecimalCarrier::Decimal128 => try_lanes64::<Op, i128>(l, r, plan, carrier, ctx)?,
+        };
+        if let Some(out) = tried {
+            return Ok(out);
+        }
+    }
     let mut keep = [None, None];
     match (lanes(l, r, &mut keep)?, carrier) {
         (Lanes::AllNull(len), _) => all_null(len, plan, carrier),
@@ -889,6 +932,108 @@ where
         (Lanes::Wide(a, b, n, len), DecimalCarrier::Decimal128) => {
             fast_lanes::<i128, Op, O, i128>(plan, ctx, a, b, n, len, carrier)
         }
+    }
+}
+
+/// A decimal operand on the narrowest native it has without a copy.
+enum Native<'a> {
+    Narrow(Operand<'a, Decimal64Type>),
+    Wide(Operand<'a, Decimal128Type>),
+}
+
+/// `o` without a copy: a `Decimal64` column or a literal that fits an
+/// `i64` on 64-bit natives, anything else on 128-bit ones.
+fn native(o: DecimalOperand<'_>) -> Native<'_> {
+    match o {
+        DecimalOperand::Decimal64(a) => Native::Narrow(Operand::Array(a)),
+        DecimalOperand::Decimal128(a) => Native::Wide(Operand::Array(a)),
+        DecimalOperand::Scalar(None) => Native::Narrow(Operand::Scalar(None)),
+        DecimalOperand::Scalar(Some(v)) => match i64::try_from(v) {
+            Ok(v) => Native::Narrow(Operand::Scalar(Some(v))),
+            Err(_) => Native::Wide(Operand::Scalar(Some(v))),
+        },
+    }
+}
+
+/// The 64-bit try ([`Exact64`]) of an exact `+ - *` plan on 128-bit
+/// storage, on the operands' own carriers (a `Decimal64` side is not
+/// widened): the result when every non-NULL row computes exactly on 64-bit
+/// lanes, `Ok(None)` when the batch must take the checked or proven
+/// 128-bit lanes (also for an all-NULL batch, which they settle).
+fn try_lanes64<Op: BinaryOp, R: DecimalOut>(
+    l: DecimalOperand<'_>,
+    r: DecimalOperand<'_>,
+    plan: &DecimalPlan,
+    carrier: DecimalCarrier,
+    ctx: &impl Dispatch,
+) -> Result<Option<ArrayRef>, KernelError> {
+    let fits = |m: i128| i64::try_from(m).is_ok();
+    if !(fits(plan.l_mul) && fits(plan.r_mul)) {
+        return Ok(None);
+    }
+    match (native(l), native(r)) {
+        (Native::Narrow(a), Native::Narrow(b)) => {
+            exact64::<_, _, Op, R>(plan, ctx, chunk::resolve_mixed(a, b)?, carrier)
+        }
+        (Native::Narrow(a), Native::Wide(b)) => {
+            exact64::<_, _, Op, R>(plan, ctx, chunk::resolve_mixed(a, b)?, carrier)
+        }
+        (Native::Wide(a), Native::Narrow(b)) => {
+            exact64::<_, _, Op, R>(plan, ctx, chunk::resolve_mixed(a, b)?, carrier)
+        }
+        (Native::Wide(a), Native::Wide(b)) => {
+            exact64::<_, _, Op, R>(plan, ctx, chunk::resolve_mixed(a, b)?, carrier)
+        }
+    }
+}
+
+/// [`try_lanes64`] on resolved sides of natives `A` and `B`.
+fn exact64<A, B, Op, R>(
+    plan: &DecimalPlan,
+    ctx: &impl Dispatch,
+    resolved: Resolved<'_, A, B>,
+    carrier: DecimalCarrier,
+) -> Result<Option<ArrayRef>, KernelError>
+where
+    A: DecimalNative,
+    B: DecimalNative,
+    Op: BinaryOp,
+    R: DecimalOut,
+{
+    let Resolved::Lanes { l, r, nulls, len } = resolved else {
+        return Ok(None);
+    };
+    // Every fault of `Exact64` is "not exact on 64 bits": the raise below
+    // only marks the fallback, it never reaches the caller.
+    let fell = std::cell::Cell::new(false);
+    let raise = |_: usize, _: Fault| {
+        fell.set(true);
+        KernelError::internal("decimal 64-bit lanes fell back")
+    };
+    macro_rules! go {
+        ($lu:literal, $ru:literal) => {
+            chunk::compute_mixed::<A, B, _, AnsiError>(
+                ctx,
+                l,
+                r,
+                nulls,
+                len,
+                Exact64(Lane64::<Op, R, $lu, $ru>::new(plan)),
+                raise,
+            )
+        };
+    }
+    // A side at the result scale skips the rescale multiply.
+    let computed = match (plan.l_mul == 1, plan.r_mul == 1) {
+        (true, true) => go!(true, true),
+        (true, false) => go!(true, false),
+        (false, true) => go!(false, true),
+        (false, false) => go!(false, false),
+    };
+    match computed {
+        Ok(c) => R::finish(c.values, c.nulls, carrier, plan.out).map(Some),
+        Err(_) if fell.get() => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
@@ -1397,5 +1542,85 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// The 64-bit try (E2 step 3): a `Decimal128` column against a
+    /// `Decimal64` one without a widened copy, a large value under a NULL
+    /// slot does not send the batch back, a large valid value does, and the
+    /// fallback keeps the checked lanes' results and error row.
+    #[test]
+    fn exact64_try_and_fallback() {
+        use arrow_array::Decimal64Array;
+        let ctx = crate::KernelCtx::new();
+        // q01's `(price * (1 - discount)) * (1 + tax)`: (32,4) x (16,2) -> (38,6).
+        let p = plan(ArithOp::Multiply, (32, 4), (16, 2), (38, 6));
+        assert_eq!(p.storage(), DecimalStorage::I128);
+        let big = 10_i128.pow(30);
+        let l = |v: Vec<Option<i128>>| {
+            Decimal128Array::from(v)
+                .with_precision_and_scale(32, 4)
+                .unwrap()
+        };
+        let r = Decimal64Array::from(vec![Some(106_i64), Some(-7), Some(10_i64.pow(15))])
+            .with_precision_and_scale(16, 2)
+            .unwrap();
+        let rd = DecimalOperand::Decimal64(&r);
+        let try_mul = |a: &Decimal128Array| {
+            try_lanes64::<crate::Mul, i128>(
+                DecimalOperand::Decimal128(a),
+                rd,
+                &p,
+                DecimalCarrier::Decimal128,
+                &ctx,
+            )
+            .unwrap()
+        };
+        let any = |a: &Decimal128Array| {
+            let out = decimal_arith_any::<AnsiError>(
+                DecimalOperand::Decimal128(a),
+                rd,
+                &p,
+                DecimalCarrier::Decimal128,
+                &ctx,
+            )?;
+            Ok::<_, KernelError>(out.as_primitive::<Decimal128Type>().clone())
+        };
+        // Small values: the try computes the batch.
+        let small = l(vec![Some(12_345), Some(2), None]);
+        let out = try_mul(&small).unwrap();
+        let out = out.as_primitive::<Decimal128Type>();
+        assert_eq!(
+            (out.value(0), out.value(1), out.is_null(2)),
+            (1_308_570, -14, true)
+        );
+        // A large value under a NULL slot: the lanes mask it out.
+        let masked = Decimal128Array::new(
+            vec![12_345, 2, big].into(),
+            Some(NullBuffer::from(vec![true, true, false])),
+        )
+        .with_precision_and_scale(32, 4)
+        .unwrap();
+        assert!(try_mul(&masked).is_some());
+        assert_eq!(any(&masked).unwrap(), any(&small).unwrap());
+        // A large valid value: the try falls back, the checked lanes compute it.
+        let wide = l(vec![Some(12_345), Some(big), Some(1)]);
+        assert!(try_mul(&wide).is_none());
+        let out = any(&wide).unwrap();
+        assert_eq!(out.value(1), big * -7);
+        assert_eq!(out.value(2), 10_i128.pow(15));
+        // An overflowing row raises at the same row after the fallback.
+        let over = l(vec![Some(1), Some(2), Some(10_i128.pow(32) - 1)]);
+        let e = any(&over).unwrap_err();
+        assert_eq!(e.row(), Some(2));
+        // A literal beyond 64 bits takes the 128-bit lanes directly.
+        let s = try_lanes64::<crate::Mul, i128>(
+            DecimalOperand::Scalar(Some(big)),
+            rd,
+            &p,
+            DecimalCarrier::Decimal128,
+            &ctx,
+        )
+        .unwrap();
+        assert!(s.is_none());
     }
 }
