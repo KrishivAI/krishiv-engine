@@ -1340,7 +1340,7 @@ fn case_rules_field_ids_and_column_mapping() {
 
 /// Iceberg's fallback ids (FC S4): a file with no field id anywhere has
 /// top-level ids 1..n by position; a file with any id is read by id only;
-/// `Refuse` fails such a file instead (a name mapping is not read yet).
+/// `Refuse` fails such a file instead; `Names` gives ids by a name mapping.
 #[test]
 fn field_ids_fall_back_to_positions_in_files_without_ids() {
     use crate::WithoutFieldIds;
@@ -1393,7 +1393,25 @@ fn field_ids_fall_back_to_positions_in_files_without_ids() {
     let refuse = FieldMapping::FieldIdOr(WithoutFieldIds::Refuse);
     let e = read(Arc::clone(&table), &plain, refuse.clone()).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(read(table, &some, refuse).is_ok());
+    assert!(read(Arc::clone(&table), &some, refuse).is_ok());
+    // A name mapping: `c` is id 3, `a` (once called `x`) id 1; `b` is
+    // unmapped, so id 9 reads NULL even though the file has a third column.
+    let names = |id: i32, names: &[&str]| crate::MappedField {
+        id: Some(id),
+        names: names.iter().map(|n| (*n).to_owned()).collect(),
+        fields: Vec::new(),
+    };
+    let mapping = FieldMapping::FieldIdOr(WithoutFieldIds::Names(Arc::new(
+        crate::NameMapping::new(vec![names(3, &["c"]), names(1, &["x", "a"])]),
+    )));
+    let b = read(Arc::clone(&table), &plain, mapping.clone()).unwrap();
+    assert_eq!(
+        (one(&b, 0), one(&b, 1), one(&b, 2)),
+        (Some(3), Some(1), None)
+    );
+    // A file with ids ignores the mapping.
+    let b = read(table, &some, mapping).unwrap();
+    assert_eq!((one(&b, 0), one(&b, 1)), (None, Some(3)));
 }
 
 fn project(batch: &RecordBatch, req: &ScanRequest) -> RecordBatch {

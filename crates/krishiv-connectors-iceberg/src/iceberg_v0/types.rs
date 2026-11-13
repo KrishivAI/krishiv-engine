@@ -159,3 +159,42 @@ fn with_ids(field: arrow_schema::Field, id: i32, ty: &Type) -> arrow_schema::Fie
     metadata.insert(krishiv_io::FIELD_ID_KEY.to_owned(), id.to_string());
     field.with_data_type(data_type).with_metadata(metadata)
 }
+
+/// One field of an Iceberg name mapping as serialised (table spec "Column
+/// Projection": `field-id` optional, `names`, nested `fields`).
+#[derive(serde::Deserialize)]
+struct MappedFieldJson {
+    #[serde(rename = "field-id")]
+    field_id: Option<i32>,
+    #[serde(default)]
+    names: Vec<String>,
+    #[serde(default)]
+    fields: Vec<MappedFieldJson>,
+}
+
+impl From<MappedFieldJson> for krishiv_io::MappedField {
+    fn from(f: MappedFieldJson) -> Self {
+        Self {
+            id: f.field_id,
+            names: f.names,
+            fields: f.fields.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// The name mapping `text` (the table property
+/// `schema.name-mapping.default`, Java's `NameMappingParser.fromJson`).
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` naming the parse error for text that is not
+/// a name mapping: files without ids are then never read by a guess.
+pub(crate) fn parse_name_mapping(text: &str) -> Result<krishiv_io::NameMapping, KrishivError> {
+    let fields: Vec<MappedFieldJson> = serde_json::from_str(text).map_err(|e| {
+        unsupported(format!(
+            "reading the Iceberg name mapping schema.name-mapping.default: {e}"
+        ))
+    })?;
+    Ok(krishiv_io::NameMapping::new(
+        fields.into_iter().map(Into::into).collect(),
+    ))
+}

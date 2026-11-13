@@ -41,7 +41,7 @@ use krishiv_exec::{GlobalState, LocalState, Source, TaskContext};
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
     ByteRange, ColumnPath, FieldMapping, FileFormat as _, FileRef, FilterId, FormatOptions,
-    IoContext, MetadataCols, ScanOptions, ScanRequest, ScanStream, WithoutFieldIds,
+    IoContext, MetadataCols, ScanOptions, ScanRequest, ScanStream,
 };
 use krishiv_memory::{MemoryConfig, Reservation, TreePool};
 use krishiv_types::batch::Batch;
@@ -114,6 +114,7 @@ pub(super) async fn load(
     io: &IoContext,
     locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
     table: &SchemaRef,
+    mapping: &FieldMapping,
     fields: &[SchemaField],
     deletes: &[&[Arc<DeleteFileEntry>]],
 ) -> Result<EqualityDeletes, KrishivError> {
@@ -127,7 +128,7 @@ pub(super) async fn load(
     }
     let pool: Arc<dyn krishiv_memory::MemoryPool> = TreePool::new(&MemoryConfig::default());
     let sets: Vec<Arc<KeySet>> = futures::stream::iter(unique.iter())
-        .map(|d| read_keys(io, locate, &pool, table, fields, d))
+        .map(|d| read_keys(io, locate, &pool, table, mapping, fields, d))
         .buffered(DELETE_FILE_CONCURRENCY)
         .map_ok(Arc::new)
         .try_collect()
@@ -157,6 +158,7 @@ async fn read_keys(
     locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
     pool: &Arc<dyn krishiv_memory::MemoryPool>,
     table: &SchemaRef,
+    mapping: &FieldMapping,
     fields: &[SchemaField],
     d: &DeleteFileEntry,
 ) -> Result<KeySet, KrishivError> {
@@ -193,8 +195,9 @@ async fn read_keys(
     let mut file = locate(&f.path)?;
     file.size = f.size;
     let mut req = ScanRequest::new(Arc::clone(table), columns.clone());
-    // Writers put field ids on every column of a delete file.
-    req.mapping = FieldMapping::FieldIdOr(WithoutFieldIds::Refuse);
+    // Columns by id, as the data files are read (a delete file without ids
+    // takes the same name mapping or positional fallback).
+    req.mapping = mapping.clone();
     let id = pool.register("iceberg equality deletes", None);
     let result = async {
         let mut stream = ScanStream::open(

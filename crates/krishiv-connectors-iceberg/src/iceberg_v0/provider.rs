@@ -9,8 +9,9 @@
 //!   ([`krishiv_io::FIELD_ID_KEY`]); files map by id
 //!   ([`FieldMapping::FieldIdOr`]). A file with no id anywhere gets top-level
 //!   positional ids 1..n, as Java's `ParquetSchemaUtil.addFallbackIds` (FC S4);
-//!   with a name mapping (`schema.name-mapping.default`) such a file is refused
-//!   until PR-25c reads the mapping.
+//!   with a name mapping (`schema.name-mapping.default`, PR-25c) such a file
+//!   takes the ids the mapping gives its columns' names
+//!   ([`WithoutFieldIds::Names`]), and an unmapped column is not read.
 //! - **Identity partitions** are per-file constants from the manifest
 //!   ([`FileConstants`]): they win over the file's column and fill a column the
 //!   file lacks (FC S4). A column is constant when every data file's spec has an
@@ -39,7 +40,7 @@ use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::split::{FilePartition, SplitConfig};
 use krishiv_io::{
     ColumnPath, FieldMapping, FileConstants, FileFormat, FileRef, FormatOptions, IoContext,
-    PushdownExpr, ScalarValue, ScanOptions, VersionToken, WithoutFieldIds,
+    NameMapping, PushdownExpr, ScalarValue, ScanOptions, VersionToken, WithoutFieldIds,
 };
 
 use super::deletes::DeleteSelections;
@@ -114,7 +115,9 @@ impl IcebergTableProvider {
             .table
             .metadata()
             .properties()
-            .contains_key(NAME_MAPPING);
+            .get(NAME_MAPPING)
+            .map(|text| super::types::parse_name_mapping(text))
+            .transpose()?;
         let reg = &table.registered;
         let locate = |path: &str| -> Result<FileRef, KrishivError> {
             let at = reg.paths.locate(path)?;
@@ -164,6 +167,7 @@ impl IcebergTableProvider {
                 &reg.io,
                 &locate,
                 &scan.parts.table,
+                &scan.mapping,
                 &scan.snapshot.fields,
                 &per_file,
             )
@@ -263,7 +267,7 @@ impl IcebergScan {
         snapshot: TableSnapshot,
         plan: ScanPlan,
         table: SchemaRef,
-        name_mapping: bool,
+        name_mapping: Option<NameMapping>,
         io: IoContext,
         locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
         config: &Config,
@@ -308,10 +312,11 @@ impl IcebergScan {
         } else {
             None
         };
-        let mapping = FieldMapping::FieldIdOr(if name_mapping {
-            WithoutFieldIds::Refuse
-        } else {
-            WithoutFieldIds::Position
+        // Files without field ids: by the table's name mapping, else by
+        // Java's positional fallback ids.
+        let mapping = FieldMapping::FieldIdOr(match name_mapping {
+            Some(m) => WithoutFieldIds::Names(Arc::new(m)),
+            None => WithoutFieldIds::Position,
         });
         let parts = ScanParts {
             table,
@@ -636,9 +641,14 @@ async fn refuse_missing_mixed_identity(scan: &IcebergScan) -> Result<(), Krishiv
                 &scan.parts.format_options,
             )
             .await?;
-        let schema = meta.schema();
-        // Any id at any depth counts, as `SchemaMapper` decides (FC S4).
-        let has_ids = krishiv_io::has_field_ids(schema.fields());
+        let mut schema = meta.schema();
+        // Any id at any depth counts, as `SchemaMapper` decides (FC S4); a
+        // file without ids takes the name mapping's, as the read does.
+        let mut has_ids = krishiv_io::has_field_ids(schema.fields());
+        if !has_ids && let FieldMapping::FieldIdOr(WithoutFieldIds::Names(m)) = &scan.mapping {
+            schema = m.apply(&schema);
+            has_ids = true;
+        }
         for c in wanted {
             let present = if has_ids {
                 let id = c.id.to_string();

@@ -36,6 +36,7 @@ mod error;
 mod format;
 pub mod io;
 pub mod json;
+mod name_mapping;
 mod options;
 pub mod parquet;
 mod registry;
@@ -82,6 +83,7 @@ pub use registry::{FormatRegistry, SPARK_FILE_SOURCES, is_spark_file_source};
 pub use take::{RowFile, TakeRequest, TakeStream, take};
 
 pub use constants::{FileConstants, scalar_column};
+pub use name_mapping::{MappedField, NameMapping};
 pub use partition::{
     DEFAULT_PARTITION, check_partition_column,
     discover::{Segment, constant_column, file_values, parse_segment, partition_columns},
