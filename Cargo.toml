@@ -82,6 +82,12 @@ arrow-data = { version = "60", default-features = false }
 arrow-ipc = { version = "60", default-features = false }
 arrow-flight = { version = "60", default-features = false }
 parquet = { version = "60", default-features = false }
+# Arrow 58, the major iceberg-rust 0.11 is on (`^58.4`), under renamed names. Used only
+# by krishiv-arrow-bridge, which moves C Data Interface values 58 -> 60 (ADR 0029 update
+# 2026-11-13, design/P3-lakehouse.md §5.2). Deleted with that crate when iceberg-rust
+# moves to the workspace's Arrow major.
+arrow-array-58 = { package = "arrow-array", version = "58.4", default-features = false }
+arrow-schema-58 = { package = "arrow-schema", version = "58.4", default-features = false }
 # object_store is pinned to the version delta_kernel 0.30 builds against (ADR 0028
 # update 2026-10-17); never enable parquet's `object_store` feature (deny.toml).
 # Cloud TLS (the `aws`, `gcp` and `azure` features) is opt-in through

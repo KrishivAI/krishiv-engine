@@ -7,7 +7,8 @@
 Iceberg table connector (feature `iceberg`).
 
 ## Invariants
-- Isolated `iceberg` crate (Arrow 58) crossing to Arrow 60 via the C Data Interface; the only allowed duplicate Arrow (deny.toml exception).
+- Isolated `iceberg` crate (Arrow 58) crossing to Arrow 60 via the C Data Interface; only values iceberg-rust returns as Arrow
+  (its schema conversion, `inspect` tables) cross, through `krishiv-arrow-bridge`; data batches never do (`design/P3-lakehouse.md` §5.2).
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
