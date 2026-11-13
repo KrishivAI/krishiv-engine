@@ -1320,7 +1320,7 @@ impl Session {
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
         let next_source = || self.next_source_id();
-        let expansion = crate::catalog::expand_views(
+        let mut expansion = crate::catalog::expand_views(
             &self.state.catalog,
             plan,
             env.analysis.conf.case_sensitive,
@@ -1342,6 +1342,7 @@ impl Session {
                 }),
             }),
         )?;
+        let inlined = std::mem::take(&mut expansion.views);
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
@@ -1381,6 +1382,9 @@ impl Session {
         for (found, changed) in synced {
             crate::store::CatalogStore::replace_table(&*self.state.catalog.store, &found, changed);
         }
+        // The lineage side table: where each inlined view landed in the resolved plan.
+        analyzed.views =
+            krishiv_plan::analyzer::lineage::locate_views(analyzed.plan.root(), inlined);
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
             if !analyzed.securables.iter().any(|s| s.securable == securable) {
