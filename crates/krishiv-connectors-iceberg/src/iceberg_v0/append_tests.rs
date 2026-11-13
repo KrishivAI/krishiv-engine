@@ -517,6 +517,13 @@ fn manifests_check_tuples_and_count_partitions_as_java() {
         ))
         .unwrap_err();
     assert!(e.to_string().contains("partition tuple of 0 values"), "{e}");
+    // Checked before any manifest is written (review 36a N9).
+    assert!(!env.dir.path().join("t/metadata/uuid-601-m0.avro").exists());
+    let written: Vec<_> = walk(env.dir.path())
+        .into_iter()
+        .filter(|p| p.contains("uuid-601"))
+        .collect();
+    assert!(written.is_empty(), "{written:?}");
 
     let new = env
         .rt
@@ -558,4 +565,18 @@ fn manifests_check_tuples_and_count_partitions_as_java() {
     // Within the limit: the flag is set, the empty partition key is not.
     assert_eq!(new.added["partition-summaries-included"], "true");
     assert!(!new.added.keys().any(|k| k.starts_with("partitions.")));
+}
+
+/// Every file path under `dir`.
+fn walk(dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p.display().to_string());
+        }
+    }
+    out
 }

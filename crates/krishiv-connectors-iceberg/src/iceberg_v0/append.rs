@@ -149,17 +149,23 @@ pub(crate) async fn write_new_manifests(
     // Java's `changed-partition-count` counts every partition path, the
     // unpartitioned "" included; iceberg-rust's collector skips unpartitioned files.
     let mut changed: HashSet<String> = HashSet::new();
-    let mut manifests = Vec::with_capacity(by_spec.len());
-    for (n, (spec_id, files)) in by_spec.into_iter().enumerate() {
-        let spec = metadata.partition_spec_by_id(spec_id).ok_or_else(|| {
+    // Every file is checked before any manifest is written, so a bad file
+    // leaves no manifest behind (review 36a N9).
+    let mut specs = Vec::with_capacity(by_spec.len());
+    for (spec_id, files) in &by_spec {
+        let spec = metadata.partition_spec_by_id(*spec_id).ok_or_else(|| {
             internal(format!(
                 "a data file of partition spec {spec_id}, which the table lacks"
             ))
         })?;
-        for f in &files {
+        for f in files {
             check_partition(spec, &schema, f.partition())?;
             changed.insert(spec.partition_to_path(f.partition(), Arc::clone(&schema)));
         }
+        specs.push(Arc::clone(spec));
+    }
+    let mut manifests = Vec::with_capacity(by_spec.len());
+    for (n, (spec, files)) in specs.iter().zip(by_spec.into_values()).enumerate() {
         let path = format!("{dir}/{commit_uuid}-m{n}.avro");
         let output = io.new_output(&path).map_err(from_iceberg)?;
         let builder = ManifestWriterBuilder::new(
