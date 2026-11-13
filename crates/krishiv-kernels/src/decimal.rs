@@ -135,6 +135,9 @@ pub struct DecimalPlan {
     l_mul: i128,
     r_mul: i128,
     storage: DecimalStorage,
+    /// Whether exact `+ - *` on 128-bit storage first try the 64-bit lanes
+    /// ([`Exact64`]); off when [`DecimalPlan::with_storage`] forces a path.
+    try64: bool,
 }
 
 /// `10^exp` for `exp <= 38` (larger exponents saturate at `10^38`).
@@ -235,6 +238,7 @@ impl DecimalPlan {
             l_mul,
             r_mul,
             storage,
+            try64: true,
         })
     }
 
@@ -261,7 +265,8 @@ impl DecimalPlan {
     }
 
     /// The same plan computed in `storage` (tests and benchmarks compare the
-    /// two paths).
+    /// two paths). The forced path is taken as it is: 128-bit storage does
+    /// not first try the 64-bit lanes.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` when `I64` is asked for a plan with a precision above 18.
@@ -272,6 +277,7 @@ impl DecimalPlan {
             ));
         }
         self.storage = storage;
+        self.try64 = false;
         Ok(self)
     }
 
@@ -644,10 +650,10 @@ where
 /// outside 64 bits, an overflowing rescale or result, or a result at the
 /// 64-bit range check). A batch that finishes has, on every non-NULL row,
 /// the exact result and one inside the result precision: what the checked
-/// lanes return, with no error and no NULL under any policy. This replaces
-/// the separate pass of [`batch_proof`] for batches whose values are small
-/// (the common case on wide types), and it masks NULL slots, which the
-/// proof cannot.
+/// lanes return, with no error and no NULL under any policy. It runs before
+/// [`batch_proof`], which a batch then needs only when the try falls back:
+/// batches whose values are small (the common case on wide types) skip the
+/// proof's pass, and NULL slots are masked, which the proof cannot do.
 #[derive(Clone, Copy)]
 struct Exact64<L>(L);
 
@@ -908,7 +914,7 @@ where
 {
     check_plan::<O>(l, r, plan.left, plan.right, plan.overflow_impossible())?;
     carrier.check(plan.out.0)?;
-    if plan.storage == DecimalStorage::I128 {
+    if plan.storage == DecimalStorage::I128 && plan.try64 && may_fit64(l) && may_fit64(r) {
         let tried = match carrier {
             DecimalCarrier::Decimal64 => try_lanes64::<Op, i64>(l, r, plan, carrier, ctx)?,
             DecimalCarrier::Decimal128 => try_lanes64::<Op, i128>(l, r, plan, carrier, ctx)?,
@@ -931,6 +937,21 @@ where
         }
         (Lanes::Wide(a, b, n, len), DecimalCarrier::Decimal128) => {
             fast_lanes::<i128, Op, O, i128>(plan, ctx, a, b, n, len, carrier)
+        }
+    }
+}
+
+/// A cheap guess, read once per batch, that `o` may fit the 64-bit lanes:
+/// `false` for a literal beyond an `i64`, or a `Decimal128` column whose
+/// first value is beyond one (a column of wide values then skips a try
+/// certain to fall back on its first row). Only a guess: the try checks
+/// every row.
+fn may_fit64(o: DecimalOperand<'_>) -> bool {
+    match o {
+        DecimalOperand::Decimal64(_) | DecimalOperand::Scalar(None) => true,
+        DecimalOperand::Scalar(Some(v)) => i64::try_from(v).is_ok(),
+        DecimalOperand::Decimal128(a) => {
+            a.values().first().is_none_or(|&v| i64::try_from(v).is_ok())
         }
     }
 }
@@ -1622,5 +1643,15 @@ mod tests {
         )
         .unwrap();
         assert!(s.is_none());
+        // A forced storage takes its path as it is; the guard reads the first
+        // value of a 128-bit column and literals only.
+        assert!(p.try64 && !p.with_storage(DecimalStorage::I128).unwrap().try64);
+        assert!(may_fit64(DecimalOperand::Decimal128(&small)));
+        assert!(!may_fit64(DecimalOperand::Decimal128(&l(vec![
+            Some(big),
+            Some(1)
+        ]))));
+        assert!(!may_fit64(DecimalOperand::Scalar(Some(big))));
+        assert!(may_fit64(DecimalOperand::Scalar(None)) && may_fit64(rd));
     }
 }
