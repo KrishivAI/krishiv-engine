@@ -946,6 +946,11 @@ impl Sink for Sort {
         "Sort"
     }
 
+    /// Parts join the global list in `combine`, which runs in lane order.
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let bits = if ctx.query().config().sort_hash_buckets {
             bucket_bits(ctx.executor().parallelism())
