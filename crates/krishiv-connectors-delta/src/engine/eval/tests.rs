@@ -1117,8 +1117,17 @@ fn partition_timestamp_grammar() {
             Some("+05:30"),
             "2024-01-15T12:30:45.123456Z",
         ),
-        // A trailing UTC needs no zone database.
+        // A name of UTC needs no zone database, spaced or glued to the time, also over a
+        // fixed reader zone (the value's zone wins), as Arrow's grammar reads it in the kernel.
         ("2024-01-15 12:30:45 UTC", None, "2024-01-15T12:30:45Z"),
+        ("2024-01-15 12:30:45UTC", None, "2024-01-15T12:30:45Z"),
+        ("2024-01-15T12:30:45.5GMT", None, "2024-01-15T12:30:45.5Z"),
+        (
+            "2024-01-15 12:30:45 Etc/UTC",
+            Some("+05:30"),
+            "2024-01-15T12:30:45Z",
+        ),
+        ("2024-01-15 12:30:45 Zulu", None, "2024-01-15T12:30:45Z"),
     ];
     for (raw, zone, want) in accepted {
         assert_eq!(
@@ -1128,6 +1137,9 @@ fn partition_timestamp_grammar() {
         );
     }
     let rejected = [
+        // An offset and a name: the kernel's Arrow grammar parses `+02:00 UTC` as one zone.
+        "2024-01-15 12:30:45+02:00 UTC",
+        "2024-01-15 12:30:45Z UTC",
         "2024-01-15 12:30:45+02:00 America/New_York",
         "日時 America/New_York",
         "2024-01-15T12:30:45+05:30:15:00",
@@ -1146,6 +1158,10 @@ fn partition_timestamp_grammar() {
     for raw in [
         "2024-01-15 12:30:45 America/New_York",
         "2024-01-15 12:30:45 Foo/Bar",
+        // A name without `/`, and one glued to the time (08a part 2 re-review: these were
+        // INTERNAL_ERROR).
+        "2024-01-15 12:30:45 CET",
+        "2024-01-15 12:30:45CET",
     ] {
         let e = partition_ts(raw, Some("+05:30")).unwrap_err();
         assert!(
