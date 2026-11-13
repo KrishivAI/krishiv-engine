@@ -635,6 +635,6 @@ pub(crate) async fn plan_files(
         }
     }
     let index = DeleteIndex::new(&out.delete_files, &snapshot.partition_specs)?
-        .with_fields(&snapshot.fields);
+        .with_fields(&snapshot.fields, env.metrics);
     Ok((out, index))
 }

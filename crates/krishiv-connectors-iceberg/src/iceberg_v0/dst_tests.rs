@@ -12,7 +12,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -30,7 +29,7 @@ use object_store::{
 };
 use proptest::prelude::*;
 
-use super::delete_tests::{Table, build_in, data, history, ops, positions};
+use super::delete_tests::{Table, build_in, data, equality, history, ops, positions};
 use super::provider_tests::{env_on, provider_session, render};
 use crate::plan::VersionSpec;
 
@@ -48,6 +47,8 @@ struct Faults {
     attempts: HashMap<(String, String, bool), u32>,
     /// Failures injected.
     injected: u64,
+    /// The file names of the GETs failed in the middle of their body.
+    mid_body: HashSet<String>,
 }
 
 /// What one GET attempt does.
@@ -78,6 +79,14 @@ impl fmt::Display for Flaky {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Flaky({})", self.inner)
     }
+}
+
+/// FNV-1a of `bytes`: stable across toolchains (`DefaultHasher` is not), so
+/// a seed replays the same faults after an upgrade.
+fn fnv(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 fn splitmix(mut z: u64) -> u64 {
@@ -129,6 +138,13 @@ impl Flaky {
         self.lock().as_ref().map_or(0, |f| f.injected)
     }
 
+    /// Whether a GET of the file named `name` failed mid-body.
+    pub(super) fn failed_mid_body(&self, name: &str) -> bool {
+        self.lock()
+            .as_ref()
+            .is_some_and(|f| f.mid_body.contains(name))
+    }
+
     fn fault(&self, location: &Path, options: &GetOptions) -> Fault {
         let mut g = self.lock();
         let Some(f) = g.as_mut() else {
@@ -147,9 +163,8 @@ impl Flaky {
             *a += 1;
             *a - 1
         };
-        let mut h = DefaultHasher::new();
-        (f.seed, &key, n).hash(&mut h);
-        let r = splitmix(h.finish());
+        let text = format!("{}|{}|{}|{n}", key.0, key.1, key.2);
+        let r = splitmix(f.seed ^ fnv(text.as_bytes()));
         if n >= f.fail_first && r % 1000 >= f.permille {
             return Fault::None;
         }
@@ -157,6 +172,9 @@ impl Flaky {
         if options.head || (r >> 32) & 1 == 0 && n >= f.fail_first {
             Fault::Before
         } else {
+            if let Some(name) = location.filename() {
+                f.mid_body.insert(name.to_owned());
+            }
             Fault::MidBody
         }
     }
@@ -288,8 +306,59 @@ fn a_transient_failure_mid_manifest_is_retried() {
     let before = retries(&t);
     flaky.arm(1, 1, 0);
     assert_eq!(ids_after(&t, || ()).unwrap(), [0, 2, 4]);
-    assert!(flaky.injected() >= 5, "{}", flaky.injected());
+    for name in [
+        "snap.avro",
+        "data-m.avro",
+        "delete-m.avro",
+        "a.parquet",
+        "b.parquet",
+        "d.parquet",
+    ] {
+        assert!(flaky.failed_mid_body(name), "{name}");
+    }
     assert!(retries(&t) - before >= flaky.injected(), "{}", retries(&t));
+}
+
+/// Seeded faults on 30% of attempts: nearly every seed reads the right rows
+/// after retries (the property test below allows a failed query, so this
+/// shows its success path is taken).
+#[test]
+fn random_faults_are_retried_to_the_right_rows() {
+    let mut retried = 0;
+    for seed in 0..16 {
+        let (t, flaky) = flaky_table(
+            &[
+                data("a.parquet", 0, 1, 0, 3),
+                positions("d.parquet", 0, 2, &[("a.parquet", 1)], None),
+                equality("e.parquet", 0, 2, &[Some(2)]),
+            ],
+            false,
+        );
+        flaky.arm(seed, 0, 300);
+        if ids_after(&t, || ()).as_deref() == Ok(&[0][..]) && flaky.injected() > 0 {
+            retried += 1;
+        }
+    }
+    assert!(retried >= 12, "{retried} of 16 seeds");
+}
+
+/// An equality delete file whose key bounds miss the data file's is not
+/// assigned to it (Java's `canContainEqDeletesForFile`), so the scan never
+/// reads it: removing it after planning changes nothing.
+#[test]
+fn a_disjoint_equality_delete_file_is_never_read() {
+    let (t, flaky) = flaky_table(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            equality("far.parquet", 0, 2, &[Some(50)]),
+            equality("near.parquet", 0, 2, &[Some(1)]),
+        ],
+        false,
+    );
+    assert_eq!(
+        ids_after(&t, || flaky.vanish("far.parquet")).unwrap(),
+        [0, 2]
+    );
 }
 
 /// A read that fails more often than the scheduler retries fails the query

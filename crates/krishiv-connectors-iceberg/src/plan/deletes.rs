@@ -23,9 +23,19 @@
 //! whose bounds are exact (integers, decimals, dates, timestamps, booleans);
 //! a float (bounds leave out NaN), string or binary (an upper bound may be
 //! truncated without rounding up) or uuid column is assumed to match, as is
-//! a field the snapshot's schema does not have. The schema's `required` is
-//! not known here, so every field is treated as optional: Java's answers
-//! differ only where it skips a delete file that holds no rows.
+//! a field the snapshot's schema does not have. Metrics are trusted as scan
+//! pruning trusts them (the table's `write.metadata.metrics.*` modes): bounds
+//! of a `counts` or `none` column are not compared, and counts of a `none`
+//! column are not read (Java consults no mode; a stray bound would make it
+//! return deleted rows). The schema's `required` is not known here, so every
+//! field is treated as optional. Each of these makes Krishiv keep a delete
+//! Java may skip (more deletes read, never fewer): a required field with no
+//! null count (Java's `containsNull` is false for it, so it goes on to the
+//! bounds) or a delete file without rows.
+//!
+//! Only primitive fields reachable through structs are in the schema's field
+//! list (`SchemaField`), so a non-primitive equality field (Java skips it
+//! before any rule) is never checked.
 //!
 //! Errors carry Java's `ValidationException` texts (class
 //! `KRISHIV_ICEBERG_INVALID_DELETES`).
@@ -39,6 +49,7 @@ use krishiv_common::error::{
 
 use super::bounds::{compare, decode};
 use super::entry::{ContentFile, DataFileEntry, DeleteFileEntry, DeleteKind, PartitionValue};
+use super::metrics::{MetricsMode, WriterMetrics};
 use super::types::{IcebergType, PartitionSpecs, SchemaField};
 
 /// The field id of a position delete file's `file_path` column (reserved).
@@ -119,9 +130,9 @@ pub struct DeleteIndex {
     equality_global: Vec<Seqd>,
     equality_by_partition: HashMap<i32, ByPartition>,
     empty: bool,
-    /// The schema's primitive fields by id, for the equality-delete metrics
-    /// check (empty: every equality delete may match).
-    types: HashMap<i32, IcebergType>,
+    /// The schema's primitive fields by id with their metrics modes, for the
+    /// equality-delete metrics check (empty: every equality delete may match).
+    types: HashMap<i32, FieldMetrics>,
 }
 
 /// Java's `ContentFileUtil.dvDesc`.
@@ -225,10 +236,14 @@ impl DeleteIndex {
 
     /// Skips equality deletes whose column metrics rule out every row of a
     /// data file (see the module docs), reading bounds at the types of
-    /// `fields` (the snapshot schema's).
+    /// `fields` (the snapshot schema's) and trusting them as `metrics` (the
+    /// table's writer modes) says.
     #[must_use]
-    pub fn with_fields(mut self, fields: &[SchemaField]) -> Self {
-        self.types = fields.iter().map(|f| (f.id, f.ty.clone())).collect();
+    pub fn with_fields(mut self, fields: &[SchemaField], metrics: &WriterMetrics) -> Self {
+        self.types = fields
+            .iter()
+            .map(|f| (f.id, FieldMetrics::new(f.ty.clone(), metrics.mode(f.id))))
+            .collect();
         self
     }
 
@@ -365,12 +380,33 @@ fn validate_partition_match(d: &DeleteFileEntry, data: &DataFileEntry) -> Result
     Ok(())
 }
 
+/// One field's type and how far its metrics are trusted.
+#[derive(Debug, Clone)]
+pub(crate) struct FieldMetrics {
+    ty: IcebergType,
+    /// Null and value counts may be read (mode not `none`).
+    counts: bool,
+    /// Bounds may be compared (mode `truncate(n)` or `full`, exact type).
+    bounds: bool,
+}
+
+impl FieldMetrics {
+    pub(crate) fn new(ty: IcebergType, mode: MetricsMode) -> Self {
+        let bounds = mode.trusts_bounds() && exact_bounds(&ty);
+        Self {
+            ty,
+            counts: mode != MetricsMode::None,
+            bounds,
+        }
+    }
+}
+
 /// Java's `DeleteFileIndex.canContainEqDeletesForFile` (apache-iceberg
 /// 1.12.0) over the fields in `types`; see the module docs for where it is
 /// more cautious. `false` only when no key of `delete` can equal a row of
 /// `data` (null equals null).
 pub(crate) fn can_contain_eq_deletes(
-    types: &HashMap<i32, IcebergType>,
+    types: &HashMap<i32, FieldMetrics>,
     data: &ContentFile,
     delete: &ContentFile,
 ) -> bool {
@@ -383,9 +419,12 @@ pub(crate) fn can_contain_eq_deletes(
     let all_non_null = |f: &ContentFile, id| f.null_counts.get(&id) == Some(&0);
     for id in ids {
         let id = *id;
-        let Some(ty) = types.get(&id) else {
+        let Some(field) = types.get(&id) else {
             continue;
         };
+        if !field.counts {
+            continue;
+        }
         if contains_null(data, id) && contains_null(delete, id) {
             continue;
         }
@@ -395,9 +434,10 @@ pub(crate) fn can_contain_eq_deletes(
         if all_null(delete, id) && all_non_null(data, id) {
             return false;
         }
-        if !exact_bounds(ty) {
+        if !field.bounds {
             continue;
         }
+        let ty = &field.ty;
         let bound =
             |m: &std::collections::BTreeMap<i32, Vec<u8>>| m.get(&id).and_then(|b| decode(b, ty));
         let (Some(data_lower), Some(data_upper), Some(delete_lower), Some(delete_upper)) = (

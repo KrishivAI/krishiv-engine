@@ -5,7 +5,7 @@
 //! property test `delete_application_matches_model`; DV corruption, a missing
 //! delete file, Java's assignment errors and equality deletes refused.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow_array::{Int32Array, Int64Array, StringArray};
@@ -141,12 +141,9 @@ pub(super) fn build_in(env: Env, files: &[File], partitioned: bool) -> Table {
                 );
                 let size = write_parquet(&path, &b);
                 let rows = u64::try_from(*rows).unwrap();
-                data_files.push((
-                    builder(DataContentType::Data, DataFileFormat::Parquet, size, rows)
-                        .build()
-                        .unwrap(),
-                    f.seq,
-                ));
+                let mut d = builder(DataContentType::Data, DataFileFormat::Parquet, size, rows);
+                id_metrics(&mut d, &ids);
+                data_files.push((d.build().unwrap(), f.seq));
             }
             Content::Positions { rows, scoped } => {
                 let mut rows = rows.clone();
@@ -206,6 +203,7 @@ pub(super) fn build_in(env: Env, files: &[File], partitioned: bool) -> Table {
                     u64::try_from(ids.len()).unwrap(),
                 );
                 d.equality_ids(Some(vec![1]));
+                id_metrics(&mut d, ids);
                 delete_files.push((d.build().unwrap(), f.seq));
             }
         }
@@ -301,6 +299,22 @@ impl Table {
     /// a scan that reads their data files runs (PR-25d), not at open.
     fn query_err(&self) -> KrishivError {
         self.ids("SELECT id FROM t").unwrap_err()
+    }
+}
+
+/// Column metrics of `id` (field 1) as a writer records them: value and null
+/// counts and the bounds of the non-null values, so equality deletes are
+/// narrowed by them (Java's `canContainEqDeletesForFile`).
+fn id_metrics(b: &mut iceberg::spec::DataFileBuilder, ids: &[Option<i64>]) {
+    use iceberg::spec::Datum;
+    let present = ids.iter().flatten().copied();
+    let count = u64::try_from(ids.len()).unwrap();
+    let nulls = u64::try_from(ids.iter().filter(|v| v.is_none()).count()).unwrap();
+    b.value_counts(HashMap::from([(1, count)]))
+        .null_value_counts(HashMap::from([(1, nulls)]));
+    if let (Some(lo), Some(hi)) = (present.clone().min(), present.max()) {
+        b.lower_bounds(HashMap::from([(1, Datum::long(lo))]))
+            .upper_bounds(HashMap::from([(1, Datum::long(hi))]));
     }
 }
 
@@ -516,7 +530,7 @@ fn a_dv_older_than_its_data_file_fails() {
     );
 }
 
-fn equality(name: &str, p: i32, seq: i64, ids: &[Option<i64>]) -> File {
+pub(super) fn equality(name: &str, p: i32, seq: i64, ids: &[Option<i64>]) -> File {
     File {
         name: name.to_owned(),
         p,

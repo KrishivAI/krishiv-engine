@@ -5,3 +5,5 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 5a18e21a17340fa785554301bc1738b3b80e479aa9387f159ee83ba2724bb6e9 # shrinks to ops = [Append { p: 0, rows: 1, back: 2, same: Some(5) }, Append { p: 1, rows: 2, back: 2, same: Some(4) }, Delete { kind: 2, stale: true, picks: [(2, 5), (6, 0)] }], partitioned = true, seed = 12422016924301475877, permille = 271
+cc 763bb7e93b205077d42a95eef2daead3feb39a3d6c26c82d65deaaf17c978fa5 # shrinks to ops = [Append { p: 0, rows: 4, back: 0, same: None }, Append { p: 0, rows: 5, back: 0, same: None }, Equality { p: 0, keys: [20], back: 0 }, Append { p: 0, rows: 1, back: 0, same: None }], partitioned = false, pick = 8383615956238217910
+cc 3f3c797489c0e6b004d5847e7e55104d752d8b1d049a280d7752be84c34ab01e # shrinks to ops = [Append { p: 0, rows: 2, back: 0, same: None }, Delete { kind: 0, stale: false, picks: [(0, 1)] }, Equality { p: 0, keys: [21], back: 0 }], partitioned = false, seed = 0, permille = 0

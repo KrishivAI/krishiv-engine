@@ -9,17 +9,22 @@ use std::sync::Arc;
 
 use proptest::prelude::*;
 
-use super::deletes::{DeleteIndex, can_contain_eq_deletes};
+use super::deletes::{DeleteIndex, FieldMetrics, can_contain_eq_deletes};
 use super::entry::{
     ContentFile, ContentKind, DataFileEntry, DeleteFileEntry, DeleteKind, EntryStatus,
 };
+use super::metrics::{MetricsMode, WriterMetrics};
 use super::tests::file;
 use super::types::{IcebergType, SchemaField};
 
 const ID: i32 = 1;
 
-fn types(ty: IcebergType) -> HashMap<i32, IcebergType> {
-    HashMap::from([(ID, ty)])
+fn types(ty: IcebergType) -> HashMap<i32, FieldMetrics> {
+    moded(ty, MetricsMode::Full)
+}
+
+fn moded(ty: IcebergType, mode: MetricsMode) -> HashMap<i32, FieldMetrics> {
+    HashMap::from([(ID, FieldMetrics::new(ty, mode))])
 }
 
 /// A file whose column `ID` holds `values` (`None` is null), with honest
@@ -142,6 +147,25 @@ fn promoted_bounds_compare_at_the_table_type() {
     assert!(may(&data, &deletes(long_file(&[Some(15)]))));
 }
 
+/// Bounds of a `counts` or `none` column are not compared (pruning does not
+/// trust them either), and counts of a `none` column are not read.
+#[test]
+fn untrusted_metrics_modes_keep_the_delete() {
+    let data = long_file(&[Some(10)]);
+    let d = deletes(long_file(&[Some(1)]));
+    let counts = moded(IcebergType::Long, MetricsMode::Counts);
+    assert!(can_contain_eq_deletes(&counts, &data, &d));
+    // Counts are still read under `counts`.
+    let all_null = long_file(&[None, None]);
+    assert!(!can_contain_eq_deletes(&counts, &all_null, &d));
+    let none = moded(IcebergType::Long, MetricsMode::None);
+    assert!(can_contain_eq_deletes(&none, &data, &d));
+    assert!(can_contain_eq_deletes(&none, &all_null, &d));
+    // The default `truncate(16)` compares integer bounds.
+    let default = moded(IcebergType::Long, WriterMetrics::default().mode(ID));
+    assert!(!can_contain_eq_deletes(&default, &data, &d));
+}
+
 /// Through the index: a disjoint global equality delete is not assigned once
 /// the schema's fields are given, and is without them.
 #[test]
@@ -171,7 +195,9 @@ fn the_index_skips_disjoint_equality_deletes_with_fields() {
         path: krishiv_io::ColumnPath::new("id"),
         ty: IcebergType::Long,
     }];
-    let narrowed = DeleteIndex::new(&[d], &specs).unwrap().with_fields(&fields);
+    let narrowed = DeleteIndex::new(&[d], &specs)
+        .unwrap()
+        .with_fields(&fields, &WriterMetrics::default());
     assert!(
         narrowed
             .for_data_file(&data)
