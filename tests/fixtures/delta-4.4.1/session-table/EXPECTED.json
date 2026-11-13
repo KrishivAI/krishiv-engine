@@ -1,0 +1,63 @@
+{
+ "delta_log": [
+  "00000000000000000000.crc",
+  "00000000000000000000.json",
+  "00000000000000000001.crc",
+  "00000000000000000001.json"
+ ],
+ "delta_spark": "4.4.1",
+ "dv_storage_types": [],
+ "feature": "session",
+ "fields": [
+  "id",
+  "name",
+  "amount",
+  "ts",
+  "p"
+ ],
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "protocol": {
+  "minReaderVersion": 1,
+  "minWriterVersion": 2
+ },
+ "rows": [
+  {
+   "amount": "1.50",
+   "id": 1,
+   "name": "a",
+   "p": "x",
+   "ts": "2024-01-01 00:00:00"
+  },
+  {
+   "amount": null,
+   "id": 2,
+   "name": null,
+   "p": "y",
+   "ts": null
+  }
+ ],
+ "schema": "struct<id:bigint,name:string,amount:decimal(10,2),ts:timestamp,p:string>",
+ "spark": "4.2.0",
+ "timezone": "UTC",
+ "typed_rows": [
+  [
+   1,
+   "a",
+   {
+    "decimal": "1.50"
+   },
+   {
+    "timestamp": "2024-01-01T00:00:00"
+   },
+   "x"
+  ],
+  [
+   2,
+   null,
+   null,
+   null,
+   "y"
+  ]
+ ]
+}
