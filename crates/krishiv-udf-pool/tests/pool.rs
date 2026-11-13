@@ -326,13 +326,14 @@ fn udf_clean_env_and_fds() {
     let udfs = SessionUdfs::new(pool, owner("s1"));
     let body = "import os\n\
         def f(x):\n    \
-        fds = []\n    \
+        fds, inputs = [], set()\n    \
         for fd in range(3, 4096):\n        \
         try:\n            os.fstat(fd)\n        except OSError:\n            continue\n        \
         target = os.readlink(f'/proc/self/fd/{fd}')\n        \
-        if not target.startswith('/memfd:'):\n            fds.append(f'{fd}={target}')\n    \
+        if target.startswith('/memfd:krishiv-udf-input'):\n            inputs.add(os.fstat(fd).st_ino)\n        \
+        else:\n            fds.append(f'{fd}={target}')\n    \
         env = sorted(os.environ)\n    \
-        return ' '.join(fds) + '|' + ','.join(env)";
+        return ' '.join(fds) + '|' + ','.join(env) + f'|{len(inputs)}'";
     let out = call(
         &udfs,
         command(&py, body, "StringType()"),
@@ -347,8 +348,10 @@ fn udf_clean_env_and_fds() {
         .expect("string")
         .value(0)
         .to_owned();
+    // While the UDF runs, the only memfd is the batch's own input (open twice: the received descriptor and
+    // the one `mmap` duplicates); any other descriptor, a memfd too, would be inherited.
     assert_eq!(
-        out, "|HOME,LC_ALL,TMPDIR",
+        out, "|HOME,LC_ALL,TMPDIR|1",
         "inherited fd {fd_no} or server env leaked"
     );
     drop(leaked);

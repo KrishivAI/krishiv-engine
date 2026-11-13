@@ -6,8 +6,10 @@
 //! `sys.path` and packages. The record gives the sandbox's read paths for that interpreter and the choice of
 //! interpreter per request. One without `pyspark` or `pyarrow` is logged and not used.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -29,6 +31,9 @@ print(json.dumps({
     "pandas": version("pandas"),
 }))
 "#;
+
+/// How long the inspection of one interpreter may take: a hanging interpreter must not hold up server startup.
+const INSPECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The oldest Python a worker may run: the 4.3 client's floor (design §2, "Python floor").
 const MIN_VERSION: (u32, u32) = (3, 11);
@@ -59,13 +64,16 @@ impl Interpreter {
     pub fn inspect(executable: &str) -> Result<Self, String> {
         let path = resolve(executable)
             .ok_or_else(|| format!("{executable}: not found (no such file, or not on PATH)"))?;
-        let out = Command::new(&path)
-            .args(["-I", "-c", INSPECT])
-            .env_clear()
-            .stdin(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|e| format!("{}: cannot run it: {e}", path.display()))?;
+        let out = run_with_timeout(
+            Command::new(&path)
+                .args(["-I", "-c", INSPECT])
+                .env_clear()
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+            INSPECT_TIMEOUT,
+        )
+        .map_err(|e| format!("{}: cannot run it: {e}", path.display()))?;
         if !out.status.success() {
             return Err(format!(
                 "{}: the inspection failed ({}): {}",
@@ -170,6 +178,40 @@ pub fn choose<'a>(
         .or_else(|| interpreters.first().map(|i| (0, i)))
 }
 
+/// Runs `command` (stdout and stderr piped) and collects its output, killing it after `timeout`. The
+/// inspection prints a few kilobytes, well inside a pipe's buffer, so reading after the exit cannot block it.
+fn run_with_timeout(command: &mut Command, timeout: Duration) -> std::io::Result<Output> {
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("no answer within {} s", timeout.as_secs()),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_end(&mut stdout)?;
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr)?;
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 /// `name` as an absolute path: itself when it has a directory part, else the first match on `PATH`.
 fn resolve(name: &str) -> Option<PathBuf> {
     let candidate = Path::new(name);
@@ -248,6 +290,24 @@ mod tests {
             "else the first"
         );
         assert!(choose(&[], "3.12").is_none());
+    }
+
+    #[test]
+    fn a_hanging_interpreter_times_out() {
+        let err = run_with_timeout(
+            Command::new("/bin/sh").args(["-c", "exec sleep 30"]),
+            Duration::from_millis(200),
+        )
+        .expect_err("timed out");
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        let out = run_with_timeout(
+            Command::new("/bin/sh")
+                .args(["-c", "echo hi"])
+                .stdout(Stdio::piped()),
+            Duration::from_secs(10),
+        )
+        .expect("runs");
+        assert_eq!(out.stdout, b"hi\n");
     }
 
     #[test]

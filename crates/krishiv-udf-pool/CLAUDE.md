@@ -39,12 +39,18 @@ Paths are relative to this crate.
 
 ## Invariants
 - `#![forbid(unsafe_code)]`: the server never maps a memfd. Input is written and sealed; results are read with
-  `pread` into server memory, capped (`max_result_bytes`) and decoded by `arrow-ipc`'s validating reader, then
-  checked for one column of the declared type, one batch and the input's row count. Worker output is untrusted.
+  `pread` into server memory, capped (`max_result_bytes`), their framing checked by `check_frames` (verified
+  flatbuffer headers, bodies and buffers in bounds, **no compression**: arrow-ipc 60 allocates a compressed
+  buffer's declared length up front, so a 16 KiB stream could abort the server), then decoded by `arrow-ipc`'s
+  validating reader and checked for one column of the declared type, one batch and the input's row count. Worker
+  output is untrusted; fuzz target `fuzz/fuzz_targets/udf_result_ipc.rs` runs `decode_result` nightly.
 - Every worker is started by the one `krishiv-udf-spawner` thread (the parent-death signal follows the starting
-  thread), never in a process group of its own, and is tracked and signalled by pid. A worker is reaped only by
-  `Worker::drop`/`exited`, after which nothing signals its pid; a call's cancel kills only while the call holds the
-  worker (`CallState.running`, cleared under its lock before the worker is given back).
+  thread), never in a process group of its own. Every signal goes through the worker's **pidfd** (opened before
+  the child can be reaped), never a pid, so a late kill (a cancel racing the worker's own exit, or `Drop` after
+  `exited` reaped it) reaches no other process. A call's cancel kills only while the call holds the worker
+  (`CallState.running`, cleared under its lock before the worker is given back).
+- A worker that breaks the protocol (user code writing to fd 0, a result changed after it was sent) is
+  `KRISHIV_PYTHON_WORKER_EXITED`; `INTERNAL_ERROR` is only for the server's own failures (memfd, socket calls).
 - The bootstrap closes every descriptor above 2 before anything else (`close_range` through `ctypes`, or
   `os.closerange` up to the server's `RLIMIT_NOFILE`), and the interpreter runs with `-I` and an environment of
   `HOME`, `TMPDIR` and `LC_ALL` only. With the sandbox off the bootstrap applies the rlimits itself.
@@ -54,8 +60,11 @@ Paths are relative to this crate.
 
 ## Not here yet (design note §9 records why)
 Per-query RSS accounting and `system.queries` visibility, the timing trailer, traceback shaping by the three
-`spark.sql.execution.pyspark.udf.*Traceback*` flags, the memfd buffer ring, artifacts, the in-process opt-in and
-`maxRecordsPerBatch` re-batching: PR-26c/26d, where the pool meets the session and the query.
+`spark.sql.execution.pyspark.udf.*Traceback*` flags, the memfd buffer ring, artifacts and the in-process opt-in:
+PR-26c/26d, where the pool meets the session and the query. Also open (review 2026-11-13 nits): the result is
+copied twice (`pread` into a `Vec`, then `StreamReader`; `StreamDecoder` over the buffer would not copy), one
+thread per call, a cancelled call still waits for its worker's start, and the default-Docker CI run of the
+sandbox suite.
 
 ## ADRs (in `../krishiv-internal/adr/`)
 0022 (UDF isolation; process pool is the server default), 0046 (N1: client code is admin-only in server mode until

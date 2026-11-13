@@ -16,10 +16,10 @@ use krishiv_common::error::{
     InternalError, KrishivError, KrishivUdfNotAvailable, OperationCanceled,
 };
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
-use rustix::process::Pid;
+use std::os::fd::OwnedFd;
 
 use crate::pool::{Owner, Pool};
-use crate::worker::{PythonPayload, kill_pid};
+use crate::worker::{PythonPayload, kill_via};
 
 /// Ids of loaded payloads, unique in the process: a worker keeps what it has loaded by id.
 static NEXT_PAYLOAD: AtomicU64 = AtomicU64::new(1);
@@ -116,9 +116,10 @@ struct Prepared {
 #[derive(Default)]
 struct CallState {
     cancelled: bool,
-    /// The worker running the call; cleared, under this lock, before the worker is given back, so a late
-    /// cancel can never signal a worker that already serves another call.
-    running: Option<Pid>,
+    /// The pidfd of the worker running the call; cleared, under this lock, before the worker is given back, so
+    /// a late cancel can never signal a worker that already serves another call (and a pidfd never names a
+    /// reused pid, so a worker that exited on its own is safe too).
+    running: Option<Arc<OwnedFd>>,
 }
 
 struct CancelOnDrop(Arc<Mutex<CallState>>);
@@ -127,8 +128,8 @@ impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         state.cancelled = true;
-        if let Some(pid) = state.running.take() {
-            kill_pid(pid);
+        if let Some(pidfd) = state.running.take() {
+            kill_via(&pidfd);
         }
     }
 }
@@ -195,7 +196,7 @@ fn run(
         if state.cancelled {
             return Err(OperationCanceled {}.into());
         }
-        state.running = Some(worker.pid());
+        state.running = Some(worker.pidfd());
     }
     let max_result = pool.max_result_bytes();
     let result = worker

@@ -27,6 +27,8 @@ tracing = { workspace = true, features = ["std"] }
 rustix = { workspace = true, features = ["fs", "net", "process", "std"] }
 
 [dev-dependencies]
+# The compressed-result regression test writes an LZ4 stream.
+arrow-ipc = { workspace = true, features = ["lz4"] }
 futures = { workspace = true, features = ["executor"] }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }

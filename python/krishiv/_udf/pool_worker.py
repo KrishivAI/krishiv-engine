@@ -131,7 +131,12 @@ class _Worker:
 
     def serve(self) -> None:
         while True:
-            data, fds, _flags, _addr = socket.recv_fds(self.sock, MAX_MESSAGE, 4)
+            data, fds, flags, _addr = socket.recv_fds(self.sock, MAX_MESSAGE, 4)
+            if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC):
+                for fd in fds:
+                    os.close(fd)
+                _error(self.sock, "protocol", "a message or its descriptors were truncated")
+                return
             if not data:
                 return  # EOF: the server is done with this worker
             try:

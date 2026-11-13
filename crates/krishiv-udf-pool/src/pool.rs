@@ -356,12 +356,21 @@ impl Pool {
                     };
                 }
                 // At the total cap: stop the longest-idle worker of anyone to make room.
-                if let Some(victim) = state.take_oldest_idle() {
+                if let Some(victim) = state.take_oldest_idle(|_| true) {
                     drop(state);
                     drop(victim);
                     state = self.inner.lock();
                     continue;
                 }
+            } else if let Some(victim) =
+                state.take_oldest_idle(|k| &k.owner == owner && k.interpreter != key.interpreter)
+            {
+                // At the session's cap with idle workers of another interpreter: stop one of those rather than
+                // wait for the idle timeout (review 2026-11-13 m2).
+                drop(state);
+                drop(victim);
+                state = self.inner.lock();
+                continue;
             }
             state = self
                 .inner
@@ -488,11 +497,12 @@ impl State {
         }
     }
 
-    /// Removes the worker idle the longest, of any key.
-    fn take_oldest_idle(&mut self) -> Option<Worker> {
+    /// Removes the worker idle the longest among the keys `which` accepts.
+    fn take_oldest_idle(&mut self, which: impl Fn(&Key) -> bool) -> Option<Worker> {
         let key = self
             .idle
             .iter()
+            .filter(|(k, _)| which(k))
             .filter_map(|(k, list)| list.first().map(|i| (k, i.since)))
             .min_by_key(|(_, since)| *since)
             .map(|(k, _)| k.clone())?;

@@ -45,6 +45,8 @@ jobs:
             args: -max_len=1048576
           - target: capsule_import
             args: -max_len=256
+          - target: udf_result_ipc
+            args: -max_len=1048576
     env:
       RUSTC_WRAPPER: "" # instrumented builds are not cacheable
       TARGET: ${{ matrix.target }}

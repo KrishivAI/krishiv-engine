@@ -20,7 +20,7 @@ use krishiv_common::error::{
     InternalError, KrishivError, KrishivPythonWorkerExited, PythonException,
 };
 use krishiv_udf_sandbox::{EXIT_SANDBOX_FAILED, SandboxError};
-use rustix::process::{Pid, Signal};
+use rustix::process::{Pid, PidfdFlags, Signal};
 use serde_json::{Value, json};
 
 use crate::wire::{self, Message};
@@ -42,6 +42,9 @@ pub(crate) struct Started {
 pub(crate) struct Worker {
     child: Child,
     pid: Pid,
+    /// Signals go through this pidfd, never the pid: a pidfd never names a reused pid, so a late kill (a
+    /// cancel racing the worker's own exit) cannot reach another process.
+    pidfd: Arc<OwnedFd>,
     control: OwnedFd,
     /// Removed when the worker is dropped (after the process is gone).
     _private_dir: tempfile::TempDir,
@@ -82,6 +85,18 @@ impl Worker {
             private_dir,
         } = started;
         let pid = Pid::from_child(&child);
+        // The child is not reaped yet, so `pid` is still its own.
+        let pidfd = match rustix::process::pidfd_open(pid, PidfdFlags::empty()) {
+            Ok(fd) => Arc::new(fd),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(InternalError {
+                    message: format!("cannot open a pidfd for a Python UDF worker: {e}"),
+                }
+                .into());
+            }
+        };
         let stderr = Arc::new(Mutex::new(String::new()));
         if let Some(pipe) = child.stderr.take() {
             drain_stderr(pipe, pid, Arc::clone(&stderr));
@@ -89,6 +104,7 @@ impl Worker {
         let mut worker = Worker {
             child,
             pid,
+            pidfd,
             control,
             _private_dir: private_dir,
             loaded: HashSet::new(),
@@ -130,7 +146,7 @@ impl Worker {
             rustix::net::sockopt::Timeout::Recv,
             None,
         )
-        .map_err(|e| worker.protocol(&e.to_string()))?;
+        .map_err(|e| worker.server_failure(&e.to_string()))?;
         tracing::debug!(
             pid = pid.as_raw_nonzero().get(),
             python = msg.str_field("python"),
@@ -141,9 +157,9 @@ impl Worker {
         Ok(worker)
     }
 
-    /// The process id.
-    pub(crate) fn pid(&self) -> Pid {
-        self.pid
+    /// The worker's pidfd, for a cancel to kill it from another thread.
+    pub(crate) fn pidfd(&self) -> Arc<OwnedFd> {
+        Arc::clone(&self.pidfd)
     }
 
     /// Whether the worker can take another call.
@@ -162,7 +178,7 @@ impl Worker {
         }
         let len = payload.command.len();
         let file = wire::sealed_memfd("krishiv-udf-command", &payload.command)
-            .map_err(|e| self.protocol(&format!("cannot pass the UDF: {e}")))?;
+            .map_err(|e| self.server_failure(&format!("cannot pass the UDF: {e}")))?;
         let header = json!({
             "t": "udf",
             "id": id,
@@ -191,8 +207,8 @@ impl Worker {
         return_type: &DataType,
         max_result: u64,
     ) -> Result<ArrayRef, KrishivError> {
-        let (file, len) =
-            write_input(args).map_err(|e| self.protocol(&format!("cannot pass a batch: {e}")))?;
+        let (file, len) = write_input(args)
+            .map_err(|e| self.server_failure(&format!("cannot pass a batch: {e}")))?;
         let mut conf = conf.clone();
         conf.insert(
             "krishiv.python.udf.rows".to_owned(),
@@ -224,7 +240,7 @@ impl Worker {
             return Err(if e.kind() == std::io::ErrorKind::BrokenPipe {
                 self.exited("while it was sent work")
             } else {
-                self.protocol(&e.to_string())
+                self.server_failure(&e.to_string())
             });
         }
         match wire::recv(self.control.as_fd()) {
@@ -252,8 +268,21 @@ impl Worker {
         .into()
     }
 
-    /// The worker broke the protocol (or the server could not talk to it): it is killed and not reused.
+    /// The worker broke the protocol (code in it wrote to its control socket, or sent a result it then
+    /// changed): `KRISHIV_PYTHON_WORKER_EXITED`, since it is killed and not reused. Not `INTERNAL_ERROR`, which
+    /// would read as an engine bug when user code caused it.
     fn protocol(&mut self, what: &str) -> KrishivError {
+        self.healthy = false;
+        self.kill();
+        KrishivPythonWorkerExited {
+            reason: format!("it broke the worker protocol: {what}"),
+        }
+        .into()
+    }
+
+    /// The server could not talk to the worker (a memfd or socket call failed on the server's side):
+    /// `INTERNAL_ERROR`; the worker is killed and not reused.
+    fn server_failure(&mut self, what: &str) -> KrishivError {
         self.healthy = false;
         self.kill();
         InternalError {
@@ -297,24 +326,25 @@ impl Worker {
             .to_owned()
     }
 
-    /// Sends `SIGKILL` (the worker may already be gone).
+    /// Sends `SIGKILL` through the pidfd (the worker may already be gone, or reaped: then nothing happens).
     pub(crate) fn kill(&self) {
-        kill_pid(self.pid);
+        kill_via(&self.pidfd);
     }
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        // Closing the control socket ends an idle worker; a busy one is killed. Either way it is reaped
-        // here, so its pid is never reused while the pool might still signal it.
+        // Closing the control socket ends an idle worker; a busy one is killed. Either way it is reaped here.
+        // Signals go through the pidfd, so one sent after this (a late cancel) reaches no other process.
         self.kill();
         let _ = self.child.wait();
     }
 }
 
-/// Sends `SIGKILL` to `pid`, a worker the pool has not reaped yet (so the pid is still its).
-pub(crate) fn kill_pid(pid: Pid) {
-    let _ = rustix::process::kill_process(pid, Signal::KILL);
+/// Sends `SIGKILL` to the process of `pidfd`; after that process exited (or was reaped) the call fails
+/// harmlessly, since a pidfd never names a reused pid.
+pub(crate) fn kill_via(pidfd: &OwnedFd) {
+    let _ = rustix::process::pidfd_send_signal(pidfd, Signal::KILL);
 }
 
 fn describe(status: ExitStatus) -> String {
@@ -376,8 +406,13 @@ fn write_input(args: &RecordBatch) -> std::io::Result<(File, u64)> {
     Ok((file, len))
 }
 
-/// The worker's result stream, read with validation: one column of `return_type`, `rows` rows, one batch.
-pub(crate) fn decode_result(
+/// Decodes a worker's result stream as the pool does: the framing checked first ([`check_frames`]), then
+/// arrow-ipc's validating reader, then one column of `return_type`, one batch and `rows` rows. Every failure
+/// is `PYTHON_EXCEPTION` naming what was wrong. Public for the `udf_result_ipc` fuzz target.
+///
+/// # Errors
+/// Anything but a well-formed, uncompressed stream of that shape.
+pub fn decode_result(
     bytes: Vec<u8>,
     return_type: &DataType,
     rows: usize,
@@ -389,6 +424,7 @@ pub(crate) fn decode_result(
         }
         .into()
     };
+    check_frames(&bytes).map_err(invalid)?;
     let mut reader = StreamReader::try_new(Cursor::new(bytes), None)
         .map_err(|e| invalid(format!("unreadable Arrow stream: {e}")))?;
     let schema = reader.schema();
@@ -419,6 +455,79 @@ pub(crate) fn decode_result(
         )));
     }
     Ok(Arc::clone(batch.column(0)))
+}
+
+/// Walks the stream's messages before arrow-ipc decodes them: each has the continuation marker and a
+/// verified flatbuffer header (`root_as_message`), is a schema, record batch or dictionary batch, has a body
+/// inside the stream, and, for a batch, no compression and buffers inside its body.
+///
+/// Compression is refused because arrow-ipc 60 allocates a compressed buffer's declared uncompressed length
+/// before reading it: a worker could declare 2^45 bytes in a 16 KiB stream and abort the server (review
+/// 2026-11-13 M1). The server never asks for a compressed result, and the worker writes without compression.
+fn check_frames(bytes: &[u8]) -> Result<(), String> {
+    const CONTINUATION: u32 = 0xFFFF_FFFF;
+    let word = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(
+            bytes.get(at..at.checked_add(4)?)?.try_into().ok()?,
+        ))
+    };
+    let mut at = 0_usize;
+    while at < bytes.len() {
+        if word(at) != Some(CONTINUATION) {
+            return Err(format!("no continuation marker at byte {at}"));
+        }
+        let len = word(at + 4).ok_or_else(|| format!("a truncated message at byte {at}"))?;
+        at += 8;
+        if len == 0 {
+            // End of stream: nothing may follow.
+            return if at == bytes.len() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{} bytes after the end of the stream",
+                    bytes.len() - at
+                ))
+            };
+        }
+        let len = usize::try_from(len).map_err(|e| e.to_string())?;
+        let meta_end = at
+            .checked_add(len)
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| format!("a message header past the end at byte {at}"))?;
+        let meta = bytes.get(at..meta_end).unwrap_or_default();
+        let message = arrow_ipc::root_as_message(meta)
+            .map_err(|e| format!("an invalid message header at byte {at}: {e}"))?;
+        let body_len = usize::try_from(message.bodyLength())
+            .map_err(|_| format!("a negative body length at byte {at}"))?;
+        let body_end = meta_end
+            .checked_add(body_len)
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| format!("a message body past the end at byte {at}"))?;
+        let batch = match message.header_type() {
+            arrow_ipc::MessageHeader::Schema => None,
+            arrow_ipc::MessageHeader::RecordBatch => message.header_as_record_batch(),
+            arrow_ipc::MessageHeader::DictionaryBatch => {
+                message.header_as_dictionary_batch().and_then(|d| d.data())
+            }
+            other => return Err(format!("an unexpected {other:?} message at byte {at}")),
+        };
+        if let Some(batch) = batch {
+            if batch.compression().is_some() {
+                return Err("a compressed batch (results must be uncompressed)".to_owned());
+            }
+            for buffer in batch.buffers().into_iter().flatten() {
+                let end = u64::try_from(buffer.offset())
+                    .ok()
+                    .zip(u64::try_from(buffer.length()).ok())
+                    .and_then(|(o, l)| o.checked_add(l));
+                if end.is_none_or(|end| end > body_len as u64) {
+                    return Err(format!("a buffer outside its message body at byte {at}"));
+                }
+            }
+        }
+        at = body_end;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -477,6 +586,71 @@ mod tests {
         ])
         .expect("batch");
         assert!(decode_result(stream(&[two]), &DataType::Int64, 1).is_err());
+    }
+
+    /// An LZ4 stream whose first compressed buffer declares `declared` uncompressed bytes.
+    fn compressed(declared: u64) -> Vec<u8> {
+        use arrow_ipc::CompressionType;
+        use arrow_ipc::writer::IpcWriteOptions;
+        let batch = longs((0..2048).collect());
+        let options = IpcWriteOptions::default()
+            .try_with_compression(Some(CompressionType::LZ4_FRAME))
+            .expect("lz4");
+        let mut out = Vec::new();
+        let mut w =
+            StreamWriter::try_new_with_options(&mut out, &batch.schema(), options).expect("writer");
+        w.write(&batch).expect("write");
+        w.finish().expect("finish");
+        drop(w);
+        // The batch message's body starts after its header; its first non-empty compressed buffer begins with
+        // the 8-byte uncompressed length. Patch every occurrence of the true length (2048 * 8).
+        let true_len = (2048_u64 * 8).to_le_bytes();
+        let mut patched = 0;
+        for i in 0..out.len().saturating_sub(8) {
+            if out[i..i + 8] == true_len {
+                out[i..i + 8].copy_from_slice(&declared.to_le_bytes());
+                patched += 1;
+            }
+        }
+        assert!(patched > 0, "found the length prefix");
+        out
+    }
+
+    #[test]
+    fn a_compressed_result_is_refused_before_any_allocation() {
+        // Review 2026-11-13 M1: arrow-ipc would allocate 2^45 bytes and abort the process.
+        for declared in [2048 * 8, 1_u64 << 45, 1_u64 << 62] {
+            let err =
+                decode_result(compressed(declared), &DataType::Int64, 2048).expect_err("refused");
+            assert_eq!(err.error_class(), ErrorClass::PythonException);
+            assert!(err.to_string().contains("compressed"), "{err}");
+        }
+    }
+
+    #[test]
+    fn framing_errors_are_refused() {
+        let good = stream(&[longs(vec![1])]);
+        assert!(check_frames(&good).is_ok());
+        let mut no_marker = good.clone();
+        no_marker[0] = 0;
+        assert!(
+            check_frames(&no_marker)
+                .unwrap_err()
+                .contains("continuation")
+        );
+        let mut trailing = good.clone();
+        trailing.extend_from_slice(&[0; 3]);
+        assert!(
+            check_frames(&trailing)
+                .unwrap_err()
+                .contains("after the end")
+        );
+        let mut huge_header = good.clone();
+        huge_header[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(check_frames(&huge_header).is_err());
+        for cut in [3, 9, good.len() - 9] {
+            assert!(check_frames(&good[..cut]).is_err(), "cut at {cut}");
+        }
     }
 
     #[test]

@@ -26,6 +26,10 @@ pub(crate) const WIRE_VERSION: u64 = 1;
 /// The largest control message the server reads; the worker sends at most 128 KiB.
 const MAX_MESSAGE: usize = 256 * 1024;
 
+/// The largest control message the worker reads (`MAX_MESSAGE` in `pool_worker.py`): the server sends no
+/// larger one, since the worker would see it cut.
+const WORKER_MAX_MESSAGE: usize = 128 * 1024;
+
 /// The most descriptors one message carries (the worker sends one, with a result).
 const MAX_FDS: usize = 4;
 
@@ -56,6 +60,15 @@ impl Message {
 /// Sends `body` with `fds` attached.
 pub(crate) fn send(socket: BorrowedFd<'_>, body: &Value, fds: &[BorrowedFd<'_>]) -> io::Result<()> {
     let bytes = serde_json::to_vec(body).map_err(io::Error::other)?;
+    if bytes.len() > WORKER_MAX_MESSAGE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "a control message of {} bytes is over the worker's limit of {WORKER_MAX_MESSAGE}",
+                bytes.len()
+            ),
+        ));
+    }
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(MAX_FDS))];
     let mut control = SendAncillaryBuffer::new(&mut space);
     if !fds.is_empty() && !control.push(SendAncillaryMessage::ScmRights(fds)) {
@@ -182,6 +195,15 @@ mod tests {
         assert_eq!(msg.u64_field("len"), Some(5));
         let fd = msg.fds.pop().expect("one fd");
         assert_eq!(read_untrusted(fd, 5, 5).expect("read"), b"hello");
+    }
+
+    #[test]
+    fn messages_over_the_workers_limit_are_not_sent() {
+        let (a, _b) = pair();
+        let big = "x".repeat(WORKER_MAX_MESSAGE);
+        let err =
+            send(a.as_fd(), &json!({"t": "batch", "conf": {"k": big}}), &[]).expect_err("too big");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
