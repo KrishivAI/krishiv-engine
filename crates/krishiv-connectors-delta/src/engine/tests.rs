@@ -1105,3 +1105,6 @@ fn listing_the_root_without_its_slash_stays_inside() {
 
 #[path = "parquet_tests.rs"]
 mod parquet;
+
+#[path = "oracle_tests.rs"]
+mod oracle;
