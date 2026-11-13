@@ -7,8 +7,8 @@ use prost::Message;
 
 use super::testing::{attr, boxed, conf, expr, fails, func, lit, read_table, relation};
 use super::*;
-use crate::proto::v4_2::expression::{ExprType, literal::LiteralType};
-use crate::proto::v4_2::relation::RelType;
+use crate::proto::v4_3::expression::{ExprType, literal::LiteralType};
+use crate::proto::v4_3::relation::RelType;
 use krishiv_plan::{Grouping, PlanNode};
 
 fn filter_over(input: pb::Relation) -> pb::Relation {
@@ -61,8 +61,21 @@ fn commands_compressed_plans_and_empty_plans_are_not_relations() {
         op_type: Some(OpType::Command(Box::default())),
     };
     let e = fails(translate_plan(&command, &conf()));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("Plan.command"), "{}", e.message());
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
+    );
+    let command = pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),
+        }))),
+    };
+    let e = fails(translate_plan(&command, &conf()));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+    );
+    assert!(e.message().contains("SQL_COMMAND(5)"), "{}", e.message());
     let compressed = pb::Plan {
         op_type: Some(OpType::CompressedOperation(Box::default())),
     };
@@ -242,7 +255,7 @@ fn leaves_count_as_a_level_of_the_ir() {
 
 #[test]
 fn debug_of_a_write_hides_a_path_held_by_a_oneof() {
-    use crate::proto::v4_2::{WriteOperation, write_operation::SaveType};
+    use crate::proto::v4_3::{WriteOperation, write_operation::SaveType};
     let write = WriteOperation {
         save_type: Some(SaveType::Path(
             "https://h/p?X-Amz-Signature=Canary-4d1".into(),

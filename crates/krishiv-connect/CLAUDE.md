@@ -4,22 +4,25 @@
 **Real code arrives:** P2a (protos, decoder, Connect-to-IR translation: P2-T091a); the gRPC server is P3.
 
 ## Purpose
-Spark Connect (protocols 3.5, 4.0, 4.1, 4.2): the vendored protocol types and the translation of a Connect plan into
+Spark Connect (protocols 3.5, 4.0, 4.1, 4.2, 4.3; one 4.3 superset decoder): the vendored protocol types and the translation of a Connect plan into
 the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends this decoder; it does not replace it.
 
 ## Key files
-- `src/wire.rs` the only decode path (`wire::decode_*`): size, count, depth and field-version checks
-- `src/proto/mod.rs` versioned generated protos; `src/proto/v4_2/spark.connect.pb.rs` generated messages (do not edit)
+- `src/wire.rs` the only decode path (`wire::decode_*`; `decode_request` for any RPC request, the `Request` trait the
+  generated layout implements): size, count, depth and field-version checks
+- `src/proto/mod.rs` versioned generated protos; `src/proto/v4_3/spark.connect.pb.rs` generated messages (4.2 is kept only for the golden descriptor) (do not edit)
 - `src/translate/mod.rs` `translate_*` entry points; `src/translate/relation.rs` and `expression.rs` (IR building)
 - `src/translate/literal.rs` literals; `src/translate/names.rs` names and plan-id origins
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
 - `src/arrow.rs` result columns Spark sends in another Arrow shape than the engine holds (geometry/geography)
 - `tests/fuzz_regressions.rs` fuzz findings (inputs that once ran out of memory) must end in a typed error
+- `src/coverage.rs` (P3-T012a) the coverage table: an exhaustive `match` per `oneof` (Relation, Expression, Command, Catalog, Literal, DataType) with a row per arm (status, refused fields, IR target, task, group), so a regenerated proto with a new arm does not compile until it has a row; `src/bin/connect-coverage-dump.rs` prints it as JSON for `cargo xtask connect-coverage [--check]`, which writes `docs/reference/connect/coverage.md` and `tests/connect/coverage.json` (CI checks them in the docs-site job). Update the row in the same commit that translates an arm; `tests/coverage.rs` fails when a row disagrees with the translator
 - `tests/goldens.rs` golden runner over `tests/snapshots/` and `tests/fixtures/pyspark-4.2/`
 
 ## Extension points
 - New relation or expression: a translation arm in `src/translate/relation.rs` or `expression.rs` building an existing IR node.
-- New protocol version: the generator in `tools/connect-protogen` (repository root), then a new `src/proto/v<ver>/`.
+- New protocol version: the generator in `tools/connect-protogen` (repository root), then a new `src/proto/v<ver>/`
+  (it also writes the server stub `crates/krishiv-connect-server/src/service/v<ver>.pb.rs`).
 
 ## Invariants
 - Protos are vendored per tag, verbatim, under `proto/spark-connect/<ver>/` at the repository root (ADR 0003; only
@@ -45,10 +48,14 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
   with zeros before it drops the message (`Scrub`, `scrub.pb.rs`); a proto built in Rust and passed to `translate_*`
   stays the caller's to wipe.
 - SQL expression strings (`selectExpr`, `where("...")`, `expr()`) are unsupported until the analyzer lowers the SQL
-  parser's syntax tree into the IR (P2-T071a); `ToDF`, `OneRowRelation` (a `Project` without input), set
-  operations, pivots, user schemas and nested-type literals wait for IR nodes that do not exist yet.
-- Anything outside the supported subset fails with `KRISHIV_UNSUPPORTED_FEATURE` naming the proto message and field,
-  or with Spark's own `CONNECT_INVALID_PLAN.*` class for an invalid plan; never a silent approximation.
+  parser's syntax tree into the IR (P2-T071a); `ToDF`, pivots, user schemas and nested-type literals wait for
+  IR nodes or later groups (`src/coverage.rs` lists every arm).
+- A `oneof` arm that is not translated (`Relation`, `Expression`, `Literal`, `DataType`, later `Command` and `Catalog`)
+  fails with Spark's `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` (SQLSTATE 56K00; parameters fullName,
+  the upper-cased field name and the field number, as `InvalidInputErrors.invalidOneOfField`; owner decision 6,
+  `design/P3-connect-mapping.md` s6). A supported arm with an unsupported **field** fails with
+  `KRISHIV_UNSUPPORTED_FEATURE` naming the message and field, and an invalid plan with Spark's other
+  `CONNECT_INVALID_PLAN.*` classes; never a silent approximation.
 - Krishiv extensions only in `google.protobuf.Any` slots, package `krishiv.v1`.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.

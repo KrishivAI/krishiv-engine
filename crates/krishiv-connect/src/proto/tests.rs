@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use prost::Message;
 
 use super::Scrub;
-use super::v4_2::{
+use super::v4_3::{
     Expression, Filter, Join, Plan, Project, Read, Relation, Sql, expression, join, plan,
     read::{DataSource, NamedTable, ReadType},
     relation::RelType,
@@ -105,7 +105,7 @@ fn canary_plan() -> Plan {
     let union = relation(RelType::Extension(any()));
     Plan {
         op_type: Some(plan::OpType::Root(Box::new(relation(
-            RelType::WithRelations(Box::new(super::v4_2::WithRelations {
+            RelType::WithRelations(Box::new(super::v4_3::WithRelations {
                 root: Some(Box::new(filter)),
                 references: vec![project, union],
             })),

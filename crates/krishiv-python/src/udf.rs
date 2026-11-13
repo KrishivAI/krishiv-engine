@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Embedded Python UDFs (design P2-T059 §2.5, unit 2b): the process's pool
+//! Embedded Python UDFs (unit 2b): the process's pool
 //! of pinned threads, the per-session [`runtime::PyUdfRuntime`], and the
 //! exit hook `krishiv` registers at import (`atexit`).
 //!
@@ -127,7 +127,7 @@ pub(crate) fn _udf_pool_shutdown(py: Python<'_>) -> usize {
 }
 
 /// `_native.AnonymousPythonUdf`: an unregistered Python UDF (a DataFrame-side
-/// `udf(...)`, design P2-T059 unit 2c (a)), its wrapper in the process's
+/// `udf(...)`), its wrapper in the process's
 /// table. Its calls ([`Self::call`]) resolve in any session and are never
 /// reachable by name from SQL; they show `name(args)`.
 #[pyclass(name = "AnonymousPythonUdf", module = "krishiv._native", frozen)]

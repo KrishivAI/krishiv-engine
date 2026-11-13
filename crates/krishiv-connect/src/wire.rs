@@ -40,7 +40,7 @@ use krishiv_common::error::{
 };
 use prost::Message;
 
-use crate::proto::v4_2::{Expression, Plan, Relation};
+use crate::proto::v4_3::{Expression, Plan, Relation};
 use crate::proto::{Field, Layout, Scrub, layout};
 use crate::stack::{INLINE_LEVELS, on_deep_stack};
 
@@ -128,7 +128,7 @@ impl<M: Message + Default + Send + Scrub> Drop for Decoded<M> {
 /// `CONNECT_INVALID_PLAN.PLAN_SIZE_LARGER_THAN_MAX` for input over the size,
 /// message or decoded-size limit, `FAILED_TO_PARSE_TOO_COMPLEX` for nesting
 /// deeper than [`MAX_NESTING`], `KRISHIV_UNSUPPORTED_FEATURE` for a field
-/// Spark Connect 4.2 does not define, `CONNECT_INVALID_PLAN.CANNOT_PARSE` for
+/// Spark Connect 4.3 does not define, `CONNECT_INVALID_PLAN.CANNOT_PARSE` for
 /// malformed bytes.
 pub fn decode_plan(bytes: &[u8]) -> Result<Decoded<Plan>, KrishivError> {
     decode(layout::PLAN, bytes)
@@ -148,6 +148,30 @@ pub fn decode_relation(bytes: &[u8]) -> Result<Decoded<Relation>, KrishivError> 
 /// As [`decode_plan`].
 pub fn decode_expression(bytes: &[u8]) -> Result<Decoded<Expression>, KrishivError> {
     decode(layout::EXPRESSION, bytes)
+}
+
+/// The request message of a `SparkConnectService` RPC: a root the decoder
+/// can start from. Implemented (generated) for every RPC request and
+/// nothing else.
+pub trait Request: Message + Default + Send + Scrub + sealed::Sealed {
+    /// The message's id in the generated layout table.
+    #[doc(hidden)]
+    const ROOT: u16;
+}
+
+/// Keeps [`Request`] to the generated implementations.
+pub(crate) mod sealed {
+    /// Only the generated layout implements it.
+    pub trait Sealed {}
+}
+
+/// Decodes the request of an RPC (a gRPC codec's one decode path); see
+/// [`decode_plan`] for the bounds.
+///
+/// # Errors
+/// As [`decode_plan`].
+pub fn decode_request<M: Request>(bytes: &[u8]) -> Result<Decoded<M>, KrishivError> {
+    decode(M::ROOT, bytes)
 }
 
 fn decode<M: Message + Default + Send + Scrub>(
@@ -207,7 +231,7 @@ impl From<Reject> for KrishivError {
             Reject::TooDeep => FailedToParseTooComplex {}.into(),
             Reject::UnknownField { message, number } => KrishivUnsupportedFeature {
                 feature: format!(
-                    "field {number} of spark.connect.{}, which Spark Connect 4.2 does not \
+                    "field {number} of spark.connect.{}, which Spark Connect 4.3 does not \
                      define (sent by a newer client?)",
                     layout::MESSAGES
                         .get(usize::from(message))

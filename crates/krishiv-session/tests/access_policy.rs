@@ -18,7 +18,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use arrow_array::{Int32Array, RecordBatch};
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use futures::executor::block_on;
 use krishiv_common::error::KrishivError;
@@ -139,6 +140,34 @@ fn rows(s: &Session, sql: &str) -> Result<usize, KrishivError> {
         let batches = s.sql(sql).await?.collect().await?;
         Ok(batches.iter().map(RecordBatch::num_rows).sum())
     })
+}
+
+/// Every row of `sql`'s result, each cell as text (`NULL` for a null).
+fn cells(s: &Session, sql: &str) -> Vec<Vec<String>> {
+    let batches = block_on(async { s.sql(sql).await?.collect().await })
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    let mut out = Vec::new();
+    for b in &batches {
+        for row in 0..b.num_rows() {
+            out.push(
+                b.columns()
+                    .iter()
+                    .map(|c| {
+                        if c.is_null(row) {
+                            "NULL".to_owned()
+                        } else {
+                            match c.data_type() {
+                                DataType::Utf8 => c.as_string::<i32>().value(row).to_owned(),
+                                DataType::Utf8View => c.as_string_view().value(row).to_owned(),
+                                t => panic!("{sql}: a {t} metadata column"),
+                            }
+                        }
+                    })
+                    .collect(),
+            );
+        }
+    }
+    out
 }
 
 fn class(r: Result<impl Sized, KrishivError>) -> String {
@@ -1981,14 +2010,19 @@ fn browse_on_a_view_shows_its_schema_not_its_text_or_rows() {
     ] {
         block_on(async { s.sql(sql).await?.collect().await }).unwrap();
     }
-    for sql in [
-        "DESCRIBE TABLE pv",
-        "SHOW COLUMNS IN pv",
-        "SHOW TBLPROPERTIES pv",
-    ] {
-        block_on(async { s.sql(sql).await?.collect().await })
-            .unwrap_or_else(|e| panic!("{sql}: {e}"));
-    }
+    // Exactly the schema: names and types (comment empty, as in Spark 4.2.0's
+    // `view-schema-evolution.sql.out`), no row carrying the view's text or its literal.
+    let row = |c: &[&str]| c.iter().map(|v| (*v).to_owned()).collect::<Vec<_>>();
+    assert_eq!(
+        cells(&s, "DESCRIBE TABLE pv"),
+        [row(&["a", "int", ""]), row(&["secret_literal", "int", ""])]
+    );
+    assert_eq!(
+        cells(&s, "SHOW COLUMNS IN pv"),
+        [row(&["a"]), row(&["secret_literal"])]
+    );
+    // The view has no user properties; its `view.*` entries (where the text lives) are not shown.
+    assert!(cells(&s, "SHOW TBLPROPERTIES pv").is_empty());
     for sql in [
         "SHOW CREATE TABLE pv",
         "DESCRIBE TABLE EXTENDED pv",

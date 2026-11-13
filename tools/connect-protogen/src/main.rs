@@ -7,7 +7,7 @@
 //! ```
 //!
 //! Run it from the repository root. `VERSION` is the vendored Spark minor
-//! (default `4.2`; `v<VERSION>` is `v4_2`). These files come out, all under
+//! (default `4.3`, the one `krishiv-connect` compiles; `v<VERSION>` is `v4_3`). These files come out, all under
 //! `crates/krishiv-connect`:
 //!
 //! - `src/proto/v<VERSION>/spark.connect.pb.rs`: the `prost` message types;
@@ -27,6 +27,9 @@
 //! - `src/proto/v<VERSION>/oneofs.pb.rs`: for every `oneof` variant, its field
 //!   name, number and type, so an error can name the proto field that is not
 //!   supported without formatting the (possibly secret) message;
+//! - `crates/krishiv-connect-server/src/service/v<VERSION>.pb.rs` (the
+//!   served version only, [`SERVED`]): the server side of `SparkConnectService` (a trait with one method per RPC
+//!   and the tonic router), decoding every request through `wire`;
 //! - `tests/fixtures/spark-connect-<VERSION>.fds`: the compiled descriptor
 //!   set, used by the golden tests to read protobuf JSON.
 //!
@@ -79,7 +82,7 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     let mut mode = None;
-    let mut version = "4.2".to_owned();
+    let mut version = SERVED.to_owned();
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--write" | "--check" => mode = Some(arg),
@@ -111,6 +114,11 @@ fn run() -> Result<()> {
         .into())
     }
 }
+
+/// The protocol version `krishiv-connect-server` serves: only its server
+/// stub is generated (older versions are kept for their messages and
+/// descriptor only).
+const SERVED: &str = "4.3";
 
 /// The generated files, by path.
 fn generate(root: &Path, version: &str) -> Result<Vec<(PathBuf, Vec<u8>)>> {
@@ -155,7 +163,7 @@ fn generate(root: &Path, version: &str) -> Result<Vec<(PathBuf, Vec<u8>)>> {
     let module_dir = root
         .join("src/proto")
         .join(format!("v{}", version.replace('.', "_")));
-    Ok(vec![
+    let mut outputs = vec![
         (
             module_dir.join("spark.connect.pb.rs"),
             format!("{header}{types}").into_bytes(),
@@ -180,7 +188,15 @@ fn generate(root: &Path, version: &str) -> Result<Vec<(PathBuf, Vec<u8>)>> {
             root.join(format!("tests/fixtures/spark-connect-{version}.fds")),
             fds.encode_to_vec(),
         ),
-    ])
+    ];
+    if version == SERVED {
+        outputs.push((
+            Path::new("crates/krishiv-connect-server/src/service")
+                .join(format!("v{}.pb.rs", version.replace('.', "_"))),
+            service_stub(&header, &fds)?.into_bytes(),
+        ));
+    }
+    Ok(outputs)
 }
 
 /// For every message of the package, by id (the index in name order): its
@@ -214,6 +230,28 @@ fn layout_table(header: &str, module: &str, fds: &FileDescriptorSet) -> Result<S
             .ok_or_else(|| format!("{root} is not a message"))?;
         let name = root.rsplit('.').next().unwrap_or(root).to_uppercase();
         writeln!(out, "pub(crate) const {name}: u16 = {id};")?;
+    }
+    // The request of every RPC is a root too: a gRPC codec decodes it
+    // through `wire::decode_request`.
+    let mut requests: Vec<String> = service_methods(fds)?
+        .into_iter()
+        .map(|m| m.input)
+        .collect();
+    requests.sort_unstable();
+    requests.dedup();
+    out.push_str("\n/// The request messages of the service's RPCs, by id.\n");
+    for request in requests {
+        let id = ids
+            .get(request.as_str())
+            .ok_or_else(|| format!("{request} is not a message"))?;
+        let short = request.trim_start_matches(".spark.connect.");
+        writeln!(
+            out,
+            "impl crate::wire::Request for super::{module}::{} {{\n    const ROOT: u16 = {id};\n}}\n\
+             impl crate::wire::sealed::Sealed for super::{module}::{} {{}}",
+            rust_path(short),
+            rust_path(short)
+        )?;
     }
     writeln!(
         out,
@@ -262,6 +300,216 @@ fn layout_table(header: &str, module: &str, fds: &FileDescriptorSet) -> Result<S
         )?;
     }
     out.push_str("];\n");
+    Ok(out)
+}
+
+/// One RPC of `SparkConnectService`.
+struct RpcMethod {
+    /// `ExecutePlan`.
+    name: String,
+    /// The request message, fully qualified (`.spark.connect.X`).
+    input: String,
+    /// The response message, fully qualified.
+    output: String,
+    client_streaming: bool,
+    server_streaming: bool,
+}
+
+/// The RPCs of the package's one service, in declaration order.
+fn service_methods(fds: &FileDescriptorSet) -> Result<Vec<RpcMethod>> {
+    let services: Vec<_> = fds
+        .file
+        .iter()
+        .filter(|f| f.package() == "spark.connect")
+        .flat_map(|f| &f.service)
+        .collect();
+    let [service] = services.as_slice() else {
+        return Err(format!("expected one service, found {}", services.len()).into());
+    };
+    if service.name() != "SparkConnectService" {
+        return Err(format!("unexpected service {}", service.name()).into());
+    }
+    Ok(service
+        .method
+        .iter()
+        .map(|m| RpcMethod {
+            name: m.name().to_owned(),
+            input: m.input_type().to_owned(),
+            output: m.output_type().to_owned(),
+            client_streaming: m.client_streaming(),
+            server_streaming: m.server_streaming(),
+        })
+        .collect())
+}
+
+/// The server side of `spark.connect.SparkConnectService` over tonic: a
+/// trait with one method per RPC and a `tower::Service` that routes each
+/// path to it through `tonic::server::Grpc` with the bounded `WireCodec`
+/// (so every request decodes through `krishiv_connect::wire`). Written
+/// into `krishiv-connect-server`, which supplies `pb` (the message types),
+/// `Decoded` and `WireCodec` in the including module.
+fn service_stub(header: &str, fds: &FileDescriptorSet) -> Result<String> {
+    let methods = service_methods(fds)?;
+    let ty = |full: &str| format!("pb::{}", rust_path(full.trim_start_matches(".spark.connect.")));
+    let mut out = String::from(header);
+    out.push_str(
+        "\nuse std::convert::Infallible;\n\
+         use std::future::Future;\n\
+         use std::sync::Arc;\n\
+         use std::task::{Context, Poll};\n\n\
+         use tonic::codegen::{BoxFuture, Body, StdError, http, tokio_stream::Stream};\n\
+         use tonic::server::{Grpc, NamedService};\n\
+         use tonic::{Request, Response, Status, Streaming};\n\n\
+         /// `spark.connect.SparkConnectService`: one method per RPC. A request\n\
+         /// arrives decoded and bounded (`Decoded`); dropping it wipes its\n\
+         /// secrets.\n\
+         pub trait SparkConnectService: Send + Sync + 'static {\n",
+    );
+    for m in &methods {
+        if m.server_streaming {
+            writeln!(
+                out,
+                "    /// The response stream of `{}`.\n    type {}Stream: Stream<Item = Result<{}, Status>> + Send + 'static;",
+                m.name,
+                m.name,
+                ty(&m.output)
+            )?;
+        }
+    }
+    for m in &methods {
+        let input = if m.client_streaming {
+            format!("Streaming<Decoded<{}>>", ty(&m.input))
+        } else {
+            format!("Decoded<{}>", ty(&m.input))
+        };
+        let output = if m.server_streaming {
+            format!("Self::{}Stream", m.name)
+        } else {
+            ty(&m.output)
+        };
+        writeln!(
+            out,
+            "    /// The `{}` RPC.\n    fn {}(\n        &self,\n        request: Request<{input}>,\n    ) -> impl Future<Output = Result<Response<{output}>, Status>> + Send;",
+            m.name,
+            m.name.to_snake_case()
+        )?;
+    }
+    out.push_str(
+        "}\n\n\
+         /// The tonic service of a [`SparkConnectService`].\n\
+         #[derive(Debug)]\n\
+         pub struct SparkConnectServiceServer<T> {\n\
+         \x20   inner: Arc<T>,\n\
+         \x20   max_decoding_message_size: Option<usize>,\n\
+         \x20   max_encoding_message_size: Option<usize>,\n\
+         }\n\n\
+         impl<T> Clone for SparkConnectServiceServer<T> {\n\
+         \x20   fn clone(&self) -> Self {\n\
+         \x20       Self {\n\
+         \x20           inner: Arc::clone(&self.inner),\n\
+         \x20           max_decoding_message_size: self.max_decoding_message_size,\n\
+         \x20           max_encoding_message_size: self.max_encoding_message_size,\n\
+         \x20       }\n\
+         \x20   }\n\
+         }\n\n\
+         impl<T: SparkConnectService> SparkConnectServiceServer<T> {\n\
+         \x20   /// Serves `inner`.\n\
+         \x20   pub fn from_arc(inner: Arc<T>) -> Self {\n\
+         \x20       Self { inner, max_decoding_message_size: None, max_encoding_message_size: None }\n\
+         \x20   }\n\n\
+         \x20   /// The largest request message accepted (tonic's default is 4 MiB).\n\
+         \x20   #[must_use]\n\
+         \x20   pub fn max_decoding_message_size(mut self, limit: usize) -> Self {\n\
+         \x20       self.max_decoding_message_size = Some(limit);\n\
+         \x20       self\n\
+         \x20   }\n\n\
+         \x20   /// The largest response message sent.\n\
+         \x20   #[must_use]\n\
+         \x20   pub fn max_encoding_message_size(mut self, limit: usize) -> Self {\n\
+         \x20       self.max_encoding_message_size = Some(limit);\n\
+         \x20       self\n\
+         \x20   }\n\
+         }\n\n\
+         impl<T: SparkConnectService> NamedService for SparkConnectServiceServer<T> {\n\
+         \x20   const NAME: &'static str = \"spark.connect.SparkConnectService\";\n\
+         }\n\n\
+         impl<T, B> tonic::codegen::Service<http::Request<B>> for SparkConnectServiceServer<T>\n\
+         where\n\
+         \x20   T: SparkConnectService,\n\
+         \x20   B: Body + Send + 'static,\n\
+         \x20   B::Error: Into<StdError> + Send + 'static,\n\
+         {\n\
+         \x20   type Response = http::Response<tonic::body::Body>;\n\
+         \x20   type Error = Infallible;\n\
+         \x20   type Future = BoxFuture<Self::Response, Self::Error>;\n\n\
+         \x20   fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {\n\
+         \x20       Poll::Ready(Ok(()))\n\
+         \x20   }\n\n\
+         \x20   fn call(&mut self, req: http::Request<B>) -> Self::Future {\n\
+         \x20       let inner = Arc::clone(&self.inner);\n\
+         \x20       let limits = (self.max_decoding_message_size, self.max_encoding_message_size);\n\
+         \x20       match req.uri().path() {\n",
+    );
+    for m in &methods {
+        let snake = m.name.to_snake_case();
+        let (input, output) = (ty(&m.input), ty(&m.output));
+        let (kind, trait_name, call_input, assoc) = match (m.client_streaming, m.server_streaming) {
+            (false, false) => ("unary", "UnaryService", format!("Decoded<{input}>"), String::new()),
+            (false, true) => (
+                "server_streaming",
+                "ServerStreamingService",
+                format!("Decoded<{input}>"),
+                format!("                    type ResponseStream = T::{}Stream;\n", m.name),
+            ),
+            (true, false) => (
+                "client_streaming",
+                "ClientStreamingService",
+                format!("Streaming<Decoded<{input}>>"),
+                String::new(),
+            ),
+            (true, true) => (
+                "streaming",
+                "StreamingService",
+                format!("Streaming<Decoded<{input}>>"),
+                format!("                    type ResponseStream = T::{}Stream;\n", m.name),
+            ),
+        };
+        let response = if m.server_streaming {
+            "Self::ResponseStream".to_owned()
+        } else {
+            "Self::Response".to_owned()
+        };
+        writeln!(
+            out,
+            "            \"/spark.connect.SparkConnectService/{name}\" => {{\n\
+             \x20               struct Svc<T>(Arc<T>);\n\
+             \x20               impl<T: SparkConnectService> tonic::server::{trait_name}<Decoded<{input}>> for Svc<T> {{\n\
+             \x20                   type Response = {output};\n\
+             {assoc}\
+             \x20                   type Future = BoxFuture<Response<{response}>, Status>;\n\n\
+             \x20                   fn call(&mut self, request: Request<{call_input}>) -> Self::Future {{\n\
+             \x20                       let inner = Arc::clone(&self.0);\n\
+             \x20                       Box::pin(async move {{ inner.{snake}(request).await }})\n\
+             \x20                   }}\n\
+             \x20               }}\n\
+             \x20               Box::pin(async move {{\n\
+             \x20                   let mut grpc = Grpc::new(WireCodec::<{output}, {input}>::default())\n\
+             \x20                       .apply_max_message_size_config(limits.0, limits.1);\n\
+             \x20                   Ok(grpc.{kind}(Svc(inner), req).await)\n\
+             \x20               }})\n\
+             \x20           }}",
+            name = m.name,
+        )?;
+    }
+    out.push_str(
+        "            _ => Box::pin(async move {\n\
+         \x20               let _ = inner;\n\
+         \x20               Ok(Status::unimplemented(\"unknown method\").into_http())\n\
+         \x20           }),\n\
+         \x20       }\n\
+         \x20   }\n\
+         }\n",
+    );
     Ok(out)
 }
 

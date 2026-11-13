@@ -78,18 +78,7 @@ impl Session {
         match &s.kind {
             SetKind::All => {
                 // Every explicitly set key (the frame sorts by key).
-                let config = self.state.conf.snapshot();
-                let mut rows: Vec<(String, String)> = config
-                    .explicit_registered()
-                    .into_iter()
-                    .map(|(key, value)| (key.to_owned(), value))
-                    .collect();
-                rows.extend(
-                    config
-                        .explicit_unregistered()
-                        .into_iter()
-                        .map(|(key, value)| (key.to_owned(), value.to_owned())),
-                );
+                let rows = self.state.conf.explicit_entries();
                 self.string_frame(
                     &["key", "value"],
                     rows.into_iter()

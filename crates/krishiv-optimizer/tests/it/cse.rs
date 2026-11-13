@@ -6,7 +6,7 @@
 //! control in the same query, so the test fails both without the rule
 //! (nothing hoists) and with a naive rule (everything hoists).
 
-use krishiv_optimizer::{Options, optimize, optimize_with_options};
+use krishiv_optimizer::{optimize, optimize_with_options};
 use krishiv_plan::{LogicalPlan, Plan};
 
 use crate::support::{self, data, eval};
@@ -29,10 +29,7 @@ fn both(sql: &str) -> (Plan, Plan) {
     let off = optimize_with_options(
         &plan,
         &support::AllDistinct,
-        &Options {
-            cse: false,
-            ..Options::default()
-        },
+        &support::options(|o| o.cse = false),
     )
     .unwrap();
     (on, off)
@@ -307,10 +304,7 @@ fn switch_disables_the_rule() {
     let off = optimize_with_options(
         &plan,
         &support::AllDistinct,
-        &Options {
-            cse: false,
-            ..Options::default()
-        },
+        &support::options(|o| o.cse = false),
     )
     .unwrap();
     assert_eq!(extractions(off.root()), 0);
@@ -342,10 +336,7 @@ fn differential_results_match() {
         let off = optimize_with_options(
             &plan,
             &support::AllDistinct,
-            &Options {
-                cse: false,
-                ..Options::default()
-            },
+            &support::options(|o| o.cse = false),
         )
         .unwrap();
         extracted += on.root().to_string().matches("AS krishiv_cse_").count();

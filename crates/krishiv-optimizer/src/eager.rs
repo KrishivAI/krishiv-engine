@@ -619,7 +619,7 @@ fn groups_of(keys: &[BoundColumn], side: &RelStats) -> Result<f64, String> {
 }
 
 /// Why `f` cannot run below the join, on a side with these statistics.
-fn refusal_of_call(
+pub(crate) fn refusal_of_call(
     f: &ResolvedFunction,
     side: &RelStats,
     null_supplying: bool,

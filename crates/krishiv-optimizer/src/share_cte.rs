@@ -8,6 +8,11 @@
 //! tidy, turns them into references to one `WITH` definition that the
 //! physical planner computes once per query (`SharedRead`).
 //!
+//! With `direct` (P3 W1 shape (b), `krishiv.optimizer.shareRepeatedSubtrees`)
+//! the places that read a shifted body without the `Shift` are members too: a
+//! subtree the main block reads and a subquery reads again becomes one
+//! definition whose references have `output == source`.
+//!
 //! A group is shared when
 //! - it has two or more members (instances, subquery plans included) whose
 //!   bodies are equal: bucketed by the normalized subtree hash, decided by
@@ -52,9 +57,15 @@ struct Member {
     uses: u64,
 }
 
-/// `root` with its groups of equal instances shared.
-pub(crate) fn share(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let members = shifts(&root);
+/// `root` with its groups of equal instances shared. With `direct`, the
+/// places that read a `Shift`'s body without the `Shift` count as members too
+/// (P3 W1 shape (b)): a subtree the main block reads and a subquery reads
+/// again, shifted.
+pub(crate) fn share(
+    root: Arc<LogicalPlan>,
+    direct: bool,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
+    let members = shifts(&root, direct);
     if members.iter().map(|m| m.uses).sum::<u64>() < 2 {
         return Ok(root);
     }
@@ -113,7 +124,7 @@ pub(crate) fn share(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivE
     for (name, body) in bodies {
         ctes.push(Cte {
             name,
-            plan: sharer.go(body)?,
+            plan: sharer.go_def(body)?,
         });
     }
     // A group none of whose members was replaced (an id overflow) leaves an
@@ -125,8 +136,10 @@ pub(crate) fn share(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivE
 }
 
 /// Every `Shift` of the plan (subquery plans included), once each, with the
-/// number of paths that reach it.
-fn shifts(root: &Arc<LogicalPlan>) -> Vec<Member> {
+/// number of paths that reach it; with `direct`, also one member per shifted
+/// body that is reached other than through a `Shift` (offset 0, `shift` is
+/// the body itself).
+fn shifts(root: &Arc<LogicalPlan>, direct: bool) -> Vec<Member> {
     // The relations in post-order (children before parents), each with its
     // children, then path counts from the root down.
     let mut order: Vec<Arc<LogicalPlan>> = Vec::new();
@@ -170,6 +183,46 @@ fn shifts(root: &Arc<LogicalPlan>) -> Vec<Member> {
             *slot = slot.saturating_add(n);
         }
     }
+    if direct {
+        out.extend(direct_members(&out, &paths));
+    }
+    out
+}
+
+/// A member per shifted body that some path reaches without a `Shift`:
+/// `paths(B) - sum of paths(Shift over B)`. A structurally equal body in
+/// another `Arc` is not counted, which is safe.
+fn direct_members(members: &[Member], paths: &HashMap<*const LogicalPlan, u64>) -> Vec<Member> {
+    let mut through_shift: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, u64)> = HashMap::new();
+    for m in members {
+        let e = through_shift
+            .entry(Arc::as_ptr(&m.body))
+            .or_insert_with(|| (Arc::clone(&m.body), 0));
+        e.1 = e.1.saturating_add(m.uses);
+    }
+    let mut out: Vec<Member> = through_shift
+        .into_iter()
+        .filter_map(|(ptr, (body, shifted))| {
+            let uses = paths
+                .get(&ptr)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(shifted);
+            (uses > 0).then(|| Member {
+                shift: Arc::clone(&body),
+                body,
+                offset: 0,
+                uses,
+            })
+        })
+        .collect();
+    // A stable order (the hash map's is not).
+    out.sort_by_key(|m| {
+        members
+            .iter()
+            .position(|x| Arc::ptr_eq(&x.body, &m.body))
+            .unwrap_or(usize::MAX)
+    });
     out
 }
 
@@ -271,6 +324,24 @@ impl Sharer<'_> {
             .map_expressions(|e| self.subqueries(e))?;
         self.done.insert(key, (plan, Arc::clone(&rebuilt)));
         Ok(rebuilt)
+    }
+
+    /// A definition's body: its children and expressions are rewritten, but
+    /// the body itself is not replaced by its own reference (a direct member
+    /// is keyed by the body's pointer).
+    fn go_def(&mut self, plan: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
+        // Only the body's own direct reference (`output == source`, offset 0)
+        // is skipped; a shared `Shift` that happens to be a body is replaced.
+        let own = self.replace.get(&Arc::as_ptr(&plan)).is_some_and(|r| {
+            matches!(&r.node, PlanNode::CteRef(c)
+                if c.output.iter().map(|o| o.id).eq(c.source.iter().copied()))
+        });
+        if !own {
+            return self.go(plan);
+        }
+        Arc::clone(&plan)
+            .map_children(|c| self.go(c))?
+            .map_expressions(|e| self.subqueries(e))
     }
 
     fn subqueries(&mut self, e: Arc<Expr>) -> Result<Arc<Expr>, KrishivError> {

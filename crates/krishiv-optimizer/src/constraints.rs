@@ -374,7 +374,7 @@ fn implies(known: &[Arc<Expr>], pred: &Arc<Expr>) -> bool {
 /// `isnotnull(c)` as the analyzer resolves it: never null, whatever `c` is
 /// (a call built with `nullable` from its argument would differ from the
 /// user's own `c IS NOT NULL`, and the plan would not be a fixed point).
-fn is_not_null_of(c: &BoundColumn) -> Arc<Expr> {
+pub(crate) fn is_not_null_of(c: &BoundColumn) -> Arc<Expr> {
     let mut f = call_builtin(Builtin::IsNotNull, vec![column(c)], DataType::Boolean);
     f.nullable = false;
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))))

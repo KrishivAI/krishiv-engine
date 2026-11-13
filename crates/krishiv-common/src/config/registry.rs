@@ -15,8 +15,22 @@ use super::{
 
 mod python;
 pub use python::{ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS};
+mod lakehouse;
+mod optimizer;
 mod result_cache;
+mod server;
+pub use lakehouse::{CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, DELTA_LOG_THREADS};
+pub use optimizer::{SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW};
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
+pub use server::{
+    CONNECT_ADDRESS, CONNECT_HANDSHAKE_TIMEOUT, CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
+    CONNECT_HTTP2_MAX_HEADER_LIST_BYTES, CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
+    CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME, CONNECT_KEEPALIVE_TIMEOUT,
+    CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE, CONNECT_MAX_SESSIONS,
+    CONNECT_MAX_SESSIONS_PER_PRINCIPAL, CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT,
+    CONNECT_SESSION_MAINTENANCE_INTERVAL, CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS,
+    SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
+};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -67,6 +81,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RESULT_CACHE_ENABLED,
     &RESULT_CACHE_TTL,
     &RESULT_CACHE_MAX_BYTES,
+    &SUBQUERY_AS_WINDOW,
+    &SHARE_REPEATED_SUBTREES,
     &SPILL_DIR,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
@@ -85,6 +101,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &LEAF_NODE_DEFAULT_PARALLELISM,
     &IO_MAX_CONCURRENT_REQUESTS,
     &IO_BLOCKING_THREADS,
+    &DELTA_LOG_THREADS,
+    &CATALOG_MAX_METADATA_BYTES,
+    &CATALOG_MAX_COLUMNS,
     &IO_COALESCE_BYTES,
     &IO_COALESCE_WASTE_BYTES,
     &IO_COALESCE_WASTE_DIVISOR,
@@ -143,6 +162,25 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &NDV_SAMPLING_ROWS,
     &NDV_SAMPLING_TIMEOUT,
     &JOIN_COST,
+    &CONNECT_PORT,
+    &CONNECT_ADDRESS,
+    &CONNECT_MAX_INBOUND_MESSAGE_SIZE,
+    &CONNECT_KEEPALIVE_ENABLED,
+    &CONNECT_KEEPALIVE_TIME,
+    &CONNECT_KEEPALIVE_TIMEOUT,
+    &CONNECT_SESSION_IDLE_TIMEOUT,
+    &CONNECT_SESSION_MAINTENANCE_INTERVAL,
+    &CONNECT_SESSION_TOMBSTONES,
+    &CONNECT_MAX_SESSIONS,
+    &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
+    &CONNECT_MAX_CONNECTIONS,
+    &CONNECT_HANDSHAKE_TIMEOUT,
+    &CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
+    &CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
+    &CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
+    &SERVER_SHUTDOWN_TIMEOUT,
+    &SERVER_ALLOW_CORE_DUMPS,
+    &SERVER_METRICS_PUBLIC,
 ];
 
 /// ANSI SQL mode (Spark 4 default: on).
@@ -667,16 +705,23 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
     key: "krishiv.deterministicOrder",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(false)),
-    doc: "Make a query's result reproducible: every pipeline runs on one driver, so partial \
-          states (a decimal `sum` or `avg`, whose overflow can depend on the order of the \
-          merges) are merged in the order the input arrives and a query without `ORDER BY` \
-          returns its rows in the same order on every run, byte for byte, for the engine's \
-          own scans. The key hashes take a fixed seed, so an operator that spills splits \
-          its rows the same way on every run. Costs the parallelism of the query: meant for \
-          reproducing a result, comparing two builds, and tests. Memory pressure from other queries in the process \
+    doc: "Make a query's result reproducible, aiming at the same bytes at any thread count (a \
+          float sum under a window, a sort-merge join or a very large grouping can still differ, \
+          because those size their buckets by the thread count). A scan \
+          pipeline whose source can be split deterministically runs one driver per logical \
+          partition (up to 16), morsels are dealt to them by ordinal, and their partial states \
+          are combined in partition order, so partial states (a decimal `sum` or `avg`, whose \
+          overflow can depend on the order of the merges) merge the same way and a query \
+          without `ORDER BY` returns its rows in the same order on every run, byte for byte, \
+          for the engine's own scans. Any other pipeline (a sink that is not lane-safe, a \
+          source that reports no positions, a pushed `LIMIT`, an operator with work after its \
+          input, a memory limit under 4 GiB) runs on one driver. The key hashes take a fixed \
+          seed, so an operator that spills splits its rows the same way on every run. Costs \
+          parallelism where it falls back to one driver: meant for reproducing a result, \
+          comparing two builds, and tests. Memory pressure from other queries in the process \
           can still change when an operator spills, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
-          probing a union) take turns, one after another, so they lose their overlap too. Off by \
+          probing a union) take turns in branch order, so they lose their overlap too. Off by \
           default.",
     scope: Scope::Session,
     settable_by: SettableBy::User,

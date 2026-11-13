@@ -534,6 +534,8 @@ struct FileScanLocal {
     /// The footer read in flight for a file this driver opens next.
     ahead: Option<(usize, MetadataFuture)>,
     claimed: u64,
+    lane: Option<(usize, usize)>,
+    taken: usize,
     /// The claim ordinal of the claimed morsel.
     position: Option<u64>,
     /// What the last piece read measured for its row-level filter, and its
@@ -879,7 +881,7 @@ impl FileScanSource {
                 .get(f)
                 .is_some_and(|f| caps.is_splittable(f.path.as_ref()))
         };
-        let drivers = ctx.executor().parallelism();
+        let drivers = ctx.layout_parallelism();
         if self.request.metadata_cols.row_index && caps.random_access.is_none() {
             return krishiv_io::split::morsels(&self.partitions, u64::MAX, splittable);
         }
@@ -1165,7 +1167,7 @@ impl FileScanSource {
                     .await?;
                 continue;
             }
-            let Some((ordinal, m)) = g.cursor.claim_ordered() else {
+            let Some((ordinal, m)) = g.cursor.claim_for(local.lane, &mut local.taken) else {
                 return Ok(None);
             };
             local.position = Some(ordinal);
@@ -1516,6 +1518,13 @@ impl Source for FileScanSource {
         global_ref::<FileScanGlobal>(global, "FileScan").map_or(1, |g| g.cursor.len().max(1))
     }
 
+    fn deterministic_split(&self, global: &GlobalState) -> Option<usize> {
+        global_ref::<FileScanGlobal>(global, "FileScan")
+            .ok()
+            .filter(|g| g.request.limit.is_none())
+            .map(|g| g.cursor.len().max(1))
+    }
+
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
         Ok(Box::new(FileScanLocal {
@@ -1528,6 +1537,8 @@ impl Source for FileScanSource {
             current: None,
             ahead: None,
             claimed: 0,
+            lane: ctx.lane(),
+            taken: 0,
             row_filter: None,
             position: None,
             totals: Arc::clone(&self.metrics),

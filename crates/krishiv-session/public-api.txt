@@ -1015,6 +1015,7 @@ pub fn krishiv_session::ReadOnlyPolicy::check<'a>(&'a self, &'a krishiv_common::
 pub fn krishiv_session::ReadOnlyPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::RuntimeConf
 impl krishiv_session::RuntimeConf
+pub fn krishiv_session::RuntimeConf::entries(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub fn krishiv_session::RuntimeConf::get(&self, &str) -> core::option::Option<alloc::string::String>
 pub fn krishiv_session::RuntimeConf::is_modifiable(&self, &str) -> bool
 pub fn krishiv_session::RuntimeConf::set(&self, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
@@ -1047,9 +1048,13 @@ pub fn krishiv_session::Session::temp_table_names(&self) -> alloc::vec::Vec<allo
 pub fn krishiv_session::Session::uncache_table(&self, &str)
 impl krishiv_session::Session
 pub fn krishiv_session::Session::cancel(&self, &krishiv_session::QueryId) -> bool
+pub fn krishiv_session::Session::clone_session(&self) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::close(&self) -> usize
+pub fn krishiv_session::Session::id(&self) -> &str
 pub fn krishiv_session::Session::interrupt_all(&self) -> alloc::vec::Vec<krishiv_session::QueryId>
+pub fn krishiv_session::Session::is_closed(&self) -> bool
 pub fn krishiv_session::Session::new_session(&self) -> Self
+pub fn krishiv_session::Session::running_queries(&self) -> usize
 pub fn krishiv_session::Session::runtime(&self) -> &alloc::sync::Arc<krishiv_session::EngineRuntime>
 pub async fn krishiv_session::Session::sql_with(&self, &str, krishiv_session::QueryOptions) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 impl krishiv_session::Session

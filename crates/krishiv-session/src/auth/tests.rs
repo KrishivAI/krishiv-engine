@@ -288,7 +288,36 @@ fn token_compare_is_constant_time() {
     // Structural: a lookup walks every digest whatever matches (timing is not measured).
     let dir = tempfile::tempdir().unwrap();
     let tokens = StaticTokens::build(&two_tokens(dir.path()).tokens).unwrap();
-    assert_eq!(tokens.comparisons_per_lookup(), tokens.len());
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens.comparisons_for(TOKEN_A), 2, "first entry matches");
+    assert_eq!(tokens.comparisons_for(TOKEN_B), 2, "last entry matches");
+    assert_eq!(tokens.comparisons_for("wrong"), 2, "no entry matches");
+}
+
+/// A secret a `Bearer` header cannot carry as written (spaces trimmed by header parsing,
+/// controls, non-ASCII) refuses startup instead of making a token no client can present.
+#[test]
+fn secrets_a_header_cannot_carry_refuse_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, secret) in [
+        ("lead", format!(" {TOKEN_A}")),
+        ("trail", format!("{TOKEN_A} ")),
+        ("spaces", " ".repeat(32)),
+        ("inner", format!("{TOKEN_A} {TOKEN_B}")),
+        ("tab", format!("{TOKEN_A}\t")),
+        ("utf8", format!("{TOKEN_A}é")),
+    ] {
+        let path = secret_file(dir.path(), name, &secret, 0o600);
+        let c = config(&[
+            ("krishiv.auth.tokens.a.secret", &path),
+            ("krishiv.auth.tokens.a.principal", "alice"),
+            ("krishiv.auth.tokens.a.role", "admin"),
+        ])
+        .unwrap();
+        let e = StaticTokens::build(&c.tokens).unwrap_err();
+        assert!(e.to_string().contains("visible ASCII"), "{name}: {e}");
+        assert!(!e.to_string().contains(TOKEN_A), "{name}: {e}");
+    }
 }
 
 #[test]

@@ -5,7 +5,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_plan::Plan;
 
 use super::{Result, TranslateConf, translate_relation};
-use crate::proto::v4_2::{
+use crate::proto::v4_3::{
     DataType, Expression, Relation, RelationCommon,
     data_type::Kind,
     expression::{self, ExprType, Literal, literal::LiteralType},
