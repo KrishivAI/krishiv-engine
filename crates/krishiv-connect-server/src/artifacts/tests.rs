@@ -189,3 +189,49 @@ fn protocol_refusals() {
     );
     assert_eq!(e.artifacts().used_bytes(), 0);
 }
+
+/// Review L6: a clone dropped mid-copy (its unpublished entry closed) gets
+/// nothing more: no quota, no file, no directory; and closing it after a
+/// partial copy returns what it had.
+#[test]
+fn a_copy_into_a_closed_session_leaves_nothing_behind() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = store(tmp.path());
+    let m = sessions();
+    let source = entry(&m, S1);
+    let mut t = transfer(&store, &source);
+    t.on_message(&request(Some(single("files/a/x", b"xyz"))))
+        .unwrap();
+    t.on_message(&request(Some(single("cache/abc", b"blob"))))
+        .unwrap();
+    t.finish().unwrap();
+    let held = store.used_bytes();
+    let snapshot = source.artifacts().snapshot().unwrap();
+    assert!(!snapshot.is_empty());
+    let pool = source.session().runtime().memory();
+
+    // Closed before the copy (the handler dropped while it waited).
+    let target = Arc::new(super::SessionArtifacts::default());
+    target.close();
+    let e = target.copy_from(&snapshot, &store, &pool).unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
+    assert_eq!(target.used_bytes(), 0);
+    assert!(target.dir_path().is_none());
+    assert!(target.cached("abc").is_none());
+    assert_eq!(store.used_bytes(), held);
+
+    // Copied, then closed (dropped after the copy, before publication).
+    let target = Arc::new(super::SessionArtifacts::default());
+    target.copy_from(&snapshot, &store, &pool).unwrap();
+    let dir = target.dir_path().unwrap();
+    assert!(dir.join("files/a/x").exists());
+    assert_eq!(store.used_bytes(), 2 * held);
+    target.close();
+    assert_eq!(target.used_bytes(), 0);
+    assert_eq!(store.used_bytes(), held);
+    // The directory goes once its last holder drops it.
+    drop(target);
+    assert!(!dir.exists());
+    // A late install into the closed session is refused, not recorded.
+    assert!(source.artifacts().snapshot().is_some());
+}

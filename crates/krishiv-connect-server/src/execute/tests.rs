@@ -374,3 +374,35 @@ fn an_interrupt_before_the_end_wins_over_the_error() {
 fn errors() -> crate::errors::SessionErrors {
     crate::errors::SessionErrors::new(krishiv_session::Session::new().unwrap().conf())
 }
+
+/// Review M1: a setup that fails is `FAILED`; one whose RPC was dropped
+/// (the client cancelled during analysis) is `CANCELLED`.
+#[test]
+fn a_setup_failure_is_failed_and_a_dropped_setup_cancelled() {
+    use crate::operation::{OperationState, Operations};
+    let operations = Arc::new(Operations::default());
+    let failed = Arc::new(running_op());
+    operations.register(&failed, 10).unwrap();
+    let id = failed.id().as_str().to_owned();
+    super::Registered {
+        operations: Arc::clone(&operations),
+        op: Some(Arc::clone(&failed)),
+    }
+    .fail();
+    assert!(operations.is_empty());
+    assert_eq!(operations.state_of(&id), Some(OperationState::Failed));
+
+    let operations = Arc::new(Operations::default());
+    let dropped = Arc::new(running_op());
+    operations.register(&dropped, 10).unwrap();
+    drop(super::Registered {
+        operations: Arc::clone(&operations),
+        op: Some(Arc::clone(&dropped)),
+    });
+    assert!(operations.is_empty());
+    assert_eq!(
+        operations.state_of(dropped.id().as_str()),
+        Some(OperationState::Cancelled)
+    );
+    assert!(dropped.replay().is_closed());
+}

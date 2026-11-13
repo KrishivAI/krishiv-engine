@@ -2,20 +2,33 @@
 //! `GetStatus` (design P3-T011a §3.12): the states of a session's
 //! operations.
 //!
+//! **Unverified against Spark**: Spark's `SparkConnectGetStatusHandler`
+//! (v4.3.0) was not read; everything below follows design P3-T011a §3.12,
+//! not Spark's source. Verified only: Spark keeps ended operations in
+//! `SessionHolder.inactiveOperations`, `expireAfterAccess` 30 minutes, keyed
+//! by the operation id string (`SessionHolder.scala:108-115, 208-263`), and
+//! the request, response and state enum of `base.proto:1228-1300`.
+//!
 //! `operation_status` absent: no statuses. Present without ids: every
 //! operation the session knows, the live ones and those that ended within
 //! the window [`Operations`](crate::operation::Operations) keeps (30 minutes
 //! after the last lookup). Present with ids: one status per distinct id, in
-//! the order first given; an id the session does not know (or that is not a
-//! UUID) is `UNKNOWN`. `UNSPECIFIED` is never sent. Request extensions are
-//! ignored (Spark hands them to `spark.connect.extensions.getStatus.classes`
-//! plugins; Krishiv has none).
+//! the order first given, ids deduplicated by their canonical UUID form (the
+//! one lookups use; Spark keys by the raw string, so it may answer `UNKNOWN`
+//! for a non-canonical spelling: unverified), each echoed as first given; an
+//! id the session does not know (or that is not a UUID) is `UNKNOWN`.
+//! `UNSPECIFIED` is never sent. Request and operation extensions are
+//! ignored (Krishiv has no `spark.connect.extensions.getStatus.classes`
+//! plugins, `Connect.scala` v4.3.0 line 266; what Spark does with them is
+//! unverified).
 
 use std::collections::HashSet;
 
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::get_status_response::OperationStatus;
 use krishiv_connect::proto::v4_3::get_status_response::operation_status::OperationState as Wire;
+
+use krishiv_session::QueryId;
 
 use crate::manager::SessionEntry;
 use crate::operation::OperationState;
@@ -56,7 +69,11 @@ pub fn get_status(entry: &SessionEntry, request: &pb::GetStatusRequest) -> pb::G
             asked
                 .operation_ids
                 .iter()
-                .filter(|id| seen.insert(id.as_str()))
+                .filter(|id| {
+                    let key = QueryId::parse(id)
+                        .map_or_else(|_| (*id).clone(), |q| q.as_str().to_owned());
+                    seen.insert(key)
+                })
                 .map(|id| status(id.clone(), operations.state_of(id)))
                 .collect()
         }

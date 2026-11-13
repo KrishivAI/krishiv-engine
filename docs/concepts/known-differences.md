@@ -248,6 +248,10 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
   Spark does not check; a target id another principal holds answers `INVALID_HANDLE.SESSION_NOT_FOUND`; and a
   target created by a racing request while the clone is made fails with
   `INVALID_CLONE_SESSION_REQUEST.TARGET_SESSION_ID_ALREADY_EXISTS` where Spark returns the racing session.
-- **GetStatus** ignores request and operation extensions (Spark hands them to
-  `spark.connect.extensions.getStatus.classes` plugins; Krishiv has none). A session remembers the final state of at
-  most 1,000 ended operations, each for 30 minutes after its last lookup; Spark keeps every one for the 30 minutes.
+- **GetStatus** ignores request and operation extensions: Krishiv has no `spark.connect.extensions.getStatus.classes`
+  plugins. A session remembers the final state of at most 1,000 ended operations, each for 30 minutes after its last
+  lookup; Spark keeps every one for the 30 minutes. Operation ids are matched in their canonical UUID form, so an
+  upper-case spelling finds the operation; Spark keys them by the string as sent. Which state Spark reports in a few
+  cases has not been checked against Spark yet: Krishiv reports `CANCELLED` for an `ExecutePlan` whose client went
+  away during analysis, `FAILED` for one that failed there, and `TERMINATING` for an interrupted operation that has
+  not stopped yet.

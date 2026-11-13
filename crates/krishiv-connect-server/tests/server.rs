@@ -561,8 +561,7 @@ async fn every_rpc_is_unavailable_once_the_server_drains() {
     // No artifact directory until an artifact is written.
     assert!(service.artifacts().root_path().is_none());
     {
-        let (drain, code) = (true, Code::Unavailable);
-        draining.store(drain, Ordering::Release);
+        draining.store(true, Ordering::Release);
         let results: Vec<(&str, tonic::Status)> = vec![
             (
                 "CloneSession",
@@ -579,7 +578,7 @@ async fn every_rpc_is_unavailable_once_the_server_drains() {
                     .unwrap_err(),
             ),
         ];
-        if drain {
+        {
             // The other RPCs refuse too while draining.
             for e in [
                 service
@@ -621,7 +620,7 @@ async fn every_rpc_is_unavailable_once_the_server_drains() {
             assert_eq!(e.code(), Code::Unavailable);
         }
         for (rpc, status) in results {
-            assert_eq!(status.code(), code, "{rpc}");
+            assert_eq!(status.code(), Code::Unavailable, "{rpc}");
             assert_eq!(status.message(), "server shutting down", "{rpc}");
         }
     }

@@ -101,7 +101,15 @@ Paths are relative to this crate.
   is each session's statement gate (`SessionEntry::shared`, a tokio `RwLock`): an RPC holds only its own session's
   gate and takes no other lock while waiting for it; `CloneSession` holds the source's exclusively only around the
   synchronous copy (never across the artifact copy or a stream), so it cannot deadlock and never waits on a client.
-  Commands (T012) that change session state must run under the shared gate.
+  The gate is fair (write-preferring): a clone queued behind a slow `ExecutePlan` setup (`df.schema()` listing many
+  files) holds back every later `Config`, `AnalyzePlan` and `ExecutePlan` of that session until that setup ends:
+  head-of-line blocking, not a deadlock. Commands (T012) that change session state must run under the shared gate,
+  and their side effects must not run in the encoder (after the gate is dropped).
+- **Cached artifact blobs copied to a clone are reserved twice in the pool** while both sessions hold them (the
+  `Bytes` are shared): deliberate, conservative accounting (review L4); a tight pool can refuse such a clone.
+- **GetStatus and the operation states follow design §3.12, not Spark's handler** (unverified, not in the vendored
+  sources): a setup failure is `FAILED`, a setup whose RPC was dropped is `CANCELLED`, an interrupt whose encoder still
+  runs is `TERMINATING`.
 - **Decode only through `wire`** (`#![deny(clippy::disallowed_methods)]`): the codec is the one decode path.
 - Shutdown: draining flag (new RPCs `UNAVAILABLE`, `/readyz` 503), stop accepting, queries get
   `krishiv.server.shutdownTimeout`, then every session is closed (queries cancelled). The engine runtime is dropped

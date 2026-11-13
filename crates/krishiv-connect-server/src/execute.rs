@@ -147,7 +147,10 @@ impl ResponseBudget {
 }
 
 /// Removes its operation from the session when dropped, unless kept: the
-/// operation failed before its stream started.
+/// operation ended before its stream started, cancelled (its RPC was
+/// dropped) unless [`Registered::fail`] marked it failed. Spark's state for
+/// either is **unverified** (its `SparkConnectGetStatusHandler` was not
+/// read); this follows design P3-T011a §3.12.
 struct Registered {
     operations: Arc<Operations>,
     op: Option<Arc<Operation>>,
@@ -159,13 +162,19 @@ impl Registered {
     fn keep(mut self) {
         self.op = None;
     }
+
+    /// The setup failed (GetStatus: `FAILED`); the operation is removed.
+    fn fail(self) {
+        if let Some(op) = &self.op {
+            op.fail();
+        }
+    }
 }
 
 impl Drop for Registered {
     fn drop(&mut self) {
         if let Some(op) = self.op.take() {
-            // It failed before its stream started (GetStatus: FAILED).
-            op.fail();
+            // Not failed: interrupted by `close` (GetStatus: CANCELLED).
             op.mark_ended();
             op.close();
             self.operations.remove(&op);
@@ -228,10 +237,22 @@ pub async fn execute_plan(
     };
     let session = entry.session();
     let conf = session.conf();
-    let logical = request_plan(session, &plan, limits).await?;
-    let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
-    let schema = df.schema().await?;
-    let schema_response = schema::proto_schema(&schema)?;
+    let setup = async {
+        let logical = request_plan(session, &plan, limits).await?;
+        let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
+        let schema = df.schema().await?;
+        let schema_response = schema::proto_schema(&schema)?;
+        Ok::<_, KrishivError>((df, schema, schema_response))
+    };
+    // A failure is FAILED; this future dropped (its client cancelled the
+    // RPC) drops `registered`, which is CANCELLED.
+    let (df, schema, schema_response) = match setup.await {
+        Ok(ready) => ready,
+        Err(e) => {
+            registered.fail();
+            return Err(e);
+        }
+    };
     let settings = encode_settings(&conf, limits, opts.chunking);
 
     let sender = Sender {

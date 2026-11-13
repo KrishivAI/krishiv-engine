@@ -473,9 +473,15 @@ impl SparkConnectService for ConnectService {
     }
 
     /// Spark's `SparkConnectCloneSessionHandler` and
-    /// `SparkConnectSessionManager.cloneSession` (v4.3.0 lines 145-180):
-    /// the source is looked up (its server-side id checked), the target is
-    /// `new_session_id` or a fresh UUID (`SessionManager::clone_session`).
+    /// `SparkConnectSessionManager.cloneSession` (`SM.scala` v4.3.0 lines
+    /// 145-205, verified: source lookup, observed-id check, then the target
+    /// checks): the source is looked up (its server-side id checked), the
+    /// target is `new_session_id` or a fresh UUID
+    /// (`SessionManager::clone_session`). **Unverified** (the handler was
+    /// not read; design P3-T011a §3.11 instead): the fresh UUID when
+    /// `new_session_id` is absent, the response's `server_side_session_id`
+    /// being the source's, and errors after the source lookup carrying the
+    /// source session's `errorId`.
     async fn clone_session(
         &self,
         request: Request<Decoded<pb::CloneSessionRequest>>,
@@ -508,8 +514,10 @@ impl SparkConnectService for ConnectService {
         }))
     }
 
-    /// Spark's `SparkConnectGetStatusHandler`: the session is looked up
-    /// (its server-side id checked), the states read (`crate::get_status`).
+    /// `GetStatus` (`crate::get_status`): the session is looked up, its
+    /// server-side id checked. **Unverified** against Spark's
+    /// `SparkConnectGetStatusHandler` (not read; design P3-T011a §2.1 and
+    /// §3.12 instead), including the server-side id check.
     async fn get_status(
         &self,
         request: Request<Decoded<pb::GetStatusRequest>>,

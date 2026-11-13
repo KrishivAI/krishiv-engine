@@ -251,7 +251,12 @@ pub const ENDED_OPERATIONS_KEPT: usize = 1000;
 
 /// What `GetStatus` reports for an operation (design P3-T011a §3.12;
 /// `GetStatusResponse.OperationStatus.OperationState` without `UNKNOWN`
-/// and `UNSPECIFIED`).
+/// and `UNSPECIFIED`). **Unverified against Spark**: how Spark maps an
+/// operation's `ExecuteStatus` and `TerminationReason`
+/// (`ExecuteHolder.scala:348-355`) to these states is in its
+/// `SparkConnectGetStatusHandler`, which was not read: `TERMINATING` for an
+/// interrupt whose encoder still runs, `CANCELLED` for one removed while
+/// running, `FAILED` for a setup failure follow the design, not Spark.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OperationState {
     /// Running (or waiting for admission).

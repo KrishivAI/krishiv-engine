@@ -845,7 +845,13 @@ async fn get_status_states() {
     )
     .await
     .expect("stream");
-    let mut statuses = get_status(&run, Some(&[OP, OP2, OP, "not-a-uuid", SESSION])).await;
+    // The upper-case spelling is the same id (deduplicated canonically).
+    let upper = OP.to_uppercase();
+    let mut statuses = get_status(
+        &run,
+        Some(&[OP, OP2, OP, upper.as_str(), "not-a-uuid", SESSION]),
+    )
+    .await;
     assert_eq!(
         statuses,
         vec![

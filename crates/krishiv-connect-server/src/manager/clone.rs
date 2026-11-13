@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `CloneSession` (design P3-T011a §3.11, threat model T-Z6; Spark's
 //! `SparkConnectSessionManager.cloneSession` and
-//! `validateCloneTargetSession`, v4.3.0 lines 145-205).
+//! `validateCloneTargetSession`, `SM.scala` v4.3.0 lines 145-205, read: the
+//! order source lookup, observed-id check, format, closed, exists; no session
+//! cap). That Spark's `cloneSession` copies artifacts
+//! (`SparkSession.scala:295`, `BaseSessionStateBuilder.scala:468`) is from
+//! the design's reading, not re-read here: **unverified** in this PR.
 //!
 //! The source is looked up only (by the handler, its server-side id
 //! checked); the clone belongs to the caller's principal, which is the
@@ -23,6 +27,7 @@
 //! complete.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use krishiv_common::error::{
     InternalError, InvalidCloneSessionRequestTargetSessionIdAlreadyClosed,
@@ -112,6 +117,10 @@ impl SessionManager {
         {
             let mut inner = self.lock();
             Self::check_clone_locked(&mut inner, &key, &self.limits)?;
+            // The idle clock starts now, not before the copy (review L3): a
+            // copy longer than the idle timeout must not get the clone
+            // swept as soon as it is published.
+            entry.last_access.store(self.now_ms(), Ordering::Relaxed);
             inner.live.insert(key.clone(), Arc::clone(&entry));
             inner
                 .owners
