@@ -436,6 +436,44 @@ fn a_python_aggregate_beside_a_builtin_is_refused() {
     );
 }
 
+/// A Python UDAF call with `DISTINCT`, `FILTER (WHERE ...)` or `WITHIN
+/// GROUP` would run over every row of its group: refused at planning.
+#[test]
+fn a_python_aggregate_with_distinct_filter_or_within_group_is_refused() {
+    let env = env();
+    let (input, cols) = input(&env, "SELECT a, b FROM t");
+    let changed = |change: &dyn Fn(&mut ResolvedFunction)| {
+        let ExprNode::Resolved(ResolvedExpr::Function(f)) = &udaf(&cols[1]).node else {
+            unreachable!()
+        };
+        let mut f = f.clone();
+        change(&mut f);
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))))
+    };
+    let cases: [(&str, Arc<Expr>); 3] = [
+        ("DISTINCT", changed(&|f| f.distinct = true)),
+        ("FILTER", changed(&|f| f.filter = Some(col(&cols[0])))),
+        (
+            "WITHIN GROUP",
+            changed(&|f| f.within_group = vec![krishiv_plan::SortOrder::asc(col(&cols[0]))]),
+        ),
+    ];
+    for (what, call) in cases {
+        let node = LogicalPlan::new(PlanNode::Aggregate {
+            input: Arc::clone(&input),
+            grouping: Grouping::GroupBy(vec![col(&cols[0])]),
+            aggregates: vec![col(&cols[0]), alias(call, 950, "n")],
+        });
+        let err = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{what}: {err}"
+        );
+        assert!(err.to_string().contains(what), "{what}: {err}");
+    }
+}
+
 #[test]
 fn barrier_mode_is_refused_at_planning() {
     let env = env();

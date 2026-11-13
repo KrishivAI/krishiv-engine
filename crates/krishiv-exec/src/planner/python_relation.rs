@@ -319,6 +319,7 @@ impl Planner<'_> {
             let ExprNode::Resolved(ResolvedExpr::Function(f)) = &call.node else {
                 return Err(internal("a Python UDAF call is not a function"));
             };
+            refuse_call_syntax(f)?;
             if f.args.iter().any(|a| super::build::has_subquery(a)) {
                 return Err(unsupported("a subquery in the arguments of a Python UDF"));
             }
@@ -476,6 +477,28 @@ fn key_names(input: &Planned, keys: &[usize]) -> String {
 
 fn literal(l: krishiv_plan::Literal) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Literal(l)))
+}
+
+/// Refuses a Python UDAF call written with `DISTINCT`, `FILTER (WHERE ...)`
+/// or `WITHIN GROUP`: the operator feeds every row of a group to the UDF,
+/// so running such a call would silently ignore the clause. Spark refuses
+/// them too (a `PythonUDF` is not an `AggregateFunction`); its class is not
+/// verified against a Spark run yet, so the refusal is
+/// `KRISHIV_UNSUPPORTED_FEATURE`.
+fn refuse_call_syntax(f: &krishiv_plan::ResolvedFunction) -> Result<()> {
+    let clause = if f.distinct {
+        "DISTINCT"
+    } else if f.filter.is_some() {
+        "FILTER (WHERE ...)"
+    } else if !f.within_group.is_empty() {
+        "WITHIN GROUP (ORDER BY ...)"
+    } else {
+        return Ok(());
+    };
+    Err(unsupported(&format!(
+        "{clause} on a call of the Python aggregate UDF {}",
+        f.id.name()
+    )))
 }
 
 /// The attribute `e` reads if it is a plain column.
