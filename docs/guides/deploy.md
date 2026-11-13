@@ -1,3 +1,7 @@
+---
+description: The three deployment modes: embedded, single-node and distributed.
+---
+
 # Deployment
 
 | Mode | Status |

@@ -1,3 +1,7 @@
+---
+description: Run SQL against files from the krishiv command line.
+---
+
 # Run SQL from the command line
 
 Use `krishiv sql` to run one or more statements and print the result. This page shows the three ways to give it SQL and the output formats. The output below was captured from a real run.

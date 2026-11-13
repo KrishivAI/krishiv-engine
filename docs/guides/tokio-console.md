@@ -1,3 +1,7 @@
+---
+description: Find a stalled or slow task with tokio-console.
+---
+
 # tokio-console task diagnostics
 
 When a query seems stuck but uses CPU, the cause is usually a driver that

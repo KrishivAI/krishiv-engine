@@ -1,3 +1,7 @@
+---
+description: The krishiv Python package, which mirrors pyspark.sql and needs CPython 3.11 or newer.
+---
+
 # Python
 
 The `krishiv` package runs in your process and mirrors `pyspark.sql`: the same import paths, signatures and error

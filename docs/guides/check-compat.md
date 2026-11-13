@@ -1,3 +1,7 @@
+---
+description: Scan a PySpark or SQL project for functions Krishiv does not run the way Spark does.
+---
+
 # Check a PySpark or SQL project with check-compat
 
 `krishiv check-compat` reads your `.py`, `.sql` and `.ipynb` files and lists the functions that Krishiv does not run the way Spark does. It does not execute anything. Use it before you move a job, to see what to change.

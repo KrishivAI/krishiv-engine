@@ -1,3 +1,7 @@
+---
+description: Install the Python package and run your first SQL and DataFrame query.
+---
+
 # Quickstart
 
 <!-- The code blocks equal the Quickstart section of the repository README (a test checks it); CI runs the README's. -->
