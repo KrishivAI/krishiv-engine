@@ -98,6 +98,7 @@ mod hof;
 mod instance;
 mod intervals;
 pub(crate) mod legacy;
+pub mod lineage;
 mod ops;
 mod pivot;
 pub(crate) mod prefix;
@@ -807,6 +808,9 @@ pub struct AnalyzedPlan {
     pub timings: AnalysisTimings,
     /// What Spark logs as warnings during analysis: hints it ignores.
     pub warnings: Vec<String>,
+    /// The view side table: the views inlined before binding, located in [`Self::plan`] (filled by the
+    /// session that inlines them; see [`lineage::ViewExpansion`]).
+    pub views: Vec<lineage::ViewExpansion>,
 }
 
 impl PartialEq for AnalyzedPlan {
@@ -820,6 +824,7 @@ impl PartialEq for AnalyzedPlan {
             && self.query_text == other.query_text
             && self.reads_files == other.reads_files
             && self.warnings == other.warnings
+            && self.views == other.views
     }
 }
 
@@ -1075,5 +1080,6 @@ async fn analyze_with(
             resolve: resolving.elapsed(),
         },
         warnings,
+        views: Vec::new(),
     })
 }
