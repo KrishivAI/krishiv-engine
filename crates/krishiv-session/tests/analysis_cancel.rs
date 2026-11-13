@@ -18,8 +18,8 @@ use futures::executor::block_on;
 use krishiv_common::error::KrishivError;
 use krishiv_plan::analyzer::{BoxFuture, PolicyVersion};
 use krishiv_session::{
-    AccessDecision, AccessPolicy, Principal, PrincipalKind, Privilege, QueryId, QueryOptions,
-    Securable, Session,
+    AccessDecision, AccessPolicy, AdmissionController, Permit, Principal, PrincipalKind, Privilege,
+    QueryId, QueryOptions, QueryRequest, Securable, Session,
 };
 
 const OP: &str = "00112233-4455-6677-8899-aabbccddeeff";
@@ -92,6 +92,32 @@ fn hung_statement(s: &Session, policy: &Hanging, entered: &Receiver<()>) -> Rece
     rx
 }
 
+/// `state|cancel_reason` of the `system.queries` rows named `id`.
+fn outcome(s: &Session, id: &str) -> String {
+    let df = block_on(s.sql(&format!(
+        "SELECT concat(state, '|', coalesce(cancel_reason, '-')) FROM system.queries \
+         WHERE query_id = '{id}'"
+    )))
+    .unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    let mut out = Vec::new();
+    for b in &batches {
+        let any = b.column(0).as_any();
+        for i in 0..b.num_rows() {
+            let v = any.downcast_ref::<arrow_array::StringArray>().map_or_else(
+                || {
+                    any.downcast_ref::<arrow_array::StringViewArray>()
+                        .map(|a| a.value(i).to_owned())
+                        .unwrap_or_default()
+                },
+                |a| a.value(i).to_owned(),
+            );
+            out.push(v);
+        }
+    }
+    out.join(",")
+}
+
 #[test]
 fn interrupt_all_ends_a_statement_during_analysis() {
     let (s, policy, entered) = session();
@@ -102,6 +128,60 @@ fn interrupt_all_ends_a_statement_during_analysis() {
         .recv_timeout(Duration::from_secs(30))
         .expect("the statement ended");
     assert_eq!(class, "OPERATION_CANCELED");
+    policy.hang.store(false, Ordering::SeqCst);
+    // Its row says why, as a cancelled running query's does.
+    assert_eq!(outcome(&s, OP), "cancelled|user");
+}
+
+/// Admits everything; the first request after `hang` is set says so and never answers.
+#[derive(Debug)]
+struct Queue {
+    hang: AtomicBool,
+    entered: Mutex<Sender<()>>,
+}
+
+impl AdmissionController for Queue {
+    fn admit<'a>(&'a self, _: &'a QueryRequest) -> BoxFuture<'a, Result<Permit, KrishivError>> {
+        if self.hang.swap(false, Ordering::SeqCst) {
+            let _ = self.entered.lock().unwrap().send(());
+            return Box::pin(std::future::pending());
+        }
+        Box::pin(std::future::ready(Ok(Permit::unlimited())))
+    }
+
+    fn uses_estimate(&self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_statement_cancelled_while_queued_names_the_reason() {
+    let (tx, entered) = channel();
+    let queue = Arc::new(Queue {
+        hang: AtomicBool::new(false),
+        entered: Mutex::new(tx),
+    });
+    let s = Session::builder()
+        .admission_controller(Arc::clone(&queue) as Arc<dyn AdmissionController>)
+        .build()
+        .unwrap();
+    let df = block_on(s.sql_with("SELECT 1 AS x", QueryOptions::new().operation_id(OP))).unwrap();
+    queue.hang.store(true, Ordering::SeqCst);
+    let (done, ended) = channel();
+    std::thread::spawn(move || {
+        let out = block_on(df.collect());
+        let _ =
+            done.send(out.map_or_else(|e| e.error_class().name().to_owned(), |_| "ok".to_owned()));
+    });
+    entered
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the query queued");
+    assert!(s.cancel(&QueryId::parse(OP).unwrap()));
+    assert_eq!(
+        ended.recv_timeout(Duration::from_secs(30)).unwrap(),
+        "OPERATION_CANCELED"
+    );
+    assert_eq!(outcome(&s, OP), "cancelled|user");
 }
 
 #[test]

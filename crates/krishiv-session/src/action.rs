@@ -121,7 +121,8 @@ pub(crate) type HandedOver = (u64, Arc<str>);
 /// What [`Actions::cancel_where`] did.
 #[derive(Debug, Default)]
 pub(crate) struct ActionsCancelled {
-    /// The operation ids of the actions it ended (not handed over, an id given).
+    /// The operation ids of the actions it ended, or will end at their next
+    /// reservation (no row reserved yet, an id given).
     pub(crate) ids: Vec<Arc<str>>,
     /// How many actions it ended, with an id or without.
     pub(crate) ended: usize,
@@ -183,7 +184,9 @@ impl Actions {
             let mut state = action.lock();
             if state.reason.is_none() {
                 state.reason = Some(reason);
-                if !state.handed_over {
+                // Ended now, or at its next reservation (past a commit point, no
+                // row yet). An action with rows is reported by the registry, through them.
+                if state.rows.is_empty() {
                     out.ended += 1;
                     if let Some(id) = &action.operation {
                         out.ids.push(Arc::clone(id));
@@ -206,6 +209,11 @@ pub(crate) struct ActionGuard {
 }
 
 impl ActionGuard {
+    /// A handle on the reason this action is cancelled with, which outlives it.
+    pub(crate) fn reason(&self) -> ActionReason {
+        ActionReason(Arc::clone(&self.action))
+    }
+
     /// Runs `work` as this action: current in the task-local, and ended with
     /// the cancellation's error if one comes before it hands over.
     pub(crate) async fn run<T>(
@@ -238,6 +246,19 @@ impl ActionGuard {
     }
 }
 
+/// The reason an action was cancelled with ([`ActionGuard::reason`]).
+#[derive(Debug)]
+pub(crate) struct ActionReason(Arc<Action>);
+
+impl ActionReason {
+    /// The reason the action was ended with before it handed over (by its
+    /// race, so no query row records it), if it was.
+    pub(crate) fn ended_with(&self) -> Option<CancelReason> {
+        let state = self.0.lock();
+        state.reason.filter(|_| !state.handed_over)
+    }
+}
+
 impl Drop for ActionGuard {
     fn drop(&mut self) {
         self.actions
@@ -259,6 +280,15 @@ pub(crate) fn hand_over(session: u64, row: &str) -> Option<CancelReason> {
             }
             action.hand_over_chain(Some(&(session, Arc::from(row))))
         })
+        .ok()
+        .flatten()
+}
+
+/// The reason the current action was cancelled with, if it was (a drop that
+/// runs inside the action, such as a statement's row closing while it waited).
+pub(crate) fn current_reason() -> Option<CancelReason> {
+    CURRENT
+        .try_with(|action| action.lock().reason)
         .ok()
         .flatten()
 }
@@ -383,10 +413,8 @@ mod tests {
         let out = block(guard.run(async move {
             commit_point();
             let cancelled = a.cancel_where(CancelReason::User, &all);
-            assert!(
-                cancelled.ids.is_empty(),
-                "not ended: it waits for its reservation"
-            );
+            // Named: it ends at its reservation, though it is not dropped now.
+            assert_eq!(cancelled.ids, vec![Arc::<str>::from("op")]);
             tokio::task::yield_now().await;
             // The side effect finishes; the next reservation takes the reason.
             Ok::<_, KrishivError>(hand_over(1, "row"))
