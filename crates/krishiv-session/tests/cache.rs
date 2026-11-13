@@ -912,3 +912,32 @@ fn closing_the_session_removes_its_spill_files() {
     assert_eq!(spill_files(dir.path()), 0);
     assert_eq!(s.cache_reserved(), 0);
 }
+
+/// `spark.sql.defaultCacheStorageLevel` is the level of `cache()` and `CACHE TABLE`.
+#[test]
+fn the_default_storage_level_follows_the_config() {
+    let s = int_session(vec![1, 2, 3]);
+    assert_eq!(
+        block_on(s.table("t").cache().storage_level()).unwrap(),
+        StorageLevel::MEMORY_AND_DISK
+    );
+    block_on(s.table("t").unpersist()).unwrap();
+    s.conf()
+        .set("spark.sql.defaultCacheStorageLevel", "disk_only")
+        .unwrap();
+    assert_eq!(
+        block_on(s.table("t").cache().storage_level()).unwrap(),
+        StorageLevel::DISK_ONLY
+    );
+    block_on(s.table("t").unpersist()).unwrap();
+    block_on(s.sql("CACHE TABLE t")).unwrap();
+    assert_eq!(
+        block_on(s.table("t").storage_level()).unwrap(),
+        StorageLevel::DISK_ONLY
+    );
+    assert!(
+        s.conf()
+            .set("spark.sql.defaultCacheStorageLevel", "bogus")
+            .is_err()
+    );
+}

@@ -71,6 +71,7 @@ use crate::session::Session;
 
 mod tier;
 
+mod level;
 pub(crate) use tier::CacheDisk;
 use tier::{CacheSpill, HeldTable, PoolHold, Tier};
 

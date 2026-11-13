@@ -1303,8 +1303,8 @@ impl DataFrame {
         Ok(rows)
     }
 
-    /// Caches this frame's rows in memory (PySpark's `cache`, Spark's
-    /// `MEMORY_AND_DISK` default): the plan is registered at once
+    /// Caches this frame's rows (PySpark's `cache`, at
+    /// `spark.sql.defaultCacheStorageLevel`, `MEMORY_AND_DISK` unless set): the plan is registered at once
     /// ([`Self::is_cached`] is true from this call on), and the first action
     /// of any frame that uses it materializes it into the session's relation
     /// cache; later actions read the snapshot instead of recomputing it.
@@ -1320,7 +1320,9 @@ impl DataFrame {
     /// ```
     #[must_use]
     pub fn cache(&self) -> Self {
-        self.persist(StorageLevel::MEMORY_AND_DISK)
+        self.persist(StorageLevel::default_of(
+            &self.session.state.conf.snapshot(),
+        ))
     }
 
     /// Caches this frame's rows at `level` (PySpark's `persist`; where each
