@@ -394,7 +394,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: tools/connect-protogen
-      - run: cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check
+      # 4.3 is what krishiv-connect compiles; 4.2 still feeds the descriptor the golden tests read.
+      - run: cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check 4.3
+      - run: cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check 4.2
+      - run: python3 tests/scripts/check_proto_manifest.py
 
   # The generated `krishiv.plan.v1` types match proto/krishiv/plan/v1 (P2-T173),
   # and every schema element added since ADR 0040 declares its compatibility class.

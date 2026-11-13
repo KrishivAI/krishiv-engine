@@ -1,0 +1,9 @@
+{
+ "hll_sketch_agg": "approx_count_distinct(expr) returns the estimate directly; serialized HyperLogLog sketches are not available",
+ "hll_sketch_estimate": "approx_count_distinct(expr) over the raw column returns the estimate; serialized HyperLogLog sketches are not available",
+ "java_method": "Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference)",
+ "reflect": "Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference)",
+ "theta_sketch_agg": "approx_count_distinct(expr) returns a distinct-count estimate; Theta sketches are not available",
+ "theta_sketch_estimate": "approx_count_distinct(expr) over the raw column returns a distinct-count estimate; Theta sketches are not available",
+ "try_reflect": "Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference)"
+}

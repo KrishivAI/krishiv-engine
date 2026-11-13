@@ -941,3 +941,96 @@ fn task_specs_rejects_what_it_cannot_split() {
     drop(analysis);
     drop(df);
 }
+
+/// A copied catalog leaves out the script results no copied view pins: the
+/// clone has no frame that reads them, and a shared entry would keep the
+/// result alive in both catalogs once its frame is gone.
+#[test]
+fn a_copied_catalog_leaves_out_script_results() {
+    let s = int_session(vec![1]);
+    let base = s.state.catalog.entry_count();
+    let df = block_on(s.sql("BEGIN SELECT id FROM range(5); END")).unwrap();
+    assert_eq!(s.state.catalog.entry_count(), base + 1);
+    let c = s.clone_session().unwrap();
+    assert_eq!(c.state.catalog.entry_count(), base);
+    // The source's frame still reads its result.
+    let rows: usize = block_on(df.collect())
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 5);
+    // Once the frame goes, the next change of the source's catalog drops it.
+    drop(df);
+    block_on(s.sql("CREATE TEMP VIEW gc_v AS SELECT 1 AS a")).unwrap();
+    assert_eq!(s.state.catalog.entry_count(), base + 1);
+    block_on(c.sql("CREATE TEMP VIEW gc_v AS SELECT 1 AS a")).unwrap();
+    assert_eq!(c.state.catalog.entry_count(), base + 1);
+}
+
+/// A script result a copied view pins is kept, under a handle of the
+/// clone's own: once each session drops its view, each collects its entry
+/// (a shared handle would keep both alive while the other session lives).
+#[test]
+fn a_pinned_script_result_is_collected_in_each_session_after_its_view_goes() {
+    let s = int_session(vec![1]);
+    let base = s.state.catalog.entry_count();
+    let df = block_on(s.sql("BEGIN SELECT id FROM range(5); END")).unwrap();
+    block_on(df.create_or_replace_temp_view("pinned_v")).unwrap();
+    drop(df);
+    // The view and the result it pins.
+    assert_eq!(s.state.catalog.entry_count(), base + 2);
+    let c = s.clone_session().unwrap();
+    assert_eq!(c.state.catalog.entry_count(), base + 2);
+    let rows: usize = block_on(block_on(c.sql("SELECT * FROM pinned_v")).unwrap().collect())
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 5);
+    for session in [&s, &c] {
+        block_on(session.sql("DROP VIEW pinned_v")).unwrap();
+        block_on(session.sql("CREATE TEMP VIEW gc_v AS SELECT 1 AS a")).unwrap();
+        assert_eq!(session.state.catalog.entry_count(), base + 1);
+    }
+}
+
+/// A clone shares the relation store its copied memory tables' leases live
+/// in: the batch splits of a copied table resolve through the clone's
+/// store, and its tasks read the table.
+#[test]
+fn task_specs_of_a_copied_memory_table_resolve_in_the_clone() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let s = int_session(vec![1, 2, 3]);
+    let c = s.clone_session().unwrap();
+    let df = block_on(c.sql("SELECT id FROM t")).unwrap();
+    let analysis = rt.block_on(df.analysis()).unwrap();
+    let (_, physical) = rt
+        .block_on(c.physical(&analysis.analyzed, &analysis.env))
+        .unwrap();
+    let specs = analysis.env.catalog.task_specs(&physical, 1, 1).unwrap();
+    let mut batches = 0;
+    for task in &specs {
+        for splits in task.scans.values() {
+            if let krishiv_exec::physical::ScanSplits::Batches { relation, range } = splits {
+                c.relations()
+                    .resolve(&relation.hash, range.clone())
+                    .unwrap();
+                batches += 1;
+            }
+        }
+    }
+    assert!(batches > 0, "a batch split: {specs:?}");
+    let mut union = Vec::new();
+    for task in &specs {
+        union.extend(ids_of(
+            &rt.block_on(c.run_task(&physical, &analysis.env, task))
+                .unwrap(),
+        ));
+    }
+    union.sort_unstable();
+    assert_eq!(union, vec![1, 2, 3]);
+}

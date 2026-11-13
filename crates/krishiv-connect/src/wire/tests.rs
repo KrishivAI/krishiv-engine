@@ -6,7 +6,8 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 
 use super::*;
 use crate::proto::layout::{EXPRESSION, MESSAGES, PLAN, RELATION};
-use crate::proto::v4_2::{expression, relation};
+use crate::proto::v4_3::expression::literal;
+use crate::proto::v4_3::{expression, relation};
 
 // Protobuf wire builders: raw bytes, so a hostile depth needs no recursion.
 
@@ -362,7 +363,7 @@ fn flat_hostile_messages_hit_the_decoded_size_cap() {
     // Two million empty expressions in a Project: two wire bytes each, about
     // 300 decoded, so the decoded-size cap is reached first.
     let one = field(3, &[]);
-    let n = MAX_DECODED_BYTES / size_of::<crate::proto::v4_2::Expression>() + 1;
+    let n = MAX_DECODED_BYTES / size_of::<crate::proto::v4_3::Expression>() + 1;
     assert!(n < MAX_MESSAGES);
     let mut project = Vec::with_capacity(one.len() * n);
     for _ in 0..n {
@@ -410,7 +411,7 @@ fn layout_table_matches_the_generated_types() {
     assert_eq!(MESSAGES[usize::from(EXPRESSION)].name, "Expression");
     assert_eq!(
         MESSAGES[usize::from(RELATION)].size,
-        size_of::<crate::proto::v4_2::Relation>()
+        size_of::<crate::proto::v4_3::Relation>()
     );
     for (id, m) in MESSAGES.iter().enumerate() {
         // The walk binary-searches each row, and descends only to ids it has.
@@ -439,4 +440,51 @@ fn an_any_extension_is_checked_flatly() {
     ok.extend(field(2, &[1, 2, 3]));
     ok.extend([0x18, 0x05, 0x25, 1, 2, 3, 4, 0x29, 1, 2, 3, 4, 5, 6, 7, 8]);
     assert!(any(&ok).is_ok());
+}
+
+#[test]
+fn the_4_3_additions_decode_in_the_superset() {
+    // Relation field 48 is Zip { left, right } (new in Spark 4.3).
+    let zip = field(48, &[field(1, &sql_leaf()), field(2, &sql_leaf())].concat());
+    let decoded = decode_relation(&zip).expect("Zip is defined in the superset");
+    assert!(matches!(
+        decoded.message.rel_type,
+        Some(relation::RelType::Zip(_))
+    ));
+    // Literal fields 29 and 30 are the nanosecond timestamps: epoch_micros = 1, the rest default.
+    let literal_of = |number| {
+        let e = field(1, &field(number, &[0x08, 0x01]));
+        let decoded = decode_expression(&e).expect("nanosecond literal is defined in the superset");
+        match &decoded.message.expr_type {
+            Some(expression::ExprType::Literal(l)) => l.literal_type.clone(),
+            other => panic!("not a literal: {other:?}"),
+        }
+    };
+    assert_eq!(
+        literal_of(29),
+        Some(literal::LiteralType::TimestampNtzNanos(
+            literal::TimestampNtzNanos {
+                epoch_micros: 1,
+                nanos_within_micro: 0,
+                precision: None
+            }
+        ))
+    );
+    assert_eq!(
+        literal_of(30),
+        Some(literal::LiteralType::TimestampLtzNanos(
+            literal::TimestampLtzNanos {
+                epoch_micros: 1,
+                nanos_within_micro: 0,
+                precision: None
+            }
+        ))
+    );
+    // Still undefined in 4.3: a new relation number past Zip.
+    let err = decode_relation(&[sql_leaf(), field(49, b"x")].concat()).expect_err("field 49");
+    assert!(
+        err.message().contains("field 49 of spark.connect.Relation"),
+        "{}",
+        err.message()
+    );
 }
