@@ -80,13 +80,36 @@ fn output_schema(output: &[BoundColumn]) -> SchemaRef {
     ))
 }
 
-/// The frame side reading the first `columns.len()` columns of a relation.
-fn side_of(columns: &[usize], cols: &[BoundColumn]) -> PythonFrameSide {
-    PythonFrameSide {
-        columns: columns.to_vec(),
-        names: cols.iter().map(|c| c.name.clone()).collect(),
-        types: cols.iter().map(|c| c.data_type.clone()).collect(),
+/// A frame side: the key columns `key_at` (computed keys included), then
+/// the data columns `columns` of a relation whose declared columns are
+/// `cols`. Spark's layout (`PandasGroupUtils.resolveArgOffsets` at v4.2.0):
+/// the worker builds `key` from the leading columns and the frame from the
+/// rest.
+fn side_of(
+    keys: &[Arc<Expr>],
+    key_at: &[usize],
+    columns: &[usize],
+    cols: &[BoundColumn],
+) -> Result<PythonFrameSide> {
+    let mut side = PythonFrameSide {
+        columns: key_at.iter().chain(columns).copied().collect(),
+        names: Vec::with_capacity(keys.len() + cols.len()),
+        types: Vec::with_capacity(keys.len() + cols.len()),
+    };
+    for k in keys {
+        let name = match &k.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => c.name.clone(),
+            _ => k.to_string(),
+        };
+        side.names.push(name);
+        side.types.push(
+            k.resolved_type()
+                .ok_or_else(|| internal("a Python UDF grouping key without a type"))?,
+        );
     }
+    side.names.extend(cols.iter().map(|c| c.name.clone()));
+    side.types.extend(cols.iter().map(|c| c.data_type.clone()));
+    Ok(side)
 }
 
 /// The columns of `p`'s declared output.
@@ -118,7 +141,7 @@ impl Planner<'_> {
             .collect::<Result<Vec<_>>>()?;
         let plan = PythonRelationPlan {
             udf: udf.clone(),
-            sides: vec![side_of(&columns, &cols)],
+            sides: vec![side_of(&[], &[], &columns, &cols)?],
             output: outputs(output),
         };
         let explain = format!("{}#{}", udf.name, udf.version);
@@ -147,15 +170,14 @@ impl Planner<'_> {
             .map(|c| planned.column(c.id))
             .collect::<Result<Vec<_>>>()?;
         let sorted = self.clustered_and_sorted(planned, &key_columns, &[])?;
-        let keys = key_columns.clone();
         let plan = PythonRelationPlan {
             udf: udf.clone(),
-            sides: vec![side_of(&columns, &cols)],
+            sides: vec![side_of(keys, &key_columns, &columns, &cols)?],
             output: outputs(output),
         };
         let explain = format!(
             "[{}], {}#{}",
-            key_names(&sorted, &keys),
+            key_names(&sorted, &key_columns),
             udf.name,
             udf.version
         );
@@ -163,7 +185,7 @@ impl Planner<'_> {
             sorted,
             |input| PhysNode::PythonGroupMap {
                 input,
-                keys,
+                keys: key_columns,
                 udf: plan,
             },
             output,
@@ -274,13 +296,17 @@ impl Planner<'_> {
             udf: udf.clone(),
             sides: vec![
                 side_of(
+                    left_keys,
+                    &key_columns,
                     &(k + 1..k + 1 + left_cols.len()).collect::<Vec<_>>(),
                     &left_cols,
-                ),
+                )?,
                 side_of(
+                    right_keys,
+                    &key_columns,
                     &(k + 1 + left_cols.len()..width).collect::<Vec<_>>(),
                     &right_cols,
-                ),
+                )?,
             ],
             output: outputs(output),
         };

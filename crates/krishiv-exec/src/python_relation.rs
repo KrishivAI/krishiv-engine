@@ -7,8 +7,9 @@
 //! (a column per argument in, a column out). A relation kind sees a
 //! relation, so its call is a **task fed by frames**: the worker prepares
 //! the call site once ([`UdfRuntime::prepare_relation`]), opens one
-//! [`UdfTask`] per partition (one per driver), sends it the partition's rows
-//! as [`Frame`]s and reads whatever batches it yields. Output rows are not
+//! [`UdfTask`] per driver (a partition read by several drivers opens one
+//! task per driver, an empty one none), sends it the driver's rows as
+//! [`Frame`]s and reads whatever batches it yields. Output rows are not
 //! aligned to input rows.
 //!
 //! [`Frame`] mirrors Spark's grouped wire form (`PythonArrowInput.scala`
@@ -20,6 +21,19 @@
 //! then its right rows (side 1), then `EndGroup`. The embedded runtime
 //! (PR-48) and the worker pool (PR-26c) carry the same frames: one
 //! protocol, two transports.
+//!
+//! **Keys.** A grouped or cogrouped kind's frames lead with the
+//! [`RelationCallSpec::key_count`] key columns (computed keys included),
+//! then the side's data columns: Spark's layout
+//! (`PandasGroupUtils.resolveArgOffsets`), from which the Python side builds
+//! `key` for `f(key, pdf)` and the frame from the rest. Every row of a
+//! group has the same key values.
+//!
+//! **Cogroup sides.** Every key gets a frame for both sides: a side without
+//! rows for a key gets one zero-row [`Frame::Batch`] (its columns' names and
+//! types in the batch's schema, as [`RelationCallSpec::input_names`] and
+//! [`RelationCallSpec::input_types`] list them), so the Python side builds
+//! Spark's empty DataFrame for it. The side order stays left then right.
 //!
 //! [`UdfRuntime::prepare_relation`] has a default that refuses with
 //! `KRISHIV_UDF_NOT_AVAILABLE`, so a runtime that implements only the
@@ -55,13 +69,21 @@ pub struct RelationCallSpec {
     /// Whether tasks may run concurrently.
     pub thread_safe: bool,
     /// The Spark types of the columns of each side's frames, in frame
-    /// order: one side, two for a cogroup. A grouped kind's frames hold
-    /// every input column, its keys among them.
+    /// order: one side, two for a cogroup. A grouped kind's frames lead
+    /// with its [`Self::key_count`] key columns, then the side's data
+    /// columns.
     pub input_types: Vec<Vec<DataType>>,
-    /// The grouping keys (0 for a map kind): with [`Self::arity`] what the
-    /// Python side needs to call `f(pdf)` or `f(key, pdf)`.
+    /// The names of the columns of each side's frames, as
+    /// [`Self::input_types`] orders them: what an empty side's DataFrame is
+    /// built from.
+    pub input_names: Vec<Vec<String>>,
+    /// The grouping keys (0 for a map kind and an aggregate's arguments):
+    /// the leading columns of every side's frames. With [`Self::arity`]
+    /// what the Python side needs to call `f(pdf)` or `f(key, pdf)`.
     pub key_count: usize,
-    /// The columns of a side's frames (the first side's for a cogroup).
+    /// The data columns of a side's frames, keys excluded (the first
+    /// side's for a cogroup; the other's is its `input_types` length less
+    /// `key_count`).
     pub arity: usize,
     /// The declared result: names and Spark types, one per column.
     pub output_names: Vec<String>,
@@ -92,7 +114,8 @@ pub struct RunnerConf {
 /// One message to a [`UdfTask`].
 #[derive(Debug, Clone)]
 pub enum Frame {
-    /// Rows of the current group (of the partition, for a map kind).
+    /// Rows of the current group (of the partition, for a map kind); for
+    /// a cogroup, zero rows for a side the key has no rows on.
     Batch {
         /// The relation the rows come from: 0, or 1 for a cogroup's right.
         side: u8,
@@ -107,7 +130,7 @@ pub enum Frame {
 
 /// One prepared relation call site.
 pub trait PreparedRelationUdf: Send + Sync {
-    /// One task per partition: the frames in, the result batches out.
+    /// One task per driver: the frames in, the result batches out.
     ///
     /// # Errors
     /// What the runtime raises starting it.

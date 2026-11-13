@@ -19,7 +19,8 @@
 //! key's rows together; the sink cuts groups where the key changes
 //! (compared as the sort compares them, floats canonical) and ends each
 //! with [`Frame::EndGroup`]. A cogroup's input is both relations in one
-//! stream sorted by key then side: a key's left rows, then its right rows.
+//! stream sorted by key then side: a key's left rows, then its right rows;
+//! a side without rows for a key gets one zero-row frame.
 //! Rows are held until a frame is full (`maxRecordsPerBatch`, and
 //! `maxBytesPerBatch` when set) or its group or side ends, as Spark cuts a
 //! group's Arrow stream; a group is never held whole.
@@ -359,6 +360,8 @@ struct RelLocal {
     held: Vec<RecordBatch>,
     held_rows: usize,
     held_side: u8,
+    /// The cogroup sides the open group has rows on.
+    sides_seen: [bool; 2],
     /// The reservation of the held rows' bytes.
     held_bytes: Reservation,
     /// An aggregate's group keys, one row per group, in group order.
@@ -521,9 +524,28 @@ impl RelationSink {
         Ok(())
     }
 
-    /// Ends the open group: its held rows, then `EndGroup` to every lane.
+    /// Sends every lane a zero-row frame of `side`: a cogroup key without
+    /// rows on that side (Spark gives the UDF an empty DataFrame for it).
+    fn empty_side(&self, l: &mut RelLocal, side: u8) -> Result<()> {
+        let empty = RecordBatch::new_empty(Arc::clone(&self.input));
+        for (lane, state) in self.lanes.iter().zip(&l.lanes) {
+            let frame = self.frame(lane, side, &empty, l.partition)?;
+            state.queue(lane.udf.as_ref(), frame, l.held_bytes.split(0))?;
+        }
+        Ok(())
+    }
+
+    fn cogrouped(&self) -> bool {
+        matches!(self.shape, RelationShape::CoGrouped { .. })
+    }
+
+    /// Ends the open group: its held rows (a cogroup's empty right side),
+    /// then `EndGroup` to every lane.
     fn end_group(&self, l: &mut RelLocal) -> Result<()> {
         self.send_held(l, true)?;
+        if self.cogrouped() && !l.sides_seen[1] {
+            self.empty_side(l, 1)?;
+        }
         for (lane, state) in self.lanes.iter().zip(&l.lanes) {
             let r = l.held_bytes.split(0);
             state.queue(lane.udf.as_ref(), Frame::EndGroup, r)?;
@@ -547,6 +569,7 @@ impl RelationSink {
                     self.end_group(l)?;
                 }
                 l.group_open = true;
+                l.sides_seen = [false; 2];
                 if let Some(k) = keys.next() {
                     l.key_rows.push(k);
                 }
@@ -557,6 +580,11 @@ impl RelationSink {
                 self.send_held(l, true)?;
                 l.held_side = run.side;
             }
+            if self.cogrouped() && run.side == 1 && !l.sides_seen[0] {
+                // A key on the right only: its empty left side first.
+                self.empty_side(l, 0)?;
+            }
+            l.sides_seen[usize::from(run.side)] = true;
             l.held.push(batch.slice(run.start, run.len));
             l.held_rows += run.len;
             self.send_held(l, false)?;
@@ -735,6 +763,7 @@ impl Sink for RelationSink {
             held: Vec::new(),
             held_rows: 0,
             held_side: 0,
+            sides_seen: [false; 2],
             held_bytes: consumer.reservation(),
             key_rows: Vec::new(),
             key_bytes: Vec::new(),

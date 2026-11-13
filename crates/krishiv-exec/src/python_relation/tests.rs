@@ -391,7 +391,7 @@ async fn a_grouped_task_without_keys_sees_one_group() {
 }
 
 #[tokio::test]
-async fn a_cogroup_key_on_one_side_gets_only_that_side_then_end_group() {
+async fn a_cogroup_key_on_one_side_gets_a_zero_row_frame_for_the_other() {
     let r = rig(
         RelationShape::CoGrouped {
             keys: vec![0],
@@ -414,7 +414,9 @@ async fn a_cogroup_key_on_one_side_gets_only_that_side_then_end_group() {
     .unwrap();
     assert_eq!(
         r.shared.log(),
-        ["B0:1", "G", "B0:1", "B1:2", "G", "B1:1", "G", "E"]
+        [
+            "B0:1", "B1:0", "G", "B0:1", "B1:2", "G", "B0:0", "B1:1", "G", "E"
+        ]
     );
     done(r);
 }
@@ -546,6 +548,7 @@ fn a_runtime_without_relation_kinds_refuses_them_as_not_available() {
         eval_type: krishiv_plan::PythonEvalType::GroupedMapArrow,
         thread_safe: true,
         input_types: vec![vec![krishiv_types::DataType::Long]],
+        input_names: vec![vec!["k".to_owned()]],
         key_count: 1,
         arity: 1,
         output_names: vec!["n".to_owned()],

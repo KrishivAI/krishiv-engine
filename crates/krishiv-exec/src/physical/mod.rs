@@ -1270,7 +1270,9 @@ pub struct PythonRelationPlan {
     pub output: Vec<PythonOutputColumn>,
 }
 
-/// The columns of one side's frames.
+/// The columns of one side's frames: a grouped kind's key columns first
+/// (computed keys included, as many as the node has keys), then the side's
+/// data columns, as Spark lays them out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PythonFrameSide {
     /// The input columns, in frame order.

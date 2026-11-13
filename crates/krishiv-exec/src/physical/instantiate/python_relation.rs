@@ -182,8 +182,12 @@ impl Instantiation<'_> {
             eval_type: plan.udf.eval_type,
             thread_safe: plan.udf.thread_safe,
             input_types: plan.sides.iter().map(|s| s.types.clone()).collect(),
+            input_names: plan.sides.iter().map(|s| s.names.clone()).collect(),
             key_count,
-            arity: plan.sides.first().map_or(0, |s| s.columns.len()),
+            arity: plan
+                .sides
+                .first()
+                .map_or(0, |s| s.columns.len().saturating_sub(key_count)),
             output_names: plan.output.iter().map(|c| c.name.clone()).collect(),
             output_types: plan.output.iter().map(|c| c.data_type.clone()).collect(),
             output_arrow: Arc::new(Schema::new(client_fields)),
@@ -249,6 +253,7 @@ impl Instantiation<'_> {
             let canonical = f.data_type.to_arrow();
             let client = client_arrow_type(&canonical);
             let name = format!("pythonUDAF{i}");
+            let arg_names: Vec<String> = (0..args.len()).map(|j| format!("_{j}")).collect();
             let spec = RelationCallSpec {
                 name: udf.name.clone(),
                 version: udf.version,
@@ -256,6 +261,7 @@ impl Instantiation<'_> {
                 thread_safe: udf.thread_safe,
                 arity: arg_types.len(),
                 input_types: vec![arg_types],
+                input_names: vec![arg_names.clone()],
                 key_count: 0,
                 output_names: vec![name.clone()],
                 output_types: vec![f.data_type.clone()],
@@ -266,7 +272,7 @@ impl Instantiation<'_> {
             fields.push(Field::new(&name, canonical, true));
             lanes.push(RelationLane {
                 udf: prepared,
-                names: vec![(0..args.len()).map(|j| format!("_{j}")).collect()],
+                names: vec![arg_names],
                 sides: vec![
                     args.into_iter()
                         .map(|e| Arc::new(Compiled(e)) as Arc<dyn ScalarExpr>)

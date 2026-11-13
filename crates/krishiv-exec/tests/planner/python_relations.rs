@@ -41,6 +41,9 @@ struct Runtime {
     log: Arc<std::sync::Mutex<Vec<String>>>,
     /// Each task's own frames.
     per_task: Arc<std::sync::Mutex<Vec<Log>>>,
+    /// Per `Batch` frame of a grouped kind: `<side>:<key values>:<rows>`
+    /// (`-` for the key of a zero-row frame).
+    keys: Log,
 }
 
 type Log = Arc<std::sync::Mutex<Vec<String>>>;
@@ -62,11 +65,24 @@ impl UdfRuntime for Runtime {
             "twice" => Mode::Twice,
             _ => Mode::Count,
         };
+        assert_eq!(spec.input_names.len(), spec.input_types.len(), "{spec:?}");
+        for (names, types) in spec.input_names.iter().zip(&spec.input_types) {
+            assert_eq!(names.len(), types.len(), "{spec:?}");
+            assert!(names.len() >= spec.key_count, "{spec:?}");
+        }
+        assert_eq!(
+            spec.arity + spec.key_count,
+            spec.input_types[0].len(),
+            "{spec:?}"
+        );
         Ok(Arc::new(Prepared {
             mode,
             output: Arc::clone(&spec.output_arrow),
             log: Arc::clone(&self.log),
             per_task: Arc::clone(&self.per_task),
+            keys: Arc::clone(&self.keys),
+            names: spec.input_names.clone(),
+            key_count: spec.key_count,
         }))
     }
 }
@@ -77,6 +93,9 @@ struct Prepared {
     output: arrow_schema::SchemaRef,
     log: Arc<std::sync::Mutex<Vec<String>>>,
     per_task: Arc<std::sync::Mutex<Vec<Log>>>,
+    keys: Log,
+    names: Vec<Vec<String>>,
+    key_count: usize,
 }
 
 impl PreparedRelationUdf for Prepared {
@@ -88,6 +107,9 @@ impl PreparedRelationUdf for Prepared {
             mode: self.mode,
             output: Arc::clone(&self.output),
             log: Arc::clone(&self.log),
+            keys: Arc::clone(&self.keys),
+            names: self.names.clone(),
+            key_count: self.key_count,
             state: std::sync::Mutex::new(State::default()),
             ready: AtomicWaker::new(),
         }))
@@ -107,11 +129,47 @@ struct Task {
     mode: Mode,
     output: arrow_schema::SchemaRef,
     log: Arc<std::sync::Mutex<Vec<String>>>,
+    keys: Log,
+    names: Vec<Vec<String>>,
+    key_count: usize,
     state: std::sync::Mutex<State>,
     ready: AtomicWaker,
 }
 
 impl Task {
+    /// Checks a frame against the spec: its columns are the side's, led by
+    /// the keys, whose values are the same on every row; logs them.
+    fn check(&self, side: u8, batch: &RecordBatch) {
+        let names: Vec<&str> = batch
+            .schema_ref()
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+        assert_eq!(names, self.names[usize::from(side)], "frame columns");
+        if self.key_count == 0 {
+            return;
+        }
+        let key = |r: usize| {
+            (0..self.key_count)
+                .map(|c| cell(batch.column(c).as_ref(), r))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let first = if batch.num_rows() == 0 {
+            "-".to_owned()
+        } else {
+            key(0)
+        };
+        for r in 1..batch.num_rows() {
+            assert_eq!(key(r), first, "one key per group");
+        }
+        self.keys
+            .lock()
+            .unwrap()
+            .push(format!("{side}:{first}:{}", batch.num_rows()));
+    }
+
     fn push(&self, entry: String) {
         self.own.lock().unwrap().push(entry.clone());
         self.log.lock().unwrap().push(entry);
@@ -132,6 +190,7 @@ impl UdfTask for Task {
             let mut s = self.state.lock().unwrap();
             match frame {
                 Frame::Batch { side, batch } => {
+                    self.check(side, &batch);
                     self.push(format!("B{side}:{}", batch.num_rows()));
                     s.rows += i64::try_from(batch.num_rows()).unwrap();
                     let back =
@@ -350,21 +409,59 @@ fn a_cogroup_gives_each_key_both_sides_and_a_one_sided_key_its_side() {
     assert_eq!(rows.len(), 9, "{rows:?}");
     assert_eq!(rows.iter().filter(|r| *r == "2").count(), 3, "{rows:?}");
     let log = log_of(&rt);
-    assert_eq!(
-        log.iter().filter(|e| e.starts_with("B1")).count(),
-        2,
-        "{log:?}"
-    );
-    // Within each task, a key's left rows come before its right rows.
+    let count = |e: &str| log.iter().filter(|x| *x == e).count();
+    assert_eq!(count("B1:1"), 2, "{log:?}");
+    // The seven keys on the left only get a zero-row right side.
+    assert_eq!(count("B1:0"), 7, "{log:?}");
+    assert_eq!(count("B0:0"), 0, "{log:?}");
+    // Within each task, every group is a left frame, a right frame, then
+    // `EndGroup`.
     for own in rt.per_task.lock().unwrap().iter() {
         let own = own.lock().unwrap();
-        for w in own.windows(2) {
-            assert!(
-                !(w[0].starts_with("B1") && w[1].starts_with("B0")),
-                "{own:?}"
-            );
+        for group in own
+            .split(|e| e == "G")
+            .filter(|g| *g != ["E"] && !g.is_empty())
+        {
+            assert!(group[0].starts_with("B0"), "{own:?}");
+            assert!(group.last().unwrap().starts_with("B1"), "{own:?}");
         }
     }
+    // The frames lead with the key: the right side's keys are 0 and 1.
+    let keys = rt.keys.lock().unwrap().clone();
+    let mut right: Vec<&String> = keys
+        .iter()
+        .filter(|k| k.starts_with("1:") && !k.ends_with(":0"))
+        .collect();
+    right.sort();
+    assert_eq!(right, ["1:0:1", "1:1:1"], "{keys:?}");
+}
+
+#[test]
+fn a_computed_grouping_key_leads_every_frame() {
+    let env = env();
+    // `groupBy(df.a % 2)`: the key is computed, not an input column.
+    let analyzed = env.analyze("SELECT a, b, a % 2 AS m FROM t");
+    let root = analyzed.root();
+    let PlanNode::Project { input, exprs } = &root.node else {
+        panic!("{root}")
+    };
+    let key = match &exprs[2].node {
+        ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
+        other => panic!("{other:?}"),
+    };
+    let rt = Arc::new(Runtime::default());
+    let node = LogicalPlan::new(PlanNode::GroupMap {
+        input: Arc::clone(input),
+        keys: vec![key],
+        udf: udf("count", PythonEvalType::GroupedMapPandas),
+        output: counted(),
+    });
+    let out = run_with(&env, node, Some(Arc::clone(&rt))).unwrap();
+    // `a` is 0..9 with 3 and 7 NULL: five even, three odd, two NULL.
+    assert_eq!(lines(&out), ["2", "3", "5"]);
+    let mut keys = rt.keys.lock().unwrap().clone();
+    keys.sort();
+    assert_eq!(keys, ["0:0:5", "0:1:3", "0:NULL:2"]);
 }
 
 /// A grouped-aggregate Python UDF call over `arg`.
