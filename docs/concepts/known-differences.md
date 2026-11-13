@@ -1,3 +1,7 @@
+---
+description: "Where Krishiv behaviour deliberately differs from Spark."
+---
+
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Known differences from Spark
 
