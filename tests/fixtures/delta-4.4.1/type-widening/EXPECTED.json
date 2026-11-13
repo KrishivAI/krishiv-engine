@@ -1,0 +1,79 @@
+{
+ "delta_log": [
+  "00000000000000000000.crc",
+  "00000000000000000000.json",
+  "00000000000000000001.crc",
+  "00000000000000000001.json",
+  "00000000000000000002.crc",
+  "00000000000000000002.json",
+  "00000000000000000003.crc",
+  "00000000000000000003.json",
+  "00000000000000000004.crc",
+  "00000000000000000004.json"
+ ],
+ "delta_spark": "4.4.1",
+ "dv_storage_types": [],
+ "feature": "typeWidening",
+ "fields": [
+  "id",
+  "i",
+  "f"
+ ],
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "protocol": {
+  "minReaderVersion": 3,
+  "minWriterVersion": 7,
+  "readerFeatures": [
+   "typeWidening"
+  ],
+  "writerFeatures": [
+   "typeWidening",
+   "invariants",
+   "appendOnly"
+  ]
+ },
+ "rows": [
+  {
+   "f": 1.5,
+   "i": 2147483647,
+   "id": 1
+  },
+  {
+   "f": 0.10000000149011612,
+   "i": null,
+   "id": 2
+  },
+  {
+   "f": 0.1,
+   "i": 9223372036854775807,
+   "id": 3
+  }
+ ],
+ "schema": "struct<id:bigint,i:bigint,f:double>",
+ "spark": "4.2.0",
+ "timezone": "UTC",
+ "typed_rows": [
+  [
+   1,
+   2147483647,
+   {
+    "float": "1.5"
+   }
+  ],
+  [
+   2,
+   null,
+   {
+    "float": "0.10000000149011612"
+   }
+  ],
+  [
+   3,
+   9223372036854775807,
+   {
+    "float": "0.1"
+   }
+  ]
+ ]
+}
