@@ -160,7 +160,8 @@ fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: b
 
 #[expect(
     clippy::print_stdout,
-    reason = "CLI binary: the addresses and token are its output"
+    clippy::print_stderr,
+    reason = "CLI binary: the addresses, token and warnings are its output"
 )]
 async fn run_listeners(
     runtime: Arc<EngineRuntime>,
@@ -196,7 +197,14 @@ async fn run_listeners(
         Arc::new(TokenGuard::new(&token))
     };
     let ready = Arc::new(AtomicBool::new(false));
-    let app = admin_router(&runtime, config, guard, Arc::clone(&ready), admin_bound)?;
+    let app = admin_router(
+        &runtime,
+        config,
+        guard,
+        authenticated,
+        Arc::clone(&ready),
+        admin_bound,
+    )?;
     let connect = ConnectServer::new(
         Arc::clone(&manager),
         ConnectServerConfig::from_config(config),
@@ -222,6 +230,12 @@ async fn run_listeners(
     let ui = flag(config, &UI_ENABLED, true) && cfg!(feature = "ui");
     if authenticated {
         println!("krishiv server: admin routes need a configured token (krishiv.auth.tokens)");
+        // The Connect listener is authenticated in a later unit; until then it serves any
+        // local client, which the loopback-only rule above keeps to this machine.
+        eprintln!(
+            "krishiv server: warning: Spark Connect does not check tokens yet; it accepts any \
+             client on {connect_bound}"
+        );
     } else if ui {
         println!("open http://{admin_bound}/?token={token}");
     } else if metrics_need_token(config, admin_bound) {
@@ -252,11 +266,14 @@ fn admin_router(
     runtime: &Arc<EngineRuntime>,
     config: &Config,
     guard: Arc<dyn Guard>,
+    authenticated: bool,
     ready: Arc<AtomicBool>,
     bound: SocketAddr,
 ) -> Result<axum::Router, String> {
     let metrics_on = flag(config, &METRICS_ENABLED, false);
-    let public = metrics_on && !metrics_need_token(config, bound);
+    // With authentication configured every scrape authenticates (ADR 0046 §3c: a viewer
+    // service principal); `krishiv.server.metrics.public` opens it only without.
+    let public = metrics_on && !authenticated && !metrics_need_token(config, bound);
     let snapshot_runtime = Arc::clone(runtime);
     let metrics = krishiv_server::metrics::metrics_route_guarded(
         metrics_on,

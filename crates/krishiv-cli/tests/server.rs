@@ -333,13 +333,15 @@ fn configured_tokens_guard_the_admin_routes() {
     assert!(none.starts_with("HTTP/1.1 401"), "{none}");
     let scrape = http_get_as(&server.admin, "/metrics", Some(token));
     assert!(scrape.starts_with("HTTP/1.1 200"), "{scrape}");
-    // A viewer sees no other principal's work in the UI's data routes (403 with the UI on; the
-    // route does not exist without it).
+    // A viewer sees no other principal's work in the UI's data routes (the route exists only
+    // with the `ui` feature).
     let ui = http_get_as(&server.admin, "/api/internal/queries", Some(token));
-    assert!(
-        ui.starts_with("HTTP/1.1 403") || ui.starts_with("HTTP/1.1 404"),
-        "{ui}"
-    );
+    let expected = if cfg!(feature = "ui") {
+        "HTTP/1.1 403"
+    } else {
+        "HTTP/1.1 404"
+    };
+    assert!(ui.starts_with(expected), "{ui}");
     let probe = http_get(&server.admin, "/healthz");
     assert!(probe.starts_with("HTTP/1.1 200"), "{probe}");
 }

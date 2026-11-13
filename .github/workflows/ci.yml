@@ -290,6 +290,9 @@ jobs:
           KRISHIV_SIM_TPCH_DIR: ${{ runner.temp }}/tpch-sf0.1
       - run: cargo test --workspace --doc --locked
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
+      # The admin listener's authentication (P3-T002) is feature-gated, so default-feature runs skip it.
+      - run: cargo nextest run -p krishiv-server --features session,metrics-prometheus --locked
+      - run: cargo nextest run -p krishiv-cli --features server --test server --locked
       - name: Disk left
         if: always()
         run: df -h / "$RUNNER_TEMP"
