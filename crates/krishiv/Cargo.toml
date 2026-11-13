@@ -1,8 +1,8 @@
 [package]
 name = "krishiv"
-description = "Spark-compatible SQL and DataFrame engine in Rust: embedded, vectorized on Arrow, no JVM"
-keywords = ["spark", "sql", "dataframe", "arrow", "query-engine"]
-categories = ["database-implementations", "data-structures"]
+description = "Spark alternative in Rust: run Spark SQL and DataFrames embedded, vectorized on Arrow, no JVM"
+keywords = ["spark", "pyspark", "sql", "dataframe", "query-engine"]
+categories = ["database-implementations", "database"]
 homepage = "https://krishiv.ai"
 documentation = "https://docs.rs/krishiv"
 version.workspace = true
