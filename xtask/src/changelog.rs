@@ -61,6 +61,14 @@ pub fn check(
     labels: &[&str],
     read: impl Fn(&str) -> Option<String>,
 ) -> Result<(), String> {
+    if let Some(bad) = added.iter().find(|p| {
+        p.starts_with("changelog.d/") && **p != "changelog.d/README.md" && !is_fragment_path(p)
+    }) {
+        return Err(format!(
+            "{bad} is not a fragment name: use changelog.d/<pr>.<type>.md (type: {}); `assemble` rejects anything else",
+            SECTIONS.map(|(k, _)| k).join(", ")
+        ));
+    }
     let fragments: Vec<&str> = added
         .iter()
         .copied()
@@ -273,6 +281,16 @@ mod tests {
         assert!(check(&["src/a.rs"], &["no-changelog"], text).is_ok());
         assert!(check(&["src/a.rs", "changelog.d/README.md"], &[], text).is_err());
         assert!(check(&["changelog.d/sub/1.fixed.md"], &[], text).is_err());
+        // a mistyped fragment next to a valid one, or next to the exempt label, is refused
+        assert!(
+            check(
+                &["changelog.d/1.fixed.md", "changelog.d/2.fix.md"],
+                &[],
+                text
+            )
+            .is_err()
+        );
+        assert!(check(&["changelog.d/2.fix.md"], &["no-changelog"], text).is_err());
         let blank = |_: &str| Some(" \n".to_owned());
         assert!(check(&["changelog.d/1.fixed.md"], &[], blank).is_err());
         assert!(check(&["changelog.d/1.fixed.md"], &["no-changelog"], blank).is_err());
