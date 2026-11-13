@@ -34,6 +34,7 @@ use krishiv_io::{CmpOp, Collation, ColumnPath, PushdownExpr, ScalarValue};
 
 use super::bounds::{compare, decode, is_nan, is_unordered};
 use super::entry::{ContentFile, ManifestFileEntry, PartitionFieldSummary, PartitionValue};
+use super::metrics::{MetricsMode, WriterMetrics};
 use super::transform::{apply, is_time, truncate_str};
 use super::types::{
     IcebergType, PartitionFieldInfo, PartitionSpecInfo, PartitionSpecs, SchemaField, Transform,
@@ -93,6 +94,9 @@ pub struct Pruner<'a> {
     fields: &'a [SchemaField],
     specs: &'a PartitionSpecs,
     options: PruneOptions,
+    /// The writers' metrics modes (`None`: `options.truncate_length` for every
+    /// column).
+    metrics: Option<&'a WriterMetrics>,
 }
 
 /// A leaf of the predicate, bound to its column.
@@ -119,7 +123,18 @@ impl<'a> Pruner<'a> {
             fields,
             specs,
             options,
+            metrics: None,
         }
+    }
+
+    /// The same pruner reading file metrics by the table's metrics modes
+    /// (review F3): a column whose writer wrote no bounds (`none`, `counts`)
+    /// is not pruned by bounds, and a string or binary upper bound is exact
+    /// only below the column's own truncation length.
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: &'a WriterMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Whether the files of `manifest` may hold a matching row, by its partition
@@ -169,7 +184,23 @@ impl<'a> Pruner<'a> {
     #[must_use]
     pub fn metrics_may_match(&self, file: &ContentFile) -> bool {
         self.eval(&self.expr, &|field, op| {
-            metric_facts(file, field, self.options).may_match(op)
+            let options = match self.metrics.map(|m| m.mode(field.id)) {
+                None => Some(self.options),
+                Some(MetricsMode::None | MetricsMode::Counts) => None,
+                Some(MetricsMode::Truncate(n)) => Some(PruneOptions {
+                    truncate_length: n,
+                    ..self.options
+                }),
+                Some(MetricsMode::Full) => Some(PruneOptions {
+                    truncate_length: usize::MAX,
+                    ..self.options
+                }),
+                Some(MetricsMode::Unknown) => Some(PruneOptions {
+                    truncate_length: 0,
+                    ..self.options
+                }),
+            };
+            metric_facts(file, field, options).may_match(op)
         })
     }
 
@@ -327,8 +358,14 @@ fn upper_bound(v: ScalarValue, ty: &IcebergType, options: PruneOptions) -> Upper
     }
 }
 
-fn metric_facts(file: &ContentFile, field: &SchemaField, options: PruneOptions) -> Facts {
+/// `options` `None`: the writer wrote no bounds, so none found is trusted.
+fn metric_facts(file: &ContentFile, field: &SchemaField, options: Option<PruneOptions>) -> Facts {
     let id = field.id;
+    // uuid bounds: Spark compares the strings (unsigned order of the bytes),
+    // but older Java writers ordered bounds by `UUID.compareTo` (signed longs;
+    // review F8, unverified). Until a T028 golden settles it, they are unused.
+    let bounds = options.is_some() && field.ty != IcebergType::Uuid;
+    let options = options.filter(|_| bounds);
     let values = file.value_counts.get(&id).copied();
     let nulls = file.null_counts.get(&id).copied();
     let nans = file.nan_counts.get(&id).copied();
@@ -338,12 +375,14 @@ fn metric_facts(file: &ContentFile, field: &SchemaField, options: PruneOptions) 
         lower: file
             .lower_bounds
             .get(&id)
+            .filter(|_| bounds)
             .and_then(|b| decode(b, &field.ty)),
-        upper: file
-            .upper_bounds
-            .get(&id)
-            .and_then(|b| decode(b, &field.ty))
-            .map(|u| upper_bound(u, &field.ty, options)),
+        upper: options.and_then(|options| {
+            file.upper_bounds
+                .get(&id)
+                .and_then(|b| decode(b, &field.ty))
+                .map(|u| upper_bound(u, &field.ty, options))
+        }),
         has_nulls: nulls.map(|n| n > 0),
         all_null,
         maybe_nan,
@@ -382,17 +421,28 @@ fn summary_facts(
     let Some(ty) = &pf.result_type else {
         return Facts::default();
     };
-    let lower = s.lower.as_ref().and_then(|b| decode(b, ty));
+    // uuid summaries: as for file bounds (review F8).
+    let ordered = *ty != IcebergType::Uuid;
+    let lower = s
+        .lower
+        .as_ref()
+        .filter(|_| ordered)
+        .and_then(|b| decode(b, ty));
     let upper = s
         .upper
         .as_ref()
+        .filter(|_| ordered)
         .and_then(|b| decode(b, ty))
         .map(|u| upper_bound(u, ty, options));
     let no_nan = !ty.is_float() || s.contains_nan == Some(false);
     // Java: no lower bound means every value is null (or NaN, excluded here). Only
     // when both bounds were absent as written, never when one failed to decode.
-    let all_null =
-        options.mode == PruneMode::Scan && s.lower.is_none() && s.upper.is_none() && no_nan;
+    // Java's `allValuesAreNull` also needs `contains_null` (review F6).
+    let all_null = options.mode == PruneMode::Scan
+        && s.contains_null
+        && s.lower.is_none()
+        && s.upper.is_none()
+        && no_nan;
     Facts {
         lower,
         upper,

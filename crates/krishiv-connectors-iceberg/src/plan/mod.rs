@@ -11,6 +11,7 @@
 
 pub(crate) mod bounds;
 pub(crate) mod entry;
+pub(crate) mod metrics;
 pub(crate) mod prune;
 pub(crate) mod snapshot;
 pub(crate) mod transform;
@@ -27,6 +28,7 @@ pub use entry::{
     FileFormatKind, FileScanTask, LiveEntry, ManifestContent, ManifestFileEntry, ManifestFilter,
     ParsedEntry, PartitionFieldSummary, PartitionValue, ScanPlan, inherit,
 };
+pub use metrics::{METRICS_COLUMN_PREFIX, METRICS_DEFAULT, MetricsMode, WriterMetrics};
 pub use prune::{DEFAULT_TRUNCATE_LENGTH, PruneMode, PruneOptions, Pruner};
 pub use snapshot::{RefInfo, RefKind, TableSnapshot, VersionSpec};
 pub use transform::apply as apply_transform;

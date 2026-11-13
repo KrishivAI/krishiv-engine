@@ -16,7 +16,9 @@ use iceberg::spec::{
     ManifestList, ManifestStatus, NestedField, PrimitiveLiteral, PrimitiveType, Schema,
     SnapshotReference, SnapshotRetention, TableMetadata, Type,
 };
-use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    InternalError, KrishivCatalogLimitExceeded, KrishivError, KrishivUnsupportedFeature,
+};
 use krishiv_io::{ColumnPath, PushdownExpr};
 
 use super::storage::from_iceberg;
@@ -27,6 +29,7 @@ use crate::plan::entry::{
     ManifestContent, ManifestFileEntry, ManifestFilter, ParsedEntry, PartitionFieldSummary,
     PartitionValue, ScanPlan, inherit,
 };
+use crate::plan::metrics::WriterMetrics;
 use crate::plan::prune::{PruneOptions, Pruner};
 use crate::plan::snapshot::{
     MetadataView, RefInfo, RefKind, Resolved, SnapshotInfo, TableSnapshot, VersionSpec, resolve,
@@ -144,12 +147,12 @@ pub(crate) fn partition_specs(metadata: &TableMetadata, read: &Schema) -> Partit
 fn refs(metadata: &TableMetadata) -> Result<BTreeMap<String, RefInfo>, KrishivError> {
     let mut json = serde_json::to_value(metadata)
         .map_err(|e| internal(format!("iceberg-rust: serialising table metadata: {e}")))?;
-    let Some(refs) = json.get_mut("refs").map(serde_json::Value::take) else {
-        return Ok(BTreeMap::new());
+    let refs: HashMap<String, SnapshotReference> = match json.get_mut("refs") {
+        Some(refs) => serde_json::from_value(refs.take())
+            .map_err(|e| internal(format!("iceberg-rust: table metadata refs: {e}")))?,
+        None => HashMap::new(),
     };
-    let refs: HashMap<String, SnapshotReference> = serde_json::from_value(refs)
-        .map_err(|e| internal(format!("iceberg-rust: table metadata refs: {e}")))?;
-    Ok(refs
+    let mut out: BTreeMap<String, RefInfo> = refs
         .into_iter()
         .map(|(name, r)| {
             let kind = match r.retention {
@@ -164,7 +167,16 @@ fn refs(metadata: &TableMetadata) -> Result<BTreeMap<String, RefInfo>, KrishivEr
                 },
             )
         })
-        .collect())
+        .collect();
+    // iceberg-rust's v1 serialisation has no refs (review F5); Java's parser
+    // makes `main` a branch at the current snapshot when the metadata has none.
+    if let Some(current) = metadata.current_snapshot_id() {
+        out.entry("main".to_owned()).or_insert(RefInfo {
+            snapshot_id: current,
+            kind: RefKind::Branch,
+        });
+    }
+    Ok(out)
 }
 
 /// What resolution needs of `metadata` (refs only when `with_refs`).
@@ -244,18 +256,104 @@ fn format_version(v: u8) -> Result<FormatVersion, KrishivError> {
     }
 }
 
-/// The entries of the manifest list at `location`.
+/// The catalog parse limit (`krishiv.catalog.maxMetadataBytes`) on one
+/// metadata file of `size` bytes.
+///
+/// # Errors
+/// `KRISHIV_CATALOG_LIMIT_EXCEEDED` naming the file.
+pub(crate) fn check_size(
+    what: &str,
+    location: &str,
+    size: u64,
+    max: u64,
+) -> Result<(), KrishivError> {
+    if size <= max {
+        return Ok(());
+    }
+    Err(KrishivCatalogLimitExceeded {
+        source: format!("The Iceberg {what} {location}"),
+        limit: format!("the metadata size limit of {max} bytes"),
+        value: format!("{size} bytes"),
+        config: "\"krishiv.catalog.maxMetadataBytes\" raised".to_owned(),
+    }
+    .into())
+}
+
+/// The bytes of the metadata file at `location`, refused before the read when
+/// the store reports more than `max` bytes (and after it, if the store lied).
+async fn read_capped(
+    io: &FileIO,
+    what: &str,
+    location: &str,
+    declared: Option<u64>,
+    max: u64,
+) -> Result<bytes::Bytes, KrishivError> {
+    let input = io.new_input(location).map_err(from_iceberg)?;
+    let size = match declared {
+        Some(n) => n,
+        None => input.metadata().await.map_err(from_iceberg)?.size,
+    };
+    check_size(what, location, size, max)?;
+    let bytes = input.read().await.map_err(from_iceberg)?;
+    check_size(what, location, bytes.len() as u64, max)?;
+    Ok(bytes)
+}
+
+/// The `format-version` an Avro object container file's header names
+/// (Iceberg's manifest-list and manifest writers set it), if any.
+pub(crate) fn avro_format_version(bytes: &[u8]) -> Option<u8> {
+    fn long(b: &[u8], at: &mut usize) -> Option<i64> {
+        let mut v: u64 = 0;
+        for shift in (0..64).step_by(7) {
+            let byte = *b.get(*at)?;
+            *at += 1;
+            v |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some((v >> 1) as i64 ^ -((v & 1) as i64));
+            }
+        }
+        None
+    }
+    fn blob<'b>(b: &'b [u8], at: &mut usize) -> Option<&'b [u8]> {
+        let n = usize::try_from(long(b, at)?).ok()?;
+        let out = b.get(*at..at.checked_add(n)?)?;
+        *at += n;
+        Some(out)
+    }
+    if !bytes.starts_with(b"Obj\x01") {
+        return None;
+    }
+    let mut at = 4;
+    loop {
+        let count = long(bytes, &mut at)?;
+        if count == 0 {
+            return None;
+        }
+        if count < 0 {
+            long(bytes, &mut at)?; // the block's byte size
+        }
+        for _ in 0..count.unsigned_abs() {
+            let key = blob(bytes, &mut at)?;
+            let value = blob(bytes, &mut at)?;
+            if key == b"format-version" {
+                return std::str::from_utf8(value).ok()?.parse().ok();
+            }
+        }
+    }
+}
+
+/// The entries of the manifest list at `location`, parsed with the format
+/// version its own header names (a snapshot written before the table's
+/// upgrade has an older list; review F9), else `version`. A list larger than
+/// `max_bytes` is refused before it is read.
 pub(crate) async fn read_manifest_list(
     io: &FileIO,
     location: &str,
     version: u8,
+    max_bytes: u64,
 ) -> Result<Vec<ManifestFileEntry>, KrishivError> {
-    let bytes = io
-        .new_input(location)
-        .map_err(from_iceberg)?
-        .read()
-        .await
-        .map_err(from_iceberg)?;
+    let bytes = read_capped(io, "manifest list", location, None, max_bytes).await?;
+    let version = avro_format_version(&bytes).unwrap_or(version);
     let list =
         ManifestList::parse_with_version(&bytes, format_version(version)?).map_err(from_iceberg)?;
     Ok(list
@@ -382,6 +480,7 @@ pub(crate) fn parse_manifest(bytes: &[u8], spec_id: i32) -> Result<Vec<ParsedEnt
 async fn manifest_entries(
     io: &FileIO,
     manifest: &ManifestFileEntry,
+    max_bytes: u64,
 ) -> Result<Vec<LiveEntry>, KrishivError> {
     if manifest.encrypted {
         return Err(KrishivUnsupportedFeature {
@@ -389,26 +488,33 @@ async fn manifest_entries(
         }
         .into());
     }
-    let bytes = io
-        .new_input(&manifest.path)
-        .map_err(from_iceberg)?
-        .read()
-        .await
-        .map_err(from_iceberg)?;
+    let declared = u64::try_from(manifest.length).ok().filter(|n| *n > 0);
+    let bytes = read_capped(io, "manifest", &manifest.path, declared, max_bytes).await?;
     inherit(manifest, parse_manifest(&bytes, manifest.spec_id)?)
+}
+
+/// What a plan reads under: the catalog parse limit on each manifest list and
+/// manifest (compressed bytes; the decoded entries are not charged to a memory
+/// reservation until PR-25d) and the writers' metrics modes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PlanEnv<'a> {
+    pub(crate) max_metadata_bytes: u64,
+    pub(crate) metrics: &'a WriterMetrics,
 }
 
 /// The files of `snapshot` that may hold rows matching `predicate`.
 ///
 /// # Errors
-/// The I/O error of a read (its class kept); an internal error for a manifest
-/// list or manifest iceberg-rust cannot parse or that breaks the spec.
+/// The I/O error of a read (its class kept); `KRISHIV_CATALOG_LIMIT_EXCEEDED` for
+/// a manifest list or manifest over the size limit; an internal error for one
+/// iceberg-rust cannot parse or that breaks the spec.
 pub(crate) async fn plan(
     io: &FileIO,
     snapshot: &TableSnapshot,
     predicate: Option<&PushdownExpr>,
     filter: ManifestFilter,
     options: PruneOptions,
+    env: PlanEnv<'_>,
 ) -> Result<ScanPlan, KrishivError> {
     let ManifestFilter::All = filter;
     let Some(list) = &snapshot.manifest_list else {
@@ -420,8 +526,16 @@ pub(crate) async fn plan(
         &snapshot.fields,
         &snapshot.partition_specs,
         options,
-    );
-    let manifests = read_manifest_list(io, list, snapshot.format_version).await?;
+    )
+    .with_metrics(env.metrics);
+    // A snapshot from before an upgrade to v2 has no sequence number; its list
+    // is v1 when the header does not say.
+    let fallback = if snapshot.sequence_number == Some(0) {
+        1
+    } else {
+        snapshot.format_version
+    };
+    let manifests = read_manifest_list(io, list, fallback, env.max_metadata_bytes).await?;
     let manifests_total = manifests.len();
     let kept: Vec<_> = manifests
         .into_iter()
@@ -429,7 +543,7 @@ pub(crate) async fn plan(
         .collect();
     let manifests_pruned = manifests_total - kept.len();
     let per_manifest: Vec<Vec<LiveEntry>> = futures::stream::iter(kept.iter())
-        .map(|m| manifest_entries(io, m))
+        .map(|m| manifest_entries(io, m, env.max_metadata_bytes))
         .buffered(MANIFEST_CONCURRENCY)
         .try_collect()
         .await?;

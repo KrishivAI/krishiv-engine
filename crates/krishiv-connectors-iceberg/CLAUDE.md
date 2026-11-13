@@ -19,22 +19,29 @@ scheduler's I/O runtime, error mapping both ways (a Krishiv error keeps its clas
 `plan`) · `provider.rs` `IcebergTableProvider` (design note §3.1): a pinned snapshot's data files as the file list
 of `krishiv-exec`'s `FileScan` (Parquet, Spark split planning), columns by field id with Java's positional fallback
 for files without ids (`FieldMapping::FieldIdOr`; refused under a name mapping until 25c), identity-partition
-columns constant in every file's spec read from the manifest (`FileConstants`, FC S4), a snapshot with delete
+columns constant in every file's spec read from the manifest (`FileConstants`, FC S4), a mixed-spec identity
+column that a file of an identity spec lacks refused (footers of those files read at open), a snapshot with delete
 files refused (25b), pushed filters pruning files through `Pruner` when the scan is built (still applied above);
 `types.rs` also builds the Arrow table schema carrying every Iceberg id · `scan.rs` metadata → `TableSnapshot` (refs read from the metadata's serialisation: iceberg-rust has no
 accessor and its `snapshot_for_ref` panics on a dangling ref), manifest list and manifests fetched through the
-`FileIO` and parsed with iceberg-rust's public parsers into `plan` values, up to 8 manifests at once · `tests.rs`,
+`FileIO` and parsed with iceberg-rust's public parsers into `plan` values, up to 8 manifests at once, each
+metadata file, manifest list and manifest capped by `krishiv.catalog.maxMetadataBytes` before parsing
+(`KRISHIV_CATALOG_LIMIT_EXCEEDED`; decoded entries are not charged to memory until 25d), a manifest list parsed
+with the format version its Avro header names (snapshots from before a v1 → v2 upgrade), `main` added for
+metadata without refs (v1) · `tests.rs`,
 `scan_tests.rs` (manifests written by iceberg-rust's `ManifestWriterBuilder`, transforms against iceberg-rust's,
 an in-memory-catalog table planned and time-travelled), `provider_tests.rs` (SQL through the executor: identity
 partitions from the manifest, files without ids, delete files refused, time travel, the 22 TPC-H queries over
-Iceberg equal to the same Parquet files), `baseline_tests.rs` (ignored: the §2.3 planning baseline, 1,000
+Iceberg equal to the same Parquet files), `table_tests.rs` (`catalog_parse_limits`, v1 refs and lists across an
+upgrade, the table's metrics modes in a scan, the mixed-spec refusal), `baseline_tests.rs` (ignored: the §2.3 planning baseline, 1,000
 manifests × 100 entries, timed as fetch/parse/map/prune).
 `src/plan/` (public, Krishiv-owned types only; design note `P3-T026-T027-iceberg-scan-and-commit.md` §2): `types.rs`
 `IcebergType`, `SchemaField` (primitive columns reachable through structs), `PartitionSpecInfo`/`Transform` ·
 `snapshot.rs` `VersionSpec` (connector-local until PR-07's `TableVersionSpec`), resolution with Iceberg's error texts
 (FC S6), `TableSnapshot` · `entry.rs` manifest-list and manifest entries, `inherit` (FC B2: sequence numbers,
 snapshot ids, v3 `first_row_id`), `DataFileEntry`/`DeleteFileEntry`, `FileScanTask`, `ScanPlan`, `ManifestFilter` ·
-`bounds.rs` single-value serialisation decoded by stored width (review-1 S10) · `transform.rs` partition transforms
+`bounds.rs` single-value serialisation decoded by stored width (review-1 S10) · `metrics.rs` `WriterMetrics`, the
+`write.metadata.metrics.*` modes (`none`/`counts`: bounds untrusted, `truncate(n)`, `full`; default `truncate(16)`) · `transform.rs` partition transforms
 of literals (Murmur3 bucket, truncate, year/month/day/hour) · `prune.rs` `Pruner`, the might-match evaluator over
 summaries, partition tuples and metrics (`PruneMode::Conservative` for T027 validation, review-1 S11) · `tests.rs`,
 `prop_tests.rs` (`prune_never_skips_a_matching_row`).
@@ -51,7 +58,8 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 - A serialised `FileIO` carries only the registration name; an unknown name fails at `build`, never panics.
 - iceberg-rust runs on the I/O runtime (`IoScheduler::runtime`), never on a compute worker.
 - Pruning keeps every file that may hold a matching row under Spark's semantics: a float column that may hold NaN
-  is never pruned by bounds, a string/binary upper bound at the truncation length is a prefix, a bound that does
+  is never pruned by bounds, a string/binary upper bound at the column's truncation length (from the table's
+  metrics modes) is a prefix, uuid bounds and a transform of a literal of another type than the source are unused, a bound that does
   not decode is dropped (never the file), unknown transforms and columns keep. Time-travel errors carry Iceberg's
   `IllegalArgumentException` texts (class `KRISHIV_TIME_TRAVEL_NOT_FOUND`, SQLSTATE 42K0E).
 - `#![forbid(unsafe_code)]`. No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE

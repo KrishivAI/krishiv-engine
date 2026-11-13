@@ -303,20 +303,20 @@ pub(super) fn render(batches: &[RecordBatch]) -> Vec<String> {
     out
 }
 
-fn int64s(v: &[i64]) -> ArrayRef {
+pub(super) fn int64s(v: &[i64]) -> ArrayRef {
     Arc::new(Int64Array::from(v.to_vec()))
 }
 
-fn strings(v: &[&str]) -> ArrayRef {
+pub(super) fn strings(v: &[&str]) -> ArrayRef {
     Arc::new(StringArray::from(v.to_vec()))
 }
 
-fn batch(fields: Vec<Field>, columns: Vec<ArrayRef>) -> RecordBatch {
+pub(super) fn batch(fields: Vec<Field>, columns: Vec<ArrayRef>) -> RecordBatch {
     RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
 }
 
 /// `id long (1), x int (2), name string (3)`.
-fn ixn_schema() -> iceberg::spec::Schema {
+pub(super) fn ixn_schema() -> iceberg::spec::Schema {
     iceberg::spec::Schema::builder()
         .with_fields(vec![
             NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -327,7 +327,7 @@ fn ixn_schema() -> iceberg::spec::Schema {
         .unwrap()
 }
 
-fn provider_session(p: IcebergTableProvider) -> Session {
+pub(super) fn provider_session(p: IcebergTableProvider) -> Session {
     let schema = p.snapshot().schema.clone();
     session(vec![("t", schema, Arc::new(p))])
 }

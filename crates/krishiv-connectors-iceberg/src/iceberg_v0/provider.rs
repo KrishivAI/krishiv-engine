@@ -42,7 +42,7 @@ use super::table::IcebergTable;
 use super::types::arrow_schema;
 use crate::plan::{
     DataFileEntry, FileFormatKind, ManifestFilter, PartitionValue, PruneOptions, Pruner, ScanPlan,
-    TableSnapshot, Transform, VersionSpec, decode,
+    TableSnapshot, Transform, VersionSpec, WriterMetrics, decode,
 };
 
 /// The table property naming a name mapping for files without field ids.
@@ -72,8 +72,10 @@ impl IcebergTableProvider {
     /// # Errors
     /// The time-travel errors of [`IcebergTable::snapshot`]; the planning
     /// errors of [`IcebergTable::plan`]; `KRISHIV_UNSUPPORTED_FEATURE` for a
-    /// snapshot with delete files (naming the first) or a data file that is not
-    /// Parquet; `INTERNAL_ERROR` for a partition value that does not decode.
+    /// snapshot with delete files (naming the first), a data file that is not
+    /// Parquet, or a file that lacks a column its spec partitions by identity
+    /// when other files' specs do not (see [`refuse_missing_mixed_identity`]);
+    /// `INTERNAL_ERROR` for a partition value that does not decode.
     pub async fn open(
         table: &IcebergTable,
         version: &VersionSpec,
@@ -116,6 +118,7 @@ impl IcebergTableProvider {
                 modified_micros: None,
             })
         };
+        let metrics = table.writer_metrics(&snapshot);
         let scan = IcebergScan::new(
             snapshot,
             plan,
@@ -125,7 +128,9 @@ impl IcebergTableProvider {
             &locate,
             config,
             worker_slots,
+            metrics,
         )?;
+        refuse_missing_mixed_identity(&scan).await?;
         Ok(Self {
             scan: Arc::new(scan),
         })
@@ -186,6 +191,8 @@ struct IcebergScan {
     files: Arc<[FileRef]>,
     entries: Arc<[Arc<DataFileEntry>]>,
     mapping: FieldMapping,
+    /// The writers' metrics modes, for pruning by file metrics.
+    metrics: Arc<WriterMetrics>,
     parts: ScanParts,
     /// The scan over every file (or a distributed task's given splits).
     base: FileScan,
@@ -216,6 +223,7 @@ impl IcebergScan {
         locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
         config: &Config,
         worker_slots: u64,
+        metrics: WriterMetrics,
     ) -> Result<Self, KrishivError> {
         if let Some(d) = plan.delete_files.first() {
             return Err(unsupported(format!(
@@ -258,6 +266,7 @@ impl IcebergScan {
             files: files.into(),
             entries: entries.into(),
             mapping,
+            metrics: Arc::new(metrics),
             parts,
             prune: true,
         })
@@ -315,7 +324,8 @@ impl IcebergScan {
             &self.snapshot.fields,
             &self.snapshot.partition_specs,
             PruneOptions::default(),
-        );
+        )
+        .with_metrics(&self.metrics);
         let kept: Vec<FileRef> = self
             .entries
             .iter()
@@ -435,4 +445,86 @@ fn constants(
         out.insert(f.path.clone(), values);
     }
     Ok((fields, out))
+}
+
+/// Mixed specs (review of PR-25a): a top-level column that is an identity
+/// partition source in some data files' specs but not in others is read from
+/// the files, not from the manifests. That is right while every file whose spec
+/// partitions by it also stores it (conforming writers do); a file that lacks it
+/// would read NULL where Java reads the manifest's value, so such a table is
+/// refused instead. Reads the footers of those files only.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` naming the column and the file; the error of
+/// a footer read.
+async fn refuse_missing_mixed_identity(scan: &IcebergScan) -> Result<(), KrishivError> {
+    let snapshot = &scan.snapshot;
+    let identity_of = |e: &DataFileEntry, id: i32| {
+        snapshot
+            .partition_specs
+            .get(&e.file.spec_id)
+            .is_some_and(|spec| {
+                spec.fields
+                    .iter()
+                    .any(|f| f.transform == Transform::Identity && f.source_id == id)
+            })
+    };
+    let constant: BTreeSet<&str> = scan
+        .parts
+        .constant_columns
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect();
+    let mixed: Vec<_> = snapshot
+        .fields
+        .iter()
+        .filter(|f| f.path.0.len() == 1 && !constant.contains(f.path.root()))
+        .filter(|f| scan.entries.iter().any(|e| identity_of(e, f.id)))
+        .collect();
+    if mixed.is_empty() {
+        return Ok(());
+    }
+    let format = ParquetFormat;
+    for (e, file) in scan.entries.iter().zip(scan.files.iter()) {
+        let wanted: Vec<_> = mixed.iter().filter(|c| identity_of(e, c.id)).collect();
+        if wanted.is_empty() {
+            continue;
+        }
+        let meta = scan
+            .parts
+            .io
+            .read_metadata(
+                &format,
+                file,
+                krishiv_io::MetadataNeeds::default(),
+                &scan.parts.format_options,
+            )
+            .await?;
+        let schema = meta.schema();
+        let has_ids = schema
+            .fields()
+            .iter()
+            .any(|f| f.metadata().contains_key(krishiv_io::FIELD_ID_KEY));
+        for c in wanted {
+            let present = if has_ids {
+                let id = c.id.to_string();
+                schema
+                    .fields()
+                    .iter()
+                    .any(|f| f.metadata().get(krishiv_io::FIELD_ID_KEY) == Some(&id))
+            } else {
+                // Positional fallback ids (FC S4).
+                usize::try_from(c.id).is_ok_and(|k| k >= 1 && k <= schema.fields().len())
+            };
+            if !present {
+                return Err(unsupported(format!(
+                    "reading the Iceberg identity partition column {} from the manifest for \
+                     some data files but not others: the file {} lacks the column",
+                    c.path.0.join("."),
+                    e.file.path
+                )));
+            }
+        }
+    }
+    Ok(())
 }

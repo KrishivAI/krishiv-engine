@@ -15,4 +15,6 @@ mod provider_tests;
 #[cfg(test)]
 mod scan_tests;
 #[cfg(test)]
+mod table_tests;
+#[cfg(test)]
 mod tests;

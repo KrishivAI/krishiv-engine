@@ -15,11 +15,11 @@ use iceberg::spec::{
 };
 use krishiv_io::{CmpOp, ColumnPath, PushdownExpr, ScalarValue};
 
-use super::scan::{parse_manifest, plan, read_manifest_list};
+use super::scan::{PlanEnv, parse_manifest, plan, read_manifest_list};
 use super::tests::local;
 use crate::plan::{
     IcebergType, LiveEntry, ManifestFilter, PartitionFieldInfo, PartitionSpecInfo, PruneOptions,
-    Pruner, SchemaField, TableSnapshot, Transform, inherit,
+    Pruner, SchemaField, TableSnapshot, Transform, WriterMetrics, inherit,
 };
 
 const MANIFESTS: usize = 1_000;
@@ -139,7 +139,7 @@ async fn planning_baseline() {
 
     // Fetch: the list and every manifest's bytes (8 at once, as the planner).
     let start = Instant::now();
-    let entries = read_manifest_list(&io, &list, 2).await.unwrap();
+    let entries = read_manifest_list(&io, &list, 2, u64::MAX).await.unwrap();
     let bytes: Vec<_> = futures::stream::iter(entries.iter())
         .map(|m| {
             let io = io.clone();
@@ -195,6 +195,11 @@ async fn planning_baseline() {
         fields: fields.clone(),
         partition_specs: specs.clone(),
     };
+    let metrics = WriterMetrics::default();
+    let env = PlanEnv {
+        max_metadata_bytes: u64::MAX,
+        metrics: &metrics,
+    };
     let start = Instant::now();
     let unfiltered = plan(
         &io,
@@ -202,6 +207,7 @@ async fn planning_baseline() {
         None,
         ManifestFilter::All,
         PruneOptions::default(),
+        env,
     )
     .await
     .unwrap();
@@ -213,6 +219,7 @@ async fn planning_baseline() {
         Some(&predicate),
         ManifestFilter::All,
         PruneOptions::default(),
+        env,
     )
     .await
     .unwrap();

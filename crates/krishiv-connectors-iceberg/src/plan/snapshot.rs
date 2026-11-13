@@ -7,9 +7,10 @@
 //! - `VERSION AS OF '<name>'`: a branch or tag (`Cannot find matching snapshot
 //!   ID or reference name for version <name>`); a tag reads the tagged
 //!   snapshot's schema, a branch the table's current schema;
-//! - `TIMESTAMP AS OF`: the snapshot-log entry with the largest time at or before
-//!   the timestamp, Spark's microseconds truncated to milliseconds (`Cannot find
-//!   a snapshot older than <ts>`), with that snapshot's schema.
+//! - `TIMESTAMP AS OF`: the last snapshot-log entry, in log order, whose time is
+//!   at or before the timestamp (review F4: log times may go backwards),
+//!   Spark's microseconds truncated to milliseconds (`Cannot find a snapshot
+//!   older than <ts>`), with that snapshot's schema.
 //!
 //! A ref is checked against the snapshot list before anything else uses it:
 //! iceberg-rust's `snapshot_for_ref` panics on a dangling ref (FC S6), and it is
@@ -132,13 +133,17 @@ pub(crate) fn resolve(
         VersionSpec::TimestampMicros(us) => {
             // Java's `TimeUnit.MICROSECONDS.toMillis` truncates toward zero.
             let ms = us / 1000;
-            let mut best: Option<(i64, i64)> = None;
-            for &(ts, id) in &view.log {
-                if ts <= ms && best.is_none_or(|(b, _)| ts >= b) {
-                    best = Some((ts, id));
-                }
-            }
-            let Some((_, id)) = best else {
+            // The last entry in log order at or before the time, as Java's
+            // `SnapshotUtil.nullableSnapshotIdAsOfTime` walks `history()`: the
+            // snapshot that was current then. Log times may go backwards (Java
+            // allows a minute of clock skew), so this is not the largest time.
+            let Some(id) = view
+                .log
+                .iter()
+                .rev()
+                .find(|(ts, _)| *ts <= ms)
+                .map(|(_, id)| *id)
+            else {
                 return Err(time_travel_error(format!(
                     "Cannot find a snapshot older than {}",
                     format_timestamp_millis(ms)

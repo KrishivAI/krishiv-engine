@@ -22,6 +22,12 @@ pub fn apply(
     value: &ScalarValue,
 ) -> Option<ScalarValue> {
     use ScalarValue as S;
+    // A literal of another type than the source (a decimal at another scale
+    // above all) would hash or truncate to another value and prune wrongly;
+    // T027's validation passes literals that were not coerced (review F7).
+    if !fits(source, value) {
+        return None;
+    }
     match transform {
         Transform::Identity => Some(value.clone()),
         Transform::Bucket(n) => {
@@ -34,6 +40,28 @@ pub fn apply(
             temporal(transform, value)
         }
         Transform::Void | Transform::Unknown => None,
+    }
+}
+
+/// Whether `value` is a value of the Iceberg type `source` as the reader types
+/// it (`uuid` as its string, `fixed` as binary; a decimal at the same scale).
+fn fits(source: &IcebergType, value: &ScalarValue) -> bool {
+    use IcebergType as T;
+    use ScalarValue as S;
+    match (source, value) {
+        (T::Boolean, S::Boolean(_))
+        | (T::Int, S::Int32(_))
+        | (T::Date, S::Date32(_))
+        | (T::Long, S::Int64(_))
+        | (T::Float, S::Float32(_))
+        | (T::Double, S::Float64(_))
+        | (T::Timestamp | T::Timestamptz, S::TimestampMicros(_))
+        | (T::String | T::Uuid, S::Utf8(_))
+        | (T::Fixed(_) | T::Binary, S::Binary(_)) => true,
+        (T::Decimal { scale, .. }, S::Decimal128 { scale: s, .. }) => {
+            i16::from(*scale) == i16::from(*s)
+        }
+        _ => false,
     }
 }
 

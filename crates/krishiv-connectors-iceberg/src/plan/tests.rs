@@ -881,7 +881,7 @@ fn time_travel_resolution() {
         got(VersionSpec::Ref("main".to_owned())).unwrap(),
         (Some(3), 2)
     );
-    // Timestamps: micros truncated to millis, largest at or before.
+    // Timestamps: micros truncated to millis, the last log entry at or before.
     assert_eq!(
         got(VersionSpec::TimestampMicros(2_000_999)).unwrap(),
         (Some(2), 1)
@@ -930,6 +930,29 @@ fn time_travel_resolution() {
     assert!(resolve(&empty, &VersionSpec::TimestampMicros(0)).is_err());
 }
 
+/// Review F4: the last log entry in log order at or before the time, not the
+/// largest time (Java walks `history()` keeping the last match; log times may go
+/// backwards within its clock-skew allowance).
+#[test]
+fn timestamp_as_of_takes_the_last_log_entry_in_order() {
+    let got = |log: Vec<(i64, i64)>, us: i64| {
+        let mut v = view();
+        v.log = log;
+        resolve(&v, &VersionSpec::TimestampMicros(us))
+            .map(|r| r.snapshot.map(|s| s.snapshot_id))
+            .ok()
+            .flatten()
+    };
+    let skewed = || vec![(1000, 1), (990, 2)];
+    assert_eq!(got(skewed(), 1_005_000), Some(2));
+    // Only the second entry is at or before 995 ms.
+    assert_eq!(got(skewed(), 995_000), Some(2));
+    assert_eq!(got(skewed(), 989_000), None);
+    let three = || vec![(1000, 1), (990, 2), (1000, 3)];
+    assert_eq!(got(three(), 1_000_000), Some(3));
+    assert_eq!(got(three(), 999_000), Some(2));
+}
+
 #[test]
 fn timestamp_format_is_java_instant() {
     assert_eq!(format_timestamp_millis(0), "1970-01-01T00:00:00+00:00");
@@ -938,4 +961,150 @@ fn timestamp_format_is_java_instant() {
         "2023-11-14T22:13:20.123+00:00"
     );
     assert_eq!(format_timestamp_millis(-1), "1969-12-31T23:59:59.999+00:00");
+}
+
+/// Review F3: the truncation length and whether bounds exist come from the
+/// table's `write.metadata.metrics.*` properties, not a constant.
+#[test]
+fn metrics_modes_come_from_the_table_properties() {
+    use super::metrics::{MetricsMode, WriterMetrics};
+    use ScalarValue as S;
+    assert_eq!(MetricsMode::parse("truncate(8)"), MetricsMode::Truncate(8));
+    assert_eq!(MetricsMode::parse(" Full "), MetricsMode::Full);
+    assert_eq!(MetricsMode::parse("counts"), MetricsMode::Counts);
+    assert_eq!(MetricsMode::parse("none"), MetricsMode::None);
+    assert_eq!(MetricsMode::parse("truncate(0)"), MetricsMode::Unknown);
+    assert_eq!(MetricsMode::parse("bogus"), MetricsMode::Unknown);
+
+    let fields = [
+        field(1, "s", IcebergType::String),
+        field(2, "k", IcebergType::Int),
+    ];
+    let specs = unpartitioned();
+    let props = |pairs: &[(&'static str, &'static str)]| {
+        WriterMetrics::from_properties(pairs.iter().copied(), &fields)
+    };
+    let keeps_with = |m: &WriterMetrics, f: &ContentFile, e: &PushdownExpr| {
+        Pruner::new(e, &fields, &specs, PruneOptions::default())
+            .with_metrics(m)
+            .file_may_match(f)
+    };
+    // A non-rounding writer truncated "abcdefghz" to an upper bound "abcd".
+    let strings = with_metrics(1, b"abc".to_vec(), b"abcd".to_vec(), 5, 0);
+    let hit = cmp("s", CmpOp::Eq, S::Utf8("abcdefghz".to_owned()));
+    // Default truncate(16): a 4-character upper is exact, so the file is pruned
+    // (the documented assumption about writers).
+    assert!(!keeps_with(&WriterMetrics::default(), &strings, &hit));
+    // truncate(4) on the table: the 4-character upper is a prefix; kept.
+    let t4 = props(&[("write.metadata.metrics.default", "truncate(4)")]);
+    assert!(keeps_with(&t4, &strings, &hit));
+    // The column's own mode wins over the default.
+    let col4 = props(&[
+        ("write.metadata.metrics.default", "full"),
+        ("write.metadata.metrics.column.s", "truncate(4)"),
+    ]);
+    assert!(keeps_with(&col4, &strings, &hit));
+    // An unparsable mode: no assumption about truncation.
+    let bad = props(&[("write.metadata.metrics.default", "truncate(x)")]);
+    assert!(keeps_with(&bad, &strings, &hit));
+    // `full`: bounds are exact at any length.
+    let full = props(&[("write.metadata.metrics.default", "full")]);
+    let long = with_metrics(1, b"a".to_vec(), "b".repeat(40).into_bytes(), 5, 0);
+    // A value that extends the 40-character upper bound: above it if the bound
+    // is exact, possibly below a truncated one.
+    let past = cmp("s", CmpOp::Eq, S::Utf8(format!("{}c", "b".repeat(40))));
+    assert!(!keeps_with(&full, &long, &past));
+    assert!(keeps_with(&WriterMetrics::default(), &long, &past));
+    // `none` / `counts`: bounds found are not trusted; counts still are.
+    let ints = with_metrics(
+        2,
+        1i32.to_le_bytes().to_vec(),
+        5i32.to_le_bytes().to_vec(),
+        5,
+        0,
+    );
+    let out = cmp("k", CmpOp::Eq, S::Int32(50));
+    assert!(!keeps_with(&WriterMetrics::default(), &ints, &out));
+    for mode in ["none", "counts"] {
+        let m =
+            WriterMetrics::from_properties([("write.metadata.metrics.column.k", mode)], &fields);
+        assert!(keeps_with(&m, &ints, &out), "{mode}");
+    }
+    let counts = props(&[("write.metadata.metrics.default", "counts")]);
+    let all_null = with_metrics(2, Vec::new(), Vec::new(), 5, 5);
+    assert!(!keeps_with(
+        &counts,
+        &all_null,
+        &PushdownExpr::IsNotNull(col("k"))
+    ));
+}
+
+/// Review F6: a summary without bounds is all null only when it says it has
+/// nulls (Java's `allValuesAreNull`).
+#[test]
+fn a_summary_without_bounds_or_nulls_is_not_all_null() {
+    let fields = [field(1, "k", IcebergType::Int)];
+    let specs = spec(vec![pfield(1000, 1, Transform::Identity, IcebergType::Int)]);
+    let mut m = manifest_entry(1, None);
+    m.spec_id = 1;
+    let summary = |contains_null| PartitionFieldSummary {
+        contains_null,
+        contains_nan: None,
+        lower: None,
+        upper: None,
+    };
+    let not_null = PushdownExpr::IsNotNull(col("k"));
+    let may = |m: &ManifestFileEntry| {
+        Pruner::new(&not_null, &fields, &specs, PruneOptions::default()).manifest_may_match(m)
+    };
+    m.partitions = Some(vec![summary(true)]);
+    assert!(!may(&m), "no bounds and nulls: all null");
+    m.partitions = Some(vec![summary(false)]);
+    assert!(may(&m), "no bounds and no nulls: malformed, kept");
+}
+
+/// Review F7: bucket and truncate of a literal of another type than the
+/// source (a decimal at another scale) do not apply, so nothing is pruned.
+#[test]
+fn transforms_refuse_literals_of_another_type() {
+    use ScalarValue as S;
+    let dec = IcebergType::Decimal {
+        precision: 9,
+        scale: 2,
+    };
+    let at = |scale| S::Decimal128 {
+        unscaled: 1234,
+        precision: 9,
+        scale,
+    };
+    assert!(transform::apply(Transform::Bucket(16), &dec, &at(2)).is_some());
+    assert_eq!(transform::apply(Transform::Bucket(16), &dec, &at(3)), None);
+    assert_eq!(
+        transform::apply(Transform::Truncate(10), &dec, &at(1)),
+        None
+    );
+    assert_eq!(
+        transform::apply(Transform::Bucket(4), &IcebergType::Long, &S::Int32(1)),
+        None
+    );
+    assert_eq!(
+        transform::apply(Transform::Identity, &IcebergType::Int, &S::Int64(1)),
+        None
+    );
+}
+
+/// Review F8: uuid bounds are not used (their order is unsettled).
+#[test]
+fn uuid_bounds_are_not_used() {
+    use ScalarValue as S;
+    let fields = [field(1, "u", IcebergType::Uuid)];
+    let lo = [0u8; 16].to_vec();
+    let hi = [1u8; 16].to_vec();
+    let f = with_metrics(1, lo, hi, 5, 0);
+    let e = cmp(
+        "u",
+        CmpOp::Eq,
+        S::Utf8("ffffffff-ffff-ffff-ffff-ffffffffffff".to_owned()),
+    );
+    assert!(keeps(&fields, &unpartitioned(), &f, &e));
 }
