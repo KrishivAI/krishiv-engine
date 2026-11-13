@@ -9,6 +9,7 @@ files and added field names, so the next bump is read, not assumed.
 
     python3 tests/scripts/check_proto_manifest.py            # verify (PR check)
     python3 tests/scripts/check_proto_manifest.py --write    # regenerate after a deliberate re-vendor
+    python3 tests/scripts/check_proto_manifest.py --upstream # nightly: re-read every tag from apache/spark and compare
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import difflib
 import hashlib
 import json
 import sys
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,10 +114,40 @@ def delta_problems(base: str = "4.2.1", new: str = "4.3") -> list[str]:
     return problems
 
 
+RAW = "https://raw.githubusercontent.com/apache/spark/{tag}/sql/connect/common/src/main/protobuf/spark/connect/{name}"
+
+
+def upstream_problems(fetch=None) -> list[str]:
+    """Each vendored file against the same file at its apache/spark tag (network; the nightly check)."""
+
+    def default_fetch(url: str) -> bytes:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            return r.read()
+
+    fetch = fetch or default_fetch
+    problems = []
+    for ver, tag in TAGS.items():
+        for f in sorted((PROTO / ver / "spark" / "connect").glob("*.proto")):
+            try:
+                body = fetch(RAW.format(tag=tag, name=f.name))
+            except OSError as e:
+                problems.append(f"{ver}/{f.name}: cannot fetch {tag}: {e}")
+                continue
+            if hashlib.sha256(body).hexdigest() != sha256(f):
+                problems.append(f"{ver}/{f.name}: differs from apache/spark {tag}")
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--write", action="store_true")
+    ap.add_argument("--upstream", action="store_true", help="compare with apache/spark at each tag (network)")
     args = ap.parse_args(argv)
+    if args.upstream:
+        problems = upstream_problems()
+        for e in problems:
+            print(e, file=sys.stderr)
+        return 1 if problems else 0
     current = collect()
     if args.write:
         MANIFEST.write_text(json.dumps(current, indent=1) + "\n", encoding="utf-8")
