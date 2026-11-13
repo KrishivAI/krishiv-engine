@@ -164,3 +164,31 @@ def test_checkpoint_needs_a_directory(spark: SparkSession, tmp_path) -> None:
         df.checkpoint()
     spark.conf.set("spark.checkpoint.dir", str(tmp_path / "cp"))
     assert rows(df.checkpoint()) == [(2, "Alice")]
+
+
+def test_checkpoint_arguments_are_checked(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(2, "Alice")], ["age", "name"])
+    with pytest.raises(Exception, match="eager"):
+        df.checkpoint("yes")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(Exception, match="eager"):
+        df.localCheckpoint("yes")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(Exception, match="storageLevel"):
+        df.localCheckpoint(storageLevel="DISK_ONLY")  # ty: ignore[invalid-argument-type]
+
+
+def test_a_checkpoint_is_a_snapshot_of_a_changing_source(spark: SparkSession, tmp_path) -> None:
+    spark.conf.set("spark.checkpoint.dir", str(tmp_path / "cp"))
+    spark.sql("CREATE TABLE snap_src (age INT, name STRING) USING parquet")
+    spark.sql("INSERT INTO snap_src VALUES (1, 'a')")
+    for make in (
+        lambda d: d.localCheckpoint(),
+        lambda d: d.checkpoint(),
+    ):
+        cp = make(spark.table("snap_src"))
+        spark.sql("INSERT INTO snap_src VALUES (9, 'z')")
+        assert rows(cp) == [(1, "a")]
+        spark.sql("DELETE FROM snap_src WHERE age = 9")
+    lazy = spark.table("snap_src").localCheckpoint(eager=False)
+    assert rows(lazy) == [(1, "a")]
+    spark.sql("INSERT INTO snap_src VALUES (9, 'z')")
+    assert rows(lazy) == [(1, "a")]
