@@ -120,3 +120,31 @@ fn dropped_reads_cancel_their_kernel_calls() {
         "{e}"
     );
 }
+
+/// `krishiv.delta.snapshotCache.maxBytes` reaches the runtime's cache: under a bound that holds
+/// a snapshot but not its listing, the table is cached without its files (re-review N6).
+#[test]
+fn the_runtime_cache_takes_its_byte_bound_from_the_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, _land) = two_commits(tmp.path());
+    let path = dir.to_string_lossy().into_owned();
+    let bound = krishiv_connectors_delta::table::cache::ENTRY_BYTES.to_string();
+    let rt = crate::runtime::EngineRuntime::builder()
+        .config("krishiv.delta.snapshotCache.maxBytes", &bound)
+        .build()
+        .unwrap();
+    let s = Session::builder().runtime(rt).build().unwrap();
+    let cache = Arc::clone(&s.state.runtime.delta);
+    let query = s.query_env();
+    let reads = &query.catalog.delta;
+    let table = block_on(reads.open(&read(&path), None)).unwrap();
+    assert_eq!(table.version(), 1);
+    let (store, root) = reads.root_of(&read(&path)).unwrap();
+    let key = krishiv_connectors_delta::table::CacheKey {
+        root: root.as_str().to_owned(),
+        store,
+        credential: reads.credential.clone(),
+    };
+    assert_eq!(cache.cached_version(&key), Some(1));
+    assert!(!cache.keeps_listing(&key));
+}

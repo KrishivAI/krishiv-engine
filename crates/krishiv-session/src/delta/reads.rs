@@ -57,7 +57,7 @@ pub(crate) struct DeltaReads {
     runtime: tokio::runtime::Handle,
     config: Arc<Config>,
     cache: Arc<DeltaCache>,
-    credential: String,
+    pub(super) credential: String,
     /// The planning-time kernel calls' cancellation (opening tables, `CREATE`'s shape): fired
     /// when the query's reads are dropped (a dropped planning future), so a call still waiting
     /// for a log-pool slot gives up and one already running ends at its next handler call.

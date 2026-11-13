@@ -36,8 +36,10 @@ pub const DEFAULT_CAPACITY: usize = 256;
 /// The bytes a cache holds by default (`krishiv.delta.snapshotCache.maxBytes`).
 pub const DEFAULT_MAX_BYTES: u64 = 64 << 20;
 
-/// The estimated bytes of one cached table besides its listing: the snapshot (its log segment,
-/// protocol, metadata and schema) and the entry itself.
+/// The estimated bytes of one cached table besides its listing: the snapshot (protocol, metadata
+/// and schema) and the entry itself. The snapshot's log segment is not counted: a table with no
+/// recent checkpoint keeps one file entry per commit since the last one, so thousands of
+/// commits can make the real size several hundred KiB.
 pub const ENTRY_BYTES: u64 = 16 << 10;
 
 /// The estimated bytes of a table's live-file listing: each unit's fixed size, its path and its
@@ -216,8 +218,17 @@ impl SnapshotCache {
     }
 
     /// Drops the entry of `key` only while it is still the one a query found stale (its
-    /// `version` and last commit `last`): an entry another query stored meanwhile stays.
+    /// `version` and last commit `last`): an entry another query stored meanwhile stays. The
+    /// query's lookup counted a hit, but it now reads the log from its last checkpoint, so that
+    /// hit is counted as a miss instead.
     pub(crate) fn invalidate_if(&self, key: &CacheKey, version: u64, last: CommitStamp) {
+        if self
+            .hits
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |h| h.checked_sub(1))
+            .is_ok()
+        {
+            self.misses.fetch_add(1, Ordering::Relaxed);
+        }
         let mut entries = self.lock();
         entries
             .list
