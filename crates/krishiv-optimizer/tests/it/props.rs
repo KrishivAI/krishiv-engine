@@ -712,3 +712,130 @@ fn a_conjunct_over_a_projection_estimates_as_once_pushed_below_it() {
         "{sql}"
     );
 }
+
+/// Seed 16415633519706479466 of `random_queries_reach_the_lowest_operator`:
+/// join ordering put a conjunct that reads no column (`false`, from a right
+/// join's condition) on the first input in canonical order, a `Shift` over an
+/// aggregate of a join. Tidying then pushed it into that join, which the
+/// second optimization ordered again with the filter, so the plan was not a
+/// fixed point. Such a conjunct now filters the first input with no inputs of
+/// its own. Pruning also no longer wraps a one-column input in a projection
+/// that keeps it whole (tidying collapsed it, and the two repeated until the
+/// round limit).
+#[test]
+fn a_constant_conjunct_filters_an_input_pushdown_cannot_move_it_below() {
+    let seed = 16_415_633_519_706_479_466_u64;
+    let sql = Gen::new(seed).top();
+    let plan = support::resolve(&sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{sql}: not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let db = data::small(seed);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root()),
+        "{sql}"
+    );
+}
+
+/// Seed 8434893260344359798 of `random_queries_reach_the_lowest_operator`:
+/// `WHERE x3.a = x1.a` makes the second join inner, and `x2.a = x3.a` with it implies
+/// `x1.a = x2.a`, which join ordering left as a filter over the first (left outer) join.
+/// That filter rejects the NULL rows of `x2`, so tidying turned the join inner, after
+/// ordering: the first optimization ordered two inputs, and the second one saw the three
+/// inputs of the inner-join tree and swapped the sides of the inner join over the shared
+/// scan. A filter ordering or restriction leaves now goes through the rewrite batch inside
+/// their loop, so the outer join is inner before the last ordering.
+#[test]
+fn an_outer_join_a_derived_filter_makes_inner_is_ordered_with_its_tree() {
+    let sql = "SELECT * FROM (SELECT x2.d AS c0, x1.a + 1 AS c1 FROM u AS x1 \
+               LEFT JOIN u AS x2 ON x1.a = x2.a AND (x1.d IS NOT NULL AND x1.a IN (2, 2)) \
+               LEFT JOIN u AS x3 ON x2.a = x3.a AND (x2.a IS NULL OR x1.d <=> x1.d) \
+               WHERE x3.a = x1.a) ORDER BY c0, c1 LIMIT 0";
+    let plan = support::resolve(sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    // No outer join is left, and the rows are those of the written query.
+    assert!(
+        !optimized.root().to_string().contains("LeftOuter"),
+        "{}",
+        optimized.root()
+    );
+    for seed in 0..4 {
+        let db = data::small(seed);
+        assert_eq!(
+            eval::rows(&db, optimized.root()),
+            eval::rows(&db, plan.root()),
+            "seed {seed}"
+        );
+    }
+}
+
+/// A nondeterministic predicate must see the rows it saw before, so the order and restrict loop
+/// turns an outer join inner only on what pushdown would move: the deterministic prefix of the top
+/// filter's conjuncts, and only through filters that are deterministic as a whole.
+#[test]
+fn a_nondeterministic_filter_keeps_the_outer_join_under_it() {
+    for (name, sql) in [
+        (
+            "rand before the rejecting conjunct",
+            "SELECT * FROM t LEFT JOIN u ON t.a = u.a WHERE rand() < 0.5 AND u.d = 'z'",
+        ),
+        (
+            "rejecting filter above a rand filter",
+            "SELECT * FROM (SELECT * FROM t LEFT JOIN u ON t.a = u.a WHERE rand() < 0.5) x \
+             WHERE x.d = 'z'",
+        ),
+    ] {
+        let plan = support::resolve(sql, &support::ctx());
+        let optimized = optimize(&plan).unwrap();
+        assert!(
+            optimized.root().to_string().contains("LeftOuter"),
+            "{name}: the join turned inner\n{}",
+            optimized.root()
+        );
+        let again = optimize(&optimized).unwrap();
+        assert!(
+            again.structurally_eq(&optimized),
+            "{name}: not a fixed point"
+        );
+    }
+    // The same joins with a deterministic rejecting filter do turn inner.
+    let plan = support::resolve(
+        "SELECT * FROM t LEFT JOIN u ON t.a = u.a WHERE u.d = 'z'",
+        &support::ctx(),
+    );
+    assert!(
+        !optimize(&plan)
+            .unwrap()
+            .root()
+            .to_string()
+            .contains("LeftOuter")
+    );
+}
+
+/// Seed 5211661776127910118 of `random_queries_reach_the_lowest_operator`
+/// (failed #688's merge-queue run on main 2d6054309): the second
+/// optimization swapped the inputs of the inner join under the left join's
+/// right-hand projection, so the plan was not a fixed point.
+#[test]
+fn an_inner_join_below_a_left_join_keeps_its_input_order() {
+    fixed_point_with_rows(
+        5_211_661_776_127_910_118,
+        "SELECT x4.a AS c0, x1.c2 AS c1, x1.c0 AS c2 FROM (SELECT x2.a AS c0, x2.a AS c1, \
+         x2.d AS c2 FROM u AS x2 FULL JOIN u AS x3 ON x2.a = x3.a WHERE x3.d <= x3.d) AS x1 \
+         LEFT JOIN u AS x4 ON x1.c1 = x4.a AND x4.d <> x1.c2 \
+         WHERE (x1.c1 IS NOT NULL AND NOT (x1.c0 <> x4.a))",
+    );
+}

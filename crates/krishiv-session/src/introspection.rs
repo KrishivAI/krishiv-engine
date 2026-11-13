@@ -135,7 +135,7 @@ fn tree_children(out: &mut String, prefix: &str, ty: &DataType) {
     }
 }
 
-fn keep(pattern: Option<&ShowPattern>, name: &str) -> bool {
+pub(crate) fn keep(pattern: Option<&ShowPattern>, name: &str) -> bool {
     pattern.is_none_or(|p| matches(&p.pattern, name))
 }
 
@@ -396,7 +396,18 @@ impl Session {
         let env = self.query_env();
         let ns = match name {
             Some(n) => self.namespace_name(n, &env)?,
-            None => self.state.catalog.current_namespace(),
+            None => {
+                // The `system` catalog has no namespace: a bare listing has nothing to show
+                // (not the session catalog's `default`).
+                let catalog = self.state.catalog.current_catalog();
+                if crate::system::is_system(&catalog) {
+                    return Err(SchemaNotFound {
+                        schema_name: format!("`{catalog}`"),
+                    }
+                    .into());
+                }
+                self.state.catalog.current_namespace()
+            }
         };
         if !is_global_namespace(&ns) {
             self.require_namespace(&ns)?;
@@ -415,6 +426,35 @@ impl Session {
             ShowKind::Tables {
                 namespace, pattern, ..
             } => {
+                // `SHOW TABLES IN system`: the tables of the reserved read-only catalog (it has no
+                // namespace, so the namespace column is empty).
+                let in_system = match namespace {
+                    Some(n) => self
+                        .namespace_name(n, &self.query_env())
+                        .is_ok_and(|name| crate::system::is_system(&name)),
+                    // After `USE system` a bare `SHOW TABLES` lists the system tables.
+                    None => crate::system::is_system(&self.state.catalog.current_catalog()),
+                };
+                if in_system {
+                    let mut rows: Vec<Vec<Cell>> = crate::system::table_names()
+                        .iter()
+                        .filter(|t| keep(pattern.as_ref(), t))
+                        .map(|t| vec![s(""), s(*t), s("false")])
+                        .collect();
+                    // The session's temporary views stay listed.
+                    rows.extend(
+                        self.temp_view_names(pattern.as_ref())
+                            .into_iter()
+                            .map(|n| vec![s(""), s(n), s("true")]),
+                    );
+                    return self
+                        .ordered_frame(
+                            &["namespace", "tableName", "isTemporary"],
+                            &["isTemporary"],
+                            rows,
+                        )
+                        .await;
+                }
                 let ns = self.show_namespace(namespace.as_ref())?;
                 if is_global_namespace(&ns) {
                     return self
@@ -485,7 +525,50 @@ impl Session {
                 table, namespace, ..
             } => {
                 let env = self.query_env();
-                let mut name = self.table_name(table, &env)?;
+                let system_table = match namespace {
+                    None => self.system_table_of(table, &env)?,
+                    Some(ns) => {
+                        let from = self.namespace_name(ns, &env)?;
+                        let parts = crate::access::ddl_parts(table, &env)?;
+                        match parts.as_slice() {
+                            [t] => Some(t),
+                            [q, t] if crate::system::is_system(q) => Some(t),
+                            _ => None,
+                        }
+                        .filter(|_| crate::system::is_system(&from))
+                        .filter(|t| {
+                            crate::system::is_system_table(&["system".to_owned(), t.to_lowercase()])
+                        })
+                        .cloned()
+                    }
+                };
+                if let Some(t) = system_table {
+                    let analysis = DataFrame::new(
+                        self.clone(),
+                        Arc::new(krishiv_plan::LogicalPlan::table([
+                            "system",
+                            &t.to_lowercase(),
+                        ])),
+                    )
+                    .analyzed_in(env.clone())
+                    .await?;
+                    let names = analysis
+                        .analyzed
+                        .output
+                        .iter()
+                        .map(|c| vec![s(&c.name)])
+                        .collect();
+                    return self
+                        .frame_with_order(&["col_name"], &[], names, false)
+                        .await;
+                }
+                // With `FROM ns` the table is named by that namespace: no guard on the bare name first.
+                let mut name = if namespace.is_some() {
+                    let parts = crate::access::ddl_parts(table, &env)?;
+                    TableName::resolve(&parts, &self.state.catalog.current_namespace(), &env)?
+                } else {
+                    self.table_name(table, &env)?
+                };
                 if let Some(ns) = namespace {
                     let from = self.namespace_name(ns, &env)?;
                     if !name.bare && !name.namespace.eq_ignore_ascii_case(&from) {
@@ -503,10 +586,12 @@ impl Session {
                 self.frame_with_order(&["col_name"], &[], rows, false).await
             }
             ShowKind::Namespaces { pattern, .. } => {
+                // `system` has no namespaces; never list the session catalog's under it.
+                let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
                 let rows = store
                     .namespaces()
                     .into_iter()
-                    .filter(|(n, _)| keep(pattern.as_ref(), n))
+                    .filter(|(n, _)| !in_system && keep(pattern.as_ref(), n))
                     .map(|(n, _)| vec![s(n)])
                     .collect();
                 self.ordered_frame(&["namespace"], &[], rows).await
@@ -643,7 +728,7 @@ impl Session {
             // `CatalogTablePartition.simpleString`: the partition's own entries.
             let entries: Vec<(String, String)> = partition_details(&t, &p)
                 .into_iter()
-                .skip(4)
+                .skip(PARTITION_HEADER_ROWS)
                 .take_while(|(k, _)| !k.is_empty())
                 .collect();
             let rows = vec![vec![
@@ -697,12 +782,20 @@ impl Session {
             let Some(entry) = self.state.catalog.get(&name, case_sensitive) else {
                 continue;
             };
-            // A data source view: its columns are all it has. A query view would print its text, which
-            // the session does not keep.
-            let crate::catalog::TempTable::Files { columns, .. } = &*entry else {
-                return Err(unsupported(
-                    "SHOW TABLE EXTENDED of a temporary view over a query or DataFrame",
-                ));
+            // A data source view: its columns are all it has. A view over a query prints its text (a
+            // DataFrame view has none, and is refused).
+            let (columns, text) = match &*entry {
+                crate::catalog::TempTable::Files { columns, .. } => (columns, None),
+                crate::catalog::TempTable::View {
+                    columns,
+                    text: Some(text),
+                    ..
+                } => (columns, Some(text)),
+                _ => {
+                    return Err(unsupported(
+                        "SHOW TABLE EXTENDED of a temporary view over a DataFrame",
+                    ));
+                }
             };
             let mut entries = vec![
                 ("Table".to_owned(), name.clone()),
@@ -711,7 +804,33 @@ impl Session {
                 ("Created By".to_owned(), "Spark 4.2.0".to_owned()),
                 ("Type".to_owned(), "VIEW".to_owned()),
             ];
-            if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
+            if let Some(text) = text {
+                // Spark prints no original text for a temporary view; its schema mode (when the feature is on)
+                // sits between the text and the catalog.
+                entries.push(("View Text".to_owned(), text.clone()));
+                if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
+                    entries.push(("View Schema Mode".to_owned(), "BINDING".to_owned()));
+                }
+                entries.push((
+                    "View Catalog and Namespace".to_owned(),
+                    format!(
+                        "{}.{}",
+                        crate::catalog::CATALOG,
+                        self.state.catalog.current_namespace()
+                    ),
+                ));
+                entries.push((
+                    "View Query Output Columns".to_owned(),
+                    format!(
+                        "[{}]",
+                        columns
+                            .iter()
+                            .map(|c| format!("`{}`", c.name.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            } else if crate::view_schema::binding_enabled(&self.state.conf.snapshot()) {
                 entries.push(("View Schema Mode".to_owned(), "BINDING".to_owned()));
             }
             let fields: Vec<(&str, &DataType, bool)> = columns
@@ -801,11 +920,60 @@ impl Session {
             .collect())
     }
 
+    /// The table of the `system` catalog `table` names (current under `USE system` and not a temporary view, or
+    /// written `system.<table>`), if it is one.
+    fn system_table_of(
+        &self,
+        table: &DdlName,
+        env: &crate::session::QueryEnv,
+    ) -> Result<Option<String>, KrishivError> {
+        let parts = crate::access::ddl_parts(table, env)?;
+        let in_system = env.catalog.in_system();
+        Ok(match parts.as_slice() {
+            [t] if in_system && !self.is_temp_name(t, env) => Some(t.clone()),
+            [c, t] if crate::system::is_system(c) => Some(t.clone()),
+            _ => None,
+        }
+        .filter(|t| crate::system::is_system_table(&["system".to_owned(), t.to_lowercase()])))
+    }
+
+    /// `DESCRIBE system.<table>`: the table's columns (name, type, no comment). The variants that
+    /// describe stored metadata (`EXTENDED`, `PARTITION`, `AS JSON`, one column) are refused: the
+    /// catalog is generated, so it has none.
+    async fn describe_system_table(
+        &self,
+        table: &str,
+        extended: bool,
+        partition: bool,
+        as_json: bool,
+        column: bool,
+        env: &crate::session::QueryEnv,
+    ) -> Result<DataFrame, KrishivError> {
+        if extended || partition || as_json || column {
+            return Err(unsupported(
+                "DESCRIBE variants other than the plain form of a system table",
+            ));
+        }
+        let plan = Arc::new(krishiv_plan::LogicalPlan::table(["system", table]));
+        let analysis = DataFrame::new(self.clone(), plan)
+            .analyzed_in(env.clone())
+            .await?;
+        let rows: Vec<Vec<Cell>> = analysis
+            .analyzed
+            .output
+            .iter()
+            .map(|c| vec![s(&c.name), s(c.data_type.catalog_string()), s("")])
+            .collect();
+        self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
+            .await
+    }
+
     /// `DESCRIBE ...`.
     pub(crate) async fn exec_describe(
         &self,
         d: &Describe,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         match &d.kind {
@@ -817,6 +985,20 @@ impl Session {
                 as_json,
                 ..
             } => {
+                // A table of the read-only `system` catalog: its columns, nothing stored.
+                let system_table = self.system_table_of(table, &env)?;
+                if let Some(table) = system_table {
+                    return self
+                        .describe_system_table(
+                            &table.to_lowercase(),
+                            mode.is_some(),
+                            partition.is_some(),
+                            *as_json,
+                            !column.is_empty(),
+                            &env,
+                        )
+                        .await;
+                }
                 let name = self.table_name(table, &env)?;
                 let columns = self.columns_of_relation(&name).await?;
                 let temp = self.temp_entry_of(&name, &env)
@@ -847,26 +1029,15 @@ impl Session {
                         .await;
                 }
                 if !column.is_empty() {
-                    // The statistics rows are NULL because the catalog keeps no column statistics; after
-                    // `ANALYZE .. FOR COLUMNS` Spark shows values, so say so rather than print NULLs.
-                    let analyzed = !temp
-                        && self
-                            .state
-                            .catalog
-                            .store
-                            .table(&name.namespace, &name.name)
-                            .is_some_and(|t| t.column_stats_requested);
-                    if mode.is_some() && analyzed {
-                        return Err(unsupported(
-                            "DESCRIBE EXTENDED of a column after ANALYZE TABLE ... FOR COLUMNS (column statistics)",
-                        ));
-                    }
+                    let stats = (!temp)
+                        .then(|| self.state.catalog.store.table(&name.namespace, &name.name))
+                        .flatten();
                     return self
                         .describe_column(
                             &columns,
                             column,
                             &self.declared_char_varchars(&name, temp).await?,
-                            mode.is_some(),
+                            mode.is_some().then_some(stats.as_deref()),
                         )
                         .await;
                 }
@@ -936,19 +1107,25 @@ impl Session {
                     .await
             }
             DescribeKind::Query { query, .. } => {
-                let plan = krishiv_sql::lower_with(
+                let plan = krishiv_sql::lower_identified(
                     query,
                     self.next_source_id(),
                     self.parser_options().case_sensitive,
+                    ids,
                 )
                 .map_err(|e| e.error)?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
-                let rows = analysis
-                    .analyzed
+                // A column's comment follows it through the query (Spark's field metadata).
+                let analyzed = &analysis.analyzed;
+                let rows = analyzed
                     .output
                     .iter()
-                    .map(|c| vec![s(&c.name), s(c.data_type.catalog_string()), None])
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let comment = analyzed.output_comments.get(i).cloned().flatten();
+                        vec![s(&c.name), s(c.data_type.catalog_string()), comment]
+                    })
                     .collect();
                 self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
                     .await
@@ -970,13 +1147,20 @@ impl Session {
                     })?;
                 let mut rows = self.namespace_rows(&ns, &meta)?;
                 if *extended {
+                    // Spark 4.2.0 (`research/spark/schema-collation/probe1.out`): the sorted pairs as Scala
+                    // tuples, `((a,1), (b,2))`; nothing for none.
                     let props = meta
                         .properties
                         .iter()
-                        .map(|(k, v)| format!("{k}={}", redact(k, v)))
+                        .map(|(k, v)| format!("({k},{})", redact(k, v)))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    rows.push(vec![s("Properties"), s(format!("({props})"))]);
+                    let shown = if props.is_empty() {
+                        String::new()
+                    } else {
+                        format!("({props})")
+                    };
+                    rows.push(vec![s("Properties"), s(shown)]);
                 }
                 self.ordered_frame(&["info_name", "info_value"], &[], rows)
                     .await
@@ -1002,13 +1186,19 @@ impl Session {
                 format!("file:{}", dir.display())
             }
         };
-        Ok(vec![
+        let mut rows = vec![
             vec![s("Catalog Name"), s(crate::catalog::CATALOG)],
             vec![s("Namespace Name"), s(ns)],
             vec![s("Comment"), s(meta.comment.clone().unwrap_or_default())],
-            vec![s("Location"), s(location)],
-            vec![s("Owner"), s("spark")],
-        ])
+        ];
+        // The schema's default collation, after the comment (Spark 4.2.0,
+        // `research/spark/schema-collation/probe2.out`).
+        if let Some(c) = &meta.collation {
+            rows.push(vec![s("Collation"), s(c.clone())]);
+        }
+        rows.push(vec![s("Location"), s(location)]);
+        rows.push(vec![s("Owner"), s("spark")]);
+        Ok(rows)
     }
 
     /// One column's `info_name`/`info_value` rows.
@@ -1017,7 +1207,7 @@ impl Session {
         columns: &[(String, DataType, Option<String>)],
         column: &[krishiv_sql::ast::ColumnName],
         declared: &std::collections::HashMap<String, String>,
-        statistics: bool,
+        statistics: Option<Option<&CatalogTable>>,
     ) -> Result<DataFrame, KrishivError> {
         let wanted = match column {
             [krishiv_sql::ast::ColumnName::Ident(i)] => i.value.clone(),
@@ -1043,24 +1233,59 @@ impl Session {
                 s(comment.clone().unwrap_or_else(|| "NULL".to_owned())),
             ],
         ];
-        // `EXTENDED | FORMATTED` add the statistics rows; the catalog keeps none, so they are NULL.
-        for stat in statistics
-            .then_some([
-                "min",
-                "max",
-                "num_nulls",
-                "distinct_count",
-                "avg_col_len",
-                "max_col_len",
-                "histogram",
-            ])
-            .into_iter()
-            .flatten()
-        {
-            rows.push(vec![s(stat), s("NULL")]);
+        // `EXTENDED | FORMATTED` add the statistics rows, NULL for what `ANALYZE` did not gather.
+        if let Some(table) = statistics {
+            let found = table.and_then(|t| t.column_stats.get(name));
+            let text = |f: fn(&crate::store::ColumnStats) -> &String| {
+                found.map_or_else(|| "NULL".to_owned(), |c| f(c).clone())
+            };
+            rows.push(vec![
+                s("min"),
+                s(self
+                    .shown_stat_bound(found.and_then(|c| c.min.as_deref()), data_type)
+                    .await?),
+            ]);
+            rows.push(vec![
+                s("max"),
+                s(self
+                    .shown_stat_bound(found.and_then(|c| c.max.as_deref()), data_type)
+                    .await?),
+            ]);
+            rows.push(vec![s("num_nulls"), s(text(|c| &c.num_nulls))]);
+            rows.push(vec![s("distinct_count"), s(text(|c| &c.distinct_count))]);
+            rows.push(vec![s("avg_col_len"), s(text(|c| &c.avg_col_len))]);
+            rows.push(vec![s("max_col_len"), s(text(|c| &c.max_col_len))]);
+            rows.push(vec![s("histogram"), s("NULL")]);
         }
         self.ordered_frame(&["info_name", "info_value"], &[], rows)
             .await
+    }
+
+    /// A stored `min` or `max` as `DESCRIBE` prints it (`NULL` when there is none): a timestamp in the session's time zone
+    /// (`DescribeColumnCommand.toZoneAwareExternalString`), anything else as stored.
+    async fn shown_stat_bound(
+        &self,
+        stored: Option<&str>,
+        data_type: &DataType,
+    ) -> Result<String, KrishivError> {
+        let Some(stored) = stored else {
+            return Ok("NULL".to_owned());
+        };
+        if *data_type != DataType::Timestamp {
+            return Ok(stored.to_owned());
+        }
+        let micros: i64 = stored
+            .parse()
+            .map_err(|_| unsupported("a timestamp statistic that is not a number"))?;
+        let query = format!(
+            "SELECT date_format(timestamp_micros({micros}), 'yyyy-MM-dd HH:mm:ss.SSSSSS Z')"
+        );
+        let batches = self.nested_query(&query).await?;
+        crate::column_stats::first_row_text(&batches)?
+            .into_iter()
+            .next()
+            .flatten()
+            .ok_or_else(|| unsupported("a timestamp statistic out of range"))
     }
 
     /// The `# Detailed Table Information` rows of `DESCRIBE EXTENDED|FORMATTED`.
@@ -1089,8 +1314,8 @@ impl Session {
             if let Some(c) = &t.comment {
                 rows.push(("Comment".to_owned(), c.clone()));
             }
-            rows.push(("View Text".to_owned(), view.sql.clone()));
-            rows.push(("View Original Text".to_owned(), view.sql.clone()));
+            rows.push(("View Text".to_owned(), view.written.clone()));
+            rows.push(("View Original Text".to_owned(), view.written.clone()));
             let enabled = crate::view_schema::binding_enabled(&self.state.conf.snapshot());
             let mode = crate::view_schema::effective_mode(view.schema_mode, enabled);
             if let Some(mode) = mode {
@@ -1383,6 +1608,10 @@ fn storage_rows(t: &CatalogTable, location: &std::path::Path) -> Vec<(String, St
     rows
 }
 
+/// The rows `partition_details` writes before `Partition Values`: a blank row, the
+/// `# Detailed Partition Information` header, `Database` and `Table`.
+const PARTITION_HEADER_ROWS: usize = 4;
+
 /// The rows `DESCRIBE EXTENDED ... PARTITION` adds (`describeFormattedDetailedPartitionInfo`).
 fn partition_details(t: &CatalogTable, p: &CatalogPartition) -> Vec<(String, String)> {
     let mut rows = vec![
@@ -1484,7 +1713,7 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
             out.push_str(&format!("WITH SCHEMA {}\n", mode.as_str()));
         }
         out.push_str("AS ");
-        out.push_str(&view.sql);
+        out.push_str(&view.written);
         out.push('\n');
         return Ok(out);
     }

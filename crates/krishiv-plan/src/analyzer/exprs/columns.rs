@@ -2,6 +2,7 @@
 //! Column and field resolution, and Spark's `UNRESOLVED_COLUMN`/`UNRESOLVED_FIELD` errors with their suggestions.
 
 use super::*;
+use crate::analyzer::VariableValue;
 
 /// `FIELD_NOT_FOUND` for a struct field `parts` names below a struct with
 /// `fields` (Spark's `GetStructField` by an unknown name, checked against
@@ -300,7 +301,35 @@ impl Resolver<'_> {
             }
             _ => None,
         };
-        for (i, level) in [Some(scope), extra, hidden].into_iter().enumerate() {
+        // Spark resolves lateral column aliases before it extracts a select-list generator, so a
+        // generated column is no input column yet: an earlier plain lateral alias of its name
+        // takes the name, and is ambiguous with an earlier generator's own single alias (those
+        // keep their generator qualifier in `cx.lateral`; a name list or none is no alias).
+        let mut lateral_first = false;
+        if let ([name], Some(lateral)) = (&c.name[..], cx.lateral) {
+            let cs = self.ctx.conf.case_sensitive;
+            let named = |a: &&Attr| same(&a.col.name, name, cs);
+            let generated = |a: &Attr| {
+                a.qual
+                    .iter()
+                    .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
+            };
+            let plain = lateral
+                .iter()
+                .filter(named)
+                .filter(|a| !generated(a))
+                .count();
+            if plain > 0
+                && scope.iter().filter(named).all(&generated)
+                && scope.iter().filter(named).any(&generated)
+            {
+                lateral_first = true;
+            }
+        }
+        for (i, level) in [(!lateral_first).then_some(scope), extra, hidden]
+            .into_iter()
+            .enumerate()
+        {
             let Some(level) = level else { continue };
             let lenient = cx.lenient && i == 0;
             match self.find(level, &c.name, origin, lenient) {
@@ -458,6 +487,58 @@ impl Resolver<'_> {
         // value as a typed literal, so no physical, executor or plan-codec
         // change is needed; the expression keeps the spelling it was
         // written with for names and errors.
+        // A nested value resolves from its constructor; `v.f` of a struct
+        // variable reads its field.
+        let nested = match self.ctx.variables.get(&c.name) {
+            Some(var) => match &var.value {
+                VariableValue::Nested(e) => Some((var, Arc::clone(e), c.name.len())),
+                VariableValue::Scalar(_) => None,
+            },
+            None => {
+                self.ctx
+                    .variables
+                    .get_struct_prefix(&c.name)
+                    .and_then(|(var, used)| match &var.value {
+                        VariableValue::Nested(e) => Some((var, Arc::clone(e), used)),
+                        // A NULL struct: its fields are NULLs of the declared type.
+                        VariableValue::Scalar(Literal::Null(_)) => {
+                            let null = Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None))));
+                            let typed = Arc::new(Expr::new(ExprNode::Cast {
+                                expr: null,
+                                to: var.data_type.clone(),
+                                mode: crate::CastMode::Default,
+                            }));
+                            Some((var, typed, used))
+                        }
+                        VariableValue::Scalar(_) => None,
+                    })
+            }
+        };
+        if let Some((var, ctor, used)) = nested {
+            let value = var.value.sql();
+            let mut e = ctor;
+            for field in &c.name[used..] {
+                e = Arc::new(
+                    Expr::new(ExprNode::Field {
+                        base: e,
+                        name: field.clone(),
+                    })
+                    .with_origin(origin),
+                );
+            }
+            let mut b = self.expr(&e, cx)?;
+            let (top, var_name) = (&c.name[c.name.len() - 1], &c.name[used - 1]);
+            let mut text = format!(
+                "variablereference(system.session.{}={})",
+                var_name.to_lowercase(),
+                value
+            );
+            for field in &c.name[used..] {
+                text = format!("{text}.{field}");
+            }
+            b.shown = Some(named_as(top, text, c, origin));
+            return Ok(b);
+        }
         if let Some(var) = self.ctx.variables.get(&c.name) {
             let Some(name) = c.name.last() else {
                 debug_assert!(false, "a variable name is never empty");
@@ -467,10 +548,18 @@ impl Resolver<'_> {
                 id: self.fresh(),
                 name: name.clone(),
                 data_type: var.data_type.clone(),
-                nullable: matches!(var.value, Literal::Null(_)),
+                nullable: matches!(var.value, VariableValue::Scalar(Literal::Null(_))),
             };
             return Ok(Bound {
-                expr: Arc::new(Expr::new(ExprNode::Literal(var.value.clone())).with_origin(origin)),
+                expr: Arc::new(
+                    Expr::new(ExprNode::Literal(
+                        var.value
+                            .as_literal()
+                            .cloned()
+                            .unwrap_or(Literal::Null(None)),
+                    ))
+                    .with_origin(origin),
+                ),
                 ty: column(&col),
                 agg: None,
                 win: None,
@@ -483,7 +572,7 @@ impl Resolver<'_> {
                     format!(
                         "variablereference(system.session.{}={})",
                         name.to_lowercase(),
-                        var.value
+                        var.value.sql()
                     ),
                     c,
                     origin,
@@ -674,7 +763,16 @@ impl Resolver<'_> {
                 ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => outer_column_name_of(&c.name),
                 ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
-                _ => format!("col{}", i + 1),
+                // A column written in the call names its field even when it
+                // binds to a value (a SQL function's parameter, `STRUCT(a, b)`).
+                _ => match f.args.get(i).map(|a| &a.node) {
+                    Some(ExprNode::Column(c)) => c
+                        .name
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| format!("col{}", i + 1)),
+                    _ => format!("col{}", i + 1),
+                },
             };
             names.push(name);
         }
@@ -914,6 +1012,13 @@ impl Resolver<'_> {
         let mut base = Arc::new(Expr::new(node).with_origin(origin));
         let mut parent = parts[used - 1].clone();
         for (i, part) in parts.iter().enumerate().skip(used) {
+            // `ExtractValue.applyOrNull`: a field of a `NULL` (`void`) base is `NULL`, and stays so below it.
+            if ty.data_type.is_none() {
+                base =
+                    Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(origin));
+                parent.clone_from(&parts[parts.len() - 1]);
+                break;
+            }
             // A map below the path: the rest are lookups (`m.a.b` is `m['a']['b']`).
             if matches!(ty.data_type, Some(DataType::Map(_))) {
                 let mut chain = Expr::clone(&base);

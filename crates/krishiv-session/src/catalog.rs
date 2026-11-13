@@ -46,8 +46,11 @@ use crate::cache::{RelationCache, is_cache_name};
 
 mod file_tables;
 mod ndv_sampling;
+mod scans;
+mod script_results;
 
-use self::file_tables::FileScanOf;
+use self::file_tables::{FileScanOf, reference_key};
+pub(crate) use self::scans::reads_stored_table;
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -79,6 +82,14 @@ pub(crate) enum TempTable {
         /// it lists its files without inferring a schema, and a table with
         /// no files is empty.
         known: bool,
+        /// An entry of the permanent catalog: only a reference to one takes read options of its
+        /// own (`FROM t WITH (..)`); Spark drops them for a temporary view.
+        permanent: bool,
+        /// A permanent table's partition columns and registered partitions
+        /// (`None` when they are not all at their default directories, so a
+        /// listing under the root cannot read them as Spark does). Empty
+        /// otherwise.
+        partitions: Option<krishiv_exec::files::KnownPartitions>,
     },
     /// A view over a query: the unresolved plan and the output columns it
     /// had when it was created (renamed when the view declares aliases).
@@ -94,6 +105,9 @@ pub(crate) enum TempTable {
         columns: Vec<TableColumn>,
         /// The hidden names this view pinned, owned by this view.
         pins: Vec<String>,
+        /// The query text of a view `CREATE TEMPORARY VIEW` made (`SHOW TABLE EXTENDED` prints it as
+        /// `View Text`); `None` for a DataFrame view.
+        text: Option<String>,
     },
 }
 
@@ -140,8 +154,10 @@ pub(crate) struct SessionCatalog {
     pub(crate) store: Arc<InMemoryCatalogStore>,
     /// Where managed tables live (the runtime's).
     pub(crate) warehouse: Arc<Warehouse>,
-    /// The namespace bare table names resolve in (`USE`).
-    current_namespace: RwLock<String>,
+    /// The current catalog (`USE system`; empty is `spark_catalog`) and the namespace bare
+    /// table names resolve in (`USE`; empty is the default), under one lock so a reader never
+    /// sees half of a `USE`.
+    position: RwLock<(String, String)>,
     /// The entries `SET PATH` stored; `None` is the default path.
     path: RwLock<Option<Vec<crate::sql_path::Entry>>>,
 }
@@ -156,8 +172,41 @@ impl SessionCatalog {
             hidden: AtomicU64::new(0),
             store,
             warehouse,
-            current_namespace: RwLock::default(),
+            position: RwLock::default(),
             path: RwLock::default(),
+        }
+    }
+
+    /// A catalog over the same permanent store and warehouse holding this
+    /// one's temporary tables and views, current catalog, namespace and
+    /// path; later changes to either do not reach the other. Script
+    /// results no copied view pins are left out: their frames belong to
+    /// this catalog's session.
+    pub(crate) fn copy(&self) -> Self {
+        let mut tables = self
+            .tables
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        script_results::leave_out(&mut tables);
+        let position = self
+            .position
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let path = self
+            .path
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Self {
+            tables: RwLock::new(tables),
+            epoch: AtomicU64::new(0),
+            hidden: AtomicU64::new(self.hidden.load(Ordering::Acquire)),
+            store: Arc::clone(&self.store),
+            warehouse: Arc::clone(&self.warehouse),
+            position: RwLock::new(position),
+            path: RwLock::new(path),
         }
     }
 
@@ -195,6 +244,7 @@ impl SessionCatalog {
                     plan,
                     columns,
                     pins,
+                    text: None,
                 }),
             ),
         );
@@ -202,8 +252,7 @@ impl SessionCatalog {
         self.epoch.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Removes every hidden entry no live view pins anymore. The caller
-    /// holds the write lock and bumps the epoch itself.
+    /// Removes the hidden entries nothing needs; the caller holds the write lock and bumps the epoch.
     fn collect_garbage(tables: &mut BTreeMap<String, (String, Arc<TempTable>)>) {
         let mut live = BTreeSet::new();
         for (_, table) in tables.values() {
@@ -211,7 +260,7 @@ impl SessionCatalog {
                 live.extend(pins.iter().cloned());
             }
         }
-        tables.retain(|key, _| !is_hidden_name(key) || live.contains(key));
+        script_results::retain(tables, &live);
     }
 
     /// Hands out the next hidden name snapshot pins use: no SQL text
@@ -265,15 +314,15 @@ impl SessionCatalog {
 
     /// The namespace bare table names resolve in.
     pub(crate) fn current_namespace(&self) -> String {
-        let ns = self
-            .current_namespace
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        if ns.is_empty() {
-            NAMESPACE.to_owned()
-        } else {
-            ns.clone()
-        }
+        self.position_pair().1
+    }
+
+    /// The current catalog's canonical name and namespace, read together.
+    pub(crate) fn position_pair(&self) -> (String, String) {
+        let p = self.position.read().unwrap_or_else(PoisonError::into_inner);
+        let catalog = if p.0.is_empty() { CATALOG } else { &p.0 };
+        let namespace = if p.1.is_empty() { NAMESPACE } else { &p.1 };
+        (catalog.to_owned(), namespace.to_owned())
     }
 
     /// The stored path entries, `None` for the default.
@@ -296,17 +345,55 @@ impl SessionCatalog {
         let entries = self
             .stored_path()
             .unwrap_or_else(|| crate::sql_path::default_entries(default_conf));
-        let namespace = self.current_namespace();
-        entries.iter().map(|e| e.parts(&namespace)).collect()
+        let current = self.current_position();
+        entries.iter().map(|e| e.parts(&current)).collect()
+    }
+
+    /// The current catalog and namespace as path parts: `[spark_catalog,
+    /// db]`, or `[system]`.
+    pub(crate) fn current_position(&self) -> Vec<String> {
+        let (catalog, namespace) = self.position_pair();
+        if crate::system::is_system(&catalog) {
+            vec![catalog]
+        } else {
+            vec![catalog, namespace]
+        }
+    }
+
+    /// The current catalog's canonical name.
+    pub(crate) fn current_catalog(&self) -> String {
+        self.position_pair().0
+    }
+
+    /// `USE <catalog>`: a no-op when `catalog` is current, else its default
+    /// namespace (the default database for `spark_catalog`, none for `system`).
+    pub(crate) fn use_catalog(&self, catalog: &str) {
+        {
+            let mut p = self
+                .position
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            let current = if p.0.is_empty() {
+                CATALOG
+            } else {
+                p.0.as_str()
+            };
+            if current == catalog {
+                return;
+            }
+            *p = (catalog.to_owned(), String::new());
+        }
+        self.epoch.fetch_add(1, Ordering::AcqRel);
     }
 
     /// `USE namespace`.
     pub(crate) fn use_namespace(&self, namespace: &str) {
         namespace.clone_into(
             &mut self
-                .current_namespace
+                .position
                 .write()
-                .unwrap_or_else(PoisonError::into_inner),
+                .unwrap_or_else(PoisonError::into_inner)
+                .1,
         );
         self.epoch.fetch_add(1, Ordering::AcqRel);
     }
@@ -362,6 +449,13 @@ enum FilesKey {
     /// A permanent table, by `namespace.table`.
     Table(String),
     Read(ReadSource),
+    /// A reference to a file table with read options of its own: the table's identity (and
+    /// whether its columns are known) plus the files read with the merged options.
+    Reference {
+        key: String,
+        known: bool,
+        source: ReadSource,
+    },
 }
 
 /// How a query opens the file tables of its scans.
@@ -395,10 +489,25 @@ pub(crate) struct QueryCatalog {
     epoch: u64,
     /// The current namespace (`USE`) as this query sees it.
     namespace: Vec<String>,
+    /// The current catalog (`USE system`) as this query sees it.
+    catalog: String,
     /// The SQL path (`SET PATH`) as this query sees it.
     path: Vec<Vec<String>>,
     /// What the `system` tables read.
     system: crate::system::Sources,
+    /// Which kinds of table the planned scans read: a `system.*` table, anything else. A query
+    /// that read only `system.*` tables skips admission (`reads_only_system`).
+    scanned: Scanned,
+    /// The estimate of the query's optimized plan, kept for the admission request when the
+    /// controller asked for one (`AdmissionController::uses_estimate`).
+    estimate: Mutex<Option<crate::explain::Estimate>>,
+}
+
+/// The kinds of table a query's scans read (set when each scan's provider is resolved).
+#[derive(Debug, Default)]
+struct Scanned {
+    system: std::sync::atomic::AtomicBool,
+    other: std::sync::atomic::AtomicBool,
 }
 
 impl QueryCatalog {
@@ -431,8 +540,14 @@ impl QueryCatalog {
         system: crate::system::Sources,
     ) -> Self {
         let epoch = session.epoch();
-        let namespace = vec![session.current_namespace()];
-        let path = session.sql_path(default_path);
+        // One read of the position, so the snapshot never mixes two `USE`s.
+        let (catalog, current_namespace) = session.position_pair();
+        let namespace = if crate::system::is_system(&catalog) {
+            Vec::new()
+        } else {
+            vec![current_namespace]
+        };
+        let path = session.sql_path_in(default_path, &catalog, &namespace);
         Self {
             session,
             cache,
@@ -443,9 +558,33 @@ impl QueryCatalog {
             opened: Mutex::new(Vec::new()),
             epoch,
             namespace,
+            catalog,
             path,
             system,
+            scanned: Scanned::default(),
+            estimate: Mutex::new(None),
         }
+    }
+
+    /// Whether the planned scans and `plan`'s leaves read `system.*` tables and nothing else
+    /// (`system::plan_reads_only_system`): such a query is never queued behind the load.
+    pub(crate) fn reads_only_system(&self, plan: &krishiv_exec::physical::PhysicalPlan) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        (self.scanned.system.load(SeqCst) && !self.scanned.other.load(SeqCst))
+            && crate::system::plan_reads_only_system(plan)
+    }
+
+    /// Keeps `estimate` for the query's admission request.
+    pub(crate) fn set_estimate(&self, estimate: crate::explain::Estimate) {
+        *self.estimate.lock().unwrap_or_else(PoisonError::into_inner) = Some(estimate);
+    }
+
+    /// The kept estimate, `None` when none was computed (unknown).
+    pub(crate) fn estimate(&self) -> Option<crate::explain::Estimate> {
+        self.estimate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Keeps the snapshot `table` for this query's scans of the hidden `name`.
@@ -574,7 +713,7 @@ impl QueryCatalog {
         let mut assigned: Vec<(ScanId, ScanSplitsKind)> = Vec::new();
         for scan in scans {
             match &scan.scan.source {
-                ReadSource::Table { name, .. } => {
+                ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
                     let Some(table) = self.loaded(last) else {
                         return Err(InternalError {
@@ -594,8 +733,26 @@ impl QueryCatalog {
                                 ));
                             }
                         }
-                        TempTable::Files { .. } => {
-                            let key = FilesKey::View(last.to_lowercase());
+                        TempTable::Files {
+                            source,
+                            known,
+                            permanent,
+                            ..
+                        } => {
+                            let key = if options.is_empty() {
+                                FilesKey::View(last.to_lowercase())
+                            } else {
+                                // The key `open_files` and the provider build: the entry's own.
+                                reference_key(
+                                    self.entry_of(name)
+                                        .map_or_else(|| last.to_lowercase(), |(k, _)| k),
+                                    *known,
+                                    *permanent,
+                                    source,
+                                    options,
+                                )
+                                .0
+                            };
                             let table = self.opened(&key).ok_or_else(|| InternalError {
                                 message: "a scan of files that was not opened before planning"
                                     .to_owned(),
@@ -734,44 +891,6 @@ async fn run_on<T: Send + 'static>(
     }
 }
 
-/// Whether the analyzed `plan` reads the permanent table `namespace.name` (directly, or through a view or a
-/// subquery): `INSERT OVERWRITE` of a table that is also read would delete what it reads.
-pub(crate) fn reads_stored_table(
-    plan: &LogicalPlan,
-    namespace: &str,
-    name: &str,
-    current: &str,
-) -> bool {
-    let mut scans = Vec::new();
-    collect_scans(plan, &mut scans);
-    scans.iter().any(|scan| {
-        let ReadSource::Table { name: parts, .. } = &scan.source else {
-            return false;
-        };
-        let (ns, table) = match parts.as_slice() {
-            [table] => (current, table),
-            [.., ns, table] => (ns.as_str(), table),
-            [] => return false,
-        };
-        ns.eq_ignore_ascii_case(namespace) && table.eq_ignore_ascii_case(name)
-    })
-}
-
-/// The scans of `plan` and of the subqueries in its expressions.
-fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
-    fn in_expr<'a>(e: &'a Arc<krishiv_plan::Expr>, out: &mut Vec<&'a Scan>) {
-        if let ExprNode::Subquery { plan, .. } = &e.node {
-            collect_scans(plan, out);
-        }
-        e.for_each_child(&mut |c| in_expr(c, out));
-    }
-    if let PlanNode::Scan(scan) = &plan.node {
-        out.push(scan);
-    }
-    plan.for_each_expr(&mut |e| in_expr(e, out));
-    plan.for_each_child(&mut |c| collect_scans(c, out));
-}
-
 /// The scans of the streaming pipeline of `root`: those a task splits.
 /// Joins contribute only their probe side and nodes only their streaming
 /// input; subquery plans and join builds read whole (no entry), so tasks
@@ -809,6 +928,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::Window { input, .. }
             | PhysNode::WindowGroupLimit { input, .. }
             | PhysNode::Aggregate { input, .. }
+            | PhysNode::PythonEval { input, .. }
             | PhysNode::WriteFiles { input, .. } => go(input, out),
             PhysNode::Exchange(e) => go(&e.input, out),
             PhysNode::HashJoin(join) => go(&join.probe, out),
@@ -892,6 +1012,8 @@ impl QueryCatalog {
             source: table_source(&table),
             columns: columns.clone(),
             known: true,
+            permanent: true,
+            partitions: file_tables::known_partitions(&table),
         });
         let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         // Keys are lower case whatever the session's case sensitivity: `entry_key` spells scans that way.
@@ -912,6 +1034,11 @@ impl QueryCatalog {
             version: None,
             kind: TableKind::Table,
             file_metadata: file_metadata(&table.provider),
+            column_comments: table
+                .columns
+                .iter()
+                .filter_map(|c| Some((c.name.clone(), c.comment.clone()?)))
+                .collect(),
         })
     }
 }
@@ -1014,6 +1141,7 @@ impl Catalog for QueryCatalog {
                 version: None,
                 kind,
                 file_metadata,
+                column_comments: BTreeMap::new(),
             }))
         })
     }
@@ -1025,7 +1153,7 @@ pub(crate) struct QueryCatalogs(pub(crate) Arc<QueryCatalog>);
 
 impl CatalogResolver for QueryCatalogs {
     fn current_catalog(&self) -> &str {
-        CATALOG
+        &self.0.catalog
     }
 
     fn current_namespace(&self) -> &[String] {
@@ -1038,7 +1166,7 @@ impl CatalogResolver for QueryCatalogs {
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
         if crate::system::is_system(name) {
-            return Some(Arc::new(crate::system::SystemCatalog::of(&self.0.system)));
+            return Some(Arc::new(self.0.system_catalog()));
         }
         name.eq_ignore_ascii_case(CATALOG)
             .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)
@@ -1051,6 +1179,13 @@ impl CatalogResolver for QueryCatalogs {
 
 impl TableProviderResolver for QueryCatalog {
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>, KrishivError> {
+        let kind = match &scan.source {
+            ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
+                &self.scanned.system
+            }
+            _ => &self.scanned.other,
+        };
+        kind.store(true, std::sync::atomic::Ordering::SeqCst);
         match &scan.source {
             ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
                 let table = name.last().map_or("", String::as_str);
@@ -1063,7 +1198,7 @@ impl TableProviderResolver for QueryCatalog {
                         .into()
                     })
             }
-            ReadSource::Table { name, .. } => {
+            ReadSource::Table { name, options } => {
                 let last = name.last().map_or("", String::as_str);
                 // Analysis loaded every table a scan names.
                 let Some(table) = self.loaded_for(name) else {
@@ -1087,15 +1222,18 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Memory { table, .. } => {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
-                    TempTable::Files { known, .. } => {
+                    TempTable::Files {
+                        known,
+                        permanent,
+                        source,
+                        ..
+                    } => {
                         let key = self
                             .entry_of(name)
                             .map_or_else(|| last.to_lowercase(), |(k, _)| k);
-                        self.files_provider(&if *known {
-                            FilesKey::Table(key)
-                        } else {
-                            FilesKey::View(key)
-                        })
+                        self.files_provider(
+                            &reference_key(key, *known, *permanent, source, options).0,
+                        )
                     }
                     // Views are inlined as subqueries before analysis, so
                     // no scan ever reads one.
@@ -1148,6 +1286,8 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) path: Vec<Vec<String>>,
     /// `spark.sql.legacy.viewSchemaBindingMode` of the query's snapshot: views read by their schema binding mode.
     pub(crate) binding_enabled: bool,
+    /// Whether `system` was the current catalog as the query snapshot saw it.
+    pub(crate) in_system: bool,
     /// Qualifies the bare routine calls of an expression written in a namespace under a frozen path
     /// (`None` when nothing changed): the calls of a stored view's query resolve where the view was
     /// created, not where it is read.
@@ -1225,424 +1365,6 @@ pub(crate) struct Expansion {
     /// The stored views inlined, inner views before the views that read them: their schema binding is checked
     /// against their analyzed queries (`view_schema::check_read`).
     pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
-}
-
-/// [`expand_temp_views`]: the views on the current expansion path, by
-/// lower-case name, for cycle detection.
-struct Expander<'a> {
-    catalog: &'a SessionCatalog,
-    case_sensitive: bool,
-    path: Vec<String>,
-    stored: Option<&'a StoredViews<'a>>,
-    /// Inside a stored view: the namespace its bare table names belong to.
-    view_namespace: Option<String>,
-    /// Inside a stored view: the SQL path frozen with it.
-    view_path: Option<Vec<Vec<String>>>,
-    /// The catalog-store lookups so far, in plan order, without repeats.
-    reads: Vec<ReadCandidate>,
-    /// The first failure inside a stored view's text, kept for [`Expansion::deferred`].
-    deferred: Option<KrishivError>,
-    /// The stored views inlined so far, for [`Expansion::stored_reads`].
-    stored_reads: Vec<crate::view_schema::StoredRead>,
-}
-
-impl Expander<'_> {
-    /// `plan` with its views inlined; `scope` holds the `WITH`
-    /// definitions visible where `plan` reads.
-    fn go(
-        &mut self,
-        plan: Arc<LogicalPlan>,
-        scope: &mut Vec<String>,
-    ) -> Result<Arc<LogicalPlan>, KrishivError> {
-        // Snapshot pins and cached snapshots are unreachable from user
-        // input however a read spells them: a read of one behaves exactly
-        // as a missing table, with or without read options. (The pins
-        // snapshot views read are scans, which pass through untouched
-        // below.)
-        if let PlanNode::Read(ReadSource::Table { name, .. }) = &plan.node
-            && let [view] = name.as_slice()
-            && !scope
-                .iter()
-                .any(|c| same_name(c, view, self.case_sensitive))
-            && is_reserved_view_name(view)
-        {
-            return Err(TableOrViewNotFound {
-                relation_name: quote(view),
-                search_path: search_path(),
-            }
-            .into());
-        }
-        // Inside a stored view a bare table name is the view's own namespace's, never a temporary view.
-        if let Some(namespace) = &self.view_namespace
-            && let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
-            && let [bare] = name.as_slice()
-            && !scope
-                .iter()
-                .any(|c| same_name(c, bare, self.case_sensitive))
-        {
-            // The first schema of the view's frozen path holding the name. A name no schema of a
-            // non-empty frozen path holds stays missing (the first schema reports it), never
-            // read from a namespace the path left out; a view without a catalog schema in its
-            // path reads its own namespace.
-            let namespace = self
-                .view_path
-                .as_deref()
-                .and_then(|path| {
-                    self.path_schema_of(path, bare).or_else(|| {
-                        path.iter().find_map(|entry| match entry.as_slice() {
-                            [c, n] if c.eq_ignore_ascii_case(CATALOG) => Some(n.clone()),
-                            _ => None,
-                        })
-                    })
-                })
-                .unwrap_or_else(|| namespace.clone());
-            let qualified = ReadSource::Table {
-                name: vec![namespace, bare.clone()],
-                options: options.clone(),
-            };
-            let plan =
-                Arc::new(LogicalPlan::new(PlanNode::Read(qualified)).with_origin(plan.origin));
-            return self.expand_stored(plan, scope);
-        }
-        if let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
-            && options.is_empty()
-        {
-            // A bare name (not shadowed by a `WITH` definition) is a temporary view; `global_temp.name`
-            // is a global one.
-            let found = match name.as_slice() {
-                [view]
-                    if !scope
-                        .iter()
-                        .any(|c| same_name(c, view, self.case_sensitive)) =>
-                {
-                    // (Hidden names are rejected above, before this view lookup.)
-                    Some((view.as_str(), self.catalog.get(view, self.case_sensitive)))
-                }
-                [namespace, view] if namespace.eq_ignore_ascii_case(GLOBAL_NAMESPACE) => Some((
-                    view.as_str(),
-                    self.catalog
-                        .get(&global_key(view), self.case_sensitive)
-                        .filter(|_| !is_reserved_view_name(view)),
-                )),
-                _ => None,
-            };
-            if let Some((view, Some(entry))) = found
-                && let TempTable::View {
-                    plan: definition,
-                    columns,
-                    ..
-                } = &*entry
-            {
-                // Debug-quoted parts keep the part boundaries: `a.b` (one part) and `a`.`b` differ.
-                let key = format!(
-                    "{:?}",
-                    name.iter().map(|p| p.to_lowercase()).collect::<Vec<_>>()
-                );
-                if self.path.contains(&key) {
-                    return Err(InternalError {
-                        message: format!("temporary view `{}` reads itself", name.join(".")),
-                    }
-                    .into());
-                }
-                self.path.push(key);
-                // A view's definitions are its own: outer `WITH` names do not
-                // reach into it.
-                let input = self.go(Arc::clone(definition), &mut Vec::new());
-                self.path.pop();
-                let columns = columns.iter().map(|c| c.name.clone()).collect();
-                return Ok(Arc::new(
-                    LogicalPlan::new(PlanNode::SubqueryAlias {
-                        input: input?,
-                        // A global view's qualifier is `global_temp.v`, two parts (see
-                        // `ALIAS_PART_SEP`).
-                        alias: if name.len() == 2 {
-                            format!("{GLOBAL_NAMESPACE}{ALIAS_PART_SEP}{view}")
-                        } else {
-                            view.to_owned()
-                        },
-                        columns,
-                    })
-                    .with_origin(plan.origin),
-                ));
-            }
-        }
-        if let PlanNode::WithCte { input, ctes } = &plan.node {
-            let (input, ctes) = (Arc::clone(input), ctes.clone());
-            return self.go_with_cte(plan.origin, input, ctes, scope);
-        }
-        let plan = self.children_and_exprs(plan, scope)?;
-        self.expand_stored(plan, scope)
-    }
-
-    /// The first schema of `path` (in the catalog store) holding the table or view `table`.
-    fn path_schema_of(&self, path: &[Vec<String>], table: &str) -> Option<String> {
-        path.iter().find_map(|entry| match entry.as_slice() {
-            [c, n] if c.eq_ignore_ascii_case(CATALOG) => {
-                let (n_key, t_key) = if self.case_sensitive {
-                    (n.clone(), table.to_owned())
-                } else {
-                    (n.to_lowercase(), table.to_lowercase())
-                };
-                self.catalog.store.table(&n_key, &t_key).map(|_| n.clone())
-            }
-            _ => None,
-        })
-    }
-
-    /// `plan`, or when it reads a stored view, that view's query as a subquery named for the view.
-    fn expand_stored(
-        &mut self,
-        plan: Arc<LogicalPlan>,
-        scope: &mut [String],
-    ) -> Result<Arc<LogicalPlan>, KrishivError> {
-        let Some(stored) = self.stored else {
-            return Ok(plan);
-        };
-        let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node else {
-            return Ok(plan);
-        };
-        if !options.is_empty()
-            || scope
-                .iter()
-                .any(|c| name.len() == 1 && same_name(c, &name[0], self.case_sensitive))
-        {
-            return Ok(plan);
-        }
-        // A bare name that is a temporary table or view never reaches a permanent view (Spark's resolution order).
-        if self.view_namespace.is_none()
-            && name.len() == 1
-            && self.catalog.exists(&name[0], self.case_sensitive)
-        {
-            return Ok(plan);
-        }
-        let (namespace, table) = match name.as_slice() {
-            [table] => {
-                // Outside a stored view, the first schema of the path holding the name; inside one,
-                // the view's own namespace.
-                let path = self.view_path.as_deref().unwrap_or(&stored.path);
-                let from_path = (self.view_namespace.is_none() || self.view_path.is_some())
-                    .then(|| self.path_schema_of(path, table))
-                    .flatten();
-                match (from_path, &self.view_namespace) {
-                    (Some(namespace), _) => (namespace, table),
-                    (None, Some(_)) => (stored.namespace.clone(), table),
-                    // No schema of the path holds the name: no view to inline.
-                    (None, None) => return Ok(plan),
-                }
-            }
-            [namespace, table] => (namespace.clone(), table),
-            [catalog, namespace, table] if catalog.eq_ignore_ascii_case(CATALOG) => {
-                (namespace.clone(), table)
-            }
-            _ => return Ok(plan),
-        };
-        let (namespace, table_key) = if self.case_sensitive {
-            (namespace, table.clone())
-        } else {
-            (namespace.to_lowercase(), table.to_lowercase())
-        };
-        let entry = self.catalog.store.table(&namespace, &table_key);
-        let candidate = ReadCandidate {
-            written: name.clone(),
-            view: entry
-                .as_ref()
-                .filter(|e| e.view.is_some())
-                .map(|e| (e.namespace.clone(), e.name.clone())),
-        };
-        if !self.reads.contains(&candidate) {
-            self.reads.push(candidate);
-        }
-        let Some(entry) = entry else {
-            return Ok(plan);
-        };
-        let Some(view) = &entry.view else {
-            return Ok(plan);
-        };
-        match self.inline_stored(&plan, &entry, view, &namespace, &table_key, scope) {
-            Ok(done) => Ok(done),
-            Err(e) => {
-                // Keep the read as it is; the failure is raised once the reads are authorized.
-                self.deferred.get_or_insert(e);
-                Ok(plan)
-            }
-        }
-    }
-
-    /// The query of the stored view `entry`, inlined for the read `plan`.
-    fn inline_stored(
-        &mut self,
-        plan: &Arc<LogicalPlan>,
-        entry: &Arc<CatalogTable>,
-        view: &ViewDef,
-        namespace: &str,
-        table_key: &str,
-        _scope: &mut [String],
-    ) -> Result<Arc<LogicalPlan>, KrishivError> {
-        let Some(stored) = self.stored else {
-            return Ok(Arc::clone(plan));
-        };
-        let table = match &plan.node {
-            PlanNode::Read(ReadSource::Table { name, .. }) => {
-                name.last().cloned().unwrap_or_default()
-            }
-            _ => return Ok(Arc::clone(plan)),
-        };
-        let key = format!("{namespace}.{table_key}");
-        if self.path.contains(&key) {
-            return Err(InternalError {
-                message: format!("view `{key}` reads itself"),
-            }
-            .into());
-        }
-        let statement =
-            krishiv_sql::parse_statement(&view.sql, &stored.parser).map_err(|e| e.error)?;
-        let krishiv_sql::ast::Statement::Query(query) = statement else {
-            return Err(InternalError {
-                message: format!("the text of view `{key}` is not a query"),
-            }
-            .into());
-        };
-        let lowered =
-            krishiv_sql::lower_with(&query, (stored.next_source)(), stored.parser.case_sensitive)
-                .map_err(|e| e.error)?;
-        self.path.push(key);
-        let previous = self.view_namespace.replace(view.namespace.clone());
-        let previous_path = self.view_path.replace(view.path.clone());
-        let input = self.go(Arc::clone(lowered.root()), &mut Vec::new());
-        self.view_namespace = previous;
-        self.view_path = previous_path;
-        self.path.pop();
-        let mut input = input?;
-        let mode = crate::view_schema::effective_mode(view.schema_mode, stored.binding_enabled);
-        self.stored_reads.push(crate::view_schema::StoredRead {
-            entry: Arc::clone(entry),
-            query: Arc::clone(&input),
-            mode,
-        });
-        let projection = crate::view_schema::projection(mode);
-        let mut columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
-        let unique = view
-            .query_columns
-            .iter()
-            .map(|c| c.to_lowercase())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len()
-            == view.query_columns.len();
-        if projection == crate::view_schema::ReadProjection::Output {
-            // `EVOLUTION`: the view is its query's output, whatever the stored schema says.
-            columns.clear();
-        } else if unique && view.query_columns.len() == columns.len() {
-            // The stored columns, by their query names: a base table that gained columns since does not change
-            // what the view returns. In their stored types (the binding check ran on the analyzed query), or in
-            // the query's types under `TYPE EVOLUTION`.
-            let exprs = view
-                .query_columns
-                .iter()
-                .zip(&entry.columns)
-                .map(|(q, c)| {
-                    // The name is one part: `col(q)` would split a dot or read a trailing `*`.
-                    let stored = crate::column::Column::new(Expr::new(ExprNode::Column(
-                        krishiv_plan::ColumnRef::new(vec![q.clone()]),
-                    )));
-                    let typed = if projection == crate::view_schema::ReadProjection::Cast {
-                        stored.cast_ansi(c.data_type.clone())
-                    } else {
-                        stored
-                    };
-                    Arc::new(typed.alias(&c.name).expr)
-                })
-                .collect();
-            input = Arc::new(
-                LogicalPlan::new(PlanNode::Project { input, exprs }).with_origin(plan.origin),
-            );
-        }
-        // Otherwise (a query that repeats a column name, or a column list of another length) the columns are only
-        // renamed by position: a repeated name cannot be cast, since `ColumnRef` has no ordinal. The binding check
-        // matches by name and ordinal as Spark does, so a type change under such a view is not cast here.
-        Ok(Arc::new(
-            LogicalPlan::new(PlanNode::SubqueryAlias {
-                input,
-                alias: table,
-                columns,
-            })
-            .with_origin(plan.origin),
-        ))
-    }
-
-    /// `WITH` query parts (of `origin`) with their views inlined: each
-    /// definition expands with only the preceding definitions in scope, as
-    /// in Spark, so a body still reads a view of its own name.
-    fn go_with_cte(
-        &mut self,
-        origin: Origin,
-        input: Arc<LogicalPlan>,
-        ctes: Vec<Cte>,
-        scope: &mut Vec<String>,
-    ) -> Result<Arc<LogicalPlan>, KrishivError> {
-        let outer = scope.len();
-        let mut expanded = Vec::with_capacity(ctes.len());
-        for cte in ctes {
-            let definition = self.go(Arc::clone(&cte.plan), scope)?;
-            scope.push(cte.name.clone());
-            expanded.push(Cte {
-                name: cte.name,
-                plan: definition,
-            });
-        }
-        let input = self.go(input, scope)?;
-        scope.truncate(outer);
-        Ok(Arc::new(
-            LogicalPlan::new(PlanNode::WithCte {
-                input,
-                ctes: expanded,
-            })
-            .with_origin(origin),
-        ))
-    }
-
-    /// `plan` with its child relations and the subquery plans in its
-    /// expressions expanded.
-    fn children_and_exprs(
-        &mut self,
-        plan: Arc<LogicalPlan>,
-        scope: &mut Vec<String>,
-    ) -> Result<Arc<LogicalPlan>, KrishivError> {
-        let plan = plan.map_children(|child| self.go(child, scope))?;
-        plan.map_expressions(|expr| self.expand_expr(expr, scope))
-    }
-
-    /// `expr` with the views read by the subquery plans inside it inlined.
-    fn expand_expr(
-        &mut self,
-        expr: Arc<Expr>,
-        scope: &mut Vec<String>,
-    ) -> Result<Arc<Expr>, KrishivError> {
-        let mut expr = expr.map_children(|child| self.expand_expr(child, scope))?;
-        // Inside a stored view the calls of its query resolve through the path it was created under.
-        if matches!(expr.node, ExprNode::Function(_))
-            && let (Some(qualify), Some(namespace), Some(path)) = (
-                self.stored.and_then(|s| s.qualify),
-                &self.view_namespace,
-                &self.view_path,
-            )
-            && let Some(next) = qualify(&expr, namespace, path)
-        {
-            expr = next;
-        }
-        if let ExprNode::Subquery { kind, plan } = &expr.node {
-            let expanded = self.go(Arc::clone(plan), scope)?;
-            if !Arc::ptr_eq(&expanded, plan) {
-                return Ok(Arc::new(Expr {
-                    node: ExprNode::Subquery {
-                        kind: kind.clone(),
-                        plan: expanded,
-                    },
-                    origin: expr.origin,
-                }));
-            }
-        }
-        Ok(expr)
-    }
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a
@@ -1882,7 +1604,7 @@ pub(crate) fn pin_temp_tables(
         owned: BTreeSet::new(),
         new_pins: Vec::new(),
     };
-    let plan = pinner.run(plan)?;
+    let plan = crate::run_site::detach_sources(pinner.run(plan)?);
     Ok((plan, pinner.owned.into_iter().collect(), pinner.new_pins))
 }
 
@@ -1999,904 +1721,7 @@ pub(crate) fn reserved_temp_view_name(name: &str) -> KrishivError {
 }
 
 #[cfg(test)]
-mod tests {
-    /// The scans of the streaming pipeline of `root`.
-    fn streaming_scans(root: &PhysNode) -> Vec<&krishiv_exec::physical::ScanNode> {
-        super::streaming_leaves(root).0
-    }
+mod tests;
 
-    use super::*;
-    use arrow_array::Array as _;
-    use arrow_array::{Int32Array, RecordBatch};
-    use arrow_schema::Field;
-    use arrow_schema::Schema;
-    use futures::executor::block_on;
-    use krishiv_common::error::ErrorClass;
-    use krishiv_types::DataType;
-
-    use crate::session::Session;
-
-    #[test]
-    fn work_runs_on_the_given_runtime_and_a_drop_aborts_it() {
-        let io = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("test-io")
-            .enable_all()
-            .build()
-            .unwrap();
-        let name = futures::executor::block_on(run_on(io.handle(), async {
-            Ok(std::thread::current().name().map(str::to_owned))
-        }))
-        .unwrap();
-        assert_eq!(name.as_deref(), Some("test-io"));
-        // Dropping the waiting future aborts a task that never finishes.
-        let (tx, rx) = std::sync::mpsc::channel::<()>();
-        let mut waiting = Box::pin(run_on(io.handle(), async move {
-            let _held = tx;
-            std::future::pending::<Result<(), KrishivError>>().await
-        }));
-        let waker = futures::task::noop_waker();
-        let _ = waiting
-            .as_mut()
-            .poll(&mut std::task::Context::from_waker(&waker));
-        drop(waiting);
-        assert_eq!(
-            rx.recv_timeout(std::time::Duration::from_secs(5)),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected),
-            "the aborted task must drop its sender"
-        );
-    }
-
-    fn files(col: &str) -> TempTable {
-        TempTable::Files {
-            known: false,
-            source: ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: vec![],
-                options: Default::default(),
-            },
-            columns: vec![TableColumn::new(col.to_owned(), DataType::Integer, false)],
-        }
-    }
-
-    fn first_column(t: &TempTable) -> &str {
-        match t {
-            TempTable::Files { columns, .. }
-            | TempTable::Memory { columns, .. }
-            | TempTable::View { columns, .. } => &columns[0].name,
-        }
-    }
-
-    #[test]
-    fn expanding_a_cycle_is_an_internal_error() {
-        // `CREATE TEMPORARY VIEW` rejects recursive views itself; the
-        // expansion guard stays for anything else that closes a cycle.
-        let session = SessionCatalog::default();
-        let view = |name: &str| TempTable::View {
-            plan: Arc::new(LogicalPlan::table([name])),
-            columns: Vec::new(),
-            pins: Vec::new(),
-        };
-        session.put("a", view("b"));
-        session.put("b", view("a"));
-        let plan = Arc::new(LogicalPlan::table(["a"]));
-        let e = expand_temp_views(&session, &plan, false).unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::InternalError);
-        assert!(e.message().contains("`a`"), "{e}");
-    }
-
-    #[test]
-    fn every_spelling_binds_the_table_loaded_first() {
-        let session = SessionCatalog::default();
-        session.put("people", files("a"));
-        let loaded = Mutex::new(HashMap::new());
-        let form = NameForm {
-            case_sensitive: false,
-            qualified: false,
-            temporary_only: false,
-        };
-        let t = resolve(&loaded, &session, "people", form).unwrap();
-        loaded.lock().unwrap().insert("people".to_owned(), t);
-        // Another thread replaces the table.
-        session.put("people", files("b"));
-        let again = resolve(&loaded, &session, "PEOPLE", form).unwrap();
-        assert_eq!(first_column(&again), "a");
-        // A case-sensitive spelling that is not registered does not resolve
-        // through the loaded entry.
-        let cs = NameForm {
-            case_sensitive: true,
-            ..form
-        };
-        assert!(resolve(&loaded, &session, "PEOPLE", cs).is_none());
-    }
-
-    /// A session with the memory table `t(id)` holding `values`.
-    fn int_session(values: Vec<i32>) -> Session {
-        let session = Session::new().unwrap();
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int32,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(values))],
-        )
-        .unwrap();
-        session.register_batches("t", schema, vec![batch]).unwrap();
-        session
-    }
-
-    /// The `id` column of `sql`, ordered.
-    fn select_ids(session: &Session, sql: &str) -> Vec<i32> {
-        let df = block_on(session.sql(sql)).unwrap();
-        let batches = block_on(df.collect()).unwrap();
-        let mut out = Vec::new();
-        for batch in &batches {
-            let ids = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            out.extend((0..batch.num_rows()).map(|i| ids.value(i)));
-        }
-        out.sort_unstable();
-        out
-    }
-
-    #[test]
-    fn view_creation_stores_pins_and_view_together() {
-        // The pins and the owning view insert in one critical section, so
-        // one epoch bump: no concurrent `put` or `drop_table` can collect
-        // a new pin before its view arrives.
-        let s = int_session(vec![1]);
-        let before = s.state.catalog.epoch();
-        block_on(s.table("t").create_or_replace_temp_view("v")).unwrap();
-        assert_eq!(s.state.catalog.epoch(), before + 1);
-        assert_eq!(s.state.catalog.entry_count(), 3);
-        assert_eq!(select_ids(&s, "SELECT id FROM v"), vec![1]);
-    }
-
-    #[test]
-    fn reregistering_a_snapshot_view_does_not_grow_the_catalog() {
-        let s = int_session(vec![1]);
-        block_on(s.table("t").create_or_replace_temp_view("v")).unwrap();
-        // The table, its pin and the view: replacing the view must not add
-        // to that.
-        assert_eq!(s.state.catalog.entry_count(), 3);
-        for _ in 0..100 {
-            block_on(s.table("t").create_or_replace_temp_view("v")).unwrap();
-        }
-        assert_eq!(s.state.catalog.entry_count(), 3);
-        assert_eq!(select_ids(&s, "SELECT id FROM v"), vec![1]);
-    }
-
-    #[test]
-    fn dropping_a_view_removes_the_pins_it_owned() {
-        let s = int_session(vec![1]);
-        block_on(s.table("t").create_or_replace_temp_view("v")).unwrap();
-        assert_eq!(s.state.catalog.entry_count(), 3);
-        block_on(s.sql("DROP VIEW v")).unwrap();
-        assert_eq!(s.state.catalog.entry_count(), 1);
-    }
-
-    #[test]
-    fn a_pin_shared_by_two_views_survives_dropping_one() {
-        let s = int_session(vec![1]);
-        block_on(s.table("t").create_or_replace_temp_view("v1")).unwrap();
-        // A view over a view reuses the pin instead of stacking a new one.
-        block_on(s.table("v1").create_or_replace_temp_view("v2")).unwrap();
-        assert_eq!(s.state.catalog.entry_count(), 4);
-        assert!(s.drop_temp_view("v1"));
-        assert_eq!(s.state.catalog.entry_count(), 3);
-        // The surviving view still reads the snapshot, however `t` changes.
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int32,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![99]))],
-        )
-        .unwrap();
-        s.register_batches("t", schema, vec![batch]).unwrap();
-        assert_eq!(select_ids(&s, "SELECT id FROM v2"), vec![1]);
-    }
-
-    #[test]
-    fn hidden_names_resolve_as_missing_tables() {
-        let s = int_session(vec![1]);
-        block_on(s.table("t").create_or_replace_temp_view("v")).unwrap();
-        // Exactly as a missing table: same class, state and message shape.
-        let missing = block_on(s.sql("SELECT * FROM nope")).unwrap_err();
-        assert_eq!(missing.error_class(), ErrorClass::TableOrViewNotFound);
-        let e = block_on(s.sql("SELECT * FROM `__krishiv_snapshot_0`")).unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
-        assert_eq!(e.sql_state(), missing.sql_state());
-        assert_eq!(
-            e.message().replace("`__krishiv_snapshot_0`", "`nope`"),
-            missing.message()
-        );
-        // Any letter case, quoted or not.
-        let e = block_on(s.sql("SELECT * FROM __KRISHIV_SNAPSHOT_0")).unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
-        // With read options too, while a pin of that name exists: the
-        // options do not reach the pinned snapshot.
-        let missing_options = block_on(s.sql("SELECT * FROM nope WITH ('a' = 'b')")).unwrap_err();
-        assert_eq!(
-            missing_options.error_class(),
-            ErrorClass::TableOrViewNotFound
-        );
-        let e = block_on(s.sql("SELECT * FROM __krishiv_snapshot_0 WITH ('a' = 'b')")).unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
-        assert_eq!(e.sql_state(), missing_options.sql_state());
-        assert_eq!(
-            e.message().replace("`__krishiv_snapshot_0`", "`nope`"),
-            missing_options.message()
-        );
-    }
-
-    #[test]
-    fn view_built_from_itself_reads_the_old_definition() {
-        let s = int_session(vec![1]);
-        block_on(s.table("t").create_or_replace_temp_view("t")).unwrap();
-        assert_eq!(select_ids(&s, "SELECT id FROM t"), vec![1]);
-        // Rebuilding the self-view reuses the pin instead of orphaning one.
-        block_on(s.table("t").create_or_replace_temp_view("t")).unwrap();
-        assert_eq!(select_ids(&s, "SELECT id FROM t"), vec![1]);
-        assert_eq!(s.state.catalog.entry_count(), 2);
-    }
-
-    #[test]
-    fn hidden_names_are_rejected_for_new_views_and_tables() {
-        let s = int_session(vec![1]);
-        let e = block_on(
-            s.table("t")
-                .create_or_replace_temp_view("__krishiv_snapshot_7"),
-        )
-        .unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::KrishivReservedTempViewName);
-        assert_eq!(e.error_class().name(), "KRISHIV_RESERVED_TEMP_VIEW_NAME");
-        assert_eq!(e.sql_state(), Some("42602"));
-        assert!(e.message().contains("`__krishiv_snapshot_`"), "{e}");
-        let e = block_on(s.sql("CREATE TEMP VIEW `__krishiv_snapshot_7` AS SELECT id FROM t"))
-            .unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::KrishivReservedTempViewName);
-        let e =
-            block_on(s.sql("CREATE OR REPLACE TEMP VIEW V__KRISHIV_SNAPSHOT_ AS SELECT id FROM t"));
-        // A name that merely contains the prefix is fine.
-        assert!(e.is_ok(), "{e:?}");
-        block_on(s.sql("DROP VIEW V__KRISHIV_SNAPSHOT_")).unwrap();
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int32,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![1]))],
-        )
-        .unwrap();
-        let e = s
-            .register_batches("__KRISHIV_SNAPSHOT_7", schema, vec![batch])
-            .unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::KrishivReservedTempViewName);
-    }
-
-    /// Writes `rows` `id` values to `path` as Parquet with row groups of at
-    /// most `row_group` rows.
-    fn write_parquet(path: &std::path::Path, rows: i32, row_group: usize) {
-        use parquet::arrow::ArrowWriter;
-        use parquet::file::properties::WriterProperties;
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int32,
-            false,
-        )]));
-        let props = WriterProperties::builder()
-            .set_max_row_group_row_count(Some(row_group))
-            .build();
-        let file = std::fs::File::create(path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
-        let mut at = 0;
-        while at < rows {
-            let take = (rows - at).min(50);
-            let batch = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int32Array::from(
-                    (at..at + take).collect::<Vec<_>>(),
-                ))],
-            )
-            .unwrap();
-            writer.write(&batch).unwrap();
-            at += take;
-        }
-        writer.close().unwrap();
-    }
-
-    /// The `id` column of `batches`, sorted.
-    fn ids_of(batches: &[RecordBatch]) -> Vec<i32> {
-        let mut out = Vec::new();
-        for batch in batches {
-            let ids = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            out.extend((0..batch.num_rows()).map(|i| ids.value(i)));
-        }
-        out.sort_unstable();
-        out
-    }
-
-    #[test]
-    fn task_specs_deal_file_scans_deterministically_and_cover_everything() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        write_parquet(&dir.path().join("a.parquet"), 500, 100);
-        write_parquet(&dir.path().join("b.parquet"), 300, 100);
-        let session = Session::builder()
-            // Small splits: every file is cut into several byte ranges.
-            .config("spark.sql.files.maxPartitionBytes", "1024")
-            .build()
-            .unwrap();
-        let df = session.read().parquet([dir.path().to_str().unwrap()]);
-        let analysis = rt.block_on(df.analysis()).unwrap();
-        let (_, physical) = rt
-            .block_on(session.physical(&analysis.analyzed, &analysis.env))
-            .unwrap();
-        let catalog = &analysis.env.catalog;
-        // The same listing and config give the same assignment, so a
-        // retried task reads the same splits.
-        let first = catalog.task_specs(&physical, 3, 3).unwrap();
-        let second = catalog.task_specs(&physical, 3, 3).unwrap();
-        assert_eq!(first, second);
-        assert_eq!(first.len(), 3);
-        // Every task's partitions are contiguous, and together the tasks
-        // cover every planned partition exactly once.
-        let mut indexes = Vec::new();
-        for task in &first {
-            assert_eq!(task.scans.len(), 1, "one scan: {task:?}");
-            let splits = task.scans.values().next().unwrap();
-            let krishiv_exec::physical::ScanSplits::Files { files, partitions } = splits else {
-                panic!("file splits: {splits:?}");
-            };
-            assert!(!files.is_empty());
-            let mut last: Option<usize> = None;
-            for part in partitions {
-                if let Some(previous) = last {
-                    assert_eq!(part.index, previous + 1, "contiguous: {partitions:?}");
-                }
-                last = Some(part.index);
-                indexes.push(part.index);
-            }
-        }
-        indexes.sort_unstable();
-        assert!(!indexes.is_empty(), "several splits");
-        assert_eq!(
-            indexes,
-            (0..indexes.len()).collect::<Vec<_>>(),
-            "every partition exactly once"
-        );
-        // The union of 1..=4 tasks is the single run, with no duplicates.
-        let whole = ids_of(&rt.block_on(df.collect()).unwrap());
-        assert_eq!(whole.len(), 800);
-        for tasks in 1..=4_usize {
-            let specs = catalog
-                .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
-                .unwrap();
-            assert_eq!(specs.len(), tasks);
-            let mut union = Vec::new();
-            for task in &specs {
-                union.extend(ids_of(
-                    &rt.block_on(session.run_task(&physical, &analysis.env, task))
-                        .unwrap(),
-                ));
-            }
-            union.sort_unstable();
-            assert_eq!(union, whole, "{tasks} tasks");
-        }
-    }
-
-    #[test]
-    fn task_specs_deal_a_view_over_files() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        write_parquet(&dir.path().join("a.parquet"), 500, 100);
-        write_parquet(&dir.path().join("b.parquet"), 300, 100);
-        let session = Session::builder()
-            // Small splits: every file is cut into several byte ranges.
-            .config("spark.sql.files.maxPartitionBytes", "1024")
-            .build()
-            .unwrap();
-        // A view over a files read keeps listing them: the scan names the
-        // view, and its splits come from the opened listing.
-        let files = session.read().parquet([dir.path().to_str().unwrap()]);
-        rt.block_on(files.create_or_replace_temp_view("pv"))
-            .unwrap();
-        let df = block_on(session.sql("SELECT id FROM pv")).unwrap();
-        let analysis = rt.block_on(df.analysis()).unwrap();
-        assert!(analysis.env.catalog.loaded_file_views());
-        let (_, physical) = rt
-            .block_on(session.physical(&analysis.analyzed, &analysis.env))
-            .unwrap();
-        let catalog = &analysis.env.catalog;
-        // The same listing and config give the same assignment, so a
-        // retried task reads the same splits.
-        let first = catalog.task_specs(&physical, 3, 3).unwrap();
-        let second = catalog.task_specs(&physical, 3, 3).unwrap();
-        assert_eq!(first, second);
-        assert_eq!(first.len(), 3);
-        // The union of 1..=3 tasks is the single run, with no duplicates:
-        // every task reads exactly its splits, never the whole view.
-        let whole = ids_of(&rt.block_on(df.collect()).unwrap());
-        assert_eq!(whole.len(), 800);
-        for tasks in 1..=3_usize {
-            let specs = catalog
-                .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
-                .unwrap();
-            assert_eq!(specs.len(), tasks);
-            let mut union = Vec::new();
-            for task in &specs {
-                assert_eq!(task.scans.len(), 1, "one scan: {task:?}");
-                union.extend(ids_of(
-                    &rt.block_on(session.run_task(&physical, &analysis.env, task))
-                        .unwrap(),
-                ));
-            }
-            union.sort_unstable();
-            assert_eq!(union, whole, "{tasks} tasks");
-        }
-    }
-
-    /// A streaming `Range` has no split assignment: one task is fine,
-    /// several would each emit the whole range, so they are refused.
-    #[test]
-    fn task_specs_refuse_a_range_across_several_tasks() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let session = Session::new().unwrap();
-        let df = session.range(0, 10, 1, None);
-        let analysis = rt.block_on(df.analysis()).unwrap();
-        let (_, physical) = rt
-            .block_on(session.physical(&analysis.analyzed, &analysis.env))
-            .unwrap();
-        assert_eq!(
-            analysis
-                .env
-                .catalog
-                .task_specs(&physical, 1, 1)
-                .unwrap()
-                .len(),
-            1
-        );
-        let e = analysis
-            .env
-            .catalog
-            .task_specs(&physical, 2, 2)
-            .unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    }
-
-    #[test]
-    fn a_file_changed_between_listing_and_reading_fails() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        write_parquet(&dir.path().join("a.parquet"), 200, 100);
-        let session = Session::builder()
-            .config("spark.sql.files.maxPartitionBytes", "4096")
-            .build()
-            .unwrap();
-        let df = session.read().parquet([dir.path().to_str().unwrap()]);
-        let analysis = rt.block_on(df.analysis()).unwrap();
-        let (_, physical) = rt
-            .block_on(session.physical(&analysis.analyzed, &analysis.env))
-            .unwrap();
-        let specs = analysis.env.catalog.task_specs(&physical, 1, 1).unwrap();
-        assert_eq!(specs.len(), 1);
-        // New bytes under an old name: the listed version is stale (the
-        // size differs too, so the failure does not depend on timestamp
-        // granularity).
-        write_parquet(&dir.path().join("a.parquet"), 10, 100);
-        let e = rt
-            .block_on(session.run_task(&physical, &analysis.env, &specs[0]))
-            .unwrap_err();
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::KrishivFileChangedDuringRead,
-            "{e}"
-        );
-    }
-
-    /// The `id` values of `sql` over `session`, sorted.
-    fn table_ids(session: &Session, sql: &str) -> Vec<i32> {
-        let df = block_on(session.sql(sql)).unwrap();
-        ids_of(&block_on(df.collect()).unwrap())
-    }
-
-    #[test]
-    fn task_specs_deal_memory_tables_and_release_them() {
-        use krishiv_exec::physical::TaskSpec;
-        let session = Session::new().unwrap();
-        let base = session.memory_reserved();
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int32,
-            false,
-        )]));
-        let batches_of = |values: Vec<i32>| {
-            values
-                .chunks(3)
-                .map(|chunk| {
-                    RecordBatch::try_new(
-                        Arc::clone(&schema),
-                        vec![Arc::new(Int32Array::from(chunk.to_vec()))],
-                    )
-                    .unwrap()
-                })
-                .collect::<Vec<_>>()
-        };
-        let values: Vec<i32> = (0..14).collect();
-        session
-            .register_batches("t", Arc::clone(&schema), batches_of(values.clone()))
-            .unwrap();
-        // The same data under another name shares its content hash.
-        session
-            .register_batches("u", Arc::clone(&schema), batches_of(values))
-            .unwrap();
-        session
-            .register_batches("v", Arc::clone(&schema), batches_of(vec![99]))
-            .unwrap();
-        let hash_of = |name: &str| {
-            let entry = session.state.catalog.get(name, false).unwrap();
-            let TempTable::Memory { table, .. } = &*entry else {
-                panic!("a memory table: {name}");
-            };
-            table.relation_lease().unwrap().hash()
-        };
-        assert_eq!(hash_of("t"), hash_of("u"), "same data, same hash");
-        assert_ne!(hash_of("t"), hash_of("v"), "different data, different hash");
-        assert_eq!(session.relations().len(), 2, "t and u share one entry");
-        assert!(
-            session.relations().reserved() > 0,
-            "the entries hold store bytes while leased"
-        );
-        // Holding tables never consumes the query pool's budget (tight
-        // spill tests register large tables): the store has its own pool.
-        assert_eq!(
-            session.memory_reserved(),
-            base,
-            "registration leaves the session pool alone"
-        );
-        // The union of 1..=4 tasks is the table, with no duplicates; the
-        // same listing gives the same assignment.
-        let df = session.table("t");
-        let analysis = block_on(df.analysis()).unwrap();
-        let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
-        let whole = table_ids(&session, "SELECT id FROM t");
-        assert_eq!(whole, (0..14).collect::<Vec<_>>());
-        for tasks in 1..=4_usize {
-            let catalog = &analysis.env.catalog;
-            let specs = catalog
-                .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
-                .unwrap();
-            assert_eq!(
-                specs,
-                catalog
-                    .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
-                    .unwrap(),
-                "deterministic"
-            );
-            assert_eq!(specs.len(), tasks);
-            let mut union = Vec::new();
-            for task in &specs {
-                assert_eq!(task.scans.len(), 1, "one scan: {task:?}");
-                union.extend(ids_of(
-                    &block_on(session.run_task(&physical, &analysis.env, task)).unwrap(),
-                ));
-            }
-            union.sort_unstable();
-            assert_eq!(union, whole, "{tasks} tasks");
-        }
-        // A scan without an entry reads the whole table, exactly as before.
-        let single = ids_of(
-            &block_on(session.run_task(&physical, &analysis.env, &TaskSpec::whole())).unwrap(),
-        );
-        assert_eq!(single, whole);
-        // The test's analysis holds a table lease through its loaded
-        // tables: release it before the tables are dropped.
-        drop(analysis);
-        drop(df);
-        // Dropping the tables releases their entries and their bytes.
-        assert!(session.drop_temp_view("t"));
-        assert_eq!(session.relations().len(), 2, "u still holds the entry");
-        assert!(session.drop_temp_view("u"));
-        assert_eq!(session.relations().len(), 1);
-        assert!(session.drop_temp_view("v"));
-        assert!(session.relations().is_empty());
-        assert_eq!(
-            session.relations().reserved(),
-            0,
-            "the last lease returns the bytes"
-        );
-        assert_eq!(
-            session.memory_reserved(),
-            base,
-            "queries and drops leave the session pool as it was"
-        );
-    }
-
-    #[test]
-    fn task_specs_splits_only_the_streaming_pipeline() {
-        // Broadcast builds and scalar subqueries read whole: tasks join
-        // probe shares against the full build and evaluate the subquery
-        // over its full input, so their union is the single run.
-        let session = Session::new().unwrap();
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int32,
-            false,
-        )]));
-        let batches_of = |values: Vec<i32>| {
-            values
-                .chunks(3)
-                .map(|chunk| {
-                    RecordBatch::try_new(
-                        Arc::clone(&schema),
-                        vec![Arc::new(Int32Array::from(chunk.to_vec()))],
-                    )
-                    .unwrap()
-                })
-                .collect::<Vec<_>>()
-        };
-        session
-            .register_batches("t", Arc::clone(&schema), batches_of((0..14).collect()))
-            .unwrap();
-        session
-            .register_batches("u", Arc::clone(&schema), batches_of((0..14).collect()))
-            .unwrap();
-        session
-            .register_batches("v", Arc::clone(&schema), batches_of(vec![5]))
-            .unwrap();
-        let sql = "SELECT t.id FROM t JOIN u ON t.id = u.id WHERE t.id > (SELECT max(id) FROM v)";
-        let whole = table_ids(&session, sql);
-        assert_eq!(whole, (6..14).collect::<Vec<_>>());
-        let df = block_on(session.sql(sql)).unwrap();
-        let analysis = block_on(df.analysis()).unwrap();
-        let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
-        // A shared plan runs in one task until it lowers to an exchange.
-        let shared = physical
-            .clone()
-            .with_shared(vec![krishiv_exec::physical::SharedPlan {
-                id: krishiv_exec::physical::SharedId(0),
-                plan: PhysNode::OneRow,
-                explain: krishiv_exec::planner::ExplainNode::leaf("OneRowRelation", ""),
-                deterministic: true,
-                ordered: false,
-            }])
-            .unwrap();
-        let e = analysis.env.catalog.task_specs(&shared, 2, 2).unwrap_err();
-        assert!(e.to_string().contains("a shared plan across"), "{e}");
-        assert_eq!(
-            analysis
-                .env
-                .catalog
-                .task_specs(&shared, 1, 1)
-                .unwrap()
-                .len(),
-            1
-        );
-        for tasks in [2_usize, 3_usize] {
-            let specs = analysis
-                .env
-                .catalog
-                .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
-                .unwrap();
-            assert_eq!(specs.len(), tasks);
-            // Only the streaming scan is dealt ranges; builds and the
-            // subquery's scan read whole (no entry).
-            let streaming = streaming_scans(physical.root());
-            assert_eq!(streaming.len(), 1, "one streaming scan");
-            for task in &specs {
-                assert_eq!(task.scans.len(), 1, "probe only: {task:?}");
-                assert!(
-                    task.scans.contains_key(&streaming[0].id),
-                    "the streaming scan: {task:?}"
-                );
-            }
-            let mut union = Vec::new();
-            for task in &specs {
-                union.extend(ids_of(
-                    &block_on(session.run_task(&physical, &analysis.env, task)).unwrap(),
-                ));
-            }
-            union.sort_unstable();
-            assert_eq!(union, whole, "{tasks} tasks");
-        }
-        drop(analysis);
-        drop(df);
-    }
-
-    #[test]
-    fn task_specs_rejects_no_tasks() {
-        let session = Session::new().unwrap();
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int32,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![1]))],
-        )
-        .unwrap();
-        session.register_batches("t", schema, vec![batch]).unwrap();
-        let df = session.table("t");
-        let analysis = block_on(df.analysis()).unwrap();
-        let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
-        let e = analysis
-            .env
-            .catalog
-            .task_specs(&physical, 0, 0)
-            .unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
-        // The analysis holds the old table through its loaded tables.
-        drop(analysis);
-        drop(df);
-        // Replacing the table releases the old entry: one entry either way.
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int32,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![2]))],
-        )
-        .unwrap();
-        session.register_batches("t", schema, vec![batch]).unwrap();
-        assert_eq!(session.relations().len(), 1);
-        assert_eq!(table_ids(&session, "SELECT id FROM t"), [2]);
-    }
-
-    /// A scan plan over `source`: what `task_specs` deals splits for.
-    fn split_scan_plan(source: ReadSource) -> PhysicalPlan {
-        use krishiv_exec::RowStageSettings;
-        use krishiv_exec::physical::{ExprEnv, ScanNode};
-        use krishiv_exec::planner::ExplainNode;
-        use krishiv_io::ColumnPath;
-        use krishiv_plan::{AttrId, BoundColumn};
-
-        let scan = Scan {
-            source,
-            output: vec![BoundColumn {
-                id: AttrId(1),
-                name: "id".to_owned(),
-                data_type: DataType::Integer,
-                nullable: true,
-            }],
-            version: None,
-        };
-        PhysicalPlan::new(
-            PhysNode::Scan(ScanNode {
-                id: ScanId(1),
-                scan,
-                projection: vec![ColumnPath::new("id")],
-                filter: None,
-                runtime_filters: Vec::new(),
-                row_stage: RowStageSettings::default(),
-                row_id: false,
-            }),
-            Arc::new(Schema::new(vec![Field::new(
-                "id",
-                arrow_schema::DataType::Int32,
-                true,
-            )])),
-            ExplainNode::leaf("Scan", ""),
-            ExprEnv {
-                ansi: true,
-                legacy_statistical_aggregate: false,
-                zone: None,
-                zone_name: None,
-                query_start_micros: 0,
-                user: Arc::from("u"),
-                map_key_dedup_last_win: false,
-                legacy_java_charsets: false,
-                legacy_coding_error_action: false,
-                legacy_time_parser: false,
-            },
-        )
-    }
-
-    /// A table scan source over `name`.
-    fn table_source(name: &str) -> ReadSource {
-        ReadSource::Table {
-            name: vec![
-                "spark_catalog".to_owned(),
-                "default".to_owned(),
-                name.to_owned(),
-            ],
-            options: BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn task_specs_rejects_what_it_cannot_split() {
-        let session = Session::new().unwrap();
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int32,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![1]))],
-        )
-        .unwrap();
-        session.register_batches("t", schema, vec![batch]).unwrap();
-        block_on(session.sql("CREATE TEMPORARY VIEW w AS SELECT 1 AS id")).unwrap();
-        // The analysis references the view (inlined afterwards), so the
-        // catalog holds its entry while no scan names it.
-        let df = block_on(session.sql("SELECT id FROM w")).unwrap();
-        let analysis = block_on(df.analysis()).unwrap();
-        let catalog = &analysis.env.catalog;
-        // The view's own entry, as an analysis that kept it would hold
-        // it: a view reaching split planning was not inlined.
-        let view = session.state.catalog.get("w", false).unwrap();
-        catalog.loaded.lock().unwrap().insert("w".to_owned(), view);
-
-        // A scan of a table the analysis never loaded.
-        let e = catalog
-            .task_specs(&split_scan_plan(table_source("nope")), 2, 2)
-            .unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
-        assert!(e.to_string().contains("was not loaded"), "{e}");
-
-        // A scan of a temporary view: views inline during analysis, so a
-        // view reaching split planning is a coordinator bug.
-        let e = catalog
-            .task_specs(&split_scan_plan(table_source("w")), 2, 2)
-            .unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
-        assert!(e.to_string().contains("was not inlined"), "{e}");
-
-        // A scan of files that were never opened.
-        let e = catalog
-            .task_specs(
-                &split_scan_plan(ReadSource::Files {
-                    format: "parquet".to_owned(),
-                    paths: Vec::new(),
-                    options: BTreeMap::new(),
-                }),
-                2,
-                2,
-            )
-            .unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
-        assert!(e.to_string().contains("not opened"), "{e}");
-
-        // More tasks than a `u32` holds: rejected before anything is dealt.
-        let e = catalog
-            .task_specs(
-                &split_scan_plan(table_source("t")),
-                usize::try_from(u32::MAX).unwrap() + 1,
-                1,
-            )
-            .unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
-        drop(analysis);
-        drop(df);
-    }
-}
+mod expand;
+use expand::*;

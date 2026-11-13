@@ -159,7 +159,38 @@ impl Resolver<'_> {
                 // An unknown name is `UNRESOLVED_COLUMN`, as in Spark: only
                 // an expression that resolves but cannot be folded is
                 // `CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE`.
-                let b = self.bind(cell, &cx)?;
+                let b = match self.bind(cell, &cx) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        // A name of an enclosing query resolves there, but the table's
+                        // cells cannot read it: `CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE`.
+                        if !env.outer.is_empty() {
+                            cx.outer = true;
+                            if let Ok(b) = self.bind(cell, &cx) {
+                                let mut text = pretty(&b.shown(), self.ctx.conf.session_zone);
+                                if let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) =
+                                    &b.expr.node
+                                    && let Some(a) = env
+                                        .outer
+                                        .iter()
+                                        .flat_map(|l| l.scope.iter())
+                                        .find(|a| a.col.id == c.id)
+                                {
+                                    let q = a.qual.join(".");
+                                    let dot = if q.is_empty() { "" } else { "." };
+                                    text = format!("outer({q}{dot}{})", c.name);
+                                }
+                                return Err(AnalysisError::new(
+                                    InvalidInlineTableCannotEvaluateExpressionInInlineTable {
+                                        expr: format!("\"{text}\""),
+                                    },
+                                    b.expr.origin,
+                                ));
+                            }
+                        }
+                        return Err(e);
+                    }
+                };
                 self.check_inline_bound(&b)?;
                 // Spark evaluates each cell while resolving the table: a
                 // cell that raises is `FAILED_SQL_EXPRESSION_EVALUATION`.
@@ -817,6 +848,9 @@ impl Resolver<'_> {
                 nullable: a.col.nullable,
             };
             let output = self.attr(&a.col.name, &ty);
+            // A repeated column keeps its comment and declared `CHAR`/`VARCHAR` type (Spark 4.2.0:
+            // `column-comments/probe5.out`).
+            self.carry_column_meta(a.col.id, output.id);
             exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
                     expr: column,

@@ -104,10 +104,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Runner health. Slices of 3-5 hours have repeatedly ended with "The hosted runner lost
-      # communication with the server" or a shutdown signal, with no sign of why in the log. Free
-      # the preinstalled tooling the job never uses (as coverage.yml and nightly.yml do) and log
-      # memory, disk and the target directory every five minutes, so the next loss leaves its cause.
+      # Runner health. Slices of 1-5 hours have repeatedly ended "The operation was canceled", "The
+      # hosted runner lost communication with the server" or with a shutdown signal, with no sign of
+      # why in the log; the five-minute samples of 2026-11-05 showed memory and disk healthy right up
+      # to the loss, so the cause is a spike (a runaway mutant), not a trend. Free the preinstalled
+      # tooling the job never uses (as coverage.yml and nightly.yml do), log memory, disk and the
+      # target directory every five minutes, and run a memory guard (below).
       - name: Free runner disk
         run: |
           df -h /
@@ -118,7 +120,7 @@ jobs:
           df -h /
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-mutants@27.1.0,cargo-nextest@0.9.148
       # `--in-place`: the runner is disposable. cargo-mutants refuses it with
@@ -152,9 +154,14 @@ jobs:
               echo "::notice::heartbeat $(date -u +%T) $(free -m | awk 'NR==2{print "mem used/avail MB " $3 "/" $7}') $(df -h / | awk 'NR==2{print "disk avail " $4}') target=$(du -sh target 2>/dev/null | cut -f1)"
             done ) &
           heartbeat=$!
+          # A runaway mutant (an unbounded allocation) froze the whole runner between two heartbeats on
+          # 2026-11-05 while memory and disk looked healthy at every sample: kill its test binary
+          # instead, and say which (the mutant then counts as caught).
+          bash .github/scripts/mutants-memory-guard.sh "$PWD" 3072 1 &
+          guard=$!
           rc=0
           cargo mutants "${args[@]}" -- --locked || rc=$?
-          kill "$heartbeat" 2>/dev/null || true
+          kill "$heartbeat" "$guard" 2>/dev/null || true
           case "$rc" in 0|2|3) ;; *) exit "$rc" ;; esac
       - name: Missed mutants
         if: always()

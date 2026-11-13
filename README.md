@@ -29,7 +29,7 @@ and Spark SQL you already write, and run it on a vectorized, Arrow-native engine
 laptop, and take the same code to a single server or a cluster.
 
 > [!WARNING]
-> **Alpha (`0.2.0-alpha`): the embedded core runs, the rest is being built.** You can run SQL and DataFrames
+> **Alpha (`0.2.0`): the embedded core runs, the rest is being built.** You can run SQL and DataFrames
 > in-process from Python today (see the [Quickstart](#quickstart)); there is no stable API yet, and nothing has been
 > published to PyPI or crates.io. The sections after the Quickstart describe what we are building, not what exists
 > today.
@@ -37,6 +37,28 @@ laptop, and take the same code to a single server or a cluster.
 <p align="center">
   <b>⭐ Star the repo and 👀 Watch → Custom → Releases to follow development from the first commit to 1.0.</b>
 </p>
+
+## 30 seconds
+
+Needs Python 3.11 or newer. Nothing is on PyPI yet, so build the wheel from this repository first
+([python/README.md](python/README.md)) and install it with the `pyarrow` extra (`.show()` needs it). These two
+lines are taken from the [Quickstart](#quickstart), which CI runs in the `wheels` job (skipped for docs-only PRs and merge-queue runs, so a README-only edit is not run; this copy is not run itself).
+
+```python
+import krishiv
+
+spark = krishiv.session()  # a PySpark-style SparkSession, in process: no server, no JVM
+spark.sql("SELECT 1 AS answer").show()
+```
+
+## Benchmarks
+
+<!-- benchmark-chart:placeholder
+Replace this block with the chart when the numbers are final: method and numbers only, with the command that
+reproduces them (bench/README.md). Until then no figure is claimed. -->
+
+Numbers will be published here with the method and the command that reproduces them. Until they are final, the
+repository makes no performance claim; the harness and its method are in [bench/README.md](bench/README.md).
 
 ## Why Krishiv
 
@@ -96,7 +118,7 @@ musllinux compat build is provided:
 
 ## Status and roadmap at a glance
 
-Krishiv is at **`0.2.0-alpha`**. The embedded core (in-process batch SQL and DataFrames over Arrow, from Python) runs;
+Krishiv is at **`0.2.0`**. The embedded core (in-process batch SQL and DataFrames over Arrow, from Python) runs;
 streaming, incremental views, Spark Connect and distributed execution are still being built.
 
 | Milestone | Focus | Status |

@@ -130,11 +130,12 @@ impl Session {
             env0.parser.double_quoted_identifiers,
         )?;
         // The text of a dynamic statement does not see a running script's locals.
-        let (bound, identifier_spans) = self
+        let substituted = self
             .with_locals(Vec::new())
             .substitute_identifier_clauses(&bound, &env0.parser)
             .await?;
-        let bound = bound.into_owned();
+        let (identifier_spans, identifier_written) = (substituted.spans, substituted.written);
+        let bound = substituted.text.into_owned();
         let inner_text = krishiv_sql::redact_sql(&bound);
         let env = self.query_env();
         let statement = krishiv_sql::parse_statement(&bound, &env.parser)
@@ -175,6 +176,7 @@ impl Session {
                 let plain = self.with_locals(Vec::new());
                 let mut env = plain.query_env();
                 env.identifier_spans = identifier_spans.into();
+                env.identifier_written = identifier_written.into();
                 plain.authorize_statement(&statement, class, &env).await?;
                 Box::pin(plain.run_statement(statement, env, &bound, &inner_text)).await?
             }
@@ -284,7 +286,7 @@ impl Session {
                 key,
                 StoredVariable {
                     data_type: var.data_type,
-                    value,
+                    value: value.into(),
                     default_query: var.default_query,
                 },
             );

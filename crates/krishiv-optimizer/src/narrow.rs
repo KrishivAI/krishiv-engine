@@ -17,7 +17,7 @@ use std::collections::HashSet;
 
 use krishiv_plan::{AttrId, Builtin, Expr, ExprNode, Literal, ResolvedExpr};
 
-use crate::expr::builtin;
+use crate::expr::{builtin, has_subquery, is_deterministic, references};
 use crate::stats::{AttrStats, DEFAULT_SELECTIVITY, RelStats, number, to_f64};
 
 /// The columns of a relation as a predicate sees them: the base estimates
@@ -213,6 +213,18 @@ fn equality(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
         v.column(b).map(|(i, c)| (i, c.clone())),
     );
     match (x, y) {
+        // `a = a` keeps every non-NULL row (`a <=> a` every row): it is
+        // `isnotnull(a)`, not a join of two columns. Estimated as one, an
+        // inferred `a = a` made its input look `1 / NDV` as large on the
+        // next optimization, which then chose the other build side.
+        (Some((i, ci)), Some((j, _))) if i == j => {
+            if op == Builtin::Eq {
+                v.update(i, |c| c.null_frac = 0.0);
+                1.0 - ci.null_frac
+            } else {
+                1.0
+            }
+        }
         (Some((i, ci)), Some((j, cj))) => {
             // `1 / max(NDV)`; a count that is only the default guess is
             // read as the rows (T166 design note, section 2): only
@@ -237,8 +249,30 @@ fn equality(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
             match literal(other).filter(|l| !matches!(l, Literal::Null(_))) {
                 None if literal(other).is_some() => DEFAULT_SELECTIVITY,
                 None => {
-                    if c.ndv_known() {
-                        1.0 / c.ndv
+                    // `col = <one value>`: an uncorrelated subquery (an
+                    // expression over one that reads no column and is
+                    // deterministic; scalar in practice, an uncorrelated
+                    // EXISTS or IN is one value too). One value selects `rows / ndv` rows,
+                    // and a guessed count is read as the rows (T166 section
+                    // 2's rule for `col = col`, extended: study 26, E10), so
+                    // an aggregate output compared with `(SELECT max(..))`
+                    // keeps about one row, not a fifth. A constant (folded
+                    // to a literal in an optimized plan) keeps T166's
+                    // default, and another expression (`a = b + 1`) divides
+                    // only by a known count.
+                    let one_value = one_value(other);
+                    if one_value {
+                        // `<=>` with a NULL result keeps the NULL rows, as
+                        // the `col = col` arm keeps them for `<=>`.
+                        v.update(id, |c| {
+                            c.ndv = 1.0;
+                            if op == Builtin::Eq {
+                                c.null_frac = 0.0;
+                            }
+                        });
+                    }
+                    if c.ndv_known() || one_value {
+                        1.0 / c.ndv.max(1.0)
                     } else {
                         DEFAULT_SELECTIVITY
                     }
@@ -289,6 +323,14 @@ fn compare(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
         (a, b, op)
     } else if v.column(b).is_some() && literal(a).is_some() {
         (b, a, flip(op))
+    } else if let (Some((i, c)), Some((j, _))) = (v.column(a), v.column(b))
+        && i == j
+        && matches!(op, Builtin::LtEq | Builtin::GtEq)
+    {
+        // `a <= a`, `a >= a`: every non-NULL row, as `isnotnull(a)`.
+        let kept = 1.0 - c.null_frac;
+        v.update(i, |c| c.null_frac = 0.0);
+        return kept;
     } else {
         // Two columns (or something else): every comparison rejects NULL.
         for e in [a, b] {
@@ -341,6 +383,13 @@ fn between(x: &Expr, lo: &Expr, hi: &Expr, v: &mut View<'_>) -> f64 {
     sel
 }
 
+/// An uncorrelated subquery, or an expression over one, that reads no
+/// column and is deterministic: one value per query (scalar in practice;
+/// an uncorrelated EXISTS or IN is one value too).
+fn one_value(e: &Expr) -> bool {
+    has_subquery(e) && references(e).is_empty() && is_deterministic(e)
+}
+
 /// `x IN (list)`.
 fn in_list(x: &Expr, list: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
     let Some((id, c)) = v.column(x).map(|(i, c)| (i, c.clone())) else {
@@ -356,15 +405,38 @@ fn in_list(x: &Expr, list: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
             .collect::<std::collections::HashSet<_>>()
             .len()
     });
-    let k = to_f64(u64::try_from(distinct.unwrap_or(list.len())).unwrap_or(u64::MAX));
-    let sel = if c.ndv_known() {
-        (k / c.ndv).min(1.0)
+    // A list of one values with a subquery among them (`IN (5, (SELECT
+    // max(..)))`; each element reads no column and is deterministic): at
+    // most `k` values, so a guessed count is read as the rows, as
+    // `col = <one value>` reads it (E10's follow-up). A list of constants
+    // only keeps T166's default over a guessed count. Not `one_value` per
+    // element: a constant element (a folded or cast literal) has no
+    // subquery, and one subquery in the list is enough. A NULL literal or a
+    // repeated subquery counts as a value, so `k` can only overcount.
+    let values = (distinct.is_none()
+        && list.iter().any(|e| has_subquery(e))
+        && list
+            .iter()
+            .all(|e| references(e).is_empty() && is_deterministic(e)))
+    .then(|| {
+        let subqueries = list.iter().filter(|e| literal(e).is_none()).count();
+        let literals = list
+            .iter()
+            .filter_map(|e| literal(e))
+            .map(|x| format!("{x:?}"))
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        literals + subqueries
+    });
+    let k = to_f64(u64::try_from(distinct.or(values).unwrap_or(list.len())).unwrap_or(u64::MAX));
+    let sel = if c.ndv_known() || values.is_some() {
+        (k / c.ndv.max(1.0)).min(1.0)
     } else {
         DEFAULT_SELECTIVITY
     };
     v.update(id, |c| {
         c.null_frac = 0.0;
-        if distinct.is_some() {
+        if distinct.is_some() || values.is_some() {
             c.ndv = c.ndv.min(k).max(1.0);
         }
         if let Some(n) = numbers {

@@ -11,6 +11,7 @@
 )]
 
 mod broadcast_reuse;
+mod build_projection;
 mod conditionals;
 mod correlated_or;
 mod cse;
@@ -19,6 +20,7 @@ mod eager_aggregate;
 mod exchanges;
 mod existence;
 mod folding;
+mod fused_probe;
 mod group_limit;
 mod hints;
 mod late_fetch;
@@ -30,6 +32,7 @@ mod plan_stats;
 mod runtime_filters;
 mod scan_row_drop;
 mod semantics;
+mod share_subtree;
 mod shared;
 mod splits;
 mod string_encoding;
@@ -39,6 +42,7 @@ mod tpch;
 mod two_phase;
 mod union;
 mod union_order;
+mod win_magic;
 mod window;
 mod write;
 

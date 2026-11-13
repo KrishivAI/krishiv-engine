@@ -3,10 +3,15 @@
 //! re-planned as a whole.
 //!
 //! Its inputs and the conjuncts of its conditions form a query (hyper)graph.
-//! With up to [`DP_LIMIT`] inputs, dynamic programming over connected
-//! subsets finds the order with the fewest intermediate rows (`C_out`);
-//! above it, a greedy pass repeatedly joins the connected pair with the
-//! smallest result. Only connected subsets are joined, so no cross product
+//! With up to [`DP_LIMIT`] inputs (the default limit), dynamic programming
+//! over connected subsets finds the order with the fewest intermediate rows
+//! (`C_out`; [`dp::dpsub`], which P2-T113 kept over DPhyp); above it, a
+//! greedy pass repeatedly joins the connected pair with the smallest result. Session
+//! configuration `krishiv.optimizer.joinEnumerator` can choose `greedy` for
+//! every tree, and `krishiv.optimizer.joinDpLimit` moves the limit. Both
+//! plan the same tree with the same costs, so they differ only in which
+//! orders they consider; each planned tree is described in `EXPLAIN
+//! VERBOSE` ([`TreeStats`]). Only connected subsets are joined, so no cross product
 //! is planned unless the query itself has one (then its connected parts
 //! are joined last, smallest first). Each conjunct sits at the lowest join
 //! that has its inputs; the larger input of each join is on the left, the
@@ -33,30 +38,184 @@ use krishiv_types::DataType;
 
 use crate::estimate::Estimator;
 use crate::expr::{
-    Attrs, and_all, builtin, call, column, common_equalities, conjuncts, has_subquery, implied,
-    is_deterministic, references, substitute,
+    Attrs, Classes, and_all, call, column, common_equalities, conjuncts, equality, has_subquery,
+    implied, is_deterministic, references, substitute,
 };
 use crate::narrow::{conjunct_selectivities, equi_columns, selectivity};
 use crate::stats::{RelStats, Statistics, cse_definitions, reads_cse, resolve_cse};
 
+mod dp;
+mod reads;
+
 /// An original relation (kept alive) and its rewrite.
 type Rewritten = (Arc<LogicalPlan>, Arc<LogicalPlan>);
 
-/// The most join inputs planned exactly; larger trees are planned greedily.
+/// The default of the most join inputs planned exactly (`krishiv.optimizer.joinDpLimit`); larger trees
+/// are planned greedily.
 pub const DP_LIMIT: usize = 10;
 
-/// `root` with every inner-join tree reordered.
+/// The highest `krishiv.optimizer.joinDpLimit` honoured: `dpsub` considers
+/// about 3^n splits.
+pub(crate) const MAX_DP_LIMIT: usize = 14;
+
+/// What a row costs beyond its columns' widths when trees are costed by
+/// bytes: a hash join build keeps about 40-50 B per row besides its data
+/// (hash, key row, offsets, chain, index; study `08-x3-build-bytes-step1.md`:
+/// steady plus index 67 B/row for q10's 16 B orders build, 114 for q09's
+/// 74 B lineitem build at SF10), so many narrow rows are not cheap.
+const ROW_BYTES: f64 = 48.0;
+
+/// Costed by bytes, the input with fewer rows stays a join's build unless
+/// it holds more than this many times the other's bytes: the factor the
+/// physical planner's build-side choice uses for estimates from statistics
+/// (`krishiv-exec` `orient.rs` `STATS_FACTOR`), so an estimate's error does
+/// not flip a build for a small difference in width.
+const BUILD_BYTES_FACTOR: f64 = 2.0;
+
+/// How each inner-join tree is enumerated (`krishiv.optimizer.joinEnumerator`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Enumerator {
+    /// Every split of every subset, up to the limit; greedy above it.
+    DpSub,
+    /// Always greedy.
+    Greedy,
+}
+
+impl Enumerator {
+    /// The configuration value naming it.
+    fn name(self) -> &'static str {
+        match self {
+            Self::DpSub => "dpsub",
+            Self::Greedy => "greedy",
+        }
+    }
+
+    /// The enumerator a configuration value names; `dpsub` for anything else.
+    pub(crate) fn parse(name: &str) -> Self {
+        match name {
+            "greedy" => Self::Greedy,
+            _ => Self::DpSub,
+        }
+    }
+}
+
+/// What a join tree's plan minimises (`krishiv.optimizer.joinCost`, E5b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JoinCost {
+    /// The rows of the intermediate results (`C_out`); fewer rows build.
+    Rows,
+    /// Each join's result rows times [`ROW_BYTES`] plus its build input's
+    /// bytes (rows times the width of the columns still read, [`reads`]);
+    /// the input with fewer rows builds unless it holds more than
+    /// [`BUILD_BYTES_FACTOR`] times the other's bytes.
+    Bytes,
+}
+
+impl JoinCost {
+    /// The configuration value naming it.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Rows => "rows",
+            Self::Bytes => "bytes",
+        }
+    }
+
+    /// The cost a configuration value names; `rows` for anything else.
+    pub(crate) fn parse(name: &str) -> Self {
+        match name {
+            "bytes" => Self::Bytes,
+            _ => Self::Rows,
+        }
+    }
+}
+
+/// The join-ordering choices a session can make.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Settings {
+    pub(crate) enumerator: Enumerator,
+    pub(crate) cost: JoinCost,
+    /// The most inputs `dpsub` plans exactly (at most [`MAX_DP_LIMIT`]).
+    pub(crate) dp_limit: usize,
+    /// Whether to describe each planned tree ([`TreeStats`]).
+    pub(crate) trace: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            enumerator: Enumerator::DpSub,
+            cost: JoinCost::Rows,
+            dp_limit: DP_LIMIT,
+            trace: false,
+        }
+    }
+}
+
+/// What planning one inner-join tree did (`EXPLAIN VERBOSE`, one note per
+/// tree): its size, the enumerator, why it fell back to greedy, the pairs
+/// of halves it costed, the estimated `C_out` of the plan, and the plan's
+/// shape as a fingerprint (inputs numbered in their canonical order; the
+/// left of each pair is the probe side).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TreeStats {
+    inputs: usize,
+    /// Pairs of inputs some join condition over exactly those two joins.
+    edges: usize,
+    /// Join conditions over three or more inputs.
+    hyperedges: usize,
+    enumerator: Enumerator,
+    /// Why the tree was planned greedily, if it was: `inputs` (too many for
+    /// the enumerator), `hyperedge`
+    /// (some part is held together only by a condition over three or more
+    /// inputs) or `forced` (the `greedy` enumerator).
+    fallback: Option<&'static str>,
+    /// Pairs of planned, connected halves costed (csg-cmp pairs).
+    pairs: u64,
+    /// Candidate pairs of halves looked at to find them.
+    considered: u64,
+    /// What `cost` counts.
+    measure: JoinCost,
+    cost: f64,
+    shape: String,
+}
+
+impl std::fmt::Display for TreeStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "tree inputs={} edges={} hyperedges={} enumerator={} fallback={} pairs={} considered={} measure={} cost={:.6e} shape={}",
+            self.inputs,
+            self.edges,
+            self.hyperedges,
+            self.enumerator.name(),
+            self.fallback.unwrap_or("none"),
+            self.pairs,
+            self.considered,
+            self.measure.name(),
+            self.cost,
+            self.shape
+        )
+    }
+}
+
+/// `root` with every inner-join tree reordered, and a note per tree planned
+/// (when `settings.trace`).
 pub(crate) fn reorder(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
-) -> Arc<LogicalPlan> {
-    Reorder {
+    settings: Settings,
+) -> (Arc<LogicalPlan>, Vec<String>) {
+    let mut r = Reorder {
         est: Estimator::with_propagation(stats, propagate),
         propagate,
-        done: HashMap::new(),
-    }
-    .positional(root)
+        done: Default::default(),
+        settings,
+        notes: Vec::new(),
+        reads: Some(reads::Reads::of_query(root)),
+    };
+    let out = r.positional(root);
+    (out, r.notes)
 }
 
 struct Reorder<'a> {
@@ -65,7 +224,12 @@ struct Reorder<'a> {
     /// ([`crate::Options::stats_propagation`]).
     propagate: bool,
     /// The original is kept alive so its address stays unique.
-    done: HashMap<*const LogicalPlan, Rewritten>,
+    done: crate::expr::AddrMap<LogicalPlan, Rewritten>,
+    settings: Settings,
+    /// A [`TreeStats`] per tree planned, when tracing.
+    notes: Vec<String>,
+    /// The query's column reads: bytes cost a tree, or break a tie in rows.
+    reads: Option<reads::Reads>,
 }
 
 fn inner(p: &LogicalPlan) -> bool {
@@ -91,6 +255,24 @@ fn selection(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
         }
         _ => None,
     }
+}
+
+/// The outputs of a projection `p` that rename an input column
+/// (`a AS c`), by output attribute: the input column's attribute.
+fn renamed_columns(p: &LogicalPlan) -> HashMap<AttrId, AttrId> {
+    let PlanNode::Project { exprs, .. } = &p.node else {
+        return HashMap::new();
+    };
+    exprs
+        .iter()
+        .filter_map(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => match &expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => Some((output.id, c.id)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
 }
 
 /// The outputs of `p`'s projection that compute an expression rather than
@@ -306,7 +488,16 @@ impl Reorder<'_> {
             return self.children(root);
         }
         let ests: Vec<Arc<RelStats>> = leaves.iter().map(|l| self.est.plan(l)).collect();
-        let mut graph = Graph::new(&leaves, &ests, preds.clone(), self.propagate);
+        // Costed by bytes, an input is as wide as the columns read above the
+        // tree (or by a join of it).
+        let above = self.reads.as_ref().map(|r| r.above(root));
+        let mut graph = Graph::new(
+            &leaves,
+            &ests,
+            preds.clone(),
+            self.propagate,
+            above.as_ref(),
+        );
         if graph.binary_parts() > graph.parts(true) {
             // Some inputs are joined only by a condition over three or more
             // of them, so two of them would meet in a cross product. Take
@@ -314,7 +505,7 @@ impl Reorder<'_> {
             // as conditions of their own (TPC-DS q13). Only then: elsewhere
             // they would add join keys the inputs do not need.
             let preds = preds.iter().flat_map(common_equalities).collect();
-            graph = Graph::new(&leaves, &ests, preds, self.propagate);
+            graph = Graph::new(&leaves, &ests, preds, self.propagate, above.as_ref());
         }
         if graph.parts(false) < graph.parts(true) {
             // Inputs related only through a conjunct with a subquery: as
@@ -322,7 +513,13 @@ impl Reorder<'_> {
             // in a cross product. Keep the tree as written.
             return self.children(root);
         }
-        graph.plan()
+        graph.trace = self.settings.trace;
+        graph.by_bytes = self.settings.cost == JoinCost::Bytes;
+        let (plan, stats) = graph.plan(self.settings);
+        if self.settings.trace {
+            self.notes.push(stats.to_string());
+        }
+        plan
     }
 }
 
@@ -436,12 +633,39 @@ fn rows(x: f64) -> f64 {
 /// A set of inputs, as bits (exact planning only).
 type Set = u64;
 
+/// The pair of parts the greedy enumerator joins next, its rows and its
+/// cost (`cost`, then `tie`).
+type Pick = ((usize, usize), f64, (f64, f64));
+
 /// The cheapest plan of a subset: the halves it joins (none for an input).
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Best {
     cost: f64,
+    /// The bytes of the plan, when `cost` counts rows: of two plans with
+    /// the same rows, the smaller in bytes wins.
+    tie: f64,
     left: Set,
     right: Set,
+}
+
+/// A plan of some inputs with its estimated rows, its `C_out` (the rows of
+/// every join in it, summed) and its shape (when tracing).
+struct Built {
+    plan: Arc<LogicalPlan>,
+    rows: f64,
+    /// The tree's inputs it joins.
+    members: Vec<usize>,
+    cost: f64,
+    shape: String,
+}
+
+/// A column of a join input that is read after the input is joined (trees
+/// costed by bytes): its width, whether something above the tree reads it,
+/// and the conjuncts over the tree's inputs that read it.
+struct ColumnUse {
+    width: f64,
+    above: bool,
+    preds: Vec<usize>,
 }
 
 /// A conjunct of the tree: the inputs it reads, its selectivity, and
@@ -459,60 +683,16 @@ struct Pred {
     carrier: Option<bool>,
 }
 
-/// The columns of `a = b` over two plain columns of the same type, which
-/// is transitive (`=`, not `<=>`: a null never matches, so with `a = b`
-/// and `b = c`, `a = c` holds of every row that passes both). Array, map
-/// and struct columns are left out: a class can turn a join key into a
-/// filter of one input, and the executor's scalar `=` does not compare
-/// every nested type its join keys do (a struct holding an array), so
-/// their equalities stay as the query wrote them.
-fn equality(e: &Expr) -> Option<[&BoundColumn; 2]> {
-    let Some((Builtin::Eq, [a, b], _)) = builtin(e) else {
-        return None;
-    };
-    fn col(e: &Expr) -> Option<&BoundColumn> {
-        match &e.node {
-            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
-            _ => None,
-        }
-    }
-    let (a, b) = (col(a)?, col(b)?);
-    (a.id != b.id && a.data_type == b.data_type && !a.data_type.is_nested()).then_some([a, b])
-}
-
-/// Union-find over attributes, for the equalities that a set of joined
-/// inputs already holds.
-#[derive(Default)]
-struct Classes(HashMap<AttrId, AttrId>);
-
-impl Classes {
-    fn find(&mut self, mut x: AttrId) -> AttrId {
-        while let Some(&p) = self.0.get(&x) {
-            if p == x {
-                break;
-            }
-            let gp = self.0.get(&p).copied().unwrap_or(p);
-            self.0.insert(x, gp);
-            x = gp;
-        }
-        x
-    }
-
-    /// Joins the classes of `a` and `b`; false when they were one already.
-    fn union(&mut self, [a, b]: [AttrId; 2]) -> bool {
-        let (ra, rb) = (self.find(a), self.find(b));
-        if ra == rb {
-            return false;
-        }
-        self.0.insert(ra, rb);
-        self.0.entry(rb).or_insert(rb);
-        true
-    }
-}
-
 struct Graph {
+    /// Whether plans record their shape ([`Settings::trace`]).
+    trace: bool,
     leaves: Vec<Arc<LogicalPlan>>,
     rows: Vec<f64>,
+    /// Per input, its columns that may be read after it is joined (their
+    /// widths and readers); `None` when the reads are unknown.
+    widths: Option<Vec<Vec<ColumnUse>>>,
+    /// Whether plans are costed by bytes; by rows, bytes only break ties.
+    by_bytes: bool,
     /// The conjuncts over more than one input.
     preds: Vec<Pred>,
 }
@@ -523,6 +703,7 @@ impl Graph {
         ests: &[Arc<RelStats>],
         preds: Vec<Arc<Expr>>,
         narrow: bool,
+        above: Option<&Attrs>,
     ) -> Self {
         let mut owner: HashMap<AttrId, usize> = HashMap::new();
         for (i, l) in leaves.iter().enumerate() {
@@ -549,7 +730,7 @@ impl Graph {
                 r.iter()
                     .flat_map(|id| match all_defs.get(id) {
                         Some(def) => references(def),
-                        None => Attrs::from([*id]),
+                        None => std::iter::once(*id).collect(),
                     })
                     .collect()
             })
@@ -604,6 +785,21 @@ impl Graph {
         } else {
             Vec::new()
         };
+        // Where a conjunct over no input (a constant `false`) goes: the first
+        // input without inputs of its own (a scan), found before the loop
+        // wraps inputs in filters, so the choice does not depend on the order
+        // the conjuncts were written in. Pushdown cannot move it further, so
+        // it is where the next optimization finds and places it again; on an
+        // input with a plan under it, a later pushdown would carry it into a
+        // join tree ordered here without it.
+        let no_input = sorted
+            .iter()
+            .position(|l| {
+                let mut leaf = true;
+                l.for_each_child(&mut |_| leaf = false);
+                leaf
+            })
+            .unwrap_or(0);
         // The conjuncts over each input alone, estimated together after the
         // loop: each narrows the columns the next reads.
         let mut local: Vec<Vec<Arc<Expr>>> = vec![Vec::new(); sorted.len()];
@@ -615,8 +811,9 @@ impl Graph {
             on.sort_unstable();
             on.dedup();
             if let [] | [_] = on.as_slice() {
-                // A conjunct over one input (or none) filters that input.
-                let i = on.first().copied().unwrap_or(0);
+                // A conjunct over one input filters that input; one over none
+                // filters `no_input`.
+                let i = on.first().copied().unwrap_or(no_input);
                 let resolved = leaf_defs
                     .get(i)
                     .map_or_else(|| Arc::clone(&p), |defs| resolve_cse(&p, defs));
@@ -649,6 +846,12 @@ impl Graph {
             preds.sort_by_cached_key(ToString::to_string);
         }
         for (i, preds) in local.iter().enumerate() {
+            // Read through the input's renames, as the estimate of a filter
+            // over it does (`estimate::same_renames`).
+            let preds: Vec<Arc<Expr>> = preds
+                .iter()
+                .map(|p| crate::estimate::same_renames(p, &sorted[i]))
+                .collect();
             for sel in
                 conjunct_selectivities(preds.iter().map(AsRef::as_ref), &ests[order[i]], narrow)
             {
@@ -702,9 +905,59 @@ impl Graph {
             });
         }
         composite_keys(&mut kept, &all, &owner, &at, &rows);
+        let widths = above.map(|above| {
+            // A column is carried while something still reads it: an
+            // operator above the tree, or a conjunct over the tree's inputs.
+            // One read only by a filter of its own input is not.
+            let mut read_by: HashMap<AttrId, Vec<usize>> = HashMap::new();
+            for (k, p) in kept.iter().enumerate() {
+                for id in references(&p.expr) {
+                    read_by.entry(id).or_default().push(k);
+                }
+            }
+            // Columns of one input that rename the same input column count
+            // once: `Project [a AS c0, a AS c1]` carries `a`'s bytes once,
+            // and pruning one of the names later must not change the width
+            // (and with it a tie-break) when the plan is optimized again.
+            order
+                .iter()
+                .map(|&i| {
+                    let sources = renamed_columns(&leaves[i]);
+                    let mut uses: Vec<(AttrId, ColumnUse)> = Vec::new();
+                    for c in leaves[i].resolved_output().unwrap_or_default().iter() {
+                        let preds: Vec<usize> = read_by.get(&c.id).cloned().unwrap_or_default();
+                        let above = above.contains(&c.id);
+                        if !above && preds.is_empty() {
+                            continue;
+                        }
+                        let source = sources.get(&c.id).copied().unwrap_or(c.id);
+                        if let Some((_, u)) = uses.iter_mut().find(|(s, _)| *s == source) {
+                            u.above |= above;
+                            u.preds.extend(preds);
+                            continue;
+                        }
+                        uses.push((
+                            source,
+                            ColumnUse {
+                                width: f64::from(
+                                    u32::try_from(crate::plan_stats::default_size(&c.data_type))
+                                        .unwrap_or(u32::MAX),
+                                ),
+                                above,
+                                preds,
+                            },
+                        ));
+                    }
+                    uses.into_iter().map(|(_, u)| u).collect()
+                })
+                .collect()
+        });
         Self {
+            trace: false,
             leaves: sorted,
             rows,
+            widths,
+            by_bytes: false,
             preds: kept,
         }
     }
@@ -748,6 +1001,97 @@ impl Graph {
 
     fn n(&self) -> usize {
         self.leaves.len()
+    }
+
+    /// The bytes per row of the join of the inputs in `set` (0 when costed
+    /// by rows): the columns read above the tree or by a conjunct over an
+    /// input outside `set`; a join key used up inside `set` is not carried.
+    fn width_of(&self, set: &dyn Fn(usize) -> bool) -> f64 {
+        self.widths.as_ref().map_or(0.0, |w| {
+            (0..w.len())
+                .filter(|&i| set(i))
+                .flat_map(|i| &w[i])
+                .filter(|c| {
+                    c.above
+                        || c.preds
+                            .iter()
+                            .any(|&k| self.preds[k].on.iter().any(|&x| !set(x)))
+                })
+                .map(|c| c.width)
+                .sum()
+        })
+    }
+
+    /// The rows and width of a planned part.
+    fn size(&self, p: &Built) -> (f64, f64) {
+        (p.rows, self.width_of(&|x| p.members.contains(&x)))
+    }
+
+    /// What producing a join result of `rows` rows costs: its rows, or by
+    /// bytes [`ROW_BYTES`] a row (the work per row streamed).
+    fn result_cost(&self, rows: f64) -> f64 {
+        if self.by_bytes {
+            self::rows(rows * ROW_BYTES)
+        } else {
+            rows
+        }
+    }
+
+    /// What producing `rows` rows costs in bytes, when the tree is costed
+    /// by rows and the reads are known: the tie-break between plans of the
+    /// same rows (0 otherwise).
+    fn tie_result(&self, rows: f64) -> f64 {
+        if self.by_bytes || self.widths.is_none() {
+            0.0
+        } else {
+            self::rows(rows * ROW_BYTES)
+        }
+    }
+
+    /// What building a join's input costs in bytes (the one with fewer rows,
+    /// `b` on a tie), as [`Self::tie_result`].
+    fn tie_build(&self, a: (f64, f64), b: (f64, f64)) -> f64 {
+        if self.by_bytes || self.widths.is_none() {
+            return 0.0;
+        }
+        let build = if b.0 <= a.0 { b } else { a };
+        self::rows(build.0 * (ROW_BYTES + build.1))
+    }
+
+    /// Whether a join of inputs `a` and `b` (rows, width) builds `b`: the
+    /// input with fewer rows (`b` on a tie), unless costed by bytes and that
+    /// input has more than [`BUILD_BYTES_FACTOR`] times the other's bytes.
+    fn builds_second(&self, a: (f64, f64), b: (f64, f64)) -> bool {
+        let fewer = b.0 <= a.0;
+        if !self.by_bytes {
+            return fewer;
+        }
+        let (ma, mb) = (self.measure(a.0, a.1), self.measure(b.0, b.1));
+        if fewer {
+            mb <= BUILD_BYTES_FACTOR * ma
+        } else {
+            ma > BUILD_BYTES_FACTOR * mb
+        }
+    }
+
+    /// What building a join's build input costs: nothing by rows (their
+    /// `C_out` counts only results), its bytes by bytes.
+    fn build_cost(&self, a: (f64, f64), b: (f64, f64)) -> f64 {
+        if !self.by_bytes {
+            return 0.0;
+        }
+        let build = if self.builds_second(a, b) { b } else { a };
+        self.measure(build.0, build.1)
+    }
+
+    /// The size of a relation of `rows` rows over inputs `width` wide: its
+    /// rows, or its bytes ([`ROW_BYTES`] a row plus the width).
+    fn measure(&self, rows: f64, width: f64) -> f64 {
+        if self.by_bytes {
+            self::rows(rows * (ROW_BYTES + width))
+        } else {
+            rows
+        }
     }
 
     /// The conjuncts that join `a` and `b`: they read both and nothing
@@ -837,73 +1181,112 @@ impl Graph {
             .collect()
     }
 
-    fn plan(&self) -> Arc<LogicalPlan> {
-        if self.n() <= DP_LIMIT {
-            self.dp()
-        } else {
-            self.greedy()
+    /// The join conditions as input masks (inputs as bits; empty past 63
+    /// inputs, which only the greedy pass plans).
+    fn masks(&self) -> Vec<Set> {
+        if self.n() >= 64 {
+            return Vec::new();
         }
-    }
-
-    /// Exact dynamic programming over connected subsets (`C_out` cost).
-    fn dp(&self) -> Arc<LogicalPlan> {
-        let n = self.n();
-        let full: Set = (1 << n) - 1;
-        let masks: Vec<Set> = self
-            .preds
+        self.preds
             .iter()
             .filter(|p| p.edge)
             .map(|p| p.on.iter().fold(0, |m, &x| m | (1 << x)))
-            .collect();
-        let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
-        let mut best: HashMap<Set, Best> = (0..n)
-            .map(|i| {
-                (
-                    1 << i,
-                    Best {
-                        cost: 0.0,
-                        left: 0,
-                        right: 0,
-                    },
-                )
-            })
-            .collect();
-        for s in 1..=full {
-            if s.count_ones() < 2 {
-                continue;
+            .collect()
+    }
+
+    /// The tree planned by `settings`' enumerator, and what it did.
+    fn plan(&self, settings: Settings) -> (Arc<LogicalPlan>, TreeStats) {
+        let n = self.n();
+        let masks = self.masks();
+        let enumerator = settings.enumerator;
+        let (table, mut fallback, work) = match enumerator {
+            Enumerator::Greedy => (None, Some("forced"), dp::Work::default()),
+            Enumerator::DpSub if n <= settings.dp_limit.min(MAX_DP_LIMIT) => {
+                let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
+                let rows_of = |s: Set| self.rows_of(&bit(s));
+                // Each column as masks, so a subset's width is one flat pass:
+                // (its input, whether read above, inputs its conjuncts touch).
+                let cols: Vec<(Set, bool, Set, f64)> =
+                    self.widths.as_ref().map_or_else(Vec::new, |w| {
+                        w.iter()
+                            .enumerate()
+                            .flat_map(|(i, cs)| {
+                                cs.iter().map(move |c| {
+                                    let need = c.preds.iter().fold(0, |m: Set, &k| {
+                                        self.preds[k].on.iter().fold(m, |m, &x| m | (1 << x))
+                                    });
+                                    (1 << i, c.above, need, c.width)
+                                })
+                            })
+                            .collect()
+                    });
+                let width_of = |s: Set| {
+                    cols.iter()
+                        .filter(|&&(m, above, need, _)| s & m != 0 && (above || need & !s != 0))
+                        .map(|c| c.3)
+                        .sum::<f64>()
+                };
+                let result_cost = |r: f64| self.result_cost(r);
+                let tie_result = |r: f64| self.tie_result(r);
+                let tie_bytes = |r: f64, w: f64| self::rows(r * (ROW_BYTES + w));
+                let shape = dp::Shape {
+                    rows_of: &rows_of,
+                    width_of: &width_of,
+                    result_cost: &result_cost,
+                    by_bytes: self.by_bytes,
+                    build_cost: &|a, b| self.build_cost(a, b),
+                    ties: !self.by_bytes && self.widths.is_some(),
+                    tie_result: &tie_result,
+                    tie_bytes: &tie_bytes,
+                };
+                let (table, work) = dp::dpsub(n, &masks, &shape);
+                (Some(table), None, work)
             }
-            let mut found: Option<Best> = None;
-            let low = s.isolate_lowest_one();
-            let mut a = (s - 1) & s;
-            while a > 0 {
-                let b = s & !a;
-                // Each split once (the half holding the lowest input is `a`),
-                // both halves planned, and joined by some conjunct.
-                if a & low != 0
-                    && let (Some(x), Some(y)) = (best.get(&a), best.get(&b))
-                    && masks
-                        .iter()
-                        .any(|&m| m & !s == 0 && m & a != 0 && m & b != 0)
-                {
-                    let cost = x.cost + y.cost;
-                    if found.is_none_or(|f| cost < f.cost) {
-                        found = Some(Best {
-                            cost,
-                            left: a,
-                            right: b,
-                        });
-                    }
+            Enumerator::DpSub => (None, Some("inputs"), dp::Work::default()),
+        };
+        let built = match table.and_then(|t| self.table_plan(&t, &masks)) {
+            Some(b) => b,
+            None => {
+                // A part held together only by a conjunct over three or more
+                // inputs has no exact plan (no split is connected).
+                fallback = fallback.or(Some("hyperedge"));
+                self.greedy()
+            }
+        };
+        let mut pairs_seen = std::collections::BTreeSet::new();
+        let mut hyperedges = 0;
+        for p in self.preds.iter().filter(|p| p.edge) {
+            match p.on.as_slice() {
+                [a, b] => {
+                    pairs_seen.insert((*a, *b));
                 }
-                a = (a - 1) & s;
-            }
-            if let Some(mut f) = found {
-                f.cost = rows(f.cost + self.rows_of(&bit(s)));
-                best.insert(s, f);
+                [_, _, _, ..] => hyperedges += 1,
+                _ => {}
             }
         }
+        let stats = TreeStats {
+            inputs: n,
+            edges: pairs_seen.len(),
+            hyperedges,
+            enumerator,
+            fallback,
+            pairs: work.pairs,
+            considered: work.considered,
+            measure: settings.cost,
+            cost: built.cost,
+            shape: built.shape,
+        };
+        (built.plan, stats)
+    }
+
+    /// The plan of an exact table: each connected part from the table,
+    /// joined last by cross products; `None` when some part has no plan.
+    fn table_plan(&self, best: &HashMap<Set, Best>, masks: &[Set]) -> Option<Built> {
+        let n = self.n();
+        let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
         // The connected parts of the graph (one when it is connected).
         let mut part: Vec<Set> = (0..n).map(|i| 1 << i).collect();
-        for &m in &masks {
+        for &m in masks {
             let joined = part
                 .iter()
                 .filter(|&&p| p & m != 0)
@@ -911,45 +1294,53 @@ impl Graph {
             part.retain(|&p| p & m == 0);
             part.push(joined);
         }
-        // A part held together only by a conjunct over three or more inputs
-        // has no exact plan (no split is connected): plan greedily, which
-        // joins such parts last.
         if part.iter().any(|p| !best.contains_key(p)) {
-            return self.greedy();
+            return None;
         }
         let plans = part
             .into_iter()
-            .map(|p| {
-                let set = (0..n).map(bit(p)).collect();
-                (set, self.build(p, &best), self.rows_of(&bit(p)))
-            })
+            .map(|p| ((0..n).map(bit(p)).collect(), self.build(p, best)))
             .collect();
-        self.cross(plans)
+        Some(self.cross(plans))
     }
 
     /// The plan of `s` from the table.
-    fn build(&self, s: Set, best: &HashMap<Set, Best>) -> Arc<LogicalPlan> {
+    fn build(&self, s: Set, best: &HashMap<Set, Best>) -> Built {
         let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
+        let rows = self.rows_of(&bit(s));
         match best.get(&s) {
             Some(b) if b.left != 0 => {
                 let (l, r) = (self.build(b.left, best), self.build(b.right, best));
                 let on = self.joining(&bit(b.left), &bit(b.right));
-                let (lr, rr) = (self.rows_of(&bit(b.left)), self.rows_of(&bit(b.right)));
-                self.join((l, lr), (r, rr), &on)
+                self.join(l, r, &on, rows)
             }
-            _ => Arc::clone(&self.leaves[s.trailing_zeros() as usize]),
+            _ => self.leaf(s.trailing_zeros() as usize, rows),
+        }
+    }
+
+    /// Input `i` as a plan of `rows` rows.
+    fn leaf(&self, i: usize, rows: f64) -> Built {
+        Built {
+            plan: Arc::clone(&self.leaves[i]),
+            rows,
+            members: vec![i],
+            cost: 0.0,
+            shape: if self.trace {
+                i.to_string()
+            } else {
+                String::new()
+            },
         }
     }
 
     /// Greedy ordering: join the connected pair with the fewest result rows
     /// until no pair is connected. Each round reads every conjunct once.
-    fn greedy(&self) -> Arc<LogicalPlan> {
+    fn greedy(&self) -> Built {
         let n = self.n();
         let mut part_of: Vec<usize> = (0..n).collect();
         let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
-        let mut parts: Vec<Option<(Arc<LogicalPlan>, f64)>> = (0..n)
-            .map(|i| Some((Arc::clone(&self.leaves[i]), self.rows[i])))
-            .collect();
+        let mut parts: Vec<Option<Built>> =
+            (0..n).map(|i| Some(self.leaf(i, self.rows[i]))).collect();
         loop {
             // The conjuncts between exactly two parts, by pair.
             let mut pairs: BTreeMap<(usize, usize), (f64, bool, Vec<usize>)> = BTreeMap::new();
@@ -986,17 +1377,25 @@ impl Graph {
                 *on = self.independent(&both, on);
                 *sel = on.iter().map(|&k| self.preds[k].sel).product();
             }
-            let mut pick: Option<((usize, usize), f64)> = None;
+            let mut pick: Option<Pick> = None;
             for (&(a, b), (sel, edge, _)) in &pairs {
-                let (Some((_, ra)), Some((_, rb))) = (&parts[a], &parts[b]) else {
+                if !*edge {
+                    continue;
+                }
+                let (Some(pa), Some(pb)) = (&parts[a], &parts[b]) else {
                     continue;
                 };
-                let r = rows(ra * rb * sel);
-                if *edge && pick.is_none_or(|(_, best)| r < best) {
-                    pick = Some(((a, b), r));
+                let r = rows(pa.rows * pb.rows * sel);
+                let (sa, sb) = (self.size(pa), self.size(pb));
+                let m = (
+                    self.result_cost(r) + self.build_cost(sa, sb),
+                    self.tie_result(r) + self.tie_build(sa, sb),
+                );
+                if pick.is_none_or(|(_, _, best)| dp::cheaper(m, best)) {
+                    pick = Some(((a, b), r, m));
                 }
             }
-            let Some(((a, b), r)) = pick else {
+            let Some(((a, b), r, _)) = pick else {
                 break;
             };
             let (Some(pa), Some(pb)) = (parts[a].take(), parts[b].take()) else {
@@ -1006,7 +1405,7 @@ impl Graph {
                 .remove(&(a, b))
                 .map(|(_, _, on)| on)
                 .unwrap_or_default();
-            parts[a] = Some((self.join(pa, pb, &on), r));
+            parts[a] = Some(self.join(pa, pb, &on, r));
             let moved = std::mem::take(&mut members[b]);
             for &x in &moved {
                 part_of[x] = a;
@@ -1017,58 +1416,80 @@ impl Graph {
             .into_iter()
             .zip(members)
             .filter_map(|(p, m)| {
-                let (plan, r) = p?;
+                let built = p?;
                 let mut set = vec![false; n];
                 m.iter().for_each(|&x| set[x] = true);
-                Some((set, plan, r))
+                Some((set, built))
             })
             .collect();
         self.cross(left)
     }
 
     /// Joins disconnected parts by cross products, largest on the left.
-    fn cross(&self, mut parts: Vec<(Vec<bool>, Arc<LogicalPlan>, f64)>) -> Arc<LogicalPlan> {
-        parts.sort_by(|a, b| b.2.total_cmp(&a.2));
+    fn cross(&self, mut parts: Vec<(Vec<bool>, Built)>) -> Built {
+        parts.sort_by(|a, b| {
+            let m = |p: &Built| {
+                let (rows, width) = self.size(p);
+                self.measure(rows, width)
+            };
+            m(&b.1).total_cmp(&m(&a.1))
+        });
         let mut it = parts.into_iter();
-        let Some((mut set, mut acc, mut rows)) = it.next() else {
-            return Arc::clone(&self.leaves[0]);
+        let Some((mut set, mut acc)) = it.next() else {
+            return self.leaf(0, self.rows.first().copied().unwrap_or(1.0));
         };
-        for (s, p, r) in it {
+        for (s, p) in it {
             let on = self.joining(&|x| set[x], &|x| s[x]);
-            acc = self.join((acc, rows), (p, r), &on);
-            rows = self::rows(rows * r);
+            let r = self::rows(acc.rows * p.rows);
+            acc = self.join(acc, p, &on, r);
             set = set.iter().zip(&s).map(|(a, b)| *a || *b).collect();
         }
         acc
     }
 
-    /// An inner join of two plans on conjuncts `on`, the larger on the left;
-    /// conjuncts that cannot be join conditions filter its result.
-    fn join(
-        &self,
-        a: (Arc<LogicalPlan>, f64),
-        b: (Arc<LogicalPlan>, f64),
-        on: &[usize],
-    ) -> Arc<LogicalPlan> {
-        let ((left, _), (right, _)) = if b.1 > a.1 { (b, a) } else { (a, b) };
+    /// An inner join of two plans on conjuncts `on`, of `rows` rows, the
+    /// larger (by the tree's measure) on the left; conjuncts that cannot be
+    /// join conditions filter its result.
+    fn join(&self, a: Built, b: Built, on: &[usize], rows: f64) -> Built {
+        let (sa, sb) = (self.size(&a), self.size(&b));
+        let (left, right, build) = if self.builds_second(sa, sb) {
+            (a, b, self.build_cost(sa, sb))
+        } else {
+            (b, a, self.build_cost(sa, sb))
+        };
+        let mut members = [left.members.as_slice(), right.members.as_slice()].concat();
+        members.sort_unstable();
         let pick = |edge: bool| {
             on.iter()
                 .filter(move |&&i| self.preds[i].edge == edge)
                 .map(|&i| Arc::clone(&self.preds[i].expr))
         };
         let condition = and_all(pick(true)).map_or(JoinCondition::None, JoinCondition::On);
+        let shape = if self.trace {
+            format!("({} {})", left.shape, right.shape)
+        } else {
+            String::new()
+        };
+        let cost = self::rows(left.cost + right.cost + self.result_cost(rows) + build);
         let join = Arc::new(LogicalPlan::new(PlanNode::Join {
-            left,
-            right,
+            left: left.plan,
+            right: right.plan,
             kind: JoinKind::Inner,
             condition,
         }));
-        match and_all(pick(false)) {
+        let plan = match and_all(pick(false)) {
             Some(predicate) => Arc::new(LogicalPlan::new(PlanNode::Filter {
                 input: join,
                 predicate,
             })),
             None => join,
+        };
+        Built {
+            plan,
+            rows,
+            members,
+            cost,
+            shape,
         }
     }
 }
@@ -1167,4 +1588,73 @@ fn canonical_equalities(preds: Vec<Arc<Expr>>, owner: &HashMap<AttrId, usize>) -
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use krishiv_plan::{Expr, ExprNode, Literal};
+
+    use super::{ColumnUse, Graph, Pred, ROW_BYTES};
+
+    /// Two inputs joined by one conjunct: input 0 holds a 20 B key read only
+    /// by the conjunct and a 4 B column read above; input 1 an 8 B key
+    /// (the conjunct) and a 100 B column read above.
+    fn graph() -> Graph {
+        let col = |width, above, preds: &[usize]| ColumnUse {
+            width,
+            above,
+            preds: preds.to_vec(),
+        };
+        Graph {
+            trace: false,
+            by_bytes: true,
+            leaves: Vec::new(),
+            rows: vec![10.0, 10.0],
+            widths: Some(vec![
+                vec![col(20.0, false, &[0]), col(4.0, true, &[])],
+                vec![col(8.0, false, &[0]), col(100.0, true, &[])],
+            ]),
+            preds: vec![Pred {
+                expr: Arc::new(Expr::new(ExprNode::Literal(Literal::Boolean(true)))),
+                on: vec![0, 1],
+                sel: 1.0,
+                edge: true,
+                class: None,
+                carrier: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn a_join_key_used_up_inside_a_set_is_not_carried() {
+        let g = graph();
+        // Alone, each input carries its key for the join still to come.
+        assert!((g.width_of(&|i| i == 0) - 24.0).abs() < 1e-9);
+        assert!((g.width_of(&|i| i == 1) - 108.0).abs() < 1e-9);
+        // Joined, only what is read above remains.
+        assert!((g.width_of(&|_| true) - 104.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fewer_rows_build_unless_more_than_twice_the_bytes() {
+        let g = graph();
+        let w = |bytes_per_row: f64| bytes_per_row - ROW_BYTES;
+        // `b` has fewer rows and at most 2x `a`'s bytes: `b` builds.
+        assert!(g.builds_second((100.0, w(10.0)), (50.0, w(40.0))));
+        // `b` has fewer rows but more than 2x `a`'s bytes: `a` builds.
+        assert!(!g.builds_second((100.0, w(10.0)), (50.0, w(41.0))));
+        // `a` has fewer rows: it builds unless it holds more than 2x `b`'s.
+        assert!(!g.builds_second((50.0, w(40.0)), (100.0, w(10.0))));
+        assert!(g.builds_second((50.0, w(41.0)), (100.0, w(10.0))));
+        // Costed by rows, fewer rows build (`b` on a tie).
+        let rows = Graph {
+            widths: None,
+            by_bytes: false,
+            ..graph()
+        };
+        assert!(rows.builds_second((10.0, 0.0), (10.0, 0.0)));
+        assert!(!rows.builds_second((5.0, 0.0), (10.0, 0.0)));
+    }
 }

@@ -80,12 +80,27 @@ so it lists no operators of its own.
 | `finalize_ns`, `finalize_concat_ns`, `finalize_index_ns`, `finalize_max_partition_ns` | A hash join build's `finalize`, the phase one driver runs after every driver combined: its wall time, the time its partition tasks spent setting up the rows' blocks (whole blocks sliced in place, the chunks' tails copied) and indexing them (summed over the tasks, which run in parallel), and the longest single task. |
 | `steady_reserved_bytes`, `arena_bytes`, `arena_hash_bytes`, `arena_key_bytes`, `index_bytes` | A hash join build's memory once finalized, summed over the partitions finalized in memory (arenas the grace phase rebuilds from spilled partitions are not counted): what their rows keep reserved through the probe, the bytes of the finalized row arenas (each block's rows' share of its buffers, Arrow's `get_slice_memory_size`), of which the `hash` column and the key columns, and the bytes of the indexes (with match bitmaps). |
 | `max_coalesce_copy_bytes` | A hash join build's transient copy: the largest set of small chunks one build-phase step copied into a block of 16,384 rows (each copy reserves those chunks again while it runs), also over a grace partition's frames as they are read back. Finalize reads the blocks in place and copies only the chunks' tails. |
+| `max_finalize_copy_bytes` | The most bytes of tail copies `finalize` held reserved at once (partitions copying in parallel). |
 | `broadcast_shared`, `broadcast_fallback` | A broadcast hash join on a multi-task run: 1 when the task probed the worker's shared build table, or 1 when the shared build did not fit `krishiv.exec.join.sharedBroadcastBytes` and the task built its own table instead. |
 | Pipelines | Per pipeline: wall time from its first driver's start to its last driver's end, drivers, threads that ran them, and its operators from source to sink. |
 
 Other operator-specific counters (an aggregate's `groups` and spill runs,
 a join's `build_rows`, grace partitions and recursion depth) are printed
 by name. A name ending in `_bytes` is a size.
+
+### A filter fused into a hash probe
+
+A filter directly below a hash join's probe side, and a scan's runtime filters
+there, can run inside the probe (`krishiv.exec.join.fuseProbeSelect`, on by
+default). The plan and the counters then read differently:
+
+- The filter prints on the join as `probe filter: ...`, not as a `Filter` node.
+  A column-only projection above it is absorbed too, so the scan can list
+  columns only the predicate reads.
+- A scan whose runtime filters moved to the probe reports `out` before they
+  run. The probe's `in` is the rows it received and `probe_rows` the rows it
+  selected. `runtime_filter_rows_tested` and `runtime_filter_rows_dropped` stay
+  on the scan.
 
 ## The JSON document
 

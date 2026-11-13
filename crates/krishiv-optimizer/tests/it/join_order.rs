@@ -19,7 +19,7 @@ use crate::support::{self, data, eval};
 
 /// Statistics by table name, from `tests/fixtures/tpch-sf10-stats.json`.
 #[derive(Debug)]
-struct Fixture(HashMap<String, TableStats>);
+pub(crate) struct Fixture(HashMap<String, TableStats>);
 
 impl Statistics for Fixture {
     fn table(&self, scan: &Scan) -> Option<TableStats> {
@@ -38,7 +38,7 @@ fn bound(v: &Value) -> Option<Literal> {
     Some(Literal::Double(v.get("number")?.as_f64()?))
 }
 
-fn fixture() -> Fixture {
+pub(crate) fn fixture() -> Fixture {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/tpch-sf10-stats.json"
@@ -65,7 +65,7 @@ fn fixture() -> Fixture {
 }
 
 /// Panics on a join without a condition anywhere in `root`.
-fn no_cross_product(root: &LogicalPlan, what: &str) {
+pub(crate) fn no_cross_product(root: &LogicalPlan, what: &str) {
     let mut stack = vec![root];
     while let Some(p) = stack.pop() {
         p.for_each_child(&mut |c| stack.push(c));
@@ -202,10 +202,7 @@ fn results_match_with_statistics_propagation_on_and_off() {
     let ctx = support::ctx();
     let stats = fixture();
     let db = data::tpch(7, 150);
-    let off = Options {
-        stats_propagation: false,
-        ..Options::default()
-    };
+    let off = support::options(|o| o.stats_propagation = false);
     let mut ordered_differently = 0;
     for q in 1..=22 {
         let plan = support::resolve(&support::tpch_sql(q), &ctx);
@@ -256,10 +253,7 @@ fn eager_aggregation_fires_where_the_design_says() {
 #[test]
 fn eager_aggregation_can_be_switched_off() {
     let plan = support::resolve(&support::tpch_sql(13), &support::ctx());
-    let off = Options {
-        eager_aggregation: false,
-        ..Options::default()
-    };
+    let off = support::options(|o| o.eager_aggregation = false);
     let optimized = optimize_with_options(&plan, &fixture(), &off).unwrap();
     assert!(!optimized.root().to_string().contains("PartialAggregate"));
 

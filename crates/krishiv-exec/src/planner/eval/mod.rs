@@ -29,6 +29,7 @@ mod cond;
 mod field;
 mod func;
 mod hof;
+mod in_prefix;
 mod interval;
 pub(crate) mod logic;
 mod nested_cast;
@@ -47,7 +48,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_null_array};
 use arrow_schema::{DataType as ArrowType, SchemaRef};
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, LEGACY_CODING_ERROR_ACTION, LEGACY_JAVA_CHARSETS,
+    ANSI_ENABLED, BINARY_OUTPUT_STYLE, Config, LEGACY_CODING_ERROR_ACTION, LEGACY_JAVA_CHARSETS,
     LEGACY_STATISTICAL_AGGREGATE, LEGACY_TIME_PARSER_POLICY, MAP_KEY_DEDUP_POLICY,
     SESSION_TIME_ZONE,
 };
@@ -216,6 +217,8 @@ pub(crate) struct EvalEnv {
     pub(crate) legacy_coding_error_action: bool,
     /// `spark.sql.legacy.timeParserPolicy = LEGACY`; plan data too.
     pub(crate) legacy_time_parser: bool,
+    /// `spark.sql.binaryOutputStyle`; plan data too (the `binary_output_style` codec feature).
+    pub(crate) binary_style: krishiv_kernels::binary_style::BinaryStyle,
     /// Counts the unseeded random binds of one plan instantiation (see
     /// [`BindOptions::seed_salt`](krishiv_functions::scalar::BindOptions::seed_salt)).
     pub(crate) seed_salt: Arc<AtomicU64>,
@@ -273,6 +276,11 @@ impl EvalEnv {
             .get(&LEGACY_TIME_PARSER_POLICY)
             .and_then(|v| v.as_str())
             .is_some_and(|s| s.eq_ignore_ascii_case("LEGACY"));
+        let binary_style = config
+            .get(&BINARY_OUTPUT_STYLE)
+            .and_then(|v| v.as_str())
+            .and_then(krishiv_kernels::binary_style::BinaryStyle::from_name)
+            .unwrap_or_default();
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -291,6 +299,7 @@ impl EvalEnv {
             legacy_java_charsets,
             legacy_coding_error_action,
             legacy_time_parser,
+            binary_style,
             seed_salt: Arc::new(AtomicU64::new(0)),
             partition_shift: 0,
         }
@@ -319,6 +328,11 @@ impl EvalEnv {
             legacy_java_charsets: env.legacy_java_charsets,
             legacy_coding_error_action: env.legacy_coding_error_action,
             legacy_time_parser: env.legacy_time_parser,
+            binary_style: env
+                .binary_output_style
+                .as_deref()
+                .and_then(krishiv_kernels::binary_style::BinaryStyle::from_name)
+                .unwrap_or_default(),
             seed_salt: Arc::new(AtomicU64::new(0)),
             partition_shift: 0,
         }
@@ -337,6 +351,11 @@ impl EvalEnv {
             legacy_java_charsets: self.legacy_java_charsets,
             legacy_coding_error_action: self.legacy_coding_error_action,
             legacy_time_parser: self.legacy_time_parser,
+            // An unset style and an explicit `HEX_DISCRETE` print alike: only a different style
+            // is plan data, so older plans encode as before.
+            binary_output_style: (self.binary_style
+                != krishiv_kernels::binary_style::BinaryStyle::default())
+            .then(|| Arc::from(self.binary_style.name())),
         }
     }
 }
@@ -387,8 +406,129 @@ fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
     }))
 }
 
-/// Compiles `e` over `input`.
+/// Compiles `e` over `input`. An expression that can raise at run time and
+/// came from SQL text carries its span (see [`Sited`]).
 pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
+    let compiled = compile_node(e, input)?;
+    // A cast the analyzer inserted (implicit coercion) has its operand's span:
+    // Spark reports the expression it serves, so the enclosing site applies.
+    let implicit_cast =
+        matches!(&e.node, ExprNode::Cast { expr, .. } if expr.origin.sql == e.origin.sql);
+    // Spark gives no context to `try_*` functions' errors or to `split_part`'s
+    // (`try_element_at.sql.out`, `string-functions.sql.out`).
+    let context_free = matches!(
+        &e.node,
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if matches!(&f.id, FunctionId::Registry { name, .. }
+                if name.starts_with("try_") || name == "split_part")
+    ) || (!input.env.ansi && no_context_without_ansi(e));
+    let can_raise = !implicit_cast
+        && matches!(
+            &e.node,
+            ExprNode::Cast { .. } | ExprNode::Resolved(ResolvedExpr::Function(_))
+        );
+    if context_free && can_raise {
+        // The error keeps no context even when an enclosing call would give one
+        // (`abs(try_element_at(array(1, 2, 3), 0))`): the innermost site wins, and
+        // a site of no statement's text renders as none.
+        return Ok(Arc::new(Sited {
+            inner: compiled,
+            site: krishiv_common::error::ErrorSite {
+                source: NO_CONTEXT_SOURCE,
+                start: 0,
+                end: 0,
+            },
+        }));
+    }
+    Ok(match e.origin.sql {
+        Some((source, span)) if can_raise => Arc::new(Sited {
+            inner: compiled,
+            site: krishiv_common::error::ErrorSite {
+                source: source.0,
+                start: span.start,
+                end: span.end,
+            },
+        }),
+        _ => compiled,
+    })
+}
+
+/// Whether Spark 4.2.0 gives the errors of `e` no `queryContext` when `spark.sql.ansi.enabled` is
+/// off, though it does with it on: a cast's range errors and `element_at`'s zero index
+/// (`results/nonansi/cast.sql.out`, `array.sql.out`).
+fn no_context_without_ansi(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Cast { .. } => true,
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            matches!(&f.id, FunctionId::Registry { name, .. } if name == "element_at")
+        }
+        _ => false,
+    }
+}
+
+/// The source of the site a context-free expression marks its errors with: no
+/// statement's text has it, so the session renders no context for it.
+const NO_CONTEXT_SOURCE: u32 = u32::MAX;
+
+/// An expression that can raise, with the span of SQL text it came from: its
+/// error is marked with that site (the innermost expression's wins), and the
+/// session renders the span as Spark's `== SQL ==` context. The Ok path is the
+/// inner expression's; no text enters the plan.
+struct Sited {
+    inner: Arc<dyn PhysExpr>,
+    site: krishiv_common::error::ErrorSite,
+}
+
+impl fmt::Debug for Sited {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl PhysExpr for Sited {
+    fn data_type(&self) -> &ArrowType {
+        self.inner.data_type()
+    }
+    fn nullable(&self) -> bool {
+        self.inner.nullable()
+    }
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        self.inner.eval(batch, partition).map_err(|e| {
+            if has_spark_context(e.error_class().name()) {
+                e.with_pending_site(self.site)
+            } else {
+                e
+            }
+        })
+    }
+    fn is_constant(&self) -> bool {
+        self.inner.is_constant()
+    }
+    fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
+        self.inner.null_on_overflow()
+    }
+}
+
+/// Whether Spark 4.2.0 gives an error of this class a `queryContext`. Only the classes its
+/// expressions raise through `SupportQueryContext` do; others (`CAST_OVERFLOW`,
+/// `CANNOT_PARSE_TIMESTAMP`, `USER_RAISED_EXCEPTION`, `INVALID_PARAMETER_VALUE.*`, ...)
+/// carry none, and adding one would diverge from Spark (ADR 0008).
+fn has_spark_context(class: &str) -> bool {
+    matches!(
+        class,
+        "CAST_INVALID_INPUT"
+            | "ARITHMETIC_OVERFLOW"
+            | "NUMERIC_VALUE_OUT_OF_RANGE"
+            | "DIVIDE_BY_ZERO"
+            | "REMAINDER_BY_ZERO"
+            | "INVALID_INDEX_OF_ZERO"
+            | "MAP_KEY_DOES_NOT_EXIST"
+    ) || class.starts_with("INVALID_ARRAY_INDEX")
+        || class == "INTERVAL_DIVIDED_BY_ZERO"
+        || class.starts_with("NUMERIC_VALUE_OUT_OF_RANGE")
+}
+
+fn compile_node(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     match &e.node {
         ExprNode::Literal(l) => Ok(Arc::new(Lit::new(l)?)),
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {
@@ -401,6 +541,15 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         // higher-order call compiled around the body (see `hof`).
         ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => column(input, c),
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
+        // A SQL function body created under the other ANSI mode (T184): everything below
+        // reads the mode through the environment it is compiled with.
+        ExprNode::Resolved(ResolvedExpr::EvalMode { ansi, expr, .. }) => {
+            let env = EvalEnv {
+                ansi: *ansi,
+                ..input.env.clone()
+            };
+            compile(expr, Input { env: &env, ..input })
+        }
         ExprNode::Resolved(ResolvedExpr::Field {
             base,
             ordinal,
@@ -736,7 +885,10 @@ fn builtin(
                 arith::negative(e, env)?
             }
         }
-        (Builtin::In, n) if n >= 2 => cond::in_list(args, env)?,
+        (Builtin::In, n) if n >= 2 => match in_prefix::in_prefix(f, &args, input)? {
+            Some(prefix) => prefix,
+            None => cond::in_list(args, env)?,
+        },
         (Builtin::Between, 3) => {
             let hi = args.pop().ok_or_else(arity)?;
             let lo = args.pop().ok_or_else(arity)?;
@@ -899,18 +1051,9 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
             months,
             days,
             micros,
-        } => Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
-            arrow_buffer::IntervalMonthDayNano::new(
-                *months,
-                *days,
-                micros.checked_mul(1000).ok_or_else(|| {
-                    unsupported(
-                        "a calendar interval whose microseconds overflow the nanosecond \
-                             field of its Arrow type",
-                    )
-                })?,
-            ),
-        ])),
+        } => krishiv_types::calendar::calendar_array([Some(
+            krishiv_types::calendar::CalendarValue::new(*months, *days, *micros),
+        )]),
         // A one-row string map, as the JSON options bind.
         Literal::Map(pairs) => {
             let keys: ArrayRef = Arc::new(StringArray::from(
@@ -1152,6 +1295,7 @@ mod tests {
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
             legacy_time_parser: false,
+            binary_style: krishiv_kernels::binary_style::BinaryStyle::default(),
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             partition_shift: 0,
         }
@@ -1258,17 +1402,22 @@ mod tests {
     }
 
     #[test]
-    fn a_calendar_literal_past_the_nanosecond_field_is_refused_by_name() {
+    fn a_calendar_literal_holds_every_long_of_microseconds() {
         let literal = |micros| Literal::CalendarInterval {
             months: 0,
             days: 0,
             micros,
         };
-        assert!(super::literal_array(&literal(i64::MAX / 1000)).is_ok());
-        let e = super::literal_array(&literal(i64::MAX / 1000 + 1)).err();
-        assert_eq!(
-            e.map(|e| e.error_class().name().to_owned()).as_deref(),
-            Some("KRISHIV_UNSUPPORTED_FEATURE")
-        );
+        for micros in [i64::MAX / 1000 + 1, i64::MAX, i64::MIN] {
+            let a = super::literal_array(&literal(micros)).ok();
+            let got = a
+                .as_deref()
+                .and_then(krishiv_types::calendar::Calendars::of)
+                .and_then(|c| c.get(0));
+            assert_eq!(
+                got,
+                Some(krishiv_types::calendar::CalendarValue::new(0, 0, micros))
+            );
+        }
     }
 }

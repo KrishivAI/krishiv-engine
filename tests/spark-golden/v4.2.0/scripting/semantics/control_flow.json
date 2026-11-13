@@ -523,6 +523,134 @@
      "schema": "struct<b:int>"
     }
    ]
+  },
+  {
+   "name": "if_condition_text_0",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_BOOLEAN_STATEMENT",
+      "exception": "SqlScriptingException",
+      "params": {
+       "invalidStatement": "'ABC'"
+      },
+      "sqlstate": "22546"
+     },
+     "query": "BEGIN DECLARE x STRING DEFAULT 'q'; IF 'abc' THEN SELECT 'then'; END IF; END;"
+    }
+   ]
+  },
+  {
+   "name": "if_condition_text_1",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_BOOLEAN_STATEMENT",
+      "exception": "SqlScriptingException",
+      "params": {
+       "invalidStatement": "1+1"
+      },
+      "sqlstate": "22546"
+     },
+     "query": "BEGIN DECLARE x STRING DEFAULT 'q'; IF 1+1 THEN SELECT 'then'; END IF; END;"
+    }
+   ]
+  },
+  {
+   "name": "if_condition_text_2",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_BOOLEAN_STATEMENT",
+      "exception": "SqlScriptingException",
+      "params": {
+       "invalidStatement": "'TR' || 'UE'"
+      },
+      "sqlstate": "22546"
+     },
+     "query": "BEGIN DECLARE x STRING DEFAULT 'q'; IF 'tr' || 'ue' THEN SELECT 'then'; END IF; END;"
+    }
+   ]
+  },
+  {
+   "name": "if_condition_text_3",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_BOOLEAN_STATEMENT",
+      "exception": "SqlScriptingException",
+      "params": {
+       "invalidStatement": "X"
+      },
+      "sqlstate": "22546"
+     },
+     "query": "BEGIN DECLARE x STRING DEFAULT 'q'; IF x THEN SELECT 'then'; END IF; END;"
+    }
+   ]
+  },
+  {
+   "name": "if_condition_text_4",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_BOOLEAN_STATEMENT",
+      "exception": "SqlScriptingException",
+      "params": {
+       "invalidStatement": "1.5"
+      },
+      "sqlstate": "22546"
+     },
+     "query": "BEGIN DECLARE x STRING DEFAULT 'q'; IF 1.5 THEN SELECT 'then'; END IF; END;"
+    }
+   ]
+  },
+  {
+   "name": "while_condition_text",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_BOOLEAN_STATEMENT",
+      "exception": "SqlScriptingException",
+      "params": {
+       "invalidStatement": "'YES'"
+      },
+      "sqlstate": "22546"
+     },
+     "query": "BEGIN WHILE 'yes' DO SELECT 1; END WHILE; END;"
+    }
+   ]
+  },
+  {
+   "name": "repeat_condition_text",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_BOOLEAN_STATEMENT",
+      "exception": "SqlScriptingException",
+      "params": {
+       "invalidStatement": "7"
+      },
+      "sqlstate": "22546"
+     },
+     "query": "BEGIN REPEAT SELECT 1; UNTIL 7 END REPEAT; END;"
+    }
+   ]
+  },
+  {
+   "name": "searched_case_condition_text",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_BOOLEAN_STATEMENT",
+      "exception": "SqlScriptingException",
+      "params": {
+       "invalidStatement": "5"
+      },
+      "sqlstate": "22546"
+     },
+     "query": "BEGIN CASE WHEN 5 THEN SELECT 1; END CASE; END;"
+    }
+   ]
   }
  ],
  "file": "control_flow.sql",

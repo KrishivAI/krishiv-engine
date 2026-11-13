@@ -510,6 +510,11 @@ impl RowArena {
         out
     }
 
+    /// The arena's blocks in row order, each a batch of the arena schema (what an idle build writes to disk).
+    pub(crate) fn blocks(&self) -> impl Iterator<Item = &Batch> {
+        self.parts.iter().map(|part| &part.batch)
+    }
+
     pub(crate) fn hash(&self, row: u32) -> u64 {
         self.at(row).map_or(0, |(p, i)| p.hashes.value(i as usize))
     }

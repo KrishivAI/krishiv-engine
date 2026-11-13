@@ -58,7 +58,7 @@ pub use lower::{
 };
 pub use params::{ParameterMarker, parameter_markers};
 pub use redact::redact_sql;
-pub use summary::{query_summary, sanitize_query_text};
+pub use summary::{mask_literals, query_summary, sanitize_query_text};
 
 /// Spark's check that a temporary function's name takes no database
 /// (`INVALID_TEMP_OBJ_QUALIFIER`), for a name an `IDENTIFIER(...)` clause
@@ -136,6 +136,10 @@ pub struct ParserOptions {
     /// `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
     /// a select list with no aggregate call filters rows like `WHERE`.
     pub having_without_group_by_as_where: bool,
+    /// `spark.sql.collation.schemaLevel.enabled` (off in Spark 4.2): a schema may take
+    /// `DEFAULT COLLATION`; off, `ALTER SCHEMA .. DEFAULT COLLATION` is
+    /// `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`.
+    pub schema_level_collations: bool,
 }
 
 impl Default for ParserOptions {
@@ -182,6 +186,7 @@ impl ParserOptions {
                 "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
                 false,
             ),
+            schema_level_collations: on("spark.sql.collation.schemaLevel.enabled", false),
         }
     }
 }

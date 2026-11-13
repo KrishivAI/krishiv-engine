@@ -79,6 +79,8 @@ mod table;
 mod udf;
 
 #[cfg(test)]
+mod slice_tests;
+#[cfg(test)]
 mod tests;
 
 use std::sync::Arc;
@@ -186,6 +188,11 @@ pub enum AggregateFunction {
     MaxBy,
     /// `min_by(x, y)`, as `max_by` for the smallest `y` (same tie caveat).
     MinBy,
+    /// `max(x)` of a collated string, as `max_by(x, key)`, keeping the first of equal keys
+    /// (Spark's `Max` keeps its buffer on a tie, where `max_by` takes the new row).
+    MaxByKeyFirst,
+    /// `min(x)` of a collated string; see [`Self::MaxByKeyFirst`].
+    MinByKeyFirst,
     /// `collect_list(x)` (and `array_agg`, which the analyzer resolves as
     /// `collect_list` for Spark's display name): the non-NULL values in
     /// input order within a partition, partitions merged in partition-index
@@ -328,6 +335,11 @@ pub struct UdafCall {
     /// The argument columns after the analyzer's casts, as the UDF reads
     /// them (decimals on `Decimal128`).
     pub args: Vec<Field>,
+    /// The Spark types of the arguments, as the analyzer typed them (one per
+    /// `args` entry; `NULL` for an untyped `NULL`). The Arrow fields in
+    /// `args` carry the same types only as the carrier the UDF reads, which
+    /// loses `TIME(p)`, non-default intervals and the like.
+    pub arg_types: Vec<krishiv_types::DataType>,
     /// The result type, as the analyzer typed it.
     pub result: krishiv_types::DataType,
     /// Whether the result may be NULL.
@@ -607,7 +619,8 @@ impl AggregateExpr {
             }
             // `approx_count_distinct` is `bigint`.
             (F::ApproxCountDistinct { .. }, t) if accumulator::hll_supported(t) => DataType::Int64,
-            (F::MaxBy | F::MinBy, _) => match self.by_types() {
+            (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => match self.by_types()
+            {
                 Some((v, k))
                     if accumulator::min_max_supported(v) && accumulator::min_max_supported(k) =>
                 {
@@ -731,7 +744,7 @@ impl AggregateExpr {
             }
             // The key is NULL until a row with a key was taken: it says
             // whether the value (which may be NULL) counts.
-            (F::MaxBy | F::MinBy, _) => {
+            (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => {
                 let key = self.by_types().map_or(DataType::Null, |(_, k)| k.clone());
                 vec![
                     Field::new(n("value"), out, true),

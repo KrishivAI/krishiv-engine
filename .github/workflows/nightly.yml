@@ -19,7 +19,7 @@ concurrency:
 
 env:
   # Faster builds and links in CI: line tables only (backtraces and coverage keep
-  # line numbers); mold is installed per job by rui314/setup-mold.
+  # line numbers); mold is installed per job by .github/actions/setup-mold.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
@@ -55,7 +55,7 @@ jobs:
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: Pinned tools (sccache, nextest)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0,cargo-nextest@0.9.148
       - name: clippy (all features)
@@ -96,7 +96,7 @@ jobs:
           persist-credentials: false
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: $/.github/actions/setup-uv
       - name: Seed (the date)
         run: echo "SEED=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
       - name: Generate queries (DuckDB)
@@ -120,6 +120,16 @@ jobs:
             --fixture "$RUNNER_TEMP/diff/expr.json" \
             --known tests/fixtures/spark-4.2.0/expr-differential-known-failures.json \
             --out "$RUNNER_TEMP/diff/expr-mismatches.json"
+      # P2-T082b: Spark 4.2 writes and reads every partitioned-write case again; a difference from the committed
+      # fixture (a Krishiv writer change Spark reads differently) fails the job.
+      - name: Partitioned writes Spark reads back (Spark 4.2, local mode)
+        run: |
+          cargo build -p krishiv-testkit --locked --bin write-partition-cases
+          env -u SPARK_HOME uv run --no-project --python 3.12 --with 'pyspark==4.2.0' \
+            python -I tests/scripts/gen_partitioned_write_goldens.py \
+            --writer target/debug/write-partition-cases \
+            --check tests/fixtures/spark-4.2.0/partitioned-write-goldens.json \
+            > "$RUNNER_TEMP/diff/partitioned-writes.json"
       - name: TLP and NoREC hunt (one hour)
         run: |
           set -o pipefail
@@ -170,7 +180,7 @@ jobs:
       # cannot compile apache-avro 0.22 (async-drop cycle), which ended every run since.
       - name: Nightly toolchain with llvm-tools (branch coverage)
         run: rustup toolchain install nightly-2026-08-12 --profile minimal --component llvm-tools-preview
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-llvm-cov,cargo-nextest
       # No `--branch`: with branch coverage `llvm-cov export -format=lcov` crashes on the pinned
@@ -237,8 +247,8 @@ jobs:
         run: |
           rustup show active-toolchain
           rustup component add llvm-tools-preview
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/setup-uv
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-llvm-cov
       - name: Build the instrumented extension and run the Python tests
@@ -275,13 +285,21 @@ jobs:
   # and result channel (`crates/krishiv-exec/src/loom_model.rs`).
   # P2-T163: runtime filter snapshot publication
   # (`crates/krishiv-io/src/runtime_filter/tests.rs`).
-  # P2-T103: every wheel target, built and tested (wheels.yml).
-  wheels:
+  # Every job of ci.yml on main (msrv, hack, deny, docs, release-dry-run, miri, fuzz-build, the abi3 and cp314t wheels,
+  # ...): ci.yml has no schedule or push trigger of its own (owner 2026-11-08, each gate runs once). Its jobs run here
+  # with `github.event_name == 'schedule'`, including the full wheel matrix (P2-T103, `wheels-targets` calling wheels.yml),
+  # and a failure opens the
+  # "nightly CI failed" issue (nightly-failure-notice, a job of ci.yml).
+  ci:
     if: github.repository == 'KrishivAI/krishiv-engine'
     permissions:
       contents: read
       actions: read
-    uses: $/.github/workflows/wheels.yml
+      checks: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    uses: $/.github/workflows/ci.yml
 
   loom:
     if: github.repository == 'KrishivAI/krishiv-engine'
@@ -328,7 +346,7 @@ jobs:
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: Pinned tools (sccache)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0
       - name: TPC-H SF1 with no stalled poll
@@ -356,11 +374,53 @@ jobs:
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: Pinned tools (sccache)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0
       - name: Golden ratchet through the wire format
         run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
+
+  # Object stores against throw-away emulators (P2-T084): krishiv-io's S3 (MinIO) and Azure (Azurite) round trips,
+  # then TPC-H SF1 uploaded to MinIO and read back over `s3a://`, equal to the local answers. The script names and
+  # removes only its own containers. Docker Hub no longer serves `minio/minio`, so MinIO comes from Chainguard.
+  object-stores:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MINIO_IMAGE: cgr.dev/chainguard/minio@sha256:a1ac4589a5f8136b616e667b48a0bea9719bb10bd45799ea946f24bbedfafde4
+      AZURITE_IMAGE: mcr.microsoft.com/azure-storage/azurite@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5 # 3.37.0
+      AZ_CLI_IMAGE: mcr.microsoft.com/azure-cli@sha256:a4e2660b4099b76f02001a9316a0eb0dc56e330b5f7d1d1312c932200645bf26
+      # 22 queries over S3 and over the files take about a minute in a debug build (SF1, 12 cores).
+      KRISHIV_TPCH_DIR: ${{ runner.temp }}/tpch-sf1
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (sccache, nextest)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: sccache@0.18.0,cargo-nextest@0.9.148
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Generate TPC-H SF1 (DuckDB dbgen)
+        working-directory: bench
+        env:
+          KRISHIV_DATA: ${{ runner.temp }}/data
+        run: |
+          uv sync --frozen
+          uv run krishiv-datasets tpch-dbgen --sf 1
+          # The output directory is versioned by the generator: link whichever one holds the tables.
+          lineitem="$(find "$KRISHIV_DATA/tpch-dbgen" -name lineitem.parquet | head -n1)"
+          [ -n "$lineitem" ] || { echo "no lineitem.parquet under $KRISHIV_DATA/tpch-dbgen" >&2; exit 1; }
+          ln -s "$(dirname "$lineitem")" "$KRISHIV_TPCH_DIR"
+      - name: Object stores against emulators
+        run: tests/scripts/object_store_emulators.sh
 
   # The Spark golden ratchet for other Spark versions (P3-T090): the upstream goldens of the tag are fetched
   # here (they are not committed, only v4.2.0 is), the baseline of failing statements is committed under
@@ -380,7 +440,7 @@ jobs:
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: Pinned tools (sccache)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0
       - name: Fetch the Spark v4.3.0, v4.1.4, v4.0.5 and v3.5.9 goldens
@@ -448,7 +508,7 @@ jobs:
           persist-credentials: false
       - name: Nightly toolchain
         run: rustup toolchain install nightly-2026-08-12 --profile minimal
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: $/.github/actions/install-tool
         with:
           tool: cargo-fuzz@0.13.2
       # The corpus carries over between nights: restore the latest, save anew.
@@ -490,7 +550,7 @@ jobs:
       - name: Nightly toolchain
         run: rustup toolchain install nightly-2026-08-12 --profile minimal
       - name: Pinned tools (sccache, cargo-public-api)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0,cargo-public-api@0.52.0
       - name: Diff against the snapshots
@@ -500,3 +560,59 @@ jobs:
               > "$RUNNER_TEMP/$crate.txt"
             diff -u "crates/$crate/public-api.txt" "$RUNNER_TEMP/$crate.txt"
           done
+
+  # Breaking changes against the last release (docs/concepts/stability.md). Non-blocking until the 0.2
+  # release exists to compare against; then drop continue-on-error and set the baseline.
+  semver-checks:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Pinned tools (sccache, cargo-semver-checks)
+        uses: $/.github/actions/install-tool
+        with:
+          tool: sccache@0.18.0,cargo-semver-checks@0.43.0
+      - name: Check against the last release tag
+        run: |
+          base=$(git tag --list 'v*' --sort=-v:refname | grep -v -- '-' | head -n1 || true)
+          if [ -z "$base" ]; then echo "no released version yet; nothing to compare"; exit 0; fi
+          cargo semver-checks check-release -p krishiv -p krishiv-session -p krishiv-udf-sdk --baseline-rev "$base"
+
+  # The generated reference under docs/reference/ is what the generators print (SQL, Python, Rust).
+  docs-reference:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nightly toolchain (rustdoc JSON)
+        run: rustup toolchain install nightly-2026-08-12 --profile minimal
+      - name: Pinned tools (sccache, rustdoc-md)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: sccache@0.18.0
+      - name: Install rustdoc-md
+        run: cargo install rustdoc-md --version 0.2.0 --locked
+      - name: SQL, Python, Rust and configuration pages match the generators
+        run: |
+          cargo xtask docs-sql --check
+          cargo xtask docs-examples --check
+          cargo xtask docs-python --check
+          cargo xtask docs-rust --check
+          cargo xtask docs-config "$RUNNER_TEMP/configuration.md"
+          diff -u docs/reference/config/index.md "$RUNNER_TEMP/configuration.md"

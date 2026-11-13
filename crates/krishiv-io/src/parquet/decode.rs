@@ -54,7 +54,7 @@ use super::row_filter::{CACHE_BYTES, LateMaterialization, Worth};
 use crate::error::{FormatError, FormatResult};
 use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
 use crate::options::FormatOptions;
-use crate::request::{ColumnPath, PushdownExpr, RowFilterPolicy, ScanRequest, project_batch};
+use crate::request::{ColumnPath, Projector, PushdownExpr, RowFilterPolicy, ScanRequest};
 use crate::runtime_filter::ScanFilter;
 use crate::stats::{TriState, prune};
 
@@ -137,7 +137,8 @@ pub(crate) struct ParquetDecoder {
     /// Whether the row filter may evaluate the runtime filters
     /// ([`crate::RowLevel::runtime_filters`]).
     dynamic_rows: bool,
-    projection: Vec<ColumnPath>,
+    /// The batch projection with its plan cached across batches.
+    projector: Projector,
     output: SchemaRef,
     row_index: bool,
     widen: bool,
@@ -225,6 +226,30 @@ impl ParquetDecoder {
         req: &ScanRequest,
         o: &FormatOptions,
     ) -> FormatResult<Self> {
+        // Dates and timestamps Spark would rebase do not prune or filter
+        // rows before the guard sees them (`calendar.rs`).
+        let rebased = super::calendar::rebased_datetime_roots(
+            meta.calendars,
+            meta.reader.parquet_schema(),
+            o.str("datetimeRebaseMode"),
+        );
+        let stripped;
+        let req = if rebased.is_empty() {
+            req
+        } else {
+            let mut r = req.clone();
+            r.predicate = super::calendar::without_columns(req.predicate.as_ref(), &rebased);
+            if let crate::request::RowLevel::Prefix(p) = &req.row_level {
+                r.row_level = crate::request::RowLevel::Prefix(super::calendar::without_columns(
+                    p.as_ref(),
+                    &rebased,
+                ));
+            }
+            r.dynamic
+                .retain(|d| !super::calendar::reads_root(d, &rebased));
+            stripped = r;
+            &stripped
+        };
         let output = req.output_schema().map_err(FormatError::Other)?;
         let roots: Vec<&str> = output.fields().iter().map(|f| f.name().as_str()).collect();
         let guard = Guard::new(meta.calendars, meta.reader.parquet_schema(), &roots, o);
@@ -366,6 +391,7 @@ impl ParquetDecoder {
         // selection are not verified yet (design section 5, stage 3).
         let page = o.bool("pageIndex").unwrap_or(true) && !row_index;
         let bloom = o.bool("bloomFilter").unwrap_or(true);
+        let dict = o.bool("dictionaryFilter").unwrap_or(true);
         // The row filter reads the predicate's and the runtime filters'
         // columns under a projection of its own: an offset index attached
         // for some of a row group's fetched columns and not others would
@@ -388,10 +414,10 @@ impl ParquetDecoder {
         attach_leaves.extend(projection_mask(meta, &filter_columns).1);
         attach_leaves.sort_unstable();
         attach_leaves.dedup();
-        let pages = if page || bloom {
+        let pages = if page || bloom || dict {
             req.predicate.as_ref().and_then(|p| {
                 let units: Vec<usize> = planned.iter().map(|u| u.index).collect();
-                PageStage::plan(meta, &units, p, &attach_leaves, page, bloom)
+                PageStage::plan(meta, &units, p, &attach_leaves, page, bloom, dict)
             })
         } else {
             None
@@ -411,7 +437,7 @@ impl ParquetDecoder {
                 .map(|d| (d.clone(), d.generation()))
                 .collect(),
             dynamic_rows: req.row_level.runtime_filters(),
-            projection: req.projection.clone(),
+            projector: Projector::new(&req.projection),
             output,
             row_index,
             widen,
@@ -431,7 +457,7 @@ impl ParquetDecoder {
     }
 
     /// The decoded batch in the file-level output schema.
-    fn finish(&self, batch: RecordBatch) -> FormatResult<RecordBatch> {
+    fn finish(&mut self, batch: RecordBatch) -> FormatResult<RecordBatch> {
         let rows = batch.num_rows();
         let mut batch = batch;
         let row_number = if self.row_index {
@@ -470,7 +496,10 @@ impl ParquetDecoder {
         if !self.meta.variants.roots.is_empty() {
             batch = variant_columns(&batch, &self.meta.schema, &self.meta.variants.roots)?;
         }
-        let projected = project_batch(&batch, &self.projection).map_err(FormatError::Other)?;
+        if !self.meta.geos.roots.is_empty() {
+            batch = super::geo::to_engine(&batch, &self.meta.schema, &self.meta.geos.roots)?;
+        }
+        let projected = self.projector.project(&batch).map_err(FormatError::Other)?;
         let mut columns = projected
             .columns()
             .iter()
@@ -692,6 +721,8 @@ impl ParquetDecoder {
         self.metrics.page_index_rejected += stage.rejected;
         self.metrics.units_pruned_bloom += stage.bloom_pruned;
         self.metrics.bloom_rejected += stage.bloom_rejected;
+        self.metrics.units_pruned_dictionary += stage.dict_pruned;
+        self.metrics.dictionary_rejected += stage.dict_rejected;
         self.pages = None;
         if outcome.decisions.is_empty() {
             return Ok(());

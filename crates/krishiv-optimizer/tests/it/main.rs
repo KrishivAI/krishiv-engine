@@ -9,13 +9,18 @@
 )]
 
 mod cse;
+mod join_cost;
+mod join_enumerator;
 mod join_order;
+mod oracle;
 mod plan_stats;
 mod props;
 mod qerror;
 mod rules;
+mod share_subtree;
 mod sum_rewrite;
 mod support;
 mod tpcds;
 mod tpch;
 mod udf;
+mod win_magic;

@@ -12,7 +12,7 @@ use krishiv_plan::{
 use krishiv_types::DataType;
 
 /// A set of attribute ids.
-pub(crate) type Attrs = HashSet<AttrId>;
+pub(crate) type Attrs = HashSet<AttrId, std::hash::BuildHasherDefault<AddrHasher>>;
 
 /// A relation or an expression, for walks that enter subquery plans.
 #[derive(Clone, Copy)]
@@ -22,7 +22,7 @@ enum Item<'a> {
     Expr(&'a Expr, bool),
 }
 
-/// A hasher for the addresses of plan nodes: they are already well spread,
+/// A hasher for the addresses of plan nodes and attribute ids: they are already well spread,
 /// so a multiply replaces SipHash (these sets are walked for every
 /// expression of every rule).
 #[derive(Default)]
@@ -42,22 +42,58 @@ impl std::hash::Hasher for AddrHasher {
     fn write_usize(&mut self, n: usize) {
         self.0 = (self.0 ^ n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0 ^ n).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
 }
 
 /// A set of node addresses.
 pub(crate) type AddrSet<T> = HashSet<*const T, std::hash::BuildHasherDefault<AddrHasher>>;
 
+/// A map keyed by node addresses.
+pub(crate) type AddrMap<T, V> =
+    std::collections::HashMap<*const T, V, std::hash::BuildHasherDefault<AddrHasher>>;
+
 /// Visits `e` and every expression and relation of its subquery plans
 /// once each, without recursing.
 fn walk<'a>(e: &'a Expr, mut f: impl FnMut(Item<'a>)) {
-    let mut seen: AddrSet<()> = AddrSet::default();
+    // Most expressions are small: a short list is searched before any set is
+    // built (the set costs an allocation and a hash per node, and this walk
+    // runs for every expression of every rule).
+    const SMALL: usize = 24;
+    // A leaf (a column, a literal) is most of the expressions walked.
+    if !matches!(e.node, ExprNode::Subquery { .. }) {
+        let mut has_child = false;
+        e.for_each_child(&mut |_| has_child = true);
+        if !has_child {
+            f(Item::Expr(e, false));
+            return;
+        }
+    }
+    let mut few: Vec<*const ()> = Vec::new();
+    let mut seen: Option<AddrSet<()>> = None;
     let mut stack = vec![Item::Expr(e, false)];
     while let Some(item) = stack.pop() {
-        let key = match item {
+        let key: *const () = match item {
             Item::Plan(p) => std::ptr::from_ref(p).cast(),
             Item::Expr(x, _) => std::ptr::from_ref(x).cast(),
         };
-        if !seen.insert(key) {
+        let fresh = match &mut seen {
+            Some(set) => set.insert(key),
+            None if few.contains(&key) => false,
+            None if few.len() < SMALL => {
+                few.push(key);
+                true
+            }
+            None => {
+                let mut set: AddrSet<()> = few.drain(..).collect();
+                let fresh = set.insert(key);
+                seen = Some(set);
+                fresh
+            }
+        };
+        if !fresh {
             continue;
         }
         f(item);
@@ -97,7 +133,7 @@ pub(crate) fn references_into(e: &Expr, out: &mut Attrs) {
 
 /// The attributes `e` reads; see [`references_into`].
 pub(crate) fn references(e: &Expr) -> Attrs {
-    let mut out = Attrs::new();
+    let mut out = Attrs::default();
     references_into(e, &mut out);
     out
 }
@@ -107,11 +143,16 @@ pub(crate) fn references(e: &Expr) -> Attrs {
 /// predicate holding one is never moved, and a projection holding one is
 /// never inlined.
 pub(crate) fn is_deterministic(e: &Expr) -> bool {
+    let nondeterministic = |x: &Expr| matches!(&x.node, ExprNode::Resolved(ResolvedExpr::Function(f)) if !f.deterministic);
+    match quick(e, &mut 48, false, &nondeterministic) {
+        Quick::Hit => return false,
+        Quick::Miss => return true,
+        Quick::Unknown => {}
+    }
     let mut ok = true;
     walk(e, |item| {
         if let Item::Expr(x, _) = item
-            && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
-            && !f.deterministic
+            && nondeterministic(x)
         {
             ok = false;
         }
@@ -119,8 +160,49 @@ pub(crate) fn is_deterministic(e: &Expr) -> bool {
     ok
 }
 
+/// The answer of a bounded walk ([`quick`]).
+enum Quick {
+    Hit,
+    Miss,
+    /// Too big, or a subquery plan to enter: use [`walk`].
+    Unknown,
+}
+
+/// Looks at up to 48 nodes of `e` without allocating: `hit` is asked of
+/// each; a subquery is a hit when `subquery_hits`, else the answer is
+/// unknown (its plan needs the full walk). Most expressions are this small
+/// and the rewriter asks about every one of them at every node.
+fn quick(e: &Expr, budget: &mut u32, subquery_hits: bool, hit: &dyn Fn(&Expr) -> bool) -> Quick {
+    if *budget == 0 {
+        return Quick::Unknown;
+    }
+    *budget -= 1;
+    if matches!(e.node, ExprNode::Subquery { .. }) {
+        return if subquery_hits {
+            Quick::Hit
+        } else {
+            Quick::Unknown
+        };
+    }
+    if hit(e) {
+        return Quick::Hit;
+    }
+    let mut out = Quick::Miss;
+    e.for_each_child(&mut |c| {
+        if matches!(out, Quick::Miss) {
+            out = quick(c, budget, subquery_hits, hit);
+        }
+    });
+    out
+}
+
 /// Whether `e` holds a subquery expression.
 pub(crate) fn has_subquery(e: &Expr) -> bool {
+    match quick(e, &mut 48, true, &|_| false) {
+        Quick::Hit => return true,
+        Quick::Miss => return false,
+        Quick::Unknown => {}
+    }
     let mut found = false;
     walk(e, |item| {
         if let Item::Expr(x, false) = item {
@@ -472,4 +554,66 @@ fn same_in(a: &Expr, b: &Expr, equal: &mut HashSet<(*const Expr, *const Expr)>) 
         equal.insert(key);
     }
     result
+}
+
+/// The columns of `a = b` over two plain columns of the same type, which
+/// is transitive (`=`, not `<=>`: a null never matches, so with `a = b`
+/// and `b = c`, `a = c` holds of every row that passes both). Array, map
+/// and struct columns are left out: a class can turn a join key into a
+/// filter of one input, and the executor's scalar `=` does not compare
+/// every nested type its join keys do (a struct holding an array), so
+/// their equalities stay as the query wrote them.
+pub(crate) fn equality(e: &Expr) -> Option<[&BoundColumn; 2]> {
+    let Some((Builtin::Eq, [a, b], _)) = builtin(e) else {
+        return None;
+    };
+    fn col(e: &Expr) -> Option<&BoundColumn> {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+            _ => None,
+        }
+    }
+    let (a, b) = (col(a)?, col(b)?);
+    (a.id != b.id && a.data_type == b.data_type && !a.data_type.is_nested()).then_some([a, b])
+}
+
+/// The classes of the column equalities `a = b` (same type) among `preds`.
+pub(crate) fn equality_classes<'a>(preds: impl IntoIterator<Item = &'a Arc<Expr>>) -> Classes {
+    let mut classes = Classes::default();
+    for p in preds {
+        if let Some([a, b]) = equality(p) {
+            classes.union([a.id, b.id]);
+        }
+    }
+    classes
+}
+
+/// Union-find over attributes, for the equalities that a set of joined
+/// inputs already holds.
+#[derive(Default)]
+pub(crate) struct Classes(HashMap<AttrId, AttrId>);
+
+impl Classes {
+    pub(crate) fn find(&mut self, mut x: AttrId) -> AttrId {
+        while let Some(&p) = self.0.get(&x) {
+            if p == x {
+                break;
+            }
+            let gp = self.0.get(&p).copied().unwrap_or(p);
+            self.0.insert(x, gp);
+            x = gp;
+        }
+        x
+    }
+
+    /// Joins the classes of `a` and `b`; false when they were one already.
+    pub(crate) fn union(&mut self, [a, b]: [AttrId; 2]) -> bool {
+        let (ra, rb) = (self.find(a), self.find(b));
+        if ra == rb {
+            return false;
+        }
+        self.0.insert(ra, rb);
+        self.0.entry(rb).or_insert(rb);
+        true
+    }
 }

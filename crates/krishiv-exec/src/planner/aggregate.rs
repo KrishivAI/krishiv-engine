@@ -81,6 +81,9 @@ impl Planner<'_> {
                 at
             }));
         }
+        // Python UDFs in keys and arguments run below (Spark's
+        // `ExtractGroupingPythonUDFFromAggregate`).
+        let (input, wanted) = self.extract_python(input, &wanted)?;
         let (input, columns) = self.with_columns(input, &wanted)?;
         let k = keys.len();
         let mut aggregates = Vec::with_capacity(calls.len());
@@ -240,6 +243,8 @@ impl Planner<'_> {
             .iter()
             .map(|e| replace(e, &key_ids, &call_ids))
             .collect::<Result<Vec<_>>>()?;
+        // Python UDFs over keys and results run above the aggregate.
+        let (agg, rewritten) = self.extract_python(agg, &rewritten)?;
         self.project(agg, &rewritten)
     }
 
@@ -440,6 +445,7 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
             name: name.clone(),
             version: *version,
             args: Vec::new(),
+            arg_types: Vec::new(),
             result: f.data_type.clone(),
             nullable: f.nullable,
             state: Vec::new(),
@@ -473,6 +479,9 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "try_sum" if f.args.len() == 1 => (AggregateFunction::TrySum, f.args.clone()),
         "avg" | "mean" => (AggregateFunction::Avg, f.args.clone()),
         "try_avg" if f.args.len() == 1 => (AggregateFunction::TryAvg, f.args.clone()),
+        // The collation rewrite adds the key of a collated value.
+        "max" if f.args.len() == 2 => (AggregateFunction::MaxByKeyFirst, f.args.clone()),
+        "min" if f.args.len() == 2 => (AggregateFunction::MinByKeyFirst, f.args.clone()),
         "min" | "bool_and" | "every" => (AggregateFunction::Min, f.args.clone()),
         "max" | "bool_or" | "some" | "any" => (AggregateFunction::Max, f.args.clone()),
         "first" | "first_value" => (AggregateFunction::First { ignore_nulls }, value),
@@ -833,6 +842,14 @@ pub(super) fn aggregate_expr(
 ) -> Result<AggregateExpr> {
     let typed = |a: &usize| view_type(schema.field(*a).data_type());
     if let AggregateFunction::Udf(mut call) = function {
+        call.arg_types = args
+            .iter()
+            .map(|a| {
+                krishiv_types::DataType::from_arrow_field(schema.field(*a)).map_err(|e| {
+                    internal(&format!("aggregate UDF argument {}: {e}", schema.field(*a)))
+                })
+            })
+            .collect::<Result<_>>()?;
         call.args = args
             .iter()
             .enumerate()
@@ -854,7 +871,10 @@ pub(super) fn aggregate_expr(
     }
     if matches!(
         function,
-        AggregateFunction::MaxBy | AggregateFunction::MinBy
+        AggregateFunction::MaxBy
+            | AggregateFunction::MinBy
+            | AggregateFunction::MaxByKeyFirst
+            | AggregateFunction::MinByKeyFirst
     ) {
         let [value, key] = args[..] else {
             return Err(internal("max_by without a value and a key"));
@@ -909,4 +929,51 @@ pub(super) fn udaf_state(
 
 fn non_null_literal(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Literal(l) if !matches!(l, krishiv_plan::Literal::Null(_)))
+}
+
+#[cfg(test)]
+mod udaf_arg_type_tests {
+    use super::*;
+    use arrow_schema::{DataType, Schema};
+
+    fn call() -> UdafCall {
+        UdafCall {
+            name: "f".to_owned(),
+            version: 1,
+            args: Vec::new(),
+            arg_types: Vec::new(),
+            result: krishiv_types::DataType::Long,
+            nullable: true,
+            state: Vec::new(),
+        }
+    }
+
+    /// The Spark types of a UDF call's arguments are read from the input
+    /// fields' Spark type tag; a tag that is not a type is an internal error.
+    #[test]
+    fn an_aggregate_udf_reads_its_spark_argument_types_off_the_input() {
+        let tagged = |tag: &str| {
+            Field::new("a", DataType::Int64, true).with_metadata(std::collections::HashMap::from([
+                (
+                    krishiv_types::arrow::SPARK_TYPE_METADATA_KEY.to_owned(),
+                    tag.to_owned(),
+                ),
+            ]))
+        };
+        let build = |tag: &str| {
+            aggregate_expr(
+                AggregateFunction::Udf(Box::new(call())),
+                vec![0],
+                None,
+                &Schema::new(vec![tagged(tag)]),
+                "n".to_owned(),
+            )
+        };
+        let AggregateFunction::Udf(c) = build("bigint").unwrap().function else {
+            panic!("not a UDF call");
+        };
+        assert_eq!(c.arg_types, vec![krishiv_types::DataType::Long]);
+        let e = build("not a type").unwrap_err();
+        assert!(e.to_string().contains("aggregate UDF argument"), "{e}");
+    }
 }

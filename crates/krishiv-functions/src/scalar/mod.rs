@@ -34,6 +34,7 @@ mod array_shape;
 mod bitwise;
 mod chars;
 mod codec;
+mod collation;
 mod collection;
 mod csv;
 mod datetime;
@@ -46,6 +47,7 @@ mod json;
 mod json_tuple;
 mod map;
 mod math;
+mod mersenne;
 mod misc;
 mod number;
 mod predicate;
@@ -168,6 +170,9 @@ pub struct BindOptions {
     /// use `SimpleDateFormat`, and the JSON, CSV and XML functions the
     /// lenient `FastDateFormat` for their `DATE` and `TIMESTAMP` fields.
     pub legacy_time_parser: bool,
+    /// `spark.sql.binaryOutputStyle`: how `to_csv` and `to_xml` print a `BINARY` field (an
+    /// unset config prints `[45 61]`, which is `HEX_DISCRETE`).
+    pub binary_style: krishiv_kernels::binary_style::BinaryStyle,
     /// The session's user (`current_user()`).
     pub user: Arc<str>,
     /// Counts the unseeded random binds of one plan instantiation, in
@@ -196,6 +201,7 @@ impl BindOptions {
                 replace_malformed: false,
             },
             legacy_time_parser: false,
+            binary_style: krishiv_kernels::binary_style::BinaryStyle::HexDiscrete,
             user: Arc::from("unknown"),
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
@@ -255,6 +261,16 @@ impl BindOptions {
     #[must_use]
     pub const fn with_legacy_time_parser(mut self, on: bool) -> Self {
         self.legacy_time_parser = on;
+        self
+    }
+
+    /// With `spark.sql.binaryOutputStyle = style`.
+    #[must_use]
+    pub const fn with_binary_style(
+        mut self,
+        style: krishiv_kernels::binary_style::BinaryStyle,
+    ) -> Self {
+        self.binary_style = style;
         self
     }
 
@@ -511,6 +527,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (xml::NAMES, xml::bind),
     (vector::NAMES, vector::bind),
     (element::NAMES, element::bind),
+    (collation::NAMES, collation::bind),
     (array_edit::NAMES, array_edit::bind),
     (array_scan::NAMES, array_scan::bind),
     (array_set::NAMES, array_set::bind),

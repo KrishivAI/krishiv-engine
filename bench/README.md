@@ -28,9 +28,32 @@ For publishable numbers run from a clean committed tree (the result JSON records
 ## Baselines (`baselines/docker-compose.yml`, project `krishiv-bench`)
 | Service | Image | Host port | Notes |
 |---|---|---|---|
-| spark | `apache/spark:4.2.0` | 15002 (Connect), 14040 (UI) | `local[*]`, driver 8g, container cap 12g, `$KRISHIV_DATA` mounted **read-only** at `/data` |
-| minio | `minio/minio` (digest-pinned, RELEASE.2025-09-07) | 19100 (S3), 19101 (console) | own instance, creds `krishiv` / `krishiv-bench-secret`; unrelated to `bench-minio` |
+| spark | `apache/spark:4.2.0` | 15002 (Connect), 14040 (UI) | `local[*]`, driver `SPARK_DRIVER_MEMORY` (default 8g), container cap `SPARK_MEM_LIMIT` (default 12g; the benchmarks page's TPC-H baseline uses 20g in 28g, Krishiv's engine memory and scope), `$KRISHIV_DATA` mounted **read-only** at `/data` |
+| minio | `cgr.dev/chainguard/minio` (digest-pinned, RELEASE.2026-11-09; Docker Hub no longer serves `minio/minio`; runs as root to keep an existing volume) | 19100 (S3), 19101 (console) | own instance, creds `krishiv` / `krishiv-bench-secret`; unrelated to `bench-minio` |
 | kafka | `apache/kafka:4.0.0` (KRaft, 1 node) | 19092 | profile `kafka`: `docker compose ... --profile kafka up -d` |
+
+### Spark baseline of the benchmarks page (method)
+The TPC-H Spark column of the 0.2 benchmarks page (first run 2026-11-10/11 on the laptop, 12 cores, 62 GB) is
+measured with this compose service and the harness's `spark-connect` engine:
+- Spark 4.2.0 (`apache/spark:4.2.0`), Spark Connect, `local[*]` (12 cores), Spark 4 defaults (`spark.sql.ansi.enabled`
+  not set: Spark 4's default, on),
+  `spark.sql.shuffle.partitions=24`, `SPARK_DRIVER_MEMORY=20g` in `SPARK_MEM_LIMIT=28g`: Krishiv's engine memory
+  (`--memory-limit 20g`) and process scope (28 GB). Client `pyspark[connect]==4.2.0`; Spark's times include the
+  Connect round trip (one query, results collected to the client).
+- `krishiv-bench run --engine spark-connect --cold --iterations 2 --warmup 0 --min-mem-avail 0.3`: the page cache is
+  dropped for the dataset before every run; the median (for two runs, their mean) is reported. `--min-mem-avail 0.3`
+  because the JVM keeps its heap between queries: under the default 0.75 the memory guard waits for MemAvailable and
+  then marks the runs invalid on a 62 GB box with a 28 GB container.
+- SF10 (`tpch-duckdb/sf10`, `--timeout 1800`) and SF100 (`tpch/sf100`, `--timeout 3600`), the same Parquet files as
+  Krishiv's and DuckDB's `reproduce --cold` rows of the same night. SF1000: one query per `run`, two cold runs each,
+  every run capped at 1,800 s, in query order, until a deadline; a run past the cap is cancelled (`interruptAll`) and
+  the query is listed as not finished.
+- Results are checked by row count against Krishiv's and DuckDB's (the harness has no answer values for these
+  datasets): every SF10 and SF100 query returned the same row count as that night's `reproduce`, and every finished
+  SF1000 query the same as the 2026-11-08 `reproduce` at SF1000 (`20261108T224018Z_reproduce_tpch_sf1000.json`).
+- `SPARK_DRIVER_MEMORY` is also a variable Spark reads itself: exported in a shell that also runs the local
+  `spark-local` engine, it resizes that engine's driver too.
+- The service is stopped after the night (`docker compose stop spark`): its JVM holds its heap.
 
 Ports are env-overridable (`SPARK_CONNECT_PORT`, `MINIO_S3_PORT`, `KAFKA_PORT`, ...). Spark 4.2.0 is the newest 4.2.x
 published on Docker Hub (verified 2026-10-16 via `docker manifest inspect`); the client is pinned to
@@ -399,8 +422,24 @@ uv run krishiv-bench run --engine duckdb --suite dsb --sf 1 --dataset dsb@v1
   recorded; Parquet is written with one thread), an order-independent row hash per table and the SHA-256 of each query and of the oracle file. The upstream C code
   reads uninitialised locals, so the tools are built with `-ftrivial-auto-var-init=zero`: without it the data differs between optimisation levels.
 * `relation_count_distribution` in the manifest is the number of base-table references per query (a repeated table counts each time).
-* Scope: `run` supports the suite; `reproduce`, `abba` and `ab` do not yet. Full scale on the benchmark server: `uv run krishiv-datasets dsb --sf 10` (the
+* Scope: `run`, `ab` and `join-trees` support the suite; `reproduce` and `abba` do not yet. Full scale on the benchmark server: `uv run krishiv-datasets dsb --sf 10` (the
   conversion is single-threaded and `dsdgen` is single-process: about 3.5 min per unit on a laptop).
+## Join enumerators (`join-trees`, P2-T113)
+
+```bash
+uv run krishiv-bench join-trees --suite dsb --sf 10            # arms dpsub, dpsub12, dpsub13, greedy (the first is the base)
+uv run krishiv-bench join-trees --suite tpcds --arm base=krishiv.optimizer.joinEnumerator=dpsub \
+    --arm wide=krishiv.optimizer.joinDpLimit=12 --plan-reps 50
+```
+
+Nothing is executed. Per arm (a set of session settings) one runner plans every query over the dataset, so the
+optimizer reads its real statistics: `EXPLAIN VERBOSE` once, whose `JoinOrder` notes describe each inner-join tree
+(inputs, edges, hyperedges, enumerator, greedy fallback and why, csg-cmp pairs costed and candidates looked at,
+estimated `C_out`, plan shape), and `EXPLAIN` `--plan-reps` times for planning time (p50/p99; parsing, analysis,
+optimization and physical planning, so an upper bound on the enumerator's own time). The summary lists the trees by
+size and fallback and the queries whose plan shape differs from the base arm with their estimated-cost ratio; time
+those with `ab --a-conf ... --b-conf ...` over one runner.
+
 ## Operator microbenchmarks (`micro`, P2-T168)
 Krishiv, DuckDB and Polars run the **same single-operator query over the same Parquet files**, so a slow operator can be told from a
 slow plan: if Krishiv's operator time (below) is in line with the others but its wall time is not, the plan is at fault.

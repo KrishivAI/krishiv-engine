@@ -14,7 +14,8 @@
 //! must keep order). The pipelines of a fan-in (`UNION ALL`) end in one
 //! sink: they run one after another, in pipeline order, when none of
 //! their shared operators needs a cross-driver flush, and start together
-//! otherwise, sharing the sink's state either way. The coordinator awaits every driver; the first error
+//! otherwise (taking turns with a [`Baton`] under `krishiv.deterministicOrder`),
+//! sharing the sink's state either way. The coordinator awaits every driver; the first error
 //! (a driver's error, a panic, a memory abort, cancellation) wins and
 //! cancels the rest, which are also aborted. The result stream ends only
 //! after every task has ended and every pipeline's state is dropped, so the
@@ -37,7 +38,7 @@ use crate::driver::{PipelineRun, spawn_driver};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::OperatorEntry;
-use crate::morsel::{Barrier, Countdown};
+use crate::morsel::{Barrier, Baton, Countdown};
 use crate::operator::GlobalState;
 use crate::physical::{PhysicalPlan, WorkerContext, instantiate};
 use crate::pipeline::{ExecNode, Pipeline, PipelineBuilder};
@@ -141,15 +142,20 @@ impl QueryRunner {
         };
         let executor = Arc::clone(&self.executor);
         let q = Arc::clone(&query);
+        // The pipeline task runs inside the span that submitted it (the caller's `krishiv.execute`).
+        let span = tracing::Span::current();
         drop(self.executor.spawn(
             query.class(),
-            Box::pin(async move {
-                if let Err(e) = run_pipelines(&executor, &q, pipelines).await {
-                    q.fail(e);
-                }
-                q.blocking_done().await;
-                finish.complete();
-            }),
+            Box::pin(tracing::Instrument::instrument(
+                async move {
+                    if let Err(e) = run_pipelines(&executor, &q, pipelines).await {
+                        q.fail(e);
+                    }
+                    q.blocking_done().await;
+                    finish.complete();
+                },
+                span,
+            )),
         ));
         Ok(Box::pin(ResultStream { channel, query }))
     }
@@ -502,10 +508,15 @@ fn start_group(
         };
         let base = u32::try_from(next_partition)
             .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
-        // `drivers` fits `usize`; the end index must fit `u32` as well.
-        u32::try_from(next_partition + drivers as u64)
+        // The next member starts past every split of this one (a source can
+        // have more splits than drivers), so split ids never overlap. The
+        // 2^24 cap only bounds the id space: a source reporting more splits
+        // than that would see members' split ids (and seeded draws) overlap.
+        let span = drivers.max(source.partitions(&source_global).min(1 << 24));
+        // `span` fits `usize`; the end index must fit `u32` as well.
+        u32::try_from(next_partition + span as u64)
             .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
-        next_partition += drivers as u64;
+        next_partition += span as u64;
         started.push(MemberStart {
             pipeline,
             operator_deps,
@@ -606,12 +617,15 @@ fn drivers(run: &Arc<PipelineRun>, base: u32, count: usize) -> Result<Vec<TaskHa
         let partition = base
             .checked_add(offset)
             .ok_or_else(|| internal("too many drivers for u32 partition ids".to_owned()))?;
-        out.push(spawn_driver(Arc::clone(run), partition));
+        out.push(spawn_driver(Arc::clone(run), partition, base));
     }
     Ok(out)
 }
 
 /// Starts every member of `group` together, sharing the sink's state.
+/// Under `krishiv.deterministicOrder` (one driver per member) the members
+/// of a fan-in take turns with a [`Baton`], in member order, so the shared
+/// operators see their rows in the same order on every run.
 fn spawn_group(
     executor: &Arc<dyn Executor>,
     query: &Arc<QueryContext>,
@@ -624,9 +638,13 @@ fn spawn_group(
         members,
     } = group;
     let total = members.iter().map(|m| m.drivers).sum();
+    let baton = (query.config().deterministic_order
+        && members.len() > 1
+        && members.iter().all(|m| m.drivers == 1))
+    .then(|| Arc::new(Baton::new(members.len())));
     let mut runs = Vec::with_capacity(members.len());
     let mut handles = Vec::with_capacity(total);
-    for m in members {
+    for (member, m) in members.into_iter().enumerate() {
         let member_barriers = member_barriers(&m, &barriers)?;
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
@@ -635,6 +653,7 @@ fn spawn_group(
             source_global: m.source_global,
             sink_global: Arc::clone(&sink_global),
             countdown: Arc::clone(&countdown),
+            turn: baton.as_ref().map(|b| (Arc::clone(b), member)),
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
@@ -669,6 +688,7 @@ async fn run_group_sequential(
             source_global: m.source_global,
             sink_global: Arc::clone(&sink_global),
             countdown: Arc::clone(&countdown),
+            turn: None,
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });

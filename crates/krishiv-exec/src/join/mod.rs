@@ -392,19 +392,29 @@ pub(crate) enum Counter {
     ArenaKeyBytes,
     /// The bytes of the finalized indexes (and match bitmaps).
     IndexBytes,
+    /// The most bytes of concatenation copies `finalize` held reserved at
+    /// once (partitions copying in parallel).
+    MaxFinalizeCopyBytes,
     /// The largest run of chunks a build-phase coalesce merged (each merge
     /// reserves the run again while it copies).
     MaxCoalesceCopyBytes,
+    /// Partitions of the finished build written to disk while it waited
+    /// for its probe (`build::IdleBuild`; reported with the probe's
+    /// counters, which are read after the build's).
+    IdleSpills,
+    /// The bytes of their spill files.
+    IdleSpilledBytes,
 }
 
 /// The build sink's counters, by name.
-const BUILD_COUNTERS: [(Counter, &str); 15] = [
+const BUILD_COUNTERS: [(Counter, &str); 16] = [
     (Counter::BuildRows, "build_rows"),
     (Counter::SteadyReservedBytes, "steady_reserved_bytes"),
     (Counter::ArenaBytes, "arena_bytes"),
     (Counter::ArenaHashBytes, "arena_hash_bytes"),
     (Counter::ArenaKeyBytes, "arena_key_bytes"),
     (Counter::IndexBytes, "index_bytes"),
+    (Counter::MaxFinalizeCopyBytes, "max_finalize_copy_bytes"),
     (Counter::MaxCoalesceCopyBytes, "max_coalesce_copy_bytes"),
     (Counter::HashEntries, "hash_entries"),
     (Counter::HashBuckets, "hash_buckets"),
@@ -436,8 +446,16 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 ];
 
 /// Counters updated by every driver (relaxed: read once the query ended).
-#[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 30]);
+#[derive(Debug)]
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 33]);
+
+impl Default for Counters {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| {
+            std::sync::atomic::AtomicU64::new(0)
+        }))
+    }
+}
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {
@@ -465,6 +483,7 @@ impl Counters {
                     Counter::RecursionDepth
                     | Counter::MaxProbeLength
                     | Counter::MaxPartitionNs
+                    | Counter::MaxFinalizeCopyBytes
                     | Counter::MaxCoalesceCopyBytes => Metric::Max(v),
                     _ => Metric::Count(v),
                 };
@@ -487,6 +506,13 @@ impl Counters {
 
     pub(crate) fn probe(&self) -> crate::metrics::ExtraMetrics {
         let mut out = self.report(&PROBE_COUNTERS);
+        // Only a build spilled while it waited for its probe reports it.
+        if self.get(Counter::IdleSpills) > 0 {
+            out.extend(self.report(&[
+                (Counter::IdleSpills, "idle_spills"),
+                (Counter::IdleSpilledBytes, "idle_spilled_bytes"),
+            ]));
+        }
         // Only a join that fell back to sort-merge reports it.
         if self.get(Counter::MergeFallbacks) > 0 {
             out.extend(self.report(&[(Counter::MergeFallbacks, "merge_fallbacks")]));
@@ -528,6 +554,23 @@ pub(crate) struct Shared {
     runtime: Vec<JoinRuntimeFilter>,
     /// Where the build publishes `runtime`, and as which producer.
     publisher: Option<FilterPublisher>,
+    /// What the probe keeps of each input batch (design P2-E3 U2).
+    select: Option<ProbeSelectSpec>,
+}
+
+/// A filter and a scan's row stage fused into the probe (design P2-E3 U2,
+/// [`crate::physical::ProbeSelect`]): each probe driver selects the rows
+/// of its input batches that `predicate` is TRUE for and the row stage of
+/// its scan driver keeps, and joins only those, by id.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProbeSelectSpec {
+    /// The fused filter's predicate, over the probe input.
+    pub(crate) predicate: Option<Arc<dyn Predicate>>,
+    /// The runtime filters whose row stage the scan handed to the probe.
+    pub(crate) row_stage: Option<crate::operators::RuntimeFilters>,
+    /// The probe input's columns of each batch received (a fused
+    /// projection; `None`: the batch as it is).
+    pub(crate) columns: Option<Vec<usize>>,
 }
 
 /// Where a build publishes its runtime filters.
@@ -746,6 +789,7 @@ impl Shared {
             counters: Counters::default(),
             runtime: Vec::new(),
             publisher: None,
+            select: None,
         })
     }
 
@@ -953,6 +997,59 @@ impl HashJoin {
         }
         shared.runtime = filters;
         shared.publisher = Some(FilterPublisher { values, producer });
+        Ok(self)
+    }
+
+    /// The same join joining only the rows of each probe batch that
+    /// `predicate` (over the probe input) is TRUE for: a filter fused into
+    /// the probe, which selects the rows by id instead of joining a filtered
+    /// copy (design P2-E3 U2). The result is the join of the filtered input.
+    /// Call before the join is shared. Public for tests and embedders that
+    /// build a join by hand; the planner sets it from the plan.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a join already shared.
+    pub fn with_probe_filter(mut self, predicate: Arc<dyn Predicate>) -> Result<Self> {
+        let shared = Arc::get_mut(&mut self.0)
+            .ok_or_else(|| internal("a probe filter added to a shared join".to_owned()))?;
+        shared
+            .select
+            .get_or_insert_with(ProbeSelectSpec::default)
+            .predicate = Some(predicate);
+        Ok(self)
+    }
+
+    /// The same join reading its probe input as columns `columns` of the
+    /// batches it receives, whose rows the selection is evaluated over (a
+    /// fused projection, design P2-E3 U2). Call before the join is shared.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a join already shared.
+    pub(crate) fn with_probe_columns(mut self, columns: Vec<usize>) -> Result<Self> {
+        let shared = Arc::get_mut(&mut self.0)
+            .ok_or_else(|| internal("a probe projection added to a shared join".to_owned()))?;
+        shared
+            .select
+            .get_or_insert_with(ProbeSelectSpec::default)
+            .columns = Some(columns);
+        Ok(self)
+    }
+
+    /// The same join running the row stage `filters`' scan handed it
+    /// (design P2-E3 U2). Call before the join is shared.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a join already shared.
+    pub(crate) fn with_row_stage(
+        mut self,
+        filters: crate::operators::RuntimeFilters,
+    ) -> Result<Self> {
+        let shared = Arc::get_mut(&mut self.0)
+            .ok_or_else(|| internal("a probe row stage added to a shared join".to_owned()))?;
+        shared
+            .select
+            .get_or_insert_with(ProbeSelectSpec::default)
+            .row_stage = Some(filters);
         Ok(self)
     }
 
@@ -1204,6 +1301,33 @@ mod tests {
         assert_eq!(
             j.0.arena_schema(&h).field(1).data_type(),
             &DataType::LargeBinary
+        );
+    }
+
+    /// A probe handed a row stage its scan never built fails in every
+    /// build (it once only `debug_assert!`ed, and ran without the stage).
+    #[test]
+    fn a_probe_without_its_handed_row_stage_fails() {
+        use krishiv_memory::{MemoryConfig, MemoryPool, SpillOwner, TreePool};
+
+        let root = TreePool::new(&MemoryConfig::default());
+        let query = crate::QueryContext::new(
+            crate::QueryId(1),
+            crate::WorkloadClass::Interactive,
+            crate::ExecConfig::default(),
+            root.child("q", None),
+        );
+        let exec = crate::TokioExecutor::new(&crate::ExecutorConfig::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let ctx =
+            crate::TaskContext::new(query, exec, SpillOwner::new(), crate::OperatorId(1), "p");
+        let join = HashJoin::try_new(spec(JoinType::Inner, 1, false))
+            .and_then(|j| j.with_row_stage(crate::operators::RuntimeFilters::new(Vec::new())))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let e = join.probe().local_state(&ctx).err().map(|e| e.to_string());
+        assert!(
+            e.as_deref().is_some_and(|m| m.contains("row stage")),
+            "{e:?}"
         );
     }
 }

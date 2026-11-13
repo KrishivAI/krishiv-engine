@@ -299,6 +299,14 @@ impl Resolver<'_> {
             filter: None,
             within_group: Vec::new(),
         };
+        // `grouping(f(c1))` names the call as written, not its inlined body.
+        let shown = kids.iter().any(|k| k.shown.is_some()).then(|| {
+            let written = FunctionCall {
+                args: kids.iter().map(Bound::shown).collect(),
+                ..call.clone()
+            };
+            Arc::new(Expr::new(ExprNode::Function(written)).with_origin(e.origin))
+        });
         Ok(Bound {
             expr: Arc::new(Expr::new(ExprNode::Function(call)).with_origin(e.origin)),
             ty: arg_type(which.data_type(), false),
@@ -306,7 +314,7 @@ impl Resolver<'_> {
             win: kids.iter().find_map(|k| k.win),
             outer: kids.iter().filter_map(|k| k.outer).min(),
             lateral: kids.iter().flat_map(|k| k.lateral.clone()).collect(),
-            shown: None,
+            shown,
         })
     }
 
@@ -510,6 +518,9 @@ impl Resolver<'_> {
             };
             let ty = arg_type(v.data_type.clone(), true);
             let copy = self.attr(&name, &ty);
+            // The key's copy keeps the column's comment and declared `CHAR`/`VARCHAR` type (Spark 4.2.0:
+            // ROLLUP/CUBE/GROUPING SETS keys do, `column-comments/probe5.out`).
+            self.carry_column_meta(v.id, copy.id);
             copies.push(GroupExpr {
                 key: keys_of[j],
                 attr: Attr {
@@ -719,7 +730,7 @@ impl Resolver<'_> {
                 // `SELECT session.upper(s) ... GROUP BY ROLLUP(s)` would
                 // silently run the built-in `upper` over the copy.
                 let (name, qualifier) = match &f.id {
-                    FunctionId::Udf { name, .. } => (
+                    FunctionId::Udf { name, .. } | FunctionId::PythonUdf { name, .. } => (
                         name.clone(),
                         vec!["system".to_owned(), "session".to_owned()],
                     ),

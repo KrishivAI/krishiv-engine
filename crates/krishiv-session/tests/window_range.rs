@@ -291,13 +291,13 @@ fn a_date_target_past_the_day_range_wraps_without_ansi() {
     assert_eq!(got, ["0"]);
 }
 
-/// A bound that does not fit the key's decimal type is refused instead of evaluated (Spark raises the cast overflow under ANSI; not reproduced yet).
+/// A bound that does not fit the key's decimal type raises the cast overflow under ANSI (the default).
 #[test]
-fn a_decimal_bound_past_the_key_precision_is_not_accepted() {
+fn a_decimal_bound_past_the_key_precision_raises_the_cast_error() {
     let s = session();
     let sql = "SELECT count(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND 100 FOLLOWING) \
                FROM VALUES (CAST(1 AS DECIMAL(2,0))) AS b(x)";
-    assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(class(&s, sql), "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION");
 }
 
 /// `128 PRECEDING` is `-128` once cast, which a TINYINT key holds.

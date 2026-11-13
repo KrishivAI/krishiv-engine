@@ -16,7 +16,10 @@
 //! `name=value` directories under a path are partition columns (Spark's
 //! partition discovery, `krishiv_io::partition_columns`): typed by
 //! inference, appended after the data columns, read from the path of each
-//! file. A table with a known schema does not discover them yet.
+//! file. A table with a known schema (a permanent catalog table) takes
+//! them from its declared partition columns instead: the directories must
+//! name exactly those columns, in order, and each value is read as the
+//! column's declared type, never inferred.
 //!
 //! A name is hidden when it starts with `.`, or with `_` without a `=` in
 //! it, or ends with `._COPYING_`; hidden directories are skipped whole.
@@ -26,12 +29,14 @@
 //! `abfs://`, `abfss://`, `az://`, resolved by [`ObjectPaths`] through the
 //! [`StoreRegistry`]) are supported. Not yet supported, failing with
 //! `KRISHIV_UNSUPPORTED_FEATURE`: subdirectories that are
-//! not `name=value` partition directories, paths with any other scheme, file sources Spark
+//! not `name=value` partition directories in a read by path (a catalog
+//! table reads its registered partitions only and skips other directories,
+//! as Spark's `CatalogFileIndex`), paths with any other scheme, file sources Spark
 //! knows but the engine has no [`FileFormat`] for, and merging the files'
 //! schemas (`mergeSchema`). A name Spark does not know at all fails with
 //! Spark's `DATA_SOURCE_NOT_FOUND`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -39,8 +44,8 @@ use arrow_schema::{FieldRef, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::config::Config;
 use krishiv_common::error::{
-    CannotMergeIncompatibleDataType, KrishivError, KrishivUnsupportedFeature, PathNotFound,
-    UnableToInferSchema,
+    CannotMergeIncompatibleDataType, FailedReadFileUnsupportedFileSystem, InvalidEmptyLocation,
+    KrishivError, KrishivUnsupportedFeature, PathNotFound, UnableToInferSchema,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_io::{
@@ -361,22 +366,36 @@ impl FileReads {
 
     /// The listing of a table whose columns are known: the files under
     /// `paths` (none is fine: the table is empty), with `schema` as their
-    /// schema. Nothing is inferred and nothing is cached, so every query
-    /// lists the table afresh.
+    /// schema. `partitions` are the table's partition columns (the last
+    /// columns of `schema`, in this order) and the partitions its catalog
+    /// registered. Only the files of registered partitions are read, as
+    /// Spark's `CatalogFileIndex` lists only their locations: a file under a
+    /// directory the catalog does not know (before `MSCK REPAIR`), or under
+    /// any directory that is not a partition of the declared columns, is not
+    /// one of the table's files (`spark.sql.hive.manageFilesourcePartitions`
+    /// is not modelled: Spark's default, true). Values are read as the
+    /// columns' declared types. Nothing is inferred and nothing is cached,
+    /// so every query lists the table afresh.
     ///
     /// # Errors
     /// The listing errors of [`Self::listing`], except that no files is not
-    /// an error.
+    /// an error; `KRISHIV_UNSUPPORTED_FEATURE` when a partition column's type
+    /// is not read from a directory yet.
     pub async fn listing_known(
         &self,
         format: &str,
         paths: &[OptionValue],
         options: &BTreeMap<String, OptionValue>,
         schema: SchemaRef,
+        partitions: &KnownPartitions,
     ) -> Result<Arc<FileListing>> {
-        let listing =
-            Box::pin(self.list_with(&format.to_ascii_lowercase(), paths, options, Some(schema)))
-                .await?;
+        let listing = Box::pin(self.list_with(
+            &format.to_ascii_lowercase(),
+            paths,
+            options,
+            Some((schema, partitions)),
+        ))
+        .await?;
         Ok(Arc::new(listing))
     }
 
@@ -397,15 +416,30 @@ impl FileReads {
         Box::pin(self.list_with(format, paths, options, None)).await
     }
 
-    /// [`Self::list`]; with `known` the schema is given, not inferred.
+    /// [`Self::list`]; with `known` the schema and the partition columns
+    /// are given, not inferred.
     async fn list_with(
         &self,
         format: &str,
         paths: &[OptionValue],
         options: &BTreeMap<String, OptionValue>,
-        known: Option<SchemaRef>,
+        known: Option<(SchemaRef, &KnownPartitions)>,
     ) -> Result<FileListing> {
-        let mode = self.list_mode(options)?;
+        let mut mode = self.list_mode(options)?;
+        // A partitioned catalog table reads its registered partitions only
+        // (Spark's `CatalogFileIndex`, which lists only their locations).
+        let partitioned = known.as_ref().is_some_and(|(_, d)| !d.columns.is_empty());
+        if partitioned && mode.recursive {
+            return Err(unsupported(
+                "recursiveFileLookup on a partitioned table".to_owned(),
+            ));
+        }
+        // Any catalog table skips a directory that is not `name=value`
+        // (Spark 4.2.0 reads an unpartitioned table's root files only, and a
+        // partitioned one's registered locations only).
+        // (`recursiveFileLookup` keeps reading every directory, as before.)
+        mode.skip_foreign_dirs = known.is_some() && mode.base.is_none() && !mode.recursive;
+        mode.skip_all_dirs = mode.skip_foreign_dirs && !partitioned;
         // Spark checks the paths before the format.
         let mut listed: Vec<(FileRef, Vec<Segment>)> = Vec::new();
         for p in paths {
@@ -435,6 +469,36 @@ impl FileReads {
         });
         // Overlapping roots (`/d/{a,a/b}`, or a glob and a plain path) reach a file twice: it is read once.
         listed.dedup_by(|a, b| a.0.path == b.0.path && a.0.store == b.0.store);
+        // A partitioned catalog table reads its registered partitions only
+        // (Spark's `CatalogFileIndex`): other directories under its root are
+        // not its locations, so their files are not read (Spark 4.2.0: an
+        // external table's `p=1` directory left on disk after `DROP PARTITION`
+        // is not read).
+        if let Some((_, declared)) = &known
+            && partitioned
+        {
+            // With a `basePath` above the location, directories that are not
+            // the table's partition columns sit above its files (`q=1/p=2`
+            // for a table partitioned by `p`): refused, as before, rather
+            // than read as an empty table.
+            if mode.base.is_some()
+                && let Some((f, segs)) = listed.iter().find(|(_, segs)| {
+                    segs.len() != declared.columns.len()
+                        || segs.iter().zip(&declared.columns).any(|((n, _), c)| n != c)
+                })
+            {
+                let found: Vec<&str> = segs.iter().map(|(n, _)| n.as_str()).collect();
+                return Err(unsupported(format!(
+                    "reading {} with basePath: its partition directories ({}) are not the table's partition columns ({})",
+                    f.display_path(),
+                    found.join(", "),
+                    declared.columns.join(", ")
+                )));
+            }
+            let registered: HashSet<&[Option<String>]> =
+                declared.registered.iter().map(Vec::as_slice).collect();
+            listed.retain(|(_, segs)| is_registered(&declared.columns, &registered, segs));
+        }
         let format = match self.formats.get(format) {
             Ok(format) => format,
             Err(e) => {
@@ -451,13 +515,12 @@ impl FileReads {
             .map(|(f, segs)| (f.display_path(), segs.clone()))
             .collect();
         let files: Vec<FileRef> = listed.into_iter().map(|(f, _)| f).collect();
-        let partition_columns = partition_columns(&discovered, self.infers_partition_types())?;
-        if let Some(schema) = known {
-            if !partition_columns.is_empty() {
-                return Err(unsupported(
-                    "reading the subdirectory of a table (partition discovery)".to_owned(),
-                ));
-            }
+        // A known table's partition values take its declared types: they
+        // are never inferred (nor refused for looking like timestamps).
+        let infer = known.is_none() && self.infers_partition_types();
+        let partition_columns = partition_columns(&discovered, infer)?;
+        if let Some((schema, declared)) = known {
+            let partition_columns = declared_partitions(&schema, declared, &partition_columns)?;
             return Ok(FileListing {
                 format,
                 files: files.into(),
@@ -654,6 +717,8 @@ impl FileReads {
             recursive: mode.recursive,
             base: mode.base.clone(),
             logged: outer,
+            skip_foreign_dirs: mode.skip_foreign_dirs,
+            skip_all_dirs: mode.skip_all_dirs,
         };
         for (names, path) in matched {
             let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
@@ -691,6 +756,8 @@ impl FileReads {
             recursive,
             base,
             logged: None,
+            skip_foreign_dirs: false,
+            skip_all_dirs: false,
         })
     }
 
@@ -740,11 +807,10 @@ impl FileReads {
             at.path.clone(),
             at.display.clone(),
         );
-        if log.exists().await? {
-            Ok(Some(log.snapshot().await?.files))
-        } else {
-            Ok(None)
-        }
+        Ok(log
+            .snapshot_if_exists()
+            .await?
+            .map(|snapshot| snapshot.files))
     }
 
     /// The log of the nearest ancestor of `at`, reached through `name=value` directories only (a
@@ -910,6 +976,15 @@ impl FileReads {
                 .iter()
                 .map(|p| p.as_ref().to_owned())
                 .collect();
+            // A catalog table: a directory that is not a `name=value`
+            // partition directory holds none of its files (Spark 4.2.0 reads
+            // neither an unpartitioned table's subdirectories nor a partitioned
+            // one's unregistered locations). Any other read refuses it.
+            if (mode.skip_all_dirs && !names.is_empty())
+                || (mode.skip_foreign_dirs && names.iter().any(|d| parse_segment(d).is_none()))
+            {
+                continue;
+            }
             let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
         }
@@ -1040,6 +1115,96 @@ struct ListMode {
         usize,
         Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
     )>,
+    /// A catalog table's listing: files under a directory that is not a
+    /// `name=value` partition directory are skipped, not refused.
+    skip_foreign_dirs: bool,
+    /// An unpartitioned catalog table's listing: every subdirectory is
+    /// skipped, `name=value` ones too (its files are its root's).
+    skip_all_dirs: bool,
+}
+
+/// The partition columns of a permanent table and the partitions its
+/// catalog registered, which a read of it lists ([`FileReads::listing_known`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KnownPartitions {
+    /// The partition columns, in partition order (the table's last columns).
+    pub columns: Vec<String>,
+    /// Each registered partition's values in partition order, as the
+    /// directory names hold them unescaped (`None` for the default
+    /// partition, NULL).
+    pub registered: Vec<Vec<Option<String>>>,
+}
+
+/// The partition columns of a known table: its `declared` columns, the
+/// last of `schema`, typed as declared, when the partition columns
+/// `discovered` from its files name exactly those (in order); none when there
+/// are no partition directories (an empty or unpartitioned table). The
+/// listing has kept the registered partitions' files only (`is_registered`,
+/// as Spark's `CatalogFileIndex` reads only the registered locations), so a
+/// mismatch is left only for an unpartitioned table with partition
+/// directories. A partition column of a type whose directory
+/// value the scan does not read yet is refused (only strings, integers and
+/// dates are: a timestamp is local time in the session zone, which the scan
+/// does not have).
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` in those cases.
+fn declared_partitions(
+    schema: &SchemaRef,
+    declared: &KnownPartitions,
+    discovered: &[FieldRef],
+) -> Result<Vec<FieldRef>> {
+    use arrow_schema::DataType as T;
+    if discovered.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mismatch =
+        || unsupported("reading the subdirectory of a table (partition discovery)".to_owned());
+    let names = &declared.columns;
+    let fields = schema.fields();
+    if names.len() != discovered.len() || names.len() > fields.len() {
+        return Err(mismatch());
+    }
+    let tail = &fields[fields.len() - names.len()..];
+    let mut out = Vec::with_capacity(tail.len());
+    for ((field, name), found) in tail.iter().zip(names).zip(discovered) {
+        if !field.name().eq_ignore_ascii_case(name) || !name.eq_ignore_ascii_case(found.name()) {
+            return Err(mismatch());
+        }
+        if !matches!(
+            field.data_type(),
+            T::Utf8 | T::Utf8View | T::Int8 | T::Int16 | T::Int32 | T::Int64 | T::Date32
+        ) {
+            return Err(unsupported(format!(
+                "reading the partition column {} of type {} of a table",
+                field.name(),
+                field.data_type()
+            )));
+        }
+        out.push(Arc::clone(field));
+    }
+    Ok(out)
+}
+
+/// Whether a file's partition directories (`segs`) are one of the
+/// `registered` partitions: exactly the declared `columns`, in order and as
+/// written (Spark reads the exact location `<root>/p=1`, never `P=1`), with
+/// registered values.
+fn is_registered(
+    columns: &[String],
+    registered: &HashSet<&[Option<String>]>,
+    segs: &[Segment],
+) -> bool {
+    if segs.len() != columns.len()
+        || !segs
+            .iter()
+            .zip(columns)
+            .all(|((name, _), column)| name == column)
+    {
+        return false;
+    }
+    let values: Vec<Option<String>> = segs.iter().map(|(_, v)| v.clone()).collect();
+    registered.contains(values.as_slice())
 }
 
 /// `schema` followed by `partitions`.
@@ -1083,6 +1248,13 @@ impl FileSchemaResolver for FileReads {
     /// instantiated at listing from the read's options.
     fn qualify(&self, path: &OptionValue) -> std::result::Result<OptionValue, KrishivError> {
         match path.as_plain() {
+            // Not the working directory: Spark refuses the empty location of `` parquet.`` `` as
+            // `INVALID_EMPTY_LOCATION`. A DataFrame or Connect read of `""` reaches this too; Spark 4.2 raises a
+            // plain `IllegalArgumentException` (no error class) there, and reading the working directory was wrong.
+            Some("") => Err(InvalidEmptyLocation {
+                location: String::new(),
+            }
+            .into()),
             Some(text) => Ok(OptionValue::from_user(
                 "path",
                 self.paths.qualified_display(text)?,
@@ -1109,6 +1281,10 @@ impl FileSchemaResolver for FileReads {
         options: &'a BTreeMap<String, OptionValue>,
     ) -> BoxFuture<'a, std::result::Result<Vec<TableColumn>, KrishivError>> {
         Box::pin(async move {
+            // Spark's `ResolveSQLOnFile` refuses these before it lists anything.
+            for text in paths.iter().filter_map(OptionValue::as_plain) {
+                check_sql_location(text)?;
+            }
             let listing = self.listing(format, paths, options).await?;
             listing
                 .schema
@@ -1125,6 +1301,22 @@ impl FileSchemaResolver for FileReads {
                 .collect()
         })
     }
+}
+
+/// The error Spark raises for a `` format.`location` `` on `http` or `https`: `FAILED_READ_FILE.UNSUPPORTED_FILE_SYSTEM`
+/// (Hadoop's HTTP file systems do not implement `listStatus`).
+fn check_sql_location(text: &str) -> Result<()> {
+    let class = match scheme(text) {
+        Some("http") => "org.apache.hadoop.fs.http.HttpFileSystem",
+        Some("https") => "org.apache.hadoop.fs.http.HttpsFileSystem",
+        _ => return Ok(()),
+    };
+    Err(FailedReadFileUnsupportedFileSystem {
+        path: text.to_owned(),
+        file_system_class: class.to_owned(),
+        method: "listStatus".to_owned(),
+    }
+    .into())
 }
 
 /// Whether Spark skips a file or directory named `name`.

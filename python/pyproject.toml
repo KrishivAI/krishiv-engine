@@ -9,7 +9,6 @@ requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 dynamic = ["version"]
 classifiers = [
-    "Private :: Do Not Upload",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
@@ -49,6 +48,10 @@ python-source = "."
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A test still running after 300 s dumps every thread's stack to stderr (pytest's
+# built-in faulthandler): a hang in CI then names its test and its waits instead of
+# running silently into the job's 60-minute limit (musllinux cp314t, 2026-11-09).
+faulthandler_timeout = 300
 
 [tool.coverage.run]
 source = ["krishiv"]
@@ -59,12 +62,61 @@ parallel = true
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+# The excludes below hold for files named on the command line too (the pre-push hook names them).
+force-exclude = true
+# check-compat corpus files are scanner inputs (deliberately unsorted, undefined `spark`); not lint targets.
+extend-exclude = ["../crates/krishiv-cli/tests/check_compat_corpus"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT"]
 
+# PySpark 4.2.0 code vendored unchanged but for its imports (NOTICE): kept in Spark's shape (and black's
+# 100-column format) so that it stays diffable against the tag, so only pyflakes' error checks apply.
+[tool.ruff.lint.per-file-ignores]
+"krishiv/_udf/{conversion,pandas_types,pandas_utils,typehints,loose_version}.py" = [
+    "E",
+    "W",
+    "I",
+    "B",
+    "UP",
+    "SIM",
+    "RUF",
+    "PT",
+    "F401",
+    "F811",
+    "F841",
+]
+
+# The adapted PySpark 4.2.0 tests (tests/pyspark_udf, see its README) keep Spark's shape too.
+"tests/pyspark_udf/{test_udf,test_pandas_udf_scalar,test_arrow_python_udf,goldenutils}.py" = ["ALL"]
+"tests/pyspark_udf/coercion/*.py" = ["ALL"]
+"tests/pyspark_udf/_support.py" = ["PT009", "SIM115"]
+
+[tool.ruff.format]
+exclude = [
+    "krishiv/_udf/{conversion,pandas_types,pandas_utils,typehints,loose_version}.py",
+    "tests/pyspark_udf/{test_udf,test_pandas_udf_scalar,test_arrow_python_udf,goldenutils}.py",
+    "tests/pyspark_udf/coercion/*.py",
+]
+
 [tool.ty.environment]
 python-version = "3.11"
+
+[tool.ty.src]
+# The vendored PySpark modules (see the ruff note above) are untyped in Spark's way; ty skips them.
+exclude = [
+    "krishiv/_udf/conversion.py",
+    "krishiv/_udf/pandas_types.py",
+    "krishiv/_udf/pandas_utils.py",
+    "krishiv/_udf/typehints.py",
+    "krishiv/_udf/loose_version.py",
+    # The adapted PySpark tests (tests/pyspark_udf/README.md) are dynamically typed in Spark's way.
+    "tests/pyspark_udf/test_udf.py",
+    "tests/pyspark_udf/test_pandas_udf_scalar.py",
+    "tests/pyspark_udf/test_arrow_python_udf.py",
+    "tests/pyspark_udf/goldenutils.py",
+    "tests/pyspark_udf/coercion",
+]
 
 [tool.ty.analysis]
 # The compiled extension only exists after `maturin develop`; when it is missing
@@ -81,6 +133,14 @@ show_error_codes = true
 [[tool.mypy.overrides]]
 module = ["pyarrow.*"]
 ignore_missing_imports = true
+
+# `krishiv._udf` is PySpark's worker-side conversion code, vendored nearly
+# verbatim (NOTICE); it is not annotated for `--strict` and imports pandas
+# (no inline types). The public entry points (`krishiv.sql.udf`,
+# `krishiv.sql.pandas`) are still checked.
+[[tool.mypy.overrides]]
+module = ["krishiv._udf.*"]
+ignore_errors = true
 
 [tool.coverage.paths]
 # The wheel is tested from its installed location; map it back to the source tree so

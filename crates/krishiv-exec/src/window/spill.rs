@@ -25,7 +25,13 @@
 //! The flush phase keeps a headroom reservation for its readers' frames
 //! and writers' scratch; every blocking step lends it as the consumer's
 //! grant credit and takes back what is left, so no other consumer takes it
-//! in between.
+//! in between. An external partition (one that does not fit, evaluated from
+//! its own file) needs its readers' frames plus one step's evaluation, which
+//! grows with the rows evaluated at once. When the pool refuses the growth
+//! for a whole batch, the partition is evaluated in fewer rows per step, as
+//! many as the headroom already held covers (`external_narrowed` in the
+//! metrics): the query slows down instead of failing, and fails only when
+//! one row's evaluation does not fit.
 //!
 //! # Failure and cancellation
 //! Rows handed to a blocking step are owned by that step. Until it returns
@@ -39,6 +45,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::RecordBatch;
+use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_memory::{ConsumerHandle, Reservation, SpillFile, SpillReader};
 use krishiv_types::batch::Batch;
 
@@ -57,6 +64,9 @@ pub(super) struct Counters {
     pub(super) external: AtomicU64,
     /// Batches whose frames did not fit and folded from the file.
     pub(super) file_folds: AtomicU64,
+    /// External partitions evaluated in fewer rows per step than a batch, because the headroom for a whole
+    /// batch's evaluation was refused.
+    pub(super) narrowed: AtomicU64,
 }
 
 /// The spilled rows being read back, in order.
@@ -64,6 +74,9 @@ struct Cursor {
     files: VecDeque<SpillFile>,
     reader: Option<SpillReader>,
     consumer: Arc<ConsumerHandle>,
+    /// Frames consumed so far (batches returned, file footers passed): a refusal at the same count is the same
+    /// frame refused again.
+    progress: u64,
 }
 
 impl Cursor {
@@ -72,8 +85,15 @@ impl Cursor {
         loop {
             if let Some(r) = &mut self.reader {
                 match r.next() {
-                    Some(b) => return Ok(Some(b?.data().clone())),
-                    None => self.reader = None,
+                    Some(b) => {
+                        let b = b?;
+                        self.progress += 1;
+                        return Ok(Some(b.data().clone()));
+                    }
+                    None => {
+                        self.reader = None;
+                        self.progress += 1;
+                    }
                 }
             }
             let Some(f) = self.files.pop_front() else {
@@ -81,6 +101,43 @@ impl Cursor {
             };
             self.reader = Some(f.reader(self.consumer.reservation().releasing_to_credit())?);
         }
+    }
+}
+
+/// The bytes a refused reservation asked for (0 if the error does not say).
+fn refused_bytes(e: &KrishivError) -> usize {
+    e.message_parameters()
+        .iter()
+        .find(|(name, _)| *name == "requestedBytes")
+        .and_then(|(_, v)| v.parse().ok())
+        .unwrap_or(0)
+}
+
+/// What a failed read of the cursor's next frame turns into.
+#[derive(Debug)]
+pub(super) enum Refusal {
+    /// Ask the driver for this many bytes and repeat the read.
+    Ask(usize),
+    /// The query fails with this error.
+    Fail(KrishivError),
+}
+
+/// A read of the frame after `progress` frames failed with `e`; `asked` is the progress at which the driver was
+/// last asked for memory. A memory refusal of a frame not yet asked for is asked for; the same frame refused again,
+/// or any other error, fails.
+pub(super) fn refusal(asked: &mut Option<u64>, progress: u64, e: KrishivError) -> Refusal {
+    if e.error_class() != ErrorClass::UnableToAcquireMemory || *asked == Some(progress) {
+        *asked = None;
+        return Refusal::Fail(e);
+    }
+    *asked = Some(progress);
+    Refusal::Ask(refused_bytes(&e))
+}
+
+/// The step that asks the driver for a refused frame's `bytes`, at least the replay's `base`.
+pub(super) fn need_memory(bytes: usize, base: usize) -> FlushOutput {
+    FlushOutput::NeedMemory {
+        bytes: bytes.max(base),
     }
 }
 
@@ -92,6 +149,9 @@ pub(super) struct Replay {
     carry: Option<RecordBatch>,
     /// The driver was asked for memory for `carry`.
     asked: bool,
+    /// The cursor's [`progress`](Cursor::progress) when the driver was asked for memory for its next frame, which
+    /// the pool refused.
+    read_asked: Option<u64>,
     /// A partition evaluated from disk.
     emit: Option<Box<Emit>>,
     /// Lent to blocking steps (see the [module docs](self)).
@@ -177,6 +237,11 @@ impl Window {
             return Ok(0);
         }
         topup.shrink_to_credit(topup.size());
+        // From here until the freed credit is back in the pool, the rows
+        // count as about to be released, so another driver's round that
+        // cannot spill waits for them instead of failing. No arbitration
+        // inside: the write is sync, the blocking job ends on its own.
+        let writing = ctx.consumer().consumer().spilling();
         let mut batches = Vec::with_capacity(l.pending.len());
         for p in l.pending.drain(..) {
             let n = p.batch.num_rows();
@@ -206,6 +271,7 @@ impl Window {
             })
             .await;
         ctx.consumer().consumer().release_credit();
+        drop(writing);
         let file = match written {
             Ok(f) => f,
             Err(e) => {
@@ -266,9 +332,11 @@ impl Window {
                 files,
                 reader: None,
                 consumer: Arc::clone(ctx.consumer().consumer()),
+                progress: 0,
             }),
             carry: None,
             asked: false,
+            read_asked: None,
             emit: None,
             headroom,
             base,
@@ -349,11 +417,24 @@ impl Window {
                 // fill the limit, so the next read of a batch found no memory).
                 let keep = r.base;
                 let (cursor, next) = with_credit_keeping(ctx, &mut r.headroom, keep, move || {
-                    let next = cursor.next()?;
+                    let next = cursor.next();
                     Ok((cursor, next))
                 })
                 .await?;
                 r.cursor = Some(cursor);
+                // A refused frame leaves the reader at the frame start (see `SpillReader`): the driver is asked
+                // for the frame's bytes once and the read repeats; a second refusal of the same frame fails.
+                let progress = r.cursor.as_ref().map_or(0, |c| c.progress);
+                let next = match next {
+                    Err(e) => match refusal(&mut r.read_asked, progress, e) {
+                        Refusal::Ask(bytes) => return Ok(need_memory(bytes, r.base)),
+                        Refusal::Fail(e) => return Err(e),
+                    },
+                    ok => {
+                        r.read_asked = None;
+                        ok?
+                    }
+                };
                 let Some(b) = next else {
                     l.finished = true;
                     self.flush_complete(l)?;
@@ -442,6 +523,16 @@ impl Window {
             .reservation()
             .releasing_to_credit()
             .for_spill_scratch();
+        // The whole-partition folds open on the lent credit: reserve their
+        // states on top of the rows the writer's scratch draws from, so a
+        // state larger than a small partition is not left to the pool.
+        let opening = super::disk::opened_whole(&self.env)?;
+        if opening > 0 {
+            r.headroom
+                .grow(opening)
+                .await
+                .map_err(krishiv_common::error::KrishivError::from)?;
+        }
         // The buffered rows' bytes stay with the headroom: the partition's
         // evaluation from disk needs them.
         let keep = r.headroom.size() + held;
@@ -474,21 +565,55 @@ impl Window {
         r.carry = copied.rest;
         // Frames of the readers' batches (the trailing and lead readers', the
         // lead's batch before, and each frame's or offset function's), and
-        // one batch's evaluation.
-        let rows = copied.disk.batch_rows;
-        let need = copied
+        // one step's evaluation.
+        let rows = copied.disk.batch_rows.max(1);
+        let frames = copied
             .disk
             .file
             .max_read_reservation()
-            .saturating_mul(readers)
-            .saturating_add(super::disk::headroom(&self.env.plan, rows)?);
-        let spare = r.headroom.size().saturating_sub(need.max(r.base));
+            .saturating_mul(readers);
+        // What the functions hold as they open: offset functions' values,
+        // folds' states.
+        let frames = frames.saturating_add(super::disk::opened(
+            &self.env,
+            copied.disk.file.max_read_reservation(),
+        )?);
+        let need = |n: usize| -> Result<usize> {
+            Ok(frames.saturating_add(super::disk::headroom(&self.env.plan, n)?))
+        };
+        let full = need(rows)?;
+        let spare = r.headroom.size().saturating_sub(full.max(r.base));
         r.headroom.shrink(spare);
-        if r.headroom.size() < need {
-            r.headroom
-                .grow(need - r.headroom.size())
+        let mut eval_rows = rows;
+        if r.headroom.size() < full
+            && r.headroom
+                .grow_without_abort(full - r.headroom.size())
                 .await
-                .map_err(krishiv_common::error::KrishivError::from)?;
+                .is_err()
+        {
+            // Refused (without aborting any query: this request has a
+            // fallback, ADR 0007): evaluate fewer rows per step, as many as the headroom held covers (the evaluation's need
+            // grows with its rows), so the query slows down instead of failing. Only when one row's evaluation
+            // does not fit is the refusal the query's error.
+            let held = r.headroom.size();
+            let (mut lo, mut hi) = (1_usize, rows);
+            if need(lo)? > held {
+                r.headroom
+                    .grow(need(lo)? - held)
+                    .await
+                    .map_err(krishiv_common::error::KrishivError::from)?;
+            } else {
+                while lo < hi {
+                    let mid = lo + (hi - lo).div_ceil(2);
+                    if need(mid)? <= held {
+                        lo = mid;
+                    } else {
+                        hi = mid - 1;
+                    }
+                }
+            }
+            eval_rows = lo;
+            self.counters.narrowed.fetch_add(1, Ordering::Relaxed);
         }
         let env = Arc::clone(&self.env);
         let consumer = Arc::clone(ctx.consumer().consumer());
@@ -497,7 +622,7 @@ impl Window {
         let counters = Arc::clone(&self.counters);
         let emit = with_credit(ctx, &mut r.headroom, move || {
             Ok(Box::new(Emit::open(
-                &env, disk, &consumer, counters, query,
+                &env, disk, &consumer, counters, query, eval_rows,
             )?))
         })
         .await?;

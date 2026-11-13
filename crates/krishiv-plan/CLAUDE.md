@@ -18,7 +18,8 @@ Paths are relative to this crate.
 - `src/walk.rs` child mapping and tree rewrites; `src/display.rs` pretty-printer (insta snapshots)
 - `src/analyzer/mod.rs` analyzer entry; `src/analyzer/bind.rs` Bind stage (async, catalog and access policy)
 - `src/analyzer/windows.rs` window binding and extraction into `Window` relations
-- `src/analyzer/char_varchar.rs` `CHAR(n)` / `VARCHAR(n)` (design P2-T001b): `Resolver::declared` maps attributes to the catalog string; read-side padding of `char(n)` scans (pads, never cuts), comparison padding (`ApplyCharTypePadding`; `IN` over a char column is refused), `AnalyzedPlan::output_declared`; the declared type follows bare-column aliases, CTE references, `shifted` instances and `SubqueryAlias` column lists
+- `src/analyzer/repartition.rs` `DISTRIBUTE BY` (`PlanNode::Repartition`): expressions checked as Spark checks `RepartitionByExpression`; the node stays resolved with them bound (widened like a filter's when they read a dropped column), and the physical planner evaluates them in a hash exchange (goldens `tests/fixtures/spark-4.2.0/distribute-by-goldens.json`)
+- `src/analyzer/char_varchar.rs` `CHAR(n)` / `VARCHAR(n)` (design P2-T001b): `Resolver::declared` maps attributes to the catalog string; read-side padding of `char(n)` scans (pads, never cuts), comparison padding (`ApplyCharTypePadding`, `IN` included), `AnalyzedPlan::output_declared`; the declared type follows bare-column aliases, CTE references, `shifted` instances, `SubqueryAlias` column lists, ROLLUP/CUBE/GROUPING SETS key copies and repeated set-operation columns; column comments (`Resolver::comments`, seeded from `TableMeta::column_comments`, out as `AnalyzedPlan::output_comments`) follow the same sites (`carry_column_meta`), plus a permanent view's internal read cast
 - `src/analyzer/suggest.rs` the edit-distance ranking of `UNRESOLVED_COLUMN` proposals (only classes whose Spark message proposes names use it)
 - `src/analyzer/access.rs` `authorize` (the one privilege check: fail closed, filtered readers never change a securable), `table_ident` / `namespace_parts`
 - `src/analyzer/resolve.rs` Resolve stage (sync); `src/analyzer/builtins.rs` `BuiltinFunctions`; `src/analyzer/coerce.rs` implicit coercion
@@ -30,7 +31,7 @@ Paths are relative to this crate.
 
 ## Invariants
 - `Arc` children for relations and expressions; rewrites go through `map_children` / `transform_up` / `transform_down`.
-- The canonical encoding (origins excluded, versioned) is the structural equality; `StructuralHash` is its
+- The canonical encoding (origins excluded, versioned) is the structural equality; each plan node kind has its own tag (`encode::plan_tag`, `plan_tags_are_unique`); `StructuralHash` is its
   XXH3-128 Merkle hash. Bump `ENCODING_VERSION` when the layout changes (`keys_are_stable` pins it).
 - Read options are `OptionValue`s (ADR 0038): secrets never print or enter the encoding in plaintext
   (canary tests in `src/tests/secrets.rs`); inline secrets encode as a per-process keyed fingerprint.
@@ -76,3 +77,7 @@ Paths are relative to this crate.
 
 ## Tests
 `cargo nextest run -p krishiv-plan --no-tests=pass` · `cargo clippy -p krishiv-plan --all-targets -- -D warnings`
+
+## Split modules (T193)
+Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
+- `analyzer/ops/` `aggregate.rs`, `distinct.rs`, `join.rs`, `sortlimit.rs`, `qualify.rs` (`impl Resolver` by topic), `lift.rs` (aggregate lifting); `analyzer/subquery/` `scalar.rs`, `domain.rs`, `support.rs`; `analyzer/coerce/tests.rs`; `tests/analyzer/partN.rs`.

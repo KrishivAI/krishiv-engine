@@ -12,12 +12,9 @@
 //! Seconds are a `DECIMAL(18,6)`, so their unscaled value is microseconds.
 
 use arrow_array::builder::PrimitiveBuilder;
-use arrow_array::types::{
-    DurationMicrosecondType, IntervalMonthDayNanoType, IntervalYearMonthType,
-};
+use arrow_array::types::{DurationMicrosecondType, IntervalYearMonthType};
 use arrow_array::{
-    Array, Decimal128Array, DurationMicrosecondArray, Int32Array, IntervalMonthDayNanoArray,
-    IntervalYearMonthArray,
+    Array, ArrayRef, Decimal128Array, DurationMicrosecondArray, Int32Array, IntervalYearMonthArray,
 };
 
 use crate::error::KernelError;
@@ -193,20 +190,13 @@ impl CalendarFields<'_> {
     }
 }
 
-/// `make_interval(years, months, weeks, days, hours, mins, secs)`.
-///
-/// A value Spark holds but the nanosecond field of the Arrow type can't, more
-/// than about 292 years of time, is refused by name whatever `fail_on_error`
-/// says: Spark answers it, so NULL would be a wrong result.
+/// `make_interval(years, months, weeks, days, hours, mins, secs)`, on the calendar interval's struct of
+/// microseconds (Spark's `CalendarInterval`, so every value Spark computes is held).
 ///
 /// # Errors
-/// `ARITHMETIC_OVERFLOW` when `fail_on_error`; `KRISHIV_UNSUPPORTED_FEATURE`
-/// as above; `INTERNAL_ERROR` for inputs of different lengths or seconds that
+/// `ARITHMETIC_OVERFLOW` when `fail_on_error`; `INTERNAL_ERROR` for inputs of different lengths or seconds that
 /// are not scale 6.
-pub fn make_calendar(
-    f: CalendarFields<'_>,
-    fail_on_error: bool,
-) -> Result<IntervalMonthDayNanoArray, KernelError> {
+pub fn make_calendar(f: CalendarFields<'_>, fail_on_error: bool) -> Result<ArrayRef, KernelError> {
     let rows = f.years.len();
     same_length(
         "make_interval",
@@ -221,29 +211,25 @@ pub fn make_calendar(
         ],
     )?;
     scale_six("make_interval", f.seconds)?;
-    let mut out = PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(rows);
+    let mut out = Vec::with_capacity(rows);
     for row in 0..rows {
         if f.any_null(row) {
-            out.append_null();
+            out.push(None);
             continue;
         }
         match f.at(row)? {
             Ok((months, days, micros)) => {
-                let nanos = micros.checked_mul(1000).ok_or_else(|| {
-                    KernelError::unsupported(
-                        "a calendar interval whose microseconds overflow the nanosecond field \
-                         of its Arrow type",
-                    )
-                })?;
-                out.append_value(IntervalMonthDayNanoType::make_value(months, days, nanos));
+                out.push(Some(krishiv_types::calendar::CalendarValue::new(
+                    months, days, micros,
+                )));
             }
             Err(message) if fail_on_error => {
                 return Err(KernelError::arithmetic_overflow(row, message, None));
             }
-            Err(_) => out.append_null(),
+            Err(_) => out.push(None),
         }
     }
-    Ok(out.finish())
+    Ok(krishiv_types::calendar::calendar_array(out))
 }
 
 #[cfg(test)]
@@ -262,11 +248,7 @@ mod tests {
             .unwrap()
     }
 
-    fn calendar(
-        v: [i32; 6],
-        secs: i128,
-        fail: bool,
-    ) -> Result<IntervalMonthDayNanoArray, KernelError> {
+    fn calendar(v: [i32; 6], secs: i128, fail: bool) -> Result<ArrayRef, KernelError> {
         let [years, months, weeks, days, hours, minutes] = v.map(|x| ints(&[Some(x)]));
         make_calendar(
             CalendarFields {
@@ -341,9 +323,11 @@ mod tests {
     #[test]
     fn calendar_keeps_its_three_fields_apart() {
         let out = calendar([1, 2, 3, 4, 5, 6], 7_500_000, true).unwrap();
-        let v = out.value(0);
+        let v = krishiv_types::calendar::Calendars::of(out.as_ref())
+            .unwrap()
+            .value(0);
         assert_eq!((v.months, v.days), (14, 25));
-        assert_eq!(v.nanoseconds, 18_367_500_000_000);
+        assert_eq!(v.micros, 18_367_500_000);
     }
 
     #[test]
@@ -362,9 +346,9 @@ mod tests {
     }
 
     #[test]
-    fn calendar_time_past_the_nanosecond_field_is_refused_never_null() {
-        // The largest fields still fit a long of microseconds, so Spark
-        // answers these.
+    fn calendar_time_past_the_old_nanosecond_field_is_a_value() {
+        // The largest fields still fit a long of microseconds, so Spark answers these (`interval` #72's
+        // `make_interval(1, 2, 3, 4, 0, 0, 123456789012.123456)` among them).
         let max_seconds = 999_999_999_999_999_999_i128;
         for fail in [true, false] {
             for (v, secs) in [
@@ -372,10 +356,17 @@ mod tests {
                 ([0, 0, 0, 0, i32::MAX, i32::MAX], max_seconds),
                 ([0, 0, 0, 0, i32::MIN, i32::MIN], -max_seconds),
             ] {
-                let e = calendar(v, secs, fail).unwrap_err();
-                assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+                assert!(calendar(v, secs, fail).is_ok_and(|a| a.is_valid(0)));
             }
         }
+        let out = calendar([1, 2, 3, 4, 0, 0], 123_456_789_012_123_456, true).unwrap();
+        let v = krishiv_types::calendar::Calendars::of(out.as_ref())
+            .unwrap()
+            .value(0);
+        assert_eq!(
+            (v.months, v.days, v.micros),
+            (14, 25, 123_456_789_012_123_456)
+        );
     }
 
     #[test]

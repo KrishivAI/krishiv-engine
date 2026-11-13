@@ -362,6 +362,10 @@ struct Reading<'a> {
     conv: Converter<'a>,
     zone: &'a dyn TimeZoneRules,
     today: i32,
+    /// `spark.sql.binaryOutputStyle`: a `BINARY` field's text is read back as the style prints it.
+    binary: krishiv_kernels::binary_style::BinaryStyle,
+    /// Spark 4.1+ reads a `BINARY` field back; 4.0.x has no such case (every text is a miss).
+    binary_readable: bool,
 }
 
 impl Reading<'_> {
@@ -410,6 +414,19 @@ impl Reading<'_> {
                 },
                 bad,
             ),
+            // Spark has no keep-the-text fallback: a decoder that throws is a miss (4.0.x has no
+            // BINARY read-back at all, so every non-empty text misses there).
+            FieldKind::Bin => match self
+                .binary_readable
+                .then(|| self.binary.parse(text))
+                .flatten()
+            {
+                Some(bytes) => V::Leaf(Val::Bytes(bytes)),
+                None => {
+                    *bad = true;
+                    V::Null
+                }
+            },
             _ => match self.conv.convert(&kind, Some(text)) {
                 Ok(Val::Null) => V::Null,
                 Ok(v) => V::Leaf(v),
@@ -593,6 +610,13 @@ fn build(dt: &DataType, vals: &[V]) -> Result<ArrayRef, KrishivError> {
         DataType::Utf8 => primitive!(StringBuilder::new(), text_of),
         DataType::LargeUtf8 => primitive!(LargeStringBuilder::new(), text_of),
         DataType::Utf8View => primitive!(StringViewBuilder::new(), text_of),
+        DataType::Binary => primitive!(arrow_array::builder::BinaryBuilder::new(), bytes_of),
+        DataType::LargeBinary => {
+            primitive!(arrow_array::builder::LargeBinaryBuilder::new(), bytes_of)
+        }
+        DataType::BinaryView => {
+            primitive!(arrow_array::builder::BinaryViewBuilder::new(), bytes_of)
+        }
         DataType::Struct(fields) => {
             let mut valid = Vec::with_capacity(vals.len());
             let mut cols: Vec<Vec<V>> = fields.iter().map(|_| Vec::new()).collect();
@@ -697,6 +721,14 @@ fn build(dt: &DataType, vals: &[V]) -> Result<ArrayRef, KrishivError> {
     })
 }
 
+/// A binary field's bytes (`Reading::leaf` decoded the element's text by the output style).
+fn bytes_of(x: &Val) -> Result<&[u8], KrishivError> {
+    match x {
+        Val::Bytes(b) => Ok(b),
+        _ => Err(internal("a non-binary value".to_owned())),
+    }
+}
+
 fn text_of(x: &Val) -> Result<String, KrishivError> {
     match x {
         Val::Text(t) => Ok(t.clone()),
@@ -746,6 +778,8 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
     }
     let return_type = DataType::Struct(fields.clone());
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
+    let binary = opts.binary_style;
+    let binary_readable = opts.kernel.spark_version() != krishiv_kernels::SparkVersion::V4_0;
     let today = krishiv_kernels::datetime::current_date(opts.query_start_micros, zone.as_ref())
         .map_err(KrishivError::from)?;
     Ok(Binding::new(return_type, move |x: &Inputs<'_>| {
@@ -763,6 +797,8 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
             },
             zone: zone.as_ref(),
             today,
+            binary,
+            binary_readable,
         };
         let mut rows: Vec<V> = Vec::with_capacity(docs.len());
         for i in 0..docs.len() {
@@ -842,6 +878,8 @@ struct Writing<'a> {
     time: Option<&'a DateTimePattern>,
     timestamp: &'a DateTimePattern,
     ntz: &'a DateTimePattern,
+    /// `spark.sql.binaryOutputStyle`.
+    binary: krishiv_kernels::binary_style::BinaryStyle,
 }
 
 /// `text` escaped for element content (or an attribute value). `>` is only
@@ -932,6 +970,9 @@ impl Writing<'_> {
             DataType::Timestamp(TimeUnit::Microsecond, None) => self
                 .ntz
                 .format_local(a.as_primitive::<TimestampMicrosecondType>().value(i))?,
+            DataType::Binary => self.binary.render(a.as_binary::<i32>().value(i)),
+            DataType::LargeBinary => self.binary.render(a.as_binary::<i64>().value(i)),
+            DataType::BinaryView => self.binary.render(a.as_binary_view().value(i)),
             _ => return Ok(None),
         }))
     }
@@ -1138,6 +1179,7 @@ fn bind_to_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         .map_or_else(|| default("yyyy-MM-dd'T'HH:mm:ss.SSS"), Ok)?;
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
     let zone_name: Arc<str> = Arc::clone(&opts.time_zone_name);
+    let binary = opts.binary_style;
     Ok(Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
         let col = x.plain_column(0)?;
         let rows = col.as_struct();
@@ -1149,6 +1191,7 @@ fn bind_to_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
             time: parsed.time.as_ref(),
             timestamp: &timestamp,
             ntz: &ntz,
+            binary,
         };
         let mut out = arrow_array::builder::StringBuilder::new();
         let mut total = 0usize;

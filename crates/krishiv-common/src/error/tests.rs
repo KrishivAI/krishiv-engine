@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for error classes: SQLSTATE and name lookup, sub-classes, message templates and parameters, and the generated docs.
 use std::collections::BTreeSet;
 
 use super::template;
@@ -437,4 +438,20 @@ fn every_internal_error_class_is_operator_only() {
     ] {
         assert_eq!(c.audience(), Audience::Operator, "{}", c.name());
     }
+}
+
+#[test]
+fn python_exception_renders_message_and_traceback() {
+    // Spark 4.2.0 `PYTHON_EXCEPTION`: `<msg>: <traceback>`, SQLSTATE 38000.
+    assert_eq!(ErrorClass::PythonException.name(), "PYTHON_EXCEPTION");
+    let e = KrishivError::from(PythonException {
+        msg: "An exception was thrown from the Python worker".to_owned(),
+        traceback: "ValueError: boom".to_owned(),
+    });
+    assert_eq!(e.sql_state(), Some("38000"));
+    assert!(
+        e.to_string()
+            .contains("An exception was thrown from the Python worker: ValueError: boom"),
+        "{e}"
+    );
 }

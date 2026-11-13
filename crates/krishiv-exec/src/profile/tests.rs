@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the query profile: node numbering, shared plans and subqueries, the JSON round trip and corrupt documents.
 #![expect(
     clippy::disallowed_methods,
     reason = "test-only fixture read; never runs on a compute worker"
@@ -30,6 +31,7 @@ fn env() -> ExprEnv {
         legacy_java_charsets: false,
         legacy_coding_error_action: false,
         legacy_time_parser: false,
+        binary_output_style: None,
     }
 }
 
@@ -124,6 +126,8 @@ fn metrics() -> QueryMetrics {
             threads: 1,
             started: Duration::from_millis(1),
             ended: Duration::from_millis(3),
+            max_slice: Duration::from_micros(1_500),
+            stalls: 2,
         },
     );
     m
@@ -609,6 +613,49 @@ fn planning_round_trips() {
     assert!(QueryProfile::from_json(&v.to_string()).is_err());
 }
 
+/// `trace` (minor 4) round-trips; a minor-3 document without it reads as `None`; a `trace` that
+/// is not an object is refused.
+#[test]
+fn trace_round_trips_and_is_optional_and_checked() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), false);
+    p.trace = Some(serde_json::json!({
+        "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+        "span_id": "00f067aa0ba902b7"
+    }));
+    let back = QueryProfile::from_json(&p.to_json()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back, p);
+    // A minor-3 document: no `trace` member.
+    let mut v = p.to_json_value();
+    v["minor"] = 3.into();
+    if let Some(o) = v.as_object_mut() {
+        o.remove("trace");
+    }
+    let old = QueryProfile::from_json(&v.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(old.trace, None);
+    // `null` reads as absent; any other non-object is an error.
+    v["trace"] = serde_json::Value::Null;
+    assert_eq!(
+        QueryProfile::from_json(&v.to_string())
+            .map(|b| b.trace)
+            .ok(),
+        Some(None)
+    );
+    for bad in [
+        serde_json::json!("x"),
+        serde_json::json!([1]),
+        serde_json::json!(7),
+    ] {
+        v["trace"] = bad;
+        let err = QueryProfile::from_json(&v.to_string())
+            .err()
+            .map(|e| e.to_string());
+        assert!(
+            err.is_some_and(|m| m.contains("trace is not an object")),
+            "a non-object trace is refused"
+        );
+    }
+}
+
 /// The usage block sums the operators' counters (T138).
 #[test]
 fn usage_equals_the_operator_sums() {
@@ -650,6 +697,11 @@ fn schema_matches_the_writer() {
         serde_json::json!({"parsed": "p", "analyzed": "a", "steps": [],
         "optimized": "o", "physical": "x"}),
     );
+    profile.trace = Some(serde_json::json!({"trace_id": "t", "session_id": "s"}));
+    profile.identity = Some(ProfileIdentity {
+        principal: "user:a".into(),
+        tags: [("team".to_owned(), "x".to_owned())].into(),
+    });
     let doc = profile.to_json_value();
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v
@@ -698,6 +750,7 @@ fn schema_matches_the_writer() {
         &doc["query"]["memory"],
     );
     check(&schema["$defs"]["planning"], &doc["planning"]);
+    check(&props["trace"], &doc["trace"]);
     check(&props["environment"], &doc["environment"]);
     check(&props["usage"], &doc["usage"]);
     check(
@@ -766,4 +819,76 @@ fn profile_errors_carry_their_class() {
         krishiv_common::error::ErrorClass::KrishivInvalidProfileDocument
     );
     assert!(k.to_string().contains("profile is not an object"), "{k}");
+}
+
+#[test]
+fn a_minor_2_document_reads_pipeline_stalls_as_zero() {
+    let p = QueryProfile::new(&plan(matching()), metrics(), true);
+    let mut v = p.to_json_value();
+    assert_eq!(v["pipelines"][0]["max_slice_ns"], 1_500_000);
+    assert_eq!(v["pipelines"][0]["stalls"], 2);
+    v["minor"] = 2.into();
+    let pipe = v["pipelines"][0].as_object_mut().unwrap();
+    pipe.remove("max_slice_ns");
+    pipe.remove("stalls");
+    let back = QueryProfile::from_json(&v.to_string()).unwrap();
+    let read = &back.metrics.pipelines[&0];
+    assert_eq!((read.max_slice, read.stalls), (Duration::ZERO, 0));
+    assert_eq!(read.ended, Duration::from_millis(3));
+}
+
+#[test]
+fn the_trace_member_round_trips_and_is_absent_without_one() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), true);
+    assert!(p.to_json_value().get("trace").is_none());
+    p.trace = Some(
+        serde_json::json!({"trace_id": "sentinel-trace-7f3a", "session_id": "sentinel-session-9c1d"}),
+    );
+    let back = QueryProfile::from_json(&p.to_json()).expect("reads its own document");
+    assert_eq!(back.trace, p.trace);
+}
+
+#[test]
+fn identity_round_trips_and_a_shared_profile_drops_it_with_the_trace() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), true);
+    p.trace = Some(
+        serde_json::json!({"trace_id": "sentinel-trace-7f3a", "session_id": "sentinel-session-9c1d"}),
+    );
+    p.identity = Some(ProfileIdentity {
+        principal: "sentinel-principal-ada".into(),
+        tags: [("team".to_owned(), "sentinel-tag-data".to_owned())].into(),
+    });
+    let v = p.to_json_value();
+    assert_eq!(v["usage"]["principal"], "sentinel-principal-ada");
+    assert_eq!(v["usage"]["tags"]["team"], "sentinel-tag-data");
+    assert_eq!(
+        QueryProfile::from_json(&p.to_json())
+            .expect("reads")
+            .identity,
+        p.identity
+    );
+
+    let shared = p.shareable();
+    let text = shared.to_json();
+    for marker in [
+        "sentinel-principal-ada",
+        "sentinel-tag-data",
+        "sentinel-trace-7f3a",
+        "sentinel-session-9c1d",
+        "\"trace\"",
+    ] {
+        assert!(!text.contains(marker), "{marker} survived --share: {text}");
+    }
+    // Every number is kept.
+    assert_eq!(shared.metrics, p.metrics);
+    assert_eq!(shared.plan, p.plan);
+}
+
+#[test]
+fn a_profile_without_usage_still_reads_with_no_identity() {
+    let p = QueryProfile::new(&plan(matching()), metrics(), true);
+    let mut v = p.to_json_value();
+    v.as_object_mut().expect("object").remove("usage");
+    let back = QueryProfile::from_json(&v.to_string()).expect("an older document reads");
+    assert!(back.identity.is_none());
 }

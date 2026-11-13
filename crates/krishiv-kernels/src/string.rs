@@ -37,7 +37,9 @@
 mod case_table;
 mod chars;
 mod charsets;
-mod codec;
+pub(crate) mod codec;
+mod collation_key;
+mod lcase;
 mod like;
 mod mask_table;
 mod split;
@@ -51,13 +53,21 @@ use arrow_array::{
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 
 pub use chars::{
-    ascii, bit_length, chr, concat_ws, elt, elt_binary, find_in_set, initcap, levenshtein, locate,
-    luhn_check, overlay, overlay_binary, quote, repeat, reverse, reverse_binary, right, soundex,
-    space, split_part, substring_index, translate,
+    LcaseSearch, ascii, bit_length, chr, concat_ws, elt, elt_binary, find_in_set,
+    find_in_set_lcase, initcap, levenshtein, locate, locate_lcase, luhn_check, overlay,
+    overlay_binary, quote, repeat, reverse, reverse_binary, right, search_lcase, soundex, space,
+    split_part, substring_index, translate,
 };
 pub use codec::{
     CharsetOptions, base64, decode, decode_with, encode, encode_with, is_valid_utf8,
     make_valid_utf8, to_binary, unbase64, url_decode, url_encode, validate_utf8,
+};
+pub use collation_key::{
+    collation_key, collation_key_type, keyed_map, keyed_map_type, push_collation_key,
+};
+pub use lcase::{
+    replace_lcase, split_part_lcase, substring_index_lcase, translate_lcase, trim_collated,
+    trim_mode,
 };
 pub use like::{LikePattern, like};
 pub use split::{literal_delimiter, split_literal};

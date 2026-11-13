@@ -295,6 +295,12 @@ struct Settings {
     deterministic_order: bool,
     #[prost(uint64, optional, tag = "14")]
     shared_broadcast_bytes: Option<u64>,
+    /// `krishiv.exec.join.idleSpillAfter`; absent: the default.
+    #[prost(uint64, optional, tag = "15")]
+    join_idle_spill_after_nanos: Option<u64>,
+    /// `krishiv.exec.agg.directKeys`; absent: the default.
+    #[prost(bool, optional, tag = "16")]
+    agg_direct_keys: Option<bool>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -316,12 +322,14 @@ impl Settings {
             fail_on_stall,
             seed,
             agg_row_layout,
+            agg_direct_keys,
             detailed_metrics,
             join_row_layout,
             join_radix_bits,
             sort_hash_buckets,
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
+            join_idle_spill_after,
             deterministic_order,
         } = c.clone();
         Self {
@@ -338,7 +346,11 @@ impl Settings {
             sort_hash_buckets,
             join_merge_buffer_bytes: wide(join_merge_buffer_bytes),
             shared_broadcast_bytes: shared_broadcast_bytes.map(wide),
+            join_idle_spill_after_nanos: Some(
+                u64::try_from(join_idle_spill_after.as_nanos()).unwrap_or(u64::MAX),
+            ),
             deterministic_order,
+            agg_direct_keys: Some(agg_direct_keys),
         }
     }
 
@@ -351,6 +363,9 @@ impl Settings {
             fail_on_stall: self.fail_on_stall,
             seed: self.seed,
             agg_row_layout: self.agg_row_layout,
+            agg_direct_keys: self
+                .agg_direct_keys
+                .unwrap_or(ExecConfig::default().agg_direct_keys),
             detailed_metrics: self.detailed_metrics,
             join_row_layout: self.join_row_layout,
             join_radix_bits: self.join_radix_bits,
@@ -360,6 +375,10 @@ impl Settings {
                 .shared_broadcast_bytes
                 .map(|n| narrow(n, "shared broadcast bytes"))
                 .transpose()?,
+            join_idle_spill_after: self.join_idle_spill_after_nanos.map_or(
+                ExecConfig::default().join_idle_spill_after,
+                Duration::from_nanos,
+            ),
             deterministic_order: self.deterministic_order,
         })
     }
@@ -535,6 +554,20 @@ mod tests {
         let (root_back, got) = decode_task(&encode_task(&root, &defaults).unwrap()).unwrap();
         assert_eq!(root_back.output, None);
         assert_eq!(format!("{got:?}"), format!("{defaults:?}"));
+    }
+
+    #[test]
+    fn direct_keys_round_trip_and_default_when_absent() {
+        let off = ExecConfig {
+            agg_direct_keys: false,
+            ..ExecConfig::default()
+        };
+        let (_, got) = decode_task(&encode_task(&TaskSpec::whole(), &off).unwrap()).unwrap();
+        assert!(!got.agg_direct_keys);
+        // A descriptor written before tag 16 existed.
+        let mut old = Settings::of(&off);
+        old.agg_direct_keys = None;
+        assert!(old.config().unwrap().agg_direct_keys);
     }
 
     #[test]

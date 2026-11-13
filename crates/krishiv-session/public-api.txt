@@ -162,6 +162,7 @@ pub fn krishiv_session::functions::lit_null() -> krishiv_session::Column
 pub fn krishiv_session::functions::map_literal(alloc::vec::Vec<(alloc::string::String, alloc::string::String)>) -> krishiv_session::Column
 pub fn krishiv_session::functions::max(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_session::Column
+pub fn krishiv_session::functions::python_udf_call(&krishiv_session::PythonUdfDef, u32, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
 #[non_exhaustive] pub enum krishiv_session::CancelReason
 pub krishiv_session::CancelReason::Admin
@@ -428,6 +429,7 @@ impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::builder() -> krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntime::cancel(&self, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
 pub fn krishiv_session::EngineRuntime::executor(&self) -> &alloc::sync::Arc<dyn krishiv_exec::executor::Executor>
+pub fn krishiv_session::EngineRuntime::io_totals(&self) -> &krishiv_io::io::IoCounters
 pub fn krishiv_session::EngineRuntime::memory(&self) -> alloc::sync::Arc<dyn krishiv_memory::MemoryPool>
 pub fn krishiv_session::EngineRuntime::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
 impl core::fmt::Debug for krishiv_session::EngineRuntime
@@ -508,6 +510,42 @@ pub fn krishiv_session::Permit::with_memory_budget(self, usize) -> Self
 pub fn krishiv_session::Permit::with_slot(impl core::marker::Send + core::marker::Sync + 'static) -> Self
 impl core::fmt::Debug for krishiv_session::Permit
 pub fn krishiv_session::Permit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::PythonUdfDef
+pub krishiv_session::PythonUdfDef::deterministic: bool
+pub krishiv_session::PythonUdfDef::eval_type: krishiv_plan::function::PythonEvalType
+pub krishiv_session::PythonUdfDef::name: alloc::string::String
+pub krishiv_session::PythonUdfDef::return_type: krishiv_types::data_type::DataType
+pub krishiv_session::PythonUdfDef::thread_safe: bool
+impl core::clone::Clone for krishiv_session::PythonUdfDef
+pub fn krishiv_session::PythonUdfDef::clone(&self) -> krishiv_session::PythonUdfDef
+impl core::cmp::Eq for krishiv_session::PythonUdfDef
+impl core::cmp::PartialEq for krishiv_session::PythonUdfDef
+pub fn krishiv_session::PythonUdfDef::eq(&self, &krishiv_session::PythonUdfDef) -> bool
+impl core::fmt::Debug for krishiv_session::PythonUdfDef
+pub fn krishiv_session::PythonUdfDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::PythonUdfDef
+pub struct krishiv_session::PythonUdfEntry
+pub krishiv_session::PythonUdfEntry::def: krishiv_session::PythonUdfDef
+pub krishiv_session::PythonUdfEntry::version: u32
+impl core::clone::Clone for krishiv_session::PythonUdfEntry
+pub fn krishiv_session::PythonUdfEntry::clone(&self) -> krishiv_session::PythonUdfEntry
+impl core::cmp::Eq for krishiv_session::PythonUdfEntry
+impl core::cmp::PartialEq for krishiv_session::PythonUdfEntry
+pub fn krishiv_session::PythonUdfEntry::eq(&self, &krishiv_session::PythonUdfEntry) -> bool
+impl core::fmt::Debug for krishiv_session::PythonUdfEntry
+pub fn krishiv_session::PythonUdfEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::PythonUdfEntry
+pub struct krishiv_session::PythonUdfLibrary
+impl krishiv_session::PythonUdfLibrary
+pub fn krishiv_session::PythonUdfLibrary::entry(&self, &str) -> core::option::Option<krishiv_plan::analyzer::catalog::FunctionEntry>
+pub fn krishiv_session::PythonUdfLibrary::get(&self, &str) -> core::option::Option<krishiv_session::PythonUdfEntry>
+pub fn krishiv_session::PythonUdfLibrary::new() -> Self
+pub fn krishiv_session::PythonUdfLibrary::register(&self, krishiv_session::PythonUdfDef) -> krishiv_session::PythonUdfEntry
+pub fn krishiv_session::PythonUdfLibrary::version(&self) -> u64
+impl core::default::Default for krishiv_session::PythonUdfLibrary
+pub fn krishiv_session::PythonUdfLibrary::default() -> krishiv_session::PythonUdfLibrary
+impl core::fmt::Debug for krishiv_session::PythonUdfLibrary
+pub fn krishiv_session::PythonUdfLibrary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::QueryId(_)
 impl krishiv_session::QueryId
 pub fn krishiv_session::QueryId::as_str(&self) -> &str
@@ -560,6 +598,7 @@ pub fn krishiv_session::ReadOnlyPolicy::check<'a>(&'a self, &'a krishiv_common::
 pub fn krishiv_session::ReadOnlyPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::RuntimeConf
 impl krishiv_session::RuntimeConf
+pub fn krishiv_session::RuntimeConf::entries(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub fn krishiv_session::RuntimeConf::get(&self, &str) -> core::option::Option<alloc::string::String>
 pub fn krishiv_session::RuntimeConf::is_modifiable(&self, &str) -> bool
 pub fn krishiv_session::RuntimeConf::set(&self, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
@@ -592,6 +631,7 @@ pub fn krishiv_session::Session::temp_table_names(&self) -> alloc::vec::Vec<allo
 pub fn krishiv_session::Session::uncache_table(&self, &str)
 impl krishiv_session::Session
 pub fn krishiv_session::Session::cancel(&self, &krishiv_session::QueryId) -> bool
+pub fn krishiv_session::Session::clone_session(&self) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::close(&self) -> usize
 pub fn krishiv_session::Session::interrupt_all(&self) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::Session::new_session(&self) -> Self
@@ -606,6 +646,9 @@ pub fn krishiv_session::Session::tags(&self) -> alloc::vec::Vec<(alloc::string::
 pub fn krishiv_session::Session::trace_id(&self) -> core::option::Option<alloc::string::String>
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::estimate_sql(&self, &str) -> core::result::Result<core::option::Option<krishiv_session::Estimate>, krishiv_common::error::KrishivError>
+impl krishiv_session::Session
+pub fn krishiv_session::Session::register_python_udf(&self, krishiv_session::PythonUdfDef) -> krishiv_session::PythonUdfEntry
+pub fn krishiv_session::Session::set_python_udf_runtime(&self, alloc::sync::Arc<dyn krishiv_exec::python_eval::UdfRuntime>)
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::statement_info(&self, &str) -> core::result::Result<krishiv_session::StatementInfo, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::Session
@@ -629,6 +672,8 @@ pub struct krishiv_session::SessionFunctions
 impl krishiv_session::SessionFunctions
 pub fn krishiv_session::SessionFunctions::library(&self) -> &alloc::sync::Arc<krishiv_udf_sdk::library::UdfLibrary>
 pub fn krishiv_session::SessionFunctions::new(alloc::sync::Arc<krishiv_udf_sdk::library::UdfLibrary>) -> Self
+pub fn krishiv_session::SessionFunctions::python(&self) -> &alloc::sync::Arc<krishiv_session::PythonUdfLibrary>
+pub fn krishiv_session::SessionFunctions::with_python(self, alloc::sync::Arc<krishiv_session::PythonUdfLibrary>) -> Self
 pub fn krishiv_session::SessionFunctions::with_registry(alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::FunctionRegistry>, alloc::sync::Arc<krishiv_udf_sdk::library::UdfLibrary>) -> Self
 impl core::clone::Clone for krishiv_session::SessionFunctions
 pub fn krishiv_session::SessionFunctions::clone(&self) -> krishiv_session::SessionFunctions
@@ -685,6 +730,7 @@ pub fn krishiv_session::Unlimited::fmt(&self, &mut core::fmt::Formatter<'_>) -> 
 impl core::marker::Copy for krishiv_session::Unlimited
 impl krishiv_session::AdmissionController for krishiv_session::Unlimited
 pub fn krishiv_session::Unlimited::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::Unlimited::uses_estimate(&self) -> bool
 pub struct krishiv_session::WindowSpec
 impl krishiv_session::WindowSpec
 pub fn krishiv_session::WindowSpec::new() -> Self
@@ -702,12 +748,15 @@ pub fn krishiv_session::WindowSpec::default() -> Self
 impl core::fmt::Debug for krishiv_session::WindowSpec
 pub fn krishiv_session::WindowSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::WindowSpec
+pub const krishiv_session::ANONYMOUS_VERSION_BIT: u32
 pub const krishiv_session::VERBOSE_FORMAT: &str
 pub const krishiv_session::VERBOSE_VERSION: u64
 pub trait krishiv_session::AdmissionController: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn krishiv_session::AdmissionController::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::AdmissionController::uses_estimate(&self) -> bool
 impl krishiv_session::AdmissionController for krishiv_session::Unlimited
 pub fn krishiv_session::Unlimited::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::Unlimited::uses_estimate(&self) -> bool
 pub fn krishiv_session::dot_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
 pub fn krishiv_session::dot_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String

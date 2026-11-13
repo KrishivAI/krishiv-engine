@@ -95,6 +95,18 @@ fn pre_push_hook_refuses_main_and_force_pushes() {
 }
 
 #[test]
+fn commit_msg_hook_adds_the_sign_off_and_still_refuses_ai_attribution() {
+    let script = root().join(".githooks/test-commit-msg.sh");
+    let out = Command::new("sh").arg(&script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn deny_toml_guards_object_store_coupling() {
     let deny = read("deny.toml");
     assert!(deny.contains("[[bans.features]]"));
@@ -135,7 +147,7 @@ fn ci_policy_wiring() {
     let fuzz_build = job(&ci, "fuzz-build");
     for needle in [
         "    needs: changes\n",
-        "    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && github.event_name != 'merge_group'\n",
+        "    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'\n",
         "        run: cargo \"+$NIGHTLY\" fuzz build --target x86_64-unknown-linux-gnu\n",
     ] {
         // Whole lines: a deeper-indented step-level `if:` or `run:` must not match.
@@ -144,12 +156,49 @@ fn ci_policy_wiring() {
             "fuzz-build lacks {needle:?}"
         );
     }
-    // The merge queue runs the build, tests, clippy and the cheap lints; the long checks stay
-    // on pull requests and run on main nightly. Each stays a job that reports (skipped passes).
+    // Each gate runs once (owner 2026-11-08): ci.yml has no push or schedule trigger; the nightly run is
+    // nightly.yml, which calls ci.yml; a push to main only measures (main-measure.yml, codspeed.yml).
+    let on_block: Vec<&str> = ci
+        .lines()
+        .skip_while(|l| *l != "on:")
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect();
     assert!(
-        ci.contains("  schedule:\n    - cron:"),
-        "ci.yml runs on main nightly"
+        !on_block.iter().any(|l| l.trim_start().starts_with("schedule:") || l.trim_start().starts_with("push:")),
+        "ci.yml has no push or schedule trigger: {on_block:?}"
     );
+    assert!(
+        on_block.contains(&"  workflow_call:"),
+        "nightly.yml calls ci.yml"
+    );
+    let nightly = read(".github/workflows/nightly.yml");
+    assert!(
+        nightly.contains("  ci:\n") && nightly.contains("    uses: $/.github/workflows/ci.yml"),
+        "nightly.yml runs the jobs of ci.yml on main"
+    );
+    // The merge queue runs the build, tests, clippy, docs, layering and policy only.
+    for name in [
+        "text-lint",
+        "python-quality",
+        "fmt",
+        "deny",
+        "machete",
+        "hack",
+        "connect-protos",
+        "plan-protos",
+        "msrv",
+        "release-dry-run",
+        "fuzz-build",
+        "wheels-targets",
+    ] {
+        assert!(
+            job(&ci, name).contains("github.event_name != 'merge_group'")
+                || job(&ci, name).contains("github.event_name == 'pull_request'"),
+            "{name} must not run in the merge queue"
+        );
+    }
     for name in ["miri-kernels", "wheels"] {
         let body = job(&ci, name);
         assert!(
@@ -157,7 +206,7 @@ fn ci_policy_wiring() {
             "{name} must not run in the merge queue"
         );
     }
-    for name in ["test", "clippy", "fmt", "layering"] {
+    for name in ["test", "clippy", "docs", "layering"] {
         assert!(
             !job(&ci, name).contains("merge_group"),
             "{name} must run in the merge queue"
@@ -228,8 +277,6 @@ fn ci_policy_wiring() {
         "git rev-parse HEAD^1 > target/measured-base-sha",
         // HEAD^1 needs the parent: the default depth-1 checkout has none.
         "fetch-depth: 2",
-        // Main is measured by main-measure.yml, so ci.yml builds no wheels there.
-        "github.event_name != 'push'",
     ] {
         assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
     }
@@ -383,8 +430,8 @@ fn ci_policy_wiring() {
     // label); the label-aware gate in pr-policy.yml compares the measurement.
     let ci = read(".github/workflows/ci.yml");
     assert!(
-        ci.contains("github.event_name != 'push' && github.event_name != 'merge_group'"),
-        "wheels-targets is skipped on push and in the merge queue"
+        job(&ci, "wheels-targets").contains("github.event_name != 'merge_group'"),
+        "wheels-targets runs on pull requests and in the nightly run, not in the merge queue"
     );
     let wheels = read(".github/workflows/wheels.yml");
     for needle in [
@@ -748,10 +795,11 @@ const PUBLISH_MARKERS: [&str; 10] = [
     "pnpm publish",
 ];
 
-/// Nothing publishes on merge or on a tag (P2-T147, RELEASING.md): the only
-/// publishing path is the TestPyPI workflow, which runs on manual dispatch
-/// alone and waits for an approved environment; the release switches stay off
-/// and every crate stays unpublishable.
+/// Publishing (owner 2026-11-11, the 0.2 release): three workflows may publish, each on manual
+/// dispatch only and each behind its own GitHub environment: TestPyPI and PyPI by trusted
+/// publishing (no token), crates.io with the `crates-io` environment's token. Nothing publishes on
+/// push, merge, tag or schedule; release-plz stays a dry run; exactly the crates listed in
+/// `.github/scripts/publish-crates.txt` are publishable.
 #[test]
 fn release_publishing_is_manual_and_gated() {
     let dir = root().join(".github");
@@ -771,12 +819,16 @@ fn release_publishing_is_manual_and_gated() {
             .filter(|l| !l.trim_start().starts_with('#'))
             .collect();
         for line in &code {
-            // A dry run packages and verifies and never uploads.
             if line.contains("cargo publish") {
+                let dry = line.contains("--dry-run") && name == "publish-dry-run.sh";
+                let real = name == "publish-crates.yml";
                 assert!(
-                    line.contains("--dry-run") && name == "publish-dry-run.sh",
-                    "{name}: `cargo publish` outside the dry-run script or without --dry-run: {line}"
+                    dry || real,
+                    "{name}: `cargo publish` outside publish-crates.yml or the dry-run script: {line}"
                 );
+                if real {
+                    publishers.push(name.clone());
+                }
             }
             if PUBLISH_MARKERS.iter().any(|m| line.contains(m)) {
                 publishers.push(name.clone());
@@ -787,75 +839,98 @@ fn release_publishing_is_manual_and_gated() {
     publishers.dedup();
     assert_eq!(
         publishers,
-        ["publish-testpypi.yml"],
-        "only the gated TestPyPI workflow may publish"
+        [
+            "publish-crates.yml",
+            "publish-pypi.yml",
+            "publish-testpypi.yml"
+        ],
+        "only the three gated publishing workflows may publish"
     );
 
-    let wf = read(".github/workflows/publish-testpypi.yml");
-    let triggers: Vec<&str> = wf
-        .lines()
-        .skip_while(|l| *l != "on:")
-        .skip(1)
-        .take_while(|l| l.starts_with(' '))
-        .map(str::trim)
-        .collect();
-    assert_eq!(
-        triggers,
-        ["workflow_dispatch:"],
-        "the TestPyPI workflow must run on manual dispatch only"
-    );
-    // Scope the gate assertions to the `publish` job: a match anywhere else
-    // in the file (another job, a comment) must not satisfy them.
-    let publish = wf
-        .find("\n  publish:\n")
-        .map(|i| &wf[i..])
-        .expect("publish-testpypi.yml has a `publish` job");
-    let env = publish
-        .find("environment:\n      name: testpypi")
-        .expect("the publish job must declare the testpypi environment");
-    let upload = publish
-        .find("uses: pypa/gh-action-pypi-publish@")
-        .expect("the publish job must upload via gh-action-pypi-publish");
-    assert!(
-        env < upload,
-        "the publish job must declare the testpypi environment before the upload step"
-    );
-    assert!(wf.contains("github.ref == 'refs/heads/main'") && wf.contains("refs/tags/v"));
-    // The upload step's effective `repository-url` must be TestPyPI: scoping
-    // to the step's `with:` block keeps a production URL anywhere else (or
-    // next to the TestPyPI one) from passing.
-    let after_upload = &publish[upload..];
-    let with_off = after_upload
-        .find("\n        with:\n")
-        .expect("the upload step must have a `with:` block");
-    let with_block: Vec<&str> = after_upload[with_off..]
-        .lines()
-        .skip_while(|l| l.trim() != "with:")
-        .skip(1)
-        .take_while(|l| l.trim().is_empty() || l.starts_with("          "))
-        .collect();
-    let urls: Vec<&&str> = with_block
-        .iter()
-        .filter(|l| l.contains("repository-url:"))
-        .collect();
-    assert_eq!(
-        urls.len(),
-        1,
-        "the upload step must set exactly one repository-url, got: {with_block:?}"
-    );
-    assert_eq!(
-        urls[0].trim(),
-        "repository-url: https://test.pypi.org/legacy/",
-        "the upload step must target TestPyPI"
-    );
-    assert!(
-        !publish.contains("//pypi.org/legacy/") && !publish.contains("upload.pypi.org"),
-        "the publish job must not reference production PyPI"
-    );
-    assert!(
-        !wf.contains("secrets."),
-        "upload is by trusted publishing, no token"
-    );
+    for (file, env) in [
+        ("publish-testpypi.yml", "testpypi"),
+        ("publish-pypi.yml", "pypi"),
+        ("publish-crates.yml", "crates-io"),
+    ] {
+        let wf = read(&format!(".github/workflows/{file}"));
+        let triggers: Vec<&str> = wf
+            .lines()
+            .skip_while(|l| *l != "on:")
+            .skip(1)
+            .take_while(|l| l.starts_with(' '))
+            .map(str::trim)
+            .collect();
+        assert_eq!(
+            triggers,
+            ["workflow_dispatch:"],
+            "{file} must run on manual dispatch only"
+        );
+        let publish = wf
+            .find("\n  publish:\n")
+            .map(|i| &wf[i..])
+            .unwrap_or_else(|| panic!("{file} has a `publish` job"));
+        let env_at = publish
+            .find(&format!("environment:\n      name: {env}\n"))
+            .unwrap_or_else(|| {
+                panic!("{file}: the publish job must declare the {env} environment")
+            });
+        let upload_at = publish
+            .find("uses: pypa/gh-action-pypi-publish@")
+            .or_else(|| publish.find("cargo publish -p"))
+            .unwrap_or_else(|| panic!("{file}: the publish job has no upload step"));
+        assert!(
+            env_at < upload_at,
+            "{file}: the environment must be declared before the upload"
+        );
+        assert!(
+            wf.contains("github.ref == 'refs/heads/main'") && wf.contains("refs/tags/v"),
+            "{file}: only main or a v* tag may publish"
+        );
+        // Each upload goes where its file says, and only the crates.io job holds a token.
+        match file {
+            "publish-testpypi.yml" => {
+                assert!(publish.contains("repository-url: https://test.pypi.org/legacy/"));
+                assert!(
+                    !publish.contains("upload.pypi.org"),
+                    "{file} must target TestPyPI"
+                );
+                assert!(
+                    !wf.contains("secrets."),
+                    "{file}: trusted publishing, no token"
+                );
+            }
+            "publish-pypi.yml" => {
+                assert!(
+                    !publish.contains("test.pypi.org"),
+                    "{file} must target production PyPI"
+                );
+                assert!(
+                    !publish.contains("repository-url:"),
+                    "{file} uploads to the default PyPI"
+                );
+                assert!(
+                    !wf.contains("secrets."),
+                    "{file}: trusted publishing, no token"
+                );
+            }
+            _ => {
+                let before_publish = &wf[..wf.find("\n  publish:\n").unwrap()];
+                assert!(
+                    !before_publish.contains("secrets."),
+                    "{file}: only the publish job may read a secret"
+                );
+                assert!(
+                    publish.contains("secrets.CARGO_REGISTRY_TOKEN")
+                        && publish.matches("secrets.").count() == 1,
+                    "{file}: the publish job reads exactly CARGO_REGISTRY_TOKEN"
+                );
+                assert!(
+                    publish.contains("publish-crates.txt"),
+                    "{file} publishes the listed crates"
+                );
+            }
+        }
+    }
 
     // release-plz stays a dry run until the owner changes it.
     let plz = read("release-plz.toml");
@@ -888,19 +963,45 @@ fn release_publishing_is_manual_and_gated() {
         );
     }
 
-    // No crate can be published from this repository.
+    // Exactly the crates in publish-crates.txt are publishable; every other manifest keeps
+    // `publish = false`.
+    let listed: Vec<String> = read(".github/scripts/publish-crates.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+    assert_eq!(listed.len(), 20, "the 0.2 release publishes 20 crates");
     let mut manifests = vec![root().join("xtask/Cargo.toml")];
     for entry in std::fs::read_dir(root().join("crates")).unwrap() {
         manifests.push(entry.unwrap().path().join("Cargo.toml"));
     }
+    let mut publishable = Vec::new();
     for m in manifests.iter().filter(|m| m.exists()) {
         let text = std::fs::read_to_string(m).unwrap();
+        let name = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("name = "))
+            .map(|v| v.trim_matches('"').to_string())
+            .unwrap_or_default();
+        let on = text.lines().any(|l| l.trim() == "publish = true");
+        let off = text.lines().any(|l| l.trim() == "publish = false");
         assert!(
-            text.lines().any(|l| l.trim() == "publish = false"),
-            "{} must keep `publish = false`",
+            on != off,
+            "{} must say exactly one of publish = true / false",
             m.display()
         );
+        if on {
+            publishable.push(name);
+        }
     }
+    publishable.sort();
+    let mut want = listed;
+    want.sort();
+    assert_eq!(
+        publishable, want,
+        "publishable crates must match publish-crates.txt"
+    );
 
     // The dry run and the quickstart are wired into CI.
     let ci = read(".github/workflows/ci.yml");

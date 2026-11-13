@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for shuffle frames and files: header and batch round trips, checksums, commits and damaged data.
 use std::sync::Arc;
 
 use arrow_array::{Int64Array, RecordBatch, StringArray};
@@ -302,4 +303,33 @@ fn a_committed_output_holds_no_open_file() {
         block_on(early.next()).unwrap(),
         ExchangeFrame::Data(_)
     ));
+}
+
+/// `committed_bytes` (row 30c m5): the frames of the first committed attempt
+/// of each map partition for one reduce partition, summed; a later attempt
+/// of a map partition, an uncommitted writer and another stage attempt do
+/// not count; an exchange nothing committed to is unknown.
+#[test]
+fn committed_bytes_sum_the_first_committed_attempts() {
+    let shuffle = LocalShuffle::in_memory();
+    let id = ExchangeId(7);
+    assert_eq!(shuffle.committed_bytes(id, 0, 0), None);
+    write_and_commit(&shuffle, 0, 0, 0);
+    let one = shuffle.committed_bytes(id, 0, 0).unwrap();
+    // Two data frames and the `End` frame, each with its header.
+    assert!(one > 3 * HEADER_BYTES as u64, "{one}");
+    let other = shuffle.committed_bytes(id, 0, 1).unwrap();
+    assert!(other > 0 && other < one, "{other} vs {one}");
+    // A second map partition adds its frames; a later attempt of map 0 does not.
+    write_and_commit(&shuffle, 1, 0, 100);
+    write_and_commit(&shuffle, 0, 1, 200);
+    let two = shuffle.committed_bytes(id, 0, 0).unwrap();
+    assert_eq!(two, 2 * one);
+    // A writer that never commits is not counted.
+    let mut w = shuffle.writer(output(2, 0), 2, schema()).unwrap();
+    w.write(0, &batch(0, 5)).unwrap();
+    assert_eq!(shuffle.committed_bytes(id, 0, 0), Some(two));
+    drop(w);
+    // Another stage attempt of the exchange is kept apart.
+    assert_eq!(shuffle.committed_bytes(id, 1, 0), None);
 }

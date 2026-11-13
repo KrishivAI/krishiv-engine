@@ -44,6 +44,7 @@ variants!(
     Limit,
     ReplicateRows,
     Generate,
+    PythonEval,
     Expand,
     Sort,
     TopN,
@@ -73,6 +74,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Limit { .. } => Variant::Limit,
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Generate { .. } => Variant::Generate,
+        PhysNode::PythonEval { .. } => Variant::PythonEval,
         PhysNode::UnionLoop { .. } => Variant::UnionLoop,
         PhysNode::LoopRef { .. } => Variant::LoopRef,
         PhysNode::Expand { .. } => Variant::Expand,
@@ -200,6 +202,45 @@ fn an_exchanges_planned_schema_round_trips_and_is_ignorable() {
     )])));
     assert_eq!(round_trip(&variant), variant);
     assert!(plan_features(&variant).contains(&krishiv_plan_codec::Feature::VariantType));
+}
+
+/// An exchange's and an exchange source's schema with a nested column puts `nested_types` in the
+/// header (the encoder's flag follows the feature walk; nightly serialize-through, percentile).
+#[test]
+fn a_nested_schema_on_an_exchange_or_its_source_lists_nested_types() {
+    use arrow_schema::{DataType, Field, Schema};
+    use krishiv_exec::SortKey;
+    use krishiv_exec::physical::{ExchangeId, Partitioning};
+
+    let nested = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new(
+            "p",
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            true,
+        ),
+    ]));
+    let (_, plain) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "exchange_round_robin")
+        .unwrap();
+    let PhysNode::Exchange(mut e) = plain.root().clone() else {
+        panic!("not an exchange");
+    };
+    e.schema = Some(Arc::clone(&nested));
+    let exchange = plan_of(PhysNode::Exchange(e));
+    let source = plan_of(PhysNode::Sort {
+        input: Box::new(PhysNode::ExchangeSource {
+            id: ExchangeId(19),
+            partitioning: Partitioning::Single,
+            schema: nested,
+        }),
+        keys: vec![SortKey::asc(0)],
+    });
+    for plan in [exchange, source] {
+        assert!(plan_features(&plan).contains(&krishiv_plan_codec::Feature::NestedTypes));
+        assert_eq!(round_trip(&plan), plan);
+    }
 }
 
 #[test]
@@ -567,6 +608,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "shared_subplan"
             | "exchange_source"
             | "rust_udf"
+            | "python_udf"
             | "rust_udaf"
             | "nested_types"
             | "struct_field"
@@ -574,6 +616,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "map_key_dedup_policy"
             | "legacy_charset_switches"
             | "legacy_time_parser"
+            | "binary_output_style"
             | "session_zone_name"
             | "aggregate_filter"
             | "range"
@@ -595,12 +638,14 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
                 || n.starts_with("geo_")
                 || n.starts_with("interval_")
                 || n.starts_with("collated_")
-                || n.starts_with("variant_") =>
+                || n.starts_with("variant_")
+                || n.starts_with("calendar_") =>
             {
                 6
             }
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
             "hash_join_existence"
+            | "fused_probe"
             | "hash_join_full_outer"
             | "hash_join_single_match"
             | "nested_loop_existence"
@@ -611,6 +656,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "window_range_values"
             | "window_range_months"
             | "window_range_day_time"
+            | "captured_eval_mode"
             | "write_files_with_plan" => POST_MIGRATION_READER_VERSION,
             n if n.starts_with("generate_") || n.starts_with("union_loop") => 6,
             _ => MIN_READER_VERSION,
@@ -826,6 +872,22 @@ fn a_corrupt_listagg_is_refused() {
         &edit(&|a| a.args.clear()),
         "another argument count than its orders",
     );
+}
+
+#[test]
+fn a_udaf_call_whose_argument_types_and_columns_differ_is_refused() {
+    use pb::node::Kind;
+    let mut m = message("rust_udaf");
+    for node in &mut m.nodes {
+        if let Some(Kind::Aggregate(a)) = &mut node.kind {
+            for agg in &mut a.aggregates {
+                if let Some(u) = agg.udaf.as_mut() {
+                    u.arg_types.clear();
+                }
+            }
+        }
+    }
+    corrupt(&m, "argument types and columns differ");
 }
 
 #[test]
@@ -1386,4 +1448,36 @@ fn a_loop_without_limits_is_corrupt() {
         }
     }
     corrupt(&m, "a recursive loop without limits");
+}
+
+/// The encoder refuses the probe selections the decoder cannot read back:
+/// an empty column list (it decodes as no list) and one that selects
+/// nothing (corrupt to the decoder).
+#[test]
+fn a_probe_selection_that_cannot_round_trip_is_refused() {
+    let (_, fused) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "fused_probe")
+        .unwrap();
+    let PhysNode::HashJoin(join) = fused.root().clone() else {
+        panic!("fused_probe is a hash join");
+    };
+    let select = join.select.clone().unwrap();
+    let empty = krishiv_exec::physical::ProbeSelect {
+        columns: Some(Vec::new()),
+        ..select.clone()
+    };
+    let nothing = krishiv_exec::physical::ProbeSelect {
+        filter: None,
+        row_stage: None,
+        ..select
+    };
+    for s in [empty, nothing] {
+        let plan = plan_of(PhysNode::HashJoin(krishiv_exec::physical::HashJoinPlan {
+            select: Some(s.clone()),
+            ..join.clone()
+        }));
+        let err = encode(&plan).unwrap_err();
+        assert!(matches!(err, CodecError::Unsupported(_)), "{s:?}: {err:?}");
+    }
 }

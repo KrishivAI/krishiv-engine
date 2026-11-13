@@ -79,6 +79,7 @@
 //! | `PlanNode::Shift` | R | - | - |
 //! | `PlanNode::Hint` | U | - | - |
 //! | `PlanNode::PipeOperator` | U | - | - |
+//! | `PlanNode::Repartition` | U, R | - | - |
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
@@ -96,6 +97,7 @@
 //! | `ExprNode::Function` | U | all | `operators`, `functions` |
 //! | `ExprNode::Cast` | U, R | Q1, Q3-Q8, Q10, Q12, Q14, Q15, Q20 | `cast` |
 //! | `ExprNode::Collate` | U | - | - |
+//! | `ExprNode::StoredField` | U | - | - |
 //! | `ExprNode::Alias` | U | Q1, Q3-Q17, Q19, Q21, Q22 | `col.alias` |
 //! | `ExprNode::Field` | U | - | - |
 //! | `ExprNode::UpdateFields` | U | - | - |
@@ -109,9 +111,10 @@
 //! | `ResolvedExpr::Alias` | R | - | - |
 //! | `ResolvedExpr::Field` | R | - | - |
 //! | `ResolvedExpr::StateInput` | R | - | - |
+//! | `ResolvedExpr::EvalMode` | R | - | - |
 //!
 //! Not in v1 (spec 13 §9; added with the features that need them):
-//! `Generate`, `Repartition`, `Hint`, `Pivot`, `Command`,
+//! `Generate`, `Hint`, `Pivot`, `Command`,
 //! `Extension`, `ToDF`, `Offset`, `Deduplicate`, `LocalRelation` and `Range`
 //! relations; lambda, extract-value and extension expressions.
 
@@ -141,16 +144,28 @@ pub use display::identity_string;
 pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
     AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FrameBound, FrameUnits,
-    FunctionCall, NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star,
-    SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
+    FunctionCall, NullOrdering, PipeClause, ResolvedExpr, ResolvedFunction, SortDirection,
+    SortOrder, Star, SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec,
+    WindowSpecRef,
 };
-pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
+pub use function::{Builtin, FunctionId, FunctionKind, PythonEvalType, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
 /// The qualifier prefix of the columns a select-list generator adds: an
 /// unqualified `*` skips them (the generator's own star reads them).
 pub const GENERATE_QUALIFIER_PREFIX: &str = "__krishiv_generate_";
+/// Ends the qualifier of a generator written with one alias (`explode(..) AS a`): Spark counts
+/// that alias among the select list's lateral column aliases, a name list or none it does not.
+pub const GENERATE_ALIAS_SUFFIX: &str = "_alias";
+
+/// The qualifier of the columns the select-list generator at `index` adds; `aliased` when it was
+/// written with one alias.
+#[must_use]
+pub fn generate_qualifier(index: usize, aliased: bool) -> String {
+    let suffix = if aliased { GENERATE_ALIAS_SUFFIX } else { "" };
+    format!("{GENERATE_QUALIFIER_PREFIX}{index}{suffix}")
+}
 
 pub use plan::{
     ALIAS_PART_SEP, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind,
@@ -158,5 +173,5 @@ pub use plan::{
     TABLE_FUNCTION_NAME_SEP, TableVersion, UnpivotColumnSet, generator_arg,
     without_generated_marker,
 };
-pub use raises::{conjuncts, is_deterministic, may_raise};
+pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
 pub use walk::{MAX_DEPTH, check_depth};

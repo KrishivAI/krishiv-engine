@@ -8,17 +8,20 @@
 //! input, its type picks the generated columns, and the node outputs the
 //! input's attributes followed by them.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
     DatatypeMismatchStackColumnDiffTypes, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchValueOutOfRange, UdtfAliasNumberMismatch, UnresolvedColumnWithoutSuggestion,
-    UnsupportedGeneratorMultiGenerator, UnsupportedGeneratorNestedInExpressions,
+    DatatypeMismatchValueOutOfRange, ErrorClass, InternalError, UdtfAliasNumberMismatch,
+    UnresolvedColumnWithoutSuggestion, UnsupportedGeneratorMultiGenerator,
+    UnsupportedGeneratorNestedInExpressions,
 };
 use krishiv_types::DataType;
 
 use super::AnalysisError;
 use super::bind::unsupported;
+use super::catalog::quoted;
 use super::coerce::quoted_type;
 use super::exprs::{Bound, Cx, pretty};
 use super::ops::col_expr;
@@ -87,6 +90,50 @@ fn generated(kind: GeneratorKind, ty: &DataType) -> Option<Vec<(String, DataType
 }
 
 impl Resolver<'_> {
+    /// `e`, raised resolving the generators under a select list, as Spark
+    /// raises it: a generator argument naming an alias written earlier in
+    /// the same list leaves a `lateralAliasReference` in the resolved
+    /// plan, which Spark 4.2 reports as `INTERNAL_ERROR`. Select-list
+    /// generators run below the projection here, so the argument found
+    /// no column of that name.
+    pub(super) fn generator_over_lateral_alias(
+        &self,
+        exprs: &[Arc<Expr>],
+        e: AnalysisError,
+    ) -> AnalysisError {
+        let unresolved = matches!(
+            e.error.error_class(),
+            ErrorClass::UnresolvedColumnWithoutSuggestion
+        );
+        if !unresolved || !self.ctx.conf.lateral_column_alias {
+            return e;
+        }
+        let cs = self.ctx.conf.case_sensitive;
+        let named = |name: &str| quoted(&[name.to_owned()]);
+        // Only aliases written before the first generator are lateral
+        // references for it; later ones, and none at all, stay UNRESOLVED_COLUMN.
+        let first_gen = exprs.iter().position(is_generator_slot).unwrap_or(0);
+        let is_alias = exprs[..first_gen].iter().any(|x| match &x.node {
+            ExprNode::Alias { name, .. } => {
+                let shown = named(name);
+                let text = e.error.to_string();
+                text.contains(&shown)
+                    || (!cs && text.to_lowercase().contains(&shown.to_lowercase()))
+            }
+            _ => false,
+        });
+        if !is_alias {
+            return e;
+        }
+        AnalysisError::new(
+            InternalError {
+                message: "Resolved plan should not contain any LateralColumnAliasReference."
+                    .to_owned(),
+            },
+            e.origin,
+        )
+    }
+
     /// A generator over `input`: unresolved (`output` empty: the argument
     /// is bound and the columns derived) or resolved and read again (the
     /// argument bound again, the columns as they were).
@@ -109,7 +156,26 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
         let rels = [&c];
-        let cx = Self::cx(&c.out, &rels, env, "Generate");
+        // The argument reads an input column before another select-list generator's column of
+        // its name (Spark resolves generators over the lateral aliases only after the input).
+        let generated = |a: &Attr| {
+            a.qual
+                .iter()
+                .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
+        };
+        let cs = self.ctx.conf.case_sensitive;
+        let scope: Vec<Attr> =
+            c.out
+                .iter()
+                .filter(|a| {
+                    !generated(a)
+                        || !c.out.iter().any(|i| {
+                            !generated(i) && super::bind::same(&i.col.name, &a.col.name, cs)
+                        })
+                })
+                .cloned()
+                .collect();
+        let cx = Self::cx(&scope, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
         let mut b = self.bind(arg, &cx)?;
         // `variant_explode` expects a VARIANT: an untyped NULL is cast to one
@@ -662,6 +728,27 @@ impl Resolver<'_> {
 }
 
 impl Resolver<'_> {
+    /// Whether a `Generate` node sits between `plan` and the aggregate it
+    /// sorts: the search stops at the first aggregate, so a generator in
+    /// that aggregate's input does not count.
+    pub(super) fn holds_generator(plan: &Arc<LogicalPlan>) -> bool {
+        let mut seen = HashSet::new();
+        let mut stack = vec![Arc::clone(plan)];
+        while let Some(p) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&p) as usize) {
+                continue;
+            }
+            if matches!(p.node, PlanNode::Generate { .. }) {
+                return true;
+            }
+            if matches!(p.node, PlanNode::Aggregate { .. }) {
+                continue;
+            }
+            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+        false
+    }
+
     /// A `HAVING` over an aggregate with a generator in the select list and
     /// windows: the generator runs above the windows, and the `HAVING`
     /// still filters below them (Spark 4.3; 4.2 filtered the generated rows
@@ -686,4 +773,10 @@ impl Resolver<'_> {
         }
         Ok(None)
     }
+}
+
+/// Whether `e` is the star lowering leaves where a select-list generator stood.
+fn is_generator_slot(e: &Arc<Expr>) -> bool {
+    matches!(&e.node, ExprNode::Star(st)
+        if st.qualifier.first().is_some_and(|q| q.starts_with("__krishiv_generate_")))
 }

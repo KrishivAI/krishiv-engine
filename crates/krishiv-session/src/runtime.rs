@@ -288,6 +288,15 @@ impl EngineRuntime {
         self.metrics.snapshot()
     }
 
+    /// The process-wide I/O counters of this runtime's scheduler: requests,
+    /// bytes and the read-latency histogram, every session's queries
+    /// together (`krishiv_io::IoCounters`; a query's own are in its
+    /// `system.queries` row).
+    #[must_use]
+    pub fn io_totals(&self) -> &krishiv_io::IoCounters {
+        self.io.totals()
+    }
+
     /// The configuration a session of this runtime starts from: the
     /// runtime's pairs, then the session's. A runtime-owned key among the
     /// session's pairs fails with `CANNOT_MODIFY_STATIC_CONFIG`, as `SET` of
