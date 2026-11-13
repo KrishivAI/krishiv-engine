@@ -12,6 +12,11 @@ pub(crate) mod stats;
 pub(crate) mod storage;
 pub(crate) mod table;
 pub(crate) mod types;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the write path of PR-36a (next commit) calls it")
+)]
+pub(crate) mod write_metrics;
 
 #[cfg(test)]
 mod baseline_tests;
