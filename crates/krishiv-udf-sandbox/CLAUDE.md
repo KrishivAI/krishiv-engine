@@ -97,9 +97,7 @@ Paths are relative to this crate.
 
 ## Tests owned by later PRs (note §5)
 PR-26b (the pool and the worker module): the positive numpy/pandas/pyarrow run with threads, `udf_clean_env_and_fds`
-(the descriptor half), `sandbox_off_warns` and `sandbox_unavailable_refuses` through the pool's config, and the CI job
-that runs this crate's suite inside a default Docker container (Docker's seccomp profile decides whether Landlock is
-reachable, the refusal path). "Another session's artifacts" and "the spill root" are the same rule as the `outside`
+(the descriptor half), `sandbox_off_warns` and `sandbox_unavailable_refuses` through the pool's config. "Another session's artifacts" and "the spill root" are the same rule as the `outside`
 case here.
 
 ## ADRs (in `../krishiv-internal/adr/`)
@@ -110,3 +108,5 @@ sandbox is in use), 0028 (the `landlock` and `seccompiler` dependencies)
 `cargo nextest run -p krishiv-udf-sandbox --no-tests=pass` · `cargo clippy -p krishiv-udf-sandbox --all-targets -- -D warnings`.
 The confinement tests need Linux with Landlock and seccomp and a `python3` (`KRISHIV_TEST_PYTHON` overrides); they fail
 rather than skip without them, and `probe_matches_the_kernel` asserts Landlock ABI 6 or later when `CI` is set.
+CI job `udf-sandbox-docker` (ci.yml) also runs the suite inside a default Docker container (default seccomp and
+AppArmor profiles, no extra capabilities): Landlock and seccomp are reachable there (Docker 29, 2026-11-13).
