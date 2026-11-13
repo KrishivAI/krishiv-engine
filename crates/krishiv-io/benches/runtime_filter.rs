@@ -31,6 +31,7 @@ use std::hint::black_box;
 use arrow_array::{Array, BooleanArray, Int32Array, Int64Array, StringViewArray};
 use arrow_buffer::{BooleanBuffer, Buffer};
 use criterion::{Criterion, criterion_group, criterion_main};
+use krishiv_io::runtime_filter::{RuntimeBloom, xxh64_fixed};
 use krishiv_io::{FilterForm, KeyFilter, KeyFilterBuilder, KeyFilterOptions};
 
 const ROWS: i64 = 1 << 18;
@@ -227,5 +228,189 @@ fn bench_bitmap(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench, bench_bitmap);
+/// Rows ahead the prefetching probes request: one packed output word.
+const AHEAD: usize = 64;
+
+/// Asks for the cache line at `p` (a no-op off x86-64).
+#[inline(always)]
+fn prefetch<T>(p: *const T) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: a prefetch is a hint and never dereferences `p`; any address is allowed.
+    unsafe {
+        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(p.cast::<i8>());
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = p;
+}
+
+impl Bitmap {
+    /// [`Self::evaluate`] with a prefetch of the word row `i + AHEAD` reads.
+    fn evaluate_prefetch(&self, probe: &Int64Array) -> BooleanArray {
+        let values = probe.values();
+        let mut out = Vec::with_capacity(values.len().div_ceil(64));
+        let base = self.words.as_ptr();
+        let last = self.words.len().saturating_sub(1);
+        for (c, chunk) in values.chunks(64).enumerate() {
+            let mut w = 0u64;
+            for (j, &v) in chunk.iter().enumerate() {
+                if let Some(&a) = values.get(c * 64 + j + AHEAD) {
+                    let o = a.wrapping_sub(self.min).cast_unsigned();
+                    let i = usize::try_from(o >> 6).unwrap_or(usize::MAX).min(last);
+                    prefetch(base.wrapping_add(i));
+                }
+                let o = v.wrapping_sub(self.min).cast_unsigned();
+                let hit = o < self.span && {
+                    let i = usize::try_from(o >> 6).unwrap_or(usize::MAX);
+                    self.words
+                        .get(i)
+                        .is_some_and(|word| word >> (o & 63) & 1 == 1)
+                };
+                w |= u64::from(hit) << j;
+            }
+            out.push(w);
+        }
+        BooleanArray::new(
+            BooleanBuffer::new(Buffer::from_vec(out), 0, values.len()),
+            None,
+        )
+    }
+}
+
+const SALT: [u32; 8] = [
+    0x47b6_137b,
+    0x4497_4d91,
+    0x8824_ad5b,
+    0xa2b7_289d,
+    0x7054_95c7,
+    0x2df1_424b,
+    0x9efc_4947,
+    0x5c6b_fb31,
+];
+
+/// The library's split-block Bloom filter, copied out through `to_bytes`
+/// so the probe loop can prefetch its blocks. Answers are asserted equal
+/// to [`RuntimeBloom::check_batch`].
+struct Sbbf {
+    blocks: Vec<[u32; 8]>,
+}
+
+impl Sbbf {
+    fn new(bloom: &RuntimeBloom) -> Self {
+        let bytes = bloom.to_bytes();
+        let blocks = bytes
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .map(|b| {
+                let mut w = [0u32; 8];
+                for (x, c) in w.iter_mut().zip(b.as_chunks::<4>().0) {
+                    *x = u32::from_le_bytes(*c);
+                }
+                w
+            })
+            .collect();
+        Self { blocks }
+    }
+
+    #[inline]
+    fn block(&self, h: u64) -> usize {
+        usize::try_from(((h >> 32) * self.blocks.len() as u64) >> 32).expect("fits")
+    }
+
+    #[inline]
+    fn check(&self, h: u64) -> bool {
+        let b = &self.blocks[self.block(h)];
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the SBBF uses the low half"
+        )]
+        let key = h as u32;
+        let mut miss = 0;
+        for (w, salt) in b.iter().zip(SALT) {
+            miss |= (1 << (key.wrapping_mul(salt) >> 27)) & !w;
+        }
+        miss == 0
+    }
+
+    fn check_batch(&self, hashes: &[u64], ahead: bool) -> BooleanBuffer {
+        let mut out = Vec::with_capacity(hashes.len().div_ceil(64));
+        let base = self.blocks.as_ptr();
+        for (c, chunk) in hashes.chunks(64).enumerate() {
+            let mut w = 0u64;
+            for (j, &h) in chunk.iter().enumerate() {
+                if ahead && let Some(&a) = hashes.get(c * 64 + j + AHEAD) {
+                    prefetch(base.wrapping_add(self.block(a)));
+                }
+                w |= u64::from(self.check(h)) << j;
+            }
+            out.push(w);
+        }
+        BooleanBuffer::new(Buffer::from_vec(out), 0, hashes.len())
+    }
+}
+
+/// Spans past L2 (2e7: 2.4 MiB of bitmap) and past this server's L3 per
+/// core complex (2e8: 24 MiB), at 40 K, 400 K and 4 M keys (Blooms of
+/// 48 KiB, 484 KiB and 4.7 MiB): the bitmap and
+/// the Bloom's member pass, each with and without a prefetch `AHEAD` rows
+/// early, plus the Bloom form end to end and the range-only pass.
+fn bench_bitmap_wide(c: &mut Criterion) {
+    let mut group = c.benchmark_group("runtime_filter_bitmap_wide");
+    for n in [40_960usize, 409_600, 4_096_000] {
+        for range in [20_000_000i64, 200_000_000] {
+            let (keys, probe) = in_range(n, range);
+            let options = KeyFilterOptions {
+                max_values: 0,
+                exact_max_values: 0,
+                bloom: true,
+                bloom_max_items: u64::MAX,
+                bloom_max_bytes: 64 << 20,
+                ..KeyFilterOptions::default()
+            };
+            let mut b = KeyFilterBuilder::new(keys.data_type().clone(), options).expect("key type");
+            b.add(&keys, None).expect("keys");
+            let bloom_form = b.finish();
+            assert!(matches!(bloom_form.form(), FilterForm::Bloom(_)));
+            let range_only = build_exact(&keys, 0, 0, false);
+            let bitmap = Bitmap::new(&keys);
+            let want = bitmap.evaluate(&probe);
+            assert_eq!(bitmap.evaluate_prefetch(&probe), want);
+            // The member pass alone over precomputed hashes, as the form's
+            // probe runs after its hash pass.
+            let hash = |v: i64| xxh64_fixed::<8>(u128::from(v.cast_unsigned()));
+            let mut rb = RuntimeBloom::with_bytes(RuntimeBloom::bytes_for(n as u64, 0.01));
+            for &k in keys.values() {
+                rb.insert_hash(hash(k));
+            }
+            let sbbf = Sbbf::new(&rb);
+            let hashes: Vec<u64> = probe.values().iter().map(|&v| hash(v)).collect();
+            let lib = rb.check_batch(&hashes);
+            assert_eq!(sbbf.check_batch(&hashes, false), lib);
+            assert_eq!(sbbf.check_batch(&hashes, true), lib);
+            assert_eq!(bloom_form.bloom_bytes(), Some(rb.num_bytes()));
+            let tag = format!("{n}keys_{range}");
+            group.bench_function(format!("probe_bitmap_{tag}"), |b| {
+                b.iter(|| black_box(bitmap.evaluate(black_box(&probe))));
+            });
+            group.bench_function(format!("probe_bitmap_pf_{tag}"), |b| {
+                b.iter(|| black_box(bitmap.evaluate_prefetch(black_box(&probe))));
+            });
+            group.bench_function(format!("check_bloom_{tag}"), |b| {
+                b.iter(|| black_box(sbbf.check_batch(black_box(&hashes), false)));
+            });
+            group.bench_function(format!("check_bloom_pf_{tag}"), |b| {
+                b.iter(|| black_box(sbbf.check_batch(black_box(&hashes), true)));
+            });
+            group.bench_function(format!("probe_bloom_{tag}"), |b| {
+                b.iter(|| black_box(bloom_form.evaluate(black_box(&probe))));
+            });
+            group.bench_function(format!("probe_rangeonly_{tag}"), |b| {
+                b.iter(|| black_box(range_only.evaluate(black_box(&probe))));
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench, bench_bitmap, bench_bitmap_wide);
 criterion_main!(benches);
