@@ -728,3 +728,15 @@ fn a_3_5_client_may_send_the_fields_4_0_deleted() {
     }
     decode_relation_with(&cached(false), &opts(ClientVersion::V4_0)).expect("hash only");
 }
+
+#[test]
+fn options_built_by_hand_cannot_exceed_the_ceiling() {
+    // A cap far above the ceiling still rejects a plan nested past MAX_NESTING_LIMIT.
+    let hostile = filter_chain(MAX_NESTING_LIMIT, &sql_leaf());
+    let opts = DecodeOptions {
+        max_nesting: usize::MAX,
+        ..DecodeOptions::default()
+    };
+    let err = decode_relation_with(&hostile, &opts).expect_err("past the ceiling");
+    assert_eq!(class(&err), ErrorClass::FailedToParseTooComplex);
+}

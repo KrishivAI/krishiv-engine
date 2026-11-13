@@ -14,7 +14,9 @@ use krishiv_plan::{ReadSource, Scan};
 use krishiv_types::batch::Batch;
 
 use crate::error::Result;
+use crate::operator::Sink;
 use crate::operators::{MemoryScan, ScanPushdown};
+use crate::planner::write::{TableCapabilities, WriteRequest};
 
 /// A table the executor can read: the scan factory the planner pushes
 /// projections and filters into, and the table's statistics.
@@ -37,6 +39,30 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
     /// known. The cost of a late fetch (design P2-T063) needs it.
     fn scan_units(&self) -> Option<u64> {
         None
+    }
+
+    /// The write modes the table declared (Spark's `TableCapability`). The
+    /// session checks them before planning a write; the default declares
+    /// none, so a read-only table is never offered one.
+    fn capabilities(&self) -> TableCapabilities {
+        TableCapabilities::default()
+    }
+
+    /// The sink a write ends in. Every write commits atomically through the
+    /// table's format, never by rename (spec 13 §7): the commit happens when
+    /// the sink finalizes, with `request.write_id` as its idempotency key, and
+    /// a failed or cancelled write leaves nothing visible.
+    ///
+    /// # Errors
+    /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` when the table did not declare
+    /// what the mode needs ([`capabilities`](Self::capabilities)).
+    fn writer(&self, request: &WriteRequest) -> Result<Arc<dyn Sink>> {
+        self.capabilities()
+            .check(&request.mode, &request.table_name)?;
+        Err(KrishivUnsupportedFeature {
+            feature: format!("a writer for {self:?}"),
+        }
+        .into())
     }
 }
 

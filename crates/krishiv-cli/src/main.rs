@@ -4,15 +4,7 @@
 // `deny` rather than `forbid`: the allocator test must call a C API (see `tests`).
 #![deny(unsafe_code)]
 #![cfg_attr(
-    feature = "ui",
-    expect(
-        clippy::print_stdout,
-        clippy::print_stderr,
-        reason = "CLI binary: stdout/stderr are its interface"
-    )
-)]
-#![cfg_attr(
-    all(feature = "mcp", not(feature = "ui")),
+    feature = "mcp",
     expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")
 )]
 
@@ -27,6 +19,8 @@ mod format;
 mod highlight;
 mod history;
 mod repl;
+#[cfg(feature = "server")]
+mod server;
 mod sql;
 
 use clap::Parser;
@@ -76,19 +70,9 @@ enum Command {
         #[arg(long)]
         allow_root: bool,
     },
-    /// Serve the web UI and admin API.
-    #[cfg(feature = "ui")]
-    Server {
-        /// Port to listen on (0 picks a free port).
-        #[arg(long, default_value_t = 8080)]
-        port: u16,
-        /// Address to bind; loopback by default.
-        #[arg(long, default_value = "127.0.0.1")]
-        host: std::net::IpAddr,
-        /// Engine setting, `KEY=VALUE` (repeatable); `krishiv.ui.enabled=false` refuses to start.
-        #[arg(long = "conf", value_parser = common::key_value)]
-        conf: Vec<(String, String)>,
-    },
+    /// Serve Spark Connect (port 15002) and the admin API (port 8080; the web UI with `ui`).
+    #[cfg(feature = "server")]
+    Server(server::ServerArgs),
 }
 
 /// `KRISHIV_LOG=json` turns on JSON log records on stderr (query, session and trace ids on each;
@@ -142,50 +126,10 @@ fn run() {
         Command::DebugBundle(args) => std::process::exit(bundle::run(&args)),
         #[cfg(feature = "mcp")]
         Command::Mcp { data, allow_root } => std::process::exit(run_mcp(data, allow_root)),
-        #[cfg(feature = "ui")]
-        Command::Server { port, host, conf } => {
-            let addr = std::net::SocketAddr::new(host, port);
-            if let Err(e) = run_server(addr, &conf) {
-                eprintln!("krishiv server: {e}");
-                std::process::exit(1);
-            }
-        }
+        // Returns only after the engine runtime is dropped (spill directory removed).
+        #[cfg(feature = "server")]
+        Command::Server(args) => std::process::exit(server::run(&args)),
     }
-}
-
-/// `krishiv server`: the admin API and web UI over this process's engine runtime, behind a fresh token that
-/// is printed once at start-up (the UI's `/api/internal` routes refuse any request without it).
-#[cfg(feature = "ui")]
-fn run_server(addr: std::net::SocketAddr, conf: &[(String, String)]) -> Result<(), String> {
-    let mut config = krishiv_common::config::Config::new();
-    let mut builder = krishiv_session::EngineRuntime::builder();
-    for (k, v) in conf {
-        config.set(k, v).map_err(|e| e.to_string())?;
-        builder = builder.config(k, v);
-    }
-    let enabled = config
-        .get(&krishiv_common::config::UI_ENABLED)
-        .and_then(krishiv_common::config::ConfigValue::as_bool)
-        .unwrap_or(true);
-    if !enabled {
-        return Err("krishiv.ui.enabled is false: not serving the UI".to_owned());
-    }
-    let runtime = builder.build().map_err(|e| e.to_string())?;
-    let source =
-        krishiv_server::session_source::SessionSource::new(runtime).map_err(|e| e.to_string())?;
-    let token = krishiv_server::internal::random_token().map_err(|e| e.to_string())?;
-    let app = krishiv_server::internal::router_with_ui(std::sync::Arc::new(source), &token);
-    krishiv_server::run_blocking_with(addr, app, |a| {
-        if !a.ip().is_loopback() {
-            eprintln!(
-                "warning: {a} is not a loopback address; the server speaks plain HTTP, so the token can be read \
-                 by anyone on the path. Put a TLS proxy or an authenticated tunnel in front of it."
-            );
-        }
-        println!("krishiv server listening on http://{a}");
-        println!("open http://{a}/?token={token}");
-    })
-    .map_err(|e| e.to_string())
 }
 
 /// `krishiv mcp`: stdio until the client closes it. Exit 0 ok, 1 failure.

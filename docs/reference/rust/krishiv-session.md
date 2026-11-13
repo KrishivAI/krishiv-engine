@@ -1,4 +1,4 @@
-**Version:** 0.2.0-alpha
+**Version:** 0.2.0
 
 # Module `krishiv_session`
 
@@ -219,6 +219,36 @@ let c = call_udf("add_one", [col("id")]);
 
 ```rust
 pub fn call_udf</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(name: &str, args: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
+```
+
+#### Function `python_udf_call`
+
+A call of an unregistered Python UDF (a DataFrame-side `udf(...)`):
+`def` at `version` (top bit set), shown as
+`def.name(args)` and resolvable only through this call, never by name
+from SQL. The runtime the session holds must know `(def.name, version)`.
+
+```
+use krishiv_plan::PythonEvalType;
+use krishiv_session::PythonUdfDef;
+use krishiv_session::functions::{col, python_udf_call};
+let def = PythonUdfDef {
+    name: "<lambda>".to_owned(),
+    eval_type: PythonEvalType::ArrowBatched,
+    return_type: krishiv_types::DataType::Long,
+    deterministic: true,
+    thread_safe: true,
+};
+let c = python_udf_call(&def, 0x8000_0001, [col("id")])?;
+# Ok::<(), krishiv_common::error::KrishivError>(())
+```
+
+# Errors
+`KRISHIV_INTERNAL_ERROR` when `version` lacks the top bit or the name
+holds a NUL.
+
+```rust
+pub fn python_udf_call</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(def: &crate::PythonUdfDef, version: u32, args: impl IntoIterator<Item = crate::Column>) -> Result<crate::Column, krishiv_common::error::KrishivError> { /* ... */ }
 ```
 
 #### Function `sum`
@@ -1633,6 +1663,30 @@ pub use profile::VERBOSE_FORMAT;
 
 ```rust
 pub use profile::VERBOSE_VERSION;
+```
+
+### Re-export `ANONYMOUS_VERSION_BIT`
+
+```rust
+pub use python_udfs::ANONYMOUS_VERSION_BIT;
+```
+
+### Re-export `PythonUdfDef`
+
+```rust
+pub use python_udfs::PythonUdfDef;
+```
+
+### Re-export `PythonUdfEntry`
+
+```rust
+pub use python_udfs::PythonUdfEntry;
+```
+
+### Re-export `PythonUdfLibrary`
+
+```rust
+pub use python_udfs::PythonUdfLibrary;
 ```
 
 ### Re-export `EngineRuntime`

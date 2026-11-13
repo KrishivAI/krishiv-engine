@@ -105,6 +105,7 @@ impl Session {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
                 cache,
+                analyzer: krishiv_plan::analyzer::CachingAnalyzer::new(),
                 variables: Arc::new(seed.variables),
                 profile: parts.profile,
                 principal: parts.principal,
@@ -279,6 +280,27 @@ impl Session {
         // this is refused there (`EngineRuntime::attach`), so none slips
         // between the flag and the cancellation.
         self.state.runtime.cancel_session(self.state.number)
+    }
+
+    /// The session's id: a UUIDv7 minted when it was made, the id
+    /// `system.queries` and traces carry (Spark Connect's server-side
+    /// session id).
+    #[must_use]
+    pub fn id(&self) -> &str {
+        self.state.queries.session_id()
+    }
+
+    /// Whether [`Self::close`] ran.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.state.closed.load(Ordering::Acquire)
+    }
+
+    /// The number of this session's queries that are running (registered
+    /// on the runtime and not yet ended).
+    #[must_use]
+    pub fn running_queries(&self) -> usize {
+        self.state.runtime.running_in_session(self.state.number)
     }
 
     /// The error a closed session answers with.

@@ -92,6 +92,10 @@ impl UnionAlign {
 }
 
 impl Operator for UnionAlign {
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "UnionAlign"
     }

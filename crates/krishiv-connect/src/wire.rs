@@ -293,6 +293,41 @@ pub fn decode_expression_with(
     decode(layout::EXPRESSION, bytes, options)
 }
 
+/// The request message of a `SparkConnectService` RPC: a root the decoder
+/// can start from. Implemented (generated) for every RPC request and
+/// nothing else.
+pub trait Request: Message + Default + Send + Scrub + sealed::Sealed {
+    /// The message's id in the generated layout table.
+    #[doc(hidden)]
+    const ROOT: u16;
+}
+
+/// Keeps [`Request`] to the generated implementations.
+pub(crate) mod sealed {
+    /// Only the generated layout implements it.
+    pub trait Sealed {}
+}
+
+/// Decodes the request of an RPC (a gRPC codec's one decode path); see
+/// [`decode_plan`] for the bounds.
+///
+/// # Errors
+/// As [`decode_plan`].
+pub fn decode_request<M: Request>(bytes: &[u8]) -> Result<Decoded<M>, KrishivError> {
+    decode_request_with(bytes, &DecodeOptions::default())
+}
+
+/// [`decode_request`] with the client's version and the configured depth cap.
+///
+/// # Errors
+/// As [`decode_plan`].
+pub fn decode_request_with<M: Request>(
+    bytes: &[u8],
+    options: &DecodeOptions,
+) -> Result<Decoded<M>, KrishivError> {
+    decode(M::ROOT, bytes, options)
+}
+
 fn decode<M: Message + Default + Send + Scrub>(
     root: u16,
     bytes: &[u8],
@@ -409,7 +444,8 @@ fn check(root: u16, bytes: &[u8], options: &DecodeOptions) -> Result<usize, Kris
             bytes: MAX_PLAN_BYTES,
             messages: MAX_MESSAGES,
             decoded: MAX_DECODED_BYTES,
-            nesting: options.max_nesting,
+            // The ceiling holds however the options were built.
+            nesting: options.max_nesting.min(MAX_NESTING_LIMIT),
             version: options.version,
         },
     )

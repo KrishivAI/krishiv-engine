@@ -103,6 +103,10 @@ pub enum ValueType {
     /// A duration: a number with an optional suffix `us`, `ms`, `s`,
     /// `m`/`min`, `h`, `d` (as Spark); no suffix means seconds.
     Duration,
+    /// A duration whose bare number is milliseconds (Spark's
+    /// `timeConf(TimeUnit.MILLISECONDS)`), with the same suffixes as
+    /// [`ValueType::Duration`]. Stored as a [`ConfigValue::Duration`].
+    Millis,
     /// Any string, stored verbatim.
     String,
     /// A session time zone, stored verbatim after validation: `Z`, a
@@ -158,6 +162,12 @@ impl ValueType {
             ValueType::Duration => parse_with_unit(s, DURATION_UNITS_US, "s")
                 .map(|us| ConfigValue::Duration(Duration::from_micros(us)))
                 .ok_or_else(|| "expected a duration such as `500ms` or `120s`".to_owned()),
+            ValueType::Millis => parse_with_unit(s, DURATION_UNITS_US, "ms")
+                .map(|us| ConfigValue::Duration(Duration::from_micros(us)))
+                .ok_or_else(|| {
+                    "expected a duration such as `500ms` or `120s` (a bare number is milliseconds)"
+                        .to_owned()
+                }),
             ValueType::String => Ok(ConfigValue::String(Cow::Owned(raw.to_owned()))),
             ValueType::TimeZone => {
                 if is_valid_time_zone(s) {
@@ -188,6 +198,7 @@ impl fmt::Display for ValueType {
             ValueType::Size => f.write_str("size"),
             ValueType::SignedSize => f.write_str("signed size"),
             ValueType::Duration => f.write_str("duration"),
+            ValueType::Millis => f.write_str("duration (bare number: ms)"),
             ValueType::String => f.write_str("string"),
             ValueType::TimeZone => f.write_str("time zone"),
             ValueType::Enum(allowed) => {
