@@ -106,7 +106,10 @@ pub(super) struct Loaded {
 pub(super) struct DeleteState {
     env: Arc<DeleteEnv>,
     tasks: Vec<ScanTask>,
-    loaded: tokio::sync::OnceCell<Loaded>,
+    /// The load's outcome. A failure is kept too (review 25d N4), so the
+    /// other partitions of the scan fail at once instead of reading every
+    /// delete file again.
+    loaded: tokio::sync::OnceCell<Result<Loaded, KrishivError>>,
     /// The query's pool, from the first `global_state`.
     pool: OnceLock<Arc<dyn krishiv_memory::MemoryPool>>,
 }
@@ -144,18 +147,23 @@ impl DeleteState {
     }
 
     /// The loaded deletes, loading them on the first call. Cancel-safe: a
-    /// dropped call leaves the state unloaded, and the next call loads.
+    /// dropped call leaves the state unloaded, and the next call loads; a
+    /// load that failed fails every later call with its error.
     ///
     /// # Errors
     /// The mixed-spec refusal; the errors of reading the delete files
     /// (`deletes::load`, `eq_deletes::load`).
     pub(super) async fn ensure(&self) -> Result<&Loaded, KrishivError> {
-        self.loaded.get_or_try_init(|| self.load()).await
+        self.loaded
+            .get_or_init(|| self.load())
+            .await
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     /// The loaded deletes, if [`Self::ensure`] finished.
     pub(super) fn loaded(&self) -> Option<&Loaded> {
-        self.loaded.get()
+        self.loaded.get().and_then(|r| r.as_ref().ok())
     }
 
     async fn load(&self) -> Result<Loaded, KrishivError> {
@@ -211,8 +219,16 @@ impl DeleteState {
 #[derive(Debug)]
 pub(super) struct LazySelections(pub(super) Arc<DeleteState>);
 
+/// Invariant (review 25d N3): the file scan asks only when it opens a split,
+/// inside the inner source's `get_data`, which [`DeleteSource`] calls only
+/// after [`DeleteState::ensure`] succeeded. A path that opened a split
+/// without going through it would read "not loaded" as "no deletes".
 impl FileSelections for LazySelections {
     fn selection(&self, file: &FileRef) -> Option<RowSelection> {
+        debug_assert!(
+            self.0.loaded().is_some(),
+            "an Iceberg split opened before its deletes loaded"
+        );
         self.0.loaded().and_then(|l| l.selections.selection(file))
     }
 }
