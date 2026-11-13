@@ -843,7 +843,7 @@ fn join_enumerator_entries_default_and_parse() {
 }
 
 #[test]
-fn the_w1_rule_keys_default_off_and_are_user_settable() {
+fn the_w1_rule_keys_default_on_and_are_user_settable() {
     let mut c = Config::new();
     for (key, entry) in [
         ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
@@ -852,9 +852,9 @@ fn the_w1_rule_keys_default_off_and_are_user_settable() {
             &SHARE_REPEATED_SUBTREES,
         ),
     ] {
-        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(false));
-        c.set(key, "true").unwrap();
         assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(true));
+        c.set(key, "false").unwrap();
+        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(false));
     }
 }
 
