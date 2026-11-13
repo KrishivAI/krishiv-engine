@@ -18,21 +18,20 @@
 //!   columns than `krishiv.catalog.maxColumns`.
 //!
 //! arrow-json is built without `chrono-tz` (ADR 0028), so it cannot read the zone label `UTC`; a
-//! `timestamp` crosses arrow-json labelled `+00:00` (the same instants) and is relabelled.
+//! `timestamp` crosses arrow-json labelled `+00:00` (the same instants) and is relabelled
+//! without a copy (the crate's `relabel` module).
 
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, RecordBatch, StringArray, make_array};
-use arrow_data::ArrayData;
+use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_json::ReaderBuilder;
 use arrow_json::writer::{
     Encoder, EncoderFactory, EncoderOptions, LineDelimited, NullableEncoder, WriterBuilder,
     make_encoder,
 };
 use arrow_schema::{
-    ArrowError, DataType as ArrowType, Field, FieldRef, Fields, Schema,
-    SchemaRef as ArrowSchemaRef, TimeUnit,
+    ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRef as ArrowSchemaRef,
 };
 use bytes::Bytes;
 use delta_kernel::engine_data::FilteredEngineData;
@@ -46,6 +45,7 @@ use krishiv_common::error::{KrishivCatalogLimitExceeded, KrishivError};
 use url::Url;
 
 use super::data::KrishivEngineData;
+use super::relabel::{ARROW_UTC, relabel_batch, schema_with_zone};
 use super::schema::to_arrow_schema;
 use super::storage::KrishivStorageHandler;
 use super::{DeltaLimits, Shared};
@@ -55,7 +55,7 @@ use crate::error::to_kernel;
 const BATCH_ROWS: usize = 8192;
 
 /// The zone label timestamps carry across arrow-json.
-const JSON_UTC: &str = "+00:00";
+const JSON_UTC: &str = ARROW_UTC;
 
 // ---------------------------------------------------------------------------------------------
 // Limits.
@@ -212,83 +212,6 @@ fn check_batch(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------------------------
-// Zones.
-
-/// `t` with every zoned timestamp labelled `zone`.
-fn with_zone(t: &ArrowType, zone: &str) -> ArrowType {
-    let field = |f: &FieldRef| {
-        Arc::new(
-            Field::new(f.name(), with_zone(f.data_type(), zone), f.is_nullable())
-                .with_metadata(f.metadata().clone()),
-        )
-    };
-    match t {
-        ArrowType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
-            ArrowType::Timestamp(TimeUnit::Microsecond, Some(zone.into()))
-        }
-        ArrowType::Struct(fields) => {
-            ArrowType::Struct(fields.iter().map(field).collect::<Fields>())
-        }
-        ArrowType::List(f) => ArrowType::List(field(f)),
-        ArrowType::LargeList(f) => ArrowType::LargeList(field(f)),
-        ArrowType::Map(f, sorted) => ArrowType::Map(field(f), *sorted),
-        other => other.clone(),
-    }
-}
-
-fn schema_with_zone(schema: &Schema, zone: &str) -> Schema {
-    Schema::new(
-        schema
-            .fields()
-            .iter()
-            .map(|f| {
-                Field::new(f.name(), with_zone(f.data_type(), zone), f.is_nullable())
-                    .with_metadata(f.metadata().clone())
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
-/// `data` relabelled as `target`, which differs from its type only in timestamp zones.
-fn retype(data: ArrayData, target: &ArrowType) -> Result<ArrayData, ArrowError> {
-    if data.data_type() == target {
-        return Ok(data);
-    }
-    let children: Vec<ArrayData> = match target {
-        ArrowType::Struct(fields) => data
-            .child_data()
-            .iter()
-            .zip(fields.iter())
-            .map(|(c, f)| retype(c.clone(), f.data_type()))
-            .collect::<Result<_, _>>()?,
-        ArrowType::List(f) | ArrowType::LargeList(f) | ArrowType::Map(f, _) => data
-            .child_data()
-            .iter()
-            .map(|c| retype(c.clone(), f.data_type()))
-            .collect::<Result<_, _>>()?,
-        _ => data.child_data().to_vec(),
-    };
-    data.into_builder()
-        .data_type(target.clone())
-        .child_data(children)
-        .build()
-}
-
-/// `batch` with its zones relabelled to those of `schema`.
-fn relabel(batch: RecordBatch, schema: ArrowSchemaRef) -> Result<RecordBatch, ArrowError> {
-    if batch.schema().as_ref() == schema.as_ref() {
-        return Ok(batch);
-    }
-    let columns = batch
-        .columns()
-        .iter()
-        .zip(schema.fields())
-        .map(|(c, f)| retype(c.to_data(), f.data_type()).map(make_array))
-        .collect::<Result<Vec<ArrayRef>, _>>()?;
-    RecordBatch::try_new(schema, columns)
-}
-
 #[expect(
     clippy::needless_pass_by_value,
     reason = "used as `map_err(arrow_err)`"
@@ -338,8 +261,8 @@ impl Target {
     }
 
     /// `batch` (decoded with [`Self::json`]) as the output schema, `_file` columns filled.
-    fn finish(&self, batch: RecordBatch, file: &str) -> KernelResult<RecordBatch> {
-        let batch = relabel(batch, Arc::clone(&self.arrow)).map_err(arrow_err)?;
+    fn finish(&self, batch: &RecordBatch, file: &str) -> KernelResult<RecordBatch> {
+        let batch = relabel_batch(batch, Arc::clone(&self.arrow)).map_err(arrow_err)?;
         if self.file_columns.is_empty() {
             return Ok(batch);
         }
@@ -370,7 +293,7 @@ fn decode_lines(target: &Target, text: &[u8], file: &str) -> KernelResult<Vec<Re
         if decoder.len() >= BATCH_ROWS
             && let Some(batch) = decoder.flush().map_err(arrow_err)?
         {
-            out.push(target.finish(batch, file)?);
+            out.push(target.finish(&batch, file)?);
         }
     }
     if decoder.has_partial_record() {
@@ -379,7 +302,7 @@ fn decode_lines(target: &Target, text: &[u8], file: &str) -> KernelResult<Vec<Re
         )));
     }
     if let Some(batch) = decoder.flush().map_err(arrow_err)? {
-        out.push(target.finish(batch, file)?);
+        out.push(target.finish(&batch, file)?);
     }
     Ok(out)
 }
@@ -411,7 +334,7 @@ fn decode_rows<'s>(
         .flush()
         .map_err(arrow_err)?
         .ok_or_else(|| KernelError::generic("Malformed JSON: nothing decoded"))?;
-    target.finish(batch, "")
+    target.finish(&batch, "")
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -459,7 +382,7 @@ fn encode(data: KernelResultIterator<'_, FilteredEngineData>) -> KernelResult<Ve
         let selected = chunk?.apply_selection_vector()?;
         let batch = KrishivEngineData::from_engine_data(selected)?.into_batch();
         let zoned = Arc::new(schema_with_zone(batch.schema_ref(), JSON_UTC));
-        let batch = relabel(batch, zoned).map_err(arrow_err)?;
+        let batch = relabel_batch(&batch, zoned).map_err(arrow_err)?;
         writer.write(&batch).map_err(arrow_err)?;
     }
     writer.finish().map_err(arrow_err)?;
