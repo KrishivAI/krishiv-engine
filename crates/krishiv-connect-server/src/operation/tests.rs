@@ -118,10 +118,18 @@ fn sent_ids_and_cancellation() {
 
 #[test]
 fn a_finished_operation_is_not_interrupted() {
+    // Completion wins: the interrupt finds it finished.
     let o = op(A, b"p");
-    o.finish();
+    assert!(o.finish(), "a running operation finishes");
+    assert!(o.finish(), "finishing twice is still finished");
     assert!(!o.cancel());
     assert!(!o.is_cancelled());
+    // Interrupt wins: the completion finds it cancelled.
+    let c = op(B, b"q");
+    assert!(c.cancel());
+    assert!(!c.finish(), "a cancelled operation does not finish");
+    assert!(c.is_cancelled());
+    assert!(!c.cancel());
     let ops = Operations::default();
     ops.register(&o, 2).unwrap();
     ops.register(&op(B, b"q"), 2).unwrap();
@@ -132,6 +140,22 @@ fn a_finished_operation_is_not_interrupted() {
         .collect();
     ids.sort();
     assert_eq!(ids, vec![A.to_owned(), B.to_owned()]);
+}
+
+/// Racing threads: exactly one of `cancel` and `finish` wins, and their
+/// answers agree with the final state.
+#[test]
+fn cancel_and_finish_race_to_one_winner() {
+    for _ in 0..2_000 {
+        let o = op(A, b"p");
+        let (c, f) = std::thread::scope(|s| {
+            let c = s.spawn(|| o.cancel());
+            let f = s.spawn(|| o.finish());
+            (c.join().unwrap(), f.join().unwrap())
+        });
+        assert!(c != f, "cancelled {c}, finished {f}");
+        assert_eq!(o.is_cancelled(), c);
+    }
 }
 
 #[tokio::test]

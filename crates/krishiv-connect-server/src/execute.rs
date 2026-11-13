@@ -460,16 +460,36 @@ async fn encode(
         () = sender.tx.closed() => Err(Stop::Gone),
         r = produce(&sender, &df, &schema, schema_response, &settings) => r,
     };
-    if outcome.is_ok() {
-        op.finish();
-    }
     // The query's stream is gone by now (dropped with `produce`).
     drop(df);
-    match outcome {
-        Ok(()) | Err(Stop::Gone) => {}
-        Err(Stop::Failed(e)) => sender.fail(&e).await,
+    if let Some(e) = settle(&op, outcome) {
+        sender.fail(&e).await;
     }
     drop(registered);
+}
+
+/// Ends `op` after its encoder stopped with `outcome` and returns the error
+/// its stream ends with. The operation is finished (an interrupt from now
+/// on interrupts nothing) before the error waits for room in the channel;
+/// an interrupt that came first wins, and the stream ends with
+/// `OPERATION_CANCELED` instead of the error (Spark's
+/// `ExecuteThreadRunner.execute`, v4.3.0 lines 149-180).
+fn settle(op: &Operation, outcome: Result<(), Stop>) -> Option<KrishivError> {
+    match outcome {
+        // `produce` finished the operation before its last response.
+        Ok(()) => None,
+        Err(Stop::Gone) => {
+            op.finish();
+            None
+        }
+        Err(Stop::Failed(e)) => {
+            if op.finish() {
+                Some(e)
+            } else {
+                Some(OperationCanceled {}.into())
+            }
+        }
+    }
 }
 
 async fn produce(
@@ -503,6 +523,13 @@ async fn produce(
     // metrics (a follow-up); until then the list is empty.
     metrics.metrics = Some(Metrics::default());
     sender.send(metrics).await?;
+    // The end is atomic with interrupts: once finished, an interrupt
+    // interrupts nothing; an interrupt that came first turns the end into
+    // OPERATION_CANCELED (Spark's `ExecuteThreadRunner`, v4.3.0 lines
+    // 271-293).
+    if !sender.op.finish() {
+        return Err(Stop::Failed(OperationCanceled {}.into()));
+    }
     if sender.op.reattachable() {
         sender
             .send(sender.response(Some(ResponseType::ResultComplete(ResultComplete {}))))

@@ -14,7 +14,7 @@
 //! under it.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use krishiv_common::config::{
@@ -154,6 +154,11 @@ pub fn plan_digest(plan_bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(plan_bytes).into()
 }
 
+/// [`Operation`] states.
+const RUNNING: u8 = 0;
+const FINISHED: u8 = 1;
+const CANCELLED: u8 = 2;
+
 /// One `ExecutePlan` (Spark's `ExecuteHolder`).
 #[derive(Debug)]
 pub struct Operation {
@@ -164,9 +169,9 @@ pub struct Operation {
     /// The response ids sent so far (`ReleaseExecute.release_until` accepts
     /// only these).
     sent: Mutex<HashSet<String>>,
-    cancelled: AtomicBool,
-    /// Set once the operation produced its last response.
-    finished: AtomicBool,
+    /// [`RUNNING`], then [`FINISHED`] or [`CANCELLED`], each set once by a
+    /// compare-and-swap (Spark's `ExecuteThreadRunner` state).
+    state: AtomicU8,
     cancel: Notify,
     /// The memory consumer its buffered responses are reserved from.
     responses: OnceLock<Arc<ConsumerHandle>>,
@@ -187,8 +192,7 @@ impl Operation {
             tags,
             reattachable,
             sent: Mutex::new(HashSet::new()),
-            cancelled: AtomicBool::new(false),
-            finished: AtomicBool::new(false),
+            state: AtomicU8::new(RUNNING),
             cancel: Notify::new(),
             responses: OnceLock::new(),
         }
@@ -258,31 +262,38 @@ impl Operation {
 
     /// Asks the operation to stop: its stream ends with
     /// `OPERATION_CANCELED`. Idempotent. Whether this call interrupted it
-    /// (Spark's `ExecuteThreadRunner.interrupt`): `false` when it was
-    /// cancelled before or had already produced its last response.
+    /// (Spark's `ExecuteThreadRunner.interrupt`, one compare-and-swap of the
+    /// state): `false` when it was cancelled before or had already ended
+    /// ([`Self::finish`]).
     pub fn cancel(&self) -> bool {
-        if self.finished.load(Ordering::Acquire) {
-            return false;
-        }
-        if self.cancelled.swap(true, Ordering::AcqRel) {
-            false
-        } else {
+        let won = self
+            .state
+            .compare_exchange(RUNNING, CANCELLED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        if won {
             // `notify_one` keeps a permit when nobody waits yet.
             self.cancel.notify_one();
-            true
+        }
+        won
+    }
+
+    /// Ends the operation on its own (result complete, failed, or its client
+    /// gone), unless it was cancelled first; a later [`Self::cancel`]
+    /// interrupts nothing. Whether it is finished: `false` when a cancel won.
+    pub fn finish(&self) -> bool {
+        match self
+            .state
+            .compare_exchange(RUNNING, FINISHED, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => true,
+            Err(now) => now == FINISHED,
         }
     }
 
-    /// Notes that the operation produced its last response; a later
-    /// [`Self::cancel`] interrupts nothing.
-    pub fn finish(&self) {
-        self.finished.store(true, Ordering::Release);
-    }
-
-    /// Whether [`Self::cancel`] ran.
+    /// Whether [`Self::cancel`] interrupted the operation.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.state.load(Ordering::Acquire) == CANCELLED
     }
 
     /// Resolves once [`Self::cancel`] runs (one waiter: the operation's
