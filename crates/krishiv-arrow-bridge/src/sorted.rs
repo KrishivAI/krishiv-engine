@@ -77,3 +77,82 @@ pub(crate) fn retype(data: ArrayData, target: &DataType) -> Result<ArrayData, Ar
         .child_data(children)
         .build()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
+    use arrow_array::{Array, ArrayRef, StructArray};
+    use arrow_schema::{DataType, Field};
+
+    use super::{restore_type, retype};
+
+    /// `Map<Utf8, Int32>` in Arrow 58 (`sorted`) and today's Arrow (`unsorted`).
+    fn maps(sorted: bool) -> (arrow_schema_58::DataType, DataType) {
+        use arrow_schema_58::{DataType as Old, Field as OldField};
+        let old_entries = OldField::new_struct(
+            "entries",
+            vec![
+                OldField::new("keys", Old::Utf8, false),
+                OldField::new("values", Old::Int32, true),
+            ],
+            false,
+        );
+        let new_entries = Field::new_struct(
+            "entries",
+            vec![
+                Field::new("keys", DataType::Utf8, false),
+                Field::new("values", DataType::Int32, true),
+            ],
+            false,
+        );
+        (
+            Old::Map(Arc::new(old_entries), sorted),
+            DataType::Map(Arc::new(new_entries), false),
+        )
+    }
+
+    #[test]
+    fn the_flag_comes_back_through_large_and_fixed_size_lists() {
+        use arrow_schema_58::{DataType as Old, Field as OldField};
+        let (old_map, new_map) = maps(true);
+        let old = Old::LargeList(Arc::new(OldField::new("item", old_map.clone(), true)));
+        let new = DataType::LargeList(Arc::new(Field::new("item", new_map.clone(), true)));
+        let DataType::LargeList(item) = restore_type(&old, &new) else {
+            panic!("not a large list");
+        };
+        assert!(matches!(item.data_type(), DataType::Map(_, true)));
+
+        let old = Old::FixedSizeList(Arc::new(OldField::new("item", old_map, true)), 2);
+        let new = DataType::FixedSizeList(Arc::new(Field::new("item", new_map, true)), 2);
+        let DataType::FixedSizeList(item, 2) = restore_type(&old, &new) else {
+            panic!("not a fixed-size list of 2");
+        };
+        assert!(matches!(item.data_type(), DataType::Map(_, true)));
+    }
+
+    #[test]
+    fn a_struct_of_a_map_is_retyped_with_its_buffers() {
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        builder.keys().append_value("a");
+        builder.values().append_value(1);
+        builder.append(true).unwrap();
+        let map: ArrayRef = Arc::new(builder.finish());
+        let unsorted = StructArray::from(vec![(
+            Arc::new(Field::new("m", map.data_type().clone(), true)),
+            Arc::clone(&map),
+        )]);
+        let DataType::Map(entries, false) = map.data_type().clone() else {
+            panic!("the builder makes an unsorted map");
+        };
+        let target =
+            DataType::Struct(vec![Field::new("m", DataType::Map(entries, true), true)].into());
+        let data = retype(unsorted.to_data(), &target).unwrap();
+        assert_eq!(data.data_type(), &target);
+        assert_eq!(
+            data.child_data()[0].child_data()[0].buffers(),
+            map.to_data().child_data()[0].buffers()
+        );
+    }
+}
