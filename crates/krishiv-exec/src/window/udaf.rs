@@ -61,6 +61,10 @@ pub(super) fn cost(
 pub(super) struct Charge<'a> {
     pool: Option<&'a mut Reservation>,
     held: usize,
+    /// What earlier functions of the same evaluation held: kept until the
+    /// charge drops, so a retry's credit is used in the same order and a
+    /// later function never finds it returned to the pool.
+    base: usize,
     refused: Option<usize>,
 }
 
@@ -70,8 +74,14 @@ impl<'a> Charge<'a> {
         Self {
             pool,
             held: 0,
+            base: 0,
             refused: None,
         }
+    }
+
+    /// The next function's state starts on top of what this charge holds.
+    pub(super) const fn next_function(&mut self) {
+        self.base = self.held;
     }
 
     /// The whole state the pool refused (what the charge held then plus the
@@ -85,6 +95,7 @@ impl<'a> Charge<'a> {
     /// # Errors
     /// The memory class when the pool refuses the growth.
     fn to(&mut self, size: usize) -> Result<()> {
+        let size = self.base.saturating_add(size);
         let Some(pool) = self.pool.as_deref_mut() else {
             return Ok(());
         };

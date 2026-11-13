@@ -352,7 +352,12 @@ impl Window {
             if l.spilled.is_none() {
                 // No spill: a window with an aggregate UDF evaluates the end
                 // of its input here (see `finish`).
-                return self.flush_end(l);
+                let out = self.flush_end(l)?;
+                if matches!(out, FlushOutput::Done) {
+                    // What a granted request left unused goes back.
+                    ctx.consumer().consumer().release_credit();
+                }
+                return Ok(out);
             }
             // Spilled while the end of input waited for memory for a UDF's
             // state: its rows are on disk now and are evaluated from there.

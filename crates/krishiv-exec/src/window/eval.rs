@@ -185,12 +185,15 @@ pub(super) fn evaluate_with(
         )?;
     }
     let mut columns = Vec::with_capacity(plan.functions.len());
+    // The UDFs' states are charged as they grow, each on top of what the
+    // ones before held, and released with the evaluation: a refusal names
+    // the evaluation's whole need, and a retry's credit is not handed back
+    // to the pool between functions.
+    let mut charge = super::udaf::Charge::new(pool.as_deref_mut());
     for f in &plan.functions {
         columns.push(match &f.function {
             WindowFunction::Aggregate(a) if super::udaf::is_udf(a) => {
-                // A UDF's state is charged as it grows, and released with
-                // the function's evaluation.
-                let mut charge = super::udaf::Charge::new(pool.as_deref_mut());
+                charge.next_function();
                 match super::udaf::aggregate(a, f, &unit, ansi, udafs, &mut charge) {
                     Ok(column) => column,
                     Err(e) => {

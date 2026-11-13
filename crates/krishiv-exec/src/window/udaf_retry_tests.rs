@@ -35,10 +35,10 @@ use crate::{ExecConfig, TaskContext};
 /// The bytes of state [`Grow`] reports per row it was given.
 const PER_ROW: usize = 256;
 
-/// `grow(x)`: the number of rows, with a state that reports [`PER_ROW`]
-/// bytes for every row it was given (a state that keeps its rows).
+/// `grow(x)`: the number of rows, with a state that reports `.1` bytes
+/// for every row it was given (a state that keeps its rows).
 #[derive(Debug)]
-struct Grow(Signature);
+struct Grow(Signature, usize);
 
 impl AggregateUdf for Grow {
     fn name(&self) -> &str {
@@ -74,6 +74,7 @@ impl AggregateUdf for Grow {
         Ok(Box::new(Rows {
             rows: Vec::new(),
             seen: 0,
+            per_row: self.1,
         }))
     }
 }
@@ -82,6 +83,7 @@ impl AggregateUdf for Grow {
 struct Rows {
     rows: Vec<i64>,
     seen: usize,
+    per_row: usize,
 }
 
 impl GroupsAccumulator for Rows {
@@ -111,7 +113,7 @@ impl GroupsAccumulator for Rows {
         )))
     }
     fn size(&self) -> usize {
-        self.seen * PER_ROW
+        self.seen * self.per_row
     }
 }
 
@@ -137,12 +139,24 @@ fn grow() -> WindowFunction {
 
 /// A window of `grow(v)` over `frame`, partitioned by `p`, ordered by `o`.
 fn window(frame: WindowFrame, spill: Option<krishiv_memory::SpillScope>) -> Window {
-    let mut w = Window::new(schema(), plan(vec![(grow(), frame)], true), true, spill).unwrap();
+    window_of(vec![(grow(), frame)], spill, PER_ROW)
+}
+
+/// A window of `functions` whose `grow` reports `per_row` bytes a row.
+fn window_of(
+    functions: Vec<(WindowFunction, WindowFrame)>,
+    spill: Option<krishiv_memory::SpillScope>,
+    per_row: usize,
+) -> Window {
+    let mut w = Window::new(schema(), plan(functions, true), true, spill).unwrap();
     let library = UdfLibrary::new();
     library
-        .register_aggregate(Arc::new(Grow(Signature::Exact(vec![
-            krishiv_udf_sdk::UdfInputType::Exact(krishiv_types::DataType::Long),
-        ]))))
+        .register_aggregate(Arc::new(Grow(
+            Signature::Exact(vec![krishiv_udf_sdk::UdfInputType::Exact(
+                krishiv_types::DataType::Long,
+            )]),
+            per_row,
+        )))
         .unwrap();
     Arc::get_mut(&mut w.env).unwrap().udafs = Some(UdafEnv {
         library: Arc::new(library),
@@ -290,15 +304,19 @@ fn input_of(_: &TaskContext) -> Vec<Batch> {
 
 /// The output of `frame` on an unconstrained pool.
 async fn reference(frame: WindowFrame) -> Vec<String> {
-    let op = window(frame, None);
+    reference_of(&window(frame, None), 1).await
+}
+
+/// The output of `op` (with `functions` window columns) on an unconstrained pool.
+async fn reference_of(op: &Window, functions: usize) -> Vec<String> {
     let (_root, ctx) = task_with(1 << 30, config());
     let pool = Arc::clone(ctx.query().pool());
     let mut hog = Reservation::new(Arc::clone(&pool), pool.register("hog", None));
-    let run = drive(&op, &ctx, &mut hog, &mut |_| unreachable!("no refusal"))
+    let run = drive(op, &ctx, &mut hog, &mut |_| unreachable!("no refusal"))
         .await
         .unwrap();
     assert!(run.needs.is_empty());
-    outputs(&run.out, 1)
+    outputs(&run.out, functions)
 }
 
 /// Complete rows flush in `execute` once 64 of them wait.
@@ -400,7 +418,7 @@ fn each_request_names_the_whole_state_so_requests_only_grow() {
         for (_, bytes) in &run.needs {
             assert!(*bytes >= 16 * PER_ROW, "{:?}", run.needs);
         }
-        assert!(run.needs.len() <= 60, "{:?}", run.needs);
+        assert!(run.needs.len() <= 4, "{:?}", run.needs);
     });
 }
 
@@ -450,46 +468,73 @@ fn a_request_the_driver_cannot_meet_is_the_memory_error_not_a_loop() {
 #[test]
 fn a_spill_while_a_refused_state_waits_loses_no_row() {
     runtime().block_on(async {
-        // The spill paths do not depend on the frame: a sliding frame's
-        // refused batch cost frees the memory its flushes need, so it would
-        // not spill here.
+        // 16 KiB of state a row: a partition's state (4.8 MB) is refused in
+        // the flush phase too, after the spill, where the flush is retried
+        // before the phase checks that its input ended.
+        let big = 16 << 10;
         for frame in [
             WindowFrame::whole(FrameUnits::Rows),
             WindowFrame::running(FrameUnits::Rows),
         ] {
-            let want = reference(frame).await;
+            let want = reference_of(&window_of(vec![(grow(), frame)], None, big), 1).await;
             // In execute: the buffered rows spill instead of a grant, and
-            // wait for the flush phase, whose refusals are granted.
+            // wait for the flush phase.
             let (_dir, scope) = spill_scope();
-            let op = window(frame, Some(scope));
+            let op = window_of(vec![(grow(), frame)], Some(scope), big);
             let (_root, ctx, mut hog) = tight(48 << 10);
             let run = drive(&op, &ctx, &mut hog, &mut |p| match p {
                 Phase::Execute => OnNeed::Spill,
-                Phase::Flush => OnNeed::Grant,
+                Phase::Flush => OnNeed::GrantExact,
             })
             .await
             .unwrap();
             assert!(op.counters.spills.load(Ordering::Relaxed) > 0, "{frame:?}");
+            assert!(
+                run.needs.iter().any(|(p, _)| *p == Phase::Flush),
+                "{frame:?}: refused in the flush phase: {:?}",
+                run.needs
+            );
             assert_eq!(outputs(&run.out, 1), want, "{frame:?}");
             assert_eq!(op.rows.load(Ordering::Relaxed), 1_200, "{frame:?}");
 
             // At the end of input: the rows spill while the state waits,
             // and are read back from disk.
             let (_dir, scope) = spill_scope();
-            let op = window(frame, Some(scope));
+            let op = window_of(vec![(grow(), frame)], Some(scope), big);
             let (_root, ctx, mut hog) = tight_with(200 << 10, at_the_end());
             let mut first = true;
             let run = drive(&op, &ctx, &mut hog, &mut |_| {
                 if std::mem::take(&mut first) {
                     OnNeed::Spill
                 } else {
-                    OnNeed::Grant
+                    OnNeed::GrantExact
                 }
             })
             .await
             .unwrap();
             assert!(op.counters.spills.load(Ordering::Relaxed) > 0, "{frame:?}");
+            assert!(run.needs.len() > 1, "{frame:?}: {:?}", run.needs);
             assert_eq!(outputs(&run.out, 1), want, "{frame:?}");
         }
+    });
+}
+
+#[test]
+fn two_udafs_of_one_evaluation_ask_for_their_states_together() {
+    runtime().block_on(async {
+        let functions = || {
+            vec![
+                (grow(), WindowFrame::whole(FrameUnits::Rows)),
+                (grow(), WindowFrame::running(FrameUnits::Rows)),
+            ]
+        };
+        let want = reference_of(&window_of(functions(), None, PER_ROW), 2).await;
+        let op = window_of(functions(), None, PER_ROW);
+        let (_root, ctx, mut hog) = tight(48 << 10);
+        let run = drive(&op, &ctx, &mut hog, &mut |_| OnNeed::GrantExact)
+            .await
+            .unwrap();
+        assert!(!run.needs.is_empty());
+        assert_eq!(outputs(&run.out, 2), want);
     });
 }

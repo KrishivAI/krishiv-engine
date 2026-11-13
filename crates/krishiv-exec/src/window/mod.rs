@@ -1067,6 +1067,10 @@ impl Operator for Window {
         Ok(Self::emit(l))
     }
 
+    /// A window with a spill scope or an aggregate UDF ends its input in
+    /// `flush`. As for any operator with work after its input, the driver
+    /// then holds a per-pipeline barrier and the pipeline does not ask an
+    /// ordered sink to keep the source order (`runner.rs`).
     fn needs_flush(&self) -> bool {
         self.spill.is_some() || self.has_udaf()
     }
