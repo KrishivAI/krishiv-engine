@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type, Int32Type};
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::future::BoxFuture;
@@ -71,6 +71,8 @@ pub(super) fn ordinal_field() -> Field {
 struct KeySet {
     /// The equality columns, in the delete file's `equality_ids` order.
     columns: Vec<ColumnPath>,
+    /// The key columns' types, which `converter` encodes.
+    types: Vec<DataType>,
     converter: RowConverter,
     keys: HashSet<Box<[u8]>>,
 }
@@ -195,8 +197,7 @@ async fn read_keys(
     let mut file = locate(&f.path)?;
     file.size = f.size;
     let mut req = ScanRequest::new(Arc::clone(table), columns.clone());
-    // Columns by id, as the data files are read (a delete file without ids
-    // takes the same name mapping or positional fallback).
+    // Columns by id (the caller's rule for a file without ids).
     req.mapping = mapping.clone();
     let id = pool.register("iceberg equality deletes", None);
     let result = async {
@@ -212,12 +213,16 @@ async fn read_keys(
         )
         .await?;
         let mut converter: Option<RowConverter> = None;
+        let mut types: Vec<DataType> = Vec::new();
         let mut keys = HashSet::new();
         while let Some(batch) = stream.next_batch().await? {
             let cols = key_columns(&batch, &columns)?;
             let conv = match &mut converter {
                 Some(c) => c,
-                None => converter.insert(converter_for(&cols)?),
+                None => {
+                    types = cols.iter().map(|c| c.data_type().clone()).collect();
+                    converter.insert(converter_for(&cols)?)
+                }
             };
             let rows = conv
                 .convert_columns(&cols)
@@ -232,11 +237,14 @@ async fn read_keys(
             None => {
                 let schema = krishiv_io::project_schema(table, &columns)?;
                 let empty = RecordBatch::new_empty(schema);
-                converter_for(&key_columns(&empty, &columns)?)?
+                let cols = key_columns(&empty, &columns)?;
+                types = cols.iter().map(|c| c.data_type().clone()).collect();
+                converter_for(&cols)?
             }
         };
         Ok(KeySet {
             columns,
+            types,
             converter,
             keys,
         })
@@ -364,12 +372,27 @@ impl EqDeleteSource {
                 .ok_or_else(|| internal(format!("no data file {file} in the scan")))?;
             if !sets.is_empty() {
                 let run = batch.slice(start, end - start);
+                // The run's keys are encoded once per distinct equality
+                // column list and key types (Flink writes one delete file per
+                // checkpoint, all on the same columns): such sets share an
+                // encoding, as Java shares one set per `equality_ids` group.
+                let mut encoded: Vec<(&KeySet, arrow_row::Rows)> = Vec::new();
                 for set in sets {
-                    let cols = key_columns(&run, &set.columns)?;
-                    let rows = set
-                        .converter
-                        .convert_columns(&cols)
-                        .map_err(|e| internal(format!("equality delete keys: {e}")))?;
+                    let at = encoded
+                        .iter()
+                        .position(|(k, _)| k.columns == set.columns && k.types == set.types);
+                    let at = if let Some(i) = at {
+                        i
+                    } else {
+                        let cols = key_columns(&run, &set.columns)?;
+                        let rows = set
+                            .converter
+                            .convert_columns(&cols)
+                            .map_err(|e| internal(format!("equality delete keys: {e}")))?;
+                        encoded.push((set, rows));
+                        encoded.len() - 1
+                    };
+                    let rows = &encoded[at].1;
                     for (r, row) in rows.iter().enumerate() {
                         if set.keys.contains(row.as_ref()) {
                             keep.get_or_insert_with(|| vec![true; n])[start + r] = false;
@@ -386,9 +409,14 @@ impl EqDeleteSource {
         };
         let out = krishiv_io::project_batch(&kept, &self.output)?;
         // The projection keeps the inner fields; the schema is the one the
-        // planner was given (same fields).
-        RecordBatch::try_new(Arc::clone(&self.schema), out.columns().to_vec())
-            .map_err(|e| internal(format!("equality-deleted batch: {e}")))
+        // planner was given (same fields). The row count is explicit for an
+        // output of no columns.
+        RecordBatch::try_new_with_options(
+            Arc::clone(&self.schema),
+            out.columns().to_vec(),
+            &RecordBatchOptions::new().with_row_count(Some(kept.num_rows())),
+        )
+        .map_err(|e| internal(format!("equality-deleted batch: {e}")))
     }
 }
 

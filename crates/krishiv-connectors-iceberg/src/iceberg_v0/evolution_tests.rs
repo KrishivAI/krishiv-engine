@@ -31,6 +31,9 @@ struct File {
     lower: HashMap<i32, Datum>,
     upper: HashMap<i32, Datum>,
     nans: HashMap<i32, u64>,
+    /// An equality delete file on these field ids (data sequence number 2;
+    /// data files have 1).
+    equality: Option<Vec<i32>>,
 }
 
 impl File {
@@ -43,7 +46,14 @@ impl File {
             lower: HashMap::new(),
             upper: HashMap::new(),
             nans: HashMap::new(),
+            equality: None,
         }
+    }
+
+    /// An equality delete file on `ids`.
+    fn deletes(mut self, ids: &[i32]) -> Self {
+        self.equality = Some(ids.to_vec());
+        self
     }
 
     fn bounds(mut self, id: i32, lower: Datum, upper: Datum) -> Self {
@@ -72,14 +82,21 @@ impl File {
 fn evolved(env: &Env, schemas: &[Schema], files: Vec<File>) -> IcebergTable {
     let t = env.create("t", schemas[0].clone(), None);
     let io: FileIO = env.reg.file_io();
-    let data: Vec<(usize, DataFile)> = files
+    let data: Vec<(usize, bool, DataFile)> = files
         .into_iter()
         .map(|f| {
             let path = env.at(f.name);
             let rows = f.columns[0].len();
             let size = write_parquet(&path, &batch(f.fields, f.columns));
-            let file = DataFileBuilder::default()
-                .content(DataContentType::Data)
+            let mut builder = DataFileBuilder::default();
+            if let Some(ids) = &f.equality {
+                builder
+                    .content(DataContentType::EqualityDeletes)
+                    .equality_ids(Some(ids.clone()));
+            } else {
+                builder.content(DataContentType::Data);
+            }
+            let file = builder
                 .file_path(path)
                 .file_format(DataFileFormat::Parquet)
                 .file_size_in_bytes(size)
@@ -91,7 +108,7 @@ fn evolved(env: &Env, schemas: &[Schema], files: Vec<File>) -> IcebergTable {
                 .nan_value_counts(f.nans)
                 .build()
                 .unwrap();
-            (f.schema, file)
+            (f.schema, f.equality.is_some(), file)
         })
         .collect();
     let snapshot_id = 1000;
@@ -99,27 +116,37 @@ fn evolved(env: &Env, schemas: &[Schema], files: Vec<File>) -> IcebergTable {
     env.rt.block_on(async {
         let mut manifests = Vec::new();
         for (i, schema) in schemas.iter().enumerate() {
-            let files: Vec<_> = data.iter().filter(|(s, _)| *s == i).collect();
-            if files.is_empty() {
-                continue;
+            for deletes in [false, true] {
+                let files: Vec<_> = data
+                    .iter()
+                    .filter(|(s, d, _)| *s == i && *d == deletes)
+                    .collect();
+                if files.is_empty() {
+                    continue;
+                }
+                let b = ManifestWriterBuilder::new(
+                    io.new_output(env.at(&format!("m{i}-{deletes}.avro")))
+                        .unwrap(),
+                    Some(snapshot_id),
+                    Arc::new(schema.clone()),
+                    PartitionSpec::unpartition_spec(),
+                );
+                let mut w = if deletes {
+                    b.build_v2_deletes()
+                } else {
+                    b.build_v2_data()
+                };
+                for (_, _, d) in files {
+                    w.add_file(d.clone(), if deletes { 2 } else { 1 }).unwrap();
+                }
+                manifests.push(w.write_manifest_file().await.unwrap());
             }
-            let mut w = ManifestWriterBuilder::new(
-                io.new_output(env.at(&format!("m{i}.avro"))).unwrap(),
-                Some(snapshot_id),
-                Arc::new(schema.clone()),
-                PartitionSpec::unpartition_spec(),
-            )
-            .build_v2_data();
-            for (_, d) in files {
-                w.add_file(d.clone(), 1).unwrap();
-            }
-            manifests.push(w.write_manifest_file().await.unwrap());
         }
         let mut lw = ManifestListWriter::v2(
             io.new_output(&list).unwrap().writer().await.unwrap(),
             snapshot_id,
             None,
-            1,
+            2,
         );
         lw.add_manifests(manifests.into_iter()).unwrap();
         lw.close().await.unwrap();
@@ -147,14 +174,14 @@ fn evolved(env: &Env, schemas: &[Schema], files: Vec<File>) -> IcebergTable {
         serde_json::json!(schemas.iter().map(Schema::highest_field_id).max().unwrap());
     json["snapshots"] = serde_json::json!([{
         "snapshot-id": snapshot_id,
-        "sequence-number": 1,
+        "sequence-number": 2,
         "timestamp-ms": ts,
         "manifest-list": list,
         "summary": {"operation": "append"},
         "schema-id": current_id
     }]);
     json["current-snapshot-id"] = serde_json::json!(snapshot_id);
-    json["last-sequence-number"] = serde_json::json!(1);
+    json["last-sequence-number"] = serde_json::json!(2);
     json["refs"] = serde_json::json!({"main": {"snapshot-id": snapshot_id, "type": "branch"}});
     json["snapshot-log"] = serde_json::json!([{"snapshot-id": snapshot_id, "timestamp-ms": ts}]);
     let edited = env.at("99-evolved.metadata.json");
@@ -444,5 +471,113 @@ fn iceberg_schema_evolution_matrix() {
     assert_eq!(
         rows(&env, &table, "SELECT id FROM t WHERE label = 'x'"),
         ["1"]
+    );
+}
+
+/// Equality keys end to end (design note §3.3): a key written as `int` and
+/// compared with the column promoted to `long`, a string key, a key nested
+/// in a struct, and a key column added after the data file was written
+/// (read as null there, so a non-null key never matches it).
+#[test]
+fn equality_keys_of_every_shape_delete_rows() {
+    use arrow_array::{StringArray, StructArray};
+    use arrow_schema::Fields;
+    use iceberg::spec::StructType as IceStruct;
+
+    let env = env();
+    let s_type = || {
+        Type::Struct(IceStruct::new(vec![Arc::new(opt(
+            4,
+            "a",
+            PrimitiveType::Int,
+        ))]))
+    };
+    let first = schema(vec![
+        opt(1, "v", PrimitiveType::Int),
+        opt(2, "name", PrimitiveType::String),
+        NestedField::optional(3, "s", s_type()),
+    ]);
+    let second = schema(vec![
+        opt(1, "v", PrimitiveType::Long),
+        opt(2, "name", PrimitiveType::String),
+        NestedField::optional(3, "s", s_type()),
+        opt(5, "c", PrimitiveType::Int),
+    ]);
+    let s_fields = Fields::from(vec![id_field("a", A::Int32, 4)]);
+    let s_col = |v: Vec<i32>| -> ArrayRef {
+        Arc::new(StructArray::new(
+            s_fields.clone(),
+            vec![Arc::new(Int32Array::from(v))],
+            None,
+        ))
+    };
+    let old = File::new(
+        "old.parquet",
+        vec![
+            id_field("v", A::Int32, 1),
+            id_field("name", A::Utf8, 2),
+            id_field("s", A::Struct(s_fields.clone()), 3),
+        ],
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
+            s_col(vec![10, 20, 30, 40, 50]),
+        ],
+    );
+    let new = File::new(
+        "new.parquet",
+        vec![
+            id_field("v", A::Int64, 1),
+            id_field("name", A::Utf8, 2),
+            id_field("s", A::Struct(s_fields.clone()), 3),
+            id_field("c", A::Int32, 5),
+        ],
+        vec![
+            Arc::new(Int64Array::from(vec![6, 7])),
+            Arc::new(StringArray::from(vec!["f", "g"])),
+            s_col(vec![60, 70]),
+            Arc::new(Int32Array::from(vec![Some(1), None])),
+        ],
+    )
+    .under(1);
+    let deletes = vec![
+        // Written when `v` was an int: deletes 2 (and 7 is not in it).
+        File::new(
+            "eq-v.parquet",
+            vec![id_field("v", A::Int32, 1)],
+            vec![Arc::new(Int32Array::from(vec![2]))],
+        )
+        .deletes(&[1]),
+        // A string key: deletes "c".
+        File::new(
+            "eq-name.parquet",
+            vec![id_field("name", A::Utf8, 2)],
+            vec![Arc::new(StringArray::from(vec!["c", "zz"]))],
+        )
+        .deletes(&[2])
+        .under(1),
+        // A nested key: deletes s.a = 40.
+        File::new(
+            "eq-s.parquet",
+            vec![id_field("s", A::Struct(s_fields.clone()), 3)],
+            vec![s_col(vec![40])],
+        )
+        .deletes(&[4])
+        .under(1),
+        // `c` = 1: only the new file's first row; the old file has no `c`.
+        File::new(
+            "eq-c.parquet",
+            vec![id_field("c", A::Int32, 5)],
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .deletes(&[5])
+        .under(1),
+    ];
+    let mut files = vec![old, new];
+    files.extend(deletes);
+    let table = evolved(&env, &[first, second], files);
+    assert_eq!(
+        rows(&env, &table, "SELECT v, name FROM t"),
+        ["1|a", "5|e", "7|g"]
     );
 }

@@ -166,7 +166,6 @@ fn with_ids(field: arrow_schema::Field, id: i32, ty: &Type) -> arrow_schema::Fie
 struct MappedFieldJson {
     #[serde(rename = "field-id")]
     field_id: Option<i32>,
-    #[serde(default)]
     names: Vec<String>,
     #[serde(default)]
     fields: Vec<MappedFieldJson>,
@@ -187,13 +186,30 @@ impl From<MappedFieldJson> for krishiv_io::MappedField {
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` naming the parse error for text that is not
-/// a name mapping: files without ids are then never read by a guess.
+/// a name mapping (a field without `names`, as Java requires them) or that
+/// gives one name twice at a level (Java's `MappedFields` refuses it): files
+/// without ids are then never read by a guess.
 pub(crate) fn parse_name_mapping(text: &str) -> Result<krishiv_io::NameMapping, KrishivError> {
-    let fields: Vec<MappedFieldJson> = serde_json::from_str(text).map_err(|e| {
+    let bad = |e: String| {
         unsupported(format!(
             "reading the Iceberg name mapping schema.name-mapping.default: {e}"
         ))
-    })?;
+    };
+    let fields: Vec<MappedFieldJson> =
+        serde_json::from_str(text).map_err(|e| bad(e.to_string()))?;
+    fn unique(level: &[MappedFieldJson]) -> Result<(), String> {
+        let mut seen = std::collections::BTreeSet::new();
+        for f in level {
+            for n in &f.names {
+                if !seen.insert(n.as_str()) {
+                    return Err(format!("the name {n} is mapped twice"));
+                }
+            }
+            unique(&f.fields)?;
+        }
+        Ok(())
+    }
+    unique(&fields).map_err(bad)?;
     Ok(krishiv_io::NameMapping::new(
         fields.into_iter().map(Into::into).collect(),
     ))

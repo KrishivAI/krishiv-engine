@@ -37,8 +37,13 @@ fn schema() -> iceberg::spec::Schema {
 /// What one file of a test table is.
 #[derive(Debug, Clone)]
 enum Content {
-    /// Rows with ids `first..first + rows` in partition `p`.
-    Data { first: i64, rows: i64 },
+    /// Rows with ids `first..first + rows` in partition `p`; the row at
+    /// position `null_at` has a null id instead.
+    Data {
+        first: i64,
+        rows: i64,
+        null_at: Option<i64>,
+    },
     /// A position delete file: `(data file name, position)` rows.
     Positions {
         rows: Vec<(String, i64)>,
@@ -107,8 +112,14 @@ fn build(files: &[File], partitioned: bool) -> Table {
             b
         };
         match &f.content {
-            Content::Data { first, rows } => {
-                let ids: Vec<i64> = (*first..first + rows).collect();
+            Content::Data {
+                first,
+                rows,
+                null_at,
+            } => {
+                let ids: Vec<Option<i64>> = (*first..first + rows)
+                    .map(|i| (Some(i - first) != *null_at).then_some(i))
+                    .collect();
                 let b = batch(
                     vec![id_field("id", A::Int64, 1), id_field("p", A::Int32, 2)],
                     vec![
@@ -286,7 +297,11 @@ fn data(name: &str, p: i32, seq: i64, first: i64, rows: i64) -> File {
         name: name.to_owned(),
         p,
         seq,
-        content: Content::Data { first, rows },
+        content: Content::Data {
+            first,
+            rows,
+            null_at: None,
+        },
     }
 }
 
@@ -514,7 +529,13 @@ fn equality_deletes_remove_rows_of_older_files() {
     assert_eq!(t.ids("SELECT id FROM t").unwrap(), [2, 10, 11, 13]);
     assert_eq!(t.ids("SELECT count(*) FROM t").unwrap(), [4]);
     assert_eq!(t.ids("SELECT id FROM t WHERE id > 10").unwrap(), [11, 13]);
-    assert_eq!(t.ids("SELECT id FROM t LIMIT 10").unwrap(), [2, 10, 11, 13]);
+    // A limit is not pushed below the deletes: file a keeps one row of five,
+    // so a scan that stopped after a's batch would give one row.
+    assert_eq!(
+        t.ids("SELECT count(*) FROM (SELECT id FROM t LIMIT 2)")
+            .unwrap(),
+        [2]
+    );
     // A column the query does not read is still the key.
     assert_eq!(t.ids("SELECT p FROM t").unwrap(), [0, 0, 0, 0]);
     // The query's columns and `_metadata` are what leaves the scan; the
@@ -557,18 +578,44 @@ fn partitioned_equality_deletes_stay_in_their_partition() {
     assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 1, 2, 10, 12]);
 }
 
-/// Iceberg deletes compare `null` equal to `null` (not SQL's rule).
+/// Iceberg deletes compare `null` equal to `null` (not SQL's rule): a null
+/// key removes the rows whose key is null, and only a null key does.
 #[test]
 fn a_null_equality_key_deletes_null_rows() {
+    let with_null = |name: &str| File {
+        name: name.to_owned(),
+        p: 0,
+        seq: 1,
+        content: Content::Data {
+            first: 0,
+            rows: 3,
+            null_at: Some(1),
+        },
+    };
+    let rows = |t: &Table| {
+        let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+        let mut out =
+            super::provider_tests::render(&provider_session(p).run("SELECT id FROM t").unwrap());
+        out.sort();
+        out
+    };
     let t = build(
         &[
-            data("a.parquet", 0, 1, 0, 3),
+            with_null("a.parquet"),
             equality("e.parquet", 0, 2, &[None, Some(2)]),
         ],
         false,
     );
-    // No row has a null id: only 2 goes.
-    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 1]);
+    assert_eq!(rows(&t), ["0"]);
+    // Without a null key the null row stays.
+    let t = build(
+        &[
+            with_null("a.parquet"),
+            equality("e.parquet", 0, 2, &[Some(0)]),
+        ],
+        false,
+    );
+    assert_eq!(rows(&t), ["2", "NULL"]);
 }
 
 /// A missing equality delete file fails the query; it is never skipped.

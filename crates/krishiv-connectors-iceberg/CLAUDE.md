@@ -18,7 +18,7 @@ scheduler's I/O runtime, error mapping both ways (a Krishiv error keeps its clas
 `IcebergTable` (load from a metadata location, schema, `snapshots`/`manifests` as Arrow 60, `snapshot(VersionSpec)`,
 `plan`) · `provider.rs` `IcebergTableProvider` (design note §3.1): a pinned snapshot's data files as the file list
 of `krishiv-exec`'s `FileScan` (Parquet, Spark split planning), columns by field id with Java's positional fallback
-for files without ids (`FieldMapping::FieldIdOr`; under `schema.name-mapping.default` by the mapping's names instead, `types.rs` `parse_name_mapping`, PR-25c; equality delete files read the same way), identity-partition
+for files without ids (`FieldMapping::FieldIdOr`; under `schema.name-mapping.default` by the mapping's names instead, `types.rs` `parse_name_mapping`, strict as Java: `names` required, no name twice at a level; PR-25c. Equality delete files ignore the mapping, as Java's delete loader does), identity-partition
 columns constant in every file's spec read from the manifest (`FileConstants`, FC S4), a mixed-spec identity
 column that a file of an identity spec lacks refused (footers of those files read at open), position deletes and DVs
 applied as each file's row selection (`FileSelections`), equality deletes applied by wrapping the file scan's source (`EqDeleteSource`), pushed filters pruning files through `Pruner` when the scan is built (still applied above);
@@ -29,7 +29,7 @@ past the end delete nothing, as Java); not charged to memory until 25d · `eq_de
 delete file once per scan (its `equality_ids` by field id through the read schema, so promoted keys compare at the
 table's type) into a key set in Arrow's row format (null equals null; NaN equals NaN and -0.0 differs from 0.0, as
 Java's `Comparators`; a field of a null struct is null); `EqDeleteSource` wraps the file scan's source and drops the
-rows whose key is in a set of their data file, found by the per-file constant column `_krishiv_iceberg_file` (the
+rows whose key is in a set of their data file (a run's keys encoded once per distinct column list and key types), found by the per-file constant column `_krishiv_iceberg_file` (the
 file's index in the scan, through `FileConstants`); the equality columns, that column and any `_metadata` the query
 did not ask for are projected away, and no limit is pushed below it · `scan.rs` metadata → `TableSnapshot` (refs read from the metadata's serialisation: iceberg-rust has no
 accessor and its `snapshot_for_ref` panics on a dangling ref), manifest list and manifests fetched through the

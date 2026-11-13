@@ -167,7 +167,10 @@ impl IcebergTableProvider {
                 &reg.io,
                 &locate,
                 &scan.parts.table,
-                &scan.mapping,
+                // Java's delete loader reads delete files without the name
+                // mapping (writers give them ids): a file without ids takes
+                // the positional fallback.
+                &FieldMapping::FieldIdOr(WithoutFieldIds::Position),
                 &scan.snapshot.fields,
                 &per_file,
             )

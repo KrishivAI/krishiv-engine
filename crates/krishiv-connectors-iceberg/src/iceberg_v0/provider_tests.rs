@@ -504,15 +504,22 @@ fn a_file_without_field_ids_reads_by_position() {
     let s = provider_session(env.provider(&table, &VersionSpec::Current).unwrap());
     assert_eq!(s.rows("SELECT name, id, x FROM t"), ["thirty|10|NULL"]);
     assert_eq!(s.rows("SELECT id FROM t WHERE name = 'thirty'"), ["10"]);
-    // Text that is not a name mapping.
-    let table = with_mapping(r#"{"field-id": 1}"#);
-    let e = env.provider(&table, &VersionSpec::Current).unwrap_err();
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{e}"
-    );
-    assert!(e.message().contains("schema.name-mapping.default"), "{e}");
+    // Text that is not a name mapping: not a list, a field without names,
+    // one name mapped twice at a level.
+    for text in [
+        r#"{"field-id": 1}"#,
+        r#"[{"field-id": 1}]"#,
+        r#"[{"field-id": 1, "names": ["c0"]}, {"field-id": 2, "names": ["c0"]}]"#,
+    ] {
+        let table = with_mapping(text);
+        let e = env.provider(&table, &VersionSpec::Current).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{e}"
+        );
+        assert!(e.message().contains("schema.name-mapping.default"), "{e}");
+    }
 }
 
 /// Time travel through the provider reads the older snapshot's files with its
