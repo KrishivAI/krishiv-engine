@@ -83,6 +83,28 @@ impl ConfStore {
         Self::with_local_zone(config, &local_zone())
     }
 
+    /// A store starting at this one's current configuration, with the same
+    /// local zone, whose `RESET` restores `baseline` (the runtime's
+    /// configuration) and this one's build-time session keys. Spark's
+    /// `cloneSession` gives the clone empty initial session options
+    /// (`SparkSession.scala:286-298` at v4.3.0, and likewise at v3.5.0,
+    /// v4.0.0, v4.1.0 and v4.2.0), so its `RESET` restores the shared
+    /// state's configuration only (`ResetCommand`, `SetCommand.scala:220-238`
+    /// at v4.3.0). The build-time keys (the memory limit) describe the pool
+    /// the clone is built with, so they stay.
+    pub(crate) fn copy_onto(&self, baseline: &Config) -> Self {
+        let (config, _) = self.versioned_snapshot();
+        let mut initial = baseline.clone();
+        for key in SESSION_BUILD_TIME {
+            initial.reset_key(key, &self.initial);
+        }
+        Self {
+            current: RwLock::new((config, 0)),
+            initial,
+            local_zone: Arc::clone(&self.local_zone),
+        }
+    }
+
     fn with_local_zone(config: Config, local_zone: &str) -> Self {
         Self {
             current: RwLock::new((Arc::new(config.clone()), 0)),
@@ -115,6 +137,25 @@ impl ConfStore {
 
     pub(crate) fn snapshot(&self) -> Arc<Config> {
         self.versioned_snapshot().0
+    }
+
+    /// Every explicitly set key with its value as text, sorted by key: what
+    /// `SET` lists and Spark Connect's `Config` `GetAll` returns.
+    pub(crate) fn explicit_entries(&self) -> Vec<(String, String)> {
+        let config = self.snapshot();
+        let mut rows: Vec<(String, String)> = config
+            .explicit_registered()
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .chain(
+                config
+                    .explicit_unregistered()
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), value.to_owned())),
+            )
+            .collect();
+        rows.sort_unstable();
+        rows
     }
 
     /// The configuration and its version, read together.
@@ -385,6 +426,21 @@ impl RuntimeConf {
         }
         self.store.reset_key(key);
         Ok(())
+    }
+
+    /// Every explicitly set key and its value as text, sorted by key, as
+    /// `SET` lists them (Spark's `RuntimeConfig.getAll`). Registered keys
+    /// appear under their canonical name; defaults are not listed.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// session.conf().set("my.app.flag", "on")?;
+    /// assert!(session.conf().entries().contains(&("my.app.flag".to_owned(), "on".to_owned())));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn entries(&self) -> Vec<(String, String)> {
+        self.store.explicit_entries()
     }
 
     /// Whether `key` can be set at runtime.

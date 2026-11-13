@@ -71,12 +71,14 @@ mod restrict;
 mod share_cte;
 mod stats;
 mod sum_rewrite;
+mod win_magic;
 
 use std::sync::Arc;
 
 use krishiv_common::config::{
     ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, JOIN_COST, JOIN_DP_LIMIT,
-    JOIN_ENUMERATOR, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+    JOIN_ENUMERATOR, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES,
+    SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -133,10 +135,15 @@ pub struct RuleStep {
     pub note: String,
 }
 
+/// The default of `krishiv.optimizer.shareRepeatedSubtrees` when no
+/// configuration value is set (off until the P3 W1 flip, unit 6).
+const SHARE_REPEATED_SUBTREES_DEFAULT: bool = false;
+
 /// A test-only switch per optimizer rule: which rewrites run. All are on
 /// by default; the differential harnesses turn one off at a time and
 /// compare results with it on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Options {
     /// Common-subexpression elimination within one operator (`cse`).
     pub cse: bool,
@@ -149,6 +156,14 @@ pub struct Options {
     /// statistics say it pays. Needs statistics; a session configuration,
     /// when given, can switch it off.
     pub eager_aggregation: bool,
+    /// Subquery as window (`win_magic`, P3 W1 shape (a)): a correlated
+    /// aggregate subquery over the outer block's own join runs as a window.
+    /// Runs only when `krishiv.optimizer.subqueryAsWindow` is also on.
+    pub subquery_as_window: bool,
+    /// Sharing a subtree the main block and a subquery both read (`ShareCte`
+    /// direct members, P3 W1 shape (b)). Runs only when
+    /// `krishiv.optimizer.shareRepeatedSubtrees` is also on.
+    pub share_repeated_subtrees: bool,
 }
 
 impl Default for Options {
@@ -157,6 +172,8 @@ impl Default for Options {
             cse: true,
             stats_propagation: true,
             eager_aggregation: true,
+            subquery_as_window: true,
+            share_repeated_subtrees: true,
         }
     }
 }
@@ -392,6 +409,31 @@ fn run(
         } else {
             root = batch(root, "Rewrite", &mut t)?;
         }
+        // P3 W1 shape (a): a correlated aggregate subquery over the outer block's own
+        // relations becomes a window (`krishiv.optimizer.subqueryAsWindow`, off by default).
+        let window = options.subquery_as_window
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SUBQUERY_AS_WINDOW)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
+        let root = if window {
+            let mut notes = Vec::new();
+            let after = t.once("SubqueryAsWindow", &root, |r| {
+                let (after, n) = win_magic::rewrite(
+                    Arc::clone(r),
+                    stats.unwrap_or(&NoStatistics),
+                    options.stats_propagation,
+                )?;
+                notes = n;
+                Ok(after)
+            })?;
+            t.notes("SubqueryAsWindow", &after, notes);
+            after
+        } else {
+            root
+        };
         // After the rewrite batch, which moves `WHERE` equalities into the
         // joins (comma joins are cross joins before it); the batch runs
         // again to push what the rule added, only when it added something.
@@ -499,8 +541,19 @@ fn run(
                 .and_then(ConfigValue::as_bool)
                 .unwrap_or(true)
         });
+        // P3 W1 shape (b): the places that read a shared body directly
+        // count as members too (`krishiv.optimizer.shareRepeatedSubtrees`).
+        let direct = options.share_repeated_subtrees
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SHARE_REPEATED_SUBTREES)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(SHARE_REPEATED_SUBTREES_DEFAULT)
+            });
         let root = if share {
-            t.once("ShareCte", &root, |r| share_cte::share(Arc::clone(r)))?
+            t.once("ShareCte", &root, |r| {
+                share_cte::share(Arc::clone(r), direct)
+            })?
         } else {
             root
         };

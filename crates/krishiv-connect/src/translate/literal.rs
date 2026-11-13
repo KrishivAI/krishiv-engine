@@ -14,7 +14,7 @@ use super::errors::{
     assertion, incompatible_literal, not_set, unsupported_literal_type, unsupported_variant,
 };
 use super::types::{data_type, decimal_type};
-use crate::proto::v4_2::{DataType as ProtoType, data_type::Kind, expression};
+use crate::proto::v4_3::{DataType as ProtoType, data_type::Kind, expression};
 use expression::literal::{Decimal, LiteralType};
 
 /// Spark's default for `DayTimeIntervalType()`: `DAY TO SECOND`.
@@ -123,9 +123,10 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
         | LiteralType::Map(_)
         | LiteralType::Struct(_)
         | LiteralType::SpecializedArray(_)
-        | LiteralType::Time(_) => {
+        | LiteralType::Time(_)
+        | LiteralType::TimestampNtzNanos(_)
+        | LiteralType::TimestampLtzNanos(_) => {
             return Err(unsupported_variant(
-                "literal",
                 "spark.connect.Expression.Literal",
                 value.variant(),
             ));
