@@ -134,6 +134,28 @@ pub static CONNECT_MAX_SESSIONS_PER_PRINCIPAL: ConfigEntry = startup(
     None,
 );
 
+/// Live operations of one session.
+pub static CONNECT_MAX_OPERATIONS_PER_SESSION: ConfigEntry = startup(
+    "krishiv.connect.maxOperationsPerSession",
+    ValueType::PositiveInt,
+    ConfigValue::Int(100),
+    "Most live Spark Connect operations (`ExecutePlan` calls not yet finished or released) of \
+     one session; a new one past it is refused with `KRISHIV_OPERATION_LIMIT`.",
+    None,
+);
+
+/// Encoded responses an operation may hold ahead of its client.
+pub static CONNECT_EXECUTE_AHEAD_BYTES: ConfigEntry = startup(
+    "krishiv.connect.execute.aheadBytes",
+    ValueType::Size,
+    ConfigValue::Size(64 * MIB),
+    "Most bytes of encoded `ExecutePlan` responses one operation holds before its client reads \
+     them; past it the query pauses until the client catches up (the gRPC flow-control window \
+     is the backpressure), so no result is held in full. The bytes count against the memory \
+     pool.",
+    None,
+);
+
 /// Open Connect connections.
 pub static CONNECT_MAX_CONNECTIONS: ConfigEntry = startup(
     "krishiv.connect.maxConnections",

@@ -10,9 +10,9 @@
 //!   `geography: "true"`) and `srid: "<SRID of the type>"`, -1 for `ANY`.
 //!   In memory the WKB child is a `BinaryView`, without the tags.
 //! - `variant`: `Struct<value: Binary, metadata: Binary>` (that order), both
-//!   children non-null, the struct field tagged `variant: "true"`, without
-//!   the Arrow extension name (oracle, `df.toArrow()` on Spark 4.2.0,
-//!   design P2-T001c section 6). In memory the children are `metadata`
+//!   children non-null, the `metadata` child tagged `variant: "true"`,
+//!   without the Arrow extension name (Spark's `ArrowUtils.toArrowField`,
+//!   v4.0.0 to v4.3.0). In memory the children are `metadata`
 //!   then `value`, `BinaryView`, marked by `krishiv.variant`.
 //!
 //! The other result conversions (time zones, strings) belong to the result
@@ -106,11 +106,15 @@ pub fn spatial_column(column: &ArrayRef, data_type: &DataType) -> Result<ArrayRe
     Ok(Arc::new(out))
 }
 
-/// The children of a variant column as Spark Connect sends them.
+/// The children of a variant column as Spark Connect sends them: the
+/// `metadata` child carries the `variant: "true"` tag (Spark's
+/// `ArrowUtils.toArrowField`; `isVariantField` and PySpark's `is_variant`
+/// look for it there).
 fn variant_children() -> Fields {
     Fields::from(vec![
         Field::new(VARIANT_VALUE_FIELD, ArrowType::Binary, false),
-        Field::new(VARIANT_METADATA_FIELD, ArrowType::Binary, false),
+        Field::new(VARIANT_METADATA_FIELD, ArrowType::Binary, false)
+            .with_metadata(HashMap::from([("variant".to_owned(), "true".to_owned())])),
     ])
 }
 
@@ -118,7 +122,6 @@ fn variant_children() -> Fields {
 #[must_use]
 pub fn variant_field(name: &str, nullable: bool) -> Field {
     Field::new(name, ArrowType::Struct(variant_children()), nullable)
-        .with_metadata(HashMap::from([("variant".to_owned(), "true".to_owned())]))
 }
 
 /// Converts a variant column from its in-memory form to the form Spark
