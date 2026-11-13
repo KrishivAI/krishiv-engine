@@ -1,0 +1,16 @@
+[package]
+name = "krishiv-catalogs"
+description = "External catalogs: Hive metastore and Unity Catalog (read-only)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+tracing.workspace = true

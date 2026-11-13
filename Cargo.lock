@@ -2236,6 +2236,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-catalogs"
+version = "0.2.0"
+dependencies = [
+ "krishiv-common",
+ "tracing",
+]
+
+[[package]]
 name = "krishiv-cli"
 version = "0.2.0"
 dependencies = [
