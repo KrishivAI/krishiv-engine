@@ -475,12 +475,15 @@ async fn compressed_plans_decode_and_a_bomb_fails_before_it_expands() {
         .unwrap_err();
     assert_eq!(error_class(&e), "CONNECT_INVALID_PLAN.CANNOT_PARSE");
     let empty = zstd::bulk::compress(&[], 3).expect("zstd");
+    // An unset operation type: Spark wraps the parse error in CANNOT_PARSE.
     let e = collect(&run.channel, compressed(empty.clone(), 0, zstd_codec))
         .await
         .unwrap_err();
-    assert_eq!(
-        error_class(&e),
-        "CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET"
+    assert_eq!(error_class(&e), "CONNECT_INVALID_PLAN.CANNOT_PARSE");
+    assert!(
+        e.message().contains("OP_TYPE_UNSPECIFIED"),
+        "{}",
+        e.message()
     );
     let command = pb::Command {
         command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),

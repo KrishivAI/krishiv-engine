@@ -240,11 +240,19 @@ fn translate_plan(
                         _ => Err(command_not_supported(&pb::Command::default())),
                     }
                 }
-                _ => Err(ConnectInvalidPlanInvalidOneOfFieldNotSet {
-                    full_name: "spark.connect.Plan.CompressedOperation".to_owned(),
-                    name: "OP_TYPE_UNSPECIFIED".to_owned(),
+                _ => {
+                    // Spark's `PlanCompressionUtils` re-throws what parsing
+                    // the operation raised as `CANNOT_PARSE` (v4.3.0).
+                    let unset: KrishivError = ConnectInvalidPlanInvalidOneOfFieldNotSet {
+                        full_name: "spark.connect.Plan.CompressedOperation".to_owned(),
+                        name: "OP_TYPE_UNSPECIFIED".to_owned(),
+                    }
+                    .into();
+                    Err(krishiv_common::error::ConnectInvalidPlanCannotParse {
+                        error_msg: unset.to_string(),
+                    }
+                    .into())
                 }
-                .into()),
             }
         }
         None => Err(ConnectInvalidPlanInvalidOneOfFieldNotSet {

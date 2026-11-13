@@ -260,7 +260,7 @@ fn sc_localhost_runs_spark_range_collect() {
 /// for a reattachable execution, gets `ResultComplete`, sends
 /// `ReleaseExecute` after the responses, and logs no error.
 #[test]
-#[ignore = "needs pyspark-client 4.3.0 / 4.2.1 on the host (not installed) and Config (PR-11b)"]
+#[ignore = "needs pyspark-client 4.3.0 / 4.2.1 on the host (none on CI runners) and the Config RPC (PR-11b)"]
 fn pyspark_minimal_reattach() {
     pyspark(
         "import io, logging\n\
