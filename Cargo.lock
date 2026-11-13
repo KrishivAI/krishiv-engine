@@ -2654,6 +2654,7 @@ dependencies = [
  "opentelemetry_sdk",
  "parquet",
  "prost",
+ "regex-lite",
  "reqwest",
  "rustls",
  "serde",
