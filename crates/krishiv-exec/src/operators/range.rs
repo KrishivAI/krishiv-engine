@@ -55,6 +55,8 @@ struct RangeLocal {
     claimed: u64,
     /// The claim ordinal of the current slice.
     position: Option<u64>,
+    lane: Option<(usize, usize)>,
+    taken: usize,
     /// The first partition id of the range's group member.
     base: u32,
     /// The current slice's split (`base` + the slice index).
@@ -78,7 +80,7 @@ impl crate::operator::Source for Range {
         let config = ctx.query().config();
         let wanted = match self.num_slices {
             Some(n) => n.max(1),
-            None => u32::try_from(ctx.executor().parallelism().max(1)).unwrap_or(u32::MAX),
+            None => u32::try_from(ctx.layout_parallelism().max(1)).unwrap_or(u32::MAX),
         };
         // Slices beyond the row count are empty: they only cost the
         // morsel cursor (a seeded one allocates a permutation of them).
@@ -104,12 +106,22 @@ impl crate::operator::Source for Range {
         global_ref::<RangeGlobal>(global, "Range").map_or(1, |g| (g.partitions as usize).max(1))
     }
 
+    // A `Range` never carries a pushed-down LIMIT (the scans that do, refuse a split under
+    // one), so there is no limit to check here.
+    fn deterministic_split(&self, global: &GlobalState) -> Option<usize> {
+        global_ref::<RangeGlobal>(global, "Range")
+            .ok()
+            .map(|g| (g.partitions as usize).max(1))
+    }
+
     fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
         Ok(Box::new(RangeLocal {
             current: None,
             step: self.step,
             claimed: 0,
             position: None,
+            lane: ctx.lane(),
+            taken: 0,
             base: ctx.partition_base(),
             split: ctx.partition(),
         }))
@@ -145,7 +157,8 @@ impl Range {
         loop {
             match local.current {
                 None => {
-                    let Some((ordinal, index)) = g.cursor.claim_ordered() else {
+                    let Some((ordinal, index)) = g.cursor.claim_for(local.lane, &mut local.taken)
+                    else {
                         return Ok(None);
                     };
                     local.claimed += 1;
