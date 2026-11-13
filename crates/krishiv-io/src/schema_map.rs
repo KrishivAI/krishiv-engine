@@ -305,8 +305,11 @@ fn with_row_index(schema: SchemaRef, row_index: bool, _nullable: bool) -> Schema
     Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
-/// Whether any field of `fields`, at any depth, has a field id.
-fn has_field_ids(fields: &Fields) -> bool {
+/// Whether any field of `fields`, at any depth, has a field id (a file
+/// with none is read by position or refused under
+/// [`FieldMapping::FieldIdOr`](crate::FieldMapping::FieldIdOr)).
+#[must_use]
+pub fn has_field_ids(fields: &Fields) -> bool {
     fields.iter().any(|f| {
         f.metadata().contains_key(FIELD_ID_KEY)
             || match f.data_type() {

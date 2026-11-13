@@ -99,7 +99,7 @@ pub use runtime_filter::{
 };
 pub use scan::{ReadStats, ScanOptions, ScanStream};
 pub use scan_gate::ScanGate;
-pub use schema_map::{FIELD_ID_KEY, SchemaMapper};
+pub use schema_map::{FIELD_ID_KEY, SchemaMapper, has_field_ids};
 pub use stats::{ColumnStatistics, FileStatistics, Precision, TriState, prune};
 pub use text_format::TextFormat;
 pub use write::{FileWriter, WriteOptions, WrittenFileInfo, effective_job_uuid, spark_file_name};

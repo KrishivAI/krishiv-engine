@@ -484,6 +484,10 @@ async fn refuse_missing_mixed_identity(scan: &IcebergScan) -> Result<(), Krishiv
     if mixed.is_empty() {
         return Ok(());
     }
+    // One footer read per file whose spec makes a mixed column an identity
+    // partition, one after another: only tables whose specs disagree on a
+    // column pay it (rare; spec evolution after an import). Bounded
+    // concurrency belongs with 25d's planning hook.
     let format = ParquetFormat;
     for (e, file) in scan.entries.iter().zip(scan.files.iter()) {
         let wanted: Vec<_> = mixed.iter().filter(|c| identity_of(e, c.id)).collect();
@@ -501,10 +505,8 @@ async fn refuse_missing_mixed_identity(scan: &IcebergScan) -> Result<(), Krishiv
             )
             .await?;
         let schema = meta.schema();
-        let has_ids = schema
-            .fields()
-            .iter()
-            .any(|f| f.metadata().contains_key(krishiv_io::FIELD_ID_KEY));
+        // Any id at any depth counts, as `SchemaMapper` decides (FC S4).
+        let has_ids = krishiv_io::has_field_ids(schema.fields());
         for c in wanted {
             let present = if has_ids {
                 let id = c.id.to_string();
