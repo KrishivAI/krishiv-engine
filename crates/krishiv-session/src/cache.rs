@@ -71,6 +71,7 @@ use krishiv_types::batch::Batch;
 
 use crate::StorageLevel;
 use crate::dataframe::DataFrame;
+use crate::dataframe::checkpoint::stands_on_materializing_checkpoint;
 use crate::session::Session;
 
 mod tier;
@@ -107,6 +108,28 @@ struct TakenReg<'a> {
     cache: &'a RelationCache,
     item: Option<PendingReg>,
     counted: bool,
+}
+
+/// Queued registrations a drain skipped; put back at the front, in order, when it ends.
+struct DeferredRegs<'a> {
+    cache: &'a RelationCache,
+    items: Vec<PendingReg>,
+}
+
+impl Drop for DeferredRegs<'_> {
+    fn drop(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
+        let mut state = self
+            .cache
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for item in self.items.drain(..).rev() {
+            state.pending.push_front(item);
+        }
+    }
 }
 
 impl TakenReg<'_> {
@@ -1346,14 +1369,28 @@ impl Session {
     /// puts the item it holds back at the front of the queue.
     pub(crate) async fn register_pending_caches(&self) {
         let cache = &self.state.cache;
+        // Items standing on a lazy checkpoint that is taking its rows (this drain runs inside that
+        // query): registering them would wait for the rows. They go back to the queue when the
+        // drain ends; the action that takes the rows registers them afterwards.
+        let mut deferred = DeferredRegs {
+            cache,
+            items: Vec::new(),
+        };
         loop {
             // Created before the state is read: a registration that ends after the read wakes it.
             let notified = cache.registered.notified();
             let next = {
                 let mut state = cache.state.lock().unwrap_or_else(PoisonError::into_inner);
-                match state.pending.pop_front() {
+                let position = state
+                    .pending
+                    .iter()
+                    .position(|p| !stands_on_materializing_checkpoint(&p.keep));
+                match position.and_then(|i| state.pending.remove(i)) {
                     Some(item) => Some(item),
-                    None if state.in_flight == 0 => return,
+                    None if state.in_flight == 0 => {
+                        deferred.items = std::mem::take(&mut state.pending).into();
+                        return;
+                    }
                     None => None,
                 }
             };

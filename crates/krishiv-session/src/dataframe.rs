@@ -28,7 +28,7 @@ use crate::column::Column;
 use crate::run_site::DF_SOURCE;
 use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_files, typed_paths};
 
-mod checkpoint;
+pub(crate) mod checkpoint;
 mod fill_stream;
 mod geo_gate;
 mod traced;

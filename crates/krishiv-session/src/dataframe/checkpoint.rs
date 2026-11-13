@@ -29,6 +29,29 @@ pub(super) struct LazyCheckpoint {
     dir: Option<PathBuf>,
     marker: PlanId,
     taken: futures::lock::Mutex<Option<DataFrame>>,
+    /// Set while the rows are being taken: a registration standing on this checkpoint must wait
+    /// (see [`stands_on_materializing_checkpoint`]), as taking the rows holds `taken`.
+    materializing: std::sync::atomic::AtomicBool,
+}
+
+/// Whether one of `keep`'s lazy checkpoints is taking its rows now.
+pub(crate) fn stands_on_materializing_checkpoint(
+    keep: &[Arc<dyn std::any::Any + Send + Sync>],
+) -> bool {
+    keep.iter().any(|k| {
+        Arc::clone(k)
+            .downcast::<LazyCheckpoint>()
+            .is_ok_and(|c| c.materializing.load(std::sync::atomic::Ordering::SeqCst))
+    })
+}
+
+/// Clears `materializing` when the rows are taken, fail or the future is dropped.
+struct Materializing<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for Materializing<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// The file a reliable checkpoint wrote; it and its directory go when the snapshot drops.
@@ -46,6 +69,9 @@ impl LazyCheckpoint {
         if let Some(frame) = &*taken {
             return Ok(frame.clone());
         }
+        self.materializing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _flag = Materializing(&self.materializing);
         let frame = self.source.take_snapshot(self.dir.clone()).await?;
         *taken = Some(frame.clone());
         Ok(frame)
@@ -117,6 +143,7 @@ impl DataFrame {
             dir,
             marker,
             taken: futures::lock::Mutex::new(None),
+            materializing: std::sync::atomic::AtomicBool::new(false),
         }));
         Ok(out)
     }
@@ -210,8 +237,12 @@ async fn write_file(
     let batches = batches
         .iter()
         .map(|b| {
-            let b = RecordBatch::try_new(Arc::clone(schema), b.columns().to_vec())
-                .map_err(|e| crate::session::internal(e.to_string()))?;
+            let b = RecordBatch::try_new_with_options(
+                Arc::clone(schema),
+                b.columns().to_vec(),
+                &arrow_array::RecordBatchOptions::new().with_row_count(Some(b.num_rows())),
+            )
+            .map_err(|e| crate::session::internal(e.to_string()))?;
             crate::carrier::recarried(&b, &canonical).map(Batch::new)
         })
         .collect::<Result<Vec<_>, KrishivError>>()?;

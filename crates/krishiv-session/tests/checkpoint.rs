@@ -191,3 +191,45 @@ fn caching_a_lazy_checkpoint_does_not_hang() {
     let rows = within_a_minute(move || ids(&derived));
     assert_eq!(rows, vec![2, 3]);
 }
+
+#[test]
+fn a_frame_with_no_columns_checkpoints_with_its_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let cp_dir = dir.path().join("checkpoints");
+    let s = session(
+        dir.path(),
+        &[("spark.checkpoint.dir", cp_dir.to_str().unwrap())],
+    );
+    for reliable in [false, true] {
+        let df = block_on(s.sql("SELECT * EXCEPT (id) FROM src")).unwrap();
+        let cp = if reliable {
+            block_on(df.checkpoint(true))
+        } else {
+            block_on(df.local_checkpoint(true, None))
+        }
+        .unwrap();
+        assert_eq!(block_on(cp.count()).unwrap(), 3);
+    }
+}
+
+/// A cached lazy checkpoint answers `schema()` first, and two cached frames sharing one lazy
+/// checkpoint both read: taking the rows must not wait on a registration that waits on them.
+#[test]
+fn registrations_sharing_a_lazy_checkpoint_do_not_deadlock() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), &[]);
+    let cp = block_on(s.table("src").local_checkpoint(false, None)).unwrap();
+    let cached = cp.cache();
+    let schema_fields = within_a_minute(move || {
+        let n = block_on(cached.schema()).unwrap().fields().len();
+        (n, block_on(cached.count()).unwrap())
+    });
+    assert_eq!(schema_fields, (1, 3));
+
+    let cp = block_on(s.table("src").local_checkpoint(false, None)).unwrap();
+    let a = cp.limit(10).cache();
+    let b = cp.limit(20).cache();
+    let counts =
+        within_a_minute(move || (block_on(a.count()).unwrap(), block_on(b.count()).unwrap()));
+    assert_eq!(counts, (3, 3));
+}
