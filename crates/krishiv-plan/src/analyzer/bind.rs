@@ -1065,6 +1065,12 @@ async fn bind_files(
     // before anything is listed or inferred.
     let scopes = super::access::secret_scopes(options.values().chain(&qualified));
     authorize_usage(ctx, b, checked, &scopes, origin).await?;
+    // An endpoint option points the store, and the credentials it holds, at another host:
+    // `Manage` on the cluster (admin in server mode, P3-T067b), before anything is listed.
+    if options.keys().any(|k| krishiv_io::is_endpoint_key(k)) {
+        let cluster = Securable::System("cluster".to_owned());
+        authorize_as(ctx, b, checked, cluster, Privilege::Manage, origin).await?;
+    }
     let columns = files
         .infer(format, &qualified, options)
         .await

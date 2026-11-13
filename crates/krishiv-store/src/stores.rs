@@ -980,6 +980,24 @@ pub fn is_store_option(key: &str) -> bool {
     key.len() > 3 && key.as_bytes()[..3].eq_ignore_ascii_case(b"fs.")
 }
 
+/// The keys that point a store at another host: S3, GCS, Azure and Hugging Face endpoints. In
+/// server mode only a principal with `Manage` on the cluster may set one, per read or in its
+/// session (P3-T067b), since the store would send the server's credentials there.
+pub const ENDPOINT_KEYS: [&str; 5] = [
+    S3_ENDPOINT,
+    GCS_STORAGE_ROOT_URL,
+    GCS_ENDPOINT,
+    AZURE_ENDPOINT,
+    HF_ENDPOINT,
+];
+
+/// Whether `key` is one of [`ENDPOINT_KEYS`], matched ASCII case-insensitively as the stores
+/// look keys up.
+#[must_use]
+pub fn is_endpoint_key(key: &str) -> bool {
+    ENDPOINT_KEYS.iter().any(|k| k.eq_ignore_ascii_case(key))
+}
+
 /// Finds `key` in the per-read `options`, ASCII case-insensitively.
 #[cfg(feature = "cloud")]
 fn find_option<'a>(

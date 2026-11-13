@@ -43,6 +43,12 @@ impl Session {
         )
         .await;
         crate::access::audit(self, StatementClass::Write, r)?;
+        self.authorize_endpoints(
+            StatementClass::Write,
+            &self.state.conf.snapshot(),
+            options.keys().map(String::as_str),
+        )
+        .await?;
         let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
         for privilege in [Privilege::Modify, Privilege::Create] {
             let r = authorize(
@@ -55,6 +61,29 @@ impl Session {
             crate::access::audit(self, StatementClass::Write, r)?;
         }
         Ok(())
+    }
+
+    /// `Manage` on the cluster when `options` or the session's configuration `config` point a
+    /// store at another host than the session was built with (an endpoint key, P3-T067b): the
+    /// store would take the server's credentials there. Admin only in server mode; embedded
+    /// use (`AllowAll`) is unchanged.
+    pub(crate) async fn authorize_endpoints<'a>(
+        &self,
+        class: StatementClass,
+        config: &krishiv_common::config::Config,
+        mut options: impl Iterator<Item = &'a str>,
+    ) -> Result<(), KrishivError> {
+        if !options.any(krishiv_io::is_endpoint_key) && !self.state.conf.endpoint_changed(config) {
+            return Ok(());
+        }
+        let r = authorize(
+            &*self.state.policy,
+            &self.state.principal,
+            &Securable::System("cluster".to_owned()),
+            Privilege::Manage,
+        )
+        .await;
+        crate::access::audit(self, class, r)
     }
 
     /// The file format named `format`, which must be one the engine writes:

@@ -156,6 +156,16 @@ impl Session {
                     }
                     .into());
                 }
+                // A store endpoint is `Manage` on the cluster (P3-T067b), asked before the
+                // value is stored, so a refused `SET` leaves the configuration as it was.
+                if krishiv_io::is_endpoint_key(key) {
+                    self.authorize_endpoints(
+                        krishiv_sql::StatementClass::Session,
+                        &self.state.conf.snapshot(),
+                        std::iter::once(key.as_str()),
+                    )
+                    .await?;
+                }
                 // The assignment sets through the session configuration,
                 // so validation and error classes are its own; the row
                 // shows the value as written, as in Spark.

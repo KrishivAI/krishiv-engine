@@ -117,6 +117,23 @@ impl ConfStore {
         self.versioned_snapshot().0
     }
 
+    /// Whether `config` gives a store endpoint key (`krishiv_io::is_endpoint_key`) another value
+    /// than the configuration the session was built with: the session itself pointed a store at
+    /// another host (P3-T067b).
+    pub(crate) fn endpoint_changed(&self, config: &Config) -> bool {
+        let endpoints = |c: &Config| {
+            let mut v: Vec<(String, String)> = c
+                .explicit_unregistered()
+                .into_iter()
+                .filter(|(k, _)| krishiv_io::is_endpoint_key(k))
+                .map(|(k, v)| (k.to_ascii_lowercase(), v.to_owned()))
+                .collect();
+            v.sort();
+            v
+        };
+        endpoints(config) != endpoints(&self.initial)
+    }
+
     /// The configuration and its version, read together.
     pub(crate) fn versioned_snapshot(&self) -> (Arc<Config>, u64) {
         let current = self.current.read().unwrap_or_else(PoisonError::into_inner);
