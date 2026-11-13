@@ -7,3 +7,5 @@ tests/fixtures/spark-4.2.0/*
 tests/fixtures/spark-4.3.0/*
 tests/fixtures/spark-4.2.1/*
 tests/fixtures/spark-4.1.4/*
+tests/fixtures/spark-4.0.5/*
+tests/fixtures/spark-3.5.9/*
