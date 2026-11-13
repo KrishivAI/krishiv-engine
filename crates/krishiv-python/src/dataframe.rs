@@ -272,6 +272,41 @@ impl PyDataFrame {
         Ok(self.derive(inner))
     }
 
+    /// A reliable checkpoint (PySpark's `checkpoint`): the rows are fixed now (`eager`) or at the
+    /// result's first action, and the result does not see later changes to the sources.
+    #[pyo3(signature = (eager=true))]
+    fn checkpoint(&self, py: Python<'_>, eager: bool) -> PyResult<Self> {
+        let df = self.inner.clone();
+        let inner = block_on(py, async move { df.checkpoint(eager).await })?;
+        Ok(self.derive(inner))
+    }
+
+    /// A local checkpoint (PySpark's `localCheckpoint`): as `checkpoint`, held by the session, no
+    /// directory needed. The storage level is `(use_disk, use_memory, use_offheap, deserialized,
+    /// replication)`, accepted as PySpark takes it.
+    #[pyo3(signature = (eager=true, level=None))]
+    fn local_checkpoint(
+        &self,
+        py: Python<'_>,
+        eager: bool,
+        level: Option<(bool, bool, bool, bool, i32)>,
+    ) -> PyResult<Self> {
+        let level = level.map(
+            |(use_disk, use_memory, use_off_heap, deserialized, replication)| {
+                krishiv_session::StorageLevel {
+                    use_disk,
+                    use_memory,
+                    use_off_heap,
+                    deserialized,
+                    replication,
+                }
+            },
+        );
+        let df = self.inner.clone();
+        let inner = block_on(py, async move { df.local_checkpoint(eager, level).await })?;
+        Ok(self.derive(inner))
+    }
+
     /// Whether this frame's plan is cached now.
     fn is_cached(&self, py: Python<'_>) -> PyResult<bool> {
         let df = self.inner.clone();

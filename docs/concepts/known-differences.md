@@ -171,3 +171,15 @@ Spark. To be revisited with multi-tenant resource groups (P3-T003).
 Storage levels: `_2`/`_3` replication and `OFF_HEAP` are accepted and reported as asked, but one copy is kept, in
 the engine's memory or one local spill file. Spilled and `DISK_ONLY` entries are scratch data in the spill
 directory (`krishiv.spill.*`), deleted with the entry or at the next start after a crash.
+
+## Checkpoint files and where a checkpoint lives
+
+`DataFrame.checkpoint()` writes the rows under `spark.checkpoint.dir` as a Krishiv spill-format file
+and, unlike Spark, deletes the file when the result and every frame derived from it are gone (Spark
+keeps reliable checkpoint files by default, and nothing in Krishiv reads them back from another
+process). The rows are also held by the session, in its relation store (memory-accounted), so a
+reliable checkpoint holds a memory copy; `localCheckpoint(storageLevel=...)` accepts a level but holds
+the rows in the session's memory whatever it is. With `eager = false` the rows are taken when the
+result is first analyzed (its first action, or the first call that needs its schema), not at its
+first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
+do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.

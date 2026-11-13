@@ -29,6 +29,7 @@ use crate::column::Column;
 use crate::run_site::DF_SOURCE;
 use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_files, typed_paths};
 
+mod checkpoint;
 mod fill_stream;
 mod geo_gate;
 mod traced;
@@ -1044,7 +1045,8 @@ impl DataFrame {
         if let Some(e) = &self.invalid {
             return Err(e.clone());
         }
-        let analyzed = self.session.analyze_in(&self.plan, &env, text).await?;
+        let plan = self.plan_with_checkpoints().await?;
+        let analyzed = self.session.analyze_in(&plan, &env, text).await?;
         let mut env = env;
         if let Some(t) = text {
             env.set_text(t);

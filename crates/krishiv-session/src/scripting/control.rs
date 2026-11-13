@@ -90,7 +90,7 @@ impl Session {
     ///
     /// # Errors
     /// `UNABLE_TO_ACQUIRE_MEMORY` when the relation store cannot hold the rows.
-    pub(super) async fn script_result(
+    pub(crate) async fn script_result(
         &self,
         schema: SchemaRef,
         batches: Vec<RecordBatch>,

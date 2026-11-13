@@ -146,3 +146,19 @@ def test_storage_level_repr_str_and_equality() -> None:
     assert level == StorageLevel(True, True, False, True, 2)
     assert level != StorageLevel.MEMORY_AND_DISK
     assert level != "Disk"
+
+
+def test_local_checkpoint_fixes_the_rows(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], ["age", "name"])
+    cp = df.localCheckpoint()
+    assert rows(cp) == [(2, "Alice"), (5, "Bob")]
+    assert not cp.is_cached
+    assert rows(df.localCheckpoint(eager=False, storageLevel=StorageLevel.DISK_ONLY)) == rows(df)
+
+
+def test_checkpoint_needs_a_directory(spark: SparkSession, tmp_path) -> None:
+    df = spark.createDataFrame([(2, "Alice")], ["age", "name"])
+    with pytest.raises(Exception, match="Checkpoint directory has not been set"):
+        df.checkpoint()
+    spark.conf.set("spark.checkpoint.dir", str(tmp_path / "cp"))
+    assert rows(df.checkpoint()) == [(2, "Alice")]

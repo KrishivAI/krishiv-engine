@@ -71,7 +71,9 @@ use crate::session::Session;
 
 mod tier;
 
+mod checkpoint_stats;
 mod level;
+pub(crate) use checkpoint_stats::CheckpointStats;
 pub(crate) use tier::CacheDisk;
 use tier::{CacheSpill, HeldTable, PoolHold, Tier};
 
@@ -349,6 +351,8 @@ pub(crate) struct RelationCache {
     clock: AtomicU64,
     spills: AtomicU64,
     evictions: AtomicU64,
+    /// The session's checkpoints (reported in `system.caches`; not entries of this cache).
+    pub(crate) checkpoints: Arc<CheckpointStats>,
     /// The consumer's spill hook (the pool holds it weakly).
     spill: Arc<CacheSpill>,
     /// Where disk entries go; `None` keeps every entry in memory (unit tests).
@@ -395,6 +399,7 @@ impl RelationCache {
             clock: AtomicU64::new(0),
             spills: AtomicU64::new(0),
             evictions: AtomicU64::new(0),
+            checkpoints: Arc::default(),
             spill: Arc::clone(&spill),
             disk,
             state: Mutex::new(CacheState::default()),

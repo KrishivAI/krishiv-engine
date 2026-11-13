@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The rows of `system.caches`: the file-metadata cache and the session's
-//! relation cache (per tier: memory and disk bytes, registrations waiting
+//! relation cache and the session's checkpoints (per tier: memory and disk bytes, registrations waiting
 //! for data, spills and evictions under memory pressure; design P3-T083 §3.6).
 
 use arrow_array::ArrayRef;
@@ -30,6 +30,7 @@ pub(super) fn columns(sources: &Sources) -> Vec<ArrayRef> {
     let meta = sources.io.cache().stats();
     let io = sources.io.totals();
     let relation = sources.relations.stats();
+    let checkpoints = sources.relations.checkpoints.counts();
     let rows = [
         CacheRow {
             cache: "file_metadata",
@@ -60,6 +61,23 @@ pub(super) fn columns(sources: &Sources) -> Vec<ArrayRef> {
             disk_bytes: n(relation.disk_bytes),
             entries_pending: n(relation.entries_pending),
             spills: n(relation.spills),
+        },
+        CacheRow {
+            cache: "checkpoint",
+            entries: n(checkpoints.live),
+            bytes: n(checkpoints
+                .memory_bytes
+                .saturating_add(checkpoints.disk_bytes)),
+            capacity: None,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            invalidations: 0,
+            loads_in_flight: 0,
+            memory_bytes: n(checkpoints.memory_bytes),
+            disk_bytes: n(checkpoints.disk_bytes),
+            entries_pending: 0,
+            spills: 0,
         },
     ];
     let l = |f: fn(&CacheRow) -> i64| long(rows.iter().map(move |r| Some(f(r))));
