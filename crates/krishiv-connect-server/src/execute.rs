@@ -51,7 +51,7 @@ use krishiv_connect::wire;
 use krishiv_memory::{ConsumerHandle, Reservation};
 use krishiv_session::{DataFrame, QueryOptions, RecordBatchStream};
 use prost::Message;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError, mpsc};
 use tonic::Status;
 
 use self::arrow::EncodeSettings;
@@ -113,6 +113,43 @@ impl Drop for Registered {
     }
 }
 
+/// The digest of the request's plan, encoded from the decoded request
+/// itself (no copy); a deep plan is encoded on a big stack, as it was
+/// decoded.
+fn request_digest(
+    request: &wire::Decoded<pb::ExecutePlanRequest>,
+) -> Result<[u8; 32], KrishivError> {
+    let digest = || {
+        request.plan.as_ref().map_or_else(
+            || plan_digest(&[]),
+            |plan| plan_digest(&plan.encode_to_vec()),
+        )
+    };
+    if !request.is_deep() {
+        return Ok(digest());
+    }
+    krishiv_common::stack::on_big_stack(digest).ok_or_else(|| {
+        krishiv_common::error::InternalError {
+            message: "cannot start a thread for a deeply nested plan".to_owned(),
+        }
+        .into()
+    })
+}
+
+/// `prepare`, unless the operation is cancelled first: then
+/// `OPERATION_CANCELED` and `prepare` is dropped (a release or a closed
+/// session also stops a plan that is still being analysed).
+async fn until_cancelled<T>(
+    op: &Operation,
+    prepare: impl std::future::Future<Output = Result<T, KrishivError>>,
+) -> Result<T, KrishivError> {
+    tokio::select! {
+        biased;
+        () = op.cancelled() => Err(OperationCanceled {}.into()),
+        r = prepare => r,
+    }
+}
+
 /// Starts `request` on the session `entry`.
 ///
 /// # Errors
@@ -124,7 +161,7 @@ impl Drop for Registered {
 /// errors.
 pub async fn execute_plan(
     entry: &Arc<SessionEntry>,
-    request: &pb::ExecutePlanRequest,
+    request: &wire::Decoded<pb::ExecutePlanRequest>,
     limits: &ExecuteLimits,
 ) -> Result<ResponseStream, KrishivError> {
     let id = match &request.operation_id {
@@ -133,10 +170,9 @@ pub async fn execute_plan(
     };
     let tags = validate_tags(&request.tags)?;
     let opts = options(request);
-    let plan = request.plan.clone().unwrap_or_default();
     let op = Arc::new(Operation::new(
         id.clone(),
-        plan_digest(&plan.encode_to_vec()),
+        request_digest(request)?,
         tags,
         opts.reattachable,
     ));
@@ -149,9 +185,16 @@ pub async fn execute_plan(
     };
     let session = entry.session();
     let conf = session.conf();
-    let logical = request_plan(session, &plan, limits).await?;
-    let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
-    let schema = df.schema().await?;
+    let empty = pb::Plan::default();
+    let plan = request.plan.as_ref().unwrap_or(&empty);
+    let (df, schema) = until_cancelled(&op, async {
+        // Decompression (up to `maxPlanSize`) runs off the async workers.
+        let logical = request_plan(session, plan, limits).await?;
+        let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
+        let schema = df.schema().await?;
+        Ok((df, schema))
+    })
+    .await?;
     let schema_response = schema::proto_schema(&schema)?;
     let settings = encode_settings(&conf, limits, opts.chunking);
 
@@ -256,11 +299,19 @@ fn translate_plan(
                         _ => Err(command_not_supported(&pb::Command::default())),
                     }
                 }
-                _ => Err(ConnectInvalidPlanInvalidOneOfFieldNotSet {
-                    full_name: "spark.connect.Plan.CompressedOperation".to_owned(),
-                    name: "OP_TYPE_UNSPECIFIED".to_owned(),
+                _ => {
+                    // Spark's `PlanCompressionUtils` re-throws what parsing
+                    // the operation raised as `CANNOT_PARSE` (v4.3.0).
+                    let unset: KrishivError = ConnectInvalidPlanInvalidOneOfFieldNotSet {
+                        full_name: "spark.connect.Plan.CompressedOperation".to_owned(),
+                        name: "OP_TYPE_UNSPECIFIED".to_owned(),
+                    }
+                    .into();
+                    Err(krishiv_common::error::ConnectInvalidPlanCannotParse {
+                        error_msg: unset.to_string(),
+                    }
+                    .into())
                 }
-                .into()),
             }
         }
         None => Err(ConnectInvalidPlanInvalidOneOfFieldNotSet {
@@ -412,23 +463,36 @@ impl Sender {
         response.response_id = response_id;
         let size = response.encoded_len();
         let wanted = u32::try_from(size.clamp(1, self.cap)).unwrap_or(u32::MAX);
-        let permit = Arc::clone(&self.permits)
-            .acquire_many_owned(wanted)
-            .await
-            .map_err(|_| Stop::Gone)?;
+        let permit = match Arc::clone(&self.permits).try_acquire_many_owned(wanted) {
+            Ok(permit) => permit,
+            Err(TryAcquireError::Closed) => return Err(Stop::Gone),
+            Err(TryAcquireError::NoPermits) => {
+                let _waiting = self.op.waiting_for_client();
+                Arc::clone(&self.permits)
+                    .acquire_many_owned(wanted)
+                    .await
+                    .map_err(|_| Stop::Gone)?
+            }
+        };
         let mut reservation = self.consumer.reservation();
         reservation
             .grow_without_abort(size)
             .await
             .map_err(|e| Stop::Failed(e.into()))?;
-        self.tx
-            .send(Item {
-                response: Ok(response),
-                _permit: Some(permit),
-                _reservation: Some(reservation),
-            })
-            .await
-            .map_err(|_| Stop::Gone)
+        let slot = match self.tx.try_reserve() {
+            Ok(slot) => slot,
+            Err(mpsc::error::TrySendError::Closed(())) => return Err(Stop::Gone),
+            Err(mpsc::error::TrySendError::Full(())) => {
+                let _waiting = self.op.waiting_for_client();
+                self.tx.reserve().await.map_err(|_| Stop::Gone)?
+            }
+        };
+        slot.send(Item {
+            response: Ok(response),
+            _permit: Some(permit),
+            _reservation: Some(reservation),
+        });
+        Ok(())
     }
 
     /// Ends the stream with `error`, waiting at most [`FAIL_WAIT`] for room

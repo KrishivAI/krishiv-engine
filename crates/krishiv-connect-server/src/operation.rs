@@ -14,7 +14,7 @@
 //! under it.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use krishiv_common::config::{
@@ -172,6 +172,8 @@ pub struct Operation {
     /// [`RUNNING`], then [`FINISHED`] or [`CANCELLED`], each set once by a
     /// compare-and-swap (Spark's `ExecuteThreadRunner` state).
     state: AtomicU8,
+    /// Whether the encoder waits for the client ([`Self::is_waiting_for_client`]).
+    waiting: AtomicBool,
     cancel: Notify,
     /// The memory consumer its buffered responses are reserved from.
     responses: OnceLock<Arc<ConsumerHandle>>,
@@ -193,6 +195,7 @@ impl Operation {
             reattachable,
             sent: Mutex::new(HashSet::new()),
             state: AtomicU8::new(RUNNING),
+            waiting: AtomicBool::new(false),
             cancel: Notify::new(),
             responses: OnceLock::new(),
         }
@@ -260,6 +263,20 @@ impl Operation {
             .len()
     }
 
+    /// Whether the operation's encoder is waiting for its client to read:
+    /// its responses fill the ahead budget or the channel (backpressure).
+    #[must_use]
+    pub fn is_waiting_for_client(&self) -> bool {
+        self.waiting.load(Ordering::Acquire)
+    }
+
+    /// Marks the encoder as waiting for its client until the guard drops
+    /// (also when the wait is cancelled).
+    pub(crate) fn waiting_for_client(&self) -> WaitingForClient<'_> {
+        self.waiting.store(true, Ordering::Release);
+        WaitingForClient(self)
+    }
+
     /// Asks the operation to stop: its stream ends with
     /// `OPERATION_CANCELED`. Idempotent. Whether this call interrupted it
     /// (Spark's `ExecuteThreadRunner.interrupt`, one compare-and-swap of the
@@ -303,6 +320,16 @@ impl Operation {
             return;
         }
         self.cancel.notified().await;
+    }
+}
+
+/// The encoder of an operation waits for its client while this lives
+/// ([`Operation::waiting_for_client`]).
+pub(crate) struct WaitingForClient<'a>(&'a Operation);
+
+impl Drop for WaitingForClient<'_> {
+    fn drop(&mut self) {
+        self.0.waiting.store(false, Ordering::Release);
     }
 }
 

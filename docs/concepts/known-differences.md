@@ -188,6 +188,11 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
 - **Reattaching to an operation that is still sending** answers `INVALID_CURSOR.DISCONNECTED` to the new stream, and
   ExecutePlan re-sent with a live operation id answers the same; Spark ends the old stream and replays from the start.
   The stock client reattaches only after a dropped connection, when Krishiv has already cancelled the operation.
+- **Column metadata travels in the `schema` response only**: Spark 4.3 also writes each field's user metadata into
+  the Arrow schema of every result batch (`SPARK::metadata::json`); Krishiv's batches carry none.
+- **A connection that breaks while results are streaming fails the query**: Krishiv cancels the operation and the
+  client's reattach answers `INVALID_HANDLE.OPERATION_NOT_FOUND`, where Spark keeps the sent responses and resumes the
+  stream. Krishiv's replay buffer and resume come in a later release.
 - **ReleaseExecute without a release type** fails with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark throws
   an `UnsupportedOperationException` without an error class.
 - **AnalyzePlan.** An `UNSPECIFIED` explain mode fails with `CONNECT_INVALID_PLAN.INVALID_ENUM`, and `json_to_ddl` of a

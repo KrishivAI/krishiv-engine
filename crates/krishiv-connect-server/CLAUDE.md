@@ -27,8 +27,8 @@ Paths are relative to this crate.
 - `src/interrupt.rs` `Interrupt` (design §3.7): `ALL` and `OPERATION_ID` through the session's operations and
   `Session::cancel`/`interrupt_all`; `TAG` is `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until T064
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, sent response ids,
-  one atomic state: running, then finished or cancelled by compare-and-swap) and `Operations`, the per-session map
-  in `SessionEntry` (`krishiv.connect.maxOperationsPerSession`,
+  one atomic state: running, then finished or cancelled by compare-and-swap, whether its encoder waits for the
+  client) and `Operations`, the per-session map in `SessionEntry` (`krishiv.connect.maxOperationsPerSession`,
   `KRISHIV_OPERATION_LIMIT`); `ExecuteLimits` (`aheadBytes`, plan and batch sizes); tag checks
   (`KRISHIV_INVALID_OPERATION_TAG`)
 - `src/execute.rs` `ExecutePlan` for ROOT relations: compressed plans (bounded ZSTD), translation, the encoder task

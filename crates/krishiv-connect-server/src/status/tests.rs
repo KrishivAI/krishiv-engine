@@ -118,7 +118,7 @@ fn exception_classes_pick_the_python_exception_spark_would_raise() {
     );
     assert_eq!(
         first(ErrorClass::OperationCanceled),
-        "org.apache.spark.SparkException"
+        "org.apache.spark.SparkSQLException"
     );
     assert_eq!(
         exception_classes(ErrorClass::CastInvalidInput)[1],

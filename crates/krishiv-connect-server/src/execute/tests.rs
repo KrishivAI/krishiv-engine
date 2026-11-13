@@ -2,6 +2,7 @@
 use std::sync::Arc;
 
 use arrow_array::builder::{ListBuilder, MapBuilder, StringViewBuilder};
+use arrow_array::cast::AsArray;
 use arrow_array::{
     Array, ArrayRef, BinaryViewArray, Int32Array, Int64Array, RecordBatch, StringViewArray,
     StructArray, TimestampMicrosecondArray,
@@ -121,6 +122,49 @@ fn types_map_as_sparks_converter_maps_them() {
     assert!(s.fields[1].nullable);
 }
 
+/// The buffer compression of each record batch of an IPC stream.
+fn ipc_codecs(data: &[u8]) -> Vec<Option<CompressionType>> {
+    let mut out = Vec::new();
+    let mut pos = 0;
+    while pos + 8 <= data.len() {
+        if data[pos..pos + 4] == [0xff; 4] {
+            pos += 4;
+        }
+        let len =
+            usize::try_from(i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap())).unwrap();
+        pos += 4;
+        if len == 0 {
+            break;
+        }
+        let message = arrow_ipc::root_as_message(&data[pos..pos + len]).unwrap();
+        pos += len + usize::try_from(message.bodyLength()).unwrap();
+        if let Some(batch) = message.header_as_record_batch() {
+            out.push(batch.compression().map(|c| c.codec()));
+        }
+    }
+    out
+}
+
+#[test]
+fn a_result_schema_keeps_the_user_metadata_of_its_fields() {
+    // The engine's Arrow form of a struct: user metadata rides in an
+    // internal key, which the `schema` response must not show as such.
+    let mut map = serde_json::Map::new();
+    map.insert("comment".to_owned(), "c".into());
+    let row = DataType::Struct(StructType::new(vec![
+        StructField::new("a", DataType::Integer, false).with_metadata(Metadata::from_map(map)),
+        StructField::new("b", DataType::Long, true),
+    ]));
+    let ArrowType::Struct(fields) = row.to_arrow_field("r", false).data_type().clone() else {
+        panic!()
+    };
+    let Some(Kind::Struct(s)) = proto_schema(&Schema::new(fields)).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(s.fields[0].metadata.as_deref(), Some(r#"{"comment":"c"}"#));
+    assert_eq!(s.fields[1].metadata, None, "empty metadata is not sent");
+}
+
 #[test]
 fn a_result_schema_reads_the_spark_type_of_each_field() {
     let schema = Schema::new(vec![
@@ -229,15 +273,19 @@ fn variant_and_spatial_columns_take_sparks_shape() {
     let batch = RecordBatch::try_new(Arc::new(Schema::new(vec![variant])), vec![array]).unwrap();
     let out = spark_batch(&batch, None).unwrap();
     let field = out.schema().field(0).clone();
-    assert_eq!(
-        field.metadata().get("variant").map(String::as_str),
-        Some("true")
-    );
+    // Spark's `ArrowUtils.toArrowField` tags the `metadata` child, which is
+    // what PySpark's `is_variant` and `ArrowUtils.isVariantField` read.
+    assert_eq!(field.metadata().get("variant"), None);
     let ArrowType::Struct(f) = field.data_type() else {
         panic!()
     };
     assert_eq!(f[0].name(), VARIANT_VALUE_FIELD);
+    assert_eq!(f[0].metadata().get("variant"), None);
     assert_eq!(f[1].name(), VARIANT_METADATA_FIELD);
+    assert_eq!(
+        f[1].metadata().get("variant").map(String::as_str),
+        Some("true")
+    );
 
     let geometry = DataType::geometry(Srid::Fixed(4326)).unwrap();
     let field = geometry.to_arrow_field("g", true);
@@ -280,6 +328,38 @@ fn slices_cut_at_rows_and_bytes() {
 }
 
 #[test]
+fn slices_cut_at_the_running_size_of_their_rows() {
+    // Three 60 KiB strings, then 997 empty ones, under a 100 KiB limit: an
+    // average over the batch (about 184 bytes a row) would put all three
+    // big rows into one slice. Spark adds each row's size as it goes, so a
+    // slice ends at the row that reaches the limit.
+    let big = "x".repeat(60 * 1024);
+    let values: Vec<&str> = (0..1000)
+        .map(|i| if i < 3 { big.as_str() } else { "" })
+        .collect();
+    let strings: ArrayRef = Arc::new(arrow_array::StringArray::from(values));
+    let batch = column_batch("s", strings);
+    let rows: Vec<usize> = slices(&batch, &settings(None, 100 * 1024))
+        .iter()
+        .map(RecordBatch::num_rows)
+        .collect();
+    assert_eq!(rows[0], 2, "{rows:?}");
+    assert_eq!(rows.iter().sum::<usize>(), 1000);
+    assert!(rows[1] >= 1, "{rows:?}");
+    // No slice holds more than two of the big rows' bytes.
+    for s in slices(&batch, &settings(None, 100 * 1024)) {
+        let bytes: usize = s
+            .column(0)
+            .as_string::<i32>()
+            .iter()
+            .flatten()
+            .map(str::len)
+            .sum();
+        assert!(bytes <= 2 * 60 * 1024, "{bytes}");
+    }
+}
+
+#[test]
 fn ipc_streams_chunks_and_codecs() {
     let ids: ArrayRef = Arc::new(Int64Array::from_iter_values(0..100));
     let batch = column_batch("id", ids);
@@ -289,6 +369,7 @@ fn ipc_streams_chunks_and_codecs() {
         Some(CompressionType::LZ4_FRAME),
     ] {
         let bytes = ipc_stream(&batch, codec).unwrap();
+        assert_eq!(ipc_codecs(&bytes), vec![codec], "{codec:?}");
         let read: Vec<RecordBatch> =
             arrow_ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None)
                 .unwrap()
@@ -353,4 +434,107 @@ fn an_interrupt_before_the_end_wins_over_the_error() {
     assert!(op.cancel());
     let sent = super::settle(&op, Err(super::Stop::Failed(failure())));
     assert_eq!(sent.unwrap().error_class().name(), "OPERATION_CANCELED");
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn preparing_an_operation_stops_when_it_is_cancelled() {
+    use krishiv_common::error::ErrorClass;
+    let op = crate::operation::Operation::new(
+        crate::operation::new_operation_id().unwrap(),
+        [0; 32],
+        Arc::from(Vec::new()),
+        true,
+    );
+    // Analysis that never ends (slow storage): a release must still end it.
+    op.cancel();
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        super::until_cancelled(&op, std::future::pending::<Result<(), _>>()),
+    )
+    .await
+    .expect("the cancellation is seen");
+    assert_eq!(
+        out.unwrap_err().error_class(),
+        ErrorClass::OperationCanceled
+    );
+    // Not cancelled: the preparation's own outcome.
+    let live = crate::operation::Operation::new(
+        crate::operation::new_operation_id().unwrap(),
+        [0; 32],
+        Arc::from(Vec::new()),
+        true,
+    );
+    assert_eq!(
+        super::until_cancelled(&live, async { Ok(7) })
+            .await
+            .unwrap(),
+        7
+    );
+}
+
+#[test]
+fn the_digest_of_a_deep_plan_fits_a_small_stack() {
+    use krishiv_connect::proto::v4_3 as pb;
+    use krishiv_connect::proto::v4_3::relation::RelType;
+    use prost::Message;
+    // 500 limits over a range: 1,002 messages deep, within the wire cap. The
+    // request is built, encoded and decoded on a big stack; only the digest
+    // runs on a 256 KiB stack, far less than an async worker's 2 MiB.
+    let big = std::thread::Builder::new().stack_size(64 << 20);
+    let decoded = big
+        .spawn(|| {
+            let mut r = pb::Relation {
+                common: None,
+                rel_type: Some(RelType::Range(pb::Range {
+                    start: Some(0),
+                    end: 3,
+                    step: 1,
+                    num_partitions: None,
+                })),
+            };
+            for _ in 0..500 {
+                r = pb::Relation {
+                    common: None,
+                    rel_type: Some(RelType::Limit(Box::new(pb::Limit {
+                        input: Some(Box::new(r)),
+                        limit: 1,
+                    }))),
+                };
+            }
+            let request = pb::ExecutePlanRequest {
+                plan: Some(pb::Plan {
+                    op_type: Some(pb::plan::OpType::Root(Box::new(r))),
+                }),
+                ..Default::default()
+            };
+            let bytes = request.encode_to_vec();
+            let expected =
+                crate::operation::plan_digest(&request.plan.as_ref().unwrap().encode_to_vec());
+            drop(request);
+            (
+                krishiv_connect::wire::decode_request::<pb::ExecutePlanRequest>(&bytes).unwrap(),
+                expected,
+            )
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    let (request, expected) = decoded;
+    let digest = std::thread::Builder::new()
+        .stack_size(256 << 10)
+        .spawn(move || {
+            let d = super::request_digest(&request);
+            // The decoded request drops on its own big stack.
+            drop(request);
+            d
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+        .unwrap();
+    assert_eq!(digest, expected);
 }
