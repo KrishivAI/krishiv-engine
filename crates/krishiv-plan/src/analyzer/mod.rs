@@ -148,7 +148,8 @@ pub use catalog_write::{CatalogWrite, CreateMode, NamespaceInfo, TableInfo};
 pub use char_varchar::DeclaredType;
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use table_change::{
-    CatalogCapabilities, ColumnPosition, NamespaceChange, TableChange, apply_column_changes, widens,
+    AlterInput, AlterRules, AlteredTable, CatalogCapabilities, ColumnPosition, NamespaceChange,
+    TableChange, TypeWidening, apply_changes,
 };
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, VariableValue, variable_name};
 

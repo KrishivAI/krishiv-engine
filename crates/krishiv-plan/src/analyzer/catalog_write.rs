@@ -7,10 +7,7 @@ use std::collections::BTreeMap;
 
 use krishiv_common::error::KrishivError;
 
-use super::{
-    BoxFuture, Catalog, CatalogCapabilities, NamespaceChange, TableChange, TableColumn, TableIdent,
-    TableMeta,
-};
+use super::{BoxFuture, Catalog, NamespaceChange, TableChange, TableColumn, TableIdent, TableMeta};
 use crate::TableVersion;
 
 /// What `CREATE TABLE` does when the table exists.
@@ -113,19 +110,24 @@ pub trait CatalogWrite: Catalog {
         mode: CreateMode,
     ) -> BoxFuture<'a, Result<bool, KrishivError>>;
 
-    /// Applies `changes` in order, all or none (the `alterTable` contract),
-    /// and returns the table after them. `expected` is the version the
-    /// analyzer pinned: a concurrent change fails the statement instead of
-    /// being overwritten.
+    /// Applies `changes` in order, all or none (the `alterTable` contract;
+    /// [`apply_changes`](super::apply_changes) is the one application), and
+    /// returns the table after them. `expected` is the version the analyzer
+    /// pinned: a concurrent change fails the statement instead of being
+    /// overwritten. A catalog whose tables have no format version gives each a
+    /// version of its own (an incarnation and a change counter) in
+    /// [`TableMeta::version`], so the guard holds for every catalog.
     ///
     /// # Errors
-    /// `TABLE_OR_VIEW_NOT_FOUND`; the first change's error (see
-    /// [`apply_column_changes`](super::apply_column_changes)); a version
-    /// that moved.
+    /// `TABLE_OPERATION`-class refusals and the first change's error (see
+    /// [`apply_changes`](super::apply_changes)); `TABLE_OR_VIEW_NOT_FOUND`
+    /// when the table is gone. The class a moved version raises is decided
+    /// with the in-memory adapter (the next commit on this branch) and named
+    /// here then.
     fn alter_table<'a>(
         &'a self,
         id: &'a TableIdent,
-        expected: Option<TableVersion>,
+        expected: TableVersion,
         changes: &'a [TableChange],
     ) -> BoxFuture<'a, Result<TableMeta, KrishivError>>;
 
@@ -141,7 +143,7 @@ pub trait CatalogWrite: Catalog {
     ) -> BoxFuture<'a, Result<bool, KrishivError>>;
 
     /// Renames a table within the catalog. Across namespaces only when
-    /// [`CatalogCapabilities::rename_across_namespaces`].
+    /// [`CatalogCapabilities::rename_across_namespaces`](super::CatalogCapabilities::rename_across_namespaces).
     ///
     /// # Errors
     /// `TABLE_OR_VIEW_NOT_FOUND`, `TABLE_OR_VIEW_ALREADY_EXISTS`,
@@ -151,21 +153,6 @@ pub trait CatalogWrite: Catalog {
         from: &'a TableIdent,
         to: &'a TableIdent,
     ) -> BoxFuture<'a, Result<(), KrishivError>>;
-}
-
-impl CatalogCapabilities {
-    /// A catalog that writes tables and namespaces, renames within a
-    /// namespace and alters columns (without widening or column ids): what
-    /// the in-memory catalog declares.
-    #[must_use]
-    pub fn read_write() -> Self {
-        Self {
-            namespaces: true,
-            alter_columns: true,
-            writes: true,
-            ..Self::default()
-        }
-    }
 }
 
 #[cfg(test)]
@@ -189,12 +176,5 @@ mod tests {
         assert_eq!(info.ident, id);
         assert!(info.properties.is_empty() && info.partition_columns.is_empty());
         assert!(info.comment.is_none() && info.location.is_none());
-    }
-
-    #[test]
-    fn a_read_write_catalog_declares_writes_and_alters() {
-        let caps = CatalogCapabilities::read_write();
-        assert!(caps.writes && caps.namespaces && caps.alter_columns);
-        assert!(!caps.staged_replace && !caps.type_widening && !caps.column_ids);
     }
 }

@@ -61,7 +61,7 @@ pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, TableProvider, TableProviderResolver,
 };
-pub use write::{TableCapabilities, WriteMode};
+pub use write::{TableCapabilities, WriteMode, WriteRequest};
 
 use crate::error::Result;
 pub use crate::physical::PhysicalPlan;
