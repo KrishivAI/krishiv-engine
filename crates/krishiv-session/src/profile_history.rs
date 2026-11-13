@@ -323,14 +323,18 @@ fn cut(mut text: String, max: usize) -> String {
     text
 }
 
-/// A name for one writer: the process and the moment it opened, so two engines on a directory differ.
+/// A name for one writer: the process, the moment it opened and a process-wide count, so no two writers on a
+/// directory share one, even two opened in the same clock tick.
 fn writer_id() -> String {
+    static COUNT: AtomicU64 = AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| {
-            d.subsec_nanos() ^ u32::try_from(d.as_secs() & 0xffff_ffff).unwrap_or(0)
-        });
-    format!("{:x}{nanos:08x}", std::process::id())
+        .map_or(0, |d| d.as_nanos());
+    format!(
+        "{:x}{nanos:x}{:x}",
+        std::process::id(),
+        COUNT.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn schema() -> SchemaRef {
