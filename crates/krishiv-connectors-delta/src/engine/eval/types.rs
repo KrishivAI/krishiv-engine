@@ -17,9 +17,9 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, ListArray, MapArray, StructArray};
+use arrow_array::{Array, ArrayRef, LargeListArray, ListArray, MapArray, StructArray};
 use arrow_cast::{CastOptions, cast_with_options};
-use arrow_schema::{DataType as ArrowType, TimeUnit};
+use arrow_schema::{DataType as ArrowType, Fields, TimeUnit};
 use delta_kernel::schema::DataType;
 use delta_kernel::{KernelError, KernelResult};
 
@@ -145,6 +145,130 @@ pub(crate) fn validate(array: ArrayRef, expected: Option<&DataType>) -> KernelRe
         check(expected, array.data_type())?;
     }
     Ok(array)
+}
+
+/// `array`, already [`check`]ed against `expected`, with every struct's children picked by
+/// name in `expected`'s field order (through lists and maps too), so that the positional
+/// [`conform`] cannot pair a child with another field's name. Arrow children that `expected`
+/// does not name are dropped. An array whose struct fields are already in order is returned
+/// as it is.
+///
+/// The kernel's `apply_schema` pairs children by position after its name-based check, so a
+/// struct column stored as `{b, a}` and read as `{a, b}` swaps its values there; Krishiv's
+/// readers reconcile files by name, so this only matters for batches built another way.
+///
+/// # Errors
+/// An Arrow error rebuilding a struct, list or map.
+pub(crate) fn select_by_name(array: ArrayRef, expected: &DataType) -> KernelResult<ArrayRef> {
+    match (expected, array.data_type()) {
+        (DataType::Struct(s) | DataType::Variant(s), ArrowType::Struct(fields)) => {
+            let in_order = fields.len() == s.num_fields()
+                && fields
+                    .iter()
+                    .zip(s.fields())
+                    .all(|(f, k)| f.name() == k.name());
+            let st = array.as_struct();
+            let mut out_fields = Vec::with_capacity(s.num_fields());
+            let mut columns = Vec::with_capacity(s.num_fields());
+            let mut changed = !in_order;
+            for k in s.fields() {
+                let Some((i, f)) = fields.find(k.name()) else {
+                    return Err(KernelError::generic(format!(
+                        "Missing Struct fields {} (Up to five missing fields shown)",
+                        k.name()
+                    )));
+                };
+                let child = Arc::clone(st.column(i));
+                let picked = select_by_name(Arc::clone(&child), k.data_type())?;
+                changed |= !Arc::ptr_eq(&picked, &child);
+                out_fields.push(Arc::new(
+                    f.as_ref()
+                        .clone()
+                        .with_data_type(picked.data_type().clone()),
+                ));
+                columns.push(picked);
+            }
+            if !changed {
+                return Ok(array);
+            }
+            // Never empty: a struct of no fields is always in order and unchanged.
+            Ok(Arc::new(
+                StructArray::try_new(out_fields.into(), columns, st.nulls().cloned())
+                    .map_err(arrow_err)?,
+            ))
+        }
+        (DataType::Array(a), ArrowType::List(f)) => {
+            let l = array.as_list::<i32>();
+            let values = select_by_name(Arc::clone(l.values()), a.element_type())?;
+            if Arc::ptr_eq(&values, l.values()) {
+                return Ok(array);
+            }
+            let field = Arc::new(
+                f.as_ref()
+                    .clone()
+                    .with_data_type(values.data_type().clone()),
+            );
+            Ok(Arc::new(
+                ListArray::try_new(field, l.offsets().clone(), values, l.nulls().cloned())
+                    .map_err(arrow_err)?,
+            ))
+        }
+        (DataType::Array(a), ArrowType::LargeList(f)) => {
+            let l = array.as_list::<i64>();
+            let values = select_by_name(Arc::clone(l.values()), a.element_type())?;
+            if Arc::ptr_eq(&values, l.values()) {
+                return Ok(array);
+            }
+            let field = Arc::new(
+                f.as_ref()
+                    .clone()
+                    .with_data_type(values.data_type().clone()),
+            );
+            Ok(Arc::new(
+                LargeListArray::try_new(field, l.offsets().clone(), values, l.nulls().cloned())
+                    .map_err(arrow_err)?,
+            ))
+        }
+        (DataType::Map(m), ArrowType::Map(entries_field, sorted)) => {
+            let map = array.as_map();
+            let keys = select_by_name(Arc::clone(map.keys()), m.key_type())?;
+            let values = select_by_name(Arc::clone(map.values()), m.value_type())?;
+            if Arc::ptr_eq(&keys, map.keys()) && Arc::ptr_eq(&values, map.values()) {
+                return Ok(array);
+            }
+            let ArrowType::Struct(kv) = entries_field.data_type() else {
+                return Err(KernelError::generic("Arrow map type wasn't a struct."));
+            };
+            let kv: Fields = kv
+                .iter()
+                .zip([keys.data_type(), values.data_type()])
+                .map(|(f, t)| Arc::new(f.as_ref().clone().with_data_type(t.clone())))
+                .collect();
+            let entries = StructArray::try_new(
+                kv.clone(),
+                vec![keys, values],
+                map.entries().nulls().cloned(),
+            )
+            .map_err(arrow_err)?;
+            let entries_field = Arc::new(
+                entries_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(ArrowType::Struct(kv)),
+            );
+            Ok(Arc::new(
+                MapArray::try_new(
+                    entries_field,
+                    map.offsets().clone(),
+                    entries,
+                    map.nulls().cloned(),
+                    *sorted,
+                )
+                .map_err(arrow_err)?,
+            ))
+        }
+        _ => Ok(array),
+    }
 }
 
 /// Casts `array` to `target`, crossing zone labels Arrow cannot parse without `chrono-tz` as

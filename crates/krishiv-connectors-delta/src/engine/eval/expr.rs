@@ -13,9 +13,12 @@
 //!   type.
 //! - `Struct` takes the output field names and nullability from the result type; its optional
 //!   nullability predicate makes a row null unless the predicate is true.
+//! - A column whose result type is a struct has its children picked by name in the declared
+//!   order (the kernel pairs them by position after a name-based check, which would swap the
+//!   values of a struct stored in another field order).
 //! - `StructPatch` walks the input struct's fields in order: kept fields, then each field's
 //!   insertions, then the appended ones; a non-optional patch naming no input field is an
-//!   error; the input struct's nulls are kept.
+//!   error, whatever the optional patches match; the input struct's nulls are kept.
 //! - `Opaque` and `Unknown` are unsupported: the kernel turns an unknown expression into NULL
 //!   for data skipping itself, and an engine must never read it as NULL in a filter.
 
@@ -38,7 +41,7 @@ use delta_kernel::schema::{DataType, StructType};
 use delta_kernel::{KernelError, KernelResult};
 
 use super::predicate::evaluate_predicate;
-use super::types::{cast_to, check, validate};
+use super::types::{cast_to, check, select_by_name, validate};
 use super::{Ctx, arrow_err, json, partition};
 use crate::engine::schema::{scalar_to_array, to_arrow_type};
 
@@ -122,7 +125,13 @@ pub(crate) fn evaluate_expression(
         (Expression::Literal(scalar), _) => {
             validate(scalar_to_array(scalar, batch.num_rows())?, result_type)
         }
-        (Expression::Column(name), _) => validate(extract_column(batch, name.path())?, result_type),
+        (Expression::Column(name), _) => {
+            let column = validate(extract_column(batch, name.path())?, result_type)?;
+            match result_type {
+                Some(dt) => select_by_name(column, dt),
+                None => Ok(column),
+            }
+        }
         (Expression::Struct(fields, nullability), Some(DataType::Struct(schema))) => {
             evaluate_struct(ctx, fields, nullability.as_ref(), batch, schema)
         }
@@ -316,7 +325,9 @@ fn evaluate_struct_patch(
             for e in &p.insertions {
                 columns.push(evaluate_expression(ctx, e, batch, Some(next_type()?))?);
             }
-            used += 1;
+            if !p.optional {
+                used += 1;
+            }
         }
     }
     let required = patch.field_patches.values().filter(|p| !p.optional).count();

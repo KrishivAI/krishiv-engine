@@ -842,3 +842,44 @@ fn create_many_builds_map_columns() {
     let b = KrishivEngineData::batch_of(data.as_ref()).unwrap();
     assert_eq!(show(b.column(0)), ["{a: 1, b: NULL}", "NULL"]);
 }
+
+#[test]
+fn a_struct_column_is_read_by_field_name() {
+    let int = DataType::INTEGER;
+    // `st` is stored as {x, y}; read as {y, x} each value stays under its own name.
+    let yx = struct_of(&[("y", DataType::STRING), ("x", int.clone())]);
+    let out = eval(&col("st"), Some(&yx)).unwrap();
+    assert_eq!(show(&out)[0], "{y: p, x: 1}");
+    // A field the declared type does not name is dropped.
+    let x = struct_of(&[("x", int.clone())]);
+    let out = eval(&col("st"), Some(&x)).unwrap();
+    assert_eq!(show(&out)[0], "{x: 1}");
+    // Already in order: the column itself comes back, not a copy.
+    let b = batch();
+    let xy = struct_of(&[("x", int.clone()), ("y", DataType::STRING)]);
+    let out = evaluate_expression(&ctx(), &col("st"), &b, Some(&xy)).unwrap();
+    assert!(Arc::ptr_eq(&out, b.column_by_name("st").unwrap()));
+    // Nested: `s` stored as {x, t: {y}} read as {t: {y}, x}, keeping the struct's nulls.
+    let t = struct_of(&[("y", int.clone())]);
+    let tx = struct_of(&[("t", t), ("x", int)]);
+    let out = evaluate_expression(&ctx(), &col("s"), &nested_batch(), Some(&tx)).unwrap();
+    assert_eq!(show(&out), ["{t: {y: 7}, x: 7}", "NULL"]);
+}
+
+#[test]
+fn an_optional_match_does_not_cover_a_missing_required_patch() {
+    let int = DataType::INTEGER;
+    let keep = |optional| ExpressionFieldPatch {
+        keep_input: true,
+        insertions: vec![],
+        optional,
+    };
+    let mut p = patch();
+    p.field_patches = HashMap::from([
+        ("x".to_owned(), keep(true)),
+        ("nope".to_owned(), keep(false)),
+    ]);
+    let xy = struct_of(&[("x", int), ("y", DataType::STRING)]);
+    let e = err(eval(&Expr::StructPatch(p), Some(&xy)));
+    assert!(e.to_string().contains("non-optional field patches"), "{e}");
+}
