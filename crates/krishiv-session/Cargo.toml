@@ -33,6 +33,8 @@ serde_json = { workspace = true, features = ["std"] }
 sha2.workspace = true
 # Row hashes for the agent table (`xxhash3_128`, v1 frozen in `agent.rs`).
 twox-hash = { workspace = true, features = ["xxhash3_128"] }
+# Selector patterns of the resource group file (`resource_groups/config.rs`).
+regex-lite.workspace = true
 # Warnings from analysis and planning are logged, as Spark logs them.
 tracing.workspace = true
 # A oneshot channel back from tasks on the session's executor; `rt` to
