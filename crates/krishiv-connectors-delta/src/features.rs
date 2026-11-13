@@ -21,8 +21,6 @@
 //! # Known differences
 //! - When the kernel refuses an unsupported reader feature itself (at snapshot load, before this
 //!   list runs) it stops at the first one, so only that one is named; delta-spark names all.
-//! - `<tableNameOrPath>` is the table root URL (`file:///…/`); delta-spark shows the Hadoop path
-//!   (`file:/…`). PR-08b part 2 passes the registered name or the Hadoop form.
 
 use std::collections::HashMap;
 
