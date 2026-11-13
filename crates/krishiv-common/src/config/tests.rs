@@ -84,6 +84,22 @@ fn size_and_duration_units() {
         Ok(ConfigValue::Duration(Duration::from_secs(3600)))
     );
     assert!(dur("1 fortnight").is_err());
+    let millis = |s| ValueType::Millis.parse(s);
+    assert_eq!(
+        millis("250"),
+        Ok(ConfigValue::Duration(Duration::from_millis(250)))
+    );
+    assert_eq!(
+        millis("2s"),
+        Ok(ConfigValue::Duration(Duration::from_secs(2)))
+    );
+    assert_eq!(
+        millis("soon"),
+        Err(
+            "expected a duration such as `500ms` or `120s` (a bare number is milliseconds)"
+                .to_owned()
+        )
+    );
 }
 
 #[test]
@@ -610,8 +626,11 @@ fn docs_markdown_lists_every_entry_deterministically() {
     assert!(md.contains("`spark.sql.ansi.enabled`"));
     assert!(md.contains("enum (`ANSI`, `LEGACY`, `STRICT`)"));
     let rows: Vec<&str> = md.lines().filter(|l| l.starts_with("| `")).collect();
+    // Sorted by key (a key may be a prefix of another: `maxSessions`,
+    // `maxSessionsPerPrincipal`), not by the whole line.
+    let key = |row: &&str| row.split('`').nth(1).unwrap_or_default().to_owned();
     let mut sorted = rows.clone();
-    sorted.sort_unstable();
+    sorted.sort_unstable_by_key(key);
     assert_eq!(rows, sorted);
     assert_eq!(md, docs_markdown());
 }
@@ -1280,6 +1299,70 @@ fn fuse_probe_select_defaults_on_and_parses() {
         config.get(&EXEC_JOIN_FUSE_PROBE_SELECT),
         Some(&ConfigValue::Bool(false))
     );
+}
+
+#[test]
+fn server_entries_parse_default_and_take_sparks_names() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&CONNECT_PORT).and_then(ConfigValue::as_int),
+        Some(15002)
+    );
+    assert_eq!(
+        c.get(&CONNECT_ADDRESS).and_then(ConfigValue::as_str),
+        Some("127.0.0.1")
+    );
+    assert_eq!(
+        c.get(&CONNECT_MAX_INBOUND_MESSAGE_SIZE)
+            .and_then(ConfigValue::as_size),
+        Some(128 << 20)
+    );
+    assert_eq!(
+        c.get(&CONNECT_SESSION_IDLE_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(3600))
+    );
+    assert_eq!(
+        c.get(&SERVER_SHUTDOWN_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(30))
+    );
+    c.set("spark.connect.grpc.binding.port", "16000").unwrap();
+    c.set("spark.connect.session.manager.maintenanceInterval", "5s")
+        .unwrap();
+    // Spark's timeConf(MILLISECONDS): a bare number is milliseconds.
+    let mut ms = Config::new();
+    ms.set("spark.connect.session.manager.maintenanceInterval", "30000")
+        .unwrap();
+    assert_eq!(
+        ms.get(&CONNECT_SESSION_MAINTENANCE_INTERVAL)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(30))
+    );
+    // keepAlive.* is timeConf(SECONDS) in Spark 4.3.0: a bare number is seconds.
+    ms.set("spark.connect.grpc.keepAlive.time", "45").unwrap();
+    assert_eq!(
+        ms.get(&CONNECT_KEEPALIVE_TIME)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(45))
+    );
+    c.set("krishiv.connect.maxSessions", "7").unwrap();
+    assert_eq!(
+        c.get(&CONNECT_PORT).and_then(ConfigValue::as_int),
+        Some(16000)
+    );
+    assert_eq!(
+        c.get(&CONNECT_SESSION_MAINTENANCE_INTERVAL)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(5))
+    );
+    assert_eq!(
+        c.get(&CONNECT_MAX_SESSIONS).and_then(ConfigValue::as_int),
+        Some(7)
+    );
+    assert!(c.set("krishiv.connect.maxSessions", "0").is_err());
+    assert!(c.set("krishiv.connect.port", "-1").is_err());
+    assert_eq!(CONNECT_PORT.settable_by, SettableBy::Startup);
 }
 
 /// P3-T021: the Delta log pool and the catalog parse limits.
