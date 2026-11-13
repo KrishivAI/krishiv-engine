@@ -84,6 +84,7 @@ impl DeleteEnv {
 }
 
 /// One data file a scan reads that has deletes or needs the mixed-spec check.
+#[derive(Clone)]
 pub(super) struct ScanTask {
     /// Its index in the provider's files (the [`eq_deletes::FILE_ORDINAL`]).
     pub(super) ordinal: usize,

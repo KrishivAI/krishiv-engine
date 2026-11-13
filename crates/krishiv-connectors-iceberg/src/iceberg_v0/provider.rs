@@ -30,7 +30,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use arrow_schema::{FieldRef, SchemaRef};
 use krishiv_common::config::Config;
@@ -171,14 +171,7 @@ impl IcebergTableProvider {
 impl IcebergTableProvider {
     /// How many files a scan with the pushed filter `expr` opens.
     pub(super) fn files_read(&self, expr: PushdownExpr) -> usize {
-        let predicate: Arc<dyn krishiv_exec::Predicate> =
-            Arc::new(krishiv_exec::FnPredicate(|b: &arrow_array::RecordBatch| {
-                Ok(arrow_array::BooleanArray::from(vec![true; b.num_rows()]))
-            }));
-        self.scan
-            .pruned(&[PushedFilter::typed(predicate, expr)])
-            .files()
-            .len()
+        self.scan.pruned(&[expr]).files().len()
     }
 }
 
@@ -204,7 +197,8 @@ impl IcebergTableProvider {
         &self,
         pool: &Arc<dyn krishiv_memory::MemoryPool>,
     ) -> Option<Arc<DeleteState>> {
-        let (state, _) = self.scan.deletes_of(&self.scan.base).ok()??;
+        let planned = self.scan.planned(&[]).ok()?;
+        let state = DeleteState::new(Arc::clone(&self.scan.env), planned.tasks.clone());
         state.set_pool(pool);
         Some(Arc::new(state))
     }
@@ -257,6 +251,26 @@ struct IcebergScan {
     prune: bool,
     /// The table's statistics, once asked for.
     stats: Arc<OnceLock<TableStats>>,
+    /// The last filter list planned and its plan ([`Planned`]): `explain`
+    /// and `build` of one scan share it, as do the scans of later queries
+    /// with the same filters.
+    planned: Arc<Mutex<Option<PlanMemo>>>,
+}
+
+/// A filter list and its [`Planned`].
+type PlanMemo = (Vec<PushdownExpr>, Arc<Planned>);
+
+/// A scan's files after pruning by its pushed filters, with the deletes that
+/// apply to them (review 25d S2: worked out once per filter list).
+struct Planned {
+    scan: FileScan,
+    /// The files with deletes or that need the mixed-spec check.
+    tasks: Vec<ScanTask>,
+    /// The equality columns `tasks` need read.
+    columns: Vec<ColumnPath>,
+    /// The delete files of `tasks` by kind (position, DV, equality), each
+    /// counted once.
+    counts: [usize; 3],
 }
 
 impl fmt::Debug for IcebergScan {
@@ -369,21 +383,26 @@ impl IcebergScan {
             parts,
             prune: true,
             stats: Arc::default(),
+            planned: Arc::default(),
         })
     }
 
-    /// The deletes of the files `scan` reads, and the equality columns they
-    /// need read (`None`: no file of `scan` has deletes or needs the
-    /// mixed-spec check, and the table has no equality deletes).
+    /// The files `filters` leave and the deletes that apply to them
+    /// ([`Planned`]), from the memo when the filters are the last ones
+    /// planned. A failed plan is not kept.
     ///
     /// # Errors
-    /// The errors of [`DeleteIndex::for_data_file`] for a file `scan` reads;
+    /// The errors of [`DeleteIndex::for_data_file`] for a file the scan reads;
     /// the equality-id errors of [`eq_deletes::equality_columns`];
     /// `INTERNAL_ERROR` for a file the provider does not have.
-    fn deletes_of(
-        &self,
-        scan: &FileScan,
-    ) -> Result<Option<(DeleteState, Vec<ColumnPath>)>, KrishivError> {
+    fn planned(&self, filters: &[PushedFilter]) -> Result<Arc<Planned>, KrishivError> {
+        let exprs: Vec<PushdownExpr> = filters.iter().filter_map(|f| f.expr.clone()).collect();
+        if let Some((k, p)) = &*self.planned.lock().unwrap_or_else(PoisonError::into_inner)
+            && *k == exprs
+        {
+            return Ok(Arc::clone(p));
+        }
+        let scan = self.pruned(&exprs);
         let mut tasks = Vec::new();
         for f in scan.files() {
             let ordinal = *self
@@ -401,17 +420,36 @@ impl IcebergScan {
                 });
             }
         }
-        if tasks.is_empty() && self.parts.ordinal.is_none() {
-            return Ok(None);
-        }
         let columns = eq_deletes::equality_columns(
             &self.snapshot.fields,
             tasks.iter().flat_map(|t| t.deletes.equality_deletes.iter()),
         )?;
-        Ok(Some((
-            DeleteState::new(Arc::clone(&self.env), tasks),
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut counts = [0_usize; 3];
+        for t in &tasks {
+            let d = &t.deletes;
+            for (n, files) in [
+                (0, d.position_deletes.as_slice()),
+                (1, d.deletion_vector.as_slice()),
+                (2, d.equality_deletes.as_slice()),
+            ] {
+                for f in files {
+                    if seen.insert(f.entry.file.path.as_str()) {
+                        counts[n] += 1;
+                    }
+                }
+            }
+        }
+        drop(seen);
+        let planned = Arc::new(Planned {
+            scan,
+            tasks,
             columns,
-        )))
+            counts,
+        });
+        *self.planned.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((exprs, Arc::clone(&planned)));
+        Ok(planned)
     }
 }
 
@@ -493,12 +531,11 @@ impl IcebergScan {
     }
 
     /// The file scan of the files that may hold rows passing `filters`.
-    fn pruned(&self, filters: &[PushedFilter]) -> FileScan {
-        let exprs: Vec<PushdownExpr> = filters.iter().filter_map(|f| f.expr.clone()).collect();
+    fn pruned(&self, exprs: &[PushdownExpr]) -> FileScan {
         if !self.prune || exprs.is_empty() {
             return self.base.clone();
         }
-        let expr = PushdownExpr::And(exprs);
+        let expr = PushdownExpr::And(exprs.to_vec());
         let pruner = Pruner::new(
             &expr,
             &self.snapshot.fields,
@@ -543,11 +580,16 @@ impl ScanPushdown for IcebergScan {
 
     fn build(&self, pushdowns: ScanPushdowns) -> krishiv_exec::Result<Arc<dyn Source>> {
         let mut p = self.mapped(pushdowns);
-        let scan = self.pruned(&p.filters);
-        let Some((state, columns)) = self.deletes_of(&scan)? else {
+        let planned = self.planned(&p.filters)?;
+        let scan = planned.scan.clone();
+        if planned.tasks.is_empty() && self.parts.ordinal.is_none() {
             return scan.build(p);
-        };
-        let state = Arc::new(state);
+        }
+        let columns = &planned.columns;
+        let state = Arc::new(DeleteState::new(
+            Arc::clone(&self.env),
+            planned.tasks.clone(),
+        ));
         if state.has_positions() {
             p.selection = Some(Arc::new(LazySelections(Arc::clone(&state))));
         }
@@ -555,7 +597,7 @@ impl ScanPushdown for IcebergScan {
             let source = scan.build(p)?;
             return Ok(Arc::new(DeleteSource::new(source, state, None)));
         }
-        let (inner, output) = self.with_equality_columns(p, &columns);
+        let (inner, output) = self.with_equality_columns(p, columns);
         let source = scan.build(inner)?;
         let eq = EqProjection::new(&source.schema(), output)?;
         Ok(Arc::new(DeleteSource::new(source, state, Some(eq))))
@@ -563,43 +605,21 @@ impl ScanPushdown for IcebergScan {
 
     /// `Snapshot: <id>, DataFiles: <read>/<total>, DeleteFiles: [position=..,
     /// dv=.., equality=..]`: the delete files that apply to the data files
-    /// the scan reads, each counted once.
+    /// the scan reads, each counted once. Read from the plan `build` uses
+    /// ([`Planned`], worked out once per filter list); `None` when that plan
+    /// fails (assigning a file's deletes), which `build` then reports.
     fn explain(&self, pushdowns: &ScanPushdowns) -> Option<String> {
-        let scan = self.pruned(&pushdowns.filters);
-        let mut seen: HashSet<&str> = HashSet::new();
-        let mut counts = [0_usize; 3];
-        let assigned: Vec<_> = scan
-            .files()
-            .iter()
-            .filter_map(|f| self.ordinals.get(&file_key(f)))
-            .filter_map(|&i| self.index.for_data_file(&self.entries[i]).ok())
-            .collect();
-        for d in &assigned {
-            let kinds = [
-                d.position_deletes.iter().collect::<Vec<_>>(),
-                d.deletion_vector.iter().collect(),
-                d.equality_deletes.iter().collect(),
-            ];
-            for (n, files) in counts.iter_mut().zip(kinds) {
-                for f in files {
-                    if seen.insert(f.entry.file.path.as_str()) {
-                        *n += 1;
-                    }
-                }
-            }
-        }
+        let planned = self.planned(&pushdowns.filters).ok()?;
         let snapshot = self
             .snapshot
             .snapshot_id
             .map_or_else(|| "none".to_owned(), |id| id.to_string());
+        let [position, dv, equality] = planned.counts;
         Some(format!(
-            "Snapshot: {snapshot}, DataFiles: {}/{}, DeleteFiles: [position={}, dv={}, \
-             equality={}]",
-            scan.files().len(),
+            "Snapshot: {snapshot}, DataFiles: {}/{}, DeleteFiles: [position={position}, \
+             dv={dv}, equality={equality}]",
+            planned.scan.files().len(),
             self.files.len(),
-            counts[0],
-            counts[1],
-            counts[2]
         ))
     }
 
@@ -611,6 +631,7 @@ impl ScanPushdown for IcebergScan {
         let mut scan = self.clone();
         scan.base = scan.base.with_file_splits(files, partitions);
         scan.prune = false;
+        scan.planned = Arc::default();
         Ok(Arc::new(scan))
     }
 
