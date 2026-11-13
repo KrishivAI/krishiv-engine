@@ -16,8 +16,20 @@ Paths are relative to this crate.
 - `src/service.rs` `ConnectService`, Krishiv's implementation: `ExecutePlan`, `ReattachExecute` / `ReleaseExecute`
   (design P3-T011a §3.8: resume after `last_response_id`, `release_until` trims, `release_all` closes; the server's
   `ResponseBudget`), `ReleaseSession`, `AnalyzePlan`, `Config`,
-  `Interrupt`; the other RPCs are `UNIMPLEMENTED` until PR-15; a draining server answers `UNAVAILABLE` ("server
-  shutting down")
+  `Interrupt`, `AddArtifacts`, `ArtifactStatus`, `FetchErrorDetails`; `CloneSession` and `GetStatus` are
+  `UNIMPLEMENTED` until PR-15c; a draining server answers `UNAVAILABLE` ("server shutting down"); an error after the
+  session is known goes through `entry.errors().status` (it gets an `errorId`), one before it through `status_of`
+- `src/artifacts.rs` `AddArtifacts` / `ArtifactStatus` (design §3.9): the chunk protocol and CRC-32 (`crc32`), names
+  from `krishiv_connect::artifact` checked before any file, the privilege gate `config::check_add_artifact`, the
+  per-session quota (`krishiv.connect.artifacts.maxBytes`, `maxArtifactBytes`, `ARTIFACT_OVERHEAD` per artifact)
+  counted before each write, `Transfer` (runs on the blocking pool; dropping it removes what it staged and returns its
+  quota), `SessionArtifacts` (per session: directory, `cache/<hash>` blobs in the pool as `connect_artifacts`,
+  `cached(hash)` for T012), `ArtifactStore` (the server's root, created on first use); `src/artifacts/dir.rs` the
+  private root and session directories, `O_EXCL | O_NOFOLLOW` staging, `linkat` install (never replaces), every name
+  resolved per segment from a directory descriptor without following links; removal on the blocking pool
+- `src/errors.rs` `SessionErrors` (design §3.10): `errorId` on every status sent on a session unless
+  `spark.sql.connect.enrichError.enabled=false`, the per-session cache (20, 60 s after last access, given out once),
+  `details` (cause chain ≤ 5, each error in its client-safe form, query contexts, no stack trace)
 - `src/analyze.rs` `AnalyzePlan` (design §3.5): every arm over the translated, analyzed plan (never run);
   `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of
   the analyzed plan; the cache arms are 56K00 until PR-47; `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
@@ -55,7 +67,7 @@ Paths are relative to this crate.
 - `src/status.rs` `status_of`: a `KrishivError` as Spark's gRPC status (`INTERNAL`, `google.rpc.ErrorInfo` with
   `classes`, `sqlState`, `errorClass`, `messageParameters`; `ErrorUtils.buildStatusFromThrowable`, v4.3.0);
   `exception_classes` picks the Java class list PySpark's `convert_exception` reads (Spark's own for the Connect
-  classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT` and `KRISHIV_OPERATION_LIMIT`
+  classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT`, `KRISHIV_OPERATION_LIMIT`, `KRISHIV_ARTIFACT_LIMIT`
   are `RESOURCE_EXHAUSTED`
 - `src/manager.rs` `SessionManager` (Spark's `SparkConnectSessionManager`): get-or-create / lookup / release, tombstones
   (LRU, no expiry), abandoned-operation tombstones and `abandon_detached` (Spark's execution maintenance), `SESSION_CHANGED` on a changed server-side id, the idle sweep (skips a session running a query or
@@ -63,7 +75,8 @@ Paths are relative to this crate.
   `maxSessionsPerPrincipal`
 - `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper and abandon tasks, shutdown order
 - `tests/server.rs`, `tests/execute.rs`, `tests/rpcs.rs` (AnalyzePlan, Config, Interrupt), `tests/reattach.rs`
-  (replay, reattach, caps, detach, races) end to end over a raw tonic client
+  (replay, reattach, caps, detach, races), `tests/artifacts.rs` (AddArtifacts, ArtifactStatus, FetchErrorDetails,
+  quotas, links, client drops, T-C8) end to end over a raw tonic client
 
 ## Invariants
 - **Sessions are keyed by the authenticated principal**, never by `UserContext.user_id` (ADR 0046 §5, threat model
@@ -85,6 +98,10 @@ Paths are relative to this crate.
   query and removes it; a reattachable one detaches and stays until `release_all`, its session's release, or
   `detachedTimeout` (then tombstoned: `OPERATION_ABANDONED`). Live operations, detached or finished but unreleased,
   keep a session busy.
+- **Artifacts never leave their session's directory**: names are validated before any file exists, every path is
+  resolved segment by segment from a directory descriptor with `O_NOFOLLOW`, installs use `linkat` (no replace), and
+  every byte is counted against the quota before it is written. A released, swept or shut-down session removes its
+  directory; the root goes with the service.
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)

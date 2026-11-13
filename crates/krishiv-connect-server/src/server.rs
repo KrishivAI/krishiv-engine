@@ -31,6 +31,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tonic::transport::Server;
 use tonic::transport::server::{Connected, TcpConnectInfo};
 
+use crate::artifacts::ArtifactLimits;
 use crate::execute::ResponseBudget;
 use crate::manager::SessionManager;
 use crate::operation::ExecuteLimits;
@@ -75,6 +76,8 @@ pub struct ConnectServerConfig {
     pub shutdown_timeout: Duration,
     /// The limits of `ExecutePlan`.
     pub execute: ExecuteLimits,
+    /// The artifact quotas (`krishiv.connect.artifacts.*`).
+    pub artifacts: ArtifactLimits,
 }
 
 impl Default for ConnectServerConfig {
@@ -91,6 +94,7 @@ impl Default for ConnectServerConfig {
             maintenance_interval: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             execute: ExecuteLimits::default(),
+            artifacts: ArtifactLimits::default(),
         }
     }
 }
@@ -142,6 +146,7 @@ impl ConnectServerConfig {
                 .unwrap_or(d.maintenance_interval),
             shutdown_timeout: duration(&SERVER_SHUTDOWN_TIMEOUT).unwrap_or(d.shutdown_timeout),
             execute: ExecuteLimits::from_config(config),
+            artifacts: ArtifactLimits::from_config(config),
         }
     }
 }
@@ -227,7 +232,8 @@ impl ConnectServer {
         config.execute.validate()?;
         let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining))
             .with_limits(config.execute.clone())
-            .with_budget(budget);
+            .with_budget(budget)
+            .with_artifacts(config.artifacts.clone());
         let service = SparkConnectServiceServer::from_arc(Arc::new(service))
             .max_decoding_message_size(config.max_inbound_message_size)
             .max_encoding_message_size(config.max_inbound_message_size);

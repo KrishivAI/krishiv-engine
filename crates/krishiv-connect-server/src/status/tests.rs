@@ -120,6 +120,18 @@ fn exception_classes_pick_the_python_exception_spark_would_raise() {
         first(ErrorClass::OperationCanceled),
         "org.apache.spark.SparkException"
     );
+    // Spark raises both artifact errors as `SparkRuntimeException`
+    // (PySpark's `SparkRuntimeException`, not `AnalysisException`).
+    for c in [
+        ErrorClass::ArtifactAlreadyExists,
+        ErrorClass::InvalidArtifactPath,
+    ] {
+        assert_eq!(first(c), "org.apache.spark.SparkRuntimeException");
+    }
+    assert_eq!(
+        first(ErrorClass::KrishivArtifactLimit),
+        "org.apache.spark.SparkException"
+    );
     assert_eq!(
         exception_classes(ErrorClass::CastInvalidInput)[1],
         "java.lang.NumberFormatException"

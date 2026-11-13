@@ -11,8 +11,10 @@
 #![deny(clippy::disallowed_methods)]
 
 pub mod analyze;
+pub mod artifacts;
 pub mod codec;
 pub mod config;
+pub mod errors;
 pub mod execute;
 pub mod host;
 pub mod interrupt;
@@ -23,6 +25,8 @@ pub mod server;
 pub mod service;
 pub mod status;
 
+pub use artifacts::{ArtifactLimits, ArtifactStore, SessionArtifacts};
+pub use errors::SessionErrors;
 pub use manager::{ManagerCounts, SessionEntry, SessionLimits, SessionManager};
 pub use operation::{ExecuteLimits, Operation, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};

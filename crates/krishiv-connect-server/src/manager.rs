@@ -31,6 +31,8 @@ use krishiv_common::error::{
 use krishiv_common::principal::Principal;
 use krishiv_session::{QueryId, Session};
 
+use crate::artifacts::SessionArtifacts;
+use crate::errors::SessionErrors;
 use crate::operation::{Operation, Operations};
 
 /// Builds the session a principal gets for a new session id.
@@ -109,6 +111,10 @@ pub struct SessionEntry {
     session: Session,
     client_user_id: String,
     operations: Arc<Operations>,
+    /// The errors sent on the session, for `FetchErrorDetails`.
+    errors: Arc<SessionErrors>,
+    /// The session's artifacts (`AddArtifacts`).
+    artifacts: Arc<SessionArtifacts>,
     /// Milliseconds since the manager's epoch at the last lookup.
     last_access: AtomicU64,
 }
@@ -141,11 +147,26 @@ impl SessionEntry {
         &self.operations
     }
 
+    /// The errors sent on the session: [`SessionErrors::status`] turns an
+    /// error into the status with its `errorId`.
+    #[must_use]
+    pub fn errors(&self) -> &Arc<SessionErrors> {
+        &self.errors
+    }
+
+    /// The session's artifacts.
+    #[must_use]
+    pub fn artifacts(&self) -> &Arc<SessionArtifacts> {
+        &self.artifacts
+    }
+
     /// Closes the session's operations, then the session (its queries
-    /// cancelled). Returns the operations it closed.
+    /// cancelled), then its artifacts (their directory removed). Returns the
+    /// operations it closed.
     fn close(&self) -> Vec<Arc<Operation>> {
         let ops = self.operations.close_all();
         self.session.close();
+        self.artifacts.close();
         ops
     }
 }
@@ -325,6 +346,8 @@ impl SessionManager {
         // this one is closed unused.
         let session = (self.factory)(principal)?;
         let entry = Arc::new(SessionEntry {
+            errors: Arc::new(SessionErrors::new(session.conf())),
+            artifacts: Arc::default(),
             session,
             client_user_id: client_user_id.to_owned(),
             operations: Arc::default(),

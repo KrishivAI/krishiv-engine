@@ -341,7 +341,7 @@ fn end_of(op: &crate::operation::Operation) -> Option<tonic::Status> {
 #[test]
 fn a_failed_operation_is_finished_before_its_error_is_sent() {
     let op = running_op();
-    super::settle(&op, Err(super::Stop::Failed(failure())));
+    super::settle(&op, &errors(), Err(super::Stop::Failed(failure())));
     let status = end_of(&op).unwrap();
     assert!(status.message().contains("INTERNAL_ERROR"), "{status:?}");
     // Its error is recorded: an interrupt now interrupts nothing.
@@ -351,7 +351,7 @@ fn a_failed_operation_is_finished_before_its_error_is_sent() {
 #[test]
 fn a_closed_operation_finishes_its_stream() {
     let op = running_op();
-    super::settle(&op, Err(super::Stop::Gone));
+    super::settle(&op, &errors(), Err(super::Stop::Gone));
     assert!(end_of(&op).is_none());
     assert!(!op.cancel());
 }
@@ -362,10 +362,15 @@ fn an_interrupt_before_the_end_wins_over_the_error() {
     // OPERATION_CANCELED (`ExecuteThreadRunner.scala:150-178`).
     let op = running_op();
     assert!(op.cancel());
-    super::settle(&op, Err(super::Stop::Failed(failure())));
+    super::settle(&op, &errors(), Err(super::Stop::Failed(failure())));
     let status = end_of(&op).unwrap();
     assert!(
         status.message().contains("OPERATION_CANCELED"),
         "{status:?}"
     );
+}
+
+/// A session's error cache, for `settle`.
+fn errors() -> crate::errors::SessionErrors {
+    crate::errors::SessionErrors::new(krishiv_session::Session::new().unwrap().conf())
 }

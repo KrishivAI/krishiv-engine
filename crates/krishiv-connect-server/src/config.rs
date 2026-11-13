@@ -38,6 +38,7 @@ use krishiv_common::error::{
 use krishiv_common::principal::Principal;
 use krishiv_common::redact::redact;
 use krishiv_common::secret::is_sensitive_key;
+use krishiv_connect::artifact::{ArtifactKind, ArtifactName};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::config_request::operation::OpType;
 use krishiv_session::RuntimeConf;
@@ -104,6 +105,34 @@ pub(crate) fn check_settable(
         }
         _ => Ok(()),
     }
+}
+
+/// Whether `role` may add the artifact `name` (`AddArtifacts`, design
+/// P3-T011a §3.9, ADR 0046 §3b): a `cache/` artifact needs only the session
+/// (it is data the client could have sent inline); every other prefix is
+/// client code, `Usage` on `System("udf")`, admin only until the OS sandbox
+/// (T014b, N1).
+///
+/// TODO(P3-T002): as [`role_of`]: move this gate into the session's
+/// `AccessPolicy` path (`Usage` on `System("udf")`) with the roles.
+///
+/// # Errors
+/// `KRISHIV_INSUFFICIENT_PERMISSIONS` for a non-`cache/` artifact and a role
+/// other than [`ConfigRole::Admin`].
+pub(crate) fn check_add_artifact(
+    role: ConfigRole,
+    principal: &Principal,
+    name: &ArtifactName,
+) -> Result<(), KrishivError> {
+    if name.kind() == ArtifactKind::Cache || role == ConfigRole::Admin {
+        return Ok(());
+    }
+    Err(KrishivInsufficientPermissions {
+        principal: principal.name.clone(),
+        privilege: "USAGE".to_owned(),
+        securable: "system `udf` (AddArtifacts)".to_owned(),
+    }
+    .into())
 }
 
 /// The two SQL configs Spark Connect warns about

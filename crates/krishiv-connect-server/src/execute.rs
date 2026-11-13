@@ -63,6 +63,7 @@ use tokio::sync::Semaphore;
 use tonic::Status;
 
 use self::arrow::EncodeSettings;
+use crate::errors::SessionErrors;
 use crate::manager::SessionEntry;
 use crate::operation::replay::{Held, uuid_text};
 use crate::operation::{
@@ -70,7 +71,6 @@ use crate::operation::{
     validate_tags,
 };
 use crate::sender::{self, SenderCaps};
-use crate::status::status_of;
 
 /// The default of `spark.connect.session.resultChunking.maxChunkSize`
 /// (`(0.9 × 128 MiB).toInt`, Spark 4.1+).
@@ -211,7 +211,13 @@ pub async fn execute_plan(
             return Err(InvalidCursorNotReattachable {}.into());
         }
         let caps = SenderCaps::of(&live, limits);
-        return Ok(sender::attach(live, operations, 0, caps));
+        return Ok(sender::attach(
+            live,
+            operations,
+            Arc::clone(entry.errors()),
+            0,
+            caps,
+        ));
     }
     let registered = Registered {
         operations: Arc::clone(&operations),
@@ -240,10 +246,17 @@ pub async fn execute_plan(
         op: Arc::clone(&op),
         session_id: request.session_id.clone(),
         server_side_session_id: entry.server_side_id().to_owned(),
+        errors: Arc::clone(entry.errors()),
     };
     // Attached before the encoder starts: the operation is never detached
     // before its first stream.
-    let stream = sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
+    let stream = sender::attach(
+        Arc::clone(&op),
+        operations,
+        Arc::clone(entry.errors()),
+        0,
+        SenderCaps::of(&op, limits),
+    );
     registered.keep();
     tokio::spawn(encode(sender, df, schema, schema_response, settings));
     Ok(stream)
@@ -452,6 +465,8 @@ struct Sender {
     op: Arc<Operation>,
     session_id: String,
     server_side_session_id: String,
+    /// The session's errors: a failure ends the stream with an `errorId`.
+    errors: Arc<SessionErrors>,
 }
 
 impl Sender {
@@ -528,7 +543,7 @@ async fn encode(
     };
     // The query's stream is gone by now (dropped with `produce`).
     drop(df);
-    settle(&op, outcome);
+    settle(&op, &sender.errors, outcome);
 }
 
 /// Ends `op`'s stream after its encoder stopped with `outcome`. The
@@ -536,7 +551,7 @@ async fn encode(
 /// before its error is recorded; an interrupt that came first wins, and the
 /// stream ends with `OPERATION_CANCELED` instead of the error (Spark's
 /// `ExecuteThreadRunner.execute`, v4.3.0 lines 149-180).
-fn settle(op: &Operation, outcome: Result<(), Stop>) {
+fn settle(op: &Operation, errors: &SessionErrors, outcome: Result<(), Stop>) {
     match outcome {
         // `produce` finished the stream after its last response.
         Ok(()) => {}
@@ -550,7 +565,7 @@ fn settle(op: &Operation, outcome: Result<(), Stop>) {
             } else {
                 OperationCanceled {}.into()
             };
-            op.replay().finish(Some(status_of(&error)));
+            op.replay().finish(Some(errors.status(&error)));
         }
     }
 }

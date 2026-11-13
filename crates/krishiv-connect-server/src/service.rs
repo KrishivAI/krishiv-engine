@@ -8,8 +8,11 @@
 //! `ExecutePlan` (`crate::execute`), `ReattachExecute` and `ReleaseExecute`
 //! (with the replay buffer, sender caps and detach of PR-15a, design
 //! P3-T011a §3.8). PR-11b adds `AnalyzePlan` (`crate::analyze`), `Config`
-//! (`crate::config`) and `Interrupt` (`crate::interrupt`); the rest answer
-//! `UNIMPLEMENTED` until PR-15.
+//! (`crate::config`) and `Interrupt` (`crate::interrupt`). PR-15b adds
+//! `AddArtifacts` and `ArtifactStatus` (`crate::artifacts`) and
+//! `FetchErrorDetails` (`crate::errors`); an error sent once a session is
+//! known carries an `errorId` (`SessionEntry::errors`). `CloneSession` and
+//! `GetStatus` answer `UNIMPLEMENTED` until PR-15c.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,13 +28,14 @@ use krishiv_connect::wire::Decoded;
 use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::artifacts::{self, ArtifactLimits, ArtifactStore};
 use crate::codec::WireCodec;
 use crate::execute::ResponseBudget;
 use crate::manager::{SessionEntry, SessionManager};
 use crate::operation::ExecuteLimits;
 use crate::sender::{self, SenderCaps};
 use crate::status::status_of;
-use crate::{analyze, config, execute, interrupt};
+use crate::{analyze, config, errors, execute, interrupt};
 
 /// The generated server side of `spark.connect.SparkConnectService`.
 #[expect(
@@ -64,6 +68,7 @@ pub struct ConnectService {
     local: Principal,
     limits: ExecuteLimits,
     budget: ResponseBudget,
+    artifacts: Arc<ArtifactStore>,
 }
 
 impl ConnectService {
@@ -77,7 +82,22 @@ impl ConnectService {
             local: Principal::local_user(),
             budget: ResponseBudget::new(ExecuteLimits::default().max_response_bytes),
             limits: ExecuteLimits::default(),
+            artifacts: Arc::new(ArtifactStore::new(ArtifactLimits::default())),
         }
+    }
+
+    /// This service with the artifact quotas `limits`
+    /// (`krishiv.connect.artifacts.*`).
+    #[must_use]
+    pub fn with_artifacts(mut self, limits: ArtifactLimits) -> Self {
+        self.artifacts = Arc::new(ArtifactStore::new(limits));
+        self
+    }
+
+    /// The server's artifact store.
+    #[must_use]
+    pub fn artifacts(&self) -> &Arc<ArtifactStore> {
+        &self.artifacts
     }
 
     /// This service with the `ExecutePlan` limits `limits` (and a response
@@ -171,13 +191,13 @@ impl SparkConnectService for ConnectService {
                 .manager
                 .is_abandoned(&principal, &request.session_id, id)
         {
-            return Err(status_of(
-                &InvalidHandleOperationAbandoned { handle: id.clone() }.into(),
-            ));
+            return Err(entry
+                .errors()
+                .status(&InvalidHandleOperationAbandoned { handle: id.clone() }.into()));
         }
         let stream = execute::execute_plan(&entry, &request, &self.limits, &self.budget)
             .await
-            .map_err(|e| status_of(&e))?;
+            .map_err(|e| entry.errors().status(&e))?;
         Ok(Response::new(stream))
     }
 
@@ -199,7 +219,7 @@ impl SparkConnectService for ConnectService {
         analyze::analyze_plan(&entry, &request, &self.limits)
             .await
             .map(Response::new)
-            .map_err(|e| status_of(&e))
+            .map_err(|e| entry.errors().status(&e))
     }
 
     /// Spark's `SparkConnectConfigHandler`: the session is looked up or
@@ -219,21 +239,56 @@ impl SparkConnectService for ConnectService {
         )?;
         config::config(&entry, &request, &principal, config::role_of(&principal))
             .map(Response::new)
-            .map_err(|e| status_of(&e))
+            .map_err(|e| entry.errors().status(&e))
     }
 
+    /// Spark's `SparkConnectAddArtifactsHandler`: the session is looked up
+    /// or created from the first request (`crate::artifacts`).
     async fn add_artifacts(
         &self,
-        _request: Request<Streaming<Decoded<pb::AddArtifactsRequest>>>,
+        request: Request<Streaming<Decoded<pb::AddArtifactsRequest>>>,
     ) -> Result<Response<pb::AddArtifactsResponse>, Status> {
-        Err(self.unimplemented("AddArtifacts"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let mut stream = request.into_inner();
+        let Some(first) = stream.message().await? else {
+            // Spark fails on an empty stream (no session to answer for).
+            return Err(status_of(
+                &ConnectInvalidPlanInvalidOneOfFieldNotSet {
+                    full_name: "spark.connect.AddArtifactsRequest".to_owned(),
+                    name: "PAYLOAD_NOT_SET".to_owned(),
+                }
+                .into(),
+            ));
+        };
+        let entry = self.session(
+            &principal,
+            &first.session_id,
+            first.client_observed_server_side_session_id.as_deref(),
+            first.user_context.as_ref(),
+        )?;
+        let role = config::role_of(&principal);
+        artifacts::add_artifacts(&entry, &self.artifacts, principal, role, first, &mut stream)
+            .await
+            .map(Response::new)
     }
 
+    /// Spark's `SparkConnectArtifactStatusesHandler`: the session is looked
+    /// up or created; only a held `cache/<hash>` exists.
     async fn artifact_status(
         &self,
-        _request: Request<Decoded<pb::ArtifactStatusesRequest>>,
+        request: Request<Decoded<pb::ArtifactStatusesRequest>>,
     ) -> Result<Response<pb::ArtifactStatusesResponse>, Status> {
-        Err(self.unimplemented("ArtifactStatus"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self.session(
+            &principal,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        Ok(Response::new(artifacts::artifact_status(&entry, &request)))
     }
 
     /// Spark's `SparkConnectInterruptHandler`: the session is looked up or
@@ -253,7 +308,7 @@ impl SparkConnectService for ConnectService {
         )?;
         interrupt::interrupt(&entry, &request)
             .map(Response::new)
-            .map_err(|e| status_of(&e))
+            .map_err(|e| entry.errors().status(&e))
     }
 
     /// Spark's `SparkConnectReattachExecuteHandler` (v4.3.0 lines 30-66)
@@ -291,21 +346,27 @@ impl SparkConnectService for ConnectService {
                 } else {
                     InvalidHandleOperationNotFound { handle }.into()
                 };
-            return Err(status_of(&error));
+            return Err(entry.errors().status(&error));
         };
         if !op.reattachable() {
-            return Err(status_of(&InvalidCursorNotReattachable {}.into()));
+            return Err(entry
+                .errors()
+                .status(&InvalidCursorNotReattachable {}.into()));
         }
         // Looked up before attaching: an unknown id leaves the attached
         // sender alone (`ExecuteHolder.runGrpcResponseSender`, lines 192-198).
         let after = match &request.last_response_id {
-            Some(id) => op.replay().index_of(id).map_err(|e| status_of(&e))?,
+            Some(id) => op
+                .replay()
+                .index_of(id)
+                .map_err(|e| entry.errors().status(&e))?,
             None => 0,
         };
         let caps = SenderCaps::of(&op, &self.limits);
         Ok(Response::new(sender::attach(
             op,
             Arc::clone(entry.operations()),
+            Arc::clone(entry.errors()),
             after,
             caps,
         )))
@@ -335,7 +396,9 @@ impl SparkConnectService for ConnectService {
         };
         if let Some(op) = entry.operations().get(&request.operation_id) {
             if !op.reattachable() {
-                return Err(status_of(&InvalidCursorNotReattachable {}.into()));
+                return Err(entry
+                    .errors()
+                    .status(&InvalidCursorNotReattachable {}.into()));
             }
             response.operation_id = Some(op.id().as_str().to_owned());
             match &request.release {
@@ -346,11 +409,11 @@ impl SparkConnectService for ConnectService {
                 Some(Release::ReleaseUntil(until)) => {
                     op.replay()
                         .release_until(&until.response_id)
-                        .map_err(|e| status_of(&e))?;
+                        .map_err(|e| entry.errors().status(&e))?;
                 }
                 // Spark throws a classless UnsupportedOperationException.
                 None => {
-                    return Err(status_of(
+                    return Err(entry.errors().status(
                         &ConnectInvalidPlanInvalidOneOfFieldNotSet {
                             full_name: "spark.connect.ReleaseExecuteRequest".to_owned(),
                             name: "RELEASE_NOT_SET".to_owned(),
@@ -382,11 +445,29 @@ impl SparkConnectService for ConnectService {
         }))
     }
 
+    /// Spark's `SparkConnectFetchErrorDetailsHandler` (v4.3.0 lines 34-58):
+    /// the session is looked up or created; the error kept under the id is
+    /// given out once; an unknown id is an empty response (neither session
+    /// id set, as Spark).
     async fn fetch_error_details(
         &self,
-        _request: Request<Decoded<pb::FetchErrorDetailsRequest>>,
+        request: Request<Decoded<pb::FetchErrorDetailsRequest>>,
     ) -> Result<Response<pb::FetchErrorDetailsResponse>, Status> {
-        Err(self.unimplemented("FetchErrorDetails"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self.session(
+            &principal,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        let response = entry
+            .errors()
+            .take(&request.error_id)
+            .map(|e| errors::details(&e))
+            .unwrap_or_default();
+        Ok(Response::new(response))
     }
 
     async fn clone_session(

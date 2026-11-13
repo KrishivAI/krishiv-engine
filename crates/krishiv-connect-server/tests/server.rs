@@ -144,10 +144,10 @@ async fn release_session_frees_state() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rpcs_of_later_tasks_are_unimplemented() {
     let run = start(ConnectServerConfig::default(), SessionLimits::default()).await;
-    let e = unary::<_, pb::FetchErrorDetailsResponse>(
+    let e = unary::<_, pb::GetStatusResponse>(
         &run.channel,
-        "FetchErrorDetails",
-        pb::FetchErrorDetailsRequest {
+        "GetStatus",
+        pb::GetStatusRequest {
             session_id: ID.to_owned(),
             ..Default::default()
         },
@@ -557,20 +557,6 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
         draining.store(drain, Ordering::Release);
         let results: Vec<(&str, tonic::Status)> = vec![
             (
-                "ArtifactStatus",
-                service
-                    .artifact_status(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
-                "FetchErrorDetails",
-                service
-                    .fetch_error_details(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
                 "CloneSession",
                 service
                     .clone_session(Request::new(decoded()))
@@ -586,8 +572,17 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
             ),
         ];
         if drain {
-            // The RPCs T011a and PR-11b implement refuse too while draining.
+            // The RPCs T011a, PR-11b and PR-15b implement refuse too while
+            // draining.
             for e in [
+                service
+                    .artifact_status(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+                service
+                    .fetch_error_details(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
                 service
                     .analyze_plan(Request::new(decoded()))
                     .await
