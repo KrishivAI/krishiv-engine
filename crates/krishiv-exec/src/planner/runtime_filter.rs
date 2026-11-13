@@ -213,6 +213,17 @@ impl Planner<'_> {
             // Every scan the key reaches gets its own filter (the branches
             // of a union, both inputs of an inner join below).
             for site in probe.sites.iter().filter(|s| s.attr == source) {
+                // perf-4 step 0 (scratch, ledger §4 item 13): `KRISHIV_BLOOM_SCALE=1`
+                // raises the Bloom caps to 20M keys / 32 MiB only for a probe
+                // estimated at least 20x the build.
+                static SCALE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                let scale = *SCALE
+                    .get_or_init(|| std::env::var("KRISHIV_BLOOM_SCALE").is_ok_and(|v| v == "1"));
+                let mut s = s;
+                if scale && site.scan_rows >= 20.0 * build_rows {
+                    s.bloom_max_items = s.bloom_max_items.max(20_000_000);
+                    s.bloom_max_bytes = s.bloom_max_bytes.max(32 << 20);
+                }
                 // A build whose estimate is a guess over an aggregate's
                 // output (`HAVING`) plans its Bloom filter anyway: the build
                 // decides from the keys it holds, as it does for any planned
