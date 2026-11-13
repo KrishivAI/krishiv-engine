@@ -941,16 +941,18 @@ impl RelationCache {
         let key = &unpinned(key);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
-        let registered = state.registrations.remove(key).is_some();
+        let registration = state.registrations.remove(key);
         let Some(entry) = state.entries.remove(key) else {
-            return registered;
+            drop(state);
+            return registration.is_some();
         };
         state.names.retain(|_, k| k != key);
         state.used = state.used.saturating_sub(entry.bytes);
         self.publish_spillable(&state);
-        // Dropped under the lock: its pool bytes (or its spill scope) go
-        // now, unless a running query still reads it.
-        drop(entry);
+        drop(state);
+        // Dropped after the lock: its pool bytes (or its spill scope, whose
+        // directory is deleted) go now, unless a running query still reads it.
+        drop((entry, registration));
         true
     }
 
@@ -968,12 +970,17 @@ impl RelationCache {
     fn clear_local(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
-        state.entries.clear();
+        let dropped = (
+            std::mem::take(&mut state.entries),
+            std::mem::take(&mut state.registrations),
+            std::mem::take(&mut state.pending),
+        );
         state.names.clear();
-        state.registrations.clear();
-        state.pending.clear();
         state.used = 0;
         self.publish_spillable(&state);
+        drop(state);
+        // After the lock: dropping entries deletes their spill directories.
+        drop(dropped);
     }
 
     /// Drops the entries reading the table `name` (any spelling): what they
@@ -999,13 +1006,18 @@ impl RelationCache {
             })
             .map(|(key, _)| key.clone())
             .collect();
+        let mut dropped = Vec::with_capacity(stale.len());
         for key in &stale {
             if let Some(entry) = state.entries.remove(key) {
                 state.used = state.used.saturating_sub(entry.bytes);
+                dropped.push(entry);
             }
         }
         state.names.retain(|_, k| !stale.contains(k));
         self.publish_spillable(&state);
+        drop(state);
+        // After the lock: dropping entries deletes their spill directories.
+        drop(dropped);
     }
 
     /// Drops the registrations and entries reading the table `name` (any
@@ -1029,17 +1041,25 @@ impl RelationCache {
             .filter(|(_, reg)| reg.tables.iter().any(|t| matches(t)))
             .map(|(key, _)| key.clone())
             .collect();
+        let mut entries = Vec::with_capacity(stale.len());
+        let mut registrations = Vec::with_capacity(stale.len());
         for key in &stale {
-            state.registrations.remove(key);
+            registrations.extend(state.registrations.remove(key));
             if let Some(entry) = state.entries.remove(key) {
                 state.used = state.used.saturating_sub(entry.bytes);
+                entries.push(entry);
             }
         }
         state.names.retain(|_, k| !stale.contains(k));
         self.publish_spillable(&state);
-        state
-            .pending
-            .retain(|p| !unresolved_tables(&p.plan).iter().any(|t| matches(t)));
+        let (queued, kept): (VecDeque<PendingReg>, VecDeque<PendingReg>) =
+            std::mem::take(&mut state.pending)
+                .into_iter()
+                .partition(|p| unresolved_tables(&p.plan).iter().any(|t| matches(t)));
+        state.pending = kept;
+        drop(state);
+        // After the lock: dropping entries deletes their spill directories.
+        drop((entries, registrations, queued));
     }
 
     /// Drops the entries reading files by path: the engine wrote files, so
@@ -1047,19 +1067,24 @@ impl RelationCache {
     pub(crate) fn invalidate_files(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
-        let mut freed = 0_usize;
-        state.entries.retain(|_, entry| {
-            if entry.reads_files {
-                freed = freed.saturating_add(entry.bytes);
-                false
-            } else {
-                true
+        let stale: Vec<CacheKey> = state
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.reads_files)
+            .map(|(key, _)| key.clone())
+            .collect();
+        let mut dropped = Vec::with_capacity(stale.len());
+        for key in &stale {
+            if let Some(entry) = state.entries.remove(key) {
+                state.used = state.used.saturating_sub(entry.bytes);
+                dropped.push(entry);
             }
-        });
-        state.used = state.used.saturating_sub(freed);
-        let live: Vec<CacheKey> = state.entries.keys().cloned().collect();
-        state.names.retain(|_, k| live.contains(k));
+        }
+        state.names.retain(|_, k| !stale.contains(k));
         self.publish_spillable(&state);
+        drop(state);
+        // After the lock: dropping entries deletes their spill directories.
+        drop(dropped);
     }
 
     /// The cache's size and counters now, for `system.caches`.
