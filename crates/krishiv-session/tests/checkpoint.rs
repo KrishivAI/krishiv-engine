@@ -144,3 +144,37 @@ fn system_caches_has_a_checkpoint_row() {
     drop(cp);
     assert_eq!(row(&s), "0|false");
 }
+
+/// `f` run on a thread of its own, failing the test when it does not end in 60 seconds.
+fn within_a_minute<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(60))
+        .expect("the call hung")
+}
+
+/// A `cache()` of a frame standing on a lazy checkpoint registers without a hang: registering
+/// analyzes the frame, which takes the checkpoint's rows by running a query, which reads the
+/// registry again (review B1).
+#[test]
+fn caching_a_lazy_checkpoint_does_not_hang() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), &[]);
+    let cp = block_on(s.table("src").local_checkpoint(false, None)).unwrap();
+    let cached = cp.cache();
+    let (n, is_cached) = within_a_minute(move || {
+        let n = block_on(cached.count()).unwrap();
+        (n, block_on(cached.is_cached()).unwrap())
+    });
+    assert_eq!(n, 3);
+    assert!(is_cached);
+    // A frame derived from the checkpoint, cached, then read.
+    let cp = block_on(s.table("src").local_checkpoint(false, None)).unwrap();
+    let derived =
+        cp.filter(krishiv_session::functions::col("id").gt(krishiv_session::functions::lit(1)));
+    let derived = derived.cache();
+    let rows = within_a_minute(move || ids(&derived));
+    assert_eq!(rows, vec![2, 3]);
+}

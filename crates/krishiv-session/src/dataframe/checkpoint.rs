@@ -150,7 +150,7 @@ impl DataFrame {
 
     /// This frame's plan with each checkpoint it stands on that was not taken yet taken: the node
     /// that marks it is replaced by a scan of the snapshot.
-    pub(super) fn plan_with_checkpoints(
+    pub(crate) fn plan_with_checkpoints(
         &self,
     ) -> futures::future::BoxFuture<'_, Result<Arc<LogicalPlan>, KrishivError>> {
         // Boxed: taking a snapshot analyzes (and runs) frames, which can be checkpoints themselves.

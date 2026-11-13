@@ -50,7 +50,7 @@
 //! replacing or dropping a temporary view drop them too. Dropping an entry
 //! drops its spill scope (the directory and its file) once no query reads it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -92,6 +92,44 @@ impl std::fmt::Debug for PendingReg {
         f.debug_struct("PendingReg")
             .field("level", &self.level)
             .finish_non_exhaustive()
+    }
+}
+
+/// A queued `persist` one reader took off the queue. Counted in flight,
+/// dropping it ends that and wakes the readers waiting for it.
+struct TakenReg<'a> {
+    cache: &'a RelationCache,
+    item: Option<PendingReg>,
+    counted: bool,
+}
+
+impl TakenReg<'_> {
+    /// Counts the item in flight: readers that find the queue empty wait for it.
+    fn count(&mut self) {
+        self.cache
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .in_flight += 1;
+        self.counted = true;
+    }
+}
+
+impl Drop for TakenReg<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .cache
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let wake = self.counted;
+        if self.counted {
+            state.in_flight = state.in_flight.saturating_sub(1);
+        }
+        drop(state);
+        if wake {
+            self.cache.registered.notify_waiters();
+        }
     }
 }
 
@@ -181,7 +219,10 @@ struct CacheState {
     /// The plans asked to be cached, by key; an entry is the data of one.
     registrations: HashMap<CacheKey, Registration>,
     /// `persist` calls not yet analyzed and registered, in order.
-    pending: Vec<PendingReg>,
+    pending: VecDeque<PendingReg>,
+    /// Queued `persist`s a reader took off `pending` and is analyzing now
+    /// (their lazy checkpoints taken): another reader waits for them.
+    in_flight: usize,
     names: HashMap<String, CacheKey>,
     /// Exact bytes held, for the cap: pool grants are quantised, so the
     /// pool's own counter would over-count small snapshots.
@@ -358,9 +399,12 @@ pub(crate) struct RelationCache {
     /// Where disk entries go; `None` keeps every entry in memory (unit tests).
     disk: Option<CacheDisk>,
     state: Mutex<CacheState>,
-    /// Held while the pending registrations are analyzed, so a reader that
-    /// finds the queue taken waits for the registrations instead of missing them.
-    registering: futures::lock::Mutex<()>,
+    /// Notified when a queued `persist` taken off `pending` is registered
+    /// (or dropped), so a reader that finds one in flight waits for it
+    /// instead of missing it. No lock is held while a queued plan is
+    /// analyzed: analysis may run queries (a lazy checkpoint takes its rows),
+    /// and they read the registry too.
+    registered: tokio::sync::Notify,
 }
 
 impl RelationCache {
@@ -403,7 +447,7 @@ impl RelationCache {
             spill: Arc::clone(&spill),
             disk,
             state: Mutex::new(CacheState::default()),
-            registering: futures::lock::Mutex::new(()),
+            registered: tokio::sync::Notify::new(),
         });
         let _ = spill.cache.set(Arc::downgrade(&cache));
         hub.relations
@@ -506,7 +550,7 @@ impl RelationCache {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .pending
-            .push(PendingReg { plan, keep, level });
+            .push_back(PendingReg { plan, keep, level });
     }
 
     /// The level `key` is registered at, if it is.
@@ -1194,51 +1238,89 @@ impl Session {
     /// them, in order (Spark registers at the call; analysis is asynchronous here, so every
     /// reader of the registry catches up first). A plan that fails analysis is dropped with a
     /// warning: its frame raises the error at its own first action.
+    ///
+    /// Items are taken one at a time and no lock is held across an analysis: taking a lazy
+    /// checkpoint's rows runs a query, which reads the registry again (it skips the item being
+    /// registered, which is off the queue and not yet counted in flight). A reader that finds
+    /// the queue empty while another analyzes an item waits for that item. Dropping the future
+    /// puts the item it holds back at the front of the queue.
     pub(crate) async fn register_pending_caches(&self) {
         let cache = &self.state.cache;
-        let _turn = cache.registering.lock().await;
         loop {
-            let batch = std::mem::take(
-                &mut cache
-                    .state
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .pending,
-            );
-            if batch.is_empty() {
-                return;
-            }
-            for pending in batch {
-                let frame = DataFrame::over_plan(self.clone(), pending.plan, pending.keep);
-                let analysis = match frame.analysis().await {
-                    Ok(a) => a,
-                    Err(error) => {
-                        tracing::warn!(target: "krishiv::session", %error, "Asked to cache a plan that does not analyze");
-                        continue;
-                    }
-                };
-                let key = CacheKey::of(&analysis.analyzed);
-                let mut tables = read_tables(analysis.analyzed.plan.root());
-                tables.extend(unresolved_tables(&frame.plan));
-                tables.sort();
-                tables.dedup();
+            // Created before the state is read: a registration that ends after the read wakes it.
+            let notified = cache.registered.notified();
+            let next = {
                 let mut state = cache.state.lock().unwrap_or_else(PoisonError::into_inner);
-                if state.registrations.contains_key(&key) {
-                    tracing::warn!(target: "krishiv::session", "Asked to cache already cached data.");
-                    continue;
+                match state.pending.pop_front() {
+                    Some(item) => Some(item),
+                    None if state.in_flight == 0 => return,
+                    None => None,
                 }
-                state.registrations.insert(
-                    key,
-                    Registration {
-                        level: pending.level,
-                        plan: Arc::clone(&frame.plan),
-                        keep: frame.keep.clone(),
-                        tables,
-                        filling: false,
-                    },
-                );
+            };
+            match next {
+                Some(item) => {
+                    self.register_one(TakenReg {
+                        cache,
+                        item: Some(item),
+                        counted: false,
+                    })
+                    .await;
+                }
+                None => notified.await,
             }
         }
+    }
+
+    /// Analyzes one queued `persist` and registers it.
+    async fn register_one(&self, mut taken: TakenReg<'_>) {
+        let Some(pending) = taken.item.as_ref() else {
+            return;
+        };
+        let frame = DataFrame::over_plan(
+            self.clone(),
+            Arc::clone(&pending.plan),
+            pending.keep.clone(),
+        );
+        // The lazy checkpoints first, not counted in flight: their queries read the registry
+        // and must not wait for this item.
+        if let Err(error) = frame.plan_with_checkpoints().await {
+            taken.item = None;
+            tracing::warn!(target: "krishiv::session", %error, "Asked to cache a plan that does not analyze");
+            return;
+        }
+        taken.count();
+        let analysis = match frame.analysis().await {
+            Ok(a) => a,
+            Err(error) => {
+                taken.item = None;
+                tracing::warn!(target: "krishiv::session", %error, "Asked to cache a plan that does not analyze");
+                return;
+            }
+        };
+        let key = CacheKey::of(&analysis.analyzed);
+        let mut tables = read_tables(analysis.analyzed.plan.root());
+        tables.extend(unresolved_tables(&frame.plan));
+        tables.sort();
+        tables.dedup();
+        let cache = &self.state.cache;
+        let mut state = cache.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(pending) = taken.item.take() else {
+            return;
+        };
+        if state.registrations.contains_key(&key) {
+            tracing::warn!(target: "krishiv::session", "Asked to cache already cached data.");
+            return;
+        }
+        state.registrations.insert(
+            key,
+            Registration {
+                level: pending.level,
+                plan: Arc::clone(&frame.plan),
+                keep: frame.keep.clone(),
+                tables,
+                filling: false,
+            },
+        );
     }
 
     /// Runs, as queries of their own, the registered proper subtrees of `analyzed` that hold no
