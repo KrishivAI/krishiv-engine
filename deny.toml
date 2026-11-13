@@ -12,6 +12,11 @@ ignore = [
     # krishiv-exec for its `--cfg loom` concurrency models, never in a
     # shipped binary. Drop this when loom releases without it.
     { id = "RUSTSEC-2026-0441", reason = "unmaintained; dev-only, through loom 0.7.2; no safe upgrade" },
+    # paste is unmaintained (archived) and has no successor release. It comes
+    # only from parquet 58.4.1, which iceberg 0.11 pulls (the iceberg skip-tree
+    # below); paste is a proc macro, so nothing of it is linked. Drop this with
+    # the skip-tree, when iceberg-rust releases on the workspace Arrow major.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained proc macro; only through iceberg 0.11's parquet 58; no safe upgrade" },
 ]
 
 [licenses]
@@ -115,8 +120,14 @@ deny = [
     # to that entry with a justification rather than removing the ban.
     # Exceptions: the `codspeed` bench instrumentation crate (dev-dependency only, never shipped) and
     # `prost-derive` (the derive macro of prost, which krishiv-connect needs; a proc macro runs at
-    # build time and its dependencies are not linked into any Krishiv binary).
-    { crate = "anyhow", wrappers = ["codspeed", "prost-derive"], reason = "libraries use thiserror (ADR 0028)" },
+    # build time and its dependencies are not linked into any Krishiv binary), and `iceberg`
+    # (iceberg-rust's own error type wraps anyhow; ADR 0028 update 2026-10-17, verified
+    # with the skip-tree; Krishiv code never names anyhow and maps iceberg errors to its own).
+    { crate = "anyhow", wrappers = ["codspeed", "prost-derive", "iceberg"], reason = "libraries use thiserror (ADR 0028)" },
+    # OpenDAL stays off every path (design/P3-lakehouse.md §5.1): iceberg file access goes
+    # through Krishiv's own StorageFactory over krishiv-io, never iceberg-storage-opendal.
+    { crate = "opendal", reason = "iceberg file access goes through krishiv-io (P3 lakehouse §5.1)" },
+    { crate = "iceberg-storage-opendal", reason = "iceberg file access goes through krishiv-io (P3 lakehouse §5.1)" },
     # Single-version crates (deny duplicates).
     { crate = "tokio", deny-multiple-versions = true },
     { crate = "prost", deny-multiple-versions = true },
@@ -147,12 +158,21 @@ deny = [
 # workspace's Arrow 60 for the bridge crate krishiv-arrow-bridge only, which
 # moves C Data Interface values 58 -> 60. Remove with that crate when
 # iceberg-rust is on the workspace major (apache/iceberg-rust#3257). The
-# iceberg dependency itself (PR-06's next commit) adds its own entries.
+# iceberg dependency itself is covered by the skip-tree below.
 skip = [
     { crate = "arrow-array@58.4.1", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58 (ADR 0029 update 2026-11-13)" },
     { crate = "arrow-buffer@58.4.1", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58" },
     { crate = "arrow-data@58.4.1", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58" },
     { crate = "arrow-schema@58.4.1", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58" },
+]
+# EXCEPTION (ADR 0028 update 2026-10-17 and 2026-11-06): the iceberg 0.11 subtree,
+# used only by krishiv-connectors-iceberg (metadata, manifests and catalogs; no data
+# path). It brings Arrow and parquet 58.4 beside the workspace's 60, reqwest 0.12
+# beside 0.13, and apache-avro 0.21 (with `zstandard`, zstd 0.13; iceberg 0.11 has
+# no cargo features) beside the workspace's 0.22. Removal trigger: the first iceberg
+# release on the workspace Arrow major (apache/iceberg-rust#3257); then re-check.
+skip-tree = [
+    { crate = "iceberg@0.11", depth = 4, reason = "ADR 0028: iceberg 0.11's Arrow/parquet 58, reqwest 0.12 and apache-avro 0.21 until iceberg releases on Arrow 60 (apache/iceberg-rust#3257)" },
 ]
 
 # The parquet crate's `object_store` feature is banned: Krishiv owns its
