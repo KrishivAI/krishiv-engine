@@ -213,6 +213,42 @@ fn a_cached_entry_whose_refresh_fails_is_dropped() {
     assert_eq!(open_cached(&env, &cache, key(&env, "alice")).version(), 2);
 }
 
+/// The cache is bounded by its estimated bytes: a second table that does not fit beside the
+/// first pushes it out.
+#[test]
+fn the_cache_is_bounded_by_bytes() {
+    let env = two_commits();
+    let one = cache::ENTRY_BYTES + listing_bytes(env.open().unwrap().units());
+    assert!(listing_bytes(env.open().unwrap().units()) > 0);
+    let cache = Arc::new(SnapshotCache::bounded(8, one + one / 2));
+    open_cached(&env, &cache, key(&env, "alice"));
+    assert_eq!(cache.bytes(), one);
+    open_cached(&env, &cache, key(&env, "bob"));
+    assert_eq!((cache.len(), cache.bytes()), (1, one));
+    assert_eq!(cache.cached_version(&key(&env, "alice")), None);
+    assert_eq!(cache.cached_version(&key(&env, "bob")), Some(1));
+}
+
+/// A table whose listing alone exceeds the bound keeps only its snapshot: the next query
+/// starts from it and lists the files again.
+#[test]
+fn a_listing_over_the_bound_is_not_kept() {
+    let env = two_commits();
+    let cache = Arc::new(SnapshotCache::bounded(8, cache::ENTRY_BYTES + 1));
+    let first = open_cached(&env, &cache, key(&env, "alice"));
+    assert_eq!(cache.cached_version(&key(&env, "alice")), Some(1));
+    assert!(!cache.keeps_listing(&key(&env, "alice")));
+    assert_eq!(cache.bytes(), cache::ENTRY_BYTES);
+    let again = open_cached(&env, &cache, key(&env, "alice"));
+    assert_eq!((again.version(), cache.hits()), (1, 1));
+    assert!(!Arc::ptr_eq(&first.inner.units, &again.inner.units));
+    assert_eq!(again.units().len(), first.units().len());
+    // Nothing fits under a bound below one snapshot.
+    let tiny = Arc::new(SnapshotCache::bounded(8, 1));
+    open_cached(&env, &tiny, key(&env, "alice"));
+    assert!(tiny.is_empty());
+}
+
 #[test]
 fn hadoop_paths() {
     let url = |s: &str| url::Url::parse(s).unwrap();

@@ -103,6 +103,12 @@ mod disabled {
         .into()
     }
 
+    impl DeltaCache {
+        pub(crate) fn from_config(_: &krishiv_common::config::Config) -> Self {
+            Self
+        }
+    }
+
     impl DeltaReads {
         pub(crate) fn new(_: super::DeltaInputs) -> Self {
             Self

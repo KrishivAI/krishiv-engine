@@ -247,6 +247,7 @@ impl EngineRuntime {
             Arc::new(ResultCache::default())
         };
         let invalidation = crate::cache::Invalidation::new(Arc::clone(&results));
+        let delta = Arc::new(crate::delta::DeltaCache::from_config(&config));
         let runtime = Self {
             pairs,
             config: Arc::new(config),
@@ -267,7 +268,7 @@ impl EngineRuntime {
             live: Mutex::new(LiveSet::default()),
             io,
             private,
-            delta: Arc::default(),
+            delta,
         };
         runtime.register_gauges()?;
         Ok(Arc::new(runtime))

@@ -45,7 +45,7 @@ use crate::engine::schema::{scalar_to_array, to_arrow_field};
 use crate::error::from_kernel;
 use crate::features::{ReadProtocol, check_read, snapshot_error};
 
-pub use self::cache::{CacheKey, SnapshotCache};
+pub use self::cache::{CacheKey, SnapshotCache, listing_bytes};
 pub use self::scan::{DeltaScan, DeltaScanSource};
 
 /// How [`DeltaTable::open_with`] opens a table.
@@ -243,7 +243,7 @@ impl DeltaTable {
                     key,
                     cache::Cached {
                         snapshot: Arc::clone(&snapshot),
-                        units: Arc::clone(&units),
+                        units: Some(Arc::clone(&units)),
                         last,
                     },
                 ),
@@ -403,10 +403,12 @@ fn refresh(engine: &DeltaEngine, c: &cache::Cached, label: &str) -> Option<Opene
         .build(engine)
         .ok()?;
     check_read(label, &ReadProtocol::of(&snapshot)).ok()?;
-    if snapshot.version() == c.snapshot.version() {
+    if snapshot.version() == c.snapshot.version()
+        && let Some(units) = &c.units
+    {
         return Some(Opened {
             snapshot,
-            units: Arc::clone(&c.units),
+            units: Arc::clone(units),
             stamp: Some(c.last),
         });
     }
