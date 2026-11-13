@@ -105,3 +105,72 @@ fn data_skipping_keeps_a_file_whose_stats_struct_is_null() {
     let keep = evaluate_predicate(&ctx(), &filter, &kept, false).unwrap();
     assert_eq!(show(&(Arc::new(keep) as ArrayRef)), ["false", "true"]);
 }
+
+fn decimal(bits: i128, precision: u8, scale: u8) -> Scalar {
+    Scalar::decimal(bits, precision, scale).unwrap()
+}
+
+fn one_field(name: &str, t: DataType) -> Arc<StructType> {
+    Arc::new(StructType::try_new([StructField::nullable(name, t)]).unwrap())
+}
+
+#[test]
+fn create_many_refuses_a_scalar_of_another_decimal_scale() {
+    // The kernel's own `create_many` copies the raw bits (12.34 at scale 2 would read 1.234 at
+    // scale 3); Krishiv refuses the row instead of rescaling.
+    let field = DataType::decimal(5, 3).unwrap();
+    let e = err(handler().create_many(
+        one_field("d", field.clone()),
+        vec![vec![decimal(1234, 4, 2)]],
+    ));
+    let text = e.to_string();
+    assert!(text.contains("field 'd'"), "{text}");
+    assert!(text.contains("does not match the declared type"), "{text}");
+    // Same scale, other precision: still refused (the declared type is exact).
+    assert!(
+        handler()
+            .create_many(
+                one_field("d", field.clone()),
+                vec![vec![decimal(1234, 4, 3)]]
+            )
+            .is_err()
+    );
+    // Nested in a struct: refused too.
+    let inner = StructType::try_new([StructField::nullable("d", field.clone())]).unwrap();
+    let wrong = Scalar::Struct(
+        delta_kernel::expressions::StructData::try_new(
+            vec![StructField::nullable("d", DataType::decimal(4, 2).unwrap())],
+            vec![decimal(1234, 4, 2)],
+        )
+        .unwrap(),
+    );
+    assert!(
+        handler()
+            .create_many(
+                one_field("s", DataType::Struct(Box::new(inner))),
+                vec![vec![wrong]]
+            )
+            .is_err()
+    );
+    // A zoned timestamp into a `timestamp_ntz` field would only be relabelled: refused.
+    assert!(
+        handler()
+            .create_many(
+                one_field("t", DataType::TIMESTAMP_NTZ),
+                vec![vec![Scalar::Timestamp(1)]]
+            )
+            .is_err()
+    );
+    // The exact type is accepted, and a NULL of any decimal type is a NULL.
+    let data = handler()
+        .create_many(
+            one_field("d", field),
+            vec![
+                vec![decimal(12_340, 5, 3)],
+                vec![Scalar::Null(DataType::decimal(4, 2).unwrap())],
+            ],
+        )
+        .unwrap();
+    let b = KrishivEngineData::batch_of(data.as_ref()).unwrap();
+    assert_eq!(show(b.column(0)), ["12.340", "NULL"]);
+}

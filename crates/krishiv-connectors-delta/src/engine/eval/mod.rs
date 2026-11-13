@@ -157,7 +157,9 @@ fn all_nullable(t: &ArrowType) -> ArrowType {
 /// One batch of `rows`, one scalar per top-level field of `schema` each.
 ///
 /// # Errors
-/// A row of the wrong width, a scalar of the wrong type, or a null in a non-nullable field.
+/// A row of the wrong width, a non-null scalar whose type is not the declared one (a decimal
+/// of another precision or scale is refused, never rescaled), or a null in a non-nullable
+/// field.
 pub(crate) fn create_many(schema: &StructType, rows: &[Vec<Scalar>]) -> KernelResult<RecordBatch> {
     let arrow = Arc::new(to_arrow_schema(schema)?);
     let width = schema.num_fields();
@@ -174,14 +176,21 @@ pub(crate) fn create_many(schema: &StructType, rows: &[Vec<Scalar>]) -> KernelRe
         let mut b = make_builder(&all_nullable(arrow_field.data_type()), rows.len());
         for (i, row) in rows.iter().enumerate() {
             let value = &row[col];
-            append_scalar(value, b.as_mut(), 1).map_err(|e| {
+            let fail = |e: &dyn std::fmt::Display| {
                 KernelError::generic(format!(
                     "Row {i}, field '{}' (expected type {}, got {}): {e}",
                     field.name(),
                     field.data_type(),
                     value.data_type()
                 ))
-            })?;
+            };
+            // A builder takes the bits of a value of another decimal scale or zone label
+            // without complaint, so the type is checked first (the kernel's `create_many`
+            // does not check; it never rescales either).
+            if !value.is_null() && !same_type(&value.data_type(), field.data_type()) {
+                return Err(fail(&"the scalar's type does not match the declared type"));
+            }
+            append_scalar(value, b.as_mut(), 1).map_err(|e| fail(&e))?;
         }
         columns.push(conform(&b.finish(), arrow_field.data_type())?);
     }
@@ -191,6 +200,27 @@ pub(crate) fn create_many(schema: &StructType, rows: &[Vec<Scalar>]) -> KernelRe
         &RecordBatchOptions::new().with_row_count(Some(rows.len())),
     )
     .map_err(arrow_err)
+}
+
+/// Whether a scalar of type `got` fills a column declared `want`: the same types, struct
+/// fields by position, nullability, field names and metadata aside (the builders are
+/// positional and [`conform`] applies the declared names).
+fn same_type(got: &DataType, want: &DataType) -> bool {
+    match (got, want) {
+        (DataType::Primitive(a), DataType::Primitive(b)) => a == b,
+        (DataType::Array(a), DataType::Array(b)) => same_type(a.element_type(), b.element_type()),
+        (DataType::Map(a), DataType::Map(b)) => {
+            same_type(a.key_type(), b.key_type()) && same_type(a.value_type(), b.value_type())
+        }
+        (DataType::Struct(a), DataType::Struct(b))
+        | (DataType::Variant(a), DataType::Variant(b)) => {
+            a.num_fields() == b.num_fields()
+                && a.fields()
+                    .zip(b.fields())
+                    .all(|(x, y)| same_type(x.data_type(), y.data_type()))
+        }
+        _ => false,
+    }
 }
 
 /// Fails unless `batch` has each field of `expected` in order (extra fields allowed), each of
