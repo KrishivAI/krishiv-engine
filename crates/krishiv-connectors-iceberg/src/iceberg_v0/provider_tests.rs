@@ -2,7 +2,7 @@
 //! Tests of [`IcebergTableProvider`] through SQL (analyzer, optimizer, planner
 //! and executor) over tables written by iceberg-rust's in-memory catalog with
 //! Parquet files written here: identity partitions from the manifest, files
-//! without field ids, delete files refused, time travel, and the 22 TPC-H
+//! without field ids, a missing delete file, time travel, and the 22 TPC-H
 //! queries against the same Parquet files read as a plain file table.
 
 use std::collections::HashMap;
@@ -581,7 +581,7 @@ fn time_travel_reads_the_older_snapshot_and_schema() {
 /// a data manifest, a position-delete manifest and a manifest list, added to
 /// the metadata as a new current snapshot.
 #[test]
-fn a_snapshot_with_delete_files_is_refused() {
+fn a_snapshot_whose_delete_file_is_missing_fails() {
     use iceberg::spec::{ManifestListWriter, ManifestWriterBuilder};
     let env = env();
     let schema = ixn_schema();
@@ -687,12 +687,10 @@ fn a_snapshot_with_delete_files_is_refused() {
         .rt
         .block_on(IcebergTable::load(&env.reg, &edited, "db", "t"))
         .unwrap();
+    // The delete file was never written: the read fails naming it, never
+    // returns the rows it deletes.
     let e = env.provider(&table, &VersionSpec::Current).unwrap_err();
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{e}"
-    );
+    assert_ne!(e.error_class(), ErrorClass::InternalError, "{e}");
     assert!(e.message().contains("deletes.parquet"), "{e}");
     // The snapshot before it has no deletes and reads.
     let p = env
