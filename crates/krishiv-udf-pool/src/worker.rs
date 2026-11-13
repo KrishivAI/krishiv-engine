@@ -51,6 +51,8 @@ pub(crate) struct Worker {
     /// The payload ids this worker has loaded.
     loaded: HashSet<u64>,
     stderr: Arc<Mutex<String>>,
+    /// Disconnects when the stderr thread has read to end of file.
+    stderr_done: Option<std::sync::mpsc::Receiver<()>>,
     /// False once an exchange failed in a way that leaves the worker unusable.
     healthy: bool,
 }
@@ -98,9 +100,10 @@ impl Worker {
             }
         };
         let stderr = Arc::new(Mutex::new(String::new()));
-        if let Some(pipe) = child.stderr.take() {
-            drain_stderr(pipe, pid, Arc::clone(&stderr));
-        }
+        let stderr_done = child
+            .stderr
+            .take()
+            .and_then(|pipe| drain_stderr(pipe, pid, Arc::clone(&stderr)));
         let mut worker = Worker {
             child,
             pid,
@@ -109,6 +112,7 @@ impl Worker {
             _private_dir: private_dir,
             loaded: HashSet::new(),
             stderr,
+            stderr_done,
             healthy: false,
         };
         let greeting = rustix::net::sockopt::set_socket_timeout(
@@ -297,6 +301,11 @@ impl Worker {
         // It may be closing its socket and still running: make sure it is gone before it is waited for.
         self.kill();
         let status = self.child.wait();
+        // The process is gone, but its last output may still be in the pipe: let the stderr thread read it
+        // to end of file first (bounded, in case something else still holds the pipe).
+        if let Some(done) = self.stderr_done.take() {
+            let _ = done.recv_timeout(Duration::from_secs(1));
+        }
         let tail = self.stderr_tail();
         if let Ok(status) = status
             && status.code() == Some(i32::from(EXIT_SANDBOX_FAILED))
@@ -357,11 +366,17 @@ fn describe(status: ExitStatus) -> String {
 }
 
 /// Logs a worker's standard error and keeps its last [`STDERR_TAIL`] bytes, on a thread of its own that ends
-/// when the worker does.
-fn drain_stderr(mut pipe: impl Read + Send + 'static, pid: Pid, tail: Arc<Mutex<String>>) {
+/// when the worker does. The receiver disconnects when the thread has read to end of file.
+fn drain_stderr(
+    mut pipe: impl Read + Send + 'static,
+    pid: Pid,
+    tail: Arc<Mutex<String>>,
+) -> Option<std::sync::mpsc::Receiver<()>> {
+    let (done, finished) = std::sync::mpsc::channel::<()>();
     let spawned = std::thread::Builder::new()
         .name("krishiv-udf-stderr".to_owned())
         .spawn(move || {
+            let _done = done;
             let mut buf = [0_u8; 4096];
             loop {
                 let n = match pipe.read(&mut buf) {
@@ -385,8 +400,12 @@ fn drain_stderr(mut pipe: impl Read + Send + 'static, pid: Pid, tail: Arc<Mutex<
                 }
             }
         });
-    if let Err(e) = spawned {
-        tracing::warn!("cannot start the thread that reads a Python UDF worker's output: {e}");
+    match spawned {
+        Ok(_) => Some(finished),
+        Err(e) => {
+            tracing::warn!("cannot start the thread that reads a Python UDF worker's output: {e}");
+            None
+        }
     }
 }
 
@@ -408,10 +427,12 @@ fn write_input(args: &RecordBatch) -> std::io::Result<(File, u64)> {
 
 /// Decodes a worker's result stream as the pool does: the framing checked first ([`check_frames`]), then
 /// arrow-ipc's validating reader, then one column of `return_type`, one batch and `rows` rows. Every failure
-/// is `PYTHON_EXCEPTION` naming what was wrong. Public for the `udf_result_ipc` fuzz target.
+/// is `PYTHON_EXCEPTION` naming what was wrong. Public for the `udf_result_ipc` fuzz target only, so hidden
+/// from the documentation; not a supported interface.
 ///
 /// # Errors
 /// Anything but a well-formed, uncompressed stream of that shape.
+#[doc(hidden)]
 pub fn decode_result(
     bytes: Vec<u8>,
     return_type: &DataType,

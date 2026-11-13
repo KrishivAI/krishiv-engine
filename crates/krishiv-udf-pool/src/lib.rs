@@ -56,3 +56,12 @@ pub fn run_trampoline_if_requested() -> Option<ExitCode> {
     let rest: Vec<OsString> = args.collect();
     Some(krishiv_udf_sandbox::trampoline_main(rest))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_normal_start_is_not_the_trampoline() {
+        // The test binary's arguments never start with the subcommand.
+        assert!(super::run_trampoline_if_requested().is_none());
+    }
+}

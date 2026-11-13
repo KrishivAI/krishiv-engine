@@ -625,3 +625,104 @@ fn an_unregistered_udf_is_not_available() {
         .expect("not registered");
     assert_eq!(err.error_class(), ErrorClass::KrishivUdfNotAvailable);
 }
+
+/// A pool whose "trampoline" is `/bin/sh -c script`: the script plays a worker that fails at start.
+fn fake_worker_pool(py: &std::path::Path, script: &str) -> Pool {
+    let mut config = config(py);
+    config.launcher = Launcher {
+        program: PathBuf::from("/bin/sh"),
+        // The spec's own arguments follow as the script's positional parameters.
+        args: vec!["-c".into(), script.into(), "sh".into()],
+    };
+    Pool::new(config).expect("pool")
+}
+
+fn start_error(pool: Pool) -> KrishivError {
+    let udfs = SessionUdfs::new(pool, owner("s1"));
+    call(
+        &udfs,
+        PythonPayload {
+            command: Arc::from(&b"unused"[..]),
+            eval_type: 101,
+            python_ver: "3.12".to_owned(),
+        },
+        ARROW_BATCHED,
+        ArrowType::Int64,
+        longs(&[Some(1)]),
+    )
+    .expect_err("the worker does not start")
+}
+
+#[test]
+fn workers_that_fail_at_start() {
+    let Some(py) = python() else { return };
+    let cases: [(&str, ErrorClass, &str); 5] = [
+        (
+            "echo 'the kernel said no' >&2; exit 125",
+            ErrorClass::KrishivUdfSandboxUnavailable,
+            "the kernel said no",
+        ),
+        (
+            "echo 'cannot import' >&2; exit 3",
+            ErrorClass::KrishivPythonWorkerExited,
+            "exit code 3",
+        ),
+        (
+            r#"printf '{"t":"hello","wire":9}' >&0; sleep 5"#,
+            ErrorClass::KrishivPythonWorkerExited,
+            "wire version",
+        ),
+        (
+            r#"printf '{"t":"what"}' >&0; sleep 5"#,
+            ErrorClass::KrishivPythonWorkerExited,
+            "unexpected greeting",
+        ),
+        (
+            r#"printf '{"t":"error","kind":"python","message":"No module named pyarrow"}' >&0; sleep 5"#,
+            ErrorClass::PythonException,
+            "No module named pyarrow",
+        ),
+    ];
+    for (script, class, text) in cases {
+        let pool = fake_worker_pool(&py, script);
+        let err = start_error(pool.clone());
+        assert_eq!(err.error_class(), class, "{script}: {err}");
+        assert!(err.to_string().contains(text), "{script}: {err}");
+        assert_eq!(
+            pool.live_workers(),
+            0,
+            "{script}: the failed start is forgotten"
+        );
+    }
+}
+
+#[test]
+fn the_total_cap_stops_another_sessions_idle_worker() {
+    let Some(py) = python() else { return };
+    let mut config = config(&py);
+    config.max_total = 1;
+    let pool = Pool::new(config).expect("pool");
+    assert!(format!("{pool:?}").contains("Pool"));
+    let payload = command(
+        &py,
+        "import os\ndef f(x):\n    return os.getpid()",
+        "LongType()",
+    );
+    let pid_of = |session: &str| {
+        let udfs = SessionUdfs::new(pool.clone(), owner(session));
+        assert!(format!("{udfs:?}").contains(session));
+        let out = call(
+            &udfs,
+            payload.clone(),
+            ARROW_BATCHED,
+            ArrowType::Int64,
+            longs(&[Some(1)]),
+        )
+        .expect("runs");
+        as_longs(&out)[0].expect("pid")
+    };
+    let a = pid_of("a");
+    let b = pid_of("b");
+    assert_ne!(a, b);
+    assert_eq!(pool.live_workers(), 1, "a's idle worker made room for b's");
+}

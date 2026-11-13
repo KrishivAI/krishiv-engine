@@ -47,7 +47,8 @@ Paths are relative to this crate.
 - Every worker is started by the one `krishiv-udf-spawner` thread (the parent-death signal follows the starting
   thread), never in a process group of its own. Every signal goes through the worker's **pidfd** (opened before
   the child can be reaped), never a pid, so a late kill (a cancel racing the worker's own exit, or `Drop` after
-  `exited` reaped it) reaches no other process. A call's cancel kills only while the call holds the worker
+  `exited` reaped it) reaches no other process. pidfds need Linux 5.3, so that is the pool's floor even with
+  `krishiv.udf.sandbox=off` (the sandbox itself needs 5.13). A call's cancel kills only while the call holds the worker
   (`CallState.running`, cleared under its lock before the worker is given back).
 - A worker that breaks the protocol (user code writing to fd 0, a result changed after it was sent) is
   `KRISHIV_PYTHON_WORKER_EXITED`; `INTERNAL_ERROR` is only for the server's own failures (memfd, socket calls).
@@ -63,7 +64,9 @@ Per-query RSS accounting and `system.queries` visibility, the timing trailer, tr
 `spark.sql.execution.pyspark.udf.*Traceback*` flags, the memfd buffer ring, artifacts and the in-process opt-in:
 PR-26c/26d, where the pool meets the session and the query. Also open (review 2026-11-13 nits): the result is
 copied twice (`pread` into a `Vec`, then `StreamReader`; `StreamDecoder` over the buffer would not copy), one
-thread per call, a cancelled call still waits for its worker's start, and the default-Docker CI run of the
+thread per call, a cancelled call still waits for its worker's start, the inspection reads an interpreter's
+output only after it exits (a huge output or a grandchild holding the pipe defeats its timeout), no test of
+the per-session-cap eviction across two interpreters (CI lists one), and the default-Docker CI run of the
 sandbox suite.
 
 ## ADRs (in `../krishiv-internal/adr/`)
