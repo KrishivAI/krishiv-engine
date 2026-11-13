@@ -700,7 +700,10 @@ async fn send_batch(
             for (i, chunk) in chunks.into_iter().enumerate() {
                 let response = sender.response(Some(ResponseType::ArrowBatch(ArrowBatch {
                     row_count: rows,
-                    data: bytes.slice_ref(chunk),
+                    // Each chunk owns its bytes: a slice of the batch would
+                    // keep the whole batch alive in the retry buffer while
+                    // only the chunk's length is reserved (Codex, #742).
+                    data: prost::bytes::Bytes::copy_from_slice(chunk),
                     start_offset: Some(offset),
                     chunk_index: Some(i64::try_from(i).unwrap_or(i64::MAX)),
                     num_chunks_in_batch: Some(n),

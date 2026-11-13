@@ -228,7 +228,11 @@ pub static CONNECT_MAX_RESPONSE_BYTES: ConfigEntry = startup(
      once. Each operation reserves its worst case (`krishiv.connect.execute.aheadBytes` plus, \
      reattachable, `krishiv.connect.execute.retryBufferSize`) before its first response and \
      returns it when released, abandoned or ended; past the cap a new operation waits for one \
-     to end, a running one never waits. Must be at least that worst case (checked at startup).",
+     to end, a running one never waits. Must be at least that worst case (checked at startup). \
+     The reservation assumes responses smaller than the ahead budget: a reattachable operation \
+     can hold up to two responses more (the one being sent and the one crossing the retry \
+     window), each at most `spark.connect.grpc.arrow.maxBatchSize`; every held response is also \
+     reserved from the engine's memory pool, which stays the hard limit.",
     None,
 );
 
