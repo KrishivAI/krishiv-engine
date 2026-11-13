@@ -858,6 +858,43 @@ fn explain_shows_snapshot_files_and_deletes() {
     );
 }
 
+/// Planning a snapshot again reads its manifests from the registration's
+/// cache (PR-25d; design note §2.3): with the manifests gone from the store,
+/// a second plan through the same registration still succeeds, while a
+/// table loaded with `krishiv.iceberg.manifestCache.bytes = 0` fetches them
+/// and fails.
+#[test]
+fn a_second_plan_reads_manifests_from_the_cache() {
+    use krishiv_common::config::Config;
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            positions("d.parquet", 0, 2, &[("a.parquet", 1)], None),
+        ],
+        false,
+    );
+    let location = t.table.table.metadata_location().unwrap().to_owned();
+    let mut off = Config::new();
+    off.set("krishiv.iceberg.manifestCache.bytes", "0").unwrap();
+    let uncached = t
+        .env
+        .rt
+        .block_on(IcebergTable::load_with_config(
+            &t.env.reg, &location, "db", "t", &off,
+        ))
+        .unwrap();
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 2]);
+    for m in ["data-m.avro", "delete-m.avro"] {
+        std::fs::remove_file(t.env.dir.path().join(m)).unwrap();
+    }
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 2]);
+    let e = t
+        .env
+        .provider(&uncached, &VersionSpec::Current)
+        .unwrap_err();
+    assert!(e.message().contains("-m.avro"), "{e}");
+}
+
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
 #[derive(Debug, Clone)]
 enum Op {

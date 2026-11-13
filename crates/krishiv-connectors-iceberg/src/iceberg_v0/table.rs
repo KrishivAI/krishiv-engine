@@ -20,10 +20,14 @@ use crate::plan::deletes::DeleteIndex;
 use crate::plan::{
     ManifestFilter, PruneOptions, ScanPlan, TableSnapshot, VersionSpec, WriterMetrics,
 };
-use krishiv_common::config::{CATALOG_MAX_METADATA_BYTES, Config, ConfigValue};
+use krishiv_common::config::{
+    CATALOG_MAX_METADATA_BYTES, Config, ConfigValue, ICEBERG_MANIFEST_CACHE_BYTES,
+};
 
 /// `krishiv.catalog.maxMetadataBytes`'s default (256 MiB).
 const DEFAULT_MAX_METADATA_BYTES: u64 = 256 << 20;
+/// The default of `krishiv.iceberg.manifestCache.bytes`.
+const DEFAULT_MANIFEST_CACHE_BYTES: u64 = 64 << 20;
 use krishiv_io::PushdownExpr;
 
 /// An Iceberg table's metadata, read through a [`StorageRegistration`].
@@ -34,6 +38,8 @@ pub struct IcebergTable {
     /// The catalog parse limit on each metadata file, manifest list and
     /// manifest (`krishiv.catalog.maxMetadataBytes`).
     pub(super) max_metadata_bytes: u64,
+    /// `krishiv.iceberg.manifestCache.bytes` (0: no manifest cache).
+    pub(super) manifest_cache_bytes: u64,
 }
 
 impl fmt::Debug for IcebergTable {
@@ -76,6 +82,10 @@ impl IcebergTable {
         name: &str,
         config: &Config,
     ) -> Result<Self, KrishivError> {
+        let manifest_cache_bytes = config
+            .get(&ICEBERG_MANIFEST_CACHE_BYTES)
+            .and_then(ConfigValue::as_size)
+            .unwrap_or(DEFAULT_MANIFEST_CACHE_BYTES);
         let max_metadata_bytes = config
             .get(&CATALOG_MAX_METADATA_BYTES)
             .and_then(ConfigValue::as_size)
@@ -107,6 +117,7 @@ impl IcebergTable {
             table,
             registered,
             max_metadata_bytes,
+            manifest_cache_bytes,
         })
     }
 
@@ -154,6 +165,7 @@ impl IcebergTable {
         let env = scan::PlanEnv {
             max_metadata_bytes: self.max_metadata_bytes,
             metrics: &metrics,
+            cache: Some((&self.registered.manifests, self.manifest_cache_bytes)),
         };
         scan::plan(
             self.table.file_io(),
@@ -180,6 +192,7 @@ impl IcebergTable {
         let env = scan::PlanEnv {
             max_metadata_bytes: self.max_metadata_bytes,
             metrics: &metrics,
+            cache: Some((&self.registered.manifests, self.manifest_cache_bytes)),
         };
         scan::plan_files(
             self.table.file_io(),

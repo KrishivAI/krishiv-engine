@@ -21,6 +21,7 @@ use krishiv_common::error::{
 };
 use krishiv_io::{ColumnPath, PushdownExpr};
 
+use super::manifest_cache::{ManifestCache, ManifestKey};
 use super::storage::from_iceberg;
 use super::types::spark_schema;
 use crate::plan::bounds::min_be_bytes;
@@ -477,12 +478,20 @@ pub(crate) fn parse_manifest(bytes: &[u8], spec_id: i32) -> Result<Vec<ParsedEnt
         .collect())
 }
 
-/// The live entries of one manifest, read, parsed and inherited.
+/// The live entries of one manifest, read, parsed and inherited, or from the
+/// manifest cache of `env`.
 async fn manifest_entries(
     io: &FileIO,
     manifest: &ManifestFileEntry,
-    max_bytes: u64,
-) -> Result<Vec<LiveEntry>, KrishivError> {
+    env: PlanEnv<'_>,
+) -> Result<Arc<[LiveEntry]>, KrishivError> {
+    let cache = env.cache.filter(|(_, limit)| *limit > 0);
+    let key = cache.map(|_| ManifestKey::of(manifest));
+    if let (Some((c, _)), Some(k)) = (cache, &key)
+        && let Some(hit) = c.get(k)
+    {
+        return Ok(hit);
+    }
     if manifest.encrypted {
         return Err(KrishivUnsupportedFeature {
             feature: "encrypted Iceberg manifests".to_owned(),
@@ -490,17 +499,31 @@ async fn manifest_entries(
         .into());
     }
     let declared = u64::try_from(manifest.length).ok().filter(|n| *n > 0);
-    let bytes = read_capped(io, "manifest", &manifest.path, declared, max_bytes).await?;
-    inherit(manifest, parse_manifest(&bytes, manifest.spec_id)?)
+    let bytes = read_capped(
+        io,
+        "manifest",
+        &manifest.path,
+        declared,
+        env.max_metadata_bytes,
+    )
+    .await?;
+    let entries: Arc<[LiveEntry]> =
+        inherit(manifest, parse_manifest(&bytes, manifest.spec_id)?)?.into();
+    if let (Some((c, limit)), Some(k)) = (cache, key) {
+        c.insert(k, Arc::clone(&entries), limit);
+    }
+    Ok(entries)
 }
 
 /// What a plan reads under: the catalog parse limit on each manifest list and
 /// manifest (compressed bytes; the decoded entries are not charged to a memory
-/// reservation until PR-25d) and the writers' metrics modes.
+/// reservation) and the writers' metrics modes, with the decoded-manifest
+/// cache and its byte limit (`None`: no cache).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PlanEnv<'a> {
     pub(crate) max_metadata_bytes: u64,
     pub(crate) metrics: &'a WriterMetrics,
+    pub(crate) cache: Option<(&'a ManifestCache, u64)>,
 }
 
 /// The files of `snapshot` that may hold rows matching `predicate`.
@@ -567,8 +590,8 @@ pub(crate) async fn plan_files(
         .filter(|m| m.may_have_live_files() && pruner.manifest_may_match(m))
         .collect();
     let manifests_pruned = manifests_total - kept.len();
-    let per_manifest: Vec<Vec<LiveEntry>> = futures::stream::iter(kept.iter())
-        .map(|m| manifest_entries(io, m, env.max_metadata_bytes))
+    let per_manifest: Vec<Arc<[LiveEntry]>> = futures::stream::iter(kept.iter())
+        .map(|m| manifest_entries(io, m, env))
         .buffered(MANIFEST_CONCURRENCY)
         .try_collect()
         .await?;
@@ -578,7 +601,7 @@ pub(crate) async fn plan_files(
         manifests_pruned,
         ..ScanPlan::default()
     };
-    for entry in per_manifest.into_iter().flatten() {
+    for entry in per_manifest.iter().flat_map(|m| m.iter()).cloned() {
         match entry {
             LiveEntry::Data(d) => {
                 if pruner.file_may_match(&d.file) {
