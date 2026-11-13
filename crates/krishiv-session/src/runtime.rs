@@ -253,6 +253,10 @@ impl EngineRuntime {
                 Some(Arc::new(crate::profile_history::ProfileHistory::open(
                     std::path::Path::new(&dir),
                     max,
+                    config
+                        .get(&krishiv_common::config::HISTORY_LITERALS)
+                        .and_then(|v| v.as_str().map(|m| m != "keep"))
+                        .unwrap_or(true),
                 )?))
             }
             None => None,

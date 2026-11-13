@@ -8,14 +8,18 @@
 //! queue and a profile that does not serialize are counted ([`ProfileHistory::failures`]) and never fail
 //! the query.
 //!
-//! A segment is `history-<first finish, ms, 13 digits>-<seq, 6 digits>.parquet`, written to a temporary
+//! A segment is `history-<first finish, ms, 13 digits>-<writer id>-<seq, 6 digits>.parquet` (the writer id keeps
+//! two engines on one directory from naming the same file), written to a temporary
 //! name and renamed, so a reader never sees half a file. Retention is by whole segments, oldest first,
 //! until the directory is within the byte bound; the newest segment is always kept.
 //!
 //! Schema (v1; a reader takes the columns it knows by name, so a later optional column loads under it):
 //! `query_id`, `finished_at_ms`, `state`, `error_class`, `principal`, `sql`, `duration_ns`,
 //! `profile_version`, `profile_minor`, `profile` (the versioned profile JSON of `krishiv-exec`).
-//! `sql` is the redacted statement text `system.queries` shows (ADR 0038); the profile has no result data.
+//! `sql` is the statement text as the session redacted it for credentials (ADR 0038), and with
+//! `krishiv.history.literals = mask` (the default) every literal in it and in the profile's plan lines is `?`.
+//! The profile has no result data. A file carries `krishiv.history.schema_version` in its Parquet metadata;
+//! a reader skips a file of a later major version, so a store written by a newer build never misreads.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -33,6 +37,8 @@ use krishiv_exec::planner::PhysicalPlan;
 use krishiv_exec::profile::{PROFILE_MINOR, PROFILE_VERSION, ProfileIdentity, QueryProfile};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::file::metadata::KeyValue;
+use parquet::file::properties::WriterProperties;
 
 /// Entries the queue holds before [`ProfileHistory::record`] drops one (and counts it).
 const QUEUE: usize = 1024;
@@ -43,6 +49,11 @@ const LINGER: Duration = Duration::from_millis(500);
 /// The file name prefix and extension of a segment.
 const PREFIX: &str = "history-";
 const SUFFIX: &str = ".parquet";
+/// The segment schema's major version and the Parquet metadata key that carries it.
+const SCHEMA_VERSION: u32 = 1;
+const VERSION_KEY: &str = "krishiv.history.schema_version";
+/// The most bytes of statement text one row keeps.
+const SQL_MAX: usize = 4096;
 
 /// What a query leaves behind when it ends.
 pub(crate) struct HistoryEntry {
@@ -110,7 +121,7 @@ impl ProfileHistory {
     ///
     /// # Errors
     /// The directory cannot be created.
-    pub(crate) fn open(dir: &Path, max_bytes: u64) -> Result<Self, KrishivError> {
+    pub(crate) fn open(dir: &Path, max_bytes: u64, mask: bool) -> Result<Self, KrishivError> {
         std::fs::create_dir_all(dir)
             .map_err(|e| internal(format!("krishiv.history.path {}: {e}", dir.display())))?;
         let (tx, rx) = sync_channel(QUEUE);
@@ -120,6 +131,8 @@ impl ProfileHistory {
             max_bytes,
             failures: Arc::clone(&failures),
             seq: 0,
+            id: writer_id(),
+            mask,
         };
         let thread = std::thread::Builder::new()
             .name("krishiv-history".to_owned())
@@ -188,6 +201,9 @@ struct Writer {
     max_bytes: u64,
     failures: Arc<AtomicU64>,
     seq: u64,
+    /// Names this writer's files, unique among the engines on one directory.
+    id: String,
+    mask: bool,
 }
 
 impl Writer {
@@ -201,7 +217,7 @@ impl Writer {
             };
             match msg {
                 Ok(Msg::Entry(entry)) => {
-                    match stored(&entry) {
+                    match stored(*entry, self.mask) {
                         Some(row) => rows.push(row),
                         None => {
                             self.failures.fetch_add(1, Ordering::Relaxed);
@@ -210,7 +226,7 @@ impl Writer {
                     // Take what is already queued, up to a segment.
                     while rows.len() < SEGMENT_ROWS {
                         match rx.try_recv() {
-                            Ok(Msg::Entry(e)) => match stored(&e) {
+                            Ok(Msg::Entry(e)) => match stored(*e, self.mask) {
                                 Some(row) => rows.push(row),
                                 None => {
                                     self.failures.fetch_add(1, Ordering::Relaxed);
@@ -248,7 +264,7 @@ impl Writer {
         let taken = std::mem::take(rows);
         self.seq += 1;
         let first = taken.iter().map(|r| r.finished_at_ms).min().unwrap_or(0);
-        let name = format!("{PREFIX}{first:013}-{:06}{SUFFIX}", self.seq);
+        let name = format!("{PREFIX}{first:013}-{}-{:06}{SUFFIX}", self.id, self.seq);
         if write_segment(&self.dir, &name, &taken).is_err() {
             self.failures
                 .fetch_add(taken.len() as u64, Ordering::Relaxed);
@@ -263,22 +279,58 @@ fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
 }
 
-fn stored(e: &HistoryEntry) -> Option<StoredProfile> {
-    let mut profile = QueryProfile::new(&e.plan, e.metrics.clone(), true);
-    profile.trace.clone_from(&e.trace);
+fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
+    let mut profile = QueryProfile::new(&e.plan, e.metrics, true);
+    profile.trace = e.trace;
     profile.identity = Some(e.identity.clone());
+    let mut sql = e.sql;
+    if mask {
+        mask_plan(&mut profile.plan);
+        sql = sql.map(|t| krishiv_sql::mask_literals(&t));
+    }
+    let sql = sql.map(|t| cut(t, SQL_MAX));
     Some(StoredProfile {
-        query_id: e.query_id.clone(),
+        query_id: e.query_id,
         finished_at_ms: e.finished_at_ms,
         state: e.state.to_owned(),
-        error_class: e.error_class.clone(),
-        principal: e.identity.principal.clone(),
-        sql: e.sql.clone(),
+        error_class: e.error_class,
+        principal: e.identity.principal,
+        sql,
         duration_ns: e.duration_ns,
         profile_version: i64::try_from(PROFILE_VERSION).ok()?,
         profile_minor: i64::try_from(PROFILE_MINOR).ok()?,
         profile: profile.to_json(),
     })
+}
+
+/// Replaces the literals in every node's argument text with `?`.
+fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode) {
+    node.detail = krishiv_sql::mask_literals(&node.detail);
+    for child in &mut node.children {
+        mask_plan(child);
+    }
+}
+
+/// `text` cut to at most `max` bytes at a character boundary.
+fn cut(mut text: String, max: usize) -> String {
+    if text.len() > max {
+        let mut end = max;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    text
+}
+
+/// A name for one writer: the process and the moment it opened, so two engines on a directory differ.
+fn writer_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| {
+            d.subsec_nanos() ^ u32::try_from(d.as_secs() & 0xffff_ffff).unwrap_or(0)
+        });
+    format!("{:x}{nanos:08x}", std::process::id())
 }
 
 fn schema() -> SchemaRef {
@@ -321,7 +373,14 @@ fn write_segment(dir: &Path, name: &str, rows: &[StoredProfile]) -> Result<(), S
     .map_err(|e| e.to_string())?;
     let tmp = dir.join(format!(".{name}.tmp"));
     let file = File::create(&tmp).map_err(|e| e.to_string())?;
-    let mut writer = ArrowWriter::try_new(file, schema(), None).map_err(|e| e.to_string())?;
+    let props = WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![KeyValue::new(
+            VERSION_KEY.to_owned(),
+            SCHEMA_VERSION.to_string(),
+        )]))
+        .build();
+    let mut writer =
+        ArrowWriter::try_new(file, schema(), Some(props)).map_err(|e| e.to_string())?;
     writer.write(&batch).map_err(|e| e.to_string())?;
     writer.close().map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, dir.join(name)).map_err(|e| {
@@ -354,7 +413,12 @@ fn trim(dir: &Path, max_bytes: u64) -> std::io::Result<()> {
         if total <= max_bytes {
             break;
         }
-        std::fs::remove_file(path)?;
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            // Another engine on the directory trimmed it first.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
         total -= size;
     }
     Ok(())
@@ -384,9 +448,21 @@ pub(crate) fn read_history(dir: &Path) -> Result<Vec<StoredProfile>, KrishivErro
 
 fn read_segment(path: &Path) -> Result<Vec<StoredProfile>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
-    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
-        .and_then(parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::build)
-        .map_err(|e| e.to_string())?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| e.to_string())?;
+    // A file without the key is the first v1; one of a later major version is not this build's to read.
+    let version = builder
+        .metadata()
+        .file_metadata()
+        .key_value_metadata()
+        .and_then(|kv| kv.iter().find(|k| k.key == VERSION_KEY))
+        .and_then(|k| k.value.as_deref()?.parse::<u32>().ok())
+        .unwrap_or(1);
+    if version > SCHEMA_VERSION {
+        return Err(format!(
+            "history schema version {version} is newer than {SCHEMA_VERSION}"
+        ));
+    }
+    let reader = builder.build().map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for batch in reader {
         let batch = batch.map_err(|e| e.to_string())?;

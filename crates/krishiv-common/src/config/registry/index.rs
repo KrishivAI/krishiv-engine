@@ -29,6 +29,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
+    ("krishiv.history.literals", &HISTORY_LITERALS),
     ("krishiv.history.maxBytes", &HISTORY_MAX_BYTES),
     ("krishiv.io.cache.enabled", &IO_CACHE_ENABLED),
     ("krishiv.io.coalesceBytes", &IO_COALESCE_BYTES),

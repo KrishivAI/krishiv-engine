@@ -1298,5 +1298,13 @@ fn history_entries_parse_and_default() {
         Some(50 << 20)
     );
     assert!(c.set("krishiv.history.maxBytes", "lots").is_err());
+    assert_eq!(
+        c.get(&HISTORY_LITERALS)
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .as_deref(),
+        Some("mask")
+    );
+    c.set("krishiv.history.literals", "keep").unwrap();
+    assert!(c.set("krishiv.history.literals", "some").is_err());
     assert_eq!(HISTORY_PATH.scope, Scope::Cluster);
 }

@@ -60,6 +60,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
     &HISTORY_PATH,
+    &HISTORY_LITERALS,
     &HISTORY_MAX_BYTES,
     &UI_ENABLED,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
@@ -575,9 +576,27 @@ pub static HISTORY_PATH: ConfigEntry = ConfigEntry {
     doc: "A directory where the engine keeps one compact profile for every finished query, as \
           Parquet files, so `system.queries` history survives a restart and a stored profile can \
           be opened later. A profile has the plan, the operators' counters and the query's \
-          identity, and no literals or result data. Writing happens after the result stream \
+          identity, and no result data; literals are masked unless `krishiv.history.literals` \
+          is `keep`. Every query that reached execution is stored, as the engine metrics count \
+          them: a statement refused in parsing, analysis or an access check is not. Writing happens after the result stream \
           ends and never fails the query; a failed write is counted in \
           `krishiv_history_write_failures`. When unset, nothing is stored.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Whether the persisted history keeps literals (P3-T051).
+pub static HISTORY_LITERALS: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.literals",
+    value_type: ValueType::Enum(&["keep", "mask"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("mask"))),
+    doc: "`mask` (the default) replaces every string and number literal with `?` in the \
+          statement text and in the plan lines of the profiles stored under \
+          `krishiv.history.path`, so a stored profile carries no data values. `keep` stores \
+          them as `EXPLAIN ANALYZE` prints them. Credentials in a statement are redacted either \
+          way.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",

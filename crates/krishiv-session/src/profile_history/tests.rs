@@ -192,6 +192,9 @@ fn a_checked_in_v1_file_reads() {
     assert_eq!(stored.len(), 2);
     assert_eq!(stored[0].query_id, "q1");
     assert_eq!(stored[1].error_class.as_deref(), Some("DIVIDE_BY_ZERO"));
+    // The stored document is a profile this build still reads.
+    let profile = QueryProfile::from_json(&stored[0].profile).unwrap();
+    assert!(!profile.metrics.operators.is_empty());
 }
 
 #[test]
@@ -222,20 +225,175 @@ fn nothing_is_stored_without_a_path() {
     run(&session, "SELECT 1");
 }
 
-/// Writes `tests/data/history-v1.parquet`, the checked-in v1 file; run once with `--ignored` when v1 is
-/// defined, never to follow a later schema (the point of the fixture is that it stays as v1 wrote it).
+/// Writes `tests/data/history-v1.parquet`, the checked-in v1 file, holding a real profile; run once with
+/// `--ignored` when v1 is defined, never to follow a later schema (the point of the fixture is that it stays
+/// as v1 wrote it).
 #[test]
 #[ignore = "regenerates the checked-in fixture"]
 fn write_the_v1_fixture() {
+    let scratch = tempfile::tempdir().unwrap();
+    let rt = runtime(scratch.path(), "64m");
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    run(
+        &session,
+        "SELECT id % 3 AS k, count(*) FROM range(0, 500) GROUP BY 1",
+    );
+    rt.profile_history.as_ref().unwrap().flush();
+    let profile = read_history(scratch.path()).unwrap().remove(0).profile;
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
     std::fs::create_dir_all(&dir).unwrap();
-    let mut failed = row(2, "{}".to_owned());
+    let mut failed = row(2, profile.clone());
     failed.state = "failed".to_owned();
     failed.error_class = Some("DIVIDE_BY_ZERO".to_owned());
+    write_segment(&dir, "history-v1.parquet", &[row(1, profile), failed]).unwrap();
+}
+
+const SECRET_TEXT: &str = "hunter2-literal-canary";
+const SECRET_NUMBER: &str = "424242424";
+
+fn canary_run(literals: Option<&str>) -> Vec<StoredProfile> {
+    let dir = tempfile::tempdir().unwrap();
+    let mut b =
+        EngineRuntime::builder().config("krishiv.history.path", dir.path().to_str().unwrap());
+    if let Some(l) = literals {
+        b = b.config("krishiv.history.literals", l);
+    }
+    let rt = b.build().unwrap();
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    run(
+        &session,
+        &format!(
+            "SELECT id, '{SECRET_TEXT}' AS s FROM range(0, 50) WHERE id < {SECRET_NUMBER} AND id <> 7"
+        ),
+    );
+    rt.profile_history.as_ref().unwrap().flush();
+    read_history(dir.path()).unwrap()
+}
+
+#[test]
+fn literals_are_masked_by_default_in_the_text_and_the_plan() {
+    for stored in [canary_run(None), canary_run(Some("mask"))] {
+        assert_eq!(stored.len(), 1);
+        let q = &stored[0];
+        for text in [q.sql.as_deref().unwrap(), q.profile.as_str()] {
+            assert!(!text.contains(SECRET_TEXT), "a string literal was stored");
+            assert!(!text.contains(SECRET_NUMBER), "a number literal was stored");
+        }
+        assert!(q.sql.as_deref().unwrap().contains('?'));
+        // The plan is still there, and still parses.
+        assert!(q.profile.contains("Filter"));
+        QueryProfile::from_json(&q.profile).unwrap();
+    }
+}
+
+#[test]
+fn keep_stores_the_literals() {
+    let stored = canary_run(Some("keep"));
+    assert!(stored[0].sql.as_deref().unwrap().contains(SECRET_TEXT));
+    assert!(stored[0].profile.contains(SECRET_NUMBER));
+}
+
+#[test]
+fn a_profile_is_stored_only_after_its_result_stream_ends() {
+    use futures::StreamExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path(), "64m");
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let df = block_on(session.sql("SELECT id FROM range(0, 100000)")).unwrap();
+    let mut stream = block_on(df.execute_stream()).unwrap();
+    let history = rt.profile_history.as_ref().unwrap();
+    assert!(block_on(stream.next()).is_some());
+    history.flush();
+    assert!(
+        read_history(dir.path()).unwrap().is_empty(),
+        "stored while the stream was open"
+    );
+    while block_on(stream.next()).is_some() {}
+    drop(stream);
+    history.flush();
+    assert_eq!(read_history(dir.path()).unwrap().len(), 1);
+}
+
+#[test]
+fn two_engines_on_one_directory_keep_every_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = runtime(dir.path(), "64m");
+    let b = runtime(dir.path(), "64m");
+    let sa = Session::builder().runtime(Arc::clone(&a)).build().unwrap();
+    let sb = Session::builder().runtime(Arc::clone(&b)).build().unwrap();
+    for _ in 0..5 {
+        run(&sa, "SELECT 1");
+        a.profile_history.as_ref().unwrap().flush();
+        run(&sb, "SELECT 2");
+        b.profile_history.as_ref().unwrap().flush();
+    }
+    // Both writers have written a first segment (sequence 1) for the same moment, if the clock is coarse.
+    assert_eq!(read_history(dir.path()).unwrap().len(), 10);
+    assert_eq!(a.profile_history.as_ref().unwrap().failures(), 0);
+    assert_eq!(b.profile_history.as_ref().unwrap().failures(), 0);
+}
+
+#[test]
+fn a_file_of_a_later_schema_version_is_skipped() {
+    use parquet::file::metadata::KeyValue;
+    use parquet::file::properties::WriterProperties;
+
+    let dir = tempfile::tempdir().unwrap();
     write_segment(
-        &dir,
-        "history-v1.parquet",
-        &[row(1, "{}".to_owned()), failed],
+        dir.path(),
+        "history-0000000000001-a-000001.parquet",
+        &[row(1, "{}".to_owned())],
     )
     .unwrap();
+    // The same columns, marked as a later major version.
+    let src = dir.path().join("history-0000000000001-a-000001.parquet");
+    let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+        std::fs::File::open(&src).unwrap(),
+    )
+    .unwrap();
+    let schema = Arc::clone(builder.schema());
+    let batches: Vec<_> = builder.build().unwrap().map(Result::unwrap).collect();
+    let props = WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![KeyValue::new(
+            "krishiv.history.schema_version".to_owned(),
+            "2".to_owned(),
+        )]))
+        .build();
+    let file =
+        std::fs::File::create(dir.path().join("history-0000000000002-a-000002.parquet")).unwrap();
+    let mut w = parquet::arrow::ArrowWriter::try_new(file, schema, Some(props)).unwrap();
+    for b in &batches {
+        w.write(b).unwrap();
+    }
+    w.close().unwrap();
+    // Only the version 1 file reads.
+    assert_eq!(read_history(dir.path()).unwrap().len(), 1);
+}
+
+#[test]
+fn trim_ignores_a_segment_another_engine_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    write_segment(
+        dir.path(),
+        "history-0000000000001-a-000001.parquet",
+        &[row(1, "x".repeat(5_000))],
+    )
+    .unwrap();
+    write_segment(
+        dir.path(),
+        "history-0000000000002-a-000002.parquet",
+        &[row(2, "y".repeat(5_000))],
+    )
+    .unwrap();
+    write_segment(
+        dir.path(),
+        "history-0000000000003-a-000003.parquet",
+        &[row(3, "z".repeat(5_000))],
+    )
+    .unwrap();
+    // The listing sees all three; the first is gone by the time trim removes it.
+    std::fs::remove_file(dir.path().join("history-0000000000001-a-000001.parquet")).unwrap();
+    trim(dir.path(), 1).unwrap();
+    assert_eq!(read_history(dir.path()).unwrap().len(), 1);
 }

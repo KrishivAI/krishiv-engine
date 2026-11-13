@@ -263,7 +263,7 @@ impl QueryFold {
         ));
     }
 
-    pub(crate) fn finish(self, error: Option<&KrishivError>) {
+    pub(crate) fn finish(mut self, error: Option<&KrishivError>) {
         self.record_history(error);
         self.start.fold(
             &self.state,
@@ -275,8 +275,10 @@ impl QueryFold {
     }
 
     /// Queues the query's profile for the persisted history: the queue send is all the query pays; the profile is built and written on the history thread.
-    fn record_history(&self, error: Option<&KrishivError>) {
-        let (Some(job), Some(store)) = (&self.history, &self.state.runtime.profile_history) else {
+    fn record_history(&mut self, error: Option<&KrishivError>) {
+        // The plan moves into the entry: the one copy of it is the one taken when the query started.
+        let (Some(job), Some(store)) = (self.history.take(), &self.state.runtime.profile_history)
+        else {
             return;
         };
         let stored = self.query.error();
@@ -300,12 +302,12 @@ impl QueryFold {
                 Status::Denied => "denied",
             },
             error_class,
-            sql: job.sql.clone(),
+            sql: job.sql,
             duration_ns: i64::try_from(wall.as_nanos()).unwrap_or(i64::MAX),
-            plan: job.plan.clone(),
+            plan: job.plan,
             metrics,
-            identity: job.identity.clone(),
-            trace: job.trace.clone(),
+            identity: job.identity,
+            trace: job.trace,
         });
     }
 }
