@@ -39,3 +39,19 @@ as the driver's naive ISO form in UTC), `schema`, `fields` and the last `protoco
 pre-checkpoint commits removed so only the checkpoint can supply the state) and
 `crates/krishiv-connectors-delta/src/table/oracle_tests.rs` (every read-path table through `DeltaTable`, against
 `typed_rows` and against the kernel's own `Scan::execute`).
+
+Session probes (PR-08b part 2; `gen_delta_fixtures.py /out session`, run as the read-path tables are, plus
+`--conf spark.sql.warehouse.dir=/tmp/wh` so the managed-table probes have a writable warehouse). `SESSION.json`
+records, for one partitioned table, what Spark + delta-spark does with each statement Krishiv's session handles or
+refuses, with the table path elided as `<path>`:
+- `CREATE TABLE d USING delta LOCATION` without a column list, its `DESCRIBE` rows and its `SELECT` rows;
+- a column list that matches but omits `PARTITIONED BY` (`DELTA_CREATE_TABLE_WITH_DIFFERENT_PARTITIONING`), one that
+  matches with it (accepted), and two that differ (`DELTA_CREATE_TABLE_SCHEME_MISMATCH`, with its parameters);
+- `CREATE` over a missing or empty location, `CREATE` without a location, CTAS, `INSERT` and `ALTER` (all succeed in
+  Spark; Krishiv refuses them until PR-37a);
+- the unknown-reader-feature refusal through a catalog table (`tableNameOrPath` = `default.refused`) and through a path
+  (`file:<path>`, a trailing slash dropped), and a corrupt commit file (`FAILED_READ_FILE.NO_HINT`, KD001, with the
+  commit's `file://` URL).
+
+`session-appends` is a table of three commits (a create and two appends); the session's snapshot-cache tests remove its
+last commit and put it back while a query runs.
