@@ -56,6 +56,7 @@ mod column_stats;
 mod command;
 mod conf;
 mod dataframe;
+mod delta;
 mod execute_immediate;
 mod explain;
 mod explain_graph;

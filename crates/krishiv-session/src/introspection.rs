@@ -80,7 +80,7 @@ fn simple_string(entries: &[(String, String)]) -> String {
 }
 
 /// `StructType.treeString` of `fields` (name, type, nullable), as `printSchema` prints it.
-fn tree_string(fields: &[(&str, &DataType, bool)]) -> String {
+pub(crate) fn tree_string(fields: &[(&str, &DataType, bool)]) -> String {
     let mut out = String::from("root\n");
     for (name, ty, nullable) in fields {
         tree_field(

@@ -49,6 +49,9 @@ tracing-opentelemetry = { workspace = true, optional = true }
 prost = { workspace = true, optional = true, features = ["std"] }
 reqwest = { workspace = true, optional = true, features = ["blocking", "rustls"] }
 tracing-subscriber = { workspace = true, optional = true, features = ["registry", "std"] }
+# Delta tables (`delta.rs`, feature `delta`).
+krishiv-connectors-delta = { path = "../krishiv-connectors-delta", version = "=0.2.0", optional = true }
+url = { workspace = true, optional = true }
 # The local file system as a store (`fs`); no other store features.
 object_store = { workspace = true, features = ["fs"] }
 
@@ -66,6 +69,8 @@ tracing-subscriber = { workspace = true, features = ["registry", "std", "fmt", "
 # Cloud object stores (S3, GCS, Azure) via `krishiv-io/cloud`. Opt-in so the
 # default build stays inside the dependency and binary-size budgets.
 cloud = ["krishiv-exec/cloud", "krishiv-io/cloud"]
+# Delta tables in the session (`USING delta`, `delta.`path``, `format("delta")`): P3-T021.
+delta = ["dep:krishiv-connectors-delta", "dep:url"]
 # Access to the logical-plan IR (`Session::from_plan`, `DataFrame::plan`):
 # for the Python facade and tests; not covered by semver.
 unstable-ir = []
@@ -104,6 +109,10 @@ required-features = ["telemetry-logs"]
 workspace = true
 
 # The S3 round trip needs the S3 builder and an emulator (`KRISHIV_TEST_S3_ENDPOINT`).
+[[test]]
+name = "delta_tables"
+required-features = ["delta"]
+
 [[test]]
 name = "s3_tpch"
 required-features = ["cloud"]

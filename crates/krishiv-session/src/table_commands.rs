@@ -758,6 +758,17 @@ impl Session {
             }
             .into());
         }
+        let written = v.using.as_ref().map(|u| {
+            u.parts
+                .iter()
+                .map(|p| p.value.as_str())
+                .collect::<Vec<_>>()
+                .join(".")
+        });
+        if written.is_some_and(|w| crate::delta::handles(&short_provider(&w))) {
+            self.create_delta_temp_view(v, name, env, original).await?;
+            return self.empty_frame().await;
+        }
         let columns = v
             .columns
             .iter()
@@ -1880,3 +1891,5 @@ mod owned_directory_tests;
 mod writes;
 
 mod create;
+mod delta;
+pub(crate) use delta::{delta_write_refused, is_delta_table};

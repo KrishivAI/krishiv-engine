@@ -158,7 +158,7 @@ fn failing_create_leaves_no_table() {
     let err = block_on(
         s.table("people")
             .write_to_table("t")
-            .using("delta")
+            .using("nosuchformat")
             .create(),
     )
     .unwrap_err();

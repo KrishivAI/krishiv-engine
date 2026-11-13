@@ -298,6 +298,16 @@ impl DeltaTable {
         &self.inner.snapshot
     }
 
+    /// The partition columns, in the log's order (`metaData.partitionColumns`).
+    #[must_use]
+    pub fn partition_columns(&self) -> Vec<String> {
+        self.inner
+            .partitions
+            .iter()
+            .map(|p| p.field.name().clone())
+            .collect()
+    }
+
     /// The live files, in the kernel's order.
     #[must_use]
     pub fn units(&self) -> &[ScanUnit] {
