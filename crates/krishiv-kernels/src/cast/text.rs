@@ -1159,4 +1159,68 @@ mod tests {
             assert_eq!(plain(bad), None, "{bad:?}");
         }
     }
+    #[test]
+    fn decimal_digit_limit_and_exponent_bound() {
+        // 76 digits fit an i256; 77 do not (the bound is `> 76`).
+        let d76 = format!("1{}", "0".repeat(75));
+        assert!(parse_decimal(&d76).and_then(|d| d.to_scale(0)).is_some());
+        let d77 = format!("1{}", "0".repeat(76));
+        assert!(parse_decimal(&d77).and_then(|d| d.to_scale(0)).is_none());
+        // A runaway exponent is refused as soon as it passes the int range.
+        assert!(parse_decimal("1e99999999999999999999999").is_none());
+        assert!(parse_decimal("1e-99999999999999999999999").is_none());
+    }
+
+    #[test]
+    fn java_float_rejects_what_only_rust_accepts() {
+        for bad in ["inf", "nan", "infinity", "+inf"] {
+            assert_eq!(parse_java_float::<f64>(bad), None, "{bad:?}");
+        }
+        assert_eq!(parse_java_float::<f64>("1.5e3"), Some(1500.0));
+    }
+
+    #[test]
+    fn hex_floats_round_half_even_with_a_sticky_bit() {
+        let f = |s: &str| parse_float::<f64>(s.as_bytes());
+        let one = 1.0_f64.to_bits();
+        let bits = |s: &str| f(s).map(f64::to_bits);
+        assert_eq!(f("0x1p0"), Some(1.0));
+        assert_eq!(f("0x1.8p1"), Some(3.0));
+        assert_eq!(bits("0x1.00000000000007p0"), Some(one));
+        assert_eq!(bits("0x1.00000000000008p0"), Some(one));
+        assert_eq!(bits("0x1.00000000000009p0"), Some(one + 1));
+        assert_eq!(bits("0x1.00000000000018p0"), Some(one + 2));
+        // Digits past the 120-bit window only feed the sticky bit: a tie
+        // stays a tie over zeros and breaks upward over a nonzero digit.
+        let zeros = "0".repeat(20);
+        assert_eq!(bits(&format!("0x1.00000000000008{zeros}p0")), Some(one));
+        assert_eq!(
+            bits(&format!("0x1.00000000000008{zeros}1p0")),
+            Some(one + 1)
+        );
+        assert_eq!(f("0x1.fffffffffffffp1023"), Some(f64::MAX));
+        assert_eq!(f("0x1.8p-1074"), Some(f64::from_bits(2)));
+        assert_eq!(f("0x1p-1202"), Some(0.0));
+        assert_eq!(f("0x1p-1201"), Some(0.0));
+        assert_eq!(f("0x1p-1203"), Some(0.0));
+    }
+
+    #[test]
+    fn compose_rounds_below_the_smallest_subnormal() {
+        const E: (u32, i64, i64) = (53, -1022, 1023);
+        let c = |m, e, sticky| compose(m, e, sticky, E.0, E.1, E.2);
+        let half = 1_u128 << 127;
+        // 128 bits dropped: more than half of the smallest subnormal rounds
+        // up to it; exactly half rounds up only with a sticky bit.
+        assert_eq!(c(half + 1, -1202, false), (1, -1074, false));
+        assert_eq!(c(half, -1202, false), (0, -1074, false));
+        assert_eq!(c(half, -1202, true), (1, -1074, false));
+        assert_eq!(c(1, -1202, true), (0, -1074, false));
+        assert_eq!(c(1, -1202, false), (0, -1074, false));
+        // The overflow flag: set past `emax`, clear at the largest finite.
+        assert!(c(1, 1024, false).2);
+        assert!(!c(1, 1023, false).2);
+        assert!(!c((1_u128 << 53) - 1, 971, false).2);
+        assert!(c((1_u128 << 53) - 1, 972, false).2);
+    }
 }
