@@ -7,7 +7,9 @@
 <p align="center">
   <a href="https://github.com/KrishivAI/krishiv-engine/actions/workflows/ci.yml"><img src="https://github.com/KrishivAI/krishiv-engine/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
-  <img src="https://img.shields.io/badge/status-pre--alpha-orange.svg" alt="Status: pre-alpha">
+  <a href="https://pypi.org/project/krishiv/"><img src="https://img.shields.io/pypi/v/krishiv.svg" alt="PyPI"></a>
+  <a href="https://crates.io/crates/krishiv"><img src="https://img.shields.io/crates/v/krishiv.svg" alt="crates.io"></a>
+  <img src="https://img.shields.io/badge/status-alpha-orange.svg" alt="Status: alpha">
   <img src="https://img.shields.io/badge/built_with-Rust-B7410E.svg?logo=rust" alt="Built with Rust">
   <a href="https://scorecard.dev/viewer/?uri=github.com/KrishivAI/krishiv-engine"><img src="https://api.scorecard.dev/projects/github.com/KrishivAI/krishiv-engine/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://codspeed.io/KrishivAI/krishiv-engine"><img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed"></a>
@@ -23,26 +25,25 @@
 
 <h3 align="center">Your Spark code. No JVM. One engine for batch, streaming and always-fresh views.</h3>
 
-**Krishiv** is a Rust-native, Apache Spark™-compatible compute engine we are building for the agentic era. Keep the PySpark
-and Spark SQL you already write, and run it on a vectorized, Arrow-native engine that handles **batch SQL**,
-**streaming** and **incrementally maintained materialized views** with the same semantics. Start in-process on a
-laptop, and take the same code to a single server or a cluster.
+**Krishiv** is a Rust-native, Apache Spark™-compatible compute engine. Keep the PySpark and Spark SQL you already
+write and run it on a vectorized, Arrow-native engine, in your own process today, and on a server or a cluster as the
+next releases land.
 
-> [!WARNING]
-> **Alpha (`0.2.0`): the embedded core runs, the rest is being built.** You can run SQL and DataFrames
-> in-process from Python today (see the [Quickstart](#quickstart)); there is no stable API yet, and nothing has been
-> published to PyPI or crates.io. The sections after the Quickstart describe what we are building, not what exists
-> today.
+> [!NOTE]
+> **Krishiv 0.2 is out** ([release notes](https://github.com/KrishivAI/krishiv-engine/releases/tag/v0.2.0)): the
+> embedded core, on [PyPI](https://pypi.org/project/krishiv/) and [crates.io](https://crates.io/crates/krishiv).
+> It is an alpha: the APIs can still change between releases.
 
-<p align="center">
-  <b>⭐ Star the repo and 👀 Watch → Custom → Releases to follow development from the first commit to 1.0.</b>
-</p>
+## Install
 
-## 30 seconds
+```bash
+pip install "krishiv[pyarrow]"   # Python 3.11+, or free-threaded 3.14t
+cargo add krishiv@0.2.0           # Rust
+```
 
-Needs Python 3.11 or newer. Nothing is on PyPI yet, so build the wheel from this repository first
-([python/README.md](python/README.md)) and install it with the `pyarrow` extra (`.show()` needs it). These two
-lines are taken from the [Quickstart](#quickstart), which CI runs in the `wheels` job (skipped for docs-only PRs and merge-queue runs, so a README-only edit is not run; this copy is not run itself).
+Install with the `pyarrow` extra: `collect()`, `show()` and `toArrow()` return Arrow data. Wheels cover Linux x86_64
+and aarch64 (manylinux and musllinux x86_64) and macOS arm64. For an x86-64 CPU without AVX2 use
+`pip install krishiv-compat` ([Supported CPUs](#supported-cpus)).
 
 ```python
 import krishiv
@@ -53,90 +54,57 @@ spark.sql("SELECT 1 AS answer").show()
 
 ## Benchmarks
 
-<!-- benchmark-chart:placeholder
-Replace this block with the chart when the numbers are final: method and numbers only, with the command that
-reproduces them (bench/README.md). Until then no figure is claimed. -->
+**10.4× faster than Apache Spark 4.2.0 on one machine**: geometric mean over 22 queries derived from TPC-H at
+scale factor 100, on the same Parquet files and the same laptop.
 
-Numbers will be published here with the method and the command that reproduces them. Until they are final, the
-repository makes no performance claim; the harness and its method are in [bench/README.md](bench/README.md).
-
-## Why Krishiv
-
-| | Design goal | What it means for you |
+| | Krishiv 0.2 | Spark 4.2.0 |
 |---|---|---|
-| 🦀 | **Spark-compatible, no JVM** | Keep your PySpark and Spark SQL code. Spark Connect clients connect directly; execution is Rust-native and vectorized. |
-| 🔁 | **One engine: batch, streaming, incremental** | The same SQL and the same semantics everywhere. A batch query is just a bounded stream. |
-| 📦 | **Embedded → single-node → distributed** | `pip install krishiv` or `cargo add krishiv` to start in-process, then scale out without rewriting your code. |
-| ⚡ | **Always-fresh materialized views** | Views update incrementally as data changes (DBSP-inspired incremental computation), and streaming state is directly queryable. |
-| 🤖 | **Built for the agentic era** | A built-in MCP server lets AI agents explore and query your data; Arrow-native, zero-copy interop with pandas, Polars and PyArrow. |
-| ✅ | **Open and correctness-first** | Apache-2.0. Tested against real Spark behaviour with golden fixtures and differential testing. |
+| SF100, all 22 queries | **228 s** | 2,675 s (3,137 s with 12 shuffle partitions) |
+| SF1000 (about 1 TB of Parquet), queries completed | **22 of 22** | 6 of 17 within 30 minutes |
 
-## How it fits
+- **Machine:** one laptop, i7-9750H (12 threads), 64 GB RAM, NVMe SSD, Linux.
+- **Runs:** cold (the OS page cache is dropped before every run), two runs per query, one engine after another.
+- **Limits:** 12 threads and a 20 GB memory limit for Krishiv; Spark 4.2.0 in `local[*]` over Spark Connect,
+  `spark.sql.shuffle.partitions=24`, 20g driver, Spark 4 defaults otherwise.
+- **Data:** Parquet from `tpchgen` 3.0.0, read in place with no loading step. Krishiv's answers are checked
+  (row counts and checksums) against an independent engine at SF10 and SF100.
 
-```mermaid
-flowchart LR
-    subgraph APIs["Your code"]
-        A1["PySpark via Spark Connect"]
-        A2["SQL"]
-        A3["Python DataFrames"]
-        A4["Rust"]
-        A5["MCP for AI agents"]
-        A6["Arrow Flight SQL"]
-    end
-    subgraph Engine["One Krishiv engine"]
-        E1["Batch"]
-        E2["Streaming"]
-        E3["Incremental views"]
-    end
-    subgraph Deploy["Run it anywhere"]
-        D1["Embedded"]
-        D2["Single-node"]
-        D3["Distributed"]
-    end
-    subgraph Lake["Your lakehouse"]
-        L1["Parquet"]
-        L2["Apache Iceberg"]
-        L3["Delta Lake"]
-    end
-    APIs --> Engine --> Deploy --> Lake
+Reproduce it:
+
+```bash
+git clone https://github.com/KrishivAI/krishiv-engine
+cd krishiv-engine/bench
+uv run krishiv-bench reproduce --suite tpch --sf 100
 ```
 
-## Supported CPUs
+The harness, engine configurations and method are in [bench/README.md](bench/README.md); every per-query number,
+SF10 and SF1000 and the comparison with a reference engine that is still faster today are on
+[krishiv.ai/benchmarks](https://krishiv.ai/benchmarks).
 
-The shipped x86-64 binaries and wheels are built for the **x86-64-v3** level: AVX, AVX2, FMA, BMI1/2, F16C, LZCNT and
-MOVBE, i.e. Intel Haswell (2013) / AMD Excavator and Zen or newer. The arm64 builds target an Armv8.2 baseline
-(`neoverse-n1`: AWS Graviton2 or newer, Apple silicon). On an older CPU the main build refuses to start and says
-which feature is missing, instead of crashing (the Python package raises an `ImportError`; on Linux only: the
-macOS arm64 and Windows wheels are separate builds and are not checked).
+<sub>Derived from the TPC-H benchmark. These are not TPC-H results: they are unaudited and not comparable with
+published TPC results. TPC-H is a trademark of the Transaction Processing Performance Council.</sub>
 
-For an older x86-64 CPU use the **compat** build, which targets the plain x86-64 baseline (a little slower on
-vectorised workloads). It covers Linux x86-64 only: a manylinux x86_64 wheel and an x86-64 CLI binary. No arm64 or
-musllinux compat build is provided:
+## What is in 0.2
 
-- Python: `pip install krishiv-compat` (it is the same package and imports as `krishiv`; install one of the two, not both).
-- CLI: download the `krishiv-compat` binary from the release.
+- **Embedded Spark-compatible engine.** `krishiv.session()` gives a PySpark-style session in your process, from
+  Python or Rust, with no JVM. Spark-observable behaviour is checked against real Spark runs.
+- **Memory-bounded and fast.** A vectorized Arrow executor that spills aggregations, joins, sorts and window frames to
+  disk instead of failing, with runtime filters, Parquet row-group and dictionary pruning and a cost-based join order.
+- **Broad SQL.** Windows (`ROWS`/`RANGE`), `GROUPING SETS`, lateral joins, recursive CTEs, SQL scripting,
+  `CHAR`/`VARCHAR`, collations, `VARIANT`, calendar intervals, `GEOMETRY`/`GEOGRAPHY`, `PIVOT`, `TABLESAMPLE`, SQL
+  functions and `IDENTIFIER(..)`.
+- **Python UDFs in process.** `@udf`, scalar `pandas_udf` and `arrow_udf` run on a thread pool, in parallel on
+  free-threaded 3.14t.
+- **See what happened.** `EXPLAIN [ANALYZE|COST|VERBOSE]`, a versioned JSON profile with per-scan I/O, a local web
+  console, Prometheus metrics, OTLP spans and JSON logs, and errors that point at the SQL span that raised them.
+- **Zero-copy interop** with pyarrow, Polars and other Arrow tools through the Arrow PyCapsule interface.
+- **`krishiv sql`**, a command-line SQL shell (scripts, table/CSV/JSON output, `--timing`).
 
-## Status and roadmap at a glance
-
-Krishiv is at **`0.2.0`**. The embedded core (in-process batch SQL and DataFrames over Arrow, from Python) runs;
-streaming, incremental views, Spark Connect and distributed execution are still being built.
-
-| Milestone | Focus | Status |
-|---|---|---|
-| 1. Embedded core alpha | In-process SQL and DataFrames on Arrow, with Python and Rust APIs | 🚧 In progress |
-| 2. Spark Connect and lakehouse | PySpark over Spark Connect; Parquet, Iceberg and Delta | ⏳ Planned |
-| 3. Streaming | Stateful streaming with the same SQL and semantics as batch | ⏳ Planned |
-| 4. Incremental views | Always-fresh materialized views and queryable state | ⏳ Planned |
-| 5. Distributed | Scale out to a cluster with the same code | ⏳ Planned |
-| 6. 1.0 | Stable APIs and formats | ⏳ Planned |
-
-Watch **Releases** to hear when the first alpha lands.
+The full list is in the [0.2.0 release notes](https://github.com/KrishivAI/krishiv-engine/releases/tag/v0.2.0).
 
 ## Quickstart
 
-The embedded core runs in your process: no server, no JVM. Needs Python 3.11 or newer. Nothing is published yet, so
-until the first release is out, build the wheel from this repository (`maturin build`, see
-[python/README.md](python/README.md)) and install that file instead of the name below.
+The embedded core runs in your process: no server, no JVM. Needs Python 3.11 or newer.
 
 <!-- quickstart:begin (CI runs every block below from a clean venv against the built wheel: .github/scripts/quickstart-test.sh) -->
 
@@ -206,57 +174,87 @@ Krishiv follows Spark's SQL and DataFrame semantics and error classes; the diffe
 they are found. "Spark-compatible" describes that goal and the API shape, not a certification: Krishiv is not Apache
 Spark.
 
-## What it will look like
+## Why Krishiv
 
-> [!NOTE]
-> **Planned API (not yet available).** These snippets show the intended experience and may change.
+| | Design goal | What it means for you |
+|---|---|---|
+| 🦀 | **Spark-compatible, no JVM** | Keep your PySpark and Spark SQL code; execution is Rust-native and vectorized. |
+| 🔁 | **One engine: batch, streaming, incremental** | The same SQL and the same semantics everywhere. A batch query is just a bounded stream. |
+| 📦 | **Embedded → single-node → distributed** | Start in-process with `pip install krishiv`, then scale out without rewriting your code. |
+| ⚡ | **Always-fresh materialized views** | Views update incrementally as data changes, and streaming state is directly queryable. |
+| 🤖 | **Built for the agentic era** | A built-in MCP server lets AI agents explore and query your data; Arrow-native interop with pandas, Polars and PyArrow. |
+| ✅ | **Open and correctness-first** | Apache-2.0. Tested against real Spark behaviour with golden fixtures and differential testing. |
 
-**Python: your existing PySpark code, pointed at Krishiv over Spark Connect.**
+```mermaid
+flowchart LR
+    subgraph APIs["Your code"]
+        A1["PySpark via Spark Connect"]
+        A2["SQL"]
+        A3["Python DataFrames"]
+        A4["Rust"]
+        A5["MCP for AI agents"]
+        A6["Arrow Flight SQL"]
+    end
+    subgraph Engine["One Krishiv engine"]
+        E1["Batch"]
+        E2["Streaming"]
+        E3["Incremental views"]
+    end
+    subgraph Deploy["Run it anywhere"]
+        D1["Embedded"]
+        D2["Single-node"]
+        D3["Distributed"]
+    end
+    subgraph Lake["Your lakehouse"]
+        L1["Parquet"]
+        L2["Apache Iceberg"]
+        L3["Delta Lake"]
+    end
+    APIs --> Engine --> Deploy --> Lake
+```
+
+## Roadmap
+
+| Release | Focus | Status |
+|---|---|---|
+| 0.2 | Embedded core: in-process SQL and DataFrames on Arrow, Python and Rust APIs | ✅ Released |
+| 0.3 | Spark Connect server, lakehouse tables (Iceberg, Delta), Python UDFs over Connect, authentication | 🚧 In progress |
+| Next | Stateful streaming with the same SQL and semantics as batch | ⏳ Planned |
+| Next | Always-fresh incremental views and queryable state | ⏳ Planned |
+| Next | Distributed execution with the same code | ⏳ Planned |
+| 1.0 | Stable APIs and formats | ⏳ Planned |
+
+**Coming in 0.3: your existing PySpark code, pointed at Krishiv over Spark Connect.**
 
 ```python
 from pyspark.sql import SparkSession, functions as F
 
-# Planned: a local Krishiv server speaking the Spark Connect protocol.
+# Planned for 0.3: a Krishiv server speaking the Spark Connect protocol.
 spark = SparkSession.builder.remote("sc://localhost:15002").getOrCreate()
 
 orders = spark.read.parquet("s3://lake/orders/")
 daily = orders.groupBy("order_date").agg(F.sum("amount").alias("revenue"))
-
 daily.toPandas()  # results arrive as Arrow
 ```
 
-**Python: the native Krishiv API — same code, embedded in your process.**
+## Supported CPUs
 
-```python
-import krishiv
-from krishiv.sql import functions as F
+The shipped x86-64 binaries and wheels are built for the **x86-64-v3** level: AVX, AVX2, FMA, BMI1/2, F16C, LZCNT and
+MOVBE, i.e. Intel Haswell (2013) / AMD Excavator and Zen or newer. The arm64 builds target an Armv8.2 baseline
+(`neoverse-n1`: AWS Graviton2 or newer, Apple silicon). On an older CPU the main build refuses to start and says
+which feature is missing, instead of crashing (the Python package raises an `ImportError`; on Linux only: the
+macOS arm64 and Windows wheels are separate builds and are not checked).
 
-# Planned: PySpark-compatible API running in-process — no server, no JVM.
-spark = krishiv.SparkSession.builder.getOrCreate()
+For an older x86-64 CPU use the **compat** build, which targets the plain x86-64 baseline (a little slower on
+vectorised workloads). It covers Linux x86-64 only: a manylinux x86_64 wheel and an x86-64 CLI binary. No arm64 or
+musllinux compat build is provided:
 
-orders = spark.read.parquet("s3://lake/orders/")
-daily = orders.groupBy("order_date").agg(F.sum("amount").alias("revenue"))
-
-daily.to_arrow()   # zero-copy Arrow table (also .to_polars(), .toPandas())
-# Same code against a cluster: krishiv.SparkSession.builder.remote("sc://...")
-```
-
-**SQL: an always-fresh view over a stream.**
-
-```sql
--- Planned syntax.
-CREATE MATERIALIZED VIEW revenue_by_region AS
-SELECT region, SUM(amount) AS revenue
-FROM orders_stream
-GROUP BY region;
-
--- Reads the latest result, maintained incrementally as events arrive.
-SELECT * FROM revenue_by_region ORDER BY revenue DESC;
-```
+- Python: `pip install krishiv-compat` (it is the same package and imports as `krishiv`; install one of the two, not both).
+- CLI: download the `krishiv-compat` binary from the release.
 
 ## Follow along and get involved
 
-- ⭐ **Star** the repo and 👀 **Watch → Releases** to get notified about alphas and milestones.
+- ⭐ **Star** the repo and 👀 **Watch → Custom → Releases** to hear about each release.
 - 🐛 Report bugs or share ideas in [GitHub Issues](https://github.com/KrishivAI/krishiv-engine/issues).
 - 🛠️ Read the [contributing guide](CONTRIBUTING.md) for build, test, DCO sign-off and PR rules.
 - 🤝 Please follow our [Code of Conduct](CODE_OF_CONDUCT.md).
