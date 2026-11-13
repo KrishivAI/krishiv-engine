@@ -1068,6 +1068,40 @@ impl Session {
         DataFrame::new(self.clone(), Arc::clone(plan.root()))
     }
 
+    /// As [`Self::from_plan`], with per-statement options, as
+    /// [`Self::sql_with`] takes them for SQL: an operation id names the
+    /// queries the DataFrame's actions run (Spark Connect's `ExecutePlan`
+    /// `operation_id`) and is held while the DataFrame or a result stream of
+    /// it is alive; a deadline limits each of them.
+    ///
+    /// ```
+    /// use krishiv_plan::{LogicalPlan, Plan};
+    /// use krishiv_session::QueryOptions;
+    /// # let session = krishiv_session::Session::new()?;
+    /// let plan = Plan::try_new(LogicalPlan::table(["t"]))?;
+    /// let id = "00112233-4455-6677-8899-aabbccddeeff";
+    /// let df = session.from_plan_with(&plan, QueryOptions::new().operation_id(id))?;
+    /// // The id is taken while `df` lives.
+    /// assert!(session.from_plan_with(&plan, QueryOptions::new().operation_id(id)).is_err());
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_HANDLE.SESSION_CLOSED` on a closed session; for the
+    /// operation id, the errors of [`Self::sql_with`] (`INVALID_HANDLE.FORMAT`,
+    /// `OPERATION_ALREADY_EXISTS`, `OPERATION_ABANDONED`).
+    #[cfg(feature = "unstable-ir")]
+    pub fn from_plan_with(
+        &self,
+        plan: &Plan,
+        options: crate::QueryOptions,
+    ) -> Result<DataFrame, KrishivError> {
+        Ok(DataFrame::new(
+            self.with_options(options)?,
+            Arc::clone(plan.root()),
+        ))
+    }
+
     /// Runs `work` on the session's executor, so that it finds the
     /// runtime its I/O needs whatever runtime (if any) polls the caller;
     /// dropping the returned future aborts the work.

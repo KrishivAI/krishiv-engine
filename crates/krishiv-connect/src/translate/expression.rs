@@ -18,14 +18,14 @@ use krishiv_plan::{
 };
 
 use super::errors::{
-    expression_not_set, field_empty, not_set, unsupported, unsupported_field, unsupported_variant,
+    expression_not_set, field_empty, not_set, unsupported_field, unsupported_variant,
 };
 use super::literal::literal;
-use super::names::parse_attribute_name;
+use super::names::{parse_attribute_name, parse_multipart_identifier};
 use super::types::data_type;
 use super::{Result, Translator};
-use crate::proto::v4_2::Expression;
-use crate::proto::v4_2::expression::{
+use crate::proto::v4_3::Expression;
+use crate::proto::v4_3::expression::{
     self, ExprType, cast::CastToType, cast::EvalMode, sort_order::NullOrdering as ProtoNulls,
     sort_order::SortDirection as ProtoDirection,
 };
@@ -78,6 +78,16 @@ impl Translator<'_> {
                 })
             }
             ExprType::UnresolvedFunction(f) => self.function(f)?,
+            ExprType::CallFunction(c) => self.call_function(c)?,
+            ExprType::NamedArgumentExpression(_) => {
+                // Only as an argument of a function call (`call_args`); Spark's analyzer
+                // refuses it anywhere else.
+                return Err(unsupported_field(
+                    "Expression.NamedArgumentExpression",
+                    "key",
+                    "named arguments outside a function call's arguments",
+                ));
+            }
             ExprType::UnresolvedStar(s) => ExprNode::Star(star(s)?),
             ExprType::Alias(a) => {
                 if a.metadata.as_deref().is_some_and(|m| !m.is_empty()) {
@@ -128,15 +138,8 @@ impl Translator<'_> {
                     mode,
                 }
             }
-            ExprType::ExpressionString(_) => {
-                return Err(unsupported(
-                    "SQL expression strings (spark.connect.Expression.expression_string, sent by \
-                     selectExpr, where(\"...\") and expr())",
-                ));
-            }
             other => {
                 return Err(unsupported_variant(
-                    "expression",
                     "spark.connect.Expression",
                     other.variant(),
                 ));
@@ -163,15 +166,11 @@ impl Translator<'_> {
                 "calls of internal functions",
             ));
         }
-        let args = f
-            .arguments
-            .iter()
-            .map(|a| self.expression(a))
-            .collect::<Result<Vec<_>>>()?;
+        let (args, arg_names) = self.call_args(&f.arguments)?;
         let call = |name: &str, args: Vec<Arc<Expr>>, distinct: bool| FunctionCall {
             name: name.to_owned(),
             qualifier: Vec::new(),
-            arg_names: Vec::new(),
+            arg_names: arg_names.clone(),
             args,
             distinct,
             filter: None,
@@ -182,23 +181,17 @@ impl Translator<'_> {
             "=" | "==" => ExprNode::Function(call(Builtin::Eq.name(), args, f.is_distinct)),
             "!=" | "<>" => {
                 let equal = Expr::new(ExprNode::Function(call(Builtin::Eq.name(), args, false)));
-                ExprNode::Function(call(
-                    Builtin::Not.name(),
-                    vec![Arc::new(equal)],
-                    f.is_distinct,
-                ))
+                // `not` has one argument, so it carries none of the call's argument names.
+                let mut not = call(Builtin::Not.name(), vec![Arc::new(equal)], f.is_distinct);
+                not.arg_names = Vec::new();
+                ExprNode::Function(not)
             }
             // `F.collate(col, "name")` / `Column.collate`: the function form of `expr COLLATE name`.
-            _ if name.eq_ignore_ascii_case("collate")
-                && !f.is_distinct
-                && let [value, collation] = args.as_slice()
-                && let ExprNode::Literal(Literal::String(text)) = &collation.node =>
+            // Named arguments keep the call ordinary, so the analyzer can reject them.
+            _ if arg_names.is_empty()
+                && let Some(collate) = collate_call(name, f.is_distinct, &args)? =>
             {
-                ExprNode::Collate {
-                    expr: Arc::clone(value),
-                    collation: krishiv_types::Collation::parse(text)?,
-                    name: text.clone(),
-                }
+                collate
             }
             _ => {
                 let canonical = Builtin::from_name(name)
@@ -206,6 +199,70 @@ impl Translator<'_> {
                 ExprNode::Function(call(&canonical, args, f.is_distinct))
             }
         })
+    }
+
+    /// `CallFunction`: Spark's `UnresolvedFunction(parseMultipartIdentifier(name), args, false)`.
+    /// The last part of the name is the function, the parts before it its qualifier.
+    fn call_function(&mut self, c: &crate::proto::v4_3::CallFunction) -> Result<ExprNode> {
+        let mut parts = parse_multipart_identifier(&c.function_name)?;
+        let name = parts.pop().unwrap_or_default();
+        let (args, arg_names) = self.call_args(&c.arguments)?;
+        if parts.is_empty() && arg_names.is_empty() {
+            // An unqualified call of an operator or `collate` lowers as the unresolved-function form does.
+            let plain = |name: &str, args: Vec<Arc<Expr>>| FunctionCall {
+                name: name.to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
+                args,
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+            };
+            match name.as_str() {
+                "=" | "==" => return Ok(ExprNode::Function(plain(Builtin::Eq.name(), args))),
+                "!=" | "<>" => {
+                    let equal = Expr::new(ExprNode::Function(plain(Builtin::Eq.name(), args)));
+                    return Ok(ExprNode::Function(plain(
+                        Builtin::Not.name(),
+                        vec![Arc::new(equal)],
+                    )));
+                }
+                _ => {
+                    if let Some(collate) = collate_call(&name, false, &args)? {
+                        return Ok(collate);
+                    }
+                }
+            }
+        }
+        Ok(ExprNode::Function(FunctionCall {
+            name,
+            qualifier: parts,
+            arg_names,
+            args,
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+        }))
+    }
+
+    /// The arguments of a call and their parameter names: a `NamedArgumentExpression` is
+    /// `name => value`. The names are empty when every argument is positional.
+    fn call_args(&mut self, arguments: &[Expression]) -> Result<CallArgs> {
+        let mut args = Vec::with_capacity(arguments.len());
+        let mut names = Vec::with_capacity(arguments.len());
+        for a in arguments {
+            if let Some(ExprType::NamedArgumentExpression(n)) = &a.expr_type {
+                args.push(self.required_expression(n.value.as_deref())?);
+                names.push(Some(n.key.clone()));
+            } else {
+                args.push(self.expression(a)?);
+                names.push(None);
+            }
+        }
+        if names.iter().all(Option::is_none) {
+            names.clear();
+        }
+        Ok((args, names))
     }
 
     /// A sort key. As in Spark, anything but `SORT_DIRECTION_ASCENDING` is
@@ -227,6 +284,9 @@ impl Translator<'_> {
         })
     }
 }
+
+/// The arguments of a call and the parameter name of each (empty when all are positional).
+type CallArgs = (Vec<Arc<Expr>>, Vec<Option<String>>);
 
 /// `*`, `t.*` (the target ends in `.*`) or the star of one DataFrame
 /// (`plan_id`); not both, as in Spark.
@@ -265,3 +325,22 @@ fn star(s: &expression::UnresolvedStar) -> Result<Star> {
 
 #[cfg(test)]
 mod tests;
+
+/// `collate(value, 'name')` as the `expr COLLATE name` node, for an unqualified call of two arguments
+/// whose second is a string literal (`F.collate`, `Column.collate`, `call_function("collate", ...)`).
+fn collate_call(name: &str, distinct: bool, args: &[Arc<Expr>]) -> Result<Option<ExprNode>> {
+    if !name.eq_ignore_ascii_case("collate") || distinct {
+        return Ok(None);
+    }
+    let [value, collation] = args else {
+        return Ok(None);
+    };
+    let ExprNode::Literal(Literal::String(text)) = &collation.node else {
+        return Ok(None);
+    };
+    Ok(Some(ExprNode::Collate {
+        expr: Arc::clone(value),
+        collation: krishiv_types::Collation::parse(text)?,
+        name: text.clone(),
+    }))
+}
