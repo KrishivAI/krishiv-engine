@@ -25,12 +25,12 @@ use krishiv_common::config::{
     SERVER_METRICS_PUBLIC, UI_ENABLED,
 };
 use krishiv_connect_server::{
-    ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
+    ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
 };
 use krishiv_server::guard::{Guard, TokenGuard};
 use krishiv_server::session_guard::SessionGuard;
-use krishiv_session::auth::{AuthConfig, ServerAuth, is_auth_key};
-use krishiv_session::{EngineRuntime, Session};
+use krishiv_session::auth::{AuthConfig, Authenticated, Role, RolePolicy, ServerAuth, is_auth_key};
+use krishiv_session::{AccessPolicy, EngineRuntime, PathPrefixPolicy, PolicyVersion, Session};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -151,6 +151,31 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     result
 }
 
+/// The session factory of an authenticated server: each caller's session acts for its
+/// principal under `PathPrefixPolicy(RolePolicy(role))` (design P3-T002 §3.6), on `base`'s
+/// runtime. Client code needs admin until the T014b sandbox merges (ADR 0046 N1). The path
+/// confinement is checked once here, so a bad `krishiv.io.*` root fails at startup.
+fn caller_sessions(
+    base: Session,
+    config: &Config,
+) -> Result<Box<krishiv_connect_server::manager::SessionFactory>, String> {
+    let confine = {
+        let config = config.clone();
+        move |inner: Arc<dyn AccessPolicy>| PathPrefixPolicy::from_config(&config, inner)
+    };
+    confine(Arc::new(RolePolicy::new(
+        None,
+        Role::Admin,
+        PolicyVersion(0),
+    )))
+    .map_err(|e| e.to_string())?;
+    Ok(Box::new(move |caller: &Authenticated| {
+        let role = RolePolicy::new(caller.role, Role::Admin, PolicyVersion(0));
+        let policy = confine(Arc::new(role))?;
+        Ok(base.new_session_as(caller.principal.clone(), Arc::new(policy)))
+    }))
+}
+
 fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: bool) -> bool {
     config
         .get(entry)
@@ -160,8 +185,7 @@ fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: b
 
 #[expect(
     clippy::print_stdout,
-    clippy::print_stderr,
-    reason = "CLI binary: the addresses, token and warnings are its output"
+    reason = "CLI binary: the addresses and the token are its output"
 )]
 async fn run_listeners(
     runtime: Arc<EngineRuntime>,
@@ -174,10 +198,14 @@ async fn run_listeners(
         .runtime(Arc::clone(&runtime))
         .build()
         .map_err(|e| e.to_string())?;
-    let manager = Arc::new(SessionManager::from_base(
-        base,
-        SessionLimits::from_config(config),
-    ));
+    let authenticated = auth.is_enabled();
+    let auth = Arc::new(auth);
+    let limits = SessionLimits::from_config(config);
+    let manager = Arc::new(if authenticated {
+        SessionManager::new(caller_sessions(base, config)?, limits)
+    } else {
+        SessionManager::from_base(base, limits)
+    });
     let connect_listener = TcpListener::bind(connect_addr)
         .await
         .map_err(|e| format!("cannot bind the Spark Connect port {connect_addr}: {e}"))?;
@@ -189,10 +217,9 @@ async fn run_listeners(
 
     // With authentication configured the admin routes take the same principals as Connect;
     // without it, a random token printed once (loopback only).
-    let authenticated = auth.is_enabled();
     let token = krishiv_server::internal::random_token().map_err(|e| e.to_string())?;
     let guard: Arc<dyn Guard> = if authenticated {
-        Arc::new(SessionGuard::new(Arc::new(auth)))
+        Arc::new(SessionGuard::new(Arc::clone(&auth) as Arc<_>))
     } else {
         Arc::new(TokenGuard::new(&token))
     };
@@ -205,10 +232,13 @@ async fn run_listeners(
         Arc::clone(&ready),
         admin_bound,
     )?;
-    let connect = ConnectServer::new(
+    let mut connect = ConnectServer::new(
         Arc::clone(&manager),
         ConnectServerConfig::from_config(config),
     );
+    if authenticated {
+        connect = connect.with_auth(ConnectAuth::new(auth));
+    }
 
     let (stop_tx, stop_rx) = watch::channel(false);
     // Installed before the addresses are printed: a SIGTERM right after
@@ -229,12 +259,9 @@ async fn run_listeners(
     println!("krishiv server: admin on http://{admin_bound}");
     let ui = flag(config, &UI_ENABLED, true) && cfg!(feature = "ui");
     if authenticated {
-        println!("krishiv server: admin routes need a configured token (krishiv.auth.tokens)");
-        // The Connect listener is authenticated in a later unit; until then it serves any
-        // local client, which the loopback-only rule above keeps to this machine.
-        eprintln!(
-            "krishiv server: warning: Spark Connect does not check tokens yet; it accepts any \
-             client on {connect_bound}"
+        println!(
+            "krishiv server: Spark Connect and the admin routes need a configured credential \
+             (krishiv.auth.*)"
         );
     } else if ui {
         println!("open http://{admin_bound}/?token={token}");

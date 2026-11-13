@@ -31,6 +31,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tonic::transport::Server;
 use tonic::transport::server::{Connected, TcpConnectInfo};
 
+use crate::auth::ConnectAuth;
 use crate::manager::SessionManager;
 use crate::operation::ExecuteLimits;
 use crate::service::{ConnectService, SparkConnectServiceServer};
@@ -166,17 +167,27 @@ pub struct ConnectServer {
     manager: Arc<SessionManager>,
     draining: Arc<AtomicBool>,
     config: ConnectServerConfig,
+    auth: Arc<ConnectAuth>,
 }
 
 impl ConnectServer {
-    /// A server over `manager`.
+    /// A server over `manager`, with authentication off (loopback only:
+    /// `krishiv server` refuses another address without it).
     #[must_use]
     pub fn new(manager: Arc<SessionManager>, config: ConnectServerConfig) -> Self {
         Self {
             manager,
             draining: Arc::new(AtomicBool::new(false)),
             config,
+            auth: Arc::new(ConnectAuth::off()),
         }
+    }
+
+    /// This server authenticating every RPC with `auth` (P3-T002).
+    #[must_use]
+    pub fn with_auth(mut self, auth: ConnectAuth) -> Self {
+        self.auth = Arc::new(auth);
+        self
     }
 
     /// The flag that is set once shutdown starts (`/readyz` answers 503
@@ -210,8 +221,10 @@ impl ConnectServer {
             manager,
             draining,
             config,
+            auth,
         } = self;
         let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining))
+            .with_auth(auth)
             .with_limits(config.execute.clone());
         let service = SparkConnectServiceServer::from_arc(Arc::new(service))
             .max_decoding_message_size(config.max_inbound_message_size)

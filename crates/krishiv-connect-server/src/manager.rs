@@ -6,11 +6,19 @@
 //! admission.
 //!
 //! Spark keys by `(UserContext.user_id, session_id)`. Krishiv keys by the
-//! authenticated principal instead (ADR 0046 §5, threat model T-A8): the
+//! authenticated caller instead (ADR 0046 §5, threat model T-A8): the
 //! client's `user_id` is recorded, unverified, and never decides anything.
-//! A session id another principal holds is refused as unknown
-//! (`INVALID_HANDLE.SESSION_NOT_FOUND`), the answer a lookup of an unknown
-//! id gets.
+//! The key is the caller's [`SessionOwner`] (method, principal kind, tenant
+//! and name, without groups). A session id another owner holds is refused as
+//! unknown (`INVALID_HANDLE.SESSION_NOT_FOUND`), the answer a lookup of an
+//! unknown id gets.
+//!
+//! A session's policy is fixed when it is built, from the caller's role. A
+//! caller whose role differs from the role its live session was built with
+//! (a role list changed, an OIDC group claim changed) never gets that
+//! session: it is closed, without a tombstone, and the lookup goes on as if
+//! the id were free, so a create builds a new session under the new role and
+//! a client that saw the old one gets `INVALID_HANDLE.SESSION_CHANGED`.
 //!
 //! No lock is held across an `await`, nor while a session is built or
 //! closed: the map lock guards lookups and inserts only.
@@ -28,13 +36,15 @@ use krishiv_common::error::{
     InvalidHandleSessionChanged, InvalidHandleSessionClosed, InvalidHandleSessionNotFound,
     KrishivError, KrishivSessionLimit,
 };
-use krishiv_common::principal::Principal;
+use krishiv_session::auth::Authenticated;
 use krishiv_session::{QueryId, Session};
 
+use crate::auth::SessionOwner;
 use crate::operation::Operations;
 
-/// Builds the session a principal gets for a new session id.
-pub type SessionFactory = dyn Fn(&Principal) -> Result<Session, KrishivError> + Send + Sync;
+/// Builds the session an authenticated caller gets for a new session id:
+/// its principal, and the policy of its role.
+pub type SessionFactory = dyn Fn(&Authenticated) -> Result<Session, KrishivError> + Send + Sync;
 
 /// The manager's limits and timers.
 #[derive(Debug, Clone)]
@@ -100,6 +110,7 @@ impl SessionLimits {
 #[derive(Debug)]
 pub struct SessionEntry {
     session: Session,
+    caller: Authenticated,
     client_user_id: String,
     operations: Arc<Operations>,
     /// Milliseconds since the manager's epoch at the last lookup.
@@ -119,6 +130,12 @@ impl SessionEntry {
     #[must_use]
     pub fn server_side_id(&self) -> &str {
         self.session.id()
+    }
+
+    /// The caller the session was built for (its principal and role).
+    #[must_use]
+    pub fn caller(&self) -> &Authenticated {
+        &self.caller
     }
 
     /// The `UserContext.user_id` the client sent when it created the
@@ -153,16 +170,16 @@ pub struct ManagerCounts {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Key {
-    principal: Principal,
+    owner: SessionOwner,
     session_id: String,
 }
 
 #[derive(Default)]
 struct Inner {
     live: HashMap<Key, Arc<SessionEntry>>,
-    /// The principal holding each live session id.
-    owners: HashMap<String, Principal>,
-    per_principal: HashMap<Principal, usize>,
+    /// The owner holding each live session id.
+    owners: HashMap<String, SessionOwner>,
+    per_principal: HashMap<SessionOwner, usize>,
     closed: Tombstones,
     /// Set by [`SessionManager::close_all`]: no session is created after it.
     shut: bool,
@@ -240,8 +257,9 @@ impl SessionManager {
 
     /// A manager whose sessions are new sessions of `base` (same runtime,
     /// profile and function registry; Spark's `baseSession.newSession()`).
-    /// Every principal gets `base`'s principal until authentication (T002)
-    /// supplies a factory that sets it.
+    /// Every caller gets `base`'s principal and policy: the server without
+    /// authentication (loopback only); with it, [`Self::new`] takes a factory
+    /// that builds each caller's session (`Session::new_session_as`).
     #[must_use]
     pub fn from_base(base: Session, limits: SessionLimits) -> Self {
         Self::new(Box::new(move |_| Ok(base.new_session())), limits)
@@ -261,53 +279,87 @@ impl SessionManager {
         u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
-    fn key(principal: &Principal, session_id: &str) -> Key {
+    fn key(caller: &Authenticated, session_id: &str) -> Key {
         Key {
-            principal: principal.clone(),
+            owner: SessionOwner::of(caller),
             session_id: session_id.to_owned(),
         }
     }
 
-    /// The session `session_id` of `principal`, created when missing (the
+    /// The live entry for `key` if it was built for `caller`'s role, stamped
+    /// as an access (under the lock, so a sweep cannot release it in
+    /// between). One built for another role leaves the map without a
+    /// tombstone and goes to `retired`, to be closed after the lock is
+    /// released (module docs).
+    fn live_locked(
+        &self,
+        inner: &mut Inner,
+        key: &Key,
+        caller: &Authenticated,
+        retired: &mut Option<Arc<SessionEntry>>,
+    ) -> Option<Arc<SessionEntry>> {
+        let entry = inner.live.get(key).map(Arc::clone)?;
+        if entry.caller.role == caller.role {
+            entry.last_access.store(self.now_ms(), Ordering::Relaxed);
+            return Some(entry);
+        }
+        *retired = Self::remove_locked(inner, key);
+        None
+    }
+
+    /// Closes a session [`Self::live_locked`] retired.
+    fn close_retired(retired: Option<Arc<SessionEntry>>) {
+        if let Some(entry) = retired {
+            tracing::info!(
+                target: "krishiv::connect",
+                session = entry.server_side_id(),
+                "closed a Connect session: its caller's role changed"
+            );
+            entry.close();
+        }
+    }
+
+    /// The session `session_id` of `caller`, created when missing (the
     /// `ExecutePlan`, `AnalyzePlan` and `Config` RPCs).
     ///
     /// # Errors
     /// `INVALID_HANDLE.FORMAT` for an id that is not a UUID (on create),
     /// `INVALID_HANDLE.SESSION_CLOSED` for a released id,
-    /// `INVALID_HANDLE.SESSION_NOT_FOUND` for an id another principal
+    /// `INVALID_HANDLE.SESSION_NOT_FOUND` for an id another owner
     /// holds, `INVALID_HANDLE.SESSION_CHANGED` when `observed` is not the
     /// session's server-side id, `KRISHIV_SESSION_LIMIT` past a session
     /// cap, and whatever building the session fails with.
     pub fn get_or_create(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
         observed: Option<&str>,
         client_user_id: &str,
     ) -> Result<Arc<SessionEntry>, KrishivError> {
-        let key = Self::key(principal, session_id);
-        if let Some(entry) = self.lookup(&key, observed)? {
+        let key = Self::key(caller, session_id);
+        if let Some(entry) = self.lookup(&key, caller, observed)? {
             return Ok(entry);
         }
         // Validate before building: Spark's `validateSessionCreate`.
         QueryId::parse(session_id)?;
-        if let Some(existing) = self.check_create(&key)? {
+        if let Some(existing) = self.check_create(&key, caller)? {
             Self::check_observed(&key, &existing, observed)?;
             return Ok(existing);
         }
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
-        let session = (self.factory)(principal)?;
+        let session = (self.factory)(caller)?;
         let entry = Arc::new(SessionEntry {
             session,
+            caller: caller.clone(),
             client_user_id: client_user_id.to_owned(),
             operations: Arc::default(),
             last_access: AtomicU64::new(self.now_ms()),
         });
+        let mut retired = None;
         let raced = {
             let mut inner = self.lock();
-            if let Some(existing) = inner.live.get(&key).map(Arc::clone) {
-                existing.last_access.store(self.now_ms(), Ordering::Relaxed);
+            if let Some(existing) = self.live_locked(&mut inner, &key, caller, &mut retired) {
                 Ok(Some(existing))
             } else {
                 match Self::check_create_locked(&mut inner, &key, &self.limits) {
@@ -316,16 +368,14 @@ impl SessionManager {
                         inner.live.insert(key.clone(), Arc::clone(&entry));
                         inner
                             .owners
-                            .insert(key.session_id.clone(), key.principal.clone());
-                        *inner
-                            .per_principal
-                            .entry(key.principal.clone())
-                            .or_insert(0) += 1;
+                            .insert(key.session_id.clone(), key.owner.clone());
+                        *inner.per_principal.entry(key.owner.clone()).or_insert(0) += 1;
                         Ok(None)
                     }
                 }
             }
         };
+        Self::close_retired(retired);
         match raced {
             Err(e) => {
                 // Built, then refused by a check that changed meanwhile.
@@ -344,22 +394,23 @@ impl SessionManager {
         }
     }
 
-    /// The live session `session_id` of `principal` (every RPC that does not
+    /// The live session `session_id` of `caller` (every RPC that does not
     /// create one).
     ///
     /// # Errors
     /// `INVALID_HANDLE.SESSION_CLOSED` for a released id,
     /// `INVALID_HANDLE.SESSION_NOT_FOUND` for an unknown one (or one another
-    /// principal holds), `INVALID_HANDLE.SESSION_CHANGED` when `observed`
-    /// differs from its server-side id.
+    /// owner holds, or one built for another role of the caller),
+    /// `INVALID_HANDLE.SESSION_CHANGED` when `observed` differs from its
+    /// server-side id.
     pub fn get(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
         observed: Option<&str>,
     ) -> Result<Arc<SessionEntry>, KrishivError> {
-        let key = Self::key(principal, session_id);
-        if let Some(entry) = self.lookup(&key, observed)? {
+        let key = Self::key(caller, session_id);
+        if let Some(entry) = self.lookup(&key, caller, observed)? {
             return Ok(entry);
         }
         let closed = self.lock().closed.contains(&key);
@@ -381,28 +432,29 @@ impl SessionManager {
     #[must_use]
     pub fn get_if_present(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
     ) -> Option<Arc<SessionEntry>> {
-        let key = Self::key(principal, session_id);
-        let inner = self.lock();
-        let entry = inner.live.get(&key).map(Arc::clone)?;
-        // Stamped under the lock, so a sweep cannot release it in between.
-        entry.last_access.store(self.now_ms(), Ordering::Relaxed);
-        Some(entry)
+        let key = Self::key(caller, session_id);
+        let mut retired = None;
+        let entry = self.live_locked(&mut self.lock(), &key, caller, &mut retired);
+        Self::close_retired(retired);
+        entry
     }
 
-    /// Releases session `session_id` of `principal` (`ReleaseSession`): it
+    /// Releases session `session_id` of `caller` (`ReleaseSession`): it
     /// leaves the map, its id is tombstoned unless `allow_reconnect`, its
     /// operations are cancelled and it is closed (its queries cancelled). An unknown id is a no-op. Returns
     /// the released session's server-side id.
     pub fn release(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
         allow_reconnect: bool,
     ) -> Option<String> {
-        let key = Self::key(principal, session_id);
+        // Keyed by the owner alone: releasing ends the session whatever role
+        // it was built with.
+        let key = Self::key(caller, session_id);
         let entry = {
             let mut inner = self.lock();
             let entry = Self::remove_locked(&mut inner, &key)?;
@@ -505,36 +557,35 @@ impl SessionManager {
         }
     }
 
-    /// The live entry for `key`, checked against `observed`.
+    /// The live entry for `key` built for `caller`'s role, checked against
+    /// `observed`.
     fn lookup(
         &self,
         key: &Key,
+        caller: &Authenticated,
         observed: Option<&str>,
     ) -> Result<Option<Arc<SessionEntry>>, KrishivError> {
-        let entry = {
-            let inner = self.lock();
-            match inner.live.get(key) {
-                Some(e) => {
-                    // Stamped under the lock, so a sweep cannot release it
-                    // in between.
-                    e.last_access.store(self.now_ms(), Ordering::Relaxed);
-                    Arc::clone(e)
+        let mut retired = None;
+        let found = {
+            let mut inner = self.lock();
+            match self.live_locked(&mut inner, key, caller, &mut retired) {
+                Some(e) => Ok(Some(e)),
+                // Held by another owner: refused as unknown.
+                None if inner
+                    .owners
+                    .get(&key.session_id)
+                    .is_some_and(|o| *o != key.owner) =>
+                {
+                    Err(KrishivError::from(InvalidHandleSessionNotFound {
+                        handle: key.session_id.clone(),
+                    }))
                 }
-                None => {
-                    // Held by another principal: refused as unknown.
-                    if inner
-                        .owners
-                        .get(&key.session_id)
-                        .is_some_and(|p| *p != key.principal)
-                    {
-                        return Err(InvalidHandleSessionNotFound {
-                            handle: key.session_id.clone(),
-                        }
-                        .into());
-                    }
-                    return Ok(None);
-                }
+                None => Ok(None),
             }
+        };
+        Self::close_retired(retired);
+        let Some(entry) = found? else {
+            return Ok(None);
         };
         Self::check_observed(key, &entry, observed)?;
         Ok(Some(entry))
@@ -557,13 +608,21 @@ impl SessionManager {
     /// The caps, checked before a session is built. A racing create that
     /// inserted the key since the lookup is returned instead: reusing it
     /// takes no slot, so the caps must not refuse it.
-    fn check_create(&self, key: &Key) -> Result<Option<Arc<SessionEntry>>, KrishivError> {
-        let mut inner = self.lock();
-        if let Some(existing) = inner.live.get(key).map(Arc::clone) {
-            existing.last_access.store(self.now_ms(), Ordering::Relaxed);
-            return Ok(Some(existing));
-        }
-        Self::check_create_locked(&mut inner, key, &self.limits).map(|()| None)
+    fn check_create(
+        &self,
+        key: &Key,
+        caller: &Authenticated,
+    ) -> Result<Option<Arc<SessionEntry>>, KrishivError> {
+        let mut retired = None;
+        let checked = {
+            let mut inner = self.lock();
+            match self.live_locked(&mut inner, key, caller, &mut retired) {
+                Some(existing) => Ok(Some(existing)),
+                None => Self::check_create_locked(&mut inner, key, &self.limits).map(|()| None),
+            }
+        };
+        Self::close_retired(retired);
+        checked
     }
 
     fn check_create_locked(
@@ -582,7 +641,7 @@ impl SessionManager {
         if inner
             .owners
             .get(&key.session_id)
-            .is_some_and(|p| *p != key.principal)
+            .is_some_and(|o| *o != key.owner)
         {
             return Err(InvalidHandleSessionNotFound {
                 handle: key.session_id.clone(),
@@ -596,11 +655,7 @@ impl SessionManager {
             }
             .into());
         }
-        if inner
-            .per_principal
-            .get(&key.principal)
-            .copied()
-            .unwrap_or(0)
+        if inner.per_principal.get(&key.owner).copied().unwrap_or(0)
             >= limits.max_sessions_per_principal
         {
             return Err(KrishivSessionLimit {
@@ -615,10 +670,10 @@ impl SessionManager {
     fn remove_locked(inner: &mut Inner, key: &Key) -> Option<Arc<SessionEntry>> {
         let entry = inner.live.remove(key)?;
         inner.owners.remove(&key.session_id);
-        if let Some(n) = inner.per_principal.get_mut(&key.principal) {
+        if let Some(n) = inner.per_principal.get_mut(&key.owner) {
             *n = n.saturating_sub(1);
             if *n == 0 {
-                inner.per_principal.remove(&key.principal);
+                inner.per_principal.remove(&key.owner);
             }
         }
         Some(entry)

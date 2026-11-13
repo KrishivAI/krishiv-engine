@@ -178,6 +178,29 @@ impl Session {
         Self::on_runtime(runtime, config, parts)
     }
 
+    /// [`Self::new_session`] acting for `principal` under `policy` instead of this session's
+    /// principal and policy: a server's session for one authenticated caller (P3-T002, ADR
+    /// 0046), built from a base session that holds the server's runtime and profile. The
+    /// principal and policy are the new session's for life.
+    #[must_use]
+    pub fn new_session_as(
+        &self,
+        principal: krishiv_common::principal::Principal,
+        policy: Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
+    ) -> Self {
+        let state = &self.state;
+        let runtime = Arc::clone(&state.runtime);
+        let parts = SessionParts {
+            profile: state.profile,
+            principal: Arc::new(principal),
+            policy,
+            functions: state.base_functions.clone(),
+            admission: Some(Arc::clone(&state.admission)),
+        };
+        let config = Config::clone(&runtime.config);
+        Self::on_runtime(runtime, config, parts)
+    }
+
     /// A new session on the same runtime that starts as a copy of this one
     /// (Spark Connect's `CloneSession`, Spark's `SparkSession.cloneSession`):
     /// the same principal, access policy and profile, and copies of the

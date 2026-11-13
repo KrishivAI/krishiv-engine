@@ -728,7 +728,6 @@ impl krishiv_session::DataFrame
 pub fn krishiv_session::DataFrame::agg(&self, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> Self
 pub fn krishiv_session::DataFrame::alias(&self, &str) -> Self
 pub fn krishiv_session::DataFrame::cache(&self) -> Self
-pub async fn krishiv_session::DataFrame::checkpoint(&self, bool) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::col(&self, &str) -> krishiv_session::Column
 pub async fn krishiv_session::DataFrame::collect(&self) -> core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::count(&self) -> core::result::Result<u64, krishiv_common::error::KrishivError>
@@ -751,7 +750,6 @@ pub async fn krishiv_session::DataFrame::is_cached(&self) -> core::result::Resul
 pub fn krishiv_session::DataFrame::join(&self, &Self, krishiv_session::Column, krishiv_session::JoinType) -> Self
 pub fn krishiv_session::DataFrame::join_using<'a>(&self, &Self, impl core::iter::traits::collect::IntoIterator<Item = &'a str>, krishiv_session::JoinType) -> Self
 pub fn krishiv_session::DataFrame::limit(&self, i32) -> Self
-pub async fn krishiv_session::DataFrame::local_checkpoint(&self, bool, core::option::Option<krishiv_session::StorageLevel>) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::offset(&self, i32) -> Self
 pub fn krishiv_session::DataFrame::order_by(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
 pub fn krishiv_session::DataFrame::persist(&self, krishiv_session::StorageLevel) -> Self
@@ -777,6 +775,9 @@ pub async fn krishiv_session::DataFrame::write_to(&self, &str, &str, &str, alloc
 pub fn krishiv_session::DataFrame::write_to_table(&self, &str) -> krishiv_session::DataFrameWriterV2
 pub async fn krishiv_session::DataFrame::write_to_table_with(&self, &str, core::option::Option<alloc::string::String>, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, alloc::vec::Vec<alloc::string::String>, alloc::vec::Vec<alloc::string::String>, &str, core::option::Option<alloc::string::String>) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::write_to_with(&self, &str, &str, &str, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, alloc::vec::Vec<alloc::string::String>, core::option::Option<(i32, alloc::vec::Vec<alloc::string::String>)>, core::option::Option<alloc::vec::Vec<alloc::string::String>>) -> core::result::Result<(), krishiv_common::error::KrishivError>
+impl krishiv_session::DataFrame
+pub async fn krishiv_session::DataFrame::checkpoint(&self, bool) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::local_checkpoint(&self, bool, core::option::Option<krishiv_session::StorageLevel>) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::collect_with_metrics(&self) -> core::result::Result<(alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_exec::metrics::QueryMetrics), krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
@@ -1029,6 +1030,8 @@ impl core::fmt::Debug for krishiv_session::RuntimeConf
 pub fn krishiv_session::RuntimeConf::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::Session
 impl krishiv_session::Session
+pub async fn krishiv_session::Session::authorize_privilege(&self, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege, krishiv_sql::classify::StatementClass) -> core::result::Result<(), krishiv_common::error::KrishivError>
+impl krishiv_session::Session
 pub fn krishiv_session::Session::builder() -> krishiv_session::SessionBuilder
 pub fn krishiv_session::Session::cache_reserved(&self) -> usize
 pub fn krishiv_session::Session::clear_cache(&self)
@@ -1057,6 +1060,7 @@ pub fn krishiv_session::Session::id(&self) -> &str
 pub fn krishiv_session::Session::interrupt_all(&self) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::Session::is_closed(&self) -> bool
 pub fn krishiv_session::Session::new_session(&self) -> Self
+pub fn krishiv_session::Session::new_session_as(&self, krishiv_common::principal::Principal, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> Self
 pub fn krishiv_session::Session::running_queries(&self) -> usize
 pub fn krishiv_session::Session::runtime(&self) -> &alloc::sync::Arc<krishiv_session::EngineRuntime>
 pub async fn krishiv_session::Session::sql_with(&self, &str, krishiv_session::QueryOptions) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
@@ -1127,7 +1131,6 @@ pub krishiv_session::StorageLevel::use_disk: bool
 pub krishiv_session::StorageLevel::use_memory: bool
 pub krishiv_session::StorageLevel::use_off_heap: bool
 impl krishiv_session::StorageLevel
-pub fn krishiv_session::StorageLevel::from_name(&str) -> core::option::Option<Self>
 pub const krishiv_session::StorageLevel::DISK_ONLY: Self
 pub const krishiv_session::StorageLevel::DISK_ONLY_2: Self
 pub const krishiv_session::StorageLevel::MEMORY_AND_DISK: Self
@@ -1136,6 +1139,8 @@ pub const krishiv_session::StorageLevel::MEMORY_ONLY: Self
 pub const krishiv_session::StorageLevel::MEMORY_ONLY_2: Self
 pub const krishiv_session::StorageLevel::NONE: Self
 pub const krishiv_session::StorageLevel::OFF_HEAP: Self
+impl krishiv_session::StorageLevel
+pub fn krishiv_session::StorageLevel::from_name(&str) -> core::option::Option<Self>
 impl core::clone::Clone for krishiv_session::StorageLevel
 pub fn krishiv_session::StorageLevel::clone(&self) -> krishiv_session::StorageLevel
 impl core::cmp::Eq for krishiv_session::StorageLevel

@@ -297,6 +297,29 @@ impl Session {
     /// `privilege` on the permanent view `namespace.name`, besides the table-named check made
     /// before dispatch: the statements that show a view's definition, columns or properties
     /// need `Browse` on it (ADR 0046 §4), `SHOW TABLE EXTENDED` `Select`.
+    /// Checks that this session's principal holds `privilege` on `securable` under the
+    /// session's policy, outside any statement: what a server checks for a request before it
+    /// runs one (the Connect request classes of ADR 0046 §3b). Fails closed as every check
+    /// does, and a denial writes one `krishiv::audit` record with `class`.
+    ///
+    /// # Errors
+    /// `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) when the policy does not allow it.
+    pub async fn authorize_privilege(
+        &self,
+        securable: &Securable,
+        privilege: Privilege,
+        class: StatementClass,
+    ) -> Result<(), KrishivError> {
+        let r = authorize(
+            &*self.state.policy,
+            &self.state.principal,
+            securable,
+            privilege,
+        )
+        .await;
+        audit(self, class, r)
+    }
+
     pub(crate) async fn authorize_view(
         &self,
         namespace: &str,

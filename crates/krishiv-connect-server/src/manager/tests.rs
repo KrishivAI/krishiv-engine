@@ -4,18 +4,27 @@ use std::time::Duration;
 
 use krishiv_common::principal::{Principal, PrincipalKind};
 use krishiv_session::Session;
+use krishiv_session::auth::{Authenticated, Method, Role};
 
 use super::{SessionLimits, SessionManager};
 
 const ID: &str = "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d10";
 const ID2: &str = "1d6a3c1e-77b2-4c55-8d0f-0a6c2e9b4f21";
 
-fn alice() -> Principal {
-    Principal::new("alice", PrincipalKind::User)
+fn user(name: &str) -> Authenticated {
+    Authenticated::new(
+        Principal::new(name, PrincipalKind::User),
+        Some(Role::Operator),
+        Method::Token,
+    )
 }
 
-fn bob() -> Principal {
-    Principal::new("bob", PrincipalKind::User)
+fn alice() -> Authenticated {
+    user("alice")
+}
+
+fn bob() -> Authenticated {
+    user("bob")
 }
 
 fn manager(limits: SessionLimits) -> SessionManager {
@@ -167,7 +176,7 @@ fn session_caps_refuse_before_building() {
     );
     m.get_or_create(&bob(), ID2, None, "u")
         .expect("bob's first");
-    let carol = Principal::new("carol", PrincipalKind::User);
+    let carol = user("carol");
     let e = m
         .get_or_create(&carol, "2b1c6e0a-0f3d-4f7e-9a51-7c6d5e4f3a21", None, "u")
         .unwrap_err();
@@ -358,4 +367,115 @@ fn a_session_with_a_live_operation_is_busy_and_never_swept() {
     entry.operations().remove(&op);
     assert_eq!(m.busy(), 0);
     assert_eq!(m.sweep(), 1);
+}
+
+fn with_groups(mut caller: Authenticated, groups: &[&str]) -> Authenticated {
+    caller.principal.groups = groups.iter().map(|g| (*g).to_owned()).collect();
+    caller
+}
+
+fn with_role(caller: &Authenticated, role: Option<Role>) -> Authenticated {
+    Authenticated::new(caller.principal.clone(), role, caller.method)
+}
+
+#[test]
+fn sessions_are_bound_without_groups() {
+    // An OIDC user whose group claim changes between two tokens keeps its session (design
+    // P3-T002 §7): groups are not part of the owner.
+    let m = manager(SessionLimits::default());
+    let first = with_groups(alice(), &["etl"]);
+    let a = m.get_or_create(&first, ID, None, "u").expect("create");
+    let b = m
+        .get(
+            &with_groups(alice(), &["etl", "bi"]),
+            ID,
+            Some(a.server_side_id()),
+        )
+        .expect("same owner, other groups");
+    assert!(Arc::ptr_eq(&a, &b));
+    assert_eq!(m.counts().live, 1);
+}
+
+#[test]
+fn the_method_separates_owners_with_the_same_name() {
+    // A static token and an OIDC subject both named `alice` are two owners: neither reaches
+    // the other's session.
+    let m = manager(SessionLimits::default());
+    let token = alice();
+    let oidc = Authenticated::new(token.principal.clone(), token.role, Method::Oidc);
+    m.get_or_create(&token, ID, None, "u").expect("create");
+    let e = m.get(&oidc, ID, None).unwrap_err();
+    assert_eq!(class(&e), "INVALID_HANDLE.SESSION_NOT_FOUND");
+    let e = m.get_or_create(&oidc, ID, None, "u").unwrap_err();
+    assert_eq!(class(&e), "INVALID_HANDLE.SESSION_NOT_FOUND");
+    assert_eq!(m.counts().live, 1);
+}
+
+#[test]
+fn a_changed_role_replaces_the_session() {
+    // The policy is fixed when a session is built: a caller whose role changed never gets the
+    // old session. A create builds a new one; a client that saw the old one is told it changed.
+    let m = manager(SessionLimits::default());
+    let operator = alice();
+    let old = m.get_or_create(&operator, ID, None, "u").expect("create");
+    let viewer = with_role(&operator, Some(Role::Viewer));
+    let e = m
+        .get_or_create(&viewer, ID, Some(old.server_side_id()), "u")
+        .unwrap_err();
+    assert_eq!(class(&e), "INVALID_HANDLE.SESSION_CHANGED");
+    assert!(old.session().is_closed(), "the old session is closed");
+    let new = m.get(&viewer, ID, None).expect("the new session");
+    assert_ne!(new.server_side_id(), old.server_side_id());
+    assert_eq!(new.caller().role, Some(Role::Viewer));
+    assert_eq!(m.counts().live, 1);
+    assert_eq!(
+        m.counts().tombstones,
+        0,
+        "a replaced session leaves no tombstone"
+    );
+}
+
+#[test]
+fn a_lookup_with_a_changed_role_finds_nothing() {
+    let m = manager(SessionLimits::default());
+    let old = m.get_or_create(&alice(), ID, None, "u").expect("create");
+    let e = m.get(&with_role(&alice(), None), ID, None).unwrap_err();
+    assert_eq!(class(&e), "INVALID_HANDLE.SESSION_NOT_FOUND");
+    assert!(old.session().is_closed());
+    assert_eq!(m.counts().live, 0);
+    assert!(m.get_if_present(&alice(), ID).is_none());
+}
+
+#[test]
+fn release_ends_the_session_whatever_its_role() {
+    let m = manager(SessionLimits::default());
+    let s = m.get_or_create(&alice(), ID, None, "u").expect("create");
+    let released = m.release(&with_role(&alice(), Some(Role::Admin)), ID, false);
+    assert_eq!(released.as_deref(), Some(s.server_side_id()));
+    assert!(s.session().is_closed());
+    assert_eq!(m.counts().live, 0);
+}
+
+#[test]
+fn the_factory_gets_the_caller() {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let base = Session::new().expect("session");
+    let log = Arc::clone(&seen);
+    let m = SessionManager::new(
+        Box::new(move |caller: &Authenticated| {
+            log.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((caller.principal.name.clone(), caller.role));
+            Ok(base.new_session())
+        }),
+        SessionLimits::default(),
+    );
+    let s = m.get_or_create(&bob(), ID, None, "u").expect("create");
+    assert_eq!(s.caller(), &bob());
+    assert_eq!(
+        *seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        vec![("bob".to_owned(), Some(Role::Operator))]
+    );
 }
