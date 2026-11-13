@@ -419,12 +419,14 @@ fn run(
                     .unwrap_or(false)
             });
         let root = if window {
+            let joins = join_settings(udfs.map(|(_, config)| config), false);
             let mut notes = Vec::new();
             let after = t.once("SubqueryAsWindow", &root, |r| {
                 let (after, n) = win_magic::rewrite(
                     Arc::clone(r),
                     stats.unwrap_or(&NoStatistics),
                     options.stats_propagation,
+                    joins,
                 )?;
                 notes = n;
                 Ok(after)

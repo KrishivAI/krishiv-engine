@@ -37,6 +37,7 @@ use crate::expr::{
     Classes, and_all, builtin, column, conjuncts, data_type, equality, equality_classes,
     has_outer_reference, has_subquery, is_deterministic, references, same, strip_alias, substitute,
 };
+use crate::join_order;
 use crate::plan_stats::default_size;
 use crate::restrict::{MAX_ID, max_id};
 use crate::stats::{RelStats, Statistics};
@@ -46,9 +47,16 @@ pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
+    joins: join_order::Settings,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let mut r = Rule {
         est: Estimator::with_propagation(stats, propagate),
+        stats,
+        propagate,
+        joins: join_order::Settings {
+            trace: false,
+            ..joins
+        },
         root: Arc::clone(&root),
         next: None,
         notes: Vec::new(),
@@ -59,6 +67,10 @@ pub(crate) fn rewrite(
 
 struct Rule<'a> {
     est: Estimator<'a>,
+    /// What the guard orders the outer block with (see [`Rule::fire`]'s guard).
+    stats: &'a dyn Statistics,
+    propagate: bool,
+    joins: join_order::Settings,
     root: Arc<LogicalPlan>,
     /// The next unused attribute id, computed at the first firing.
     next: Option<u64>,
@@ -359,8 +371,15 @@ impl Rule<'_> {
         let _ = only_d;
         // The guard (design 2.4): the bytes the window sorts must not exceed the bytes the second
         // scan reads. An estimate without statistics is no basis: no firing.
+        //
+        // The rule runs before join ordering, so `X` is still the block as written: q02's is a
+        // cross join of `part` and `supplier` with `partsupp`'s two keys above it, which the
+        // estimator prices at the cross join's rows. Join ordering runs after this rule and orders
+        // the window's input the same way, so the window sorts the ordered block's rows: the guard
+        // prices those (the rewritten plan still carries `X` as written).
         let outs = join.resolved_output()?;
-        let x_est = self.est.plan(x);
+        let (ordered, _) = join_order::reorder(x, self.stats, self.propagate, self.joins);
+        let x_est = self.est.plan(&ordered);
         if !x_est.from_statistics {
             return None;
         }
