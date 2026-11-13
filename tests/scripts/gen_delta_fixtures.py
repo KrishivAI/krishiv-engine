@@ -4,10 +4,10 @@
 Writes small tables with Spark 4.2.0 + delta-spark 4.4.1, each with a checkpoint of a
 different shape:
 
-- ``v1-checkpoint``: a classic (V1) single-file checkpoint at version 2, partitioned, with
+- ``v1-checkpoint``: a classic (V1) single-file checkpoint at version 3, partitioned, with
   ``stats_parsed`` (``delta.checkpoint.writeStatsAsStruct``) and a later JSON commit;
-- ``v2-checkpoint``: ``delta.checkpointPolicy = v2`` with a Parquet top-level checkpoint and
-  its sidecars under ``_delta_log/_sidecars/``;
+- ``v2-checkpoint``: ``delta.checkpointPolicy = v2``: delta-spark writes a JSON top-level
+  checkpoint and one Parquet sidecar under ``_delta_log/_sidecars/``;
 - ``multipart-checkpoint``: a classic checkpoint split into parts
   (``spark.databricks.delta.checkpoint.partSize = 1``).
 

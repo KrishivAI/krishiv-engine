@@ -46,10 +46,9 @@ use delta_kernel::{
 };
 use krishiv_common::config::Config;
 use krishiv_common::error::KrishivError;
-use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
     ByteRange, ColumnPath, FIELD_ID_KEY, FieldMapping, FileFormat, FileRef, FormatOptions,
-    MetadataNeeds, ScanOptions, ScanRequest, ScanStream, VersionToken,
+    FormatRegistry, MetadataNeeds, ScanOptions, ScanRequest, ScanStream,
 };
 use url::Url;
 
@@ -75,9 +74,19 @@ pub struct KrishivParquetHandler {
     shared: Arc<Shared>,
 }
 
-/// The Parquet format options (all defaults).
+/// The registry name of the format the kernel's Parquet files are read and written with.
+const FORMAT: &str = "parquet";
+
+/// The format, from krishiv-io's registry (production code never names a format type).
+pub(crate) fn format() -> Result<Arc<dyn FileFormat>, KrishivError> {
+    static REGISTRY: std::sync::LazyLock<FormatRegistry> =
+        std::sync::LazyLock::new(FormatRegistry::with_defaults);
+    REGISTRY.get(FORMAT)
+}
+
+/// The format options (all defaults).
 pub(crate) fn format_options() -> Result<FormatOptions, KrishivError> {
-    Ok(ParquetFormat
+    Ok(format()?
         .options()
         .parse(&BTreeMap::new(), &Config::default())?
         .0)
@@ -324,7 +333,7 @@ struct Reads {
 
 /// The file `meta` names, its format options and its schema: the path confined, the footer's
 /// length checked against the limit, then the footer read (through the metadata cache).
-fn locate(
+pub(crate) fn locate(
     shared: &Shared,
     meta: &FileMeta,
 ) -> KernelResult<(FileRef, FormatOptions, arrow_schema::SchemaRef)> {
@@ -332,26 +341,21 @@ fn locate(
     let path = shared.root.confine(&meta.location).map_err(to_kernel)?;
     let io = &shared.io;
     let store = &shared.store;
-    let size = if meta.size > 0 {
-        meta.size
-    } else {
-        shared
-            .block_on(io.head(store, &path))?
-            .ok_or_else(|| KernelError::file_not_found(name))?
-            .size
-    };
+    // The store's own metadata versions the read (its ETag, else its modification time): this
+    // handler overwrites checkpoints and another writer may rewrite one, so a cached footer of
+    // an older file is never used for a newer one, and a file rewritten during a read fails
+    // the read (`KRISHIV_FILE_CHANGED_DURING_READ`). The kernel's `FileMeta` cannot version it:
+    // a sidecar's time and size come from the checkpoint that names it, not from the store.
+    let listed = shared
+        .block_on(io.head(store, &path))?
+        .ok_or_else(|| KernelError::file_not_found(name))?;
+    let file = FileRef::from_meta(store.clone(), &listed);
+    let size = file.size;
     if size < TRAILER {
         return Err(KernelError::generic(format!(
             "{name} is not a Parquet file ({size} bytes)"
         )));
     }
-    let file = FileRef {
-        store: store.clone(),
-        path,
-        size,
-        version: VersionToken::Immutable,
-        modified_micros: meta.last_modified.checked_mul(1000),
-    };
     let tail = shared.block_on(io.get_tail(&file, TRAILER))?;
     let bytes = &tail.bytes;
     let footer = bytes
@@ -364,8 +368,9 @@ fn locate(
     drop(tail);
     check_size(&shared.limits, name, u64::from(footer) + TRAILER).map_err(to_kernel)?;
     let options = format_options().map_err(to_kernel)?;
+    let format = format().map_err(to_kernel)?;
     let metadata = shared.block_on(io.read_metadata(
-        &ParquetFormat,
+        format.as_ref(),
         &file,
         MetadataNeeds::default(),
         &options,
@@ -392,9 +397,10 @@ impl Reads {
             None => krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default()),
         };
         let consumer = pool.register("delta parquet read", None);
+        let format = format().map_err(to_kernel)?;
         let stream = shared.block_on(ScanStream::open(
             io,
-            &ParquetFormat,
+            format.as_ref(),
             file,
             ByteRange::whole(size),
             &request,
@@ -461,26 +467,38 @@ impl KrishivParquetHandler {
         Self { shared }
     }
 
-    /// The bytes of one Parquet file of `data`.
-    fn encode(data: KernelResultIteratorStatic<Box<dyn EngineData>>) -> KernelResult<Bytes> {
-        let mut encoder = None;
+    /// The bytes of one Parquet file of `data`, for `location`.
+    ///
+    /// The whole file is buffered, then put at once (as the kernel's default engine does);
+    /// PR-37 (checkpoint writes) reserves it against the query's pool or streams a multipart
+    /// put instead.
+    fn encode(
+        &self,
+        location: &Url,
+        data: KernelResultIteratorStatic<Box<dyn EngineData>>,
+    ) -> KernelResult<Bytes> {
+        let format = format().map_err(to_kernel)?;
+        let options = format_options().map_err(to_kernel)?;
+        let mut encoder: Option<Box<dyn krishiv_io::Encoder>> = None;
         let mut schema = None;
         let mut out = BytesMut::new();
         for chunk in data {
             let batch = KrishivEngineData::from_engine_data(chunk?)?.into_batch();
             let schema = schema.get_or_insert_with(|| batch.schema());
             let batch = relabel_batch(&batch, Arc::clone(schema)).map_err(arrow_err)?;
-            let encoder = match &mut encoder {
-                Some(e) => e,
-                None => encoder.insert(
-                    ParquetFormat::encoder_with(
-                        schema,
-                        &format_options().map_err(to_kernel)?,
-                        |p| p,
-                    )
-                    .map_err(|e| KernelError::generic(e.to_string()))?,
-                ),
-            };
+            let encoder =
+                match &mut encoder {
+                    Some(e) => e,
+                    None => {
+                        let io = &self.shared.io;
+                        let schema = Arc::clone(schema);
+                        let writer = format.writer(io, schema, &options);
+                        let name = location.as_str();
+                        encoder.insert(self.shared.block_on(async move {
+                            writer.await.map_err(|e| e.into_error(name))
+                        })?)
+                    }
+                };
             encoder
                 .write(&batch)
                 .map_err(|e| KernelError::generic(e.to_string()))?;
@@ -533,7 +551,7 @@ impl ParquetHandler for KrishivParquetHandler {
     ) -> KernelResult<FileSize> {
         self.shared.check_cancelled()?;
         self.shared.root.confine(&location).map_err(to_kernel)?;
-        let bytes = Self::encode(data)?;
+        let bytes = self.encode(&location, data)?;
         let size = bytes.len() as u64;
         KrishivStorageHandler::new(Arc::clone(&self.shared)).put_bytes(&location, bytes, true)?;
         Ok(size)

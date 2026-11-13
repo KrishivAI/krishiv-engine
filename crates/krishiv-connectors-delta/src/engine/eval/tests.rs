@@ -1024,3 +1024,258 @@ fn relabelling_shares_the_buffers() {
         list.as_list::<i32>().offsets().as_ptr()
     );
 }
+
+fn one_map(entries: &[(&str, &str)]) -> RecordBatch {
+    let mut map = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+    for (k, v) in entries {
+        map.keys().append_value(k);
+        map.values().append_value(v);
+    }
+    map.append(true).unwrap();
+    let map: ArrayRef = Arc::new(map.finish());
+    RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "pv",
+            map.data_type().clone(),
+            true,
+        )])),
+        vec![map],
+    )
+    .unwrap()
+}
+
+/// A `timestamp` partition value under `MapToStruct` with reader zone `zone`, as micros.
+fn partition_ts(raw: &str, zone: Option<&str>) -> KernelResult<Option<i64>> {
+    let options = zone.map_or_else(MapToStructOptions::default, |z| {
+        MapToStructOptions::default().with_timestamp_timezone(z)
+    });
+    let schema = StructType::try_new([StructField::nullable("t", DataType::TIMESTAMP)])?;
+    let a = evaluate_expression(
+        &ctx(),
+        &Expr::map_to_struct(col("pv"), options),
+        &one_map(&[("t", raw)]),
+        Some(&DataType::Struct(Box::new(schema))),
+    )?;
+    let t = a.as_struct().column(0);
+    Ok(t.is_valid(0).then(|| {
+        t.as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+            .value(0)
+    }))
+}
+
+fn rfc3339(s: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .unwrap()
+        .timestamp_micros()
+}
+
+/// The kernel's partition-timestamp grammar (`timestamp_timezone.rs`
+/// `parses_compatible_partition_timestamps`, `rejects_unsupported_partition_timestamps`, and
+/// `evaluate_expression.rs` `test_map_to_struct_timestamp_timezone`), with its expected values.
+#[test]
+fn partition_timestamp_grammar() {
+    let accepted: &[(&str, Option<&str>, &str)] = &[
+        (
+            "2024-01-15 12:30:45.123456",
+            None,
+            "2024-01-15T12:30:45.123456Z",
+        ),
+        ("2024-01-15T17:30:45+0530", None, "2024-01-15T12:00:45Z"),
+        ("2024-01-15T12:30:45+19:00", None, "2024-01-14T17:30:45Z"),
+        ("2024-01-15T07:00:45-05:30", None, "2024-01-15T12:30:45Z"),
+        ("2024-01-15 17:30:45 +05:30", None, "2024-01-15T12:00:45Z"),
+        ("2024-01-15t12:30:45", None, "2024-01-15T12:30:45Z"),
+        ("2024-01-15 123045", None, "2024-01-15T12:30:45Z"),
+        ("2024-01-15", None, "2024-01-15T00:00:00Z"),
+        (
+            "2024-01-15 12:30:45.123456789123",
+            None,
+            "2024-01-15T12:30:45.123456Z",
+        ),
+        (
+            "2024-01-15 12:30:45.123456",
+            Some("+05:30"),
+            "2024-01-15T07:00:45.123456Z",
+        ),
+        (
+            "2024-01-15 12:30:45.123456",
+            Some("+18:00"),
+            "2024-01-14T18:30:45.123456Z",
+        ),
+        (
+            "2024-01-15 12:30:45.123456",
+            Some("-18:00"),
+            "2024-01-16T06:30:45.123456Z",
+        ),
+        (
+            "2024-01-15 12:30:45+02:00",
+            Some("+05:30"),
+            "2024-01-15T10:30:45Z",
+        ),
+        (
+            "2024-01-15T12:30:45.123456Z",
+            Some("+05:30"),
+            "2024-01-15T12:30:45.123456Z",
+        ),
+        // A trailing UTC needs no zone database.
+        ("2024-01-15 12:30:45 UTC", None, "2024-01-15T12:30:45Z"),
+    ];
+    for (raw, zone, want) in accepted {
+        assert_eq!(
+            partition_ts(raw, *zone).unwrap(),
+            Some(rfc3339(want)),
+            "{raw} in {zone:?}"
+        );
+    }
+    let rejected = [
+        "2024-01-15 12:30:45+02:00 America/New_York",
+        "日時 America/New_York",
+        "2024-01-15T12:30:45+05:30:15:00",
+        "2024-01-15T12:30:45+053",
+        "2024-01-15 01:30:45 PM",
+        "15/01/2024 12:30:45",
+        "12:30:45",
+    ];
+    for raw in rejected {
+        let e = partition_ts(raw, None).unwrap_err();
+        assert!(matches!(e, KernelError::ParseError(..)), "{raw}: {e:?}");
+    }
+    // The kernel resolves an embedded zone name with chrono-tz
+    // (`embedded_iana_timezone_with_default_options`: 2024-01-15T17:30:45Z); Krishiv refuses it
+    // by name, never with a wrong value. So is an unknown name the kernel rejects.
+    for raw in [
+        "2024-01-15 12:30:45 America/New_York",
+        "2024-01-15 12:30:45 Foo/Bar",
+    ] {
+        let e = partition_ts(raw, Some("+05:30")).unwrap_err();
+        assert!(
+            matches!(&e, KernelError::Unsupported(m) if m.contains(raw.rsplit(' ').next().unwrap())),
+            "{raw}: {e:?}"
+        );
+    }
+}
+
+/// The kernel's `rejects_noncanonical_reader_timezones`.
+#[test]
+fn invalid_reader_zones_are_refused() {
+    for zone in [
+        "",
+        "+",
+        "+05",
+        "+0530",
+        "+05:60",
+        "+05:00:01",
+        "+18:00:01",
+        "+18:30",
+        "+19:00",
+        "+05:00:00:00",
+        "Not/AZone",
+    ] {
+        assert!(
+            partition_ts("2024-01-15 12:30:45", Some(zone)).is_err(),
+            "{zone:?}"
+        );
+    }
+}
+
+/// The kernel's `test_map_to_struct_null_propagation_with_non_nullable_fields` and
+/// `test_coalesce_map_to_struct_with_null_map_non_nullable_fields`: a NULL map is a NULL
+/// struct, so non-nullable partition columns of non-add rows do not fail (checkpoint writes).
+#[test]
+fn a_null_map_is_a_null_struct_of_non_nullable_fields() {
+    let mut map = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+    for row in [
+        Some([("region", "us"), ("id", "42")]),
+        None,
+        Some([("region", "eu"), ("id", "7")]),
+    ] {
+        match row {
+            Some(entries) => {
+                for (k, v) in entries {
+                    map.keys().append_value(k);
+                    map.values().append_value(v);
+                }
+                map.append(true).unwrap();
+            }
+            None => map.append(false).unwrap(),
+        }
+    }
+    let map: ArrayRef = Arc::new(map.finish());
+    let b = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "pv",
+            map.data_type().clone(),
+            true,
+        )])),
+        vec![Arc::clone(&map)],
+    )
+    .unwrap();
+    let strict = StructType::try_new([
+        StructField::not_null("region", DataType::STRING),
+        StructField::not_null("id", DataType::INTEGER),
+    ])
+    .unwrap();
+    let a = evaluate_expression(
+        &ctx(),
+        &Expr::map_to_struct(col("pv"), MapToStructOptions::default()),
+        &b,
+        Some(&DataType::Struct(Box::new(strict))),
+    )
+    .unwrap();
+    assert_eq!(
+        show(&a),
+        ["{region: us, id: 42}", "NULL", "{region: eu, id: 7}"]
+    );
+    // COALESCE(pv_parsed, MAP_TO_STRUCT(pv)) with an all-NULL pv_parsed.
+    let date = StructType::try_new([StructField::not_null("date", DataType::DATE)]).unwrap();
+    let date_type = DataType::Struct(Box::new(date));
+    let parsed = arrow_array::new_null_array(
+        &crate::engine::schema::to_arrow_type(&date_type).unwrap(),
+        2,
+    );
+    let mut map = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+    map.keys().append_value("date");
+    map.values().append_value("2024-01-15");
+    map.append(true).unwrap();
+    map.append(false).unwrap();
+    let map: ArrayRef = Arc::new(map.finish());
+    let b = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("pv_parsed", parsed.data_type().clone(), true),
+            Field::new("pv", map.data_type().clone(), true),
+        ])),
+        vec![parsed, map],
+    )
+    .unwrap();
+    let a = evaluate_expression(
+        &ctx(),
+        &Expr::coalesce([
+            col("pv_parsed"),
+            Expr::map_to_struct(col("pv"), MapToStructOptions::default()),
+        ]),
+        &b,
+        Some(&date_type),
+    )
+    .unwrap();
+    assert_eq!(show(&a), ["{date: 2024-01-15}", "NULL"]);
+}
+
+/// The kernel's `test_map_to_struct_duplicate_keys` (the rightmost entry wins) and
+/// `test_parse_json_strict_leaf_errors_fall_back_to_all_null_struct`.
+#[test]
+fn duplicate_keys_and_strict_leaf_fallback() {
+    let schema = StructType::try_new([StructField::nullable("x", DataType::STRING)]).unwrap();
+    let a = evaluate_expression(
+        &ctx(),
+        &Expr::map_to_struct(col("pv"), MapToStructOptions::default()),
+        &one_map(&[("x", "first"), ("x", "last")]),
+        Some(&DataType::Struct(Box::new(schema))),
+    )
+    .unwrap();
+    assert_eq!(show(&a), ["{x: last}"]);
+    let strings = Arc::new(StringArray::from(vec![r#"{"a": "not_a_number"}"#])) as ArrayRef;
+    let target =
+        Arc::new(StructType::try_new([StructField::nullable("a", DataType::LONG)]).unwrap());
+    let a = super::json::parse_json(&ctx(), &strings, &target).unwrap();
+    assert_eq!((a.len(), a.null_count()), (1, 1));
+}

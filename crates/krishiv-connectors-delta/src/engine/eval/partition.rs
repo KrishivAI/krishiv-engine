@@ -12,6 +12,12 @@
 //!   zone of `MapToStructOptions` (UTC by default). The reader zone may be `UTC` or a fixed
 //!   `+HH:MM`/`-HH:MM` offset; a named IANA zone is unsupported here (the kernel's scan code never
 //!   sets one, and chrono-tz is banned by ADR 0028).
+//! - **A difference from the kernel:** a `timestamp` value ending in an IANA zone name
+//!   (`2024-01-15 12:30:45 America/New_York`) is refused as the kernel's `Unsupported` (raised as
+//!   `UNSUPPORTED_FEATURE.TABLE_OPERATION`, naming the zone), where the kernel resolves the
+//!   name with chrono-tz. Spark and Delta writers do not write such values (they write no zone
+//!   or a `Z`/offset); Krishiv has no zone database (no chrono-tz, no jiff tz data). A trailing
+//!   `UTC` or `GMT` is read as UTC.
 //! - Other types use the kernel's `PrimitiveType::parse_scalar` (decimals with exponents,
 //!   booleans case-insensitively, intervals).
 //! - A value that does not parse is the kernel's `ParseError` (a broken table), not NULL.
@@ -20,6 +26,7 @@
 //! Values are appended to typed builders straight from the map's string buffer: no per-row
 //! allocation for strings or binaries.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::builder::{
@@ -65,6 +72,13 @@ impl ReaderZone {
     }
 
     fn parse(self, raw: &str) -> Option<i64> {
+        // `UTC`/`GMT` suffixes need no zone database.
+        if let Some(local) = raw
+            .strip_suffix(" UTC")
+            .or_else(|| raw.strip_suffix(" GMT"))
+        {
+            return micros(&Utc, local.trim_end());
+        }
         match self {
             Self::Utc => micros(&Utc, raw),
             Self::Fixed(z) => micros(&z, raw),
@@ -96,6 +110,32 @@ fn fixed_offset(value: &str) -> Option<FixedOffset> {
         return None;
     }
     FixedOffset::east_opt(sign * (h * 3_600 + m * 60))
+}
+
+/// Why the `timestamp` partition value `raw` did not parse: a trailing IANA zone name on an
+/// offset-less local timestamp is `Unsupported` (see the module docs), anything else the
+/// kernel's `ParseError`. A trailing `UTC`/`GMT` is retried as UTC.
+fn named_zone_or_parse_error(raw: &str, prim: &PrimitiveType) -> KernelError {
+    let Some((local, zone)) = raw.trim_end().rsplit_once(char::is_whitespace) else {
+        return parse_error(raw, prim);
+    };
+    let local = local.trim_end();
+    // An offset in the value as well as a name conflict: the kernel rejects that too.
+    let has_offset = local
+        .get(10..)
+        .is_some_and(|time| time.contains(['+', '-', 'Z', 'z']));
+    let is_name = zone.starts_with(|c: char| c.is_ascii_alphabetic())
+        && zone.contains('/')
+        && zone
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'));
+    if is_name && !has_offset && micros(&Utc, local).is_some() {
+        return KernelError::unsupported(format!(
+            "the time zone name {zone} in the timestamp partition value '{raw}': Krishiv reads \
+             partition timestamps with no zone, `Z` or a numeric offset"
+        ));
+    }
+    parse_error(raw, prim)
 }
 
 fn parse_error(raw: &str, prim: &PrimitiveType) -> KernelError {
@@ -136,7 +176,9 @@ fn append(
             builder!(b, Date32Builder, prim).append_value(days);
         }
         PrimitiveType::Timestamp => {
-            let v = zone.parse(raw).ok_or_else(|| parse_error(raw, prim))?;
+            let Some(v) = zone.parse(raw) else {
+                return Err(named_zone_or_parse_error(raw, prim));
+            };
             builder!(b, TimestampMicrosecondBuilder, prim).append_value(v);
         }
         PrimitiveType::TimestampNtz => {
@@ -183,6 +225,12 @@ pub(crate) fn map_to_struct(
         prims.push(p);
         builders.push(make_builder(a.data_type(), map.len()));
     }
+    // Field index by name, built once per batch.
+    let index: HashMap<&str, usize> = schema
+        .fields()
+        .enumerate()
+        .map(|(i, f)| (f.name().as_str(), i))
+        .collect();
     // The entry each field last matched; an entry before the row's first belongs to an earlier
     // row (offsets only grow), so nothing is reset between rows.
     let mut matched: Vec<Option<usize>> = vec![None; prims.len()];
@@ -193,7 +241,7 @@ pub(crate) fn map_to_struct(
         if map.is_valid(row) {
             for entry in start..end {
                 let key = keys.value(entry);
-                if let Some(i) = schema.fields().position(|f| f.name() == key) {
+                if let Some(&i) = index.get(key) {
                     matched[i] = Some(entry);
                 }
             }

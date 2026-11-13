@@ -5,15 +5,15 @@
 //! and root, the runtime handle the handlers bridge to, the parse limits and the query's
 //! cancellation. Kernel calls are entered only through [`DeltaEngine::delta_blocking`], which
 //! runs them on the process's [`LogPool`]. Handlers: storage ([`storage`]), JSON ([`json`]),
-//! Parquet ([`parquet`]) and evaluation ([`eval`]).
+//! Parquet ([`columnar`]) and evaluation ([`eval`]).
 
+pub mod columnar;
 pub mod data;
 pub mod eval;
 pub mod json;
-pub mod parquet;
 pub mod paths;
 pub mod pool;
-pub mod relabel;
+pub(crate) mod relabel;
 pub mod schema;
 pub mod storage;
 
@@ -37,10 +37,10 @@ use self::paths::TableRoot;
 use self::pool::{LogPool, on_log_pool};
 use crate::error::to_kernel;
 
+pub use self::columnar::KrishivParquetHandler;
 pub use self::data::KrishivEngineData;
 pub use self::eval::KrishivEvaluationHandler;
 pub use self::json::KrishivJsonHandler;
-pub use self::parquet::KrishivParquetHandler;
 pub use self::storage::KrishivStorageHandler;
 
 /// The bounds on what the handlers parse (lakehouse design section 5.6).

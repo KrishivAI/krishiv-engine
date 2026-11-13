@@ -61,12 +61,20 @@ fn one(batch: RecordBatch) -> delta_kernel::KernelResultIteratorStatic<Box<dyn E
     )))
 }
 
+/// The file's metadata as the kernel lists it: size, and the modification time in
+/// milliseconds (truncated), so reads carry a `Modified` version.
 fn meta(f: &Fixture, rel: &str) -> FileMeta {
-    let size = std::fs::metadata(f.dir.join(rel)).map_or(0, |m| m.len());
+    let m = std::fs::metadata(f.dir.join(rel)).unwrap();
+    let millis = m
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     FileMeta {
         location: f.url(rel),
-        last_modified: 0,
-        size,
+        last_modified: i64::try_from(millis).unwrap(),
+        size: m.len(),
     }
 }
 
@@ -195,7 +203,8 @@ fn parquet_reads_refuse_what_they_cannot_fill() {
     let e = read(StructType::try_new([StructField::not_null("nope", DataType::INTEGER)]).unwrap())
         .unwrap_err();
     assert!(e.to_string().contains("non-nullable column nope"), "{e}");
-    // A narrowing.
+    // A narrowing. 08b: a corrupt or mistyped file gets a named class (FAILED_READ_FILE);
+    // update this assertion with it.
     let e = read(StructType::try_new([StructField::nullable("add", DataType::STRING)]).unwrap())
         .unwrap_err();
     assert_eq!(f.class(&e), ErrorClass::InternalError, "{e}");
@@ -261,12 +270,22 @@ fn parquet_reads_apply_the_footer_limit_and_confinement() {
                 .map(|_| ())
         })
         .unwrap_err();
-    assert_ne!(f.class(&e), ErrorClass::InternalError, "{e}");
+    assert_eq!(
+        f.class(&e),
+        ErrorClass::UnsupportedFeatureTableOperation,
+        "{e}"
+    );
+    assert!(e.to_string().contains("outside the table root"), "{e}");
     let url = Url::parse("file:///tmp/krishiv-outside.parquet").unwrap();
     let e = f
         .run(move |e| e.parquet().write_parquet_file(url, one(data(1))))
         .unwrap_err();
-    assert_ne!(f.class(&e), ErrorClass::InternalError, "{e}");
+    assert_eq!(
+        f.class(&e),
+        ErrorClass::UnsupportedFeatureTableOperation,
+        "{e}"
+    );
+    assert!(e.to_string().contains("outside the table root"), "{e}");
 }
 
 #[test]
@@ -277,7 +296,7 @@ fn a_cancelled_query_stops_between_row_groups() {
     let batch = data(4);
     let mut enc = krishiv_io::parquet::ParquetFormat::encoder_with(
         &batch.schema(),
-        &crate::engine::parquet::format_options().unwrap(),
+        &crate::engine::columnar::format_options().unwrap(),
         |p| p.set_max_row_group_row_count(Some(1)),
     )
     .unwrap();
@@ -309,4 +328,46 @@ fn a_cancelled_query_stops_between_row_groups() {
     // The next pull sees the cancel; the iterator then ends.
     assert_eq!(rest.len(), 1);
     assert!(matches!(rest[0], Err(KernelError::Cancelled)));
+}
+
+#[test]
+fn reads_are_versioned_by_the_store() {
+    // This handler overwrites checkpoints and another writer may rewrite one: each read is
+    // versioned by the store's metadata (the metadata cache key and the read precondition), so
+    // a cached footer of an older file is never used for a newer one. The kernel's own times
+    // do not version it (a sidecar's come from the checkpoint): a `FileMeta` with no time, or a
+    // wrong one, still reads.
+    let f = Fixture::new();
+    let rel = "_delta_log/1.parquet";
+    let url = f.url(rel);
+    f.run(move |e| e.parquet().write_parquet_file(url, one(data(3))))
+        .unwrap();
+    let version = |m: FileMeta| {
+        let shared = Arc::clone(&f.engine.shared);
+        f.run(move |_| crate::engine::columnar::locate(&shared, &m).map(|(file, ..)| file.version))
+            .unwrap()
+    };
+    let first = version(meta(&f, rel));
+    assert_ne!(first, krishiv_io::VersionToken::Immutable);
+    let wrong = FileMeta {
+        last_modified: 1,
+        size: 0,
+        ..meta(&f, rel)
+    };
+    assert_eq!(version(wrong), first);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let url = f.url(rel);
+    f.run(move |e| e.parquet().write_parquet_file(url, one(data(4))))
+        .unwrap();
+    assert_ne!(version(meta(&f, rel)), first, "a rewrite is a new version");
+    let files = vec![meta(&f, rel)];
+    let schema: SchemaRef =
+        Arc::new(StructType::try_new([StructField::nullable("name", DataType::STRING)]).unwrap());
+    let rows: usize = f
+        .run(move |e| collect(e.parquet().read_parquet_files(&files, schema, None)))
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 4);
 }

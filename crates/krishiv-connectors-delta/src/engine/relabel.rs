@@ -25,11 +25,11 @@ use arrow_schema::{
 };
 
 /// The zone label timestamps carry through arrow-json and arrow-cast.
-pub const ARROW_UTC: &str = "+00:00";
+pub(crate) const ARROW_UTC: &str = "+00:00";
 
 /// `t` with every zoned timestamp labelled `zone`.
 #[must_use]
-pub fn with_zone(t: &ArrowType, zone: &str) -> ArrowType {
+pub(crate) fn with_zone(t: &ArrowType, zone: &str) -> ArrowType {
     let field = |f: &FieldRef| {
         Arc::new(
             Field::new(f.name(), with_zone(f.data_type(), zone), f.is_nullable())
@@ -50,7 +50,7 @@ pub fn with_zone(t: &ArrowType, zone: &str) -> ArrowType {
 
 /// `schema` with every zoned timestamp labelled `zone`.
 #[must_use]
-pub fn schema_with_zone(schema: &Schema, zone: &str) -> Schema {
+pub(crate) fn schema_with_zone(schema: &Schema, zone: &str) -> Schema {
     Schema::new_with_metadata(
         schema
             .fields()
@@ -103,7 +103,7 @@ fn timestamp(array: &ArrayRef, unit: TimeUnit, zone: Option<&Arc<str>>) -> Array
 ///
 /// # Errors
 /// A shape mismatch, or nulls in a child `target` declares non-nullable.
-pub fn relabel(array: &ArrayRef, target: &ArrowType) -> Result<ArrayRef, ArrowError> {
+pub(crate) fn relabel(array: &ArrayRef, target: &ArrowType) -> Result<ArrayRef, ArrowError> {
     if array.data_type() == target {
         return Ok(Arc::clone(array));
     }
@@ -166,7 +166,10 @@ pub fn relabel(array: &ArrayRef, target: &ArrowType) -> Result<ArrayRef, ArrowEr
 ///
 /// # Errors
 /// As [`relabel`], or a column count mismatch.
-pub fn relabel_batch(batch: &RecordBatch, schema: SchemaRef) -> Result<RecordBatch, ArrowError> {
+pub(crate) fn relabel_batch(
+    batch: &RecordBatch,
+    schema: SchemaRef,
+) -> Result<RecordBatch, ArrowError> {
     if batch.schema().as_ref() == schema.as_ref() {
         return Ok(batch.clone());
     }

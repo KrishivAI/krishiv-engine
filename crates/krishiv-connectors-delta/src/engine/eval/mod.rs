@@ -11,24 +11,26 @@
 //! `add.partitionValues`, `COALESCE(stats, TO_JSON(stats_parsed))`), data skipping (a rewritten
 //! predicate under `DISTINCT(output, false)`), transforms (`StructPatch`, `Struct`), writes
 //! (`TO_JSON(stats)`), `create_many` for action rows, and in CDF on data batches, so it is
-//! vectorised and allocates nothing per row. Node semantics: [`expr`], [`predicate`],
-//! [`json`] (`ParseJson`, `ToJson`) and [`partition`] (`MapToStruct`).
+//! vectorised and allocates nothing per row. Node semantics: the modules `expr`, `predicate`,
+//! `json` (`ParseJson`, `ToJson`) and `partition` (`MapToStruct`).
 //!
 //! An evaluator checks that its input batch has every field of its input schema, in order and
 //! of a compatible top-level type (extra fields are allowed), and gives its output exactly the
-//! declared type ([`types::conform`]): a struct output becomes the batch's columns, any other
+//! declared type (`types::conform`): a struct output becomes the batch's columns, any other
 //! output one nullable column named `output`.
 //!
 //! Differences from the kernel's evaluator, all toward the declared output: a widenable leaf
 //! (an `Int32` where `long` is declared) is cast rather than left as it is, and `IN` over a
-//! literal array gives one value per row rather than one value. `Opaque` nodes (the kernel's
-//! Arrow adaptors) and a named reader zone in `MapToStruct` are unsupported.
+//! literal array gives one value per row rather than one value. Unsupported (the kernel's
+//! `Unsupported`, never a wrong value): `Opaque` nodes (the kernel's Arrow adaptors), a named
+//! reader zone in `MapToStruct`, and a `timestamp` partition value ending in an IANA zone name
+//! (Krishiv has no zone database; see `partition`).
 
-pub mod expr;
-pub mod json;
-pub mod partition;
-pub mod predicate;
-pub mod types;
+pub(crate) mod expr;
+pub(crate) mod json;
+pub(crate) mod partition;
+pub(crate) mod predicate;
+pub(crate) mod types;
 
 use std::sync::Arc;
 

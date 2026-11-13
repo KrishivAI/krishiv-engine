@@ -19,7 +19,7 @@
 //!
 //! arrow-json is built without `chrono-tz` (ADR 0028), so it cannot read the zone label `UTC`; a
 //! `timestamp` crosses arrow-json labelled `+00:00` (the same instants) and is relabelled
-//! without a copy ([`super::relabel`]).
+//! without a copy (the crate's `relabel` module).
 
 use std::sync::Arc;
 
