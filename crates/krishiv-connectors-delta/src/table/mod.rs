@@ -338,4 +338,6 @@ fn internal(message: String) -> KrishivError {
 }
 
 #[cfg(test)]
+mod oracle_tests;
+#[cfg(test)]
 mod tests;
