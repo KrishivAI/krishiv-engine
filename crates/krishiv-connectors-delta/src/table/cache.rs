@@ -215,6 +215,16 @@ impl SnapshotCache {
         self.lock().retain(|k| k != key);
     }
 
+    /// Drops the entry of `key` only while it is still the one a query found stale (its
+    /// `version` and last commit `last`): an entry another query stored meanwhile stays.
+    pub(crate) fn invalidate_if(&self, key: &CacheKey, version: u64, last: CommitStamp) {
+        let mut entries = self.lock();
+        entries
+            .list
+            .retain(|(k, c, _)| !(k == key && c.snapshot.version() == version && c.last == last));
+        entries.bytes = entries.list.iter().map(|(_, _, b)| *b).sum();
+    }
+
     /// Drops every entry of the table root `root` (any store or credential).
     pub fn invalidate_root(&self, root: &str) {
         self.lock().retain(|k| k.root != root);

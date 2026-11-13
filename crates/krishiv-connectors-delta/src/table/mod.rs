@@ -205,10 +205,16 @@ impl DeltaTable {
                     if let Some(opened) = refresh(e, &c, &label) {
                         return Ok(opened);
                     }
-                    // Stale or broken: dropped, and the table is built afresh (a lower version
-                    // than the dropped one may then be cached).
+                    // A refresh cut short by the query's cancellation says nothing about the
+                    // entry: it stays, and the query ends with its cancellation.
+                    if e.kernel_cancellation().is_cancelled() {
+                        return Err(from_kernel(&KernelError::Cancelled, &label));
+                    }
+                    // Stale or broken: dropped (unless another query has meanwhile stored a
+                    // newer entry), and the table is built afresh (a lower version than the
+                    // dropped one may then be cached).
                     if let Some((cache, key)) = &entry {
-                        cache.invalidate(key);
+                        cache.invalidate_if(key, c.snapshot.version(), c.last);
                     }
                 }
                 let mut builder =

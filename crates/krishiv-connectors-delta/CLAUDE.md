@@ -30,6 +30,9 @@ Fuzz target `fuzz/fuzz_targets/delta_commit_json.rs` (one commit through `parse_
 - Interrupting a query during analysis does not reach its planning-time Delta opens: the session registers the
   query with its cancel registry only after planning. The session's `DeltaReads` cancels its token when dropped (a
   dropped planning future); hooking it into the interrupt registry is a session-wide follow-up.
+- The session names a Delta table in errors as a catalog table when its key holds a `.` (`delta_name`,
+  `krishiv-session` `catalog/file_tables.rs`): a temporary view whose back-quoted name holds a `.` is named as a
+  catalog table. Deciding from the entry's kind needs `FilesKey` to carry it (review finding 10, a follow-up).
 - Arrays and maps under column mapping, `NOT NULL` columns (the analyzer makes file columns nullable) and inline DVs
   have no oracle table.
 
