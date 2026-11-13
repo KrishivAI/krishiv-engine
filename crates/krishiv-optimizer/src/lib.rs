@@ -122,7 +122,8 @@ pub struct RuleStep {
     /// The batch it ran in: `ImpliedJoinFilters`, `Rewrite`, `Restrict`,
     /// `JoinOrder` (join ordering alternating with restriction; a `Rewrite`
     /// batch also runs inside it after an outer join turned inner, its rounds
-    /// counting from 1 each time), `Prune`, `Tidy` or `Cse`.
+    /// counting from 1 each time; a `Rewrite` batch also follows
+    /// `InferJoinFilters` whenever that rule changed the plan), `Prune`, `Tidy` or `Cse`.
     pub batch: &'static str,
     /// The round of a fixed-point batch, from 1.
     pub round: usize,
@@ -440,8 +441,17 @@ fn run(
         // After the rewrite batch, which moves `WHERE` equalities into the
         // joins (comma joins are cross joins before it); the batch runs
         // again to push what the rule added, only when it added something.
+        // What it added can turn an outer join inner or one-sided (an `isnotnull` on
+        // its null-supplied side), which lets the batch move that join's `ON`
+        // conjuncts into the side they read; the rule then runs over the joins
+        // below them in join ordering (or once more after restriction), not
+        // only in a second optimization.
         let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
-        let root = inferred;
+        let root = if Arc::ptr_eq(&inferred, &root) {
+            inferred
+        } else {
+            batch(inferred, "Rewrite", &mut t)?
+        };
         let root = t.once("AlgebraicSum", &root, |r| {
             sum_rewrite::rewrite(Arc::clone(r))
         })?;
@@ -484,8 +494,19 @@ fn run(
         // Without join ordering, once more after restriction (its semi
         // joins); with it, `order_and_restrict` already ran the rule on the
         // final joins. Tidying pushes what it adds.
+        // The rule and the batch alternate until the rule adds nothing, as in
+        // `order_and_restrict`: what it adds can make another outer join
+        // one-sided, whose `ON` conjuncts the batch then moves.
         let root = if stats.is_none() {
-            t.once("InferJoinFilters", &root, infer_join_filters)?
+            let mut root = root;
+            for _ in 1..=MAX_ITERATIONS {
+                let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
+                if Arc::ptr_eq(&inferred, &root) {
+                    break;
+                }
+                root = batch(inferred, "Rewrite", &mut t)?;
+            }
+            root
         } else {
             root
         };
