@@ -4,21 +4,32 @@
 //! implementation of it, [`ConnectService`].
 //!
 //! T001 implements the session RPCs (`ReleaseSession`) and what every RPC
-//! shares (the principal, the draining refusal). `ExecutePlan`,
-//! `AnalyzePlan`, `Config`, `Interrupt` and the rest answer `UNIMPLEMENTED`
-//! until T011a.
+//! shares (the principal, the draining refusal). T011a (PR-11a) adds
+//! `ExecutePlan` (`crate::execute`) and the minimal `ReattachExecute` and
+//! `ReleaseExecute` of design P3-T011a §3.4 (no replay buffer: a live
+//! operation cannot be reattached yet). `AnalyzePlan`, `Config`, `Interrupt`
+//! (PR-11b) and the rest answer `UNIMPLEMENTED`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use krishiv_common::error::{
+    ConnectInvalidPlanInvalidOneOfFieldNotSet, InvalidCursorDisconnected,
+    InvalidCursorNotReattachable, InvalidCursorPositionNotFound, InvalidHandleOperationNotFound,
+    KrishivError,
+};
 use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
+use krishiv_connect::proto::v4_3::release_execute_request::Release;
 use krishiv_connect::wire::Decoded;
 use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::codec::WireCodec;
+use crate::execute;
 use crate::manager::SessionManager;
+use crate::operation::ExecuteLimits;
+use crate::status::status_of;
 
 /// The generated server side of `spark.connect.SparkConnectService`.
 #[expect(
@@ -49,6 +60,7 @@ pub struct ConnectService {
     manager: Arc<SessionManager>,
     draining: Arc<AtomicBool>,
     local: Principal,
+    limits: ExecuteLimits,
 }
 
 impl ConnectService {
@@ -60,7 +72,15 @@ impl ConnectService {
             manager,
             draining,
             local: Principal::local_user(),
+            limits: ExecuteLimits::default(),
         }
+    }
+
+    /// This service with the `ExecutePlan` limits `limits`.
+    #[must_use]
+    pub fn with_limits(mut self, limits: ExecuteLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// The session manager.
@@ -92,11 +112,33 @@ impl SparkConnectService for ConnectService {
     type ExecutePlanStream = BoxStream<pb::ExecutePlanResponse>;
     type ReattachExecuteStream = BoxStream<pb::ExecutePlanResponse>;
 
+    /// Spark's `SparkConnectExecutePlanHandler`: the session is looked up
+    /// or created (its server-side id checked), the operation started
+    /// (`crate::execute`).
     async fn execute_plan(
         &self,
-        _request: Request<Decoded<pb::ExecutePlanRequest>>,
+        request: Request<Decoded<pb::ExecutePlanRequest>>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
-        Err(self.unimplemented("ExecutePlan"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let user = request
+            .user_context
+            .as_ref()
+            .map_or("", |u| u.user_id.as_str());
+        let entry = self
+            .manager
+            .get_or_create(
+                &principal,
+                &request.session_id,
+                request.client_observed_server_side_session_id.as_deref(),
+                user,
+            )
+            .map_err(|e| status_of(&e))?;
+        let stream = execute::execute_plan(&entry, &request, &self.limits)
+            .await
+            .map_err(|e| status_of(&e))?;
+        Ok(Response::new(stream))
     }
 
     async fn analyze_plan(
@@ -134,18 +176,94 @@ impl SparkConnectService for ConnectService {
         Err(self.unimplemented("Interrupt"))
     }
 
+    /// Spark's `SparkConnectReattachExecuteHandler`, minimal (design
+    /// P3-T011a §3.4): a finished, cancelled or dropped operation has been
+    /// removed (`INVALID_HANDLE.OPERATION_NOT_FOUND`); a live one that is not
+    /// reattachable is `INVALID_CURSOR.NOT_REATTACHABLE`; a live reattachable
+    /// one still streams to its first RPC, and the new stream gets
+    /// `INVALID_CURSOR.DISCONNECTED` (Spark ends the old stream with it
+    /// instead; a recorded PR-11 difference until the replay buffer).
     async fn reattach_execute(
         &self,
-        _request: Request<Decoded<pb::ReattachExecuteRequest>>,
+        request: Request<Decoded<pb::ReattachExecuteRequest>>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
-        Err(self.unimplemented("ReattachExecute"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self
+            .manager
+            .get(
+                &principal,
+                &request.session_id,
+                request.client_observed_server_side_session_id.as_deref(),
+            )
+            .map_err(|e| status_of(&e))?;
+        let error: KrishivError = match entry.operations().get(&request.operation_id) {
+            None => InvalidHandleOperationNotFound {
+                handle: request.operation_id.clone(),
+            }
+            .into(),
+            Some(op) if !op.reattachable() => InvalidCursorNotReattachable {}.into(),
+            Some(_) => InvalidCursorDisconnected {}.into(),
+        };
+        Err(status_of(&error))
     }
 
+    /// Spark's `SparkConnectReleaseExecuteHandler`: the session is looked up
+    /// without the server-side id check; an unknown operation is a success
+    /// without `operation_id`. `release_all` cancels and removes the
+    /// operation; `release_until` succeeds for a response id the operation
+    /// sent (there is no buffer to trim yet) and is
+    /// `INVALID_CURSOR.POSITION_NOT_FOUND` for any other.
     async fn release_execute(
         &self,
-        _request: Request<Decoded<pb::ReleaseExecuteRequest>>,
+        request: Request<Decoded<pb::ReleaseExecuteRequest>>,
     ) -> Result<Response<pb::ReleaseExecuteResponse>, Status> {
-        Err(self.unimplemented("ReleaseExecute"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self
+            .manager
+            .get(&principal, &request.session_id, None)
+            .map_err(|e| status_of(&e))?;
+        let mut response = pb::ReleaseExecuteResponse {
+            session_id: request.session_id.clone(),
+            server_side_session_id: entry.server_side_id().to_owned(),
+            operation_id: None,
+        };
+        if let Some(op) = entry.operations().get(&request.operation_id) {
+            if !op.reattachable() {
+                return Err(status_of(&InvalidCursorNotReattachable {}.into()));
+            }
+            response.operation_id = Some(op.id().as_str().to_owned());
+            match &request.release {
+                Some(Release::ReleaseAll(_)) => {
+                    op.cancel();
+                    entry.operations().remove(&op);
+                }
+                Some(Release::ReleaseUntil(until)) => {
+                    if !op.has_sent(&until.response_id) {
+                        return Err(status_of(
+                            &InvalidCursorPositionNotFound {
+                                response_id: until.response_id.clone(),
+                            }
+                            .into(),
+                        ));
+                    }
+                }
+                // Spark throws a classless UnsupportedOperationException.
+                None => {
+                    return Err(status_of(
+                        &ConnectInvalidPlanInvalidOneOfFieldNotSet {
+                            full_name: "spark.connect.ReleaseExecuteRequest".to_owned(),
+                            name: "RELEASE_NOT_SET".to_owned(),
+                        }
+                        .into(),
+                    ));
+                }
+            }
+        }
+        Ok(Response::new(response))
     }
 
     /// Spark's `SparkConnectReleaseSessionHandler`: an unknown session is a

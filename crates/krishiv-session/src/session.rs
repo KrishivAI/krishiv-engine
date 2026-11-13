@@ -160,7 +160,9 @@ pub(crate) struct SessionState {
     /// The session's number on its runtime.
     pub(crate) number: u64,
     /// Set by [`Session::close`]: the session takes no new statement.
-    closed: AtomicBool,
+    pub(crate) closed: AtomicBool,
+    /// What `system.sessions` shows that changes per call.
+    pub(crate) activity: crate::sessions::Activity,
     /// The session's memory pool: the runtime's root, or a pool of its own
     /// under the root (`krishiv.session.memoryLimit`).
     pub(crate) memory: Arc<dyn MemoryPool>,
@@ -189,6 +191,13 @@ pub(crate) struct SessionState {
 
 impl Drop for SessionState {
     fn drop(&mut self) {
+        self.runtime.sessions.retire(self.number, || {
+            crate::sessions::SessionRow::of(
+                self,
+                Some(crate::sessions::End::Closed("client_gone")),
+                0,
+            )
+        });
         self.runtime.forget_session(self.number);
     }
 }
@@ -1215,6 +1224,7 @@ impl Session {
                 io: Arc::clone(&self.state.io),
                 relations: Arc::clone(&self.state.cache),
                 metrics: Arc::clone(&self.state.runtime.metrics),
+                sessions: self.state.runtime.session_view(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1607,6 +1617,8 @@ impl Session {
             principal: Arc::clone(&self.state.principal),
             tags: self.state.queries.tags_now(),
             class: WorkloadClass::Interactive,
+            source: None,
+            statement_class: None,
             estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);
@@ -1682,6 +1694,7 @@ impl Session {
                 .await?
                 .into_parts(),
         };
+        self.state.activity.query_started();
         let id = QueryId(self.state.runtime.reserve(
             self.state.number,
             self.state.queries.session_id(),

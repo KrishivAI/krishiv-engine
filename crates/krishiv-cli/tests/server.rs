@@ -268,6 +268,33 @@ fn sc_localhost_runs_spark_range_collect() {
     );
 }
 
+/// Design P3-T011a §5 `pyspark_minimal_reattach`: the stock client asks
+/// for a reattachable execution, gets `ResultComplete`, sends
+/// `ReleaseExecute` after the responses, and logs no warning or error.
+/// The Connect logger (`pyspark.sql.connect.logging`) is disabled unless
+/// `SPARK_CONNECT_LOG_LEVEL` is set when it is imported; a failed release
+/// is a warning there (`reattach.py`, "ReleaseExecute failed").
+#[test]
+#[ignore = "needs pyspark-client 4.3.0 / 4.2.1 on the host (none on CI runners) and the Config RPC (PR-11b)"]
+fn pyspark_minimal_reattach() {
+    pyspark(
+        "import logging, os\n\
+         os.environ['SPARK_CONNECT_LOG_LEVEL'] = 'warning'\n\
+         from pyspark.sql.connect.logging import logger\n\
+         records = []\n\
+         class Keep(logging.Handler):\n\
+         \x20   def emit(self, record):\n\
+         \x20       records.append(record)\n\
+         logger.addHandler(Keep())\n\
+         from pyspark.sql import SparkSession\n\
+         s = SparkSession.builder.getOrCreate()\n\
+         assert [r.id for r in s.range(10).collect()] == list(range(10))\n\
+         s.stop()\n\
+         bad = [r.getMessage() for r in records if r.levelno >= logging.WARNING]\n\
+         assert not bad, bad\n",
+    );
+}
+
 #[test]
 #[ignore = "needs PR-11 (ExecutePlan, Config: P3-T011a)"]
 fn server_sessions_are_isolated() {

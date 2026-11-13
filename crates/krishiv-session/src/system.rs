@@ -25,8 +25,7 @@ use krishiv_exec::planner::MemoryTable;
 use krishiv_memory::MemoryPool;
 use krishiv_plan::TableVersion;
 use krishiv_plan::analyzer::{
-    AccessDecision, AccessPolicy, BoxFuture, Catalog, NameForm, Principal, Privilege, Securable,
-    TableColumn, TableIdent, TableKind, TableMeta,
+    BoxFuture, Catalog, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
 };
 
 use crate::history::QueryHistory;
@@ -44,13 +43,14 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 6] = [
+const TABLES: [&str; 7] = [
     "capabilities",
     "caches",
     "memory",
     "metrics",
     "operators",
     "queries",
+    "sessions",
 ];
 
 /// The names of the tables of the catalog.
@@ -147,7 +147,7 @@ fn capability_rows() -> Vec<[String; 4]> {
 
 /// What a column holds.
 #[derive(Clone, Copy)]
-enum Kind {
+pub(crate) enum Kind {
     Text,
     Long,
     /// `INT`.
@@ -275,6 +275,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("error_message", Text, true),
             ("partial", Flag, false),
         ],
+        "sessions" => crate::sessions::layout(),
         _ => return None,
     })
 }
@@ -342,7 +343,7 @@ fn int_list_column(rows: &[&[i32]]) -> ArrayRef {
 }
 
 /// A `MAP<STRING, STRING>` column of `rows` label sets.
-fn labels_column(rows: &[&[(String, String)]]) -> ArrayRef {
+pub(crate) fn labels_column(rows: &[&[(String, String)]]) -> ArrayRef {
     use arrow_array::{MapArray, StringViewArray, StructArray};
     use arrow_buffer::OffsetBuffer;
     let ArrowType::Map(entries, _) = labels_type().to_arrow() else {
@@ -388,11 +389,11 @@ fn buckets_column(rows: &[Option<&[(f64, i64)]>]) -> ArrayRef {
 }
 
 /// Rows of text cells, column by column.
-fn text<'a>(cells: impl Iterator<Item = Option<&'a str>>) -> ArrayRef {
+pub(crate) fn text<'a>(cells: impl Iterator<Item = Option<&'a str>>) -> ArrayRef {
     Arc::new(StringArray::from_iter(cells))
 }
 
-fn long(cells: impl Iterator<Item = Option<i64>>) -> ArrayRef {
+pub(crate) fn long(cells: impl Iterator<Item = Option<i64>>) -> ArrayRef {
     Arc::new(Int64Array::from_iter(cells))
 }
 
@@ -401,23 +402,11 @@ fn bytes(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
-/// The trace id of a W3C `traceparent` (`version-trace_id-parent_id-flags`,
-/// lower-case hex), `None` if the header is malformed: version `ff`, an
-/// all-zero id, or the wrong lengths.
-pub(crate) fn parse_traceparent(header: &str) -> Option<String> {
-    let hex = |s: &str, n: usize| {
-        s.len() == n && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-    };
-    let parts: Vec<&str> = header.trim().split('-').collect();
-    let [version, trace, parent, flags, ..] = parts.as_slice() else {
-        return None;
-    };
-    let zero = |s: &str| s.bytes().all(|b| b == b'0');
-    // Version 00 has exactly four fields; later versions may add more.
-    let shape = hex(version, 2) && *version != "ff" && (*version != "00" || parts.len() == 4);
-    (shape && hex(trace, 32) && !zero(trace) && hex(parent, 16) && !zero(parent) && hex(flags, 2))
-        .then(|| (*trace).to_owned())
-}
+#[cfg(test)]
+use crate::trace_context::{MAX_BAGGAGE_BYTES, MAX_BAGGAGE_ENTRIES};
+pub(crate) use crate::trace_context::{RemoteParent, parse_baggage, parse_remote_parent};
+#[cfg(test)]
+use krishiv_plan::analyzer::Principal;
 
 /// The name of the memory pool of the query whose `system.queries` row is `query_id`.
 pub(crate) fn pool_name(query_id: &str) -> String {
@@ -553,6 +542,9 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             Arc::new(Int32Array::from_iter(rows.iter().map(|r| Some(r.workers)))),
         ];
     }
+    if table.eq_ignore_ascii_case("sessions") {
+        return crate::sessions::columns(sources);
+    }
     if table.eq_ignore_ascii_case("queries") {
         let rows = sources.queries.snapshot(sources.monitor.sees_all());
         let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
@@ -674,56 +666,11 @@ pub(crate) struct Sources {
     pub(crate) metrics: Arc<krishiv_exec::MetricsRegistry>,
     /// Whether the query's principal sees every principal's queries.
     pub(crate) monitor: Arc<Monitor>,
+    /// The runtime's sessions.
+    pub(crate) sessions: Arc<crate::sessions::SessionView>,
 }
 
-/// Whether one query's principal holds `MONITOR` on the `system` securable,
-/// which shows every principal's rows in `system.queries` and
-/// `system.operators` (ADR 0036 update 2026-11-05). Asked once per query,
-/// when analysis loads one of those tables; until then, and when the policy
-/// says anything but a plain allow, the principal sees its own rows only.
-pub(crate) struct Monitor {
-    principal: Arc<Principal>,
-    policy: Arc<dyn AccessPolicy>,
-    decided: OnceLock<bool>,
-}
-
-impl std::fmt::Debug for Monitor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Monitor")
-            .field("decided", &self.decided.get())
-            .finish_non_exhaustive()
-    }
-}
-
-impl Monitor {
-    pub(crate) fn new(principal: Arc<Principal>, policy: Arc<dyn AccessPolicy>) -> Self {
-        Self {
-            principal,
-            policy,
-            decided: OnceLock::new(),
-        }
-    }
-
-    /// Asks the policy, once.
-    async fn decide(&self) {
-        if self.decided.get().is_some() {
-            return;
-        }
-        let securable = Securable::System(SYSTEM.to_owned());
-        let allowed = matches!(
-            self.policy
-                .check(&self.principal, &securable, Privilege::Monitor)
-                .await,
-            Ok(AccessDecision::Allow)
-        );
-        let _ = self.decided.set(allowed);
-    }
-
-    /// Whether every principal's rows show.
-    pub(crate) fn sees_all(&self) -> bool {
-        self.decided.get().copied().unwrap_or(false)
-    }
-}
+pub(crate) use crate::monitor::Monitor;
 
 /// Most tags a session carries, and the longest key and value.
 pub(crate) const MAX_TAGS: usize = 32;
@@ -922,8 +869,11 @@ pub(crate) struct QueryLog {
     /// The session this log belongs to, and its principal (fixed for life).
     session_id: String,
     principal: String,
-    /// The W3C trace the session's next queries belong to.
-    trace_id: Mutex<Option<String>>,
+    /// The W3C trace the session's next queries belong to, and the caller's
+    /// span they are children of.
+    trace: Mutex<Option<RemoteParent>>,
+    /// The `baggage` of the inbound request (untrusted, bounded).
+    baggage: Mutex<Vec<(String, String)>>,
     /// The session's tags, by key.
     tags: Mutex<std::collections::BTreeMap<String, String>>,
 }
@@ -981,14 +931,32 @@ impl QueryLog {
             .collect()
     }
 
-    /// Sets (or clears) the trace id the session's next queries record.
-    pub(crate) fn set_trace_id(&self, trace_id: Option<String>) {
-        *self.trace_id.lock().unwrap_or_else(PoisonError::into_inner) = trace_id;
+    /// Sets (or clears) the trace the session's next queries record.
+    pub(crate) fn set_trace(&self, trace: Option<RemoteParent>) {
+        *self.trace.lock().unwrap_or_else(PoisonError::into_inner) = trace;
+    }
+
+    /// The trace now in effect.
+    pub(crate) fn trace(&self) -> Option<RemoteParent> {
+        self.trace
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The trace id now in effect.
     pub(crate) fn trace_id(&self) -> Option<String> {
-        self.trace_id
+        self.trace().map(|t| t.trace_id)
+    }
+
+    /// Replaces the inbound baggage.
+    pub(crate) fn set_baggage(&self, baggage: Vec<(String, String)>) {
+        *self.baggage.lock().unwrap_or_else(PoisonError::into_inner) = baggage;
+    }
+
+    /// The inbound baggage now.
+    pub(crate) fn baggage(&self) -> Vec<(String, String)> {
+        self.baggage
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -1369,7 +1337,7 @@ impl Catalog for SystemCatalog {
             if !id.namespace.is_empty() {
                 return Ok(None);
             }
-            if ["queries", "operators"]
+            if ["queries", "operators", "sessions"]
                 .iter()
                 .any(|t| id.name.eq_ignore_ascii_case(t))
             {
@@ -1690,6 +1658,7 @@ mod tests {
                 Arc::new(Principal::local_user()),
                 Arc::new(krishiv_plan::analyzer::AllowAll),
             )),
+            sessions: Arc::default(),
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
         assert!(provider("nope", &sources).unwrap().is_none());
@@ -1756,7 +1725,11 @@ mod tests {
     #[test]
     fn a_replayed_query_is_a_finished_row() {
         let log = QueryLog::default();
-        log.set_trace_id(Some("trace".to_owned()));
+        log.set_trace(Some(RemoteParent {
+            trace_id: "trace".to_owned(),
+            span_id: "span".to_owned(),
+            flags: 1,
+        }));
         assert!(log.try_set_tag("team", "etl"));
         let id = log.record_replayed(TextPolicy::default(), Some("SELECT 1"), Some("READ"), None);
         let row = &log.snapshot(false)[0];
@@ -1909,10 +1882,32 @@ mod tests {
     }
 
     #[test]
+    fn baggage_is_bounded_and_malformed_entries_are_skipped() {
+        let got = parse_baggage("a=1;prop=x, nokey, =v, k = v2 ,c\u{7}=1");
+        assert_eq!(
+            got,
+            [
+                ("a".to_owned(), "1".to_owned()),
+                ("k".to_owned(), "v2".to_owned())
+            ]
+        );
+        let many = (0..100)
+            .map(|i| format!("k{i}=v"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(parse_baggage(&many).len(), MAX_BAGGAGE_ENTRIES);
+        let big = format!("a={}", "x".repeat(MAX_BAGGAGE_BYTES));
+        assert!(parse_baggage(&big).is_empty());
+        let p = parse_remote_parent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+            .expect("valid");
+        assert_eq!((p.span_id.as_str(), p.flags), ("00f067aa0ba902b7", 1));
+    }
+
+    #[test]
     fn traceparent_is_checked_as_w3c_says() {
         let ok = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
         assert_eq!(
-            parse_traceparent(ok).as_deref(),
+            parse_remote_parent(ok).map(|p| p.trace_id).as_deref(),
             Some("4bf92f3577b34da6a3ce929d0e0e4736")
         );
         for bad in [
@@ -1924,10 +1919,10 @@ mod tests {
             "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
             "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra",
         ] {
-            assert!(parse_traceparent(bad).is_none(), "{bad}");
+            assert!(parse_remote_parent(bad).is_none(), "{bad}");
         }
         assert!(
-            parse_traceparent(&format!("01-{}-00f067aa0ba902b7-01-more", &ok[3..35])).is_some()
+            parse_remote_parent(&format!("01-{}-00f067aa0ba902b7-01-more", &ok[3..35])).is_some()
         );
     }
 

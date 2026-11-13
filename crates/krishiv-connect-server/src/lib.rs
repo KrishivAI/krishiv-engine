@@ -11,13 +11,16 @@
 #![deny(clippy::disallowed_methods)]
 
 pub mod codec;
+pub mod execute;
 pub mod host;
 pub mod manager;
+pub mod operation;
 pub mod server;
 pub mod service;
 pub mod status;
 
 pub use manager::{ManagerCounts, SessionEntry, SessionLimits, SessionManager};
+pub use operation::{ExecuteLimits, Operation, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};
 pub use service::ConnectService;
 pub use status::status_of;
