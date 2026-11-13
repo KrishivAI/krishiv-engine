@@ -95,6 +95,7 @@ pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
+    force: bool,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let Some(row_number) = row_number() else {
         return Ok((root, Vec::new()));
@@ -112,7 +113,7 @@ pub(crate) fn rewrite(
         let Some(shape) = Shape::of(&p) else {
             return Ok(p);
         };
-        match shape.code(&mut est, &mut next, &row_number) {
+        match shape.code(&mut est, &mut next, &row_number, force) {
             Ok(None) => Ok(p),
             Ok(Some((coded, note))) => {
                 notes.push(note);
@@ -225,6 +226,7 @@ impl<'a> Shape<'a> {
         est: &mut Estimator<'_>,
         next: &mut u64,
         row_number: &FunctionId,
+        force: bool,
     ) -> Result<Option<(Arc<LogicalPlan>, String)>, String> {
         let mut leaves = Vec::new();
         walk(self.input, true, &mut Vec::new(), &mut leaves);
@@ -243,7 +245,7 @@ impl<'a> Shape<'a> {
                 continue;
             }
             coded |= is_code(&leaf.plan);
-            match self.qualify(leaf, keys, est) {
+            match self.qualify(leaf, keys, est, force) {
                 Ok(c) => found.push(c),
                 Err(why) => refusals.push(why),
             }
@@ -274,6 +276,7 @@ impl<'a> Shape<'a> {
         leaf: Leaf,
         keys: Vec<BoundColumn>,
         est: &mut Estimator<'_>,
+        force: bool,
     ) -> Result<Candidate, String> {
         let names = keys
             .iter()
@@ -385,15 +388,32 @@ impl<'a> Shape<'a> {
             return Err(format!("no statistics for the input of [{names}]"));
         }
         let mut groups = 1.0_f64;
+        let mut guessed = None;
         for k in &keys {
-            let known = d.cols.get(&k.id).filter(|c| c.ndv_known());
-            let Some(c) = known else {
-                return Err(format!("the distinct count of {} is a guess", k.name));
-            };
-            groups *= c.ndv;
+            match d.cols.get(&k.id).filter(|c| c.ndv_known()) {
+                Some(c) => groups *= c.ndv,
+                None => guessed = guessed.or(Some(k.name.as_str())),
+            }
         }
-        let groups = groups.min(d.rows_for_costing());
         let (rows_i, rows_d) = (gate_rows(est, self.input), d.rows_for_costing());
+        if force {
+            // Measurement only (`krishiv.experimental.groupKeyCodeForce`):
+            // the shape qualifies, the statistics are not asked.
+            let note = format!(
+                "coded [{names}] (forced): input rows {rows_i:.0}, dimension rows {rows_d:.0}, \
+                 {width} key bytes dropped"
+            );
+            return Ok(Candidate {
+                leaf,
+                keys,
+                dropped,
+                note,
+            });
+        }
+        if let Some(name) = guessed {
+            return Err(format!("the distinct count of {name} is a guess"));
+        }
+        let groups = groups.min(rows_d);
         let gates =
             format!("groups {groups:.0}, input rows {rows_i:.0}, dimension rows {rows_d:.0}");
         if groups * MIN_ROWS_PER_GROUP > rows_i {

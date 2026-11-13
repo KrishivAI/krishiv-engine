@@ -504,17 +504,27 @@ fn run(
         // After eager aggregation (which may pre-empt it) and the final join
         // order, before pruning: an aggregate's dimension keys travel as one
         // code (design P2b D2).
+        // `krishiv.experimental.groupKeyCodeForce` (measurement only) also
+        // switches it on, without the statistics test.
+        let forced = udfs.is_some_and(|(_, config)| {
+            krishiv_common::experimental::is_enabled(config, "groupKeyCodeForce")
+        });
         let coded = options.group_key_code
-            && udfs.is_none_or(|(_, config)| {
-                config
-                    .get(&GROUP_KEY_CODE)
-                    .and_then(ConfigValue::as_bool)
-                    .unwrap_or(false)
-            });
+            && (forced
+                || udfs.is_none_or(|(_, config)| {
+                    config
+                        .get(&GROUP_KEY_CODE)
+                        .and_then(ConfigValue::as_bool)
+                        .unwrap_or(false)
+                }));
         let root = match stats {
             Some(stats) if coded => {
-                let (after, notes) =
-                    group_code::rewrite(Arc::clone(&root), stats, options.stats_propagation)?;
+                let (after, notes) = group_code::rewrite(
+                    Arc::clone(&root),
+                    stats,
+                    options.stats_propagation,
+                    forced,
+                )?;
                 t.step("GroupKeyCode", 1, "GroupKeyCode", &root, &after);
                 t.notes("GroupKeyCode", &after, notes);
                 // The decode join is a new inner join: ordered (and its

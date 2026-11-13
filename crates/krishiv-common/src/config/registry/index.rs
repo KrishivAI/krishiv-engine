@@ -303,6 +303,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     ),
     (
+        "krishiv.experimental.groupKeyCodeForce",
+        &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
+    ),
+    (
         "krishiv.io.parquet.bloomFilter.enabled",
         &IO_PARQUET_BLOOM_FILTER_ENABLED,
     ),

@@ -49,3 +49,18 @@ pub static GROUP_KEY_CODE: ConfigEntry = ConfigEntry {
     version_added: "0.2.0",
     spark_alias: None,
 };
+
+/// Experimental: the group-key code applies wherever the plan's shape qualifies, without the statistics test
+/// (a measurement switch for P2b D2's timed A/B).
+pub static EXPERIMENTAL_GROUP_KEY_CODE_FORCE: ConfigEntry = ConfigEntry {
+    key: "krishiv.experimental.groupKeyCodeForce",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Experimental: apply `krishiv.optimizer.groupKeyCode` wherever an aggregate's shape qualifies, \
+          also when a key's distinct count is a guess or the estimated ratios say it does not pay. \
+          For measuring the rewrite; results are the same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};

@@ -590,6 +590,42 @@ fn shared_dictionaries_stay_a_fixed_point() {
     }
 }
 
+/// `krishiv.experimental.groupKeyCodeForce` (a measurement switch) codes an
+/// aggregate whose key's distinct count is a guess, which the statistics test
+/// refuses, and the rows stay the same.
+#[test]
+fn forcing_codes_past_a_guessed_distinct_count() {
+    let ctx = support::ctx_over(catalog());
+    let udfs = krishiv_udf_sdk::UdfLibrary::new();
+    let mut stats = Stats::new();
+    stats.set("d", "g1", None);
+    let sql = "SELECT g1, g2, count(*) AS n, sum(x) AS s FROM f JOIN d ON fk = dk GROUP BY g1, g2";
+    let plan = support::resolve(sql, &ctx);
+    let mut on = krishiv_common::config::Config::new();
+    on.set("krishiv.optimizer.groupKeyCode", "true").unwrap();
+    let (refused, steps) =
+        krishiv_optimizer::optimize_traced_with_udfs(&plan, &stats, &udfs, &on).unwrap();
+    assert!(!coded(&refused.root().to_string()));
+    assert!(steps.iter().any(|s| s.note.contains("is a guess")));
+    let mut forced = krishiv_common::config::Config::new();
+    forced
+        .set("krishiv.experimental.groupKeyCodeForce", "true")
+        .unwrap();
+    let (once, steps) =
+        krishiv_optimizer::optimize_traced_with_udfs(&plan, &stats, &udfs, &forced).unwrap();
+    let text = once.root().to_string();
+    assert!(coded(&text), "{text}");
+    assert!(steps.iter().any(|s| s.note.contains("(forced)")));
+    for seed in [3, 11] {
+        let db = db(seed);
+        assert_eq!(
+            eval::rows(&db, once.root()),
+            eval::rows(&db, plan.root()),
+            "seed {seed}"
+        );
+    }
+}
+
 /// TPC-H q21 groups by `s_name` behind `EXISTS` / `NOT EXISTS`, which keep
 /// a small part of their input: the gate reads the semi and anti joins as
 /// estimated (only a null-aware `NOT IN` is read through), and refuses.

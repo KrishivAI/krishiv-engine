@@ -893,6 +893,19 @@ fn group_key_code_defaults_off_and_parses() {
 }
 
 #[test]
+fn group_key_code_force_is_experimental_and_off() {
+    let mut c = Config::new();
+    assert!(!crate::experimental::is_enabled(&c, "groupKeyCodeForce"));
+    c.set("krishiv.experimental.groupKeyCodeForce", "true")
+        .unwrap();
+    assert!(crate::experimental::is_enabled(&c, "groupKeyCodeForce"));
+    assert!(
+        c.set("krishiv.experimental.groupKeyCodeForce", "maybe")
+            .is_err()
+    );
+}
+
+#[test]
 fn eager_aggregation_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
