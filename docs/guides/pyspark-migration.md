@@ -160,6 +160,11 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Checkpoint files and where a checkpoint lives](../concepts/known-differences.md#checkpoint-files-and-where-a-checkpoint-lives) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
 
+## Where it runs
+
+Krishiv has three deployment modes: embedded (in your Python process, as above), single-node and distributed.
+Single-node is one `krishiv server` process that PySpark and other clients reach over Spark Connect; see [Deployment](deploy.md).
+
 ## Step 3: check the result
 
 Run the same job on both engines over a small input and compare. For plans and per-operator cost use `df.explain(analyze=True)`
