@@ -2,6 +2,8 @@
 //! Expression evaluation (port of the kernel's `evaluate_expression`, `delta_kernel` 0.30.1
 //! `engine/arrow_expression/evaluate_expression.rs`, Apache-2.0).
 //!
+//! - A column under a struct is null wherever a struct above it is null (the kernel's readers
+//!   fix nested null masks first; Krishiv's batches arrive unfixed).
 //! - Arithmetic is arrow-arith's checked arithmetic: integer division truncates, an integer
 //!   division by zero or an overflow is an error, a float division by zero is infinity or NaN.
 //! - `Cast` is Arrow's safe cast: a value that does not convert (a non-numeric string, an
@@ -43,7 +45,13 @@ use crate::engine::schema::{scalar_to_array, to_arrow_type};
 /// The list element field name of the kernel's Arrow conversion.
 const LIST_ELEMENT: &str = "element";
 
-/// The column at the dotted `path` of `batch`.
+/// The column at the dotted `path` of `batch`, null wherever one of the structs above it is
+/// null.
+///
+/// Arrow lets a null struct row hold a non-null child value; the kernel's evaluator reads
+/// children as they are because its readers first apply `fix_nested_null_masks`. Krishiv's
+/// batches come unfixed, so the ancestors' validity is applied here, as the getters in
+/// `engine/data.rs` do: `s.x = 7` is NULL for a NULL `s`, whatever `x` physically holds.
 ///
 /// # Errors
 /// An empty path, a missing field, or a step through a non-struct.
@@ -55,15 +63,49 @@ pub(crate) fn extract_column(batch: &RecordBatch, path: &[String]) -> KernelResu
     let mut column = batch
         .column_by_name(first)
         .ok_or_else(|| KernelError::generic(format!("No such field: {first}")))?;
+    let mut ancestors: Option<NullBuffer> = None;
     for name in names {
         let parent = column
             .as_struct_opt()
             .ok_or_else(|| KernelError::generic(format!("Not a struct: {name}")))?;
+        ancestors = NullBuffer::union(ancestors.as_ref(), parent.nulls());
         column = parent
             .column_by_name(name)
             .ok_or_else(|| KernelError::generic(format!("No such field: {name}")))?;
     }
-    Ok(Arc::clone(column))
+    match ancestors {
+        Some(nulls) if nulls.null_count() > 0 => with_parent_nulls(column, &nulls),
+        _ => Ok(Arc::clone(column)),
+    }
+}
+
+/// `column` with `parents` (the combined validity of the structs above it) unioned into its
+/// own nulls and, for a struct, into every descendant's (the kernel's
+/// `compute_nested_null_masks`). No values are copied.
+fn with_parent_nulls(column: &ArrayRef, parents: &NullBuffer) -> KernelResult<ArrayRef> {
+    // A `Null` column has no null buffer and is all null already.
+    if column.data_type() == &arrow_schema::DataType::Null {
+        return Ok(Arc::clone(column));
+    }
+    let nulls = NullBuffer::union(Some(parents), column.nulls());
+    if let Some(s) = column.as_struct_opt() {
+        let columns = match &nulls {
+            Some(n) => s
+                .columns()
+                .iter()
+                .map(|c| with_parent_nulls(c, n))
+                .collect::<KernelResult<Vec<_>>>()?,
+            None => s.columns().to_vec(),
+        };
+        return build_struct(s.fields().clone(), columns, nulls, s.len());
+    }
+    let data = column
+        .to_data()
+        .into_builder()
+        .nulls(nulls)
+        .build()
+        .map_err(arrow_err)?;
+    Ok(make_array(data))
 }
 
 /// Evaluates `expression` over `batch`; `result_type`, when given, is checked.

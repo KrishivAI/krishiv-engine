@@ -1279,3 +1279,5 @@ fn duplicate_keys_and_strict_leaf_fallback() {
     let a = super::json::parse_json(&ctx(), &strings, &target).unwrap();
     assert_eq!((a.len(), a.null_count()), (1, 1));
 }
+
+mod edge;
