@@ -133,8 +133,7 @@ def main() -> None:
         print(f"vendored Spark {version} registry -> {name}", file=sys.stderr)
 
     extract = (
-        "import zipfile,sys;sys.stdout.buffer.write(zipfile.ZipFile("
-        f"'{JAR.format(version='4.2.0')}').read('{ENTRY}'))"
+        f"import zipfile,sys;sys.stdout.buffer.write(zipfile.ZipFile('{JAR.format(version='4.2.0')}').read('{ENTRY}'))"
     )
     raw = subprocess.run([*base, "python3", "-c", extract], capture_output=True, check=True).stdout
     doc = json.loads(raw)

@@ -43,7 +43,10 @@ def read_release(version: str, image: str) -> dict[str, str]:
     base = ["docker", "run", "--rm", "-i", "--entrypoint", "", "-e", "HOME=/tmp"]
     shell = ["/opt/spark/bin/spark-shell", "--master", "local[1]"]
     ways = [
-        ([*base, "-v", f"{SCALA}:/tmp/legacy_settings.scala:ro", image, *shell, "-I", "/tmp/legacy_settings.scala"], ""),
+        (
+            [*base, "-v", f"{SCALA}:/tmp/legacy_settings.scala:ro", image, *shell, "-I", "/tmp/legacy_settings.scala"],
+            "",
+        ),
         ([*base, image, *shell], SCALA.read_text(encoding="utf-8")),
     ]
     stderr = ""
