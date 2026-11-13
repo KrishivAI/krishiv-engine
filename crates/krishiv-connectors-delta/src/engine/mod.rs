@@ -229,7 +229,10 @@ impl DeltaEngine {
     /// The evaluation handler.
     #[must_use]
     pub fn evaluation(&self) -> Arc<KrishivEvaluationHandler> {
-        Arc::new(KrishivEvaluationHandler::new(self.shared.limits))
+        Arc::new(KrishivEvaluationHandler::with_cancel(
+            self.shared.limits,
+            Arc::clone(&self.shared.cancel),
+        ))
     }
 
     /// The query's cancellation as the kernel's token, for `with_cancellation_token`.

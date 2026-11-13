@@ -44,6 +44,7 @@ use delta_kernel::{
     EngineData, EvaluationHandler, ExpressionEvaluator, KernelError, KernelResult,
     PredicateEvaluator,
 };
+use krishiv_exec::CancellationToken;
 
 use self::expr::{evaluate_expression, extract_column};
 use self::predicate::evaluate_predicate;
@@ -66,18 +67,43 @@ pub(crate) fn arrow_err(e: ArrowError) -> KernelError {
     KernelError::generic(e.to_string())
 }
 
-/// The evaluation handler of a [`super::DeltaEngine`].
-#[derive(Debug, Clone, Copy)]
+/// The query's cancellation as the evaluation handler sees it: none for a standalone handler.
+#[derive(Debug, Clone, Default)]
+struct Cancel(Option<Arc<CancellationToken>>);
+
+impl Cancel {
+    /// The kernel's `Cancelled` once the query is cancelled, as the other handlers return.
+    fn check(&self) -> KernelResult<()> {
+        match &self.0 {
+            Some(c) if c.is_cancelled() => Err(KernelError::Cancelled),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// The evaluation handler of a [`super::DeltaEngine`]. Every call, and every evaluator's
+/// `evaluate`, checks the query's cancellation first.
+#[derive(Debug, Clone)]
 pub struct KrishivEvaluationHandler {
     ctx: Ctx,
+    cancel: Cancel,
 }
 
 impl KrishivEvaluationHandler {
-    /// A handler applying `limits` to `ParseJson`.
+    /// A handler applying `limits` to `ParseJson`, with no query to cancel it.
     #[must_use]
     pub fn new(limits: DeltaLimits) -> Self {
         Self {
             ctx: Ctx { limits },
+            cancel: Cancel::default(),
+        }
+    }
+
+    /// A handler of the query whose cancellation is `cancel`.
+    pub(crate) fn with_cancel(limits: DeltaLimits, cancel: Arc<CancellationToken>) -> Self {
+        Self {
+            ctx: Ctx { limits },
+            cancel: Cancel(Some(cancel)),
         }
     }
 }
@@ -89,8 +115,10 @@ impl EvaluationHandler for KrishivEvaluationHandler {
         expression: ExpressionRef,
         output_type: DataType,
     ) -> KernelResult<Arc<dyn ExpressionEvaluator>> {
+        self.cancel.check()?;
         Ok(Arc::new(KrishivExpressionEvaluator {
             ctx: self.ctx,
+            cancel: self.cancel.clone(),
             input_schema,
             expression,
             output_type,
@@ -102,8 +130,10 @@ impl EvaluationHandler for KrishivEvaluationHandler {
         input_schema: SchemaRef,
         predicate: PredicateRef,
     ) -> KernelResult<Arc<dyn PredicateEvaluator>> {
+        self.cancel.check()?;
         Ok(Arc::new(KrishivPredicateEvaluator {
             ctx: self.ctx,
+            cancel: self.cancel.clone(),
             input_schema,
             predicate,
         }))
@@ -114,6 +144,7 @@ impl EvaluationHandler for KrishivEvaluationHandler {
         schema: SchemaRef,
         rows: Vec<Vec<Scalar>>,
     ) -> KernelResult<Box<dyn EngineData>> {
+        self.cancel.check()?;
         Ok(Box::new(KrishivEngineData::new(create_many(
             &schema, &rows,
         )?)))
@@ -286,6 +317,7 @@ fn struct_to_batch(array: &ArrayRef) -> KernelResult<RecordBatch> {
 #[derive(Debug)]
 struct KrishivExpressionEvaluator {
     ctx: Ctx,
+    cancel: Cancel,
     input_schema: SchemaRef,
     expression: ExpressionRef,
     output_type: DataType,
@@ -293,6 +325,7 @@ struct KrishivExpressionEvaluator {
 
 impl ExpressionEvaluator for KrishivExpressionEvaluator {
     fn evaluate(&self, batch: &dyn EngineData) -> KernelResult<Box<dyn EngineData>> {
+        self.cancel.check()?;
         let batch = KrishivEngineData::batch_of(batch)?;
         check_input(&self.input_schema, batch)?;
         let out = evaluate(&self.ctx, &self.expression, &self.output_type, batch)?;
@@ -338,12 +371,14 @@ pub(crate) fn evaluate(
 #[derive(Debug)]
 struct KrishivPredicateEvaluator {
     ctx: Ctx,
+    cancel: Cancel,
     input_schema: SchemaRef,
     predicate: PredicateRef,
 }
 
 impl PredicateEvaluator for KrishivPredicateEvaluator {
     fn evaluate(&self, batch: &dyn EngineData) -> KernelResult<Box<dyn EngineData>> {
+        self.cancel.check()?;
         let batch = KrishivEngineData::batch_of(batch)?;
         check_input(&self.input_schema, batch)?;
         let result = evaluate_predicate(&self.ctx, &self.predicate, batch, false)?;

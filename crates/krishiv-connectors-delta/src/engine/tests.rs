@@ -498,6 +498,45 @@ fn delta_handler_cancellation() {
 }
 
 #[test]
+fn delta_evaluation_cancellation() {
+    use delta_kernel::EvaluationHandler;
+    use delta_kernel::expressions::{ColumnName, Expression, Predicate, Scalar};
+    let f = Fixture::new();
+    let h = f.engine.evaluation();
+    let input =
+        Arc::new(StructType::try_new([StructField::nullable("s", DataType::STRING)]).unwrap());
+    let s = || Expression::Column(ColumnName::new(["s"]));
+    let expr = h
+        .new_expression_evaluator(Arc::clone(&input), Arc::new(s()), DataType::STRING)
+        .unwrap();
+    let pred = h
+        .new_predicate_evaluator(Arc::clone(&input), Arc::new(Predicate::is_null(s())))
+        .unwrap();
+    let batch = || KrishivEngineData::new(strings(&[Some("a")]));
+    // Live: both evaluate.
+    expr.evaluate(&batch()).unwrap();
+    pred.evaluate(&batch()).unwrap();
+    f.cancel.cancel();
+    let errors = [
+        expr.evaluate(&batch()).map(|_| ()).unwrap_err(),
+        pred.evaluate(&batch()).map(|_| ()).unwrap_err(),
+        h.new_expression_evaluator(Arc::clone(&input), Arc::new(s()), DataType::STRING)
+            .map(|_| ())
+            .unwrap_err(),
+        h.new_predicate_evaluator(Arc::clone(&input), Arc::new(Predicate::is_null(s())))
+            .map(|_| ())
+            .unwrap_err(),
+        h.create_many(input, vec![vec![Scalar::from("a")]])
+            .map(|_| ())
+            .unwrap_err(),
+    ];
+    for e in &errors {
+        assert!(matches!(e, KernelError::Cancelled), "{e:?}");
+        assert_eq!(f.class(e), ErrorClass::OperationCanceled);
+    }
+}
+
+#[test]
 fn the_pool_bounds_kernel_calls_and_a_cancelled_wait_ends() {
     let shared = pool(1);
     let busy = Fixture::with(DeltaLimits::default(), shared, None);

@@ -430,7 +430,14 @@ impl Reads {
             // Checks the query's cancellation before every pull (a row group at most).
             match self.shared.block_on(open.stream.next_batch())? {
                 Some(batch) => {
-                    let out = open.plan.assemble(&batch, open.next_row, &open.location)?;
+                    let out = match open.plan.assemble(&batch, open.next_row, &open.location) {
+                        Ok(out) => out,
+                        Err(e) => {
+                            // Release the file's reservation and buffers now, not on drop.
+                            self.open = None;
+                            return Err(e);
+                        }
+                    };
                     let rows = i64::try_from(batch.num_rows()).unwrap_or(i64::MAX);
                     open.next_row = open.next_row.saturating_add(rows);
                     return Ok(Some(out));
@@ -483,7 +490,10 @@ impl KrishivParquetHandler {
         let mut schema = None;
         let mut out = BytesMut::new();
         for chunk in data {
+            // Nothing is put yet, so a cancelled query stops encoding between chunks.
+            self.shared.check_cancelled()?;
             let batch = KrishivEngineData::from_engine_data(chunk?)?.into_batch();
+            self.shared.check_cancelled()?;
             let schema = schema.get_or_insert_with(|| batch.schema());
             let batch = relabel_batch(&batch, Arc::clone(schema)).map_err(arrow_err)?;
             let encoder =
