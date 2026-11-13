@@ -168,10 +168,14 @@ rdkafka = { version = "0.39", default-features = false }
 wasmtime = { version = "49", default-features = false }
 axum = { version = "0.8.9", default-features = false }
 tower = { version = "0.5.3", default-features = false }
+# Test clients only: `TokioIo` for a tonic channel over a TLS stream.
+hyper-util = { version = "0.1.21", default-features = false }
 rust-embed = { version = "8.13", default-features = false }
 utoipa = { version = "6.0", default-features = false }
 rmcp = { version = "3.5.1", default-features = false }
 rustls = { version = "0.23", default-features = false }
+# Server TLS on the listeners (P3-T002 design §3.5): the async acceptor over `rustls`.
+tokio-rustls = { version = "0.26.6", default-features = false }
 # OIDC JWT signatures (krishiv-session `oidc`); already in the tree as rustls's crypto provider.
 aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-sys"] }
 tracing = { version = "0.1.44", default-features = false }

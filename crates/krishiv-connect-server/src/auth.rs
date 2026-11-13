@@ -117,7 +117,8 @@ impl ConnectAuth {
         Authenticated::new(self.local.clone(), None, Method::None)
     }
 
-    /// Authenticates one request from its `headers` and `peer` address ([`AuthLayer`] calls
+    /// Authenticates one request from its `headers`, `peer` address and, over TLS, the client
+    /// certificate rustls verified (`peer_leaf`) ([`AuthLayer`] calls
     /// it before the body is read).
     ///
     /// # Errors
@@ -129,6 +130,7 @@ impl ConnectAuth {
         &self,
         headers: &HeaderMap,
         peer: Option<SocketAddr>,
+        peer_leaf: Option<&[u8]>,
     ) -> Result<Authenticated, Status> {
         let Some(authenticator) = &self.authenticator else {
             return Ok(self.local());
@@ -142,6 +144,7 @@ impl ConnectAuth {
             return Err(failure_status(AuthFailure::Missing));
         };
         let mut credentials = Credentials::new(peer, Surface::Connect);
+        credentials.peer_leaf = peer_leaf;
         let mut values = headers.get_all(AUTHORIZATION).iter();
         match (values.next(), values.next()) {
             (None, _) => {}

@@ -2241,6 +2241,7 @@ dependencies = [
  "libmimalloc-sys",
  "mimalloc",
  "reedline",
+ "rustls",
  "serde_json",
  "tempfile",
  "tokio",
@@ -2282,6 +2283,7 @@ dependencies = [
  "bytes",
  "futures",
  "getrandom 0.4.3",
+ "hyper-util",
  "krishiv-common",
  "krishiv-connect",
  "krishiv-memory",
@@ -2295,6 +2297,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "tonic",
  "tonic-prost",
  "tower",
@@ -2620,6 +2623,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "tracing",
 ]
 

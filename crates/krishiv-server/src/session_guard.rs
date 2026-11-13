@@ -69,6 +69,7 @@ impl Guard for SessionGuard {
             };
             let mut credentials = Credentials::new(peer, surface);
             credentials.malformed = request.malformed;
+            credentials.peer_leaf = request.peer_leaf.as_deref();
             if let Some(token) = request.token {
                 credentials = credentials.with_bearer(token);
             }

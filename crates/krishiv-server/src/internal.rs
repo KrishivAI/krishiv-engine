@@ -25,7 +25,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::{Map, Value, json};
 
-use crate::guard::{Access, Guard, GuardRequest, GuardSurface, Refusal, TokenGuard, peer_of};
+use crate::guard::{
+    Access, Guard, GuardRequest, GuardSurface, Refusal, TokenGuard, peer_leaf_of, peer_of,
+};
 
 /// One system-table row as JSON (column name to value).
 pub type Row = Map<String, Value>;
@@ -255,7 +257,8 @@ async fn require_token(
     let request = GuardRequest::new(GuardSurface::Ui, access)
         .with_token(token.as_deref())
         .with_malformed(malformed)
-        .with_peer(peer_of(req.extensions()));
+        .with_peer(peer_of(req.extensions()))
+        .with_peer_leaf(peer_leaf_of(req.extensions()));
     match s.guard.check(request).await {
         Ok(()) => next.run(req).await,
         Err(Refusal::Unauthenticated) => {

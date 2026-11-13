@@ -20,6 +20,7 @@ futures = { workspace = true, features = ["alloc"] }
 getrandom.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync"] }
+tokio-rustls = { workspace = true, optional = true }
 tracing.workspace = true
 
 [features]
@@ -29,6 +30,8 @@ tracing.workspace = true
 metrics-prometheus = ["dep:krishiv-exec"]
 # `SessionSource`: the UI backend over an engine runtime (embedded mode), reading the system tables.
 session = ["dep:krishiv-session", "dep:krishiv-common", "dep:arrow-array", "dep:arrow-schema"]
+# The admin listener over TLS (`tls::serve_capped_tls`, P3-T002 design §3.5).
+tls = ["dep:tokio-rustls", "krishiv-session?/tls"]
 
 [dev-dependencies]
 krishiv-session = { path = "../krishiv-session" }

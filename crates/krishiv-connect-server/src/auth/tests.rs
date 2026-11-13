@@ -65,7 +65,7 @@ fn authenticate(
     peer: Option<SocketAddr>,
     values: &[&str],
 ) -> Result<Authenticated, tonic::Status> {
-    block_on(auth.authenticate(&headers(values), peer))
+    block_on(auth.authenticate(&headers(values), peer, None))
 }
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {

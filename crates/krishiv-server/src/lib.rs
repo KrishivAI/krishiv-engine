@@ -27,6 +27,8 @@ pub mod metrics;
 pub mod admin;
 pub mod guard;
 pub mod internal;
+#[cfg(feature = "tls")]
+pub mod tls;
 
 #[cfg(feature = "session")]
 pub mod session_guard;

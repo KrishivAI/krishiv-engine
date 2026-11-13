@@ -70,7 +70,7 @@ fn non_loopback_requires_auth() {
             .expect("run krishiv server");
         assert_eq!(out.status.code(), Some(1), "{host}");
         let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains("without authentication"), "{err}");
+        assert!(err.contains("needs an authentication method"), "{err}");
         assert!(err.contains("--host"), "{err}");
         assert!(!String::from_utf8_lossy(&out.stdout).contains("Spark Connect on"));
     }
@@ -101,7 +101,7 @@ fn non_loopback_requires_auth() {
         .output()
         .expect("run krishiv server");
     assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("without authentication"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("needs an authentication method"));
 }
 
 /// A running server and the addresses it printed; killed and reaped on
@@ -151,11 +151,14 @@ fn start_with(spill: &std::path::Path, conf: &[String]) -> Running {
             .next()
             .expect("server printed its addresses")
             .expect("utf-8");
-        if let Some(a) = line.strip_prefix("krishiv server: admin on http://") {
+        if let Some(a) = line
+            .strip_prefix("krishiv server: admin on http://")
+            .or_else(|| line.strip_prefix("krishiv server: admin on https://"))
+        {
             admin = Some(a.to_owned());
         }
         if let Some(a) = line.strip_prefix("krishiv server: Spark Connect on sc://") {
-            connect = Some(a.to_owned());
+            connect = Some(a.trim_end_matches("/;use_ssl=true").to_owned());
         }
     }
     Running {
@@ -371,4 +374,162 @@ fn configured_tokens_guard_the_admin_routes() {
     assert!(ui.starts_with(expected), "{ui}");
     let probe = http_get(&server.admin, "/healthz");
     assert!(probe.starts_with("HTTP/1.1 200"), "{probe}");
+}
+
+#[cfg(unix)]
+#[test]
+fn tokens_on_a_public_address_need_tls() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("t");
+    std::fs::write(&path, "public-address-token-0123456789abcdef").expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let out = krishiv()
+        .args([
+            "server",
+            "--port",
+            "0",
+            "--connect-port",
+            "0",
+            "--host",
+            "0.0.0.0",
+        ])
+        .arg("--conf")
+        .arg(format!(
+            "krishiv.auth.tokens.a.secret=file:{}",
+            path.display()
+        ))
+        .args(["--conf", "krishiv.auth.tokens.a.principal=a"])
+        .args(["--conf", "krishiv.auth.tokens.a.role=viewer"])
+        .output()
+        .expect("run krishiv server");
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("need TLS"), "{err}");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Spark Connect on"));
+}
+
+#[cfg(unix)]
+/// The TLS fixtures of `krishiv-session` (`tests/fixtures/tls/README.md`).
+fn tls_fixture(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../krishiv-session/tests/fixtures/tls")
+        .join(name)
+}
+
+/// A TLS connection to `addr`, trusting the test CA, with its handshake done.
+#[cfg(unix)]
+fn tls_connect(addr: &str) -> rustls::StreamOwned<rustls::ClientConnection, TcpStream> {
+    use rustls::pki_types::pem::PemObject as _;
+    use rustls::pki_types::{CertificateDer, ServerName};
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(CertificateDer::from_pem_file(tls_fixture("ca.pem")).expect("ca"))
+        .expect("add ca");
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("versions")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    let name = ServerName::try_from("localhost").expect("name");
+    let mut conn =
+        rustls::ClientConnection::new(std::sync::Arc::new(config), name).expect("client");
+    let mut tcp = TcpStream::connect(addr).expect("connect");
+    tcp.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    while conn.is_handshaking() {
+        conn.complete_io(&mut tcp).expect("handshake");
+    }
+    rustls::StreamOwned::new(conn, tcp)
+}
+
+/// The leaf certificate the server presented on `tls`, and the response to `GET /healthz` over
+/// that connection.
+#[cfg(unix)]
+fn tls_healthz_on(
+    mut tls: rustls::StreamOwned<rustls::ClientConnection, TcpStream>,
+) -> (Vec<u8>, String) {
+    tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        .expect("write");
+    let mut out = Vec::new();
+    // The server may close without `close_notify`; keep what came.
+    let _ = tls.read_to_end(&mut out);
+    let leaf = tls
+        .conn
+        .peer_certificates()
+        .and_then(<[_]>::first)
+        .expect("server certificate")
+        .to_vec();
+    (leaf, String::from_utf8_lossy(&out).into_owned())
+}
+
+/// [`tls_healthz_on`] over a new connection to `addr`.
+#[cfg(unix)]
+fn tls_healthz(addr: &str) -> (Vec<u8>, String) {
+    tls_healthz_on(tls_connect(addr))
+}
+
+#[cfg(unix)]
+#[test]
+fn tls_serves_the_admin_listener_and_reloads_on_sighup() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (cert, key) = (dir.path().join("server.pem"), dir.path().join("server.key"));
+    std::fs::copy(tls_fixture("server.pem"), &cert).expect("cert");
+    std::fs::copy(tls_fixture("server.key"), &key).expect("key");
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let conf = [
+        format!("krishiv.server.tls.certFile={}", cert.display()),
+        format!("krishiv.server.tls.keyFile={}", key.display()),
+    ];
+    let mut server = start_with(dir.path(), &conf);
+    let (leaf, answer) = tls_healthz(&server.admin);
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    let first = std::fs::read(tls_fixture("server.der")).expect("der");
+    assert_eq!(leaf, first);
+    // Plain HTTP on the TLS port gets no HTTP answer.
+    let mut plain = TcpStream::connect(&server.admin).expect("connect");
+    plain
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    let _ = plain.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    let mut out = Vec::new();
+    let _ = plain.read_to_end(&mut out);
+    assert!(
+        !out.starts_with(b"HTTP/"),
+        "{:?}",
+        String::from_utf8_lossy(&out)
+    );
+    // SIGHUP: the second certificate is served to new connections; one opened before keeps
+    // its handshake and is served.
+    let before = tls_connect(&server.admin);
+    std::fs::copy(tls_fixture("server2.pem"), &cert).expect("cert 2");
+    std::fs::copy(tls_fixture("server2.key"), &key).expect("key 2");
+    // `copy` gives the file the fixture's mode; a key readable by others is refused.
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let second = std::fs::read(tls_fixture("server2.der")).expect("der 2");
+    let hup = Command::new("kill")
+        .args(["-HUP", &server.child.id().to_string()])
+        .status()
+        .expect("kill -HUP");
+    assert!(hup.success());
+    let start = Instant::now();
+    loop {
+        let (leaf, answer) = tls_healthz(&server.admin);
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        if leaf == second {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "no reload after SIGHUP"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let (leaf, answer) = tls_healthz_on(before);
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    assert_eq!(leaf, first, "the old connection keeps its certificate");
+    let _ = server.child.kill();
 }

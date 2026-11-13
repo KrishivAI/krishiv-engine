@@ -11,10 +11,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tonic::codegen::http::{Request, Response};
-use tonic::transport::server::TcpConnectInfo;
 use tower::Service;
 
 use super::ConnectAuth;
+use crate::server::PeerInfo;
 
 /// Authenticates every request before the wrapped service sees it.
 #[derive(Debug, Clone)]
@@ -73,11 +73,10 @@ where
         let mut inner = std::mem::replace(&mut self.inner, clone);
         let auth = Arc::clone(&self.auth);
         Box::pin(async move {
-            let peer = request
-                .extensions()
-                .get::<TcpConnectInfo>()
-                .and_then(TcpConnectInfo::remote_addr);
-            match auth.authenticate(request.headers(), peer).await {
+            let info = request.extensions().get::<PeerInfo>().cloned();
+            let peer = info.as_ref().and_then(|i| i.remote);
+            let leaf = info.as_ref().and_then(|i| i.leaf.as_deref());
+            match auth.authenticate(request.headers(), peer, leaf).await {
                 Ok(caller) => {
                     request.extensions_mut().insert(caller);
                     inner.call(request).await

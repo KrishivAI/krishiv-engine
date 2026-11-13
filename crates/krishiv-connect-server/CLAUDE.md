@@ -49,7 +49,7 @@ Paths are relative to this crate.
   (LRU, no expiry), `SESSION_CHANGED` on a changed server-side id, the idle sweep (skips a session running a query or
   holding a live operation; `busy()` is what shutdown waits for), `krishiv.connect.maxSessions` /
   `maxSessionsPerPrincipal`
-- `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper task, shutdown order
+- `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper task, shutdown order; `with_tls` (P3-T002 §3.5): the TLS handshake (ALPN `h2`) on the connection's own task within `handshakeTimeout`, `PeerInfo` (address and verified client leaf) as the connection's `ConnectInfo`, which `AuthLayer` passes to the authenticator; `tests/tls.rs`
 - `tests/server.rs`, `tests/execute.rs`, `tests/auth.rs` end to end over a raw tonic client
 
 ## Invariants

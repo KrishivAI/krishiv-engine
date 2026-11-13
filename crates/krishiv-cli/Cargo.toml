@@ -35,6 +35,7 @@ serde_json = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 
 [dev-dependencies]
+rustls = { workspace = true, features = ["aws_lc_rs", "std", "tls12"] }
 tempfile.workspace = true
 libmimalloc-sys = { workspace = true, features = ["extended"] }
 
@@ -59,7 +60,9 @@ server = [
     "dep:krishiv-server",
     "krishiv-server/session",
     "krishiv-server/metrics-prometheus",
+    "krishiv-server/tls",
     "dep:krishiv-session",
+    "krishiv-session/tls",
     "dep:krishiv-connect-server",
     "dep:axum",
     "dep:tokio",
