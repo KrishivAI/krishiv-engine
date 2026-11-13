@@ -98,11 +98,23 @@ const CLOSE_RANGE: u32 = 436;
 /// `package` first on `sys.path`, applies `limits` when the sandbox is off (the trampoline applies them
 /// otherwise), and runs the worker.
 ///
+/// With `deny_exec` (the sandbox is on and `allow_fork` is off), the next statements stack a second seccomp
+/// filter that makes `execve` and `execveat` `EPERM`, before `sys.path` changes and before any client code (the
+/// sandbox crate's invariant). The parent-death signal the trampoline arms is per thread and new threads start
+/// without it, so an `execve` from a second thread would otherwise give an image that outlives the server; the
+/// trampoline's own filter cannot refuse that call, since its own `exec` uses it. A failure exits the worker
+/// before it greets the server (fail closed).
+///
 /// `close_range` goes through `ctypes`: some CPython builds (python-build-standalone, which `uv` installs)
 /// implement `os.closerange` as a loop over every number, which takes minutes up to `2**31`. Where the call
 /// is missing (Linux before 5.9), `os.closerange` runs up to `fd_limit`, the server's descriptor limit, which
 /// bounds every descriptor the server could have opened.
-pub(crate) fn bootstrap(package: &Path, fd_limit: u64, limits: Option<&BootstrapLimits>) -> String {
+pub(crate) fn bootstrap(
+    package: &Path,
+    fd_limit: u64,
+    limits: Option<&BootstrapLimits>,
+    deny_exec: bool,
+) -> String {
     let mut lines = vec![
         "import os".to_owned(),
         "try:".to_owned(),
@@ -115,6 +127,22 @@ pub(crate) fn bootstrap(package: &Path, fd_limit: u64, limits: Option<&Bootstrap
         "if _r != 0:".to_owned(),
         format!("    os.closerange(3, {fd_limit})"),
     ];
+    if deny_exec {
+        lines.extend([
+            "import ctypes".to_owned(),
+            format!("_f = bytes.fromhex('{}')", hex(&exec_deny_filter())),
+            "_b = ctypes.create_string_buffer(_f, len(_f))".to_owned(),
+            "class _Prog(ctypes.Structure):".to_owned(),
+            "    _fields_ = [('len', ctypes.c_ushort), ('filter', ctypes.c_void_p)]".to_owned(),
+            "_p = _Prog(len(_f) // 8, ctypes.cast(_b, ctypes.c_void_p))".to_owned(),
+            "_c = ctypes.CDLL(None, use_errno=True)".to_owned(),
+            // prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog): no_new_privs is already set by the trampoline.
+            "if _c.prctl(22, 2, ctypes.byref(_p), 0, 0) != 0:".to_owned(),
+            "    raise SystemExit('krishiv: the worker could not deny exec: errno ' + str(ctypes.get_errno()))"
+                .to_owned(),
+            "del _f, _b, _p, _c, _Prog".to_owned(),
+        ]);
+    }
     if let Some(limits) = limits {
         lines.push("import resource".to_owned());
         if let Some(n) = limits.address_space {
@@ -139,6 +167,55 @@ pub(crate) fn bootstrap(package: &Path, fd_limit: u64, limits: Option<&Bootstrap
         "main()".to_owned(),
     ]);
     lines.join("\n")
+}
+
+/// `AUDIT_ARCH_*` of this target and its `execve`/`execveat` numbers.
+#[cfg(target_arch = "x86_64")]
+const EXEC_ARCH: (u32, u32, u32) = (0xC000_003E, 59, 322);
+#[cfg(target_arch = "aarch64")]
+const EXEC_ARCH: (u32, u32, u32) = (0xC000_00B7, 221, 281);
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const EXEC_ARCH: (u32, u32, u32) = (0, u32::MAX, u32::MAX);
+
+/// A classic BPF seccomp program: another architecture is killed (the trampoline's filter already refuses
+/// x32 numbers), `execve` and `execveat` are `EPERM`, everything else passes on to the earlier filter.
+/// Each instruction is `struct sock_filter` (`u16 code, u8 jt, u8 jf, u32 k`), native endian.
+fn exec_deny_filter() -> Vec<u8> {
+    const LD_W_ABS: u16 = 0x20;
+    const JEQ_K: u16 = 0x15;
+    const RET_K: u16 = 0x06;
+    const RET_KILL_PROCESS: u32 = 0x8000_0000;
+    const RET_ALLOW: u32 = 0x7FFF_0000;
+    const RET_EPERM: u32 = 0x0005_0000 | 1;
+    let (arch, execve, execveat) = EXEC_ARCH;
+    let program: [(u16, u8, u8, u32); 8] = [
+        (LD_W_ABS, 0, 0, 4), // seccomp_data.arch
+        (JEQ_K, 1, 0, arch),
+        (RET_K, 0, 0, RET_KILL_PROCESS),
+        (LD_W_ABS, 0, 0, 0), // seccomp_data.nr
+        (JEQ_K, 2, 0, execve),
+        (JEQ_K, 1, 0, execveat),
+        (RET_K, 0, 0, RET_ALLOW),
+        (RET_K, 0, 0, RET_EPERM),
+    ];
+    let mut out = Vec::with_capacity(program.len() * 8);
+    for (code, jt, jf, k) in program {
+        out.extend_from_slice(&code.to_ne_bytes());
+        out.push(jt);
+        out.push(jf);
+        out.extend_from_slice(&k.to_ne_bytes());
+    }
+    out
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 /// The limits the bootstrap applies itself when the sandbox is off.
@@ -195,7 +272,7 @@ mod tests {
 
     #[test]
     fn bootstrap_closes_descriptors_first() {
-        let code = bootstrap(Path::new("/srv/p k\u{e9}"), 1024, None);
+        let code = bootstrap(Path::new("/srv/p k\u{e9}"), 1024, None, false);
         let first_path = code.find("sys.path").unwrap_or(usize::MAX);
         assert!(code.starts_with("import os\ntry:\n    import ctypes"));
         assert!(code.find("os.closerange(3, 1024)").unwrap_or(usize::MAX) < first_path);
@@ -209,9 +286,22 @@ mod tests {
                 file_size: None,
                 open_files: 256,
             }),
+            false,
         );
         assert!(limited.contains("resource.RLIMIT_AS, (1073741824, 1073741824)"));
         assert!(limited.contains("resource.RLIMIT_NOFILE, (256, 256)"));
         assert!(!limited.contains("RLIMIT_FSIZE"));
+        assert!(!code.contains("prctl"));
+    }
+
+    #[test]
+    fn bootstrap_denies_exec_before_the_path_changes() {
+        let code = bootstrap(Path::new("/p"), 8, None, true);
+        let prctl = code.find("_c.prctl(22, 2").unwrap_or(usize::MAX);
+        assert!(code.find("os.closerange(3, 8)").unwrap_or(usize::MAX) < prctl);
+        assert!(prctl < code.find("sys.path").unwrap_or(0));
+        let filter = exec_deny_filter();
+        assert_eq!(filter.len(), 64);
+        assert!(code.contains(&hex(&filter)));
     }
 }

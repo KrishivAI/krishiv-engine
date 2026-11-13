@@ -55,6 +55,10 @@ Paths are relative to this crate.
 - The bootstrap closes every descriptor above 2 before anything else (`close_range` through `ctypes`, or
   `os.closerange` up to the server's `RLIMIT_NOFILE`), and the interpreter runs with `-I` and an environment of
   `HOME`, `TMPDIR` and `LC_ALL` only. With the sandbox off the bootstrap applies the rlimits itself.
+- With the sandbox on and `allow_fork` off, the bootstrap's next statements stack a second seccomp filter that makes
+  `execve`/`execveat` `EPERM` (`package::exec_deny_filter`), before `sys.path` changes: the parent-death signal is
+  per thread, so an `exec` from any thread but the first (UDF calls run on such threads) would otherwise outlive
+  the server. Test `udf_cannot_outlive_the_server_by_exec_from_a_thread`.
 - One worker serves one `Owner` (principal and session) and one interpreter; reuse only within that key.
 - Blocking work (spawn, socket I/O, waits) runs on the pool's threads, never on a compute worker.
 - No `unwrap`/`expect`/`panic` in library code; errors carry an error class and SQLSTATE.

@@ -418,7 +418,7 @@ impl Pool {
             spec.args = vec![
                 "-I".into(),
                 "-c".into(),
-                package::bootstrap(&inner.package, inner.fd_limit, None).into(),
+                package::bootstrap(&inner.package, inner.fd_limit, None, !config.allow_fork).into(),
             ];
             spec.env = env;
             spec.read_paths = SandboxSpec::system_read_paths();
@@ -444,6 +444,7 @@ impl Pool {
                     file_size: limits.file_size,
                     open_files: limits.open_files,
                 }),
+                false,
             );
             let mut command = Command::new(&interpreter.path);
             command.args(["-I", "-c", &bootstrap]).env_clear().envs(env);

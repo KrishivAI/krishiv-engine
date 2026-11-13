@@ -387,6 +387,44 @@ fn the_sandbox_confines_udfs() {
     assert_eq!(out, "passwd=denied socket=denied fork=denied");
 }
 
+/// The parent-death signal is per thread and new threads start without it, so an `exec` from a second thread
+/// would give an image that outlives the server. The bootstrap's second filter refuses `execve` (and
+/// `execveat`) in every thread.
+#[test]
+fn udf_cannot_outlive_the_server_by_exec_from_a_thread() {
+    let Some(py) = python() else { return };
+    let pool = Pool::new(config(&py)).expect("pool");
+    let udfs = SessionUdfs::new(pool, owner("s1"));
+    let body = "import os, sys, threading\n\
+        def f(x):\n    \
+        out = []\n    \
+        def attempt():\n        \
+        try:\n            os.execv(sys.executable, [sys.executable, '-c', 'pass'])\n        \
+        except OSError as e:\n            out.append(f'thread_exec={e.errno}')\n    \
+        t = threading.Thread(target=attempt)\n    \
+        t.start()\n    t.join()\n    \
+        try:\n        os.execv(sys.executable, [sys.executable, '-c', 'pass'])\n    \
+        except OSError as e:\n        out.append(f'exec={e.errno}')\n    \
+        return ' '.join(out)";
+    let out = call(
+        &udfs,
+        command(&py, body, "StringType()"),
+        ARROW_BATCHED,
+        ArrowType::Utf8View,
+        longs(&[Some(1)]),
+    )
+    .expect("runs");
+    let out = out
+        .as_any()
+        .downcast_ref::<StringViewArray>()
+        .expect("string")
+        .value(0)
+        .to_owned();
+    // EPERM (1) from the bootstrap's filter: UDF calls already run on threads other than the first, so both
+    // attempts are the escape the filter closes.
+    assert_eq!(out, "thread_exec=1 exec=1");
+}
+
 #[test]
 fn sandbox_unavailable_refuses() {
     let Some(py) = python() else { return };
