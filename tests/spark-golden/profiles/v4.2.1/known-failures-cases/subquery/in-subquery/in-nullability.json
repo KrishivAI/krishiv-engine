@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "subqueries": [
+      7,
+      8
+    ]
+  },
+  "file": "subquery/in-subquery/in-nullability",
+  "format_version": 1
+}
