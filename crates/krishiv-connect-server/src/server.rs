@@ -31,6 +31,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tonic::transport::Server;
 use tonic::transport::server::{Connected, TcpConnectInfo};
 
+use crate::execute::ResponseBudget;
 use crate::manager::SessionManager;
 use crate::operation::ExecuteLimits;
 use crate::service::{ConnectService, SparkConnectServiceServer};
@@ -166,6 +167,7 @@ pub struct ConnectServer {
     manager: Arc<SessionManager>,
     draining: Arc<AtomicBool>,
     config: ConnectServerConfig,
+    budget: ResponseBudget,
 }
 
 impl ConnectServer {
@@ -175,8 +177,16 @@ impl ConnectServer {
         Self {
             manager,
             draining: Arc::new(AtomicBool::new(false)),
+            budget: ResponseBudget::new(config.execute.max_response_bytes),
             config,
         }
+    }
+
+    /// The server's response budget (`krishiv.connect.maxResponseBytes`),
+    /// shared with the service it serves.
+    #[must_use]
+    pub fn response_budget(&self) -> &ResponseBudget {
+        &self.budget
     }
 
     /// The flag that is set once shutdown starts (`/readyz` answers 503
@@ -200,6 +210,8 @@ impl ConnectServer {
     /// the listener is stopped.
     ///
     /// # Errors
+    /// `KRISHIV_INVALID_CONFIG_VALUE` before serving when the `ExecutePlan`
+    /// limits do not fit together ([`ExecuteLimits::validate`]);
     /// `INTERNAL_ERROR` for a transport failure.
     pub async fn serve(
         self,
@@ -210,9 +222,12 @@ impl ConnectServer {
             manager,
             draining,
             config,
+            budget,
         } = self;
+        config.execute.validate()?;
         let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining))
-            .with_limits(config.execute.clone());
+            .with_limits(config.execute.clone())
+            .with_budget(budget);
         let service = SparkConnectServiceServer::from_arc(Arc::new(service))
             .max_decoding_message_size(config.max_inbound_message_size)
             .max_encoding_message_size(config.max_inbound_message_size);

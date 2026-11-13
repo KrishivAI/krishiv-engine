@@ -25,8 +25,8 @@ use krishiv_common::config::{
     CONNECT_MAX_OPERATIONS_PER_SESSION, CONNECT_MAX_RESPONSE_BYTES, Config, ConfigValue,
 };
 use krishiv_common::error::{
-    InternalError, InvalidHandleOperationAlreadyExists, KrishivError, KrishivInvalidOperationTag,
-    KrishivOperationLimit,
+    InternalError, InvalidHandleOperationAlreadyExists, KrishivError, KrishivInvalidConfigValue,
+    KrishivInvalidOperationTag, KrishivOperationLimit,
 };
 use krishiv_session::QueryId;
 use sha2::{Digest, Sha256};
@@ -123,6 +123,31 @@ impl ExecuteLimits {
             max_response_bytes: size(&CONNECT_MAX_RESPONSE_BYTES).unwrap_or(d.max_response_bytes),
             ..d
         }
+    }
+
+    /// Checks the limits fit together: the server's response budget holds
+    /// at least one operation's worst case (`aheadBytes` plus the retry
+    /// buffer), so an operation can always be admitted once the others are
+    /// closed.
+    ///
+    /// # Errors
+    /// `KRISHIV_INVALID_CONFIG_VALUE` for a `krishiv.connect.maxResponseBytes`
+    /// below `krishiv.connect.execute.aheadBytes` +
+    /// `krishiv.connect.execute.retryBufferSize`.
+    pub fn validate(&self) -> Result<(), KrishivError> {
+        let one = self.ahead_bytes.saturating_add(self.retry_buffer_size);
+        if self.max_response_bytes < one {
+            return Err(KrishivInvalidConfigValue {
+                value: format!("'{}'", self.max_response_bytes),
+                key: format!("\"{}\"", CONNECT_MAX_RESPONSE_BYTES.key),
+                reason: format!(
+                    "it must hold one operation's worst case, {} + {} = {one} bytes",
+                    CONNECT_EXECUTE_AHEAD_BYTES.key, CONNECT_EXECUTE_RETRY_BUFFER_SIZE.key
+                ),
+            }
+            .into());
+        }
+        Ok(())
     }
 }
 

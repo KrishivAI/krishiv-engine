@@ -21,9 +21,11 @@ use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_request::RequestOption as ReqOpt;
 use krishiv_connect::proto::v4_3::execute_plan_request::request_option::RequestOption;
 use krishiv_connect::proto::v4_3::execute_plan_response::ResponseType;
+use krishiv_connect::proto::v4_3::interrupt_request::{Interrupt, InterruptType};
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::relation::RelType;
 use krishiv_connect::proto::v4_3::release_execute_request::{Release, ReleaseAll, ReleaseUntil};
+use krishiv_connect_server::execute::ResponseBudget;
 use krishiv_connect_server::{
     ConnectServer, ConnectServerConfig, ExecuteLimits, SessionEntry, SessionLimits, SessionManager,
 };
@@ -36,10 +38,13 @@ use tonic::transport::Channel;
 const SESSION: &str = "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d10";
 const OP: &str = "00112233-4455-6677-8899-aabbccddeeff";
 const OP2: &str = "00112233-4455-6677-8899-aabbccddee00";
+const OP3: &str = "00112233-4455-6677-8899-aabbccddee11";
 
 struct Running {
     manager: Arc<SessionManager>,
     channel: Channel,
+    addr: std::net::SocketAddr,
+    budget: ResponseBudget,
     _stop: oneshot::Sender<()>,
 }
 
@@ -78,6 +83,7 @@ async fn start_with(execute: ExecuteLimits, sessions: SessionLimits) -> Running 
             ..ConnectServerConfig::default()
         },
     );
+    let budget = server.response_budget().clone();
     let (stop, stopped) = oneshot::channel::<()>();
     tokio::spawn(server.serve(listener, async {
         let _ = stopped.await;
@@ -90,6 +96,8 @@ async fn start_with(execute: ExecuteLimits, sessions: SessionLimits) -> Running 
     Running {
         manager,
         channel,
+        addr,
+        budget,
         _stop: stop,
     }
 }
@@ -603,9 +611,13 @@ async fn an_attached_operation_is_never_abandoned() {
     .await
     .expect("execute");
     live.message().await.expect("ok").expect("schema");
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // A slow client that keeps reading stays attached far past the
+    // detach timeout.
+    for _ in 0..16 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        live.message().await.expect("ok").expect("still sending");
+    }
     assert!(run.entry().operations().get(OP).is_some());
-    live.message().await.expect("ok").expect("still sending");
     release_all(&run, OP).await;
 }
 
@@ -671,64 +683,73 @@ async fn stream_duration_cap_reattach() {
     release_all(&run, OP).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn global_response_cap() {
-    // 256 KiB across the server, 1 MiB ahead per operation: the global cap
-    // binds first.
+    // Each operation reserves its worst case (64 KiB ahead + 64 KiB retry
+    // buffer) once, before its first response; the 256 KiB cap admits two.
     let run = start(ExecuteLimits {
-        ahead_bytes: 1 << 20,
+        ahead_bytes: 64 * 1024,
+        retry_buffer_size: 64 * 1024,
         max_response_bytes: 256 * 1024,
         ..ExecuteLimits::default()
     })
     .await;
-    let session = run.session(1000);
-    let mut hog = stream(
+    let session = run.session(10);
+    let mut streaming = stream(
         &run.channel,
         "ExecutePlan",
         execute(range(100_000_000_000), OP),
     )
     .await
     .expect("execute");
+    streaming.message().await.expect("ok").expect("schema");
+    // A hog that reads nothing after its schema.
+    let mut hog = stream(
+        &run.channel,
+        "ExecutePlan",
+        execute(range(100_000_000_000), OP2),
+    )
+    .await
+    .expect("execute");
     hog.message().await.expect("ok").expect("schema");
-    let entry = run.entry();
-    let hog_op = entry.operations().get(OP).expect("live");
-    // Nothing more is read: the hog fills the global budget and pauses.
-    let mut last = 0;
-    loop {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let now = hog_op.sent_count();
-        if now == last {
-            break;
-        }
-        last = now;
-    }
-    assert!(
-        hog_op.buffered_peak() <= 256 * 1024 + 16 * 1024,
-        "{} bytes held",
-        hog_op.buffered_peak()
-    );
-    // A new operation waits for room rather than failing.
-    let small = tokio::spawn({
+    // A third operation waits for admission rather than failing.
+    let waiting = tokio::spawn({
         let channel = run.channel.clone();
         async move {
-            let s = stream(&channel, "ExecutePlan", execute(range(5), OP2))
+            let s = stream(&channel, "ExecutePlan", execute(range(5), OP3))
                 .await
                 .expect("admitted");
             drain(s).await
         }
     });
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(!small.is_finished(), "it waits for the global budget");
-    release_all(&run, OP).await;
-    let read = tokio::time::timeout(Duration::from_secs(10), small)
+    assert!(!waiting.is_finished(), "it waits for the global budget");
+    // Meanwhile the admitted operation keeps streaming: it never waits on
+    // the global budget mid-stream.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for _ in 0..500 {
+            streaming.message().await.expect("ok").expect("response");
+        }
+    })
+    .await
+    .expect("the streaming operation keeps going");
+    assert!(!waiting.is_finished(), "still waiting");
+    // Releasing the hog admits it.
+    release_all(&run, OP2).await;
+    let read = tokio::time::timeout(Duration::from_secs(10), waiting)
         .await
         .expect("it runs once the hog is released")
         .expect("join");
     read.end.expect("ok");
     assert!(read.responses.last().is_some_and(is_complete));
-    release_all(&run, OP2).await;
-    drop(hog);
+    release_all(&run, OP3).await;
+    release_all(&run, OP).await;
+    drop((hog, streaming));
     eventually("the queries stop", || session.running_queries() == 0).await;
+    eventually("the budget returns", || {
+        run.budget.available() == run.budget.cap()
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -747,7 +768,15 @@ async fn reattach_racing_the_old_sender() {
         let last = schema.response_id.clone();
         racers.push(tokio::spawn(async move {
             match stream(&channel, "ReattachExecute", reattach(OP, Some(&last))).await {
-                Ok(s) => drain(s).await.end,
+                Ok(s) => {
+                    let read = drain(s).await;
+                    if read.end.is_ok() {
+                        // A racer that won got every batch after the
+                        // schema, without a gap.
+                        assert_every_batch_once(&read.responses, 2000, 10);
+                    }
+                    read.end
+                }
                 Err(e) => Err(e),
             }
         }));
@@ -881,4 +910,150 @@ async fn maintenance_racing_reattach() {
     }
     eventually("the query stops", || session.running_queries() == 0).await;
     eventually("the memory returns", || memory.reserved() == before).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_that_stops_reading_is_detached_at_its_deadline_and_abandoned() {
+    // Spark's sender ends at its deadline even when the client reads
+    // nothing (`sendResponse` waits on `isReady` with the deadline): the
+    // operation is then detached and abandoned after `detachedTimeout`.
+    let run = start(ExecuteLimits {
+        ahead_bytes: 16 * 1024,
+        sender_max_stream_duration: Duration::from_millis(300),
+        detached_timeout: Duration::from_millis(300),
+        maintenance_interval: Duration::from_millis(50),
+        ..ExecuteLimits::default()
+    })
+    .await;
+    let session = run.session(10);
+    let memory = session.runtime().memory();
+    let before = memory.reserved();
+    // Small HTTP/2 windows: they fill at once, and the server stops
+    // polling the stream.
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{}", run.addr))
+        .expect("uri")
+        .initial_stream_window_size(Some(65_535))
+        .initial_connection_window_size(Some(65_535))
+        .connect()
+        .await
+        .expect("connect");
+    let mut stalled = stream(&channel, "ExecutePlan", execute(range(100_000_000_000), OP))
+        .await
+        .expect("execute");
+    stalled.message().await.expect("ok").expect("schema");
+    let op = run.entry().operations().get(OP).expect("live");
+    eventually("detached at its deadline", || {
+        op.replay().detached_since().is_some()
+    })
+    .await;
+    eventually("abandoned after the timeout", || {
+        run.entry().operations().get(OP).is_none()
+    })
+    .await;
+    eventually("the query stops", || session.running_queries() == 0).await;
+    eventually("the memory returns", || memory.reserved() == before).await;
+    eventually("the budget returns", || {
+        run.budget.available() == run.budget.cap()
+    })
+    .await;
+    let e = stream(&run.channel, "ReattachExecute", reattach(OP, None))
+        .await
+        .expect_err("abandoned");
+    assert_eq!(error_class(&e), "INVALID_HANDLE.OPERATION_ABANDONED");
+    drop(stalled);
+}
+
+fn interrupt(kind: InterruptType, op: Option<&str>) -> pb::InterruptRequest {
+    pb::InterruptRequest {
+        session_id: SESSION.to_owned(),
+        interrupt_type: kind as i32,
+        interrupt: op.map(|id| Interrupt::OperationId(id.to_owned())),
+        ..Default::default()
+    }
+}
+
+/// Spark keeps an interrupted execution (`SessionHolder.interruptOperation`
+/// and `interruptAll`, v4.3.0 lines 272-325, only interrupt it): a reattach
+/// gets what was buffered, then `OPERATION_CANCELED`; `release_all` frees it.
+async fn interrupted_then_reattached(kind: InterruptType, by_id: bool) {
+    let run = start(ExecuteLimits::default()).await;
+    let session = run.session(10);
+    let memory = session.runtime().memory();
+    let before = memory.reserved();
+    let mut live = stream(
+        &run.channel,
+        "ExecutePlan",
+        execute(range(100_000_000_000), OP),
+    )
+    .await
+    .expect("execute");
+    let schema = live.message().await.expect("ok").expect("schema");
+    drop(live);
+    let answer: pb::InterruptResponse = unary(
+        &run.channel,
+        "Interrupt",
+        interrupt(kind, by_id.then_some(OP)),
+    )
+    .await
+    .expect("interrupt");
+    assert_eq!(answer.interrupted_ids, vec![OP.to_owned()]);
+    let read = drain(
+        stream(
+            &run.channel,
+            "ReattachExecute",
+            reattach(OP, Some(&schema.response_id)),
+        )
+        .await
+        .expect("still there after the interrupt"),
+    )
+    .await;
+    let e = read.end.expect_err("cancelled");
+    assert_eq!(error_class(&e), "OPERATION_CANCELED");
+    release_all(&run, OP).await;
+    assert!(run.entry().operations().get(OP).is_none());
+    eventually("the query stops", || session.running_queries() == 0).await;
+    eventually("the memory returns", || memory.reserved() == before).await;
+    eventually("the budget returns", || {
+        run.budget.available() == run.budget.cap()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_by_id_then_reattach_gets_operation_canceled() {
+    interrupted_then_reattached(InterruptType::OperationId, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_all_then_reattach_gets_operation_canceled() {
+    interrupted_then_reattached(InterruptType::All, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_response_cap_below_one_operation_is_refused_at_startup() {
+    let manager = Arc::new(SessionManager::from_base(
+        Session::new().expect("session"),
+        SessionLimits::default(),
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let server = ConnectServer::new(
+        manager,
+        ConnectServerConfig {
+            execute: ExecuteLimits {
+                ahead_bytes: 1 << 20,
+                retry_buffer_size: 1 << 20,
+                max_response_bytes: (2 << 20) - 1,
+                ..ExecuteLimits::default()
+            },
+            ..ConnectServerConfig::default()
+        },
+    );
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.serve(listener, std::future::pending()),
+    )
+    .await
+    .expect("refused at once, not served");
+    let e = outcome.expect_err("refused");
+    assert_eq!(e.error_class().name(), "KRISHIV_INVALID_CONFIG_VALUE");
 }

@@ -476,9 +476,11 @@ impl SessionManager {
 
     /// Spark's periodic maintenance of executions
     /// (`SparkConnectExecutionManager.periodicMaintenance`, v4.3.0 lines
-    /// 342-362): every reattachable operation with no stream attached for
-    /// `timeout` is tombstoned as abandoned, removed and closed (its query
-    /// interrupted, its responses dropped). Returns how many.
+    /// 342-362): a sender past its deadline is detached first (its client
+    /// may have stopped reading, so its stream is never polled again), then
+    /// every reattachable operation with no stream attached for `timeout`
+    /// is tombstoned as abandoned, removed and closed (its query
+    /// interrupted, its responses and budgets returned). Returns how many.
     pub fn abandon_detached(&self, timeout: Duration) -> usize {
         let sessions: Vec<(Key, Arc<SessionEntry>)> = self
             .lock()
@@ -489,6 +491,7 @@ impl SessionManager {
         let mut abandoned = 0;
         for (key, entry) in sessions {
             for op in entry.operations().all() {
+                op.replay().expire_sender(std::time::Instant::now());
                 let expired = op
                     .replay()
                     .detached_since()
@@ -498,6 +501,9 @@ impl SessionManager {
                 }
                 // Tombstoned before it leaves the map, so a racing reattach
                 // finds it abandoned rather than unknown (lines 158-166).
+                // A reattach between the check above and the close below
+                // is closed with it (its retry sees OPERATION_ABANDONED):
+                // Spark's `periodicMaintenance` has the same window.
                 self.lock().abandoned.insert(
                     OpKey {
                         session: key.clone(),

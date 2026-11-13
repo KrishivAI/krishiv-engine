@@ -186,9 +186,13 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
   struct, array or map.
 - **The `metrics` response of ExecutePlan is empty** until the operator tree is wired through.
 - **A reattachable operation's query pauses** once `krishiv.connect.execute.aheadBytes` (64 MiB) of its responses are
-  unread, whether or not a client is attached; Spark keeps producing and buffers every unread response. Across the
-  server, responses waiting or kept for a reattach hold at most `krishiv.connect.maxResponseBytes` (1 GiB); past it
-  every operation, a new one at its first response, waits until clients read or release. Spark has no such cap.
+  unread, whether or not a client is attached; Spark keeps producing and buffers every unread response.
+- **A new operation can wait for admission.** Each operation reserves its worst case (`aheadBytes` plus, reattachable,
+  `krishiv.connect.execute.retryBufferSize`) of `krishiv.connect.maxResponseBytes` (1 GiB) before its first response,
+  until it is released, abandoned or ends; past the cap a new `ExecutePlan` waits (its stream sends nothing yet) until
+  one does. Running operations never wait on it. Spark has no such cap. A server refuses to start with a cap below one
+  operation's worst case (`KRISHIV_INVALID_CONFIG_VALUE`). There is no per-principal share yet, so one principal's
+  open operations can hold the whole cap.
 - **ReleaseExecute without a release type** fails with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark throws
   an `UnsupportedOperationException` without an error class.
 - **AnalyzePlan.** An `UNSPECIFIED` explain mode fails with `CONNECT_INVALID_PLAN.INVALID_ENUM`, and `json_to_ddl` of a

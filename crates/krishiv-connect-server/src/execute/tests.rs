@@ -331,7 +331,7 @@ fn failure() -> krishiv_common::error::KrishivError {
 
 /// How the stream of `op` ends once its responses are sent.
 fn end_of(op: &crate::operation::Operation) -> Option<tonic::Status> {
-    let g = op.replay().attach();
+    let g = op.replay().attach(None);
     match op.replay().next(g, 1, true) {
         crate::operation::replay::Next::Finished(end) => end,
         other => panic!("{other:?}"),

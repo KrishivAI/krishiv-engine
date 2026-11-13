@@ -13,6 +13,10 @@
 //!   217-225, 323-336`); the client then reattaches.
 //! - When every response was sent the stream ends, with the operation's
 //!   error if it failed (`EGRS:309-322`).
+//! - The deadline is also kept by the operation's replay buffer, so the
+//!   maintenance task detaches a sender past it even when hyper stops
+//!   polling the stream (a client that stopped reading fills the HTTP/2
+//!   window); the stream, if polled again, ends with OK.
 //! - Dropping the stream (the client went away) detaches it. A reattachable
 //!   operation keeps running, bounded by its ahead budget, until it is
 //!   reattached, released or abandoned; another is closed and removed at
@@ -74,7 +78,7 @@ struct Attached {
 
 impl Drop for Attached {
     fn drop(&mut self) {
-        self.op.replay().detach();
+        self.op.replay().detach(self.generation);
         if !self.op.reattachable() {
             // Spark removes a non-reattachable execution when its one
             // sender ends (`EGRS:132-135`): its query is cancelled if it
@@ -93,15 +97,17 @@ pub fn attach(
     after: u64,
     caps: SenderCaps,
 ) -> ResponseStream {
-    let generation = op.replay().attach();
-    let now = Instant::now();
+    let deadline = caps
+        .max_duration
+        .and_then(|d| std::time::Instant::now().checked_add(d));
+    let generation = op.replay().attach(deadline);
     let attached = Attached {
         op,
         operations,
         generation,
         next: after + 1,
         sent: 0,
-        deadline: caps.max_duration.and_then(|d| now.checked_add(d)),
+        deadline: deadline.map(Instant::from_std),
         max_size: caps.max_size,
         done: false,
     };

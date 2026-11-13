@@ -11,11 +11,15 @@
 //! 4. `result_complete`, only for a reattachable execution.
 //!
 //! Every response carries the session ids, the operation id and a fresh
-//! response id (Spark's `ExecuteResponseObserver`). The encoder pushes into
-//! the operation's replay buffer (`crate::operation::replay`), each response
-//! holding its bytes of the operation's ahead budget until a sender takes it
-//! (`krishiv.connect.execute.aheadBytes`) and of the server's response budget
-//! (`krishiv.connect.maxResponseBytes`) and the memory pool (consumer
+//! response id (Spark's `ExecuteResponseObserver`). Before its first
+//! response the operation is admitted: it reserves its worst case
+//! (`aheadBytes` plus, reattachable, the retry buffer) of the server's
+//! response budget (`krishiv.connect.maxResponseBytes`) once, and holds it
+//! until it is closed; only a new operation waits there, never a running
+//! one. The encoder then pushes into the operation's replay buffer
+//! (`crate::operation::replay`), each response holding its bytes of the
+//! operation's ahead budget until a sender takes it
+//! (`krishiv.connect.execute.aheadBytes`) and of the memory pool (consumer
 //! `connect_responses`) until it leaves the buffer. So the engine pauses
 //! once `aheadBytes` are unread, attached or not (design P3-T011a §3.8), and
 //! the result is never held in full. Senders (`crate::sender`) stream the
@@ -106,10 +110,12 @@ fn options(request: &pb::ExecutePlanRequest) -> Options {
 }
 
 /// The server's budget of response bytes held by all operations
-/// (`krishiv.connect.maxResponseBytes`, design P3-T011a §3.8): a response
-/// takes its bytes before it is buffered and returns them when it leaves the
-/// buffer, so past the cap every encoder waits (a new operation at its first
-/// response) until clients read or release.
+/// (`krishiv.connect.maxResponseBytes`, design P3-T011a §3.8): each
+/// operation reserves its worst case once, before its first response, and
+/// returns it when it is closed (released, abandoned, its session closed,
+/// or a non-reattachable operation's stream ended). Past the cap a new
+/// operation waits, cancellably, until one is closed; a running one never
+/// waits on it.
 #[derive(Debug, Clone)]
 pub struct ResponseBudget {
     permits: Arc<Semaphore>,
@@ -131,6 +137,12 @@ impl ResponseBudget {
     #[must_use]
     pub fn available(&self) -> usize {
         self.permits.available_permits()
+    }
+
+    /// The whole budget.
+    #[must_use]
+    pub fn cap(&self) -> usize {
+        self.cap
     }
 }
 
@@ -219,6 +231,11 @@ pub async fn execute_plan(
         )),
         ahead_cap: limits.ahead_bytes.clamp(1, Semaphore::MAX_PERMITS),
         budget: budget.clone(),
+        footprint: limits.ahead_bytes.saturating_add(if opts.reattachable {
+            limits.retry_buffer_size
+        } else {
+            0
+        }),
         consumer: ConsumerHandle::register(session.runtime().memory(), "connect_responses", None),
         op: Arc::clone(&op),
         session_id: request.session_id.clone(),
@@ -428,6 +445,9 @@ struct Sender {
     ahead: Arc<Semaphore>,
     ahead_cap: usize,
     budget: ResponseBudget,
+    /// What the operation reserves of `budget`: `aheadBytes` plus its
+    /// retry buffer.
+    footprint: usize,
     consumer: Arc<ConsumerHandle>,
     op: Arc<Operation>,
     session_id: String,
@@ -445,9 +465,25 @@ impl Sender {
         }
     }
 
-    /// Buffers `response` once the ahead budget and the server's budget
-    /// have room for it (a response larger than a whole budget waits for
-    /// all of it) and the memory pool grants its bytes.
+    /// Admits the operation: waits until the server's response budget has
+    /// its footprint (clamped to the whole budget), held until the
+    /// operation is closed.
+    async fn admit(&self) -> Result<(), Stop> {
+        let want = u32::try_from(self.footprint.clamp(1, self.budget.cap)).unwrap_or(u32::MAX);
+        let permit = Arc::clone(&self.budget.permits)
+            .acquire_many_owned(want)
+            .await
+            .map_err(|_| Stop::Gone)?;
+        if self.op.replay().admit(permit) {
+            Ok(())
+        } else {
+            Err(Stop::Gone)
+        }
+    }
+
+    /// Buffers `response` once the ahead budget has room for it (a
+    /// response larger than the whole budget waits for all of it) and the
+    /// memory pool grants its bytes.
     async fn send(&self, mut response: pb::ExecutePlanResponse) -> Result<(), Stop> {
         let id = random_uuid()?;
         response.response_id = uuid_text(id);
@@ -457,10 +493,6 @@ impl Sender {
             .acquire_many_owned(want(self.ahead_cap))
             .await
             .map_err(|_| Stop::Gone)?;
-        let global = Arc::clone(&self.budget.permits)
-            .acquire_many_owned(want(self.budget.cap))
-            .await
-            .map_err(|_| Stop::Gone)?;
         let mut reservation = self.consumer.reservation();
         reservation
             .grow_without_abort(size)
@@ -468,7 +500,6 @@ impl Sender {
             .map_err(|e| Stop::Failed(e.into()))?;
         let held = Held {
             ahead: Some(ahead),
-            global: Some(global),
             reservation: Some(reservation),
         };
         if self.op.replay().push(response, id, size, held) {
@@ -488,7 +519,7 @@ async fn encode(
 ) {
     let op = Arc::clone(&sender.op);
     // A close or an interrupt is seen at once, also while the encoder
-    // waits for the query's first batch, for a budget or for memory.
+    // waits for admission, the query's first batch, a budget or memory.
     let outcome = tokio::select! {
         biased;
         () = op.closed() => Err(Stop::Gone),
@@ -531,6 +562,7 @@ async fn produce(
     schema_response: pb::DataType,
     settings: &EncodeSettings,
 ) -> Result<(), Stop> {
+    sender.admit().await?;
     let mut first = sender.response(None);
     first.schema = Some(schema_response);
     sender.send(first).await?;
@@ -577,7 +609,9 @@ async fn send_batch(
     offset: i64,
     settings: &EncodeSettings,
 ) -> Result<(), Stop> {
-    let bytes = arrow::ipc_stream(batch, settings.compression)?;
+    // `Bytes`: chunks are views of one buffer, and a response kept for a
+    // reattach shares its payload with the copy that is sent.
+    let bytes = prost::bytes::Bytes::from(arrow::ipc_stream(batch, settings.compression)?);
     let rows = i64::try_from(batch.num_rows()).unwrap_or(i64::MAX);
     match settings.chunk_size {
         None => {
@@ -596,7 +630,7 @@ async fn send_batch(
             for (i, chunk) in chunks.into_iter().enumerate() {
                 let response = sender.response(Some(ResponseType::ArrowBatch(ArrowBatch {
                     row_count: rows,
-                    data: chunk.to_vec(),
+                    data: bytes.slice_ref(chunk),
                     start_offset: Some(offset),
                     chunk_index: Some(i64::try_from(i).unwrap_or(i64::MAX)),
                     num_chunks_in_batch: Some(n),

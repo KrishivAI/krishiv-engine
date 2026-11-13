@@ -27,9 +27,10 @@
 //! - `src/proto/v<VERSION>/oneofs.pb.rs`: for every `oneof` variant, its field
 //!   name, number and type, so an error can name the proto field that is not
 //!   supported without formatting the (possibly secret) message;
-//! - `crates/krishiv-connect-server/src/service/v<VERSION>.pb.rs`: the
-//!   server side of `SparkConnectService` (a trait with one method per RPC
-//!   and the tonic router), decoding every request through `wire`;
+//! - `crates/krishiv-connect-server/src/service/v4_3.pb.rs`, for the
+//!   server's version [`SERVER_VERSION`] only: the server side of
+//!   `SparkConnectService` (a trait with one method per RPC and the tonic
+//!   router), decoding every request through `wire`;
 //! - `tests/fixtures/spark-connect-<VERSION>.fds`: the compiled descriptor
 //!   set, used by the golden tests to read protobuf JSON.
 //!
@@ -80,9 +81,12 @@ fn main() -> ExitCode {
     }
 }
 
+/// The version the server crate compiles: the only one with a service stub.
+const SERVER_VERSION: &str = "4.3";
+
 fn run() -> Result<()> {
     let mut mode = None;
-    let mut version = "4.3".to_owned();
+    let mut version = SERVER_VERSION.to_owned();
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--write" | "--check" => mode = Some(arg),
@@ -138,6 +142,10 @@ fn generate(root: &Path, version: &str) -> Result<Vec<(PathBuf, Vec<u8>)>> {
     }
     // `debug.pb.rs` writes every `Debug`, so none is derived.
     config.skip_debug(["."]);
+    // The Arrow payload of a result batch is `bytes::Bytes`: the server
+    // keeps each response for a reattach and sends a copy, which then
+    // shares the payload instead of copying it.
+    config.bytes([".spark.connect.ExecutePlanResponse.ArrowBatch.data"]);
     let requests = fds
         .file
         .iter()
@@ -158,7 +166,7 @@ fn generate(root: &Path, version: &str) -> Result<Vec<(PathBuf, Vec<u8>)>> {
     let module_dir = root
         .join("src/proto")
         .join(format!("v{}", version.replace('.', "_")));
-    Ok(vec![
+    let mut out = vec![
         (
             module_dir.join("spark.connect.pb.rs"),
             format!("{header}{types}").into_bytes(),
@@ -180,15 +188,18 @@ fn generate(root: &Path, version: &str) -> Result<Vec<(PathBuf, Vec<u8>)>> {
             oneof_variants(&header, &module, &fds)?.into_bytes(),
         ),
         (
-            Path::new("crates/krishiv-connect-server/src/service")
-                .join(format!("v{}.pb.rs", version.replace('.', "_"))),
-            service_stub(&header, &fds)?.into_bytes(),
-        ),
-        (
             root.join(format!("tests/fixtures/spark-connect-{version}.fds")),
             fds.encode_to_vec(),
         ),
-    ])
+    ];
+    if version == SERVER_VERSION {
+        out.push((
+            Path::new("crates/krishiv-connect-server/src/service")
+                .join(format!("v{}.pb.rs", version.replace('.', "_"))),
+            service_stub(&header, &fds)?.into_bytes(),
+        ));
+    }
+    Ok(out)
 }
 
 /// For every message of the package, by id (the index in name order): its

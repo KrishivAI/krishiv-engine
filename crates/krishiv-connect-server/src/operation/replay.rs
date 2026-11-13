@@ -12,11 +12,18 @@
 //! id that was dropped already still finds its index.
 //!
 //! A response holds, until it leaves the buffer, its bytes in the memory
-//! pool and of the server's response budget; until it is consumed, its
-//! bytes of the operation's ahead budget.
+//! pool; until it is consumed, its bytes of the operation's ahead budget.
+//! The operation's share of the server's response budget (its admission)
+//! is held here too, from before its first response until it is closed.
+//!
+//! One sender is attached at a time (the newest; older ones are
+//! disconnected). Its deadline is kept here, so maintenance detaches it at
+//! its deadline even when its stream is never polled again
+//! ([`Replay::expire_sender`]).
 //!
 //! One mutex guards the state and is never held across an `await`; a
-//! [`Notify`] wakes senders when it changes.
+//! [`Notify`] wakes senders when it changes. Permits and reservations are
+//! dropped after the mutex is released.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -35,9 +42,6 @@ use tonic::Status;
 pub struct Held {
     /// Its bytes of the operation's ahead budget, returned once consumed.
     pub ahead: Option<OwnedSemaphorePermit>,
-    /// Its bytes of the server's response budget
-    /// (`krishiv.connect.maxResponseBytes`).
-    pub global: Option<OwnedSemaphorePermit>,
     /// Its bytes in the memory pool (`connect_responses`).
     pub reservation: Option<Reservation>,
 }
@@ -85,8 +89,9 @@ struct State {
     /// Bumped by every attach: a sender whose generation is older was
     /// replaced.
     generation: u64,
-    /// Attached senders.
-    attached: usize,
+    /// The attached sender: its generation and deadline. `None` once it
+    /// detached, was replaced and detached, or passed its deadline.
+    current: Option<(u64, Option<Instant>)>,
     /// Since when no sender is attached (Spark's `lastAttachedRpcTimeNs`).
     detached_since: Option<Instant>,
     /// Closed (released or abandoned): every response dropped, senders
@@ -95,6 +100,23 @@ struct State {
     /// Bytes buffered now, and the most at once.
     bytes: usize,
     peak: usize,
+    /// The operation's share of the server's response budget.
+    admission: Option<OwnedSemaphorePermit>,
+}
+
+/// What leaves the buffer under the lock, dropped after it (permits wake
+/// waiters, reservations shrink the pool).
+#[derive(Default)]
+struct Garbage {
+    responses: Vec<Cached>,
+    held: Vec<Held>,
+    permits: Vec<OwnedSemaphorePermit>,
+}
+
+impl Garbage {
+    fn is_empty(&self) -> bool {
+        self.responses.is_empty() && self.held.is_empty() && self.permits.is_empty()
+    }
 }
 
 /// The responses of one operation and its attached senders.
@@ -124,11 +146,12 @@ impl Replay {
                 finished: None,
                 highest_consumed: 0,
                 generation: 0,
-                attached: 0,
+                current: None,
                 detached_since: None,
                 closed: false,
                 bytes: 0,
                 peak: 0,
+                admission: None,
             }),
             changed: Notify::new(),
             retry_buffer,
@@ -188,26 +211,62 @@ impl Replay {
         self.changed.notify_waiters();
     }
 
-    /// Attaches a sender (`EH:200-213`): every sender attached before is
-    /// replaced. Returns its generation.
-    pub fn attach(&self) -> u64 {
+    /// Holds `admission`, the operation's share of the server's response
+    /// budget, until [`Self::close`]. Returns false, dropping it, when the
+    /// operation is closed already.
+    pub fn admit(&self, admission: OwnedSemaphorePermit) -> bool {
+        let mut s = self.lock();
+        if s.closed {
+            drop(s);
+            drop(admission);
+            return false;
+        }
+        s.admission = Some(admission);
+        true
+    }
+
+    /// Attaches a sender whose stream ends at `deadline`, if any
+    /// (`EH:200-213`): every sender attached before is replaced. Returns
+    /// its generation.
+    pub fn attach(&self, deadline: Option<Instant>) -> u64 {
         let mut s = self.lock();
         s.generation += 1;
-        s.attached += 1;
-        s.detached_since = None;
         let generation = s.generation;
+        s.current = Some((generation, deadline));
+        s.detached_since = None;
         drop(s);
         self.changed.notify_waiters();
         generation
     }
 
-    /// Detaches a sender (`EH:215-224`); the operation is detached from now
-    /// on when it was the last one.
-    pub fn detach(&self) {
+    /// Detaches the sender of `generation` (`EH:215-224`) when it is still
+    /// the attached one: the operation is detached from now on. A replaced
+    /// sender detaches nothing.
+    pub fn detach(&self, generation: u64) {
         let mut s = self.lock();
-        s.attached = s.attached.saturating_sub(1);
-        if s.attached == 0 && !s.closed {
-            s.detached_since = Some(Instant::now());
+        if s.current.is_some_and(|(g, _)| g == generation) {
+            s.current = None;
+            if !s.closed {
+                s.detached_since = Some(Instant::now());
+            }
+        }
+    }
+
+    /// Detaches the attached sender if its deadline passed by `now`
+    /// (Spark's sender ends at its deadline even when the client reads
+    /// nothing: `EGRS.sendResponse` waits on `isReady` with it). The
+    /// operation counts as detached since that deadline. Its stream, if it
+    /// is ever polled again, sends nothing more and ends with OK. Returns
+    /// whether it detached one.
+    pub fn expire_sender(&self, now: Instant) -> bool {
+        let mut s = self.lock();
+        match s.current {
+            Some((_, Some(deadline))) if deadline <= now && !s.closed => {
+                s.current = None;
+                s.detached_since = Some(deadline);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -238,19 +297,39 @@ impl Replay {
     /// (`EGRS:227-281`): the order of checks is Spark's, an interrupt first,
     /// then a response, then the end.
     pub fn next(&self, generation: u64, index: u64, consume: bool) -> Next {
+        let mut garbage = Garbage::default();
+        let out = self.next_locked(generation, index, consume, &mut garbage);
+        if !garbage.is_empty() {
+            drop(garbage);
+            self.changed.notify_waiters();
+        }
+        out
+    }
+
+    fn next_locked(
+        &self,
+        generation: u64,
+        index: u64,
+        consume: bool,
+        garbage: &mut Garbage,
+    ) -> Next {
         let mut s = self.lock();
         if s.closed || s.generation != generation {
             return Next::Disconnected;
         }
         if consume {
-            match self.consume(&mut s, index) {
+            match self.consume(&mut s, index, garbage) {
                 Ok(Some((response, size))) => return Next::Response(Box::new(response), size),
                 Ok(None) => {}
                 Err(e) => return Next::Unavailable(e),
             }
         }
+        // `EGRS.streamFinished`: every response sent, or the observer is
+        // cleaned (finished, nothing buffered: `ERO.isCleaned`).
         match &s.finished {
-            Some((last, error)) if index > *last => Next::Finished(error.clone()),
+            Some((last, error)) if index > *last || s.responses.is_empty() => {
+                Next::Finished(error.clone())
+            }
             _ => Next::Wait,
         }
     }
@@ -260,6 +339,7 @@ impl Replay {
         &self,
         s: &mut State,
         index: u64,
+        garbage: &mut Garbage,
     ) -> Result<Option<(pb::ExecutePlanResponse, usize)>, KrishivError> {
         if index >= s.first && index < s.first + s.responses.len() as u64 {
             let at = usize::try_from(index - s.first).unwrap_or(usize::MAX);
@@ -271,7 +351,8 @@ impl Replay {
                     return Ok(None);
                 };
                 // Consumed: its bytes leave the ahead budget.
-                cached.held.ahead = None;
+                garbage.permits.extend(cached.held.ahead.take());
+                // A cheap copy: the Arrow payload is shared (`Bytes`).
                 (cached.response.clone(), cached.size)
             } else {
                 // Not reattachable: nobody asks for it again; everything up
@@ -283,12 +364,12 @@ impl Replay {
                     };
                     s.first += 1;
                     s.bytes -= cached.size;
+                    garbage.held.push(cached.held);
                     taken = Some((cached.response, cached.size));
                 }
-                self.changed.notify_waiters();
                 return Ok(taken);
             };
-            self.evict_before(s, index - 1);
+            Self::evict_before(self.retry_buffer, s, index - 1, garbage);
             return Ok(Some(out));
         }
         if index <= s.highest_consumed {
@@ -309,10 +390,10 @@ impl Replay {
     /// `ERO.removeCachedResponses` (lines 281-300): walking back from
     /// `last_sent`, keep responses while their total is under the retry
     /// buffer (the one that crosses it too), drop the rest.
-    fn evict_before(&self, s: &mut State, last_sent: u64) {
+    fn evict_before(retry_buffer: usize, s: &mut State, last_sent: u64, garbage: &mut Garbage) {
         let mut i = last_sent;
         let mut total = 0_usize;
-        while i >= 1 && i >= s.first && total < self.retry_buffer {
+        while i >= 1 && i >= s.first && total < retry_buffer {
             let at = usize::try_from(i - s.first).unwrap_or(usize::MAX);
             let Some(cached) = s.responses.get(at) else {
                 break;
@@ -320,12 +401,12 @@ impl Replay {
             total += cached.size;
             i -= 1;
         }
-        Self::remove_until(s, i);
+        Self::remove_until(s, i, garbage);
     }
 
     /// `ERO.removeResponsesUntilIndex` (lines 306-317): drops every buffered
     /// response up to and including `index`.
-    fn remove_until(s: &mut State, index: u64) {
+    fn remove_until(s: &mut State, index: u64, garbage: &mut Garbage) {
         while s.first <= index {
             // `first + len == last_produced + 1` always holds, so an empty
             // buffer means everything up to `index` is gone already.
@@ -334,6 +415,7 @@ impl Replay {
             };
             s.first += 1;
             s.bytes -= cached.size;
+            garbage.responses.push(cached);
         }
     }
 
@@ -344,9 +426,11 @@ impl Replay {
     /// `INVALID_CURSOR.POSITION_NOT_FOUND` for an id never produced.
     pub fn release_until(&self, response_id: &str) -> Result<(), KrishivError> {
         let index = self.index_of(response_id)?;
+        let mut garbage = Garbage::default();
         let mut s = self.lock();
-        Self::remove_until(&mut s, index);
+        Self::remove_until(&mut s, index, &mut garbage);
         drop(s);
+        drop(garbage);
         self.changed.notify_waiters();
         Ok(())
     }
@@ -357,10 +441,11 @@ impl Replay {
         let dropped = {
             let mut s = self.lock();
             s.closed = true;
+            s.current = None;
             s.detached_since = None;
             s.bytes = 0;
             s.first += s.responses.len() as u64;
-            std::mem::take(&mut s.responses)
+            (std::mem::take(&mut s.responses), s.admission.take())
         };
         // Budgets and reservations return outside the lock.
         drop(dropped);

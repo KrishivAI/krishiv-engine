@@ -224,9 +224,11 @@ pub static CONNECT_MAX_RESPONSE_BYTES: ConfigEntry = startup(
     "krishiv.connect.maxResponseBytes",
     ValueType::Size,
     ConfigValue::Size(1024 * MIB),
-    "Most bytes of encoded `ExecutePlan` responses all operations of the server hold at once \
-     (waiting for their clients or kept for reattach); past it every operation pauses until \
-     clients read or release responses.",
+    "Most bytes of encoded `ExecutePlan` responses all operations of the server may hold at \
+     once. Each operation reserves its worst case (`krishiv.connect.execute.aheadBytes` plus, \
+     reattachable, `krishiv.connect.execute.retryBufferSize`) before its first response and \
+     returns it when released, abandoned or ended; past the cap a new operation waits for one \
+     to end, a running one never waits. Must be at least that worst case (checked at startup).",
     None,
 );
 

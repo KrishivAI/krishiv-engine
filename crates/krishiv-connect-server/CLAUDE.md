@@ -26,7 +26,8 @@ Paths are relative to this crate.
   warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
   credentials), `SettableBy` (`check_settable`; `role_of` makes every principal admin until T002)
 - `src/interrupt.rs` `Interrupt` (design §3.7): `ALL` and `OPERATION_ID` through the session's operations and
-  `Session::cancel`/`interrupt_all`; `TAG` is `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until T064
+  `Session::cancel`/`interrupt_all`; an interrupted operation stays registered (Spark keeps the `ExecuteHolder`), so a
+  reattach gets `OPERATION_CANCELED`; `TAG` is `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until T064
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, its `Replay`, one
   atomic state: running, then finished or cancelled by compare-and-swap; `close` = Spark's `ExecuteHolder.close`)
   and `Operations`, the per-session map in `SessionEntry` (`krishiv.connect.maxOperationsPerSession`,
@@ -34,14 +35,19 @@ Paths are relative to this crate.
   plan and batch sizes, retry buffer, sender caps, detach timeout, maintenance interval, `maxResponseBytes`); tag
   checks (`KRISHIV_INVALID_OPERATION_TAG`)
 - `src/operation/replay.rs` `Replay` (Spark's `ExecuteResponseObserver`): responses numbered from 1, the retry-buffer
-  eviction, `release_until`, every response id kept (index lookups), attach generations and detach time; a response
-  holds its ahead permit until consumed and its pool reservation and global permit until it leaves the buffer
+  eviction, `release_until`, every response id kept (index lookups), attach generations, the attached sender and its
+  deadline (`expire_sender`), detach time; a response holds its ahead permit until consumed and its pool reservation
+  until it leaves the buffer; the operation's admission (its share of `maxResponseBytes`) is held until `close`;
+  permits and reservations are dropped outside its mutex
 - `src/sender.rs` `attach` (Spark's `ExecuteGrpcResponseSender`): one response stream from an index; a newer sender
   or `close` ends it with `INVALID_CURSOR.DISCONNECTED`; reattachable streams end OK without `ResultComplete` at
-  `senderMaxStreamSize` / `senderMaxStreamDuration`; dropping it detaches (a non-reattachable operation is closed)
+  `senderMaxStreamSize` / `senderMaxStreamDuration`; dropping it detaches (a non-reattachable operation is closed);
+  maintenance detaches a sender past its deadline even if hyper never polls its stream again (a stalled client)
 - `src/execute.rs` `ExecutePlan` for ROOT relations: compressed plans (bounded ZSTD), translation, the encoder task
-  pushing into the operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`), the server's
-  `ResponseBudget` (`krishiv.connect.maxResponseBytes`) and memory consumer `connect_responses`, the
+  admitted once against the server's `ResponseBudget` (`krishiv.connect.maxResponseBytes`: its worst case,
+  `aheadBytes` + retry buffer, reserved before the first response, held until close), then pushing into the
+  operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`) and memory consumer
+  `connect_responses` (the Arrow payload is `Bytes`, shared with the copy sent), the
   response order (schema, batches, metrics, `ResultComplete` when reattachable); commands are 56K00 until T012;
   `src/execute/arrow.rs` Spark's Arrow shapes, batch limits, IPC streams, codecs and chunks;
   `src/execute/schema.rs` the `schema` response (`DataTypeProtoConverter.toConnectProtoType`)
@@ -73,8 +79,9 @@ Paths are relative to this crate.
   prefix (grpc-java answers `RESOURCE_EXHAUSTED`): a recorded difference.
 - **Operations live in their session**: an operation id is looked up only in the caller's session (another
   principal's id is `OPERATION_NOT_FOUND`); a released or swept session cancels its operations first.
-- **The result is never held in full**: the encoder waits for `aheadBytes` of unread responses, attached or not, and
-  for the server's `maxResponseBytes`. Dropping a non-reattachable operation's stream (seen at once) cancels its
+- **The result is never held in full**: the encoder waits for `aheadBytes` of unread responses, attached or not. Only a
+  new operation waits on the server's `maxResponseBytes` (admission); a running one never does. `serve` refuses a cap
+  below one operation's worst case (`ExecuteLimits::validate`). Dropping a non-reattachable operation's stream (seen at once) cancels its
   query and removes it; a reattachable one detaches and stays until `release_all`, its session's release, or
   `detachedTimeout` (then tombstoned: `OPERATION_ABANDONED`). Live operations, detached or finished but unreleased,
   keep a session busy.

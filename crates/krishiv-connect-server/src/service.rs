@@ -89,6 +89,13 @@ impl ConnectService {
         self
     }
 
+    /// This service sharing the server's response budget `budget`.
+    #[must_use]
+    pub fn with_budget(mut self, budget: ResponseBudget) -> Self {
+        self.budget = budget;
+        self
+    }
+
     /// The server's response budget (`krishiv.connect.maxResponseBytes`).
     #[must_use]
     pub fn response_budget(&self) -> &ResponseBudget {
