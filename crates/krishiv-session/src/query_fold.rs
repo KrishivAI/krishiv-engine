@@ -219,6 +219,8 @@ pub(crate) struct HistoryJob {
     pub(crate) sql: Option<String>,
     /// Whether the query ran with detailed metrics (probe lengths and the like).
     pub(crate) detailed: bool,
+    /// Where the entry waits for a file write's commit, when it is one.
+    pub(crate) hold: Option<Arc<crate::profile_history::HistoryHold>>,
     pub(crate) identity: krishiv_exec::profile::ProfileIdentity,
     pub(crate) trace: Option<serde_json::Value>,
 }
@@ -294,7 +296,7 @@ impl QueryFold {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-        store.record(crate::profile_history::HistoryEntry {
+        let entry = crate::profile_history::HistoryEntry {
             query_id: self.log_id.clone(),
             finished_at_ms: now,
             state: match status {
@@ -311,7 +313,11 @@ impl QueryFold {
             metrics,
             identity: job.identity,
             trace: job.trace,
-        });
+        };
+        match &job.hold {
+            Some(hold) => hold.offer(entry, store),
+            None => store.record(entry),
+        }
     }
 }
 

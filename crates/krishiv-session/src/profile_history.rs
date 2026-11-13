@@ -70,6 +70,55 @@ pub(crate) struct HistoryEntry {
     pub(crate) trace: Option<serde_json::Value>,
 }
 
+/// Where a file write's entry waits for its commit: the query ends before the commit does, and a commit that
+/// fails is the write's outcome, so the entry is recorded once the write has settled.
+#[derive(Default)]
+pub(crate) struct HistoryHold(Mutex<HoldState>);
+
+#[derive(Default)]
+enum HoldState {
+    /// The query has not ended.
+    #[default]
+    Waiting,
+    /// The query ended; its entry waits for the write's outcome.
+    Held(Box<HistoryEntry>),
+    /// The write is settled: a late entry is recorded as it comes.
+    Settled,
+}
+
+impl HistoryHold {
+    /// Holds `entry` until [`Self::settle`], or records it now when the write already settled.
+    pub(crate) fn offer(&self, entry: HistoryEntry, store: &ProfileHistory) {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if matches!(*state, HoldState::Settled) {
+            drop(state);
+            store.record(entry);
+        } else {
+            *state = HoldState::Held(Box::new(entry));
+        }
+    }
+
+    /// Records the held entry with the write's final outcome (`error` set when it failed).
+    pub(crate) fn settle(&self, error: Option<&KrishivError>, store: &ProfileHistory) {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let held = std::mem::replace(&mut *state, HoldState::Settled);
+        drop(state);
+        if let HoldState::Held(mut entry) = held {
+            if let Some(error) = error {
+                let (status, class) = krishiv_exec::Status::from_error(Some(error));
+                entry.state = match status {
+                    krishiv_exec::Status::Succeeded => "finished",
+                    krishiv_exec::Status::Failed => "failed",
+                    krishiv_exec::Status::Cancelled => "cancelled",
+                    krishiv_exec::Status::Denied => "denied",
+                };
+                entry.error_class = class;
+            }
+            store.record(*entry);
+        }
+    }
+}
+
 /// A profile read back from the store.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StoredProfile {

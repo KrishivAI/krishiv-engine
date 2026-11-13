@@ -8,7 +8,8 @@ Spark Connect (protocols 3.5, 4.0, 4.1, 4.2, 4.3; one 4.3 superset decoder): the
 the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends this decoder; it does not replace it.
 
 ## Key files
-- `src/wire.rs` the only decode path (`wire::decode_*`): size, count, depth and field-version checks
+- `src/wire.rs` the only decode path (`wire::decode_*`; `decode_request` for any RPC request, the `Request` trait the
+  generated layout implements): size, count, depth and field-version checks
 - `src/proto/mod.rs` versioned generated protos; `src/proto/v4_3/spark.connect.pb.rs` generated messages (4.2 is kept only for the golden descriptor) (do not edit)
 - `src/translate/mod.rs` `translate_*` entry points; `src/translate/relation.rs` and `expression.rs` (IR building)
 - `src/translate/literal.rs` literals; `src/translate/names.rs` names and plan-id origins
@@ -20,7 +21,8 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 
 ## Extension points
 - New relation or expression: a translation arm in `src/translate/relation.rs` or `expression.rs` building an existing IR node.
-- New protocol version: the generator in `tools/connect-protogen` (repository root), then a new `src/proto/v<ver>/`.
+- New protocol version: the generator in `tools/connect-protogen` (repository root), then a new `src/proto/v<ver>/`
+  (it also writes the server stub `crates/krishiv-connect-server/src/service/v<ver>.pb.rs`).
 
 ## Invariants
 - Protos are vendored per tag, verbatim, under `proto/spark-connect/<ver>/` at the repository root (ADR 0003; only
