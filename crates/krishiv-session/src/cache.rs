@@ -90,6 +90,8 @@ struct PendingReg {
     plan: Arc<LogicalPlan>,
     keep: Vec<Arc<dyn std::any::Any + Send + Sync>>,
     level: StorageLevel,
+    /// `State::clears` when it was queued: a clear or close since then forgets it.
+    clears: u64,
 }
 
 impl std::fmt::Debug for PendingReg {
@@ -153,7 +155,7 @@ impl Drop for TakenReg<'_> {
             .unwrap_or_else(PoisonError::into_inner);
         let back = self.item.take();
         let wake = back.is_some() || self.counted;
-        if let Some(item) = back {
+        if let Some(item) = back.filter(|item| item.clears == state.clears) {
             state.pending.push_front(item);
         }
         if self.counted {
@@ -306,6 +308,9 @@ struct CacheState {
     registrations: HashMap<CacheKey, Registration>,
     /// `persist` calls not yet analyzed and registered, in order.
     pending: VecDeque<PendingReg>,
+    /// How many times the cache was cleared or closed: a queued or taken `persist` from before
+    /// the last one is forgotten, as `CLEAR CACHE` forgets the registrations.
+    clears: u64,
     /// Queued `persist`s a reader took off `pending` and is analyzing now
     /// (their lazy checkpoints taken): another reader waits for them.
     in_flight: usize,
@@ -636,19 +641,26 @@ impl RelationCache {
         if level == StorageLevel::NONE {
             return;
         }
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pending
-            .push_back(PendingReg { plan, keep, level });
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let clears = state.clears;
+        state.pending.push_back(PendingReg {
+            plan,
+            keep,
+            level,
+            clears,
+        });
     }
 
     /// Registers `reg` under `key`; `false` (nothing changes) when the plan
     /// is registered already: the first level wins.
-    fn register(&self, key: &CacheKey, mut reg: Registration) -> bool {
+    fn register(&self, key: &CacheKey, mut reg: Registration, clears: u64) -> bool {
         let key = unpinned(key);
         reg.epoch = self.epochs.fetch_add(1, Ordering::Relaxed);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.clears != clears {
+            // Cleared or closed while it was analyzed: forgotten, not "already cached".
+            return true;
+        }
         if state.registrations.contains_key(&key) {
             return false;
         }
@@ -993,6 +1005,7 @@ impl RelationCache {
     fn clear_local(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
+        state.clears += 1;
         let dropped = (
             std::mem::take(&mut state.entries),
             std::mem::take(&mut state.registrations),
@@ -1450,7 +1463,11 @@ impl Session {
             filling: false,
             epoch: 0,
         };
-        if !self.state.cache.register(&key, registration) {
+        if !self
+            .state
+            .cache
+            .register(&key, registration, pending.clears)
+        {
             tracing::warn!(target: "krishiv::session", "Asked to cache already cached data.");
         }
     }
@@ -1567,7 +1584,7 @@ mod tests {
             filling: false,
             epoch: 0,
         };
-        assert!(cache.register(&pinned(1), reg));
+        assert!(cache.register(&pinned(1), reg, 0));
         assert!(fill(cache, &pinned(1)).is_some());
         assert!(cache.lookup(&pinned(1)).is_some());
         // A write to `src`: its version moves to 2.
@@ -1595,6 +1612,40 @@ mod tests {
         assert_eq!((stats.entries, stats.entries_pending), (0, 0));
     }
 
+    /// A `persist` taken off the queue before a `CLEAR CACHE` or a close registers nothing when
+    /// its analysis ends, and is not put back when its reader is dropped (review, Codex P2).
+    #[test]
+    fn a_persist_taken_before_a_clear_is_forgotten() {
+        let s = session();
+        let cache = &s.state.cache;
+        let reg = || Registration {
+            level: StorageLevel::MEMORY_ONLY,
+            plan: Arc::clone(&s.table("t").plan),
+            keep: Vec::new(),
+            tables: vec!["t".to_owned()],
+            filling: false,
+            epoch: 0,
+        };
+        cache.close();
+        assert!(
+            cache.register(&pinned(1), reg(), 0),
+            "a stale request is dropped"
+        );
+        assert_eq!(cache.stats().entries_pending, 0);
+        assert!(cache.level_of(&pinned(1)).is_none());
+        // A taken item from before the clear is not requeued by its reader's drop.
+        let df = s.table("t");
+        cache.request(Arc::clone(&df.plan), Vec::new(), StorageLevel::MEMORY_ONLY);
+        let item = cache.state.lock().unwrap().pending.pop_front().unwrap();
+        cache.close();
+        drop(super::TakenReg {
+            cache,
+            item: Some(item),
+            counted: false,
+        });
+        assert_eq!(cache.stats().entries_pending, 0);
+    }
+
     /// A fill claim of a registration that was dropped and made again does not free the slot of
     /// the new registration's fill (review L3): one fill per key.
     #[test]
@@ -1609,10 +1660,10 @@ mod tests {
             filling: false,
             epoch: 0,
         };
-        assert!(cache.register(&pinned(1), reg()));
+        assert!(cache.register(&pinned(1), reg(), 0));
         let old = cache.claim_fill(&pinned(1)).unwrap();
         assert!(cache.remove(&pinned(1)));
-        assert!(cache.register(&pinned(1), reg()));
+        assert!(cache.register(&pinned(1), reg(), 0));
         let new = cache.claim_fill(&pinned(1)).unwrap();
         drop(old);
         assert!(
