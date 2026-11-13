@@ -9,6 +9,43 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aead"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1973cfbc1a2daf9cf550e74e1f088c28e7f7d8c1e1418fb6c9dc5184b7e84c99"
+dependencies = [
+ "crypto-common 0.2.2",
+ "inout",
+]
+
+[[package]]
+name = "aes"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc0fc36d7440d015b45468ba08a21e80e056ebbd014c611c6298bb7503e04bd1"
+dependencies = [
+ "cipher",
+ "cpubits",
+ "cpufeatures",
+ "zeroize",
+]
+
+[[package]]
+name = "aes-gcm"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f2b8006a0c83f52b62ba44a97b58bf76fe2f70a329e588f67f89691d93d498f"
+dependencies = [
+ "aead",
+ "aes",
+ "cipher",
+ "ctr",
+ "ctutils",
+ "ghash",
+ "zeroize",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -369,6 +406,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
+ "zeroize",
+]
+
+[[package]]
+name = "block-padding"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "710f1dd022ef4e93f8a438b4ba958de7f64308434fa6a87104481645cc30068b"
+dependencies = [
+ "hybrid-array",
 ]
 
 [[package]]
@@ -437,6 +484,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cbc"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce2dc9ee5f88d11e0beb842c88b33c8a5cf0d1329c4b19494af42b07dbfe8896"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "cc"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -483,6 +539,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipher"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8cf2a2c93cd704877c0858356ed03480ff301ee950b43f1cbe4573b088bfa6c"
+dependencies = [
+ "block-buffer 0.12.1",
+ "crypto-common 0.2.2",
+ "inout",
+ "zeroize",
+]
+
+[[package]]
 name = "clap"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -523,6 +591,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "cmov"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -553,6 +627,12 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+
+[[package]]
+name = "cpubits"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15b85f9c39137c3a891689859392b1bd49812121d0d61c9caf00d46ed5ce06ae"
 
 [[package]]
 name = "cpufeatures"
@@ -595,6 +675,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
  "hybrid-array",
+]
+
+[[package]]
+name = "ctr"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baaca1c4b237092596f64d571e9db6ce4109c4ef9742e27590f1709594461f21"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
+name = "ctutils"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "261af4dc7a06ea8a527a8717d8cbba3417530d6ea14e1edb3de6b67806be474f"
+dependencies = [
+ "cmov",
 ]
 
 [[package]]
@@ -947,6 +1045,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghash"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"
+dependencies = [
+ "polyval",
+ "zeroize",
+]
+
+[[package]]
 name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1005,6 +1113,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
 dependencies = [
  "typenum",
+ "zeroize",
 ]
 
 [[package]]
@@ -1142,6 +1251,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "inout"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a580c13f0ffc335ef42dd3f6b1a41b726051c5e1656d9a3aa6fddb3c5dfbbf9"
+dependencies = [
+ "block-padding",
+ "hybrid-array",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1238,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-common"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "serde_json",
  "thiserror",
@@ -1247,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connect"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1260,7 +1379,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-exec"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1289,13 +1408,17 @@ dependencies = [
 
 [[package]]
 name = "krishiv-functions"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
+ "aes",
+ "aes-gcm",
  "arrow-array",
  "arrow-buffer",
  "arrow-schema",
  "arrow-select",
+ "cbc",
  "fancy-regex",
+ "getrandom 0.4.3",
  "krishiv-common",
  "krishiv-kernels",
  "krishiv-types",
@@ -1329,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-io"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "apache-avro",
  "arrow-array",
@@ -1345,6 +1468,7 @@ dependencies = [
  "krishiv-common",
  "krishiv-kernels",
  "krishiv-memory",
+ "krishiv-store",
  "krishiv-types",
  "lz4_flex",
  "memchr",
@@ -1360,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-kernels"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1381,7 +1505,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-memory"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1397,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-optimizer"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1411,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-plan"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1426,10 +1550,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-plan-codec"
+version = "0.2.0"
+dependencies = [
+ "arrow-ipc",
+ "arrow-schema",
+ "krishiv-common",
+ "krishiv-exec",
+ "krishiv-io",
+ "krishiv-plan",
+ "krishiv-types",
+ "prost",
+ "thiserror",
+]
+
+[[package]]
 name = "krishiv-session"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
  "arrow-schema",
  "futures",
  "krishiv-common",
@@ -1440,6 +1580,7 @@ dependencies = [
  "krishiv-memory",
  "krishiv-optimizer",
  "krishiv-plan",
+ "krishiv-plan-codec",
  "krishiv-sql",
  "krishiv-types",
  "krishiv-udf-sdk",
@@ -1452,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-sql"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "krishiv-common",
  "krishiv-kernels",
@@ -1462,8 +1603,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-store"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "krishiv-common",
+ "object_store",
+ "tokio",
+]
+
+[[package]]
 name = "krishiv-testkit"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1494,9 +1647,10 @@ dependencies = [
 
 [[package]]
 name = "krishiv-types"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
  "arrow-schema",
  "arrow-select",
  "krishiv-common",
@@ -1505,7 +1659,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-udf-sdk"
-version = "0.2.0-alpha"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "krishiv-types",
@@ -1826,6 +1980,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
+name = "polyval"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0fa31d631f2b2cb2a544d0aa321ce847a94764d701ca2becc411138b93d49cd"
+dependencies = [
+ "cpubits",
+ "cpufeatures",
+ "universal-hash",
+ "zeroize",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2060,9 +2226,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",
@@ -2452,6 +2618,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
+name = "universal-hash"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4987bdc12753382e0bec4a65c50738ffaabc998b9cdd1f952fb5f39b0048a96"
+dependencies = [
+ "crypto-common 0.2.2",
+ "ctutils",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2741,6 +2917,12 @@ dependencies = [
  "syn 3.0.9",
  "synstructure",
 ]
+
+[[package]]
+name = "zeroize"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 
 [[package]]
 name = "zerotrie"
