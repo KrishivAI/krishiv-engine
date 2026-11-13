@@ -131,6 +131,7 @@ mod literal;
 mod origin;
 mod partial;
 mod plan;
+mod python;
 mod raises;
 pub(crate) mod spark_fmt;
 #[cfg(test)]
@@ -148,7 +149,9 @@ pub use expr::{
     SortOrder, Star, SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec,
     WindowSpecRef,
 };
-pub use function::{Builtin, FunctionId, FunctionKind, PythonEvalType, QuantifiedLike};
+pub use function::{
+    Builtin, FunctionId, FunctionKind, PythonEvalType, PythonUdfKind, PythonUdfRef, QuantifiedLike,
+};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
@@ -170,8 +173,9 @@ pub fn generate_qualifier(index: usize, aliased: bool) -> String {
 pub use plan::{
     ALIAS_PART_SEP, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind,
     JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs,
-    TABLE_FUNCTION_NAME_SEP, TableVersion, UnpivotColumnSet, generator_arg,
+    TABLE_FUNCTION_NAME_SEP, TableArg, TableVersion, UnpivotColumnSet, generator_arg,
     without_generated_marker,
 };
+pub use python::{check_python_aggregates, is_python_udaf};
 pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
 pub use walk::{MAX_DEPTH, check_depth};

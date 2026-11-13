@@ -62,6 +62,10 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Range { .. } => "PlanNode::Range",
         PlanNode::UnionLoop { .. } => "PlanNode::UnionLoop",
         PlanNode::UnionLoopRef { .. } => "PlanNode::UnionLoopRef",
+        PlanNode::MapPartitions { .. } => "PlanNode::MapPartitions",
+        PlanNode::GroupMap { .. } => "PlanNode::GroupMap",
+        PlanNode::CoGroupMap { .. } => "PlanNode::CoGroupMap",
+        PlanNode::PythonTableFunction { .. } => "PlanNode::PythonTableFunction",
     });
 }
 

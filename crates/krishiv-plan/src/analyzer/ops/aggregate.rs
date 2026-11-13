@@ -344,6 +344,8 @@ impl Resolver<'_> {
             }
         }
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
+        crate::check_python_aggregates(items.iter().map(|b| &b.expr))
+            .map_err(|e| AnalysisError::new(e, p.origin))?;
         // The declared `CHAR`/`VARCHAR` types follow the aliases of an explicit `GROUP BY` too.
         self.carry_declared(&items, aggregates);
         // Spark's `ExtractGenerator`: the generator's argument takes the

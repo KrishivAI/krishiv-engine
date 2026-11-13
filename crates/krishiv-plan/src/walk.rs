@@ -167,6 +167,10 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Repartition { .. }
                 | PlanNode::Expand { .. }
                 | PlanNode::Window { .. }
+                | PlanNode::MapPartitions { .. }
+                | PlanNode::GroupMap { .. }
+                | PlanNode::CoGroupMap { .. }
+                | PlanNode::PythonTableFunction { .. }
                 | PlanNode::ReplicateRows { .. } => true,
                 // Lowering builds the generator without its columns.
                 PlanNode::Generate { output, .. }
@@ -404,6 +408,33 @@ impl Teardown {
                 self.exprs.extend(params);
             }
             PlanNode::SetOp { left, right, .. } => self.plans.extend([left, right]),
+            PlanNode::MapPartitions { input, .. } => self.plans.push(input),
+            PlanNode::GroupMap { input, keys, .. } => {
+                self.plans.push(input);
+                self.exprs.extend(keys);
+            }
+            PlanNode::CoGroupMap {
+                left,
+                right,
+                left_keys,
+                right_keys,
+                ..
+            } => {
+                self.plans.extend([left, right]);
+                self.exprs.extend(left_keys);
+                self.exprs.extend(right_keys);
+            }
+            PlanNode::PythonTableFunction {
+                args, table_arg, ..
+            } => {
+                self.exprs.extend(args);
+                if let Some(t) = table_arg {
+                    self.plans.push(t.input);
+                    self.exprs.extend(t.partition_by);
+                    self.exprs
+                        .extend(t.order_by.into_iter().map(|SortOrder { expr, .. }| expr));
+                }
+            }
             PlanNode::Union { inputs, .. } => self.plans.extend(inputs),
             PlanNode::WithCte { input, ctes } => {
                 self.plans.push(input);

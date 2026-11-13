@@ -573,6 +573,15 @@ impl Encoder {
     }
 
     /// Writes `plan` as the digest of its encoding, computed once per node.
+    /// A relation node's Python UDF (by identity) and declared columns.
+    fn python_udf(&mut self, udf: &crate::PythonUdfRef, output: &[BoundColumn], bias: u64) {
+        self.debug(udf);
+        self.num(output.len() as u64);
+        for c in output {
+            self.bound(c, bias);
+        }
+    }
+
     fn plan(&mut self, plan: &LogicalPlan, bias: u64) {
         let key = (NodeKind::Plan, std::ptr::from_ref(plan) as usize, bias);
         let digest = match self.seen.get(&key) {
@@ -851,6 +860,63 @@ impl Encoder {
                     self.order(o, bias);
                 }
                 self.plan(input, bias);
+            }
+            PlanNode::MapPartitions {
+                input,
+                udf,
+                output,
+                barrier,
+            } => {
+                self.tag("MapPartitions");
+                self.python_udf(udf, output, bias);
+                self.flag(*barrier);
+                self.plan(input, bias);
+            }
+            PlanNode::GroupMap {
+                input,
+                keys,
+                udf,
+                output,
+            } => {
+                self.tag("GroupMap");
+                self.exprs(keys, bias);
+                self.python_udf(udf, output, bias);
+                self.plan(input, bias);
+            }
+            PlanNode::CoGroupMap {
+                left,
+                right,
+                left_keys,
+                right_keys,
+                udf,
+                output,
+            } => {
+                self.tag("CoGroupMap");
+                self.exprs(left_keys, bias);
+                self.exprs(right_keys, bias);
+                self.python_udf(udf, output, bias);
+                self.plan(left, bias);
+                self.plan(right, bias);
+            }
+            PlanNode::PythonTableFunction {
+                args,
+                table_arg,
+                udf,
+                output,
+            } => {
+                self.tag("PythonTableFunction");
+                self.exprs(args, bias);
+                self.python_udf(udf, output, bias);
+                self.flag(table_arg.is_some());
+                if let Some(t) = table_arg {
+                    self.exprs(&t.partition_by, bias);
+                    self.num(t.order_by.len() as u64);
+                    for o in &t.order_by {
+                        self.order(o, bias);
+                    }
+                    self.flag(t.single_partition);
+                    self.plan(&t.input, bias);
+                }
             }
             PlanNode::ReplicateRows { input, count } => {
                 self.tag("ReplicateRows");

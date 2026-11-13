@@ -17,6 +17,7 @@ mod json_tuple;
 mod nodes;
 mod pivot;
 mod props;
+mod python_relations;
 mod rewrite;
 mod secrets;
 mod setops;

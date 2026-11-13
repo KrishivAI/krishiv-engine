@@ -223,6 +223,25 @@ fn subqueries(plan: &LogicalPlan) -> Vec<&LogicalPlan> {
     out
 }
 
+/// A relation node's Python UDF: `name#version(eval type)`.
+struct UdfRef<'a>(&'a crate::PythonUdfRef);
+
+impl Display for UdfRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let name = crate::function::shown_call_name("", &self.0.name);
+        write!(f, "{name}#{}({})", self.0.version, self.0.eval_type.code())
+    }
+}
+
+/// `[name#id, ...]`.
+fn columns(f: &mut Formatter<'_>, output: &[crate::BoundColumn]) -> fmt::Result {
+    f.write_str("[")?;
+    for (i, c) in output.iter().enumerate() {
+        write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+    }
+    f.write_str("]")
+}
+
 /// One node's line, without its children.
 struct NodeLine<'a>(&'a LogicalPlan);
 
@@ -511,6 +530,60 @@ impl Display for NodeLine<'_> {
             }
             PlanNode::TableFunction { name, args } => {
                 write!(f, "TableFunction {name} [{}]", List(args))
+            }
+            // Spark's `MapInPandas f(a#1, b#2)#3, [x#4], false`, shortened.
+            PlanNode::MapPartitions {
+                udf,
+                output,
+                barrier,
+                ..
+            } => {
+                write!(f, "MapPartitions {}, ", UdfRef(udf))?;
+                columns(f, output)?;
+                write!(f, ", barrier={barrier}")
+            }
+            PlanNode::GroupMap {
+                keys, udf, output, ..
+            } => {
+                write!(f, "GroupMap [{}], {}, ", List(keys), UdfRef(udf))?;
+                columns(f, output)
+            }
+            PlanNode::CoGroupMap {
+                left_keys,
+                right_keys,
+                udf,
+                output,
+                ..
+            } => {
+                write!(
+                    f,
+                    "CoGroupMap [{}], [{}], {}, ",
+                    List(left_keys),
+                    List(right_keys),
+                    UdfRef(udf)
+                )?;
+                columns(f, output)
+            }
+            PlanNode::PythonTableFunction {
+                args,
+                table_arg,
+                udf,
+                output,
+            } => {
+                write!(f, "PythonTableFunction {}({}), ", UdfRef(udf), List(args))?;
+                columns(f, output)?;
+                if let Some(t) = table_arg {
+                    write!(
+                        f,
+                        ", TABLE PARTITION BY [{}] ORDER BY [",
+                        List(&t.partition_by)
+                    )?;
+                    for (i, o) in t.order_by.iter().enumerate() {
+                        write!(f, "{}{o}", sep(i))?;
+                    }
+                    write!(f, "], single={}", t.single_partition)?;
+                }
+                Ok(())
             }
             PlanNode::Range {
                 start,

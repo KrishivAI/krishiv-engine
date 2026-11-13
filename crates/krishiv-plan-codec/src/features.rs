@@ -467,6 +467,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::ProbeSelect => Some(Feature::FusedProbe),
         Construct::Generator(kind) => match kind {
             krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
+            krishiv_plan::GeneratorKind::PythonUdtf => Some(Feature::Generate),
             krishiv_plan::GeneratorKind::Explode
             | krishiv_plan::GeneratorKind::PosExplode
             | krishiv_plan::GeneratorKind::Inline => None,

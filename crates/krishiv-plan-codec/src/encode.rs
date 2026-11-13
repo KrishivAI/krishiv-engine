@@ -351,6 +351,11 @@ impl Encoder {
                     krishiv_plan::GeneratorKind::VariantExplode => {
                         pb::GeneratorKind::VariantExplode
                     }
+                    krishiv_plan::GeneratorKind::PythonUdtf => {
+                        return Err(CodecError::Unsupported(
+                            "a Python UDTF generator".to_owned(),
+                        ));
+                    }
                 }
                 .into(),
                 outer: *outer,
