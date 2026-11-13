@@ -75,13 +75,12 @@ scale factor 100, on the same Parquet files and the same laptop.
 - **Data:** Parquet from `tpchgen` 3.0.0, read in place with no loading step. Krishiv's answers are checked
   (row counts and checksums) against an independent engine at SF10 and SF100.
 
-Reproduce it:
-
-```bash
-git clone https://github.com/KrishivAI/krishiv-engine
-cd krishiv-engine/bench
-uv run krishiv-bench reproduce --suite tpch --sf 100
-```
+Reproduce it: the harness is in [`bench/`](bench/README.md). The exact settings of each column (cold runs with
+the page cache dropped, 12 threads, a 20 GB engine limit inside a 28 GB scope, Spark 4.2.0 over Spark Connect with
+24 shuffle partitions and a 20g driver) and the commands that produced them are in
+[bench/README.md, "Spark baseline of the benchmarks page"](bench/README.md#spark-baseline-of-the-benchmarks-page-method).
+The harness's defaults are different (32 GB, interleaved warm runs), so use those settings, not the defaults, to
+compare with the table.
 
 The harness, engine configurations and method are in [bench/README.md](bench/README.md); every per-query number,
 SF10 and SF1000 and the comparison with a reference engine that is still faster today are on
