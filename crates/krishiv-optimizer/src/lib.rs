@@ -137,8 +137,8 @@ pub struct RuleStep {
 }
 
 /// The default of `krishiv.optimizer.shareRepeatedSubtrees` when no
-/// configuration value is set (off until the P3 W1 flip, unit 6).
-const SHARE_REPEATED_SUBTREES_DEFAULT: bool = false;
+/// configuration value is set (on since the P3 W1 flip, unit 6).
+const SHARE_REPEATED_SUBTREES_DEFAULT: bool = true;
 
 /// A test-only switch per optimizer rule: which rewrites run. All are on
 /// by default; the differential harnesses turn one off at a time and
@@ -413,7 +413,7 @@ fn run(
         // Join ordering's settings: the window rule's guard orders with them too.
         let joins = join_settings(udfs.map(|(_, config)| config), tracing);
         // P3 W1 shape (a): a correlated aggregate subquery over the outer block's own
-        // relations becomes a window (`krishiv.optimizer.subqueryAsWindow`, off by default).
+        // relations becomes a window (`krishiv.optimizer.subqueryAsWindow`, on by default).
         let window = options.subquery_as_window
             && udfs.is_some_and(|(_, config)| {
                 config
@@ -609,9 +609,14 @@ fn unoptimised(plan: &Plan, keyed: Arc<LogicalPlan>) -> Result<Plan, KrishivErro
 
 /// [`constraints::infer_join_filters`] at every join, bottom up.
 fn infer_join_filters(root: &Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let mut memo = constraints::Memo::default();
-    dag::rewrite_up(Arc::clone(root), &mut |p| {
-        Ok(constraints::infer_join_filters(p, &mut memo))
+    let mut memo = constraints::Memo::for_root(root);
+    dag::rewrite_up_traced(Arc::clone(root), &mut |original, p| {
+        // A shared relation rebuilt by this pass (a join inside it got its
+        // own filters) is still shared.
+        memo.carry_shared(original, &p);
+        let out = constraints::infer_join_filters(p, &mut memo);
+        memo.carry_shared(original, &out);
+        Ok(out)
     })
 }
 

@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
-assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Project [product_name#360, store_name#362, store_zip#363, b_street_number#364, b_street_name#365, b_city#366, b_zip#367, c_street_number#368, c_street_name#369, c_city#370, c_zip#371, cs1syear#398, cs1cnt#399, s11#400, s21#401, s31#402, s12#403, s22#404, s32#405, syear#391, cnt#394]
@@ -83,7 +82,7 @@ Project [product_name#360, store_name#362, store_zip#363, b_street_number#364, b
          :                                                                                                        :  +- Scan spark_catalog.default.store_returns [sr_item_sk#88, sr_ticket_number#95] (shared #10)
          :                                                                                                        +- Project [ss_sold_date_sk#63, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_ticket_number#72, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
          :                                                                                                           +- Join Inner, (ss_item_sk#65 == cs_item_sk#106)
-         :                                                                                                              :- Filter ((((((((isnotnull(ss_item_sk#65) and isnotnull(ss_ticket_number#72)) and isnotnull(ss_sold_date_sk#63)) and isnotnull(ss_store_sk#70)) and isnotnull(ss_customer_sk#66)) and isnotnull(ss_cdemo_sk#67)) and isnotnull(ss_promo_sk#71)) and isnotnull(ss_hdemo_sk#68)) and isnotnull(ss_addr_sk#69))
+         :                                                                                                              :- Filter ((((((((isnotnull(ss_item_sk#65) and isnotnull(ss_ticket_number#72)) and isnotnull(ss_store_sk#70)) and isnotnull(ss_customer_sk#66)) and isnotnull(ss_cdemo_sk#67)) and isnotnull(ss_promo_sk#71)) and isnotnull(ss_hdemo_sk#68)) and isnotnull(ss_addr_sk#69)) and isnotnull(ss_sold_date_sk#63))
          :                                                                                                              :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#63, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_ticket_number#72, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82] (shared #11)
          :                                                                                                              +- Project [cs_item_sk#484 AS cs_item_sk#106] (shared #12)
          :                                                                                                                 +- Shift +469
@@ -172,6 +171,6 @@ Project [product_name#360, store_name#362, store_zip#363, b_street_number#364, b
                                                                                                                      :  +- Shared #10, printed above
                                                                                                                      +- Project [ss_sold_date_sk#63, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_ticket_number#72, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
                                                                                                                         +- Join Inner, (ss_item_sk#65 == cs_item_sk#106)
-                                                                                                                           :- Filter ((((((((isnotnull(ss_item_sk#65) and isnotnull(ss_ticket_number#72)) and isnotnull(ss_sold_date_sk#63)) and isnotnull(ss_store_sk#70)) and isnotnull(ss_customer_sk#66)) and isnotnull(ss_cdemo_sk#67)) and isnotnull(ss_promo_sk#71)) and isnotnull(ss_hdemo_sk#68)) and isnotnull(ss_addr_sk#69))
+                                                                                                                           :- Filter ((((((((isnotnull(ss_item_sk#65) and isnotnull(ss_ticket_number#72)) and isnotnull(ss_store_sk#70)) and isnotnull(ss_customer_sk#66)) and isnotnull(ss_cdemo_sk#67)) and isnotnull(ss_promo_sk#71)) and isnotnull(ss_hdemo_sk#68)) and isnotnull(ss_addr_sk#69)) and isnotnull(ss_sold_date_sk#63))
                                                                                                                            :  +- Shared #11, printed above
                                                                                                                            +- Shared #12, printed above

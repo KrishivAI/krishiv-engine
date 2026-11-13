@@ -198,6 +198,10 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("evictions", Long, false),
             ("invalidations", Long, false),
             ("loads_in_flight", Long, false),
+            ("memory_bytes", Long, false),
+            ("disk_bytes", Long, false),
+            ("entries_pending", Long, false),
+            ("spills", Long, false),
         ],
         "metrics" => vec![
             ("worker_id", Text, false),
@@ -511,47 +515,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
         ];
     }
     if table.eq_ignore_ascii_case("caches") {
-        let n = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
-        let meta = sources.io.cache().stats();
-        let io = sources.io.totals();
-        let relation = sources.relations.stats();
-        let rows = [
-            CacheRow {
-                cache: "file_metadata",
-                entries: n(meta.entries),
-                bytes: n(meta.bytes),
-                capacity: Some(n(meta.limit)),
-                hits: n(krishiv_io::IoCounters::get(&io.cache_hits)),
-                misses: n(krishiv_io::IoCounters::get(&io.cache_misses)),
-                evictions: n(meta.evictions),
-                invalidations: n(meta.invalidations),
-                loads_in_flight: n(meta.loads_in_flight),
-            },
-            CacheRow {
-                cache: "relation",
-                entries: n(relation.entries),
-                bytes: n(relation.bytes),
-                capacity: None,
-                hits: n(relation.hits),
-                misses: n(relation.misses),
-                evictions: 0,
-                invalidations: n(relation.invalidations),
-                loads_in_flight: 0,
-            },
-        ];
-        let l = |f: fn(&CacheRow) -> i64| long(rows.iter().map(move |r| Some(f(r))));
-        return vec![
-            text(rows.iter().map(|_| Some(LOCAL_WORKER))),
-            text(rows.iter().map(|r| Some(r.cache))),
-            l(|r| r.entries),
-            l(|r| r.bytes),
-            long(rows.iter().map(|r| r.capacity)),
-            l(|r| r.hits),
-            l(|r| r.misses),
-            l(|r| r.evictions),
-            l(|r| r.invalidations),
-            l(|r| r.loads_in_flight),
-        ];
+        return caches::columns(sources);
     }
     if table.eq_ignore_ascii_case("operators") {
         let rows = sources.queries.operators(sources.monitor.sees_all());
@@ -694,19 +658,6 @@ impl MetricRow {
             buckets: None,
         }
     }
-}
-
-/// One row of `system.caches`.
-struct CacheRow {
-    cache: &'static str,
-    entries: i64,
-    bytes: i64,
-    capacity: Option<i64>,
-    hits: i64,
-    misses: i64,
-    evictions: i64,
-    invalidations: i64,
-    loads_in_flight: i64,
 }
 
 /// What the tables read: the process's state.
@@ -1992,6 +1943,7 @@ mod tests {
     }
 }
 
+mod caches;
 mod text;
 pub(crate) use text::TextPolicy;
 #[cfg(test)]

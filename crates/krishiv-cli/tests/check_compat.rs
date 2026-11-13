@@ -441,3 +441,40 @@ fn an_unwritable_report_exits_2() {
         assert_eq!(out.status.code(), Some(2), "{args:?}");
     }
 }
+
+/// P3-T074: the Python of the quickstart and the migration guide, and the sample notebooks,
+/// call only supported functions (the same scan a user runs on their own project).
+#[test]
+fn the_docs_examples_pass_check_compat() {
+    let docs = repo_root().join("docs");
+    let scratch = tempfile::tempdir().expect("tempdir");
+    for (i, page) in ["get-started/quickstart.md", "guides/pyspark-migration.md"]
+        .iter()
+        .enumerate()
+    {
+        let text = std::fs::read_to_string(docs.join(page)).expect("docs page");
+        let mut code = String::from("import krishiv\nfrom krishiv.sql import functions as F\n");
+        let mut in_py = false;
+        for line in text.lines() {
+            match (in_py, line) {
+                (false, "```python") => in_py = true,
+                (true, "```") => in_py = false,
+                (true, l) => {
+                    code.push_str(l);
+                    code.push('\n');
+                }
+                _ => {}
+            }
+        }
+        assert!(code.lines().count() > 5, "{page}: no python blocks found");
+        std::fs::write(scratch.path().join(format!("page{i}.py")), code).expect("write");
+    }
+    let (code, v) = report(scratch.path());
+    assert_eq!(code, Some(0), "docs pages: {v}");
+    let (code, v) = report(&docs.join("notebooks"));
+    assert_eq!(code, Some(0), "notebooks: {v}");
+    assert!(
+        v["files_scanned"].as_u64() >= Some(3),
+        "notebooks scanned: {v}"
+    );
+}

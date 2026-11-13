@@ -180,7 +180,8 @@ impl DataFrameWriter {
                     let a = df.action_analysis().await?;
                     geo_gate::check(&a.analyzed.output, &target.format)?;
                     // A write reads the cache like any other action.
-                    let (physical, _) = df.physical_cached(&a).await?;
+                    let (physical, fill) = df.physical_cached(&a).await?;
+                    let _lease = fill.into_lease();
                     let types: Vec<_> = a
                         .analyzed
                         .output

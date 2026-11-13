@@ -74,6 +74,12 @@
     ],
     "sqlState" : "22023"
   },
+  "KRISHIV_INVALID_OPERATION_TAG" : {
+    "message" : [
+      "<reason>"
+    ],
+    "sqlState" : "22023"
+  },
   "KRISHIV_INVALID_PROFILE_DOCUMENT" : {
     "message" : [
       "The <document> document is invalid: <reason>."
@@ -110,6 +116,12 @@
     ],
     "sqlState" : "58030",
     "audience" : "operator"
+  },
+  "KRISHIV_OPERATION_LIMIT" : {
+    "message" : [
+      "Cannot start a new operation: <limitName> allows at most <limit> live operations per session. Wait for one to finish or release it (ReleaseExecute, or interrupt it in the client), or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
   },
   "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
     "message" : [
