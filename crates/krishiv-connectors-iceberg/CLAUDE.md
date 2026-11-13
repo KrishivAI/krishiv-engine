@@ -45,7 +45,10 @@ Iceberg equal to the same Parquet files), `table_tests.rs` (`catalog_parse_limit
 upgrade, the table's metrics modes in a scan, the mixed-spec refusal), `baseline_tests.rs` (ignored: the §2.3 planning baseline, 1,000
 manifests × 100 entries, timed as fetch/parse/map/prune), `delete_tests.rs` (snapshots with chosen sequence
 numbers: deletes through SQL, `delete_application_matches_model`, DV corruption, missing delete file, Java's
-assignment errors, equality deletes by sequence number and partition, null keys, a missing equality delete file).
+assignment errors, equality deletes by sequence number and partition, null keys, a missing equality delete file). `evolution_tests.rs`
+(snapshots written by hand with one manifest per writing schema, as iceberg-rust 0.11 cannot promote or rename:
+`promoted_column_filter_returns_all_rows`, the iceberg-rust #3482 shape, int → long with 4-byte bounds in the old
+manifest, plus float → double with NaN and decimal(9,2) → decimal(18,2); `iceberg_schema_evolution_matrix`).
 `src/plan/` (public, Krishiv-owned types only; design note `P3-T026-T027-iceberg-scan-and-commit.md` §2): `types.rs`
 `IcebergType`, `SchemaField` (primitive columns reachable through structs), `PartitionSpecInfo`/`Transform` ·
 `snapshot.rs` `VersionSpec` (connector-local until PR-07's `TableVersionSpec`), resolution with Iceberg's error texts
