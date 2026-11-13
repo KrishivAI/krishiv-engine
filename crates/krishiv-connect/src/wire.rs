@@ -129,7 +129,7 @@ impl<M: Message + Default + Send + Scrub> Drop for Decoded<M> {
 }
 
 /// The Spark Connect protocol version a client speaks. A client declaring 4.2 or older is refused
-/// the fields 4.3 added ([`FIELDS_SINCE_4_3`]); the other version steps are not gated yet.
+/// the fields 4.3 added (`FIELDS_SINCE_4_3`); the other version steps are not gated yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum ClientVersion {
     /// Spark 3.5.x.
