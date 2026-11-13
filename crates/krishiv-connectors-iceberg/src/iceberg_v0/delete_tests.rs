@@ -735,6 +735,63 @@ fn delete_state_is_charged_to_the_query_pool() {
     assert_eq!((pool.reserved(), consumers(&pool)), (0, 0));
 }
 
+/// A distributed task's scan of a reordered subset of the files
+/// (`with_file_splits`) applies each file's equality deletes, not those of
+/// the file at the same position in the full list (review 25c N8): the file
+/// ordinal is global, through `FileConstants` keyed by path.
+#[test]
+fn equality_deletes_follow_files_through_given_splits() {
+    use krishiv_exec::ScanPushdown;
+    use krishiv_exec::planner::TableProvider;
+    use krishiv_io::split::{FilePartition, FileSplit};
+
+    #[derive(Debug)]
+    struct Splits(super::provider::IcebergTableProvider, Vec<usize>);
+    impl TableProvider for Splits {
+        fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+            let files: Vec<_> = self.1.iter().map(|&i| self.0.files()[i].clone()).collect();
+            let partitions = files
+                .iter()
+                .enumerate()
+                .map(|(i, f)| FilePartition {
+                    index: i,
+                    splits: vec![FileSplit {
+                        file: i,
+                        range: krishiv_io::ByteRange::whole(f.size),
+                    }],
+                })
+                .collect();
+            self.0.scan()?.with_file_splits(files, partitions)
+        }
+    }
+
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            data("b.parquet", 0, 3, 10, 3),
+            data("c.parquet", 0, 1, 20, 3),
+            // Newer than a and c, not than b.
+            equality("e.parquet", 0, 2, &[Some(1), Some(11), Some(21)]),
+        ],
+        false,
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let names: Vec<String> = p.files().iter().map(|f| f.path.to_string()).collect();
+    let at = |n: &str| names.iter().position(|p| p.ends_with(n)).unwrap();
+    let (b, c) = (at("b.parquet"), at("c.parquet"));
+    assert_eq!((at("a.parquet"), b, c), (0, 1, 2));
+    let schema = p.snapshot().schema.clone();
+    let session =
+        super::provider_tests::session(vec![("t", schema, Arc::new(Splits(p, vec![b, c])))]);
+    let mut ids: Vec<i64> =
+        super::provider_tests::render(&session.run("SELECT id FROM t").unwrap())
+            .iter()
+            .map(|r| r.parse().unwrap())
+            .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, [10, 11, 12, 20, 22]);
+}
+
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
 #[derive(Debug, Clone)]
 enum Op {
