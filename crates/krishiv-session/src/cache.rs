@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The session relation cache: `DataFrame.cache`, `persist` and `unpersist`.
 //!
+//! Registration is eager, materialization lazy (as Spark's `cacheQuery`):
+//! `persist` queues the frame's plan, and every read of the registry
+//! (`Session::register_pending_caches`) first analyzes the queued plans and
+//! registers them by [`CacheKey`] with their storage level. `is_cached` and
+//! `storage_level` answer from the registrations. Any action whose plan
+//! contains a registered relation without data fills it: the whole plan as its
+//! result streams, a proper subtree as a query of its own run first. One fill
+//! per key runs at a time ([`FillClaim`]); a fill that is refused leaves the
+//! registration, and the query runs uncached.
+//!
 //! A cached relation is one materialized snapshot: Arrow batches held under
 //! the `relation_cache` memory pool (a pool consumer of that name), keyed by
 //! [`CacheKey`] (normalized plan hash, pinned versions, principal id, policy
@@ -23,7 +33,9 @@
 //! table or view drops the entries that read it, and an invalidation that
 //! runs while a fill is in flight keeps that fill from being stored.
 //! Entries are never evicted otherwise: they stay until dropped or the cap
-//! refuses new ones.
+//! refuses new ones. A data invalidation (a write, `REFRESH`) keeps the
+//! registrations, which refill on use; `CLEAR CACHE`, `UNCACHE TABLE` and
+//! replacing or dropping a temporary view drop them too.
 
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -39,6 +51,71 @@ use krishiv_plan::analyzer::AnalyzedPlan;
 use krishiv_plan::cache::{CacheKey, normalized_subtree_hash};
 use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, ReadSource, Scan};
 use krishiv_types::batch::Batch;
+
+use crate::StorageLevel;
+use crate::dataframe::DataFrame;
+use crate::session::Session;
+
+/// What a registration keeps alive beside its plan (table providers and the like).
+type KeepAlive = Vec<Arc<dyn std::any::Any + Send + Sync>>;
+
+/// What a frame's `persist` queued: the plan to analyze and register.
+struct PendingReg {
+    plan: Arc<LogicalPlan>,
+    keep: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+    level: StorageLevel,
+}
+
+impl std::fmt::Debug for PendingReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingReg")
+            .field("level", &self.level)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A plan that was asked to be cached, with the level it was first asked at.
+struct Registration {
+    level: StorageLevel,
+    /// The unanalyzed plan: a fill of it as a subtree runs this as a query.
+    plan: Arc<LogicalPlan>,
+    keep: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+    /// The table names (lower-case last parts) the plan reads.
+    tables: Vec<String>,
+    /// Whether a fill of this key is running (see [`FillClaim`]).
+    filling: bool,
+}
+
+impl std::fmt::Debug for Registration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Registration")
+            .field("level", &self.level)
+            .field("tables", &self.tables)
+            .field("filling", &self.filling)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The right to fill one registered key: only one fill per key runs. Dropping
+/// it (the fill ended, failed or was cancelled) frees the slot.
+#[derive(Debug)]
+pub(crate) struct FillClaim {
+    cache: Arc<RelationCache>,
+    key: CacheKey,
+}
+
+impl Drop for FillClaim {
+    fn drop(&mut self) {
+        let mut state = self
+            .cache
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(reg) = state.registrations.get_mut(&self.key) {
+            reg.filling = false;
+        }
+    }
+}
 
 /// The prefix of the hidden table names cached snapshots are scanned as. No
 /// user input spells them: reads of one behave as missing tables, and
@@ -74,6 +151,10 @@ pub(crate) struct CacheEntry {
 #[derive(Debug, Default)]
 struct CacheState {
     entries: HashMap<CacheKey, Arc<CacheEntry>>,
+    /// The plans asked to be cached, by key; an entry is the data of one.
+    registrations: HashMap<CacheKey, Registration>,
+    /// `persist` calls not yet analyzed and registered, in order.
+    pending: Vec<PendingReg>,
     names: HashMap<String, CacheKey>,
     /// Exact bytes held, for the cap: pool grants are quantised, so the
     /// pool's own counter would over-count small snapshots.
@@ -177,6 +258,14 @@ impl Invalidation {
         }
     }
 
+    /// Drops the registrations and entries over the table `name` of every cache.
+    pub(crate) fn forget_table(&self, name: &str) {
+        self.results.invalidate_table(name);
+        for cache in self.relations() {
+            cache.forget_local(name);
+        }
+    }
+
     /// Drops every entry of every cache (`CLEAR CACHE`).
     pub(crate) fn clear(&self) {
         self.results.clear();
@@ -203,6 +292,9 @@ pub(crate) struct RelationCache {
     hits: AtomicU64,
     misses: AtomicU64,
     state: Mutex<CacheState>,
+    /// Held while the pending registrations are analyzed, so a reader that
+    /// finds the queue taken waits for the registrations instead of missing them.
+    registering: futures::lock::Mutex<()>,
 }
 
 impl RelationCache {
@@ -229,6 +321,7 @@ impl RelationCache {
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             state: Mutex::new(CacheState::default()),
+            registering: futures::lock::Mutex::new(()),
         });
         hub.relations
             .lock()
@@ -282,13 +375,103 @@ impl RelationCache {
         state.entries.get(key).map(|e| Arc::clone(&e.table))
     }
 
-    /// Whether `key` is cached.
-    pub(crate) fn contains(&self, key: &CacheKey) -> bool {
+    /// Queues `plan` to be registered at `level` by the next read of the
+    /// registry. [`StorageLevel::NONE`] queues nothing, as in Spark.
+    pub(crate) fn request(
+        &self,
+        plan: Arc<LogicalPlan>,
+        keep: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+        level: StorageLevel,
+    ) {
+        if level == StorageLevel::NONE {
+            return;
+        }
         self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .entries
-            .contains_key(key)
+            .pending
+            .push(PendingReg { plan, keep, level });
+    }
+
+    /// The level `key` is registered at, if it is.
+    pub(crate) fn level_of(&self, key: &CacheKey) -> Option<StorageLevel> {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registrations
+            .get(key)
+            .map(|r| r.level)
+    }
+
+    /// The fill slot of `key`: `Some` when it is registered, holds no data
+    /// and no other fill runs.
+    pub(crate) fn claim_fill(self: &Arc<Self>, key: &CacheKey) -> Option<FillClaim> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.entries.contains_key(key) {
+            return None;
+        }
+        let reg = state.registrations.get_mut(key)?;
+        if reg.filling {
+            return None;
+        }
+        reg.filling = true;
+        Some(FillClaim {
+            cache: Arc::clone(self),
+            key: key.clone(),
+        })
+    }
+
+    /// The registered nodes of `analyzed`, top-down: each node's key, whether
+    /// it is the root, and whether it still needs a fill (no data, none
+    /// running). Empty when nothing is registered.
+    fn registered_nodes(&self, analyzed: &AnalyzedPlan) -> Vec<(CacheKey, bool, bool)> {
+        if self
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registrations
+            .is_empty()
+        {
+            return Vec::new();
+        }
+        let root = Arc::clone(analyzed.plan.root());
+        let mut found = Vec::new();
+        let walked: Result<Arc<LogicalPlan>, Infallible> =
+            Arc::clone(&root).transform_down(&mut |node| {
+                let key = CacheKey {
+                    plan: normalized_subtree_hash(&node),
+                    pins: analyzed.pins.clone(),
+                    principal: analyzed.context.principal.clone(),
+                    policy: analyzed.context.policy,
+                    conf: analyzed.context.conf,
+                };
+                let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                if let Some(reg) = state.registrations.get(&key) {
+                    let needs_fill = !reg.filling && !state.entries.contains_key(&key);
+                    found.push((key, Arc::ptr_eq(&node, &root), needs_fill));
+                }
+                drop(state);
+                Ok(node)
+            });
+        drop(walked);
+        found
+    }
+
+    /// The registered proper subtrees of `analyzed` that need a fill.
+    fn unfilled_subtrees(&self, analyzed: &AnalyzedPlan) -> Vec<CacheKey> {
+        self.registered_nodes(analyzed)
+            .into_iter()
+            .filter(|(_, root, needs_fill)| !root && *needs_fill)
+            .map(|(key, _, _)| key)
+            .collect()
+    }
+
+    /// The plan registered under `key` if it still needs a fill.
+    fn fill_source(&self, key: &CacheKey) -> Option<(Arc<LogicalPlan>, KeepAlive)> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let reg = state.registrations.get(key)?;
+        (!reg.filling && !state.entries.contains_key(key))
+            .then(|| (Arc::clone(&reg.plan), reg.keep.clone()))
     }
 
     /// Stores the snapshot (`schema`, `batches`) under `key` and returns the
@@ -323,7 +506,7 @@ impl RelationCache {
         // A cap of 0 disables caching, the empty result included. The
         // generation is read under the state lock, which every invalidation
         // also holds while it bumps it.
-        if cap == 0 || generation != self.generation() {
+        if cap == 0 || generation != self.generation() || !state.registrations.contains_key(&key) {
             return None;
         }
         let old = state.entries.get(&key).map(|e| e.bytes).unwrap_or(0);
@@ -365,12 +548,13 @@ impl RelationCache {
         Some(name)
     }
 
-    /// Drops the entry for `key`; whether one existed.
+    /// Drops the registration of `key` and its entry; whether one existed.
     pub(crate) fn remove(&self, key: &CacheKey) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
+        let registered = state.registrations.remove(key).is_some();
         let Some(entry) = state.entries.remove(key) else {
-            return false;
+            return registered;
         };
         state.names.retain(|_, k| k != key);
         state.used = state.used.saturating_sub(entry.bytes);
@@ -392,6 +576,8 @@ impl RelationCache {
         }
         state.entries.clear();
         state.names.clear();
+        state.registrations.clear();
+        state.pending.clear();
         state.used = 0;
     }
 
@@ -425,6 +611,43 @@ impl RelationCache {
             }
         }
         state.names.retain(|_, k| !stale.contains(k));
+    }
+
+    /// Drops the registrations and entries reading the table `name` (any
+    /// spelling) in every cache of the runtime, and the queued `persist`s that
+    /// read it: `UNCACHE TABLE`, or the table or temporary view was replaced or
+    /// dropped, so the plans no longer resolve to it.
+    pub(crate) fn forget_table(&self, name: &str) {
+        self.hub.forget_table(name);
+    }
+
+    /// [`Self::forget_table`] in this cache only.
+    fn forget_local(&self, name: &str) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        self.invalidated();
+        let lowered = name.to_lowercase();
+        let short = lowered.rsplit('.').next().unwrap_or(&lowered);
+        let matches = |table: &str| table == lowered || table == short;
+        let stale: Vec<CacheKey> = state
+            .registrations
+            .iter()
+            .filter(|(key, reg)| {
+                reg.tables.iter().any(|t| matches(t))
+                    || key.pins.keys().any(|id| matches(&id.name.to_lowercase()))
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &stale {
+            state.registrations.remove(key);
+            if let Some(entry) = state.entries.remove(key) {
+                state.used = state.used.saturating_sub(entry.bytes);
+                self.pool.release(self.consumer, entry.bytes);
+            }
+        }
+        state.names.retain(|_, k| !stale.contains(k));
+        state
+            .pending
+            .retain(|p| !unresolved_tables(&p.plan).iter().any(|t| matches(t)));
     }
 
     /// Drops the entries reading files by path: the engine wrote files, so
@@ -474,10 +697,11 @@ impl RelationCache {
         self.substitute_counting(analyzed, true)
     }
 
-    /// Whether [`Self::substitute`] would replace a subplan, without counting a hit or a miss: a
-    /// probe (is this plan eligible for the shared result cache?) is not a lookup of the execution.
+    /// Whether the plan contains a registered relation, with or without data (it reads, or
+    /// fills, this session's cache): a probe (is this plan eligible for the shared result
+    /// cache?), not a lookup of the execution.
     pub(crate) fn would_substitute(&self, analyzed: &AnalyzedPlan) -> bool {
-        self.substitute_counting(analyzed, false).is_some()
+        !self.registered_nodes(analyzed).is_empty()
     }
 
     fn substitute_counting(&self, analyzed: &AnalyzedPlan, count: bool) -> Option<Substituted> {
@@ -639,4 +863,81 @@ pub(crate) fn unresolved_tables(plan: &Arc<LogicalPlan>) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+impl Session {
+    /// Analyzes the `persist` calls queued since the last read of the registry and registers
+    /// them, in order (Spark registers at the call; analysis is asynchronous here, so every
+    /// reader of the registry catches up first). A plan that fails analysis is dropped with a
+    /// warning: its frame raises the error at its own first action.
+    pub(crate) async fn register_pending_caches(&self) {
+        let cache = &self.state.cache;
+        let _turn = cache.registering.lock().await;
+        loop {
+            let batch = std::mem::take(
+                &mut cache
+                    .state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .pending,
+            );
+            if batch.is_empty() {
+                return;
+            }
+            for pending in batch {
+                let frame = DataFrame::over_plan(self.clone(), pending.plan, pending.keep);
+                let analysis = match frame.analysis().await {
+                    Ok(a) => a,
+                    Err(error) => {
+                        tracing::warn!(target: "krishiv::session", %error, "Asked to cache a plan that does not analyze");
+                        continue;
+                    }
+                };
+                let key = CacheKey::of(&analysis.analyzed);
+                let mut tables = read_tables(analysis.analyzed.plan.root());
+                tables.extend(unresolved_tables(&frame.plan));
+                tables.sort();
+                tables.dedup();
+                let mut state = cache.state.lock().unwrap_or_else(PoisonError::into_inner);
+                if state.registrations.contains_key(&key) {
+                    tracing::warn!(target: "krishiv::session", "Asked to cache already cached data.");
+                    continue;
+                }
+                state.registrations.insert(
+                    key,
+                    Registration {
+                        level: pending.level,
+                        plan: Arc::clone(&frame.plan),
+                        keep: frame.keep.clone(),
+                        tables,
+                        filling: false,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Runs, as queries of their own, the registered proper subtrees of `analyzed` that hold no
+    /// data, so the plan reads their snapshots (Spark's "first use materializes"). A subtree whose
+    /// fill is refused stays registered and runs inside the plan; one that fails is left to fail
+    /// there.
+    pub(crate) fn fill_registered_subtrees<'a>(
+        &'a self,
+        analyzed: &'a AnalyzedPlan,
+    ) -> futures::future::BoxFuture<'a, ()> {
+        Box::pin(async move {
+            for key in self.state.cache.unfilled_subtrees(analyzed) {
+                // Re-checked: an earlier fill (a registered subtree inside this one) may have
+                // filled it, or another action is filling it now.
+                let Some((plan, keep)) = self.state.cache.fill_source(&key) else {
+                    continue;
+                };
+                let frame = DataFrame::over_plan(self.clone(), plan, keep);
+                let Ok(mut stream) = frame.execute_stream().await else {
+                    continue;
+                };
+                while let Some(Ok(_)) = futures::StreamExt::next(&mut stream).await {}
+            }
+        })
+    }
 }

@@ -44,6 +44,8 @@ pub(super) struct FillStream {
     /// The pool bytes `batches` hold; dropped (released) when the fill is
     /// abandoned, fails or is cancelled, handed to the cache on success.
     pub(super) reservation: Option<crate::cache::FillReservation>,
+    /// The registration's fill slot, held until the fill ends.
+    pub(super) claim: Option<crate::cache::FillClaim>,
     pub(super) filled: bool,
 }
 
@@ -67,6 +69,7 @@ impl futures::Stream for FillStream {
                     // A stream that changes shape mid-way is not one snapshot.
                     self.batches.clear();
                     self.reservation = None;
+                    self.claim = None;
                     self.schema = None;
                     self.filled = true;
                     return Poll::Ready(Some(Ok(batch)));
@@ -80,6 +83,7 @@ impl futures::Stream for FillStream {
                 if !reserved {
                     self.batches = Vec::new();
                     self.reservation = None;
+                    self.claim = None;
                     self.schema = None;
                     self.filled = true;
                     return Poll::Ready(Some(Ok(batch)));
@@ -114,12 +118,14 @@ impl futures::Stream for FillStream {
                             reservation,
                         },
                     );
+                    this.claim = None;
                 }
                 Poll::Ready(None)
             }
             Poll::Ready(Some(Err(e))) => {
                 self.batches.clear();
                 self.reservation = None;
+                self.claim = None;
                 self.filled = true;
                 Poll::Ready(Some(Err(e)))
             }
