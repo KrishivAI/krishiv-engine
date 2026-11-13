@@ -788,20 +788,13 @@ impl Transfer {
         let overhead = ARTIFACT_OVERHEAD.saturating_mul(segments);
         self.owner.reserve(overhead, &self.store, raw)?;
         let sink = if name.kind() == ArtifactKind::Cache {
-            let mut buf = Vec::new();
-            let mut reservation = self.owner.consumer(&self.pool).reservation();
-            // A chunked blob is sized once from its announced size (capped
-            // by `maxArtifactBytes` above).
-            let announced = chunks
-                .and_then(|c| usize::try_from(c.total_bytes).ok())
-                .unwrap_or(0);
-            if let Err(e) = grow_exact(&mut buf, Some(&mut reservation), announced) {
-                self.owner.release(overhead);
-                return Err(e);
-            }
+            // The blob grows chunk by chunk in `write`, each chunk counted
+            // against the session's and the server's quota before the pool
+            // reservation grows: an announced size reserves nothing, so a
+            // stream that announces 256 MiB and stalls pins no memory.
             Sink::Memory {
-                buf,
-                reservation: Some(reservation),
+                buf: Vec::new(),
+                reservation: Some(self.owner.consumer(&self.pool).reservation()),
             }
         } else {
             let made = self.owner.dir(&self.store).and_then(|dir| {

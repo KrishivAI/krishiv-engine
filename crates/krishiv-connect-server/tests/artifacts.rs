@@ -654,6 +654,56 @@ async fn a_client_that_goes_away_leaves_nothing_behind() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_announced_cache_size_reserves_no_memory_before_its_bytes_arrive() {
+    let run = start().await;
+    let memory = run.entry().session().runtime().memory();
+    let before = memory.reserved();
+    let (tx, rx) = tokio::sync::mpsc::channel::<pb::AddArtifactsRequest>(4);
+    let requests =
+        futures::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|m| (m, rx)) });
+    let channel = run.channel.clone();
+    let call = tokio::spawn(async move {
+        let mut grpc = tonic::client::Grpc::new(channel);
+        grpc.ready().await.expect("ready");
+        grpc.client_streaming(
+            tonic::Request::new(requests),
+            path("AddArtifacts"),
+            tonic_prost::ProstCodec::<pb::AddArtifactsRequest, pb::AddArtifactsResponse>::default(),
+        )
+        .await
+    });
+    // A cached blob announced at 200 MiB (under maxArtifactBytes) whose
+    // client sends one 4 KiB chunk and then stalls.
+    let hash = "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface";
+    tx.send(pb::AddArtifactsRequest {
+        session_id: SESSION.to_owned(),
+        payload: Some(Payload::BeginChunk(BeginChunkedArtifact {
+            name: format!("cache/{hash}"),
+            total_bytes: 200 << 20,
+            num_chunks: 51_200,
+            initial_chunk: Some(chunk(&[7; 4096])),
+        })),
+        ..Default::default()
+    })
+    .await
+    .expect("send");
+    eventually("the first chunk is counted", || {
+        run.entry().artifacts().used_bytes() >= 4096
+    })
+    .await;
+    // Only what arrived is held in the pool (rounded up to the pool's
+    // reservation unit), not the announced 200 MiB.
+    let held = memory.reserved().saturating_sub(before);
+    assert!(held <= 8 << 20, "{held} bytes reserved for 4 KiB received");
+    call.abort();
+    drop(tx);
+    eventually("the quota to come back", || {
+        run.entry().artifacts().used_bytes() == 0
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cached_artifacts_live_in_memory_and_answer_artifact_status() {
     let run = start().await;
     let blob = vec![9u8; 50_000];
@@ -978,6 +1028,7 @@ async fn fetch_error_details_redacts() {
     for q in [
         format!("SELECT * FROM parquet.`s3://user:{PLANTED}@bucket/x`"),
         format!("SELECT * FROM parquet.`s3://bucket/x?X-Amz-Signature={PLANTED}`"),
+        format!("CREATE TABLE t USING parquet OPTIONS (password '{PLANTED}') AS SELECT 1/0 AS x"),
     ] {
         let status = failing(&run, SESSION, &q).await;
         let id = info(&status).metadata["errorId"].clone();
