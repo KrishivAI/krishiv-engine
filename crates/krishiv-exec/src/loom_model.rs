@@ -3,7 +3,8 @@
 //! countdown, cancellation wake-ups, the blocked result channel (woken by a
 //! read or by dropping the stream), the driver's spill-versus-cancel wait,
 //! the `blocking_done` handshake, the operator flush barrier and the
-//! deterministic fan-in's baton (`morsel::Baton`). Each
+//! deterministic fan-in's baton (`morsel::Baton`) and the lanes' combine
+//! order (`morsel::CombineOrder`). Each
 //! protocol model was checked to fail with a planted bug (Relaxed
 //! countdown; check-before-listen in the wait loop, in `blocking_done` and
 //! in `Barrier::wait`; `drop_receiver` not waking senders).
@@ -23,7 +24,7 @@ use loom::thread;
 
 use crate::cancel::CancellationToken;
 use crate::channel::Channel;
-use crate::morsel::{Barrier, Baton, Countdown, MorselCursor};
+use crate::morsel::{Barrier, Baton, CombineOrder, Countdown, MorselCursor};
 
 fn model(f: impl Fn() + Sync + Send + 'static) {
     model_bounded(3, f);
@@ -376,5 +377,48 @@ fn blocking_done_waits_for_the_last_closure() {
         block_on(query.blocking_done());
         assert!(ended.load(Ordering::Acquire));
         closure.join().unwrap_or(());
+    });
+}
+
+/// Three lanes combine in lane order whatever the interleaving, and a lane
+/// that leaves without combining (failed or aborted) still frees the next.
+#[test]
+fn lanes_combine_in_lane_order() {
+    model(|| {
+        let order = Arc::new(CombineOrder::new());
+        let log = Arc::new(loom::sync::Mutex::new(Vec::new()));
+        let handles: Vec<_> = (1..3)
+            .map(|lane| {
+                let (o, l) = (Arc::clone(&order), Arc::clone(&log));
+                thread::spawn(move || {
+                    block_on(o.wait(lane));
+                    if let Ok(mut l) = l.lock() {
+                        l.push(lane);
+                    }
+                    o.pass(lane);
+                })
+            })
+            .collect();
+        block_on(order.wait(0));
+        if let Ok(mut l) = log.lock() {
+            l.push(0);
+        }
+        order.pass(0);
+        for h in handles {
+            assert!(h.join().is_ok());
+        }
+        assert_eq!(log.lock().map(|l| l.clone()).ok(), Some(vec![0, 1, 2]));
+    });
+}
+
+/// Lane 0 fails without combining: lane 1 still goes.
+#[test]
+fn a_lane_that_leaves_frees_the_next() {
+    model(|| {
+        let order = Arc::new(CombineOrder::new());
+        let o = Arc::clone(&order);
+        let failed = thread::spawn(move || o.pass(0));
+        block_on(order.wait(1));
+        assert!(failed.join().is_ok());
     });
 }

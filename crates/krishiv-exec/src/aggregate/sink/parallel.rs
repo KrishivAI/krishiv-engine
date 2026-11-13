@@ -39,6 +39,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use crate::sync::Mutex;
+
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use krishiv_common::error::KrishivError;
@@ -55,7 +57,7 @@ use super::{
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::hash::PARTITIONS;
-use crate::sync::{Mutex, lock};
+use crate::sync::lock;
 
 /// One final-phase task.
 struct Task {
