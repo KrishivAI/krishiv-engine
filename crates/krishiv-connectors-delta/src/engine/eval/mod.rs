@@ -22,9 +22,9 @@
 //! Differences from the kernel's evaluator, all toward the declared output: a widenable leaf
 //! (an `Int32` where `long` is declared) is cast rather than left as it is, and `IN` over a
 //! literal array gives one value per row rather than one value. Unsupported (the kernel's
-//! `Unsupported`, never a wrong value): `Opaque` nodes (the kernel's Arrow adaptors), a named
-//! reader zone in `MapToStruct`, and a `timestamp` partition value ending in an IANA zone name
-//! (Krishiv has no zone database; see `partition`).
+//! `Unsupported`, never a wrong value): `Opaque` nodes (the kernel's Arrow adaptors). Zone names
+//! in `MapToStruct` (a named reader zone, a partition value ending in one) resolve through
+//! jiff's bundled zone database (see `partition`).
 
 pub(crate) mod expr;
 pub(crate) mod json;
