@@ -440,6 +440,7 @@ pub fn krishiv_session::spark_catalog::Catalog<'_>::function_exists(&self, &str)
 pub fn krishiv_session::spark_catalog::Catalog<'_>::get_database(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Database, krishiv_common::error::KrishivError>
 pub fn krishiv_session::spark_catalog::Catalog<'_>::get_function(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Function, krishiv_common::error::KrishivError>
 pub fn krishiv_session::spark_catalog::Catalog<'_>::get_table(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Table, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::is_cached(&self, &str) -> core::result::Result<bool, krishiv_common::error::KrishivError>
 pub fn krishiv_session::spark_catalog::Catalog<'_>::list_catalogs(&self) -> alloc::vec::Vec<alloc::string::String>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_columns(&self, &str) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Column>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::spark_catalog::Catalog<'_>::list_databases(&self, core::option::Option<&str>) -> alloc::vec::Vec<krishiv_session::spark_catalog::Database>

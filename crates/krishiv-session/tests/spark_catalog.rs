@@ -185,9 +185,22 @@ fn drop_views_and_refresh() {
     assert!(!c.drop_temp_view("tab1"));
     assert!(c.drop_global_temp_view("gv"));
     assert!(!c.drop_global_temp_view("gv"));
+    assert!(!block_on(c.is_cached("t")).unwrap());
     block_on(c.cache_table("t")).unwrap();
+    assert!(block_on(c.is_cached("t")).unwrap(), "cacheTable caches it");
     block_on(c.refresh_table("t")).unwrap();
     block_on(c.uncache_table("t")).unwrap();
+    assert!(
+        !block_on(c.is_cached("t")).unwrap(),
+        "uncacheTable drops it"
+    );
+    assert_eq!(
+        block_on(c.is_cached("missing"))
+            .unwrap_err()
+            .error_class()
+            .name(),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
     c.clear_cache();
     assert_eq!(
         block_on(c.refresh_table("missing"))

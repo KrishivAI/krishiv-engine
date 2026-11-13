@@ -524,6 +524,14 @@ impl Catalog<'_> {
         self.run(&format!("CACHE TABLE {}", quoted(name))).await
     }
 
+    /// Whether the table or view `name` is cached (`spark.catalog.isCached`).
+    ///
+    /// # Errors
+    /// `TABLE_OR_VIEW_NOT_FOUND` when `name` resolves to nothing.
+    pub async fn is_cached(&self, name: &str) -> Result<bool, KrishivError> {
+        self.session.table(name).is_cached().await
+    }
+
     /// `UNCACHE TABLE name`.
     ///
     /// # Errors
