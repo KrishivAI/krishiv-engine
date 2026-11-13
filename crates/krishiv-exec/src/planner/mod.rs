@@ -44,6 +44,7 @@ mod runtime_filter;
 pub(crate) mod subquery;
 mod table;
 mod window;
+mod write;
 
 use std::fmt;
 use std::sync::Arc;
@@ -61,6 +62,7 @@ pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, SpilledTable, TableProvider,
     TableProviderResolver,
 };
+pub use write::{TableCapabilities, WriteMode, WriteRequest};
 
 use crate::error::Result;
 pub use crate::physical::PhysicalPlan;

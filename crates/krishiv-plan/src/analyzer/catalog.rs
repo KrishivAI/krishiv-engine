@@ -153,6 +153,16 @@ pub trait Catalog: Send + Sync {
     fn single_part_namespace(&self) -> bool {
         false
     }
+    /// What the catalog supports; the DDL commands check it before calling a
+    /// method. A catalog that declares nothing is read-only.
+    fn capabilities(&self) -> super::CatalogCapabilities {
+        super::CatalogCapabilities::default()
+    }
+    /// The write half, when the catalog has one. A read-only catalog (Unity
+    /// in P3) returns `None`, so no write method exists on it.
+    fn as_write(&self) -> Option<&dyn super::CatalogWrite> {
+        None
+    }
     /// The table `id` (as written; the catalog applies `form`, as Spark's
     /// catalogs do) at `version`, or the current one; `None` when it does
     /// not exist.
