@@ -23,11 +23,12 @@ krishiv-exec = { path = "../krishiv-exec" }
 krishiv-io = { path = "../krishiv-io" }
 krishiv-types = { path = "../krishiv-types" }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt"] }
 typetag = { workspace = true }
 
 [dev-dependencies]
 object_store = { workspace = true }
-serde_json = { workspace = true, features = ["std"] }
+proptest = { workspace = true, features = ["std"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

@@ -2825,6 +2825,7 @@ dependencies = [
  "krishiv-io",
  "krishiv-types",
  "object_store",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",
