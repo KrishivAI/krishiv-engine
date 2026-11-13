@@ -1970,6 +1970,24 @@ fn the_indeterminate_collation_needs_its_feature() {
     );
 }
 
+/// An Arrow field tagged with the INDETERMINATE collation (an exchange schema or an aggregate's element
+/// field) names `indeterminate_collation`, alone or inside a nested type: the tag is not parseable DDL.
+#[test]
+fn an_indeterminate_arrow_field_tag_needs_its_feature() {
+    use arrow_schema::{DataType as Arrow, Field};
+    use krishiv_types::arrow::SPARK_TYPE_METADATA_KEY;
+    for tag in ["string collate null", "array<string collate null>"] {
+        let field = Field::new("s", Arrow::Utf8View, true).with_metadata(
+            std::collections::HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), tag.to_owned())]),
+        );
+        assert_eq!(
+            feature_of(Construct::ArrowField(&field)),
+            Some(Feature::IndeterminateCollation),
+            "{tag}"
+        );
+    }
+}
+
 /// `max` and `min` of a collated string (`MaxByKeyFirst`, `MinByKeyFirst`)
 /// have their own aggregate functions on the wire, under `collated_min_max`.
 #[test]

@@ -285,6 +285,15 @@ fn collated_field(field: &arrow_schema::Field) -> bool {
         .is_some_and(|t| collated(&t))
 }
 
+/// Whether an Arrow field's tag names the INDETERMINATE collation (`string collate null`, alone or inside
+/// an array, map or struct): `parse_data_type` refuses it, so [`collated_field`] sees no collated type.
+fn indeterminate_field(field: &arrow_schema::Field) -> bool {
+    field
+        .metadata()
+        .get(SPARK_TYPE_METADATA_KEY)
+        .is_some_and(|tag| tag.contains("collate null"))
+}
+
 /// `field`, its type and every field and type inside it as constructs: the
 /// tag of a field at any depth can name a collated type.
 fn visit_arrow_field<'a>(field: &'a arrow_schema::Field, f: &mut impl FnMut(Construct<'a>)) {
@@ -482,7 +491,13 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // arm walks the element, key, value and field types, so that
         // `array<variant>` needs it too.
         Construct::Type(t) => type_feature(t),
-        Construct::ArrowField(field) => collated_field(field).then_some(Feature::CollatedStrings),
+        Construct::ArrowField(field) => {
+            if indeterminate_field(field) {
+                Some(Feature::IndeterminateCollation)
+            } else {
+                collated_field(field).then_some(Feature::CollatedStrings)
+            }
+        }
         Construct::ArrowType(t) => {
             if arrow_time(t) {
                 Some(Feature::TimeType)
