@@ -1,0 +1,4 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Krishiv is embedded and stateless: no server to stop.
+exit 0

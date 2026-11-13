@@ -1,0 +1,8 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Krishiv reads hits.parquet in place: there is nothing to load. Generates queries.sql (kept out of the repository,
+# see README "Licence") and flushes.
+set -euo pipefail
+cd "$(dirname "$0")"
+[ -f queries.sql ] || ./make-queries.py > queries.sql
+sync

@@ -1,0 +1,6 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Reads one SQL query on stdin; the result's elapsed seconds are the last stderr line (ClickBench's convention).
+set -euo pipefail
+cd "$(dirname "$0")"
+exec venv/bin/python query.py

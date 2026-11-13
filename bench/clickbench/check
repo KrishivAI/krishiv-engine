@@ -1,0 +1,4 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+cd "$(dirname "$0")"
+venv/bin/python -c "import krishiv; krishiv.session().sql('SELECT 1').toArrow()"

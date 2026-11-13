@@ -1,0 +1,14 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Installs Krishiv into ./venv. KRISHIV_VERSION (default 0.2.0) picks the PyPI release; KRISHIV_WHEEL (a path or URL)
+# installs that wheel instead. Python 3.11 or newer is required (the wheel is abi3-py311).
+set -euo pipefail
+cd "$(dirname "$0")"
+if [ ! -d venv ]; then
+    if command -v uv >/dev/null 2>&1; then uv venv -q --python 3.12 venv
+    else python3 -m venv venv || { sudo apt-get update -y && sudo apt-get install -y python3-venv python3-pip && python3 -m venv venv; }
+    fi
+fi
+if command -v uv >/dev/null 2>&1; then PIP="uv pip install -q --python venv/bin/python"; else PIP="venv/bin/pip install -q"; fi
+$PIP "${KRISHIV_WHEEL:-krishiv==${KRISHIV_VERSION:-0.2.0}}" pyarrow
+venv/bin/python -c "import krishiv, pyarrow; print('krishiv ready')"
