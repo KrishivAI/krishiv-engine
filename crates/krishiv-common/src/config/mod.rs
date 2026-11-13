@@ -462,6 +462,13 @@ pub fn lookup(key: &str) -> Option<&'static ConfigEntry> {
     search(registry::INDEX, key).copied()
 }
 
+/// The key to look up for `key`: the primary key when `key` is a Spark legacy alternative of a registered
+/// one (`withAlternative`), else `key`. Reads, resets and writes all go through it so they address one entry.
+#[must_use]
+pub fn resolve_alternative(key: &str) -> &str {
+    legacy::primary_key(key)
+}
+
 /// The value for `key` in `index`, a slice ordered by (length, name) as
 /// [`registry::INDEX`] is. Public so the benchmark measures the same search
 /// on a fixed-size index (the registry's own size changes as keys are added).
@@ -577,7 +584,7 @@ impl Config {
     /// Removes the value of `key` (a `krishiv.*` key, a Spark alias or
     /// another key), so the entry has its default again.
     pub fn unset(&mut self, key: &str) {
-        match lookup(key) {
+        match lookup(legacy::primary_key(key)) {
             Some(entry) => {
                 self.values.remove(entry.key);
             }
@@ -591,7 +598,7 @@ impl Config {
     /// its value in `baseline`: the value set there, or the default when
     /// neither sets it.
     pub fn reset_key(&mut self, key: &str, baseline: &Config) {
-        match lookup(key) {
+        match lookup(legacy::primary_key(key)) {
             Some(entry) => {
                 self.values.remove(entry.key);
                 if let Some(value) = baseline.values.get(entry.key) {

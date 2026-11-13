@@ -230,6 +230,21 @@ mod tests {
     }
 
     #[test]
+    fn unset_and_reset_through_an_alternative_address_the_primary_entry() {
+        let alt = "spark.sql.legacy.avro.datetimeRebaseModeInRead";
+        let primary = crate::config::lookup(primary_key(alt)).unwrap();
+        let baseline = crate::config::Config::default();
+        let mut c = crate::config::Config::default();
+        c.set(alt, "LEGACY").unwrap();
+        assert!(c.get(primary).is_some());
+        c.unset(alt);
+        assert!(c.get(primary).is_none());
+        c.set(alt, "LEGACY").unwrap();
+        c.reset_key(alt, &baseline);
+        assert!(c.get(primary).is_none());
+    }
+
+    #[test]
     fn a_default_of_the_default_profile_is_accepted_not_another_releases() {
         // `createHiveTableByDefault` is true in 3.5 and false in 4.x: under the default profile only false is
         // the default.
