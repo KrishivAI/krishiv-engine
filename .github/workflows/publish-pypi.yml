@@ -13,7 +13,7 @@ name: Publish to PyPI
 # repository; the trusted publishers for `krishiv` and `krishiv-compat` are configured on pypi.org
 # for this workflow file and the `pypi` environment.
 #
-# The wheels are built and tested by wheels.yml in this same run, then uploaded unchanged: the
+# The wheels are built and tested by ci.yml (its wheels-targets job, wheels.yml) in this same run, then uploaded unchanged: the
 # `krishiv` wheels and the `krishiv-compat` wheel.
 on:
   workflow_dispatch:
@@ -26,38 +26,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The merge queue skips Miri, the fuzz-target build and the wheel matrix; the nightly CI run of
-  # main runs them. Publishing needs that run green on this commit (or a later main commit).
-  nightly-green:
-    if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - name: Harden the runner (audit egress)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Latest scheduled CI run is green on this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/require-green-nightly.sh
-
-  wheels:
-    needs: nightly-green
+  # Publishing needs every gate of ci.yml green on the exact commit being published: the job calls the
+  # same reusable workflow nightly.yml calls (Miri, the fuzz-target build, the wheel matrix, ...), so no
+  # earlier scheduled run is trusted.
+  ci:
     if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
       actions: read
-    uses: $/.github/workflows/wheels.yml
+      checks: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    uses: $/.github/workflows/ci.yml
 
   publish:
-    needs: [nightly-green, wheels]
+    needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:

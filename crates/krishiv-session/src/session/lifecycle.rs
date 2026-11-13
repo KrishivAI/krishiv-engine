@@ -77,7 +77,15 @@ impl Session {
             ),
             None => runtime.memory(),
         };
-        let cache = RelationCache::on(&memory, &runtime.invalidation);
+        let cache = RelationCache::on(
+            &memory,
+            &runtime.invalidation,
+            Some(crate::cache::CacheDisk {
+                executor: Arc::clone(&runtime.executor),
+                spill: Arc::clone(&runtime.spill),
+                config: krishiv_memory::SpillConfig::from_config(&runtime.config),
+            }),
+        );
         let io = Arc::clone(&runtime.io);
         let cwd = seed.cwd.unwrap_or_else(|| {
             std::env::current_dir()
@@ -105,6 +113,7 @@ impl Session {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
                 cache,
+                analyzer: krishiv_plan::analyzer::CachingAnalyzer::new(),
                 variables: Arc::new(seed.variables),
                 profile: parts.profile,
                 principal: parts.principal,
@@ -275,6 +284,9 @@ impl Session {
         if self.state.closed.swap(true, Ordering::AcqRel) {
             return 0;
         }
+        // The session's cached relations go with it: their memory, and the
+        // spill scopes of those on disk (once no cancelled query reads them).
+        self.state.cache.close();
         // Under the runtime's registry lock: a query that registers after
         // this is refused there (`EngineRuntime::attach`), so none slips
         // between the flag and the cancellation.
