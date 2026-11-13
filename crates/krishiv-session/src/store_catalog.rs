@@ -463,6 +463,16 @@ impl CatalogWrite for StoreCatalog {
                 }
                 .into());
             }
+            // As the SQL create does (`Session::refuse_collated_namespace`): the schema's default collation
+            // is not applied to new columns yet, so a table here would silently compare as `UTF8_BINARY`.
+            if self
+                .store
+                .namespaces()
+                .into_iter()
+                .any(|(n, m)| n.eq_ignore_ascii_case(&namespace) && m.collation.is_some())
+            {
+                return Err(self.unsupported("a table in a schema with a DEFAULT COLLATION"));
+            }
             // A table that exists settles the call before the definition is looked at.
             if self.store.table(&namespace, &name).is_some() {
                 return match store_mode {
@@ -775,6 +785,28 @@ mod tests {
         let gone = block_on(c.drop_namespace(&ns("db"), true)).unwrap_err();
         assert_eq!(class(&gone), ErrorClass::SchemaNotFound);
         assert!(load(c, &ident("db", "t")).is_none());
+    }
+
+    #[test]
+    fn a_table_in_a_schema_with_a_default_collation_is_refused() {
+        let f = fixture();
+        let c = &f.catalog;
+        let meta = NamespaceMeta {
+            collation: Some("UTF8_LCASE".to_owned()),
+            ..NamespaceMeta::default()
+        };
+        assert!(c.store.create_namespace("coll", meta));
+        let err =
+            block_on(c.create_table(info("coll", "t"), CreateMode::ErrorIfExists)).unwrap_err();
+        assert_eq!(
+            err.error_class().name(),
+            "UNSUPPORTED_FEATURE.CATALOG_OPERATION"
+        );
+        assert!(c.store.table("coll", "t").is_none());
+        assert!(
+            !managed_location(f.warehouse.path(), "coll", "t").exists(),
+            "no directory is made for a refused table"
+        );
     }
 
     #[test]
