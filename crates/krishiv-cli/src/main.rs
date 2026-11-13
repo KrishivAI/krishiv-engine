@@ -107,11 +107,18 @@ fn install_logs_from_env() {
     }
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
     // First, so a CPU older than the build targets gets a message instead of SIGILL.
     // `run` holds everything else: the compiler may use the build's CPU level in the
     // prologue of a function with large locals, which must not come before the check.
     krishiv_common::cpu::check_or_exit();
+    // `krishiv __udf-worker ...`: the Python UDF worker's sandbox trampoline (P3-T014b). Before
+    // anything starts a thread: it confines this thread and replaces the process, returning only
+    // on failure.
+    #[cfg(feature = "connect")]
+    if let Some(code) = krishiv_udf_pool::run_trampoline_if_requested() {
+        return code;
+    }
     krishiv::register_build_features(&bundle::feature_states());
     #[cfg(feature = "telemetry-logs")]
     install_logs_from_env();
@@ -129,6 +136,7 @@ fn main() {
         }
     }
     run();
+    std::process::ExitCode::SUCCESS
 }
 
 #[inline(never)]

@@ -12,6 +12,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.seed", &EXEC_SEED),
     ("krishiv.spill.dir", &SPILL_DIR),
     ("krishiv.ui.enabled", &UI_ENABLED),
+    ("krishiv.udf.sandbox", &UDF_SANDBOX),
     ("krishiv.memory.limit", &MEMORY_LIMIT),
     ("krishiv.io.cache.path", &IO_CACHE_PATH),
     ("krishiv.io.maxRetries", &IO_MAX_RETRIES),
@@ -74,6 +75,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
+    ("krishiv.python.worker.maxTotal", &PYTHON_WORKER_MAX_TOTAL),
     ("krishiv.query.maxExecutionTime", &QUERY_MAX_EXECUTION_TIME),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     (
@@ -126,6 +128,18 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.memory.reservationQuantum",
         &MEMORY_RESERVATION_QUANTUM,
+    ),
+    (
+        "krishiv.python.worker.executables",
+        &PYTHON_WORKER_EXECUTABLES,
+    ),
+    (
+        "krishiv.python.worker.idleTimeout",
+        &PYTHON_WORKER_IDLE_TIMEOUT,
+    ),
+    (
+        "krishiv.python.worker.memoryLimit",
+        &PYTHON_WORKER_MEMORY_LIMIT,
     ),
     (
         "krishiv.sql.files.maxPartitionNum",
@@ -189,6 +203,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.legacy.codingErrorAction",
         &LEGACY_CODING_ERROR_ACTION,
+    ),
+    (
+        "krishiv.python.worker.maxPerSession",
+        &PYTHON_WORKER_MAX_PER_SESSION,
     ),
     (
         "krishiv.sql.files.maxPartitionBytes",
@@ -277,6 +295,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.optimizer.shareRepeatedSubtrees",
         &SHARE_REPEATED_SUBTREES,
+    ),
+    (
+        "krishiv.python.worker.sandbox.allowFork",
+        &PYTHON_WORKER_ALLOW_FORK,
     ),
     (
         "krishiv.sql.legacy.statisticalAggregate",

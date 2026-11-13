@@ -2130,6 +2130,7 @@ dependencies = [
  "krishiv-server",
  "krishiv-session",
  "krishiv-sql",
+ "krishiv-udf-pool",
  "libmimalloc-sys",
  "mimalloc",
  "reedline",
@@ -2626,6 +2627,25 @@ dependencies = [
  "krishiv-common",
  "proptest",
  "serde_json",
+]
+
+[[package]]
+name = "krishiv-udf-pool"
+version = "0.2.0"
+dependencies = [
+ "arrow-array",
+ "arrow-ipc",
+ "arrow-schema",
+ "futures",
+ "krishiv-common",
+ "krishiv-exec",
+ "krishiv-plan",
+ "krishiv-types",
+ "krishiv-udf-sandbox",
+ "rustix",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

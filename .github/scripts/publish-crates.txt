@@ -11,6 +11,7 @@ krishiv-plan
 krishiv-optimizer
 krishiv-exec
 krishiv-plan-codec
+krishiv-udf-pool
 krishiv-sql
 krishiv-session
 krishiv-ui-assets
