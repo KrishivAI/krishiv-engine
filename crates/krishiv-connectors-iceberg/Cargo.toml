@@ -19,7 +19,10 @@ arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+# Equality delete key sets (hash table of row indices, fast hasher).
+foldhash = { workspace = true }
 futures = { workspace = true }
+hashbrown = { workspace = true }
 iceberg = { workspace = true }
 krishiv-arrow-bridge = { path = "../krishiv-arrow-bridge" }
 krishiv-common = { path = "../krishiv-common" }

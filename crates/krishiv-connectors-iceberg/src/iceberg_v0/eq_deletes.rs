@@ -7,7 +7,8 @@
 //! - **Keys.** A delete file is read projected to its `equality_ids` columns
 //!   by field id, through the table's current schema, so a key written as
 //!   `int` and a column read as `long` compare as `long` (type promotion).
-//!   Keys are compared in Arrow's row format: `null` equals `null` (Iceberg
+//!   Keys are compared in Arrow's row format (one buffer per set, a
+//!   `hashbrown` table of indices hashed with foldhash): `null` equals `null` (Iceberg
 //!   deletes, unlike SQL), every `NaN` equals every `NaN` and `-0.0` differs
 //!   from `0.0` (Java's `Comparators` over `Float`/`Double`, the order the
 //!   delete set `StructLikeSet` uses). A field of a null struct is null, as
@@ -26,16 +27,19 @@
 //!   equality id that is not a primitive column of the read schema is
 //!   refused (`KRISHIV_UNSUPPORTED_FEATURE`), never ignored.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
+use std::hash::BuildHasher as _;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type, Int32Type};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions};
-use arrow_row::{RowConverter, SortField};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_row::{RowConverter, Rows, SortField};
+use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
+use foldhash::fast::FixedState;
 use futures::{StreamExt, TryStreamExt};
+use hashbrown::HashTable;
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
@@ -48,10 +52,6 @@ use crate::plan::{DeleteFileEntry, FileFormatKind, SchemaField};
 
 /// The per-file constant column holding the data file's index in the scan.
 pub(super) const FILE_ORDINAL: &str = "_krishiv_iceberg_file";
-
-/// The bytes a key is charged besides its encoding: its box and the set's
-/// slot.
-const KEY_OVERHEAD: usize = 32;
 
 /// Delete files read at once.
 const DELETE_FILE_CONCURRENCY: usize = 8;
@@ -76,9 +76,63 @@ struct KeySet {
     /// The key columns' types, which `converter` encodes.
     types: Vec<DataType>,
     converter: RowConverter,
-    keys: HashSet<Box<[u8]>>,
+    keys: Keys,
     /// Pays for `keys` while the set lives.
     _charge: Reservation,
+}
+
+/// Distinct keys in Arrow's row format: every key read in one [`Rows`]
+/// buffer and a table of the indices of the distinct ones, hashed with
+/// foldhash (review 25c N3: no allocation per key, no SipHash per probe).
+/// A duplicate key stays in the buffer and is not indexed.
+struct Keys {
+    rows: Option<Rows>,
+    index: HashTable<usize>,
+    hasher: FixedState,
+}
+
+impl Keys {
+    fn new() -> Self {
+        Self {
+            rows: None,
+            index: HashTable::new(),
+            hasher: FixedState::with_seed(0),
+        }
+    }
+
+    /// The bytes held.
+    fn size(&self) -> usize {
+        self.rows.as_ref().map_or(0, Rows::size)
+            + self.index.capacity() * (std::mem::size_of::<usize>() + 1)
+    }
+
+    /// Appends the keys of `cols`, encoded by `converter`.
+    fn append(&mut self, converter: &RowConverter, cols: &[ArrayRef]) -> Result<(), ArrowError> {
+        let rows = self.rows.get_or_insert_with(|| converter.empty_rows(0, 0));
+        let from = rows.num_rows();
+        converter.append(rows, cols)?;
+        let hasher = &self.hasher;
+        for i in from..rows.num_rows() {
+            let row = rows.row(i);
+            let h = hasher.hash_one(row.as_ref());
+            if self.index.find(h, |&j| rows.row(j) == row).is_none() {
+                self.index
+                    .insert_unique(h, i, |&j| hasher.hash_one(rows.row(j).as_ref()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `key` is one of the keys.
+    fn contains(&self, key: &[u8]) -> bool {
+        let Some(rows) = &self.rows else {
+            return false;
+        };
+        let h = self.hasher.hash_one(key);
+        self.index
+            .find(h, |&j| rows.row(j).as_ref() == key)
+            .is_some()
+    }
 }
 
 /// The equality deletes of a scan: for each data file (by its index in the
@@ -241,7 +295,7 @@ async fn read_keys(
     .await?;
     let mut converter: Option<RowConverter> = None;
     let mut types: Vec<DataType> = Vec::new();
-    let mut keys = HashSet::new();
+    let mut keys = Keys::new();
     while let Some(batch) = stream.next_batch().await? {
         let cols = key_columns(&batch, &columns)?;
         let conv = match &mut converter {
@@ -251,18 +305,14 @@ async fn read_keys(
                 converter.insert(converter_for(&cols)?)
             }
         };
-        let rows = conv
-            .convert_columns(&cols)
+        keys.append(conv, &cols)
             .map_err(|e| internal(format!("equality delete keys of {}: {e}", f.path)))?;
-        let mut added = 0_usize;
-        for r in &rows {
-            if keys.insert(Box::from(r.as_ref())) {
-                added = added.saturating_add(r.as_ref().len() + KEY_OVERHEAD);
-            }
-        }
         // Paid per batch: a key set too large for the query fails with
         // the memory class.
-        charge.grow(added).await?;
+        let held = keys.size();
+        if let Some(more) = held.checked_sub(charge.size()) {
+            charge.grow(more).await?;
+        }
     }
     let converter = match converter {
         Some(c) => c,
@@ -351,6 +401,10 @@ pub(super) struct EqProjection {
     ordinal: usize,
     /// The output's columns, as paths into the inner batches.
     output: Vec<ColumnPath>,
+    /// With only top-level output columns, their indices in the inner
+    /// batches, worked out once (review 25c N2): the projection per batch is
+    /// then a column pick.
+    top: Option<Vec<usize>>,
     schema: SchemaRef,
 }
 
@@ -366,9 +420,17 @@ impl EqProjection {
             .index_of(FILE_ORDINAL)
             .map_err(|_| internal("the scan does not read the file ordinal".to_owned()))?;
         let schema = krishiv_io::project_schema(inner, &output)?;
+        let top = output
+            .iter()
+            .map(|p| match p.0.as_slice() {
+                [name] => inner.index_of(name).ok(),
+                _ => None,
+            })
+            .collect();
         Ok(Self {
             ordinal,
             output,
+            top,
             schema,
         })
     }
@@ -438,13 +500,18 @@ impl EqProjection {
                 .map_err(|e| internal(format!("dropping equality-deleted rows: {e}")))?,
             None => batch.clone(),
         };
-        let out = krishiv_io::project_batch(&kept, &self.output)?;
+        let columns = match &self.top {
+            Some(top) => top.iter().map(|&i| Arc::clone(kept.column(i))).collect(),
+            None => krishiv_io::project_batch(&kept, &self.output)?
+                .columns()
+                .to_vec(),
+        };
         // The projection keeps the inner fields; the schema is the one the
         // planner was given (same fields). The row count is explicit for an
         // output of no columns.
         RecordBatch::try_new_with_options(
             Arc::clone(&self.schema),
-            out.columns().to_vec(),
+            columns,
             &RecordBatchOptions::new().with_row_count(Some(kept.num_rows())),
         )
         .map_err(|e| internal(format!("equality-deleted batch: {e}")))
@@ -467,7 +534,31 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields, Schema};
     use krishiv_io::ColumnPath;
 
-    use super::{converter_for, key_columns};
+    use super::{Keys, converter_for, key_columns};
+
+    /// The key set indexes each distinct key once across batches and finds
+    /// exactly the keys it holds (review 25c N3).
+    #[test]
+    fn keys_index_distinct_rows_across_batches() {
+        let a: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None, Some(2)]));
+        let b: ArrayRef = Arc::new(Int64Array::from(vec![Some(3), Some(1)]));
+        let conv = converter_for(std::slice::from_ref(&a)).unwrap();
+        let mut keys = Keys::new();
+        let probe = |k: &Keys, v: Option<i64>| {
+            let col: ArrayRef = Arc::new(Int64Array::from(vec![v]));
+            let rows = conv.convert_columns(&[col]).unwrap();
+            k.contains(rows.row(0).as_ref())
+        };
+        assert!(!probe(&keys, Some(1)), "an empty set holds nothing");
+        keys.append(&conv, &[a]).unwrap();
+        keys.append(&conv, &[b]).unwrap();
+        assert_eq!(keys.index.len(), 4);
+        for v in [Some(1), Some(2), Some(3), None] {
+            assert!(probe(&keys, v), "{v:?}");
+        }
+        assert!(!probe(&keys, Some(4)));
+        assert!(keys.size() > 0);
+    }
 
     /// Java's delete set compares floats as `Double.compare`: every NaN is
     /// one value, `-0.0` is not `0.0`; a field of a null struct is null.
