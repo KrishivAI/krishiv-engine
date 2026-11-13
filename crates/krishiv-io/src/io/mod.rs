@@ -1485,6 +1485,37 @@ impl IoContext {
     /// # Errors
     /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
     pub async fn list(&self, store: &StoreId, prefix: &Path) -> Result<Vec<ObjectMeta>> {
+        self.list_after(store, prefix, None).await
+    }
+
+    /// Every object under the directory `prefix` of `store`, at any depth,
+    /// whose path sorts strictly after `offset` (UTF-8 byte order), sorted
+    /// by path: object_store's `list_with_offset`, the listing a Delta log
+    /// replay starts from. Stores that do not list in order are sorted here.
+    ///
+    /// # Errors
+    /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
+    pub async fn list_from(
+        &self,
+        store: &StoreId,
+        prefix: &Path,
+        offset: &Path,
+    ) -> Result<Vec<ObjectMeta>> {
+        let mut out = self.list_after(store, prefix, Some(offset)).await?;
+        // The default `list_with_offset` filters but does not sort, and
+        // neither does the local file system's walk.
+        out.retain(|m| m.location.as_ref() > offset.as_ref());
+        out.sort_unstable_by(|a, b| a.location.as_ref().cmp(b.location.as_ref()));
+        Ok(out)
+    }
+
+    /// [`Self::list`], or [`Self::list_from`] when `offset` is given.
+    async fn list_after(
+        &self,
+        store: &StoreId,
+        prefix: &Path,
+        offset: Option<&Path>,
+    ) -> Result<Vec<ObjectMeta>> {
         let (s, lane) = self.sched.store(store)?;
         let cfg = &self.sched.config;
         let display = format!("{store}/{prefix}");
@@ -1502,7 +1533,10 @@ impl IoContext {
             let (retry_after, reason) = {
                 let _permit = lane.admit(Direction::Read, prefix).await?;
                 self.count(|c| &c.requests, 1);
-                let mut listed = s.list(Some(prefix));
+                let mut listed = match offset {
+                    Some(offset) => s.list_with_offset(Some(prefix), offset),
+                    None => s.list(Some(prefix)),
+                };
                 let mut out = Vec::new();
                 loop {
                     match tokio::time::timeout(object_wait, futures::StreamExt::next(&mut listed))

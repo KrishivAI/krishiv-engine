@@ -29,6 +29,7 @@ mod orientation;
 mod partial_aggregate;
 mod physical;
 mod plan_stats;
+mod prefix_cache;
 mod runtime_filters;
 mod scan_row_drop;
 mod semantics;

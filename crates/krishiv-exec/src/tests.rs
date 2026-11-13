@@ -221,3 +221,30 @@ fn a_cancellation_with_a_reason_is_the_error_of_the_query() {
     assert!(!q.cancel_with(reason("after")));
     assert!(q.error().is_none());
 }
+
+/// Lanes partition the claim ordinals: each ordinal belongs to exactly one lane, in lane order, and
+/// the seeded permutation maps ordinals to morsels as the shared claim does.
+#[test]
+fn strided_claims_deal_every_morsel_to_exactly_one_lane() {
+    for seed in [None, Some(7)] {
+        let cursor = MorselCursor::new(10, seed);
+        let mut seen = Vec::new();
+        for lane in 0..3 {
+            let got: Vec<_> = (0..)
+                .map_while(|j| cursor.claim_strided(lane, 3, j))
+                .collect();
+            assert!(got.iter().all(|(o, _)| *o % 3 == lane as u64));
+            assert!(got.windows(2).all(|w| w[0].0 < w[1].0));
+            seen.extend(got);
+        }
+        seen.sort_unstable();
+        let shared: Vec<_> = {
+            let c = MorselCursor::new(10, seed);
+            std::iter::from_fn(|| c.claim_ordered()).collect()
+        };
+        assert_eq!(seen, shared);
+    }
+    let cursor = MorselCursor::new(4, None);
+    assert!(cursor.claim_strided(0, 0, 0).is_none() && cursor.claim_strided(3, 3, 0).is_none());
+    assert!(cursor.claim_strided(0, 2, usize::MAX).is_none());
+}

@@ -16,7 +16,7 @@ TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.r
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
 `expr.rs` the `Predicate`/`ScalarExpr` evaluator interface the physical planner plugs in ·
-`select.rs` (design P2-E3 U2) `Selection` (ascending `u32` row ids) and `RowSelect` (a fused predicate and a scan's row stage, evaluated over a whole batch) ·
+`select.rs` (design P2-E3 U2) `Selection` (ascending `u32` row ids) and `RowSelect` (a fused predicate and a scan's row stage; after a selective stage the predicate reads a copy of the kept rows, of only its columns when compiled as a `Narrow`) ·
 `hash.rs` shared hash-table blocks (seeded key hash, key normalization + row encoding, `KeyTable`, spill
 partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
 `accumulator.rs` per-group states (`accumulator/paired.rs`: a decimal `sum(x)` and `avg(x)` of one aggregate folded in one pass where both take the proof path), `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
@@ -120,12 +120,13 @@ Paths are relative to this crate.
 - `src/planner/mod.rs` physical planner (IR to physical plan); `src/planner/runtime_filter.rs` runtime-filter sites
 - `src/planner/build_project.rs` (S4') an exact, narrowing expression above an inner hash join computed on the build input before its table is built; `krishiv.exec.join.buildProjection`; differential `tests/planner/build_projection.rs`
 - `src/operators/mod.rs` stateless operators (scan, filter, project, limit, union)
-- `src/aggregate/mod.rs` hash aggregate (`rowtable.rs` the row tables, `merge_index.rs` the salted index of a large final-phase merge); `src/join/mod.rs` hash join (build, probe, grace spill)
+- `src/aggregate/mod.rs` hash aggregate (`rowtable.rs` the row tables, `rowtable/local.rs` the batch-local key map of a low-cardinality batch (E2), `rowtable/direct.rs` direct-address ids of a tiny key domain (D1, `krishiv.exec.agg.directKeys`), `merge_index.rs` the salted index of a large final-phase merge); `src/join/mod.rs` hash join (build, probe, grace spill)
 - `src/rows/mod.rs` row-table layout and pages shared by aggregate and join; the stored row hash `h` is a fast seedless
   table hash, never the routing hash `H_kg` (kernels `hash::routing`, used only by exchanges and key groups);
   tables place rows by the seeded `g = finalize(h, seed)`; `rows/flooding_tests.rs` bounds probe runs under crafted and forged `h` collisions
 - `src/window/mod.rs` window operator and plan types; `src/window/eval.rs` frames, ranking and frame aggregates; `src/planner/window.rs` plans it over sorted input
 - `src/operators/file_scan.rs` and `file_write.rs` file scan and write operators over `krishiv-io`
+- `src/planner/write.rs` (P3-T023a) `WriteMode` (append, truncate, overwrite by filter, dynamic overwrite), `WriteRequest` (mode, table name, input schema, options, write id) and `TableCapabilities` (Spark's `TableCapability` write values, checked as Spark v4.0.0's `TableCapabilityCheck`: every mode needs `BATCH_WRITE` or `V1_BATCH_WRITE`, a truncate also `TRUNCATE` or `OVERWRITE_BY_FILTER`, dynamic overwrite `BATCH_WRITE` and `OVERWRITE_DYNAMIC`); `TableProvider::capabilities` / `writer(&WriteRequest)` default to no write modes, and `TableCapabilities::check` raises `UNSUPPORTED_FEATURE.TABLE_OPERATION` ("... in batch mode") before anything is written
 - `src/planner/ndv_sample.rs` (P2-T164 U6) `FileTable::sample_distinct`: plan-time distinct-value samples of the file columns an equality or `IN` compares (first rows in file order through `ScanStream`, `krishiv.optimizer.ndvSampling.*`), exact for a table the sample read whole, else GEE (`estimate`); cached in `krishiv_io::DistinctSamples`; `FileTable::statistics` reports them as `StatSource::Sampled`; `FileTable::sample_outcomes` says per table what each sample did (`SampleOutcome`: sampled, cached, timed out, no time left), which `EXPLAIN COST` prints as "Distinct-Value Samples" and `EXPLAIN VERBOSE` as a `Statistics` step
 
 ## Extension points

@@ -5,6 +5,12 @@
     ],
     "sqlState" : "58030"
   },
+  "KRISHIV_CATALOG_LIMIT_EXCEEDED" : {
+    "message" : [
+      "<source> exceeds <limit> (<value>), so it was not loaded. A legitimate table or catalog this large needs <config>."
+    ],
+    "sqlState" : "54000"
+  },
   "KRISHIV_COMMIT_LOG_CORRUPT" : {
     "message" : [
       "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
@@ -140,6 +146,12 @@
       "The temporary view name <relationName> is reserved: names starting with <prefix> (in any letter case) are reserved for internal snapshots. Choose a different name."
     ],
     "sqlState" : "42602"
+  },
+  "KRISHIV_SESSION_LIMIT" : {
+    "message" : [
+      "Cannot open a new session: <limitName> allows at most <limit> live sessions. Release a session (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
   },
   "KRISHIV_SPILL_CAP_EXCEEDED" : {
     "message" : [
