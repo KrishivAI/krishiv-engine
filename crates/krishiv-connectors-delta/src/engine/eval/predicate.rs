@@ -9,7 +9,8 @@
 //! - `AND`/`OR` are Kleene: `false AND NULL` is false, `true OR NULL` is true; an empty `AND`
 //!   is true and an empty `OR` false.
 //! - `IN` (a value in a list column, or a literal in a literal array) never gives NULL: a NULL
-//!   needle or a NULL element never matches.
+//!   needle or a NULL element never matches. A needle of another type than the list's elements
+//!   (a decimal of another scale included) is an error; the kernel panics or compares raw bits.
 //! - Sides of different string or binary encodings (views and plain) are compared as views.
 //! - `Opaque` and `Unknown` predicates are unsupported (an engine must never read an unknown
 //!   predicate as NULL in a filter; the kernel itself treats it as NULL for data skipping).
@@ -196,6 +197,20 @@ fn evaluate_in(
 }
 
 fn in_primitive_list(l: &ArrayRef, list: &arrow_array::ListArray) -> KernelResult<BooleanArray> {
+    // arrow-ord's `in_list` unwraps a downcast of the list values to the needle's array type
+    // (a panic on another type) and compares decimals by their raw bits (wrong across scales),
+    // so the element type must be the needle's; timestamps may differ in zone label only.
+    let same = match (l.data_type(), &list.value_type()) {
+        (ArrowType::Timestamp(a, _), ArrowType::Timestamp(b, _)) => a == b,
+        (a, b) => a == b,
+    };
+    if !same {
+        return Err(KernelError::generic(format!(
+            "Bad Comparison between: {:?} and {:?}",
+            l.data_type(),
+            list.data_type()
+        )));
+    }
     macro_rules! typed {
         ($t:ty) => {
             in_list(
