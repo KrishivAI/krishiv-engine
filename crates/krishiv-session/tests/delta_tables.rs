@@ -409,6 +409,37 @@ fn writes_and_ddl_are_refused_by_name() {
     assert!(!Path::new(&gone).exists());
 }
 
+/// delta-spark compares `TBLPROPERTIES` (and options) given to `CREATE TABLE .. USING delta
+/// LOCATION` with the log's configuration; until a probe pins that rule, Krishiv refuses them by
+/// name rather than storing them unchecked. A `path` option is the location, not a property.
+#[test]
+fn table_properties_on_a_delta_create_are_refused_by_name() {
+    let t = Table::copy("session-table");
+    let s = Session::new().unwrap();
+    let path = t.path();
+    for sql in [
+        format!("CREATE TABLE p USING delta LOCATION '{path}' TBLPROPERTIES ('k' = 'v')"),
+        format!("CREATE TABLE p USING delta OPTIONS (mergeSchema 'true') LOCATION '{path}'"),
+    ] {
+        let e = error(&s, &sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnsupportedFeatureTableOperation,
+            "{sql}: {e}"
+        );
+        assert!(param(&e, "operation").contains("Delta"), "{sql}: {e}");
+    }
+    assert_eq!(
+        error(&s, "SELECT * FROM p").error_class(),
+        ErrorClass::TableOrViewNotFound
+    );
+    block_on(s.sql(&format!(
+        "CREATE TABLE p USING delta OPTIONS (path '{path}')"
+    )))
+    .unwrap();
+    assert_eq!(ids(&query(&s, "SELECT id FROM p ORDER BY id")), [1, 2]);
+}
+
 #[test]
 fn a_refused_table_is_named_as_delta_spark_names_it() {
     let t = Table::copy("session-appends");
