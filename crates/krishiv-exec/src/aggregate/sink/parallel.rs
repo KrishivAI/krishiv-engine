@@ -36,8 +36,10 @@
 
 use std::collections::VecDeque;
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+
+use crate::sync::Mutex;
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
