@@ -65,7 +65,12 @@ Paths are relative to this crate.
 - Socket pairs are connection-oriented only: datagram (and `SOCK_RAW`, a datagram pair for `AF_UNIX`) and RDM pairs
   are `EPERM`, since a datagram endpoint can `sendto` any writable pathname socket (Landlock scopes those from ABI 9).
 - The worker runs in its own session (`setsid`): no controlling terminal, no terminal signals from the server's
-  process group; `TIOCSTI`/`TIOCLINUX` on an inherited terminal are refused as well.
+  process group.
+- `ioctl` is an allowlist (`IOCTL_ALLOWED` in `src/seccomp.rs`): terminal and descriptor queries, `FIONBIO`,
+  `FIOCLEX`, and the read-only file attribute queries; every other request is `EPERM`. Landlock does not mediate
+  `ioctl` on regular files, so a denylist would leave `FS_IOC_SETFLAGS`, `FS_IOC_FSSETXATTR`, fs-verity, dedupe
+  and filesystem-specific requests open on a read-only descriptor; `TIOCSTI`/`TIOCLINUX` fall out too. A request
+  a library needs is added there with the reason.
 - `enter_and_exec` and `confine_current_thread` run only in a process that exists to become the worker, never in the
   server.
 - `#![forbid(unsafe_code)]`: the `landlock` and `seccompiler` crates hold the system-call `unsafe`; the x32 filter is
