@@ -108,6 +108,11 @@ pub enum Constant {
     Interval(i64),
     /// A `TIMESTAMP` or `TIMESTAMP_NTZ`, in microseconds since the epoch.
     Timestamp(i64),
+    /// A `BINARY` (a protobuf descriptor set, say).
+    Binary(Vec<u8>),
+    /// A `MAP<STRING, STRING>` with its entries in order, `None` for a NULL
+    /// value (an options map); `map()` is the empty list.
+    StringMap(Vec<(String, Option<String>)>),
 }
 
 /// The type of a value, as function signatures see it.

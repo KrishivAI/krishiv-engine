@@ -69,17 +69,6 @@ fn schema_text(
 
 /// `from_avro(binary, jsonSchema[, options])`.
 fn from_avro(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    if !matches!(c.data_type(0), Some(DataType::Binary)) {
-        let input = c.data_type(0).cloned().unwrap_or(DataType::Null);
-        return Err(DatatypeMismatchUnexpectedInputType {
-            sql_expr: call_sql(c, "from_avro"),
-            param_index: "first".to_owned(),
-            required_type: "\"BINARY\"".to_owned(),
-            input_sql: format!("\"{}\"", c.sql(0).unwrap_or_default()),
-            input_type: format!("\"{}\"", input.sql()),
-        }
-        .into());
-    }
     let schema = schema_text(c, "from_avro", "FROM_AVRO", "from")?;
     if c.args().len() > 2 {
         let map_of_strings = match c.data_type(2) {
@@ -97,6 +86,19 @@ fn from_avro(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
                 "The third argument of the FROM_AVRO SQL function must be a constant map of strings to strings containing the options to use for converting the value from AVRO format".to_owned(),
             ));
         }
+    }
+    // Spark checks the schema and options first and never types the first argument
+    // (it is an INTERNAL_ERROR there), so a bad schema or options wins over a bad value.
+    if !matches!(c.data_type(0), Some(DataType::Binary)) {
+        let input = c.data_type(0).cloned().unwrap_or(DataType::Null);
+        return Err(DatatypeMismatchUnexpectedInputType {
+            sql_expr: call_sql(c, "from_avro"),
+            param_index: "first".to_owned(),
+            required_type: "\"BINARY\"".to_owned(),
+            input_sql: format!("\"{}\"", c.sql(0).unwrap_or_default()),
+            input_type: format!("\"{}\"", input.sql()),
+        }
+        .into());
     }
     let Some(schema) = schema else {
         return Err(KrishivUnsupportedFeature {

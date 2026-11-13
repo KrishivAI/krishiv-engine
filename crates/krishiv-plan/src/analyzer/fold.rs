@@ -187,8 +187,16 @@ pub(super) fn constant(
             | ArrowType::Duration(arrow_schema::TimeUnit::Microsecond)
             | ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth)
             | ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
+            | ArrowType::Binary
+            | ArrowType::BinaryView
+            | ArrowType::LargeBinary
+            | ArrowType::Map(..)
     ) {
         return None;
+    }
+    if matches!(array.data_type(), ArrowType::Map(..)) {
+        // Only a map of strings (or the empty `map()`) is a constant.
+        return string_map(&array).map(Constant::StringMap);
     }
     Some(match value(&array, conf.ansi) {
         Ok(c) => c,
@@ -208,6 +216,41 @@ pub(super) fn array(
     fold(e, conf, memo, functions)
 }
 
+/// The entries of a one-row map of strings, `None` for any other map. The
+/// empty map (of whatever types) has no entries.
+fn string_map(a: &ArrayRef) -> Option<Vec<(String, Option<String>)>> {
+    let map = a.as_map_opt()?;
+    let offsets = map.value_offsets();
+    let (start, end) = (
+        usize::try_from(*offsets.first()?).ok()?,
+        usize::try_from(*offsets.get(1)?).ok()?,
+    );
+    if start == end {
+        return Some(Vec::new());
+    }
+    let entries = map.entries();
+    let text = |c: &ArrayRef, i: usize| -> Option<Option<String>> {
+        match c.data_type() {
+            ArrowType::Utf8 => {
+                let s = c.as_string::<i32>();
+                Some(s.is_valid(i).then(|| s.value(i).to_owned()))
+            }
+            ArrowType::Utf8View => {
+                let s = c.as_string_view();
+                Some(s.is_valid(i).then(|| s.value(i).to_owned()))
+            }
+            ArrowType::LargeUtf8 => {
+                let s = c.as_string::<i64>();
+                Some(s.is_valid(i).then(|| s.value(i).to_owned()))
+            }
+            _ => None,
+        }
+    };
+    (start..end)
+        .map(|i| Some((text(entries.column(0), i)??, text(entries.column(1), i)?)))
+        .collect()
+}
+
 /// A folded array as a constant. A fractional value is what the implicit
 /// cast to `INT` of an integral argument gives (the scale of `round`).
 fn value(a: &ArrayRef, ansi: bool) -> Result<Constant, KrishivError> {
@@ -221,6 +264,9 @@ fn value(a: &ArrayRef, ansi: bool) -> Result<Constant, KrishivError> {
         ArrowType::Int32 => Constant::Integral(i64::from(a.as_primitive::<Int32Type>().value(0))),
         ArrowType::Int64 => Constant::Integral(a.as_primitive::<Int64Type>().value(0)),
         ArrowType::Utf8 => Constant::String(a.as_string::<i32>().value(0).to_owned()),
+        ArrowType::Binary => Constant::Binary(a.as_binary::<i32>().value(0).to_vec()),
+        ArrowType::LargeBinary => Constant::Binary(a.as_binary::<i64>().value(0).to_vec()),
+        ArrowType::BinaryView => Constant::Binary(a.as_binary_view().value(0).to_vec()),
         ArrowType::Duration(arrow_schema::TimeUnit::Microsecond) => Constant::Interval(
             a.as_primitive::<arrow_array::types::DurationMicrosecondType>()
                 .value(0),
@@ -859,6 +905,38 @@ mod tests {
 
     use super::*;
     use crate::analyzer::{BuiltinFunctions, FunctionLookup};
+
+    fn one_row_map(pairs: &[(&str, Option<&str>)]) -> ArrayRef {
+        use arrow_array::builder::{MapBuilder, StringBuilder};
+        let mut b = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+        for (k, v) in pairs {
+            b.keys().append_value(k);
+            match v {
+                Some(v) => b.values().append_value(v),
+                None => b.values().append_null(),
+            }
+        }
+        b.append(true).unwrap();
+        Arc::new(b.finish())
+    }
+
+    #[test]
+    fn a_string_map_and_a_binary_fold_to_constants() {
+        let m = one_row_map(&[("mode", Some("PERMISSIVE")), ("k", None)]);
+        assert_eq!(
+            string_map(&m),
+            Some(vec![
+                ("mode".to_owned(), Some("PERMISSIVE".to_owned())),
+                ("k".to_owned(), None)
+            ])
+        );
+        assert_eq!(string_map(&one_row_map(&[])), Some(Vec::new()));
+        let b: ArrayRef = Arc::new(arrow_array::BinaryArray::from(vec![&[1u8, 2, 3][..]]));
+        assert!(matches!(
+            value(&b, true),
+            Ok(Constant::Binary(v)) if v == [1, 2, 3]
+        ));
+    }
 
     fn constant(e: &Expr, ansi: bool) -> Option<Constant> {
         super::constant(

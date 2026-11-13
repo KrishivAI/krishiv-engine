@@ -240,7 +240,14 @@ fn format_string(c: &CallTypes<'_>, function: &str) -> Result<Option<String>, Kr
         }
         // `Fractional` lost the fraction while folding for `round`'s
         // scale; the rendering below recovers it.
-        Some(Constant::Fractional(_) | Constant::Interval(_) | Constant::Timestamp(_)) | None => {}
+        Some(
+            Constant::Fractional(_)
+            | Constant::Interval(_)
+            | Constant::Timestamp(_)
+            | Constant::Binary(_)
+            | Constant::StringMap(_),
+        )
+        | None => {}
     }
     if let Some(rendered) = rendered_format(c) {
         return Ok(Some(rendered));

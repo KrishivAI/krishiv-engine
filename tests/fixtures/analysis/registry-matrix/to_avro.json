@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "to_avro#5b8e89f2bbd1/ansi_on",
+      "reason": "SELECT to_avro(s, CAST(X'C328FF' AS STRING)) IS NULL FROM (SELECT NULL AS s) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#5b8e89f2bbd1/ansi_off",
+      "reason": "SELECT to_avro(s, CAST(X'C328FF' AS STRING)) IS NULL FROM (SELECT NULL AS s) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#5ce052293fae/ansi_on",
+      "reason": "SELECT to_avro(s, CAST(NULL AS string)) IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#5ce052293fae/ansi_off",
+      "reason": "SELECT to_avro(s, CAST(NULL AS string)) IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#8d9f78c2a6aa/ansi_on",
+      "reason": "SELECT to_avro(s, 'Ä€日本語😀é') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#8d9f78c2a6aa/ansi_off",
+      "reason": "SELECT to_avro(s, 'Ä€日本語😀é') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#b413de8e40b9/ansi_on",
+      "reason": "SELECT to_avro(s, NULL) IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#b413de8e40b9/ansi_off",
+      "reason": "SELECT to_avro(s, NULL) IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#d4349c6b4127/ansi_on",
+      "reason": "SELECT to_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#d4349c6b4127/ansi_off",
+      "reason": "SELECT to_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#d6290fc32550/ansi_on",
+      "reason": "SELECT to_avro(s, ' \\t a\\u3000\\n ') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#d6290fc32550/ansi_off",
+      "reason": "SELECT to_avro(s, ' \\t a\\u3000\\n ') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#e37cb7341f91/ansi_on",
+      "reason": "SELECT to_avro(s, '') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#e37cb7341f91/ansi_off",
+      "reason": "SELECT to_avro(s, '') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#f4c6b1ee1350/ansi_on",
+      "reason": "SELECT to_avro(s, 'abc') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#f4c6b1ee1350/ansi_off",
+      "reason": "SELECT to_avro(s, 'abc') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#f7ba5628f838/ansi_on",
+      "reason": "SELECT to_avro(s, '1') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#f7ba5628f838/ansi_off",
+      "reason": "SELECT to_avro(s, '1') IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#fadf103de03d/ansi_on",
+      "reason": "SELECT to_avro(s) IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "to_avro#fadf103de03d/ansi_off",
+      "reason": "SELECT to_avro(s) IS NULL FROM (SELECT NULL AS s) | resolves to boolean where Spark has AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    }
+  ],
+  "format_version": 1,
+  "function": "to_avro"
+}
