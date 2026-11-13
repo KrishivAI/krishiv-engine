@@ -133,6 +133,25 @@ Each step is a hard stop for agents; the maintainer runs it and approves its env
 5. **Yank the old 0.1 releases** once 0.2.0 is verified: PyPI `krishiv` 0.1.0; crates.io `krishiv` 0.1.0-nightly.202607030148 and `krishiv-common` 0.1.0 (`cargo yank --version <v> <crate>`). See below.
 6. **GitHub Release** for `v0.2.0`, with the CHANGELOG 0.2.0 section as its notes.
 
+## Publish tag (a `.github`-only fix after tagging)
+
+A release commit sometimes needs a fix under `.github/` only (a workflow, a script) after it is tagged. **Never move
+or delete the release tag** (`v0.2.0`): a published tag is permanent.
+
+1. Make one commit that changes only files under `.github/`, directly on the release commit (not on `main`).
+2. Tag it `vX.Y.Z-publishN` (for 0.2.0: `v0.2.0-publish`, `-publish2`, `-publish3`) and push the tag.
+3. Dispatch the publish workflows (`publish-pypi.yml`, `publish-crates.yml`, and `publish-testpypi.yml` for a
+   rehearsal) on that tag. `.github/scripts/require-green-nightly.sh` accepts exactly one `.github`-only commit on a
+   parent that a green scheduled nightly covers; any second commit, or a commit that touches other paths, is refused.
+
+Two things learned from 0.2.0:
+
+- **crates.io rate-limits new crate names** (HTTP 429, "try again after <date>"). `publish-crates.yml` waits until
+  the stated time and retries each crate (up to 40 attempts, a 330-minute job limit); a crate already published is
+  skipped, so a failed run can also be dispatched again.
+- **The bare `pip install krishiv` has no pyarrow**, and `collect()` needs it: install `krishiv[pyarrow]`
+  (the TestPyPI line above already does).
+
 ## Yanking a bad release (owner only)
 
 Every step is a hard stop for agents; the maintainer runs them. Yanking hides a version from new resolves and
