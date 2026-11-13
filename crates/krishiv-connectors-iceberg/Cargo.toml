@@ -31,7 +31,7 @@ krishiv-types = { path = "../krishiv-types" }
 roaring = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 typetag = { workspace = true }
 
 [dev-dependencies]

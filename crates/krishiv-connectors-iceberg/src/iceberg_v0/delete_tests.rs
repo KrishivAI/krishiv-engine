@@ -285,10 +285,10 @@ impl Table {
         Ok(out)
     }
 
-    fn open_err(&self) -> KrishivError {
-        self.env
-            .provider(&self.table, &VersionSpec::Current)
-            .unwrap_err()
+    /// The error of `SELECT id FROM t`: deletes are read, and refused, when
+    /// a scan that reads their data files runs (PR-25d), not at open.
+    fn query_err(&self) -> KrishivError {
+        self.ids("SELECT id FROM t").unwrap_err()
     }
 }
 
@@ -428,7 +428,7 @@ fn a_missing_delete_file_fails_the_query() {
         false,
     );
     std::fs::remove_file(t.env.dir.path().join("d.parquet")).unwrap();
-    let e = t.open_err();
+    let e = t.query_err();
     assert!(e.message().contains("d.parquet"), "{e}");
     assert_ne!(e.error_class(), ErrorClass::InternalError, "{e}");
 }
@@ -448,7 +448,7 @@ fn a_corrupt_dv_fails_with_javas_text() {
     let last = bytes.len() - 1;
     bytes[last] ^= 0xFF;
     std::fs::write(&path, bytes).unwrap();
-    let e = t.open_err();
+    let e = t.query_err();
     assert_eq!(
         e.error_class(),
         ErrorClass::KrishivIcebergInvalidDeletes,
@@ -470,7 +470,7 @@ fn two_dvs_for_one_file_fail() {
         ],
         false,
     );
-    let e = t.open_err();
+    let e = t.query_err();
     assert_eq!(
         e.error_class(),
         ErrorClass::KrishivIcebergInvalidDeletes,
@@ -491,7 +491,7 @@ fn a_dv_older_than_its_data_file_fails() {
         ],
         false,
     );
-    let e = t.open_err();
+    let e = t.query_err();
     assert_eq!(
         e.message(),
         "DV data sequence number (2) must be greater than or equal to data file sequence number (3)"
@@ -642,8 +642,39 @@ fn a_missing_equality_delete_file_fails() {
         false,
     );
     std::fs::remove_file(t.env.at("e.parquet").strip_prefix("file://").unwrap()).unwrap();
-    let e = t.open_err();
+    let e = t.query_err();
     assert!(e.message().contains("e.parquet"), "{e}");
+}
+
+/// Deletes are read for the data files a scan reads, after filter pruning
+/// (PR-25d; review 25b S1): with every delete file of partition 0 gone, a
+/// query whose filter prunes partition 0 reads none of them and succeeds,
+/// and one that reads partition 0 fails naming a missing delete file.
+#[test]
+fn pruned_files_read_no_delete_files() {
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            data("c.parquet", 0, 1, 10, 3),
+            data("b.parquet", 1, 1, 20, 3),
+            dv("a.puffin", 0, 2, "a.parquet", &[0]),
+            positions("pc.parquet", 0, 2, &[("c.parquet", 1)], None),
+            equality("e.parquet", 0, 2, &[Some(12)]),
+        ],
+        true,
+    );
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [1, 2, 10, 20, 21, 22]);
+    for name in ["a.puffin", "pc.parquet", "e.parquet"] {
+        std::fs::remove_file(t.env.dir.path().join(name)).unwrap();
+    }
+    assert_eq!(t.ids("SELECT id FROM t WHERE p = 1").unwrap(), [20, 21, 22]);
+    let e = t.ids("SELECT id FROM t WHERE p = 0").unwrap_err();
+    assert!(
+        ["a.puffin", "pc.parquet", "e.parquet"]
+            .iter()
+            .any(|n| e.message().contains(n)),
+        "{e}"
+    );
 }
 
 /// One step of a generated history (commit `n` has sequence number `n + 1`).

@@ -212,6 +212,25 @@ impl DeleteIndex {
         self.empty
     }
 
+    /// Every live equality delete file.
+    #[cfg(test)]
+    pub(crate) fn equality_files(&self) -> impl Iterator<Item = &Arc<DeleteFileEntry>> {
+        self.equality_global
+            .iter()
+            .chain(
+                self.equality_by_partition
+                    .values()
+                    .flat_map(|p| p.tuples.values().flatten().chain(p.unkeyed.iter())),
+            )
+            .map(|(_, d)| d)
+    }
+
+    /// Whether the snapshot has a live equality delete file.
+    #[must_use]
+    pub fn has_equality_deletes(&self) -> bool {
+        !self.equality_global.is_empty() || !self.equality_by_partition.is_empty()
+    }
+
     /// The deletes that apply to `data` (see the module docs).
     ///
     /// # Errors

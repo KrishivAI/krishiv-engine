@@ -16,6 +16,7 @@ use krishiv_types::StructType;
 use super::scan;
 use super::storage::{Registered, StorageRegistration, from_iceberg};
 use super::types::spark_schema;
+use crate::plan::deletes::DeleteIndex;
 use crate::plan::{
     ManifestFilter, PruneOptions, ScanPlan, TableSnapshot, VersionSpec, WriterMetrics,
 };
@@ -160,6 +161,32 @@ impl IcebergTable {
             predicate,
             filter,
             options,
+            env,
+        )
+        .await
+    }
+
+    /// The data files of `snapshot` and the index of its delete files,
+    /// unassigned ([`scan::plan_files`]): the provider assigns deletes to the
+    /// files a scan reads.
+    ///
+    /// # Errors
+    /// As [`Self::plan`], except the errors of assigning deletes to one file.
+    pub(super) async fn plan_files(
+        &self,
+        snapshot: &TableSnapshot,
+    ) -> Result<(ScanPlan, DeleteIndex), KrishivError> {
+        let metrics = self.writer_metrics(snapshot);
+        let env = scan::PlanEnv {
+            max_metadata_bytes: self.max_metadata_bytes,
+            metrics: &metrics,
+        };
+        scan::plan_files(
+            self.table.file_io(),
+            snapshot,
+            None,
+            ManifestFilter::All,
+            PruneOptions::default(),
             env,
         )
         .await

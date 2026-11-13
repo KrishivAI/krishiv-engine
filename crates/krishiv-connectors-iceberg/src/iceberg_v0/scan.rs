@@ -519,9 +519,31 @@ pub(crate) async fn plan(
     options: PruneOptions,
     env: PlanEnv<'_>,
 ) -> Result<ScanPlan, KrishivError> {
+    let (mut out, index) = plan_files(io, snapshot, predicate, filter, options, env).await?;
+    if !index.is_empty() {
+        for t in &mut out.tasks {
+            t.deletes = Arc::new(index.for_data_file(&t.file)?);
+        }
+    }
+    Ok(out)
+}
+
+/// [`plan`] without assigning deletes to the tasks: the index assigns them
+/// to the files a scan reads (the provider, after filter pruning).
+///
+/// # Errors
+/// As [`plan`], except the errors of assigning deletes to one data file.
+pub(crate) async fn plan_files(
+    io: &FileIO,
+    snapshot: &TableSnapshot,
+    predicate: Option<&PushdownExpr>,
+    filter: ManifestFilter,
+    options: PruneOptions,
+    env: PlanEnv<'_>,
+) -> Result<(ScanPlan, DeleteIndex), KrishivError> {
     let ManifestFilter::All = filter;
     let Some(list) = &snapshot.manifest_list else {
-        return Ok(ScanPlan::default());
+        return Ok((ScanPlan::default(), DeleteIndex::default()));
     };
     let always = PushdownExpr::Constant(true);
     let pruner = Pruner::new(
@@ -573,10 +595,5 @@ pub(crate) async fn plan(
         }
     }
     let index = DeleteIndex::new(&out.delete_files, &snapshot.partition_specs)?;
-    if !index.is_empty() {
-        for t in &mut out.tasks {
-            t.deletes = Arc::new(index.for_data_file(&t.file)?);
-        }
-    }
-    Ok(out)
+    Ok((out, index))
 }

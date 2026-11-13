@@ -4,6 +4,7 @@
 
 pub(crate) mod deletes;
 pub(crate) mod eq_deletes;
+pub(crate) mod lazy;
 pub(crate) mod provider;
 pub(crate) mod scan;
 pub(crate) mod storage;

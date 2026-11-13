@@ -705,7 +705,8 @@ fn a_snapshot_whose_delete_file_is_missing_fails() {
         .unwrap();
     // The delete file was never written: the read fails naming it, never
     // returns the rows it deletes.
-    let e = env.provider(&table, &VersionSpec::Current).unwrap_err();
+    let p = env.provider(&table, &VersionSpec::Current).unwrap();
+    let e = provider_session(p).run("SELECT name FROM t").unwrap_err();
     assert_ne!(e.error_class(), ErrorClass::InternalError, "{e}");
     assert!(e.message().contains("deletes.parquet"), "{e}");
     // The snapshot before it has no deletes and reads.

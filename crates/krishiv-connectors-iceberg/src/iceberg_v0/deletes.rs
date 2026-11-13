@@ -65,13 +65,6 @@ fn key(f: &FileRef) -> (String, String) {
     (f.store.key().to_owned(), f.path.as_ref().to_owned())
 }
 
-impl DeleteSelections {
-    /// Whether no data file has deletes.
-    pub(super) fn is_empty(&self) -> bool {
-        self.by_file.is_empty()
-    }
-}
-
 impl FileSelections for DeleteSelections {
     fn selection(&self, file: &FileRef) -> Option<RowSelection> {
         self.by_file.get(&key(file)).cloned()
@@ -88,7 +81,7 @@ impl FileSelections for DeleteSelections {
 /// delete file.
 pub(super) async fn load(
     io: &IoContext,
-    locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
+    locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
     tasks: &[(&DataFileEntry, &FileRef, &TaskDeletes)],
 ) -> Result<DeleteSelections, KrishivError> {
     // Each position delete file once, with the data files it applies to.
@@ -108,12 +101,21 @@ pub(super) async fn load(
         }
     }
     let pool: Arc<dyn krishiv_memory::MemoryPool> = TreePool::new(&MemoryConfig::default());
-    let read_positions = futures::stream::iter(position.iter())
+    // The read futures are built before their streams: a closure that
+    // borrows into `stream::iter` makes the future lose `Send` (its lifetime
+    // is not provably general enough), and the scan's source must be `Send`.
+    let position_reads: Vec<_> = position
+        .iter()
         .map(|(d, paths)| read_position_file(io, locate, &pool, d, paths))
+        .collect();
+    let dv_reads: Vec<_> = dvs
+        .iter()
+        .map(|(data, dv)| async move { read_dv(io, locate, dv).await.map(|p| (data.clone(), p)) })
+        .collect();
+    let read_positions = futures::stream::iter(position_reads)
         .buffered(DELETE_FILE_CONCURRENCY)
         .try_collect::<Vec<_>>();
-    let read_dvs = futures::stream::iter(dvs.iter())
-        .map(|(data, dv)| async move { read_dv(io, locate, dv).await.map(|p| (data.clone(), p)) })
+    let read_dvs = futures::stream::iter(dv_reads)
         .buffered(DELETE_FILE_CONCURRENCY)
         .try_collect::<Vec<_>>();
     let (from_files, from_dvs) = futures::try_join!(read_positions, read_dvs)?;
@@ -142,7 +144,7 @@ pub(super) async fn load(
 /// by data path.
 async fn read_position_file(
     io: &IoContext,
-    locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
+    locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
     pool: &Arc<dyn krishiv_memory::MemoryPool>,
     d: &DeleteFileEntry,
     paths: &BTreeSet<String>,
@@ -238,7 +240,7 @@ async fn read_position_file(
 /// The positions of the deletion vector `dv`.
 async fn read_dv(
     io: &IoContext,
-    locate: &dyn Fn(&str) -> Result<FileRef, KrishivError>,
+    locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
     dv: &DeleteFileEntry,
 ) -> Result<RoaringTreemap, KrishivError> {
     let f = &dv.entry.file;
