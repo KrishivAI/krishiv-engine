@@ -361,7 +361,7 @@ fn a_corrupt_commit_is_a_failed_read_of_that_file() {
 }
 
 /// A query that found an entry stale drops only that entry: a newer one another query stored
-/// meanwhile stays (re-review N2).
+/// meanwhile stays (re-review N2), and its hit is counted as a miss (N7).
 #[test]
 fn a_stale_drop_keeps_a_newer_entry() {
     let env = two_commits();
@@ -370,8 +370,11 @@ fn a_stale_drop_keeps_a_newer_entry() {
     let seen = cache.lookup(&key(&env, "alice")).unwrap();
     commit_last(&env);
     assert_eq!(open_cached(&env, &cache, key(&env, "alice")).version(), 2);
+    let counts = (cache.hits(), cache.misses());
     cache.invalidate_if(&key(&env, "alice"), seen.snapshot.version(), seen.last);
     assert_eq!(cache.cached_version(&key(&env, "alice")), Some(2));
+    // The stale hit is counted as a miss (re-review N7).
+    assert_eq!((cache.hits(), cache.misses()), (counts.0 - 1, counts.1 + 1));
     let now = cache.lookup(&key(&env, "alice")).unwrap();
     cache.invalidate_if(&key(&env, "alice"), now.snapshot.version(), now.last);
     assert_eq!(cache.cached_version(&key(&env, "alice")), None);

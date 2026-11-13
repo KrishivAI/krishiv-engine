@@ -19,6 +19,12 @@
 //! size and modification time); a mismatch, a missing file or any error on the cached path
 //! drops the entry and the table is built afresh. Table authorization runs before the lookup,
 //! in the session's analysis.
+//!
+//! The stamp misses two narrow cases. A store whose modification times have 1-second
+//! precision (S3's `LastModified`) does not notice a table recreated within the same second
+//! with a last commit of the same size; an ETag would close this, but the kernel's `FileMeta`
+//! carries none. A table recreated between that `head` and the listing of the newer log is
+//! combined with the cached segment.
 
 pub mod cache;
 pub mod predicate;
