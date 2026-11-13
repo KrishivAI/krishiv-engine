@@ -18,6 +18,7 @@
 //!   credential) and its failure counters.
 
 mod config;
+mod roles;
 mod secret_ref;
 mod server;
 mod throttle;
@@ -33,6 +34,7 @@ use futures::future::BoxFuture;
 use krishiv_common::principal::Principal;
 
 pub use config::{AuthConfig, ThrottleConfig, TokenSpec, is_auth_key};
+pub use roles::RolePolicy;
 pub use secret_ref::SecretRef;
 pub use server::{FailureCount, ServerAuth};
 pub use throttle::FailureThrottle;
