@@ -190,3 +190,32 @@ fn limits_from_config() {
     assert_eq!(l.max_plan_size, 512 << 20);
     assert_eq!(l.max_batch_size, 128 << 20);
 }
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn close_stops_the_encoder_of_a_finished_operation() {
+    // Codex review (#738): `release_all` of a finished operation whose
+    // `ResultComplete` waits for room must still stop its encoder, though
+    // a cancel of a finished operation interrupts nothing.
+    let o = op(A, b"p");
+    assert!(o.finish());
+    let waiter = {
+        let o = Arc::clone(&o);
+        tokio::spawn(async move { o.cancelled().await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!o.cancel(), "a finished operation is not interrupted");
+    o.close();
+    tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+        .await
+        .expect("close wakes the encoder")
+        .unwrap();
+    // Closed before anyone waits: resolves at once.
+    let late = op(B, b"q");
+    assert!(late.finish());
+    late.close();
+    late.cancelled().await;
+}

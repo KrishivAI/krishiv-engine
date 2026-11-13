@@ -311,6 +311,27 @@ async fn analyze_explain_tree_string_and_flags() {
         panic!("is local");
     };
     assert!(!l.is_local);
+    // Codex review (#738): Spark answers true for SQL `VALUES` (its analyzer
+    // makes a `LocalRelation`); Krishiv parses SQL text during analysis and
+    // lowers the rows, so it answers false (a recorded known difference).
+    // A query over rows is not local in either.
+    for query in [
+        "VALUES (1), (2)",
+        "SELECT * FROM VALUES (1), (2)",
+        "SELECT 1",
+    ] {
+        let AResult::IsLocal(l) = analyzed(
+            &run,
+            Analyze::IsLocal(Box::new(areq::IsLocal {
+                plan: Some(sql(query)),
+            })),
+        )
+        .await
+        else {
+            panic!("is local");
+        };
+        assert!(!l.is_local, "{query}");
+    }
     let AResult::IsStreaming(st) = analyzed(
         &run,
         Analyze::IsStreaming(Box::new(areq::IsStreaming { plan: Some(plan) })),

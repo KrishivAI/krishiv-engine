@@ -63,16 +63,26 @@ pub async fn analyze_plan(
     })
 }
 
+/// The request's plan as a `DataFrame` (translated, not analyzed). The
+/// plan is borrowed, never cloned: a deep plan's copy (and its drop) would
+/// recurse on the async worker's stack (translation runs a deep plan on a
+/// big stack of its own).
+async fn frame(
+    session: &krishiv_session::Session,
+    plan: Option<&pb::Plan>,
+    limits: &ExecuteLimits,
+) -> Result<DataFrame, KrishivError> {
+    let empty = pb::Plan::default();
+    let logical = request_plan(session, plan.unwrap_or(&empty), limits).await?;
+    Ok(session.from_plan(&logical))
+}
+
 async fn analyze(
     entry: &SessionEntry,
     analyze: Option<&Analyze>,
     limits: &ExecuteLimits,
 ) -> Result<res::Result, KrishivError> {
     let session = entry.session();
-    let frame = |plan: Option<pb::Plan>| async move {
-        let logical = request_plan(session, &plan.unwrap_or_default(), limits).await?;
-        Ok::<DataFrame, KrishivError>(session.from_plan(&logical))
-    };
     Ok(match analyze {
         None => {
             return Err(ConnectInvalidPlanUnknownAnalyzeMethod {
@@ -81,7 +91,7 @@ async fn analyze(
             .into());
         }
         Some(Analyze::Schema(s)) => {
-            let df = frame(s.plan.clone()).await?;
+            let df = frame(session, s.plan.as_ref(), limits).await?;
             res::Result::Schema(res::Schema {
                 schema: Some(schema::proto_schema(&*df.schema().await?)?),
             })
@@ -89,7 +99,7 @@ async fn analyze(
         Some(Analyze::Explain(e)) => {
             // Spark builds the Dataset (translation, analysis) before it
             // reads the mode.
-            let df = frame(e.plan.clone()).await?;
+            let df = frame(session, e.plan.as_ref(), limits).await?;
             df.analyzed().await?;
             let mode = explain_mode(e.explain_mode)?;
             res::Result::Explain(res::Explain {
@@ -97,27 +107,41 @@ async fn analyze(
             })
         }
         Some(Analyze::TreeString(t)) => {
-            let df = frame(t.plan.clone()).await?;
+            let df = frame(session, t.plan.as_ref(), limits).await?;
             let spark = schema::spark_schema(&*df.schema().await?)?;
             res::Result::TreeString(res::TreeString {
                 tree_string: types::tree_string(&spark, t.level),
             })
         }
         Some(Analyze::IsLocal(l)) => {
-            let analyzed = frame(l.plan.clone()).await?.analyzed().await?;
-            res::Result::IsLocal(res::IsLocal {
-                is_local: matches!(analyzed.plan.root().node, PlanNode::InlineTable { .. }),
-            })
+            // Spark: the analyzed plan is a `LocalRelation`. Krishiv's
+            // analyzer lowers inline rows to `OneRowRelation` (as for
+            // `SELECT 1`), so the question is asked of the translated plan
+            // (an inline table, as `LocalRelation` will translate in T012);
+            // SQL `VALUES` is SQL text until analysis and answers false (a
+            // known difference). The plan is still analyzed so that an
+            // invalid one fails as in Spark.
+            let empty = pb::Plan::default();
+            let logical = request_plan(session, l.plan.as_ref().unwrap_or(&empty), limits).await?;
+            let is_local = matches!(logical.root().node, PlanNode::InlineTable { .. });
+            session.from_plan(&logical).analyzed().await?;
+            res::Result::IsLocal(res::IsLocal { is_local })
         }
         Some(Analyze::IsStreaming(s)) => {
             // Analyzed so that an invalid plan fails as in Spark.
-            frame(s.plan.clone()).await?.analyzed().await?;
+            frame(session, s.plan.as_ref(), limits)
+                .await?
+                .analyzed()
+                .await?;
             res::Result::IsStreaming(res::IsStreaming {
                 is_streaming: false,
             })
         }
         Some(Analyze::InputFiles(f)) => {
-            let analyzed = frame(f.plan.clone()).await?.analyzed().await?;
+            let analyzed = frame(session, f.plan.as_ref(), limits)
+                .await?
+                .analyzed()
+                .await?;
             let mut files = BTreeSet::new();
             input_files(analyzed.plan.root(), &mut files);
             res::Result::InputFiles(res::InputFiles {
@@ -133,14 +157,15 @@ async fn analyze(
             )?)?),
         }),
         Some(Analyze::SameSemantics(s)) => {
-            let target = semantic_hash(frame(s.target_plan.clone()).await?).await?;
-            let other = semantic_hash(frame(s.other_plan.clone()).await?).await?;
+            let target =
+                semantic_hash(frame(session, s.target_plan.as_ref(), limits).await?).await?;
+            let other = semantic_hash(frame(session, s.other_plan.as_ref(), limits).await?).await?;
             res::Result::SameSemantics(res::SameSemantics {
                 result: target == other,
             })
         }
         Some(Analyze::SemanticHash(s)) => {
-            let hash = semantic_hash(frame(s.plan.clone()).await?).await?;
+            let hash = semantic_hash(frame(session, s.plan.as_ref(), limits).await?).await?;
             res::Result::SemanticHash(res::SemanticHash {
                 result: fold_hash(hash),
             })

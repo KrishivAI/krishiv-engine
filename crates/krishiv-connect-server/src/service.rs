@@ -288,7 +288,7 @@ impl SparkConnectService for ConnectService {
             response.operation_id = Some(op.id().as_str().to_owned());
             match &request.release {
                 Some(Release::ReleaseAll(_)) => {
-                    op.cancel();
+                    op.close();
                     entry.operations().remove(&op);
                 }
                 Some(Release::ReleaseUntil(until)) => {
