@@ -274,7 +274,7 @@ fn text(tag: u8, bytes: &[u8]) -> Result<String, DerError> {
 /// tables (the Unicode `Cf` code points a name could plausibly carry): soft hyphen, zero-width
 /// and joiner characters, bidirectional marks, embeddings, overrides and isolates, invisible
 /// operators and the byte order mark.
-fn is_format(c: char) -> bool {
+pub(crate) fn is_format(c: char) -> bool {
     matches!(
         c,
         '\u{00ad}'

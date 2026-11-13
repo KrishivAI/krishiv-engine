@@ -19,12 +19,27 @@
 //! - [`TlsConfig`] and [`check_listener`]: the `krishiv.server.tls.*` settings and the startup
 //!   refusals of an address, authentication and TLS that do not fit together; `ServerTls`
 //!   (feature `tls`) is the rustls configuration the listeners serve, reloadable.
+//! - [`OidcConfig`]: OIDC access tokens (feature `oidc`): JWS compact tokens parsed by a
+//!   strict, fuzzed parser (`jose.rs`), signatures checked on aws-lc-rs with the algorithm pinned
+//!   by construction (no `none`, no HMAC), keys from a cached JWK set fetched on a thread of its
+//!   own, the role from the groups claim through the role lists.
 //! - [`ServerAuth`]: the chain (throttle, client certificate, bearer token), its failure log record (target `krishiv::auth`, never the
 //!   credential) and its failure counters.
 
 mod config;
 mod der;
+#[cfg_attr(
+    all(not(feature = "oidc"), not(test)),
+    expect(
+        dead_code,
+        reason = "only the router's shape test and `Alg` are used without the `oidc` verifier"
+    )
+)]
+mod jose;
 mod mtls;
+#[cfg(feature = "oidc")]
+mod oidc;
+mod oidc_config;
 mod roles;
 mod secret_ref;
 mod server;
@@ -35,7 +50,15 @@ mod tls_config;
 mod tokens;
 
 #[cfg(test)]
+mod jose_tests;
+#[cfg(test)]
 mod mtls_tests;
+#[cfg(test)]
+#[cfg(feature = "oidc")]
+mod oidc_http_tests;
+#[cfg(test)]
+#[cfg(feature = "oidc")]
+mod oidc_tests;
 #[cfg(test)]
 mod tests;
 
@@ -47,7 +70,9 @@ use krishiv_common::principal::Principal;
 
 pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
 pub use der::{CertNames, DerError};
+pub use jose::Alg;
 pub use mtls::{ClientCertificates, MtlsConfig, PrincipalFrom};
+pub use oidc_config::OidcConfig;
 pub use roles::RolePolicy;
 pub use secret_ref::SecretRef;
 pub use server::{FailureCount, ServerAuth};
@@ -130,7 +155,7 @@ impl Surface {
 pub enum Method {
     /// A configured static token.
     Token,
-    /// An OIDC access token (a later unit).
+    /// An OIDC access token (a JWT the configured issuer signed).
     Oidc,
     /// A client certificate the client CA verified.
     Mtls,

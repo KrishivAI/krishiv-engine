@@ -127,7 +127,7 @@ pub fn check_listener(
             "a non-loopback address needs an authentication method (krishiv.auth.*)",
         ));
     }
-    if !auth.tokens.is_empty() && !tls.is_on() {
+    if auth.has_bearer_method() && !tls.is_on() {
         return Err(invalid(
             "krishiv.server.host",
             &shown,

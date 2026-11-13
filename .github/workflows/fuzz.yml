@@ -47,6 +47,8 @@ jobs:
             args: -max_len=256
           - target: cert_names
             args: -max_len=8192
+          - target: jwt_parse
+            args: -max_len=20000
     env:
       RUSTC_WRAPPER: "" # instrumented builds are not cacheable
       TARGET: ${{ matrix.target }}
