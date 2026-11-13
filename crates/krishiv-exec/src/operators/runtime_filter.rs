@@ -165,6 +165,15 @@ impl RuntimeFilters {
         self.lock().stages.get(&partition).cloned()
     }
 
+    /// The row stage of the driver in `partition` of a source outside this crate whose batches
+    /// have `schema` (see [`SourceRows`]); filters whose target is not a column of `schema` are
+    /// dropped.
+    #[must_use]
+    pub fn source_rows(&self, schema: &Schema, partition: u32) -> SourceRows {
+        let filters = self.scan_filters(schema);
+        SourceRows(self.scan_stage(&filters, schema, partition))
+    }
+
     /// The filters at the table level of `table` (filters whose target is
     /// not a column of it are dropped).
     #[must_use]
@@ -399,6 +408,30 @@ impl RowStage {
             Some(mask) => arrow_select::filter::filter_record_batch(&batch, &mask)
                 .map_err(|e| internal(e.to_string())),
         }
+    }
+}
+
+/// One driver's row stage for a scan source outside this crate (a connector's): the runtime
+/// filters' rows dropped from its batches, or kept for the hash probe above when the planner
+/// handed the stage to it. A source that receives [`RuntimeFilters`] must build one per driver
+/// (`RuntimeFilters::source_rows`), call [`Self::start_partition`] per unit of work it claims
+/// and pass each output batch through [`Self::apply`].
+#[derive(Debug)]
+pub struct SourceRows(ScanRows);
+
+impl SourceRows {
+    /// Restarts the stage's adaptive measurement at a new unit of work (a morsel, a file).
+    pub fn start_partition(&mut self) {
+        self.0.start_partition();
+    }
+
+    /// `batch` without the rows the runtime filters drop (as it is when the consumer evaluates
+    /// them).
+    ///
+    /// # Errors
+    /// A filter's evaluation error.
+    pub fn apply(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+        self.0.apply(batch)
     }
 }
 
