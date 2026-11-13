@@ -220,6 +220,35 @@ fn call_function_splits_the_qualifier_and_named_arguments_name_parameters() {
     )
     .unwrap();
     assert!(matches!(e.node, ExprNode::Collate { .. }));
+    // `=`, `==`, `!=` and `<>` are the canonical equality functions, as in the unresolved-function form.
+    for (op, outer) in [("=", "=="), ("==", "=="), ("!=", "not"), ("<>", "not")] {
+        let e = translate_expression(
+            &call(&format!("`{op}`"), vec![attr("a"), attr("b")]),
+            &conf(),
+        )
+        .unwrap();
+        assert_eq!(function(&e).name, outer, "{op}");
+    }
+    // A named argument keeps `collate` an ordinary call (the analyzer rejects the name).
+    let named_collate = expr(ExprType::UnresolvedFunction(
+        expression::UnresolvedFunction {
+            function_name: "collate".into(),
+            arguments: vec![
+                expr(ExprType::NamedArgumentExpression(Box::new(
+                    crate::proto::v4_3::NamedArgumentExpression {
+                        key: "bogus".into(),
+                        value: Some(Box::new(attr("a"))),
+                    },
+                ))),
+                lit(LiteralType::String("utf8_lcase".into())),
+            ],
+            is_distinct: false,
+            is_user_defined_function: false,
+            is_internal: None,
+        },
+    ));
+    let e = translate_expression(&named_collate, &conf()).unwrap();
+    assert_eq!(function(&e).name, "collate");
     // One argument is an ordinary call.
     let e = translate_expression(&call("collate", vec![attr("a")]), &conf()).unwrap();
     assert_eq!(function(&e).name, "collate");

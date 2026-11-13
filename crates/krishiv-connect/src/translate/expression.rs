@@ -187,7 +187,12 @@ impl Translator<'_> {
                 ExprNode::Function(not)
             }
             // `F.collate(col, "name")` / `Column.collate`: the function form of `expr COLLATE name`.
-            _ if let Some(collate) = collate_call(name, f.is_distinct, &args)? => collate,
+            // Named arguments keep the call ordinary, so the analyzer can reject them.
+            _ if arg_names.is_empty()
+                && let Some(collate) = collate_call(name, f.is_distinct, &args)? =>
+            {
+                collate
+            }
             _ => {
                 let canonical = Builtin::from_name(name)
                     .map_or_else(|| name.to_owned(), |b| b.name().to_owned());
@@ -202,11 +207,32 @@ impl Translator<'_> {
         let mut parts = parse_multipart_identifier(&c.function_name)?;
         let name = parts.pop().unwrap_or_default();
         let (args, arg_names) = self.call_args(&c.arguments)?;
-        if parts.is_empty()
-            && arg_names.iter().all(Option::is_none)
-            && let Some(collate) = collate_call(&name, false, &args)?
-        {
-            return Ok(collate);
+        if parts.is_empty() && arg_names.is_empty() {
+            // An unqualified call of an operator or `collate` lowers as the unresolved-function form does.
+            let plain = |name: &str, args: Vec<Arc<Expr>>| FunctionCall {
+                name: name.to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
+                args,
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+            };
+            match name.as_str() {
+                "=" | "==" => return Ok(ExprNode::Function(plain(Builtin::Eq.name(), args))),
+                "!=" | "<>" => {
+                    let equal = Expr::new(ExprNode::Function(plain(Builtin::Eq.name(), args)));
+                    return Ok(ExprNode::Function(plain(
+                        Builtin::Not.name(),
+                        vec![Arc::new(equal)],
+                    )));
+                }
+                _ => {
+                    if let Some(collate) = collate_call(&name, false, &args)? {
+                        return Ok(collate);
+                    }
+                }
+            }
         }
         Ok(ExprNode::Function(FunctionCall {
             name,
