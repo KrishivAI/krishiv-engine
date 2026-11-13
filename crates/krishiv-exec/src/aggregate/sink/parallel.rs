@@ -36,8 +36,8 @@
 
 use std::collections::VecDeque;
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -55,7 +55,7 @@ use super::{
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::hash::PARTITIONS;
-use crate::sync::lock;
+use crate::sync::{Mutex, lock};
 
 /// One final-phase task.
 struct Task {
