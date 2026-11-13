@@ -88,7 +88,9 @@ fn main() -> ExitCode {
         ["changelog", "assemble", version, "--highlights", file] => {
             xtask::changelog::run_assemble(&workspace_root(), version, Some(Path::new(file)))
         }
-        ["changelog", "check", flags @ ..] => run_changelog_check(flags),
+        ["changelog", "check", flags @ ..] => {
+            xtask::changelog::run_check_flags(&workspace_root(), flags)
+        }
         ["workflow-lint"] => policy::run_workflow_lint(&workspace_root().join(".github/workflows")),
         ["workflow-lint", dir] => policy::run_workflow_lint(Path::new(dir)),
         ["spdx"] => policy::run_spdx(&workspace_root()),
@@ -612,21 +614,4 @@ fn measure_budgets(root: &Path, build_time: bool) -> Result<(Budgets, PathBuf), 
         wheel_bytes: None,
     };
     Ok((now, target_dir))
-}
-
-/// `changelog check`: `--labels` carries the pull request's labels, comma separated; the rest is `--base/--head`.
-fn run_changelog_check(flags: &[&str]) -> Result<(), String> {
-    let mut diff = Vec::new();
-    let mut labels = Vec::new();
-    let mut it = flags.iter();
-    while let Some(flag) = it.next() {
-        let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
-        if *flag == "--labels" {
-            labels = value.split(',').map(str::trim).collect();
-        } else {
-            diff.extend([*flag, *value]);
-        }
-    }
-    let args = DiffArgs::parse(&diff, &workspace_root())?;
-    xtask::changelog::run_check(&args, &labels)
 }

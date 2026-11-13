@@ -176,6 +176,26 @@ pub fn run_check(args: &DiffArgs, labels: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+/// `changelog check` flags: `--labels` carries the pull request's labels, comma separated; the rest is `--base/--head`.
+///
+/// # Errors
+/// Returns a usage error or the failed check.
+pub fn run_check_flags(root: &Path, flags: &[&str]) -> Result<(), String> {
+    let mut diff = Vec::new();
+    let mut labels = Vec::new();
+    let mut it = flags.iter();
+    while let Some(flag) = it.next() {
+        let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
+        if *flag == "--labels" {
+            labels = value.split(',').map(str::trim).collect();
+        } else {
+            diff.extend([*flag, *value]);
+        }
+    }
+    let args = DiffArgs::parse(&diff, root)?;
+    run_check(&args, &labels)
+}
+
 /// `xtask changelog pending [DIR]`: prints what the next release would list.
 ///
 /// # Errors
@@ -283,5 +303,118 @@ mod tests {
             "# Changelog\n\n## Unreleased\n\nNothing yet.\n\n## 0.3.0\n\n### Added\n\n- x (#1)\n\n## 0.2.0\n\nold\n"
         );
         assert!(insert_release("# no heading", "x").is_err());
+    }
+
+    fn write(root: &Path, rel: &str, text: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn fragments_are_read_sorted_and_bad_ones_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().join("changelog.d");
+        assert!(read_fragments(&d).unwrap().is_empty());
+        write(dir.path(), "changelog.d/README.md", "how to");
+        write(dir.path(), "changelog.d/9.fixed.md", " Nine. \n");
+        write(dir.path(), "changelog.d/2.added.md", "Two.");
+        let got = read_fragments(&d).unwrap();
+        assert_eq!(
+            got,
+            vec![frag(2, "added", "Two."), frag(9, "fixed", "Nine.")]
+        );
+        write(dir.path(), "changelog.d/3.added.md", "  \n");
+        assert!(read_fragments(&d).unwrap_err().contains("empty fragment"));
+        std::fs::remove_file(d.join("3.added.md")).unwrap();
+        write(dir.path(), "changelog.d/notes.txt", "x");
+        assert!(
+            read_fragments(&d)
+                .unwrap_err()
+                .contains("not a fragment name")
+        );
+    }
+
+    #[test]
+    fn pending_prints_without_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        run_pending(dir.path()).unwrap();
+        write(dir.path(), "changelog.d/4.added.md", "Four.");
+        run_pending(dir.path()).unwrap();
+        write(dir.path(), "changelog.d/bad.md", "x");
+        assert!(run_pending(dir.path()).is_err());
+    }
+
+    #[test]
+    fn assemble_writes_the_release_and_deletes_fragments() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(
+            run_assemble(root, "0.3.0", None)
+                .unwrap_err()
+                .contains("no fragments")
+        );
+        write(root, "changelog.d/README.md", "how to");
+        write(root, "changelog.d/4.added.md", "Four.");
+        write(
+            root,
+            "CHANGELOG.md",
+            "# Changelog\n\n## Unreleased\n\nNothing yet.\n\n## 0.2.0\n\nold\n",
+        );
+        write(root, "hl.md", "Big release.\n");
+        run_assemble(root, "0.3.0", Some(&root.join("hl.md"))).unwrap();
+        let log = std::fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+        assert!(
+            log.contains(
+                "## 0.3.0\n\n### Highlights\n\nBig release.\n\n### Added\n\n- Four. (#4)\n"
+            )
+        );
+        assert!(log.contains("## 0.2.0"));
+        assert!(!root.join("changelog.d/4.added.md").exists());
+        assert!(root.join("changelog.d/README.md").exists());
+        write(root, "changelog.d/5.fixed.md", "Five.");
+        assert!(run_assemble(root, "0.4.0", Some(&root.join("missing.md"))).is_err());
+        write(root, "CHANGELOG.md", "no heading");
+        assert!(run_assemble(root, "0.4.0", None).is_err());
+    }
+
+    #[test]
+    fn check_reads_the_range_from_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .current_dir(root)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        write(root, "a.txt", "a");
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "base"]);
+        git(&["checkout", "-q", "-b", "topic"]);
+        write(root, "b.txt", "b");
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "no fragment"]);
+        let repo = root.to_str().unwrap();
+        let args = DiffArgs::parse(&["--repo", repo, "--base", "main"], root).unwrap();
+        assert!(run_check(&args, &[]).is_err());
+        assert!(run_check(&args, &[EXEMPT_LABEL]).is_ok());
+        write(root, "changelog.d/7.added.md", "Seven.");
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "fragment"]);
+        run_check(&args, &[]).unwrap();
+    }
+
+    #[test]
+    fn check_flags_split_labels_from_the_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(run_check_flags(root, &["--labels"]).is_err());
+        assert!(run_check_flags(root, &["--labels", "a, no-changelog"]).is_err());
+        assert!(run_check_flags(root, &["--base", "nope", "--labels", "no-changelog"]).is_err());
     }
 }
