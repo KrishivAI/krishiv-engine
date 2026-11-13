@@ -657,6 +657,8 @@ def main(argv=None) -> None:
             kw["container_data_root"] = a.spark_data_root or None
         if a.engine == "krishiv":
             kw["threads"] = a.duckdb_threads
+        if a.engine == "krishiv-connect" and a.runner:
+            kw["binary"] = a.runner  # the `krishiv` binary (it runs `krishiv server`)
         if a.engine == "duckdb":
             kw["memory_limit"] = a.duckdb_memory_limit
             if a.duckdb_threads:
