@@ -155,9 +155,9 @@ async fn manifest_inheritance_matches_spec() {
     assert_eq!(
         got,
         vec![
-            ("a".to_owned(), 7, 7, 42, EntryStatus::Added),
-            ("b".to_owned(), 3, 3, 5, EntryStatus::Existing),
-            ("d".to_owned(), 6, 7, 42, EntryStatus::Added),
+            ("a".to_owned(), Some(7), Some(7), 42, EntryStatus::Added),
+            ("b".to_owned(), Some(3), Some(3), 5, EntryStatus::Existing),
+            ("d".to_owned(), Some(6), Some(7), 42, EntryStatus::Added),
         ]
     );
 
@@ -186,7 +186,7 @@ async fn manifest_inheritance_matches_spec() {
             d.file_sequence_number,
             d.snapshot_id
         ),
-        (0, 0, 3)
+        (Some(0), Some(0), 3)
     );
 
     // v3: row ids assigned in order from the manifest's first_row_id.
@@ -423,9 +423,9 @@ async fn plan_prunes_and_time_travels() {
     assert_eq!(
         seqs,
         [
-            (1, snapshots[0].0),
-            (1, snapshots[0].0),
-            (2, snapshots[1].0)
+            (Some(1), snapshots[0].0),
+            (Some(1), snapshots[0].0),
+            (Some(2), snapshots[1].0)
         ]
     );
     // x >= 3 keeps only c; the first manifest's summary (x in 1..=2) prunes it.

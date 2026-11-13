@@ -726,21 +726,39 @@ fn inheritance_rules() {
     assert_eq!(
         got,
         vec![
-            (7, 7, 42, Some(1000)),
-            (3, 3, 5, Some(1010)),
-            (6, 6, 9, Some(1030)),
+            (Some(7), Some(7), 42, Some(1000)),
+            (Some(3), Some(3), 5, Some(1010)),
+            (Some(6), Some(6), 9, Some(1030)),
         ]
     );
-    // An existing entry with no sequence number outside v1 breaks the spec.
-    let e = inherit(&m, vec![parsed(EntryStatus::Existing, None, None, 1)]).unwrap_err();
-    assert!(e.to_string().contains("no data sequence number"), "{e}");
+    // An existing entry with no sequence numbers outside v1 (a writer that
+    // omitted them): read, left null, as Java and iceberg-rust do (review F1).
+    let out = inherit(&m, vec![parsed(EntryStatus::Existing, None, None, 1)]).unwrap();
+    assert_eq!(
+        (
+            data(&out[0]).data_sequence_number,
+            data(&out[0]).file_sequence_number
+        ),
+        (None, None)
+    );
+    // Only the file sequence number missing: the data one is kept.
+    let mut only_data = parsed(EntryStatus::Existing, Some(4), None, 1);
+    only_data.file_sequence_number = None;
+    let out = inherit(&m, vec![only_data]).unwrap();
+    assert_eq!(
+        (
+            data(&out[0]).data_sequence_number,
+            data(&out[0]).file_sequence_number
+        ),
+        (Some(4), None)
+    );
     // v1: sequence number 0 for everything.
     let v1 = inherit(
         &manifest_entry(0, None),
         vec![parsed(EntryStatus::Existing, None, None, 1)],
     )
     .unwrap();
-    assert_eq!(data(&v1[0]).data_sequence_number, 0);
+    assert_eq!(data(&v1[0]).data_sequence_number, Some(0));
     assert_eq!(data(&v1[0]).file.first_row_id, None);
     // A file that has a first row id keeps it and does not advance the counter.
     let mut keep = parsed(EntryStatus::Existing, Some(1), Some(1), 10);

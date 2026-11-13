@@ -194,10 +194,15 @@ pub struct DataFileEntry {
     pub status: EntryStatus,
     /// The snapshot that added it.
     pub snapshot_id: i64,
-    /// Data sequence number.
-    pub data_sequence_number: i64,
-    /// File sequence number.
-    pub file_sequence_number: i64,
+    /// Data sequence number. `None` only for an EXISTING entry whose writer left
+    /// it null in a manifest with a non-zero sequence number: Java and
+    /// iceberg-rust read such tables and leave it null. Nothing in an
+    /// append-only read uses it; delete assignment (PR-25b) must decide what a
+    /// missing one means before it compares sequence numbers.
+    pub data_sequence_number: Option<i64>,
+    /// File sequence number (`None` as for `data_sequence_number`; writers
+    /// before Iceberg 1.1 did not write it).
+    pub file_sequence_number: Option<i64>,
 }
 
 /// What a delete file deletes.
@@ -238,10 +243,12 @@ pub enum LiveEntry {
 ///   assigned the running id, which then advances by its record count (format v3);
 ///   a data manifest without one leaves every file's `first_row_id` null.
 ///
+/// An EXISTING entry with no sequence number in a manifest whose own is not 0
+/// keeps it null, as Java's `BaseInheritableMetadata` and iceberg-rust's
+/// `inherit_data` do (review F1).
+///
 /// # Errors
-/// `INTERNAL_ERROR` for an EXISTING entry with no sequence number in a manifest
-/// whose own is not 0 (the spec requires it to be written), and for a row id
-/// that overflows.
+/// `INTERNAL_ERROR` for a row id that overflows.
 pub fn inherit(
     manifest: &ManifestFileEntry,
     entries: Vec<ParsedEntry>,
@@ -261,16 +268,9 @@ pub fn inherit(
             continue;
         }
         let inherits = e.status == EntryStatus::Added || manifest.sequence_number == 0;
-        let seq = |v: Option<i64>, what: &str| match v {
-            Some(v) => Ok(v),
-            None if inherits => Ok(manifest.sequence_number),
-            None => Err(internal(format!(
-                "an existing entry for {} in manifest {} has no {what} sequence number",
-                e.file.path, manifest.path
-            ))),
-        };
-        let data_sequence_number = seq(e.sequence_number, "data")?;
-        let file_sequence_number = seq(e.file_sequence_number, "file")?;
+        let seq = |v: Option<i64>| v.or(inherits.then_some(manifest.sequence_number));
+        let data_sequence_number = seq(e.sequence_number);
+        let file_sequence_number = seq(e.file_sequence_number);
         let mut file = e.file;
         if manifest.content == ManifestContent::Data {
             match &mut next_row_id {
