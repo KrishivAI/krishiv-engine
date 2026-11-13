@@ -722,7 +722,7 @@ def collect(df, F, types: list[str]) -> tuple[list, list, list | None, str | Non
 
 
 def to_arrow(df):
-    """`DataFrame.toArrow` exists from pyspark 4.0; a 3.5 client (needed against a 3.5 server) goes through the client."""
+    """`DataFrame.toArrow` exists from pyspark 4.0; a 3.5 client (for a 3.5 server) uses the client."""
     if hasattr(df, "toArrow"):
         return df.toArrow()
     table, _ = df._session.client.to_table(df._plan)
