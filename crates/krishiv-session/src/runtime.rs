@@ -544,6 +544,24 @@ impl EngineRuntime {
         self.sessions.ended(session_id)
     }
 
+    /// The number of running queries of session `session`: reserved, or
+    /// attached and not finished (ended entries are only dropped lazily, by
+    /// [`Self::reserve`]).
+    pub(crate) fn running_in_session(&self, session: u64) -> usize {
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .queries
+            .values()
+            .filter(|l| {
+                l.session == session
+                    && l.query
+                        .as_ref()
+                        .is_none_or(|q| q.upgrade().is_some_and(|q| !q.is_finished()))
+            })
+            .count()
+    }
+
     /// Forgets session `session` once it is gone (its closed mark).
     pub(crate) fn forget_session(&self, session: u64) {
         self.live

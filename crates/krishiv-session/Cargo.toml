@@ -29,6 +29,8 @@ krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
 krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.0" }
 # The `EXPLAIN VERBOSE` JSON document.
 serde_json = { workspace = true, features = ["std"] }
+# Static token digests (`auth/tokens.rs`, P3-T002).
+sha2.workspace = true
 # Row hashes for the agent table (`xxhash3_128`, v1 frozen in `agent.rs`).
 twox-hash = { workspace = true, features = ["xxhash3_128"] }
 # Selector patterns of the resource group file (`resource_groups/config.rs`).

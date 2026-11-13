@@ -1192,7 +1192,18 @@ impl Session {
         let scans = FileScans {
             io: io.clone(),
             config: Arc::clone(&config),
-            slots: u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1),
+            // File partitions are cut for this many slots. Under `krishiv.deterministicOrder` it
+            // is a constant, never the machine's thread count: a morsel never spans a partition,
+            // so the partitions decide which rows a lane reads (T094 G1).
+            slots: if config
+                .get(&krishiv_common::config::DETERMINISTIC_ORDER)
+                .and_then(krishiv_common::config::ConfigValue::as_bool)
+                .unwrap_or(false)
+            {
+                16
+            } else {
+                u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1)
+            },
             runtime: self.state.runtime.executor.io_handle().clone(),
         };
         let catalog = Arc::new(QueryCatalog::new(
