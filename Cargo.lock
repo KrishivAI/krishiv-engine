@@ -2993,6 +2993,7 @@ dependencies = [
  "object_store",
  "parquet 60.1.0",
  "proptest",
+ "roaring",
  "serde",
  "serde_json",
  "tempfile",

@@ -22,7 +22,10 @@ krishiv-arrow-bridge = { path = "../krishiv-arrow-bridge" }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
 krishiv-io = { path = "../krishiv-io" }
+krishiv-memory = { path = "../krishiv-memory" }
 krishiv-types = { path = "../krishiv-types" }
+# Deletion vectors (the portable roaring64 layout); already built for iceberg.
+roaring = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt"] }
@@ -30,7 +33,6 @@ typetag = { workspace = true }
 
 [dev-dependencies]
 arrow-select = { workspace = true }
-krishiv-memory = { path = "../krishiv-memory" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }

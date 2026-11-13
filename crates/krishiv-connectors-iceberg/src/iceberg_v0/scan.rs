@@ -24,6 +24,7 @@ use krishiv_io::{ColumnPath, PushdownExpr};
 use super::storage::from_iceberg;
 use super::types::spark_schema;
 use crate::plan::bounds::min_be_bytes;
+use crate::plan::deletes::DeleteIndex;
 use crate::plan::entry::{
     ContentFile, ContentKind, EntryStatus, FileFormatKind, FileScanTask, LiveEntry,
     ManifestContent, ManifestFileEntry, ManifestFilter, ParsedEntry, PartitionFieldSummary,
@@ -507,7 +508,9 @@ pub(crate) struct PlanEnv<'a> {
 /// # Errors
 /// The I/O error of a read (its class kept); `KRISHIV_CATALOG_LIMIT_EXCEEDED` for
 /// a manifest list or manifest over the size limit; an internal error for one
-/// iceberg-rust cannot parse or that breaks the spec.
+/// iceberg-rust cannot parse or that breaks the spec;
+/// `KRISHIV_ICEBERG_INVALID_DELETES` for deletes that cannot be assigned
+/// ([`DeleteIndex`]).
 pub(crate) async fn plan(
     io: &FileIO,
     snapshot: &TableSnapshot,
@@ -560,12 +563,19 @@ pub(crate) async fn plan(
                     out.tasks.push(FileScanTask {
                         file: Arc::new(d),
                         residual: predicate.cloned(),
+                        deletes: Arc::default(),
                     });
                 } else {
                     out.files_pruned += 1;
                 }
             }
             LiveEntry::Delete(d) => out.delete_files.push(Arc::new(d)),
+        }
+    }
+    let index = DeleteIndex::new(&out.delete_files, &snapshot.partition_specs)?;
+    if !index.is_empty() {
+        for t in &mut out.tasks {
+            t.deletes = Arc::new(index.for_data_file(&t.file)?);
         }
     }
     Ok(out)
