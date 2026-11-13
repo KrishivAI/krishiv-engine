@@ -2,8 +2,9 @@
 //! `krishiv server` (design P3-T001): one process, one engine runtime, two
 //! listeners on one tokio runtime: Spark Connect (gRPC, port 15002) and the
 //! admin server (HTTP, port 8080: `/healthz`, `/readyz`, `/metrics` and,
-//! with the `ui` feature and `krishiv.ui.enabled`, the web UI behind a token
-//! printed once at start).
+//! with the `ui` feature and `krishiv.ui.enabled`, the web UI). With
+//! `krishiv.auth.tokens.*` configured the admin routes take those principals
+//! and the ADR 0046 roles (P3-T002); without, a random token printed once.
 //!
 //! Before anything binds: a non-loopback address is refused (no
 //! authentication exists until P3-T002), uid 0 is refused without
@@ -26,6 +27,9 @@ use krishiv_common::config::{
 use krishiv_connect_server::{
     ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
 };
+use krishiv_server::guard::{Guard, TokenGuard};
+use krishiv_server::session_guard::SessionGuard;
+use krishiv_session::auth::{AuthConfig, ServerAuth, is_auth_key};
 use krishiv_session::{EngineRuntime, Session};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -66,7 +70,20 @@ pub(crate) fn run(args: &ServerArgs) -> i32 {
 fn serve(args: &ServerArgs) -> Result<(), String> {
     let mut config = Config::new();
     let mut builder = EngineRuntime::builder();
+    // Authentication settings (secret references included) are read once here and never become
+    // engine configuration: a session could otherwise list them with `SET`.
+    let auth = AuthConfig::from_settings(
+        args.conf
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .filter(|(k, _)| is_auth_key(k)),
+    )
+    .and_then(|c| ServerAuth::new(&c))
+    .map_err(|e| e.to_string())?;
     for (k, v) in &args.conf {
+        if is_auth_key(k) {
+            continue;
+        }
         let warning = config.set(k, v).map_err(|e| e.to_string())?;
         // A Spark Connect setting Krishiv does not read would be ignored
         // silently: refuse it, naming the replacement where there is one.
@@ -122,6 +139,7 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
         run_listeners(
             runtime,
             &config,
+            auth,
             SocketAddr::new(host, connect_port),
             SocketAddr::new(host, args.port),
         )
@@ -147,6 +165,7 @@ fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: b
 async fn run_listeners(
     runtime: Arc<EngineRuntime>,
     config: &Config,
+    auth: ServerAuth,
     connect_addr: SocketAddr,
     admin_addr: SocketAddr,
 ) -> Result<(), String> {
@@ -167,9 +186,17 @@ async fn run_listeners(
     let connect_bound = connect_listener.local_addr().map_err(|e| e.to_string())?;
     let admin_bound = admin_listener.local_addr().map_err(|e| e.to_string())?;
 
+    // With authentication configured the admin routes take the same principals as Connect;
+    // without it, a random token printed once (loopback only).
+    let authenticated = auth.is_enabled();
     let token = krishiv_server::internal::random_token().map_err(|e| e.to_string())?;
+    let guard: Arc<dyn Guard> = if authenticated {
+        Arc::new(SessionGuard::new(Arc::new(auth)))
+    } else {
+        Arc::new(TokenGuard::new(&token))
+    };
     let ready = Arc::new(AtomicBool::new(false));
-    let app = admin_router(&runtime, config, &token, Arc::clone(&ready), admin_bound)?;
+    let app = admin_router(&runtime, config, guard, Arc::clone(&ready), admin_bound)?;
     let connect = ConnectServer::new(
         Arc::clone(&manager),
         ConnectServerConfig::from_config(config),
@@ -193,7 +220,9 @@ async fn run_listeners(
     println!("krishiv server: Spark Connect on sc://{connect_bound}");
     println!("krishiv server: admin on http://{admin_bound}");
     let ui = flag(config, &UI_ENABLED, true) && cfg!(feature = "ui");
-    if ui {
+    if authenticated {
+        println!("krishiv server: admin routes need a configured token (krishiv.auth.tokens)");
+    } else if ui {
         println!("open http://{admin_bound}/?token={token}");
     } else if metrics_need_token(config, admin_bound) {
         // `/metrics` is behind the admin token: print it once.
@@ -222,22 +251,22 @@ async fn run_listeners(
 fn admin_router(
     runtime: &Arc<EngineRuntime>,
     config: &Config,
-    token: &str,
+    guard: Arc<dyn Guard>,
     ready: Arc<AtomicBool>,
     bound: SocketAddr,
 ) -> Result<axum::Router, String> {
     let metrics_on = flag(config, &METRICS_ENABLED, false);
     let public = metrics_on && !metrics_need_token(config, bound);
     let snapshot_runtime = Arc::clone(runtime);
-    let metrics = krishiv_server::metrics::metrics_route(
+    let metrics = krishiv_server::metrics::metrics_route_guarded(
         metrics_on,
         Arc::new(move || snapshot_runtime.metrics()),
-        (!public).then_some(token),
+        (!public).then(|| Arc::clone(&guard)),
     );
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
         let source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
-        krishiv_server::internal::router_with_ui(Arc::new(source), token)
+        krishiv_server::internal::router_with_ui_guard(Arc::new(source), guard)
     } else {
         krishiv_server::api_router()
     };
