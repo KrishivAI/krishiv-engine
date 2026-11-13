@@ -1,0 +1,25 @@
+-- variants built from raw bytes (setup.py) incl. malformed ones
+select id, is_valid_variant(v) from mv order by id;
+select id, schema_of_variant(v) from mv where id in (1, 9) order by id;
+select id, schema_of_variant(v) from mv where id = 2;
+select id, schema_of_variant(v) from mv where id = 3;
+select id, schema_of_variant(v) from mv where id = 7;
+select schema_of_variant_agg(v) from mv where id in (1, 9);
+select schema_of_variant_agg(v) from mv where id = 3;
+select schema_of_variant_agg(v) from mv where id = 7;
+select id, to_json(v) from mv where id = 1;
+select id, to_json(v) from mv where id = 3;
+select id, variant_get(v, '$', 'int') from mv where id in (1, 9);
+select id, variant_get(v, '$', 'int') from mv where id = 2;
+select id, try_variant_get(v, '$', 'int') from mv where id = 2;
+select id, cast(v as int) from mv where id = 3;
+select id, try_cast(v as int) from mv where id = 3;
+select id, is_variant_null(v) from mv order by id;
+select count(*), count(v), sum(cast(is_valid_variant(v) as int)) from mv;
+select is_valid_variant(v), count(*) from mv group by 1 order by 1;
+select id from mv where is_valid_variant(v) order by id;
+select id, case when id = 1 then v::int else -1 end from mv order by id;
+set spark.sql.ansi.enabled=false;
+select id, is_valid_variant(v) from mv order by id;
+select id, cast(v as int) from mv where id = 3;
+select id, variant_get(v, '$', 'int') from mv where id = 2;
