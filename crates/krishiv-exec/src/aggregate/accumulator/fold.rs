@@ -128,6 +128,17 @@ impl Accumulator {
         match (&mut self.kind, state) {
             // Handled at the top of `fold`.
             (Kind::Udf(_), _) => return Err(internal("an aggregate UDF fold".to_owned())),
+            // Every row counts once with one weight: no per-row test.
+            (Kind::Count(c), false)
+                if run.is_none()
+                    && mask.is_none()
+                    && matches!(w, Weights::Const(_))
+                    && nulls
+                        .iter()
+                        .all(|n| n.as_ref().is_none_or(|n| n.null_count() == 0)) =>
+            {
+                small_fold::dense_count(groups, weight(w, 0), c);
+            }
             (Kind::Count(c), false) => {
                 for (i, &g) in groups.iter().enumerate() {
                     if active(i)

@@ -717,7 +717,7 @@ enum BatchProof {
 /// The OR of the ones'-complement magnitudes of `a` into `m`: branch-free,
 /// unlike a 128-bit maximum, and `|v| <= OR + 1` for every `v`.
 fn or_magnitudes<N: DecimalNative>(m: u128, a: &[N]) -> u128 {
-    a.iter().fold(m, |m, &v| m | v.ones_magnitude())
+    m | N::or_magnitudes(a)
 }
 
 /// An upper bound of `|v|` over every lane of a side, NULL slots included

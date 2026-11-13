@@ -34,6 +34,12 @@ pub trait DecimalNative:
     /// The ones'-complement magnitude (`|v|` for `v >= 0`, `|v| - 1`
     /// otherwise): branch-free, and `|v| <= m + 1`.
     fn ones_magnitude(self) -> u128;
+    /// The OR of [`DecimalNative::ones_magnitude`] over `v` (so every
+    /// `|x| <= result + 1`). The `i64` form ORs in 64 bits, which the
+    /// compiler vectorizes; a `u128` accumulator stays scalar.
+    fn or_magnitudes(v: &[Self]) -> u128 {
+        v.iter().fold(0_u128, |m, &x| m | x.ones_magnitude())
+    }
     /// `-v`, wrapping.
     fn negate(self) -> Self;
     /// `|v|`, wrapping.
@@ -52,6 +58,13 @@ impl DecimalNative for i64 {
     #[inline(always)]
     fn ones_magnitude(self) -> u128 {
         u128::from((self ^ (self >> 63)).cast_unsigned())
+    }
+    #[inline]
+    fn or_magnitudes(v: &[Self]) -> u128 {
+        u128::from(
+            v.iter()
+                .fold(0_u64, |m, &x| m | (x ^ (x >> 63)).cast_unsigned()),
+        )
     }
     #[inline(always)]
     fn negate(self) -> Self {
@@ -80,6 +93,22 @@ impl DecimalNative for i128 {
     #[inline(always)]
     fn ones_magnitude(self) -> u128 {
         (self ^ (self >> 127)).cast_unsigned()
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the two 64-bit halves of each value, ORed apart"
+    )]
+    #[inline]
+    fn or_magnitudes(v: &[Self]) -> u128 {
+        let (lo, hi) = v.iter().fold((0_u64, 0_u64), |(lo, hi), &x| {
+            let h = (x >> 64) as i64;
+            let sign = (h >> 63).cast_unsigned();
+            (
+                lo | (x.cast_unsigned() as u64 ^ sign),
+                hi | (h.cast_unsigned() ^ sign),
+            )
+        });
+        (u128::from(hi) << 64) | u128::from(lo)
     }
     #[inline(always)]
     fn negate(self) -> Self {
@@ -303,6 +332,33 @@ mod tests {
     use arrow_array::types::{Decimal64Type, Decimal128Type};
 
     use super::*;
+
+    /// The slice form ORs the same magnitudes as the per-value one, on
+    /// both carriers, signs and both 64-bit halves of an `i128` included.
+    #[test]
+    fn or_magnitudes_matches_the_per_value_fold() {
+        let narrow = [0_i64, 5, -1, -6, i64::MAX, i64::MIN, 1 << 40, -(1 << 50)];
+        for n in 0..=narrow.len() {
+            let v = &narrow[..n];
+            let want = v.iter().fold(0_u128, |m, &x| m | x.ones_magnitude());
+            assert_eq!(i64::or_magnitudes(v), want, "i64, {n} values");
+        }
+        let wide = [
+            0_i128,
+            7,
+            -8,
+            i128::from(i64::MIN),
+            i128::from(i64::MAX) + 1,
+            -(1_i128 << 100),
+            i128::MAX,
+            i128::MIN,
+        ];
+        for n in 0..=wide.len() {
+            let v = &wide[..n];
+            let want = v.iter().fold(0_u128, |m, &x| m | x.ones_magnitude());
+            assert_eq!(i128::or_magnitudes(v), want, "i128, {n} values");
+        }
+    }
 
     /// Either result native lands on either carrier with the same values.
     #[test]

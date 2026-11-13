@@ -4,29 +4,19 @@
 use krishiv_kernels::decimal::DecimalNative;
 
 /// The most groups a [`fold_small`] batch can have.
-const SMALL_GROUPS: usize = 8;
+pub(super) const SMALL_GROUPS: usize = 8;
 const _: () = assert!(SMALL_GROUPS.is_power_of_two());
 
-/// The proven dense fold (see `DecFold::sum`) of a table of at most
-/// [`SMALL_GROUPS`] groups: the batch adds into stack arrays indexed by
-/// `g & 7`, with no bounds test and no per-row state test, and the totals
-/// are added to the table at the end. Wrapping adds commute, so the
-/// result equals the per-row loop's. `st` (`sum`'s state, no group
-/// overflowed on entry) is set to "has a value" for each touched group;
-/// `count` (`avg`) gets the rows per group.
-fn fold_small<N: DecimalNative>(
+/// Per-group totals of a batch over a table of at most [`SMALL_GROUPS`]
+/// groups: the wrapping sum of `v` and the row count of each group, in
+/// stack arrays indexed by `g & 7` (no bounds test, no per-row state
+/// test). Wrapping adds commute, so the totals equal the per-row loop's.
+pub(super) fn small_totals<N: DecimalNative>(
     groups: &[u32],
     v: &[N],
-    sum: &mut [i128],
-    count: Option<&mut [i64]>,
-    st: &mut [u8],
-) {
+) -> ([i128; SMALL_GROUPS], [i64; SMALL_GROUPS]) {
     // Two lanes (even and odd rows) break the dependency chain through a
     // group's running total when consecutive rows share a group.
-    debug_assert!(
-        groups.iter().all(|&g| (g as usize) < sum.len()),
-        "a group id past the table"
-    );
     let mut acc = [[0_i128; SMALL_GROUPS]; 2];
     let mut rows = [[0_i64; SMALL_GROUPS]; 2];
     let (gp, gr) = groups.as_chunks::<2>();
@@ -43,8 +33,29 @@ fn fold_small<N: DecimalNative>(
         acc[0][g] = acc[0][g].wrapping_add(x.wide());
         rows[0][g] += 1;
     }
-    let acc: [i128; SMALL_GROUPS] = std::array::from_fn(|g| acc[0][g].wrapping_add(acc[1][g]));
-    let rows: [i64; SMALL_GROUPS] = std::array::from_fn(|g| rows[0][g] + rows[1][g]);
+    (
+        std::array::from_fn(|g| acc[0][g].wrapping_add(acc[1][g])),
+        std::array::from_fn(|g| rows[0][g] + rows[1][g]),
+    )
+}
+
+/// The proven dense fold (see `DecFold::sum`) of a table of at most
+/// [`SMALL_GROUPS`] groups, through [`small_totals`]; the totals are added
+/// to the table at the end. `st` (`sum`'s state, no group overflowed on
+/// entry) is set to "has a value" for each touched group; `count` (`avg`)
+/// gets the rows per group.
+fn fold_small<N: DecimalNative>(
+    groups: &[u32],
+    v: &[N],
+    sum: &mut [i128],
+    count: Option<&mut [i64]>,
+    st: &mut [u8],
+) {
+    debug_assert!(
+        groups.iter().all(|&g| (g as usize) < sum.len()),
+        "a group id past the table"
+    );
+    let (acc, rows) = small_totals(groups, v);
     for (g, s) in sum.iter_mut().enumerate() {
         *s = s.wrapping_add(acc[g]);
     }
@@ -101,9 +112,67 @@ pub(super) fn dense_avg<N: DecimalNative>(
     }
 }
 
+/// The dense `count` fold: raw rows, every row counted (no NULL argument,
+/// no `FILTER` mask, no running window), each with weight `k`. One group
+/// (a global aggregate) adds the batch length; at most [`SMALL_GROUPS`]
+/// groups count rows per group in stack arrays; more take the row loop.
+/// Wrapping adds commute, so every form equals the per-row loop.
+pub(super) fn dense_count(groups: &[u32], k: i64, count: &mut [i64]) {
+    debug_assert!(
+        groups.iter().all(|&g| (g as usize) < count.len()),
+        "a group id past the table"
+    );
+    if let [c] = count {
+        #[expect(clippy::cast_possible_wrap, reason = "wrapping, as the per-row adds")]
+        let n = groups.len() as i64;
+        *c = c.wrapping_add(k.wrapping_mul(n));
+        return;
+    }
+    if count.len() <= SMALL_GROUPS {
+        let mut rows = [[0_i64; SMALL_GROUPS]; 2];
+        let (gp, gr) = groups.as_chunks::<2>();
+        for g2 in gp {
+            for k in 0..2 {
+                rows[k][g2[k] as usize & (SMALL_GROUPS - 1)] += 1;
+            }
+        }
+        for &g in gr {
+            rows[0][g as usize & (SMALL_GROUPS - 1)] += 1;
+        }
+        for (g, c) in count.iter_mut().enumerate() {
+            *c = c.wrapping_add(k.wrapping_mul(rows[0][g] + rows[1][g]));
+        }
+        return;
+    }
+    for &g in groups {
+        let c = &mut count[g as usize];
+        *c = c.wrapping_add(k);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dense_count_matches_the_per_row_loop() {
+        for n_groups in [1_usize, 2, 5, SMALL_GROUPS, SMALL_GROUPS + 1, 40] {
+            for len in [0_usize, 1, 2, 3, 64, 101] {
+                for k in [1_i64, -1, 3, i64::MAX] {
+                    let groups: Vec<u32> = (0..len)
+                        .map(|i| u32::try_from((i * 7 + i / 5) % n_groups).unwrap_or(0))
+                        .collect();
+                    let mut want = vec![i64::MAX - 2; n_groups];
+                    for &g in &groups {
+                        want[g as usize] = want[g as usize].wrapping_add(k);
+                    }
+                    let mut got = vec![i64::MAX - 2; n_groups];
+                    dense_count(&groups, k, &mut got);
+                    assert_eq!(want, got, "{n_groups} groups, {len} rows, weight {k}");
+                }
+            }
+        }
+    }
 
     /// The per-row loop `fold_small` replaces.
     fn reference(groups: &[u32], v: &[i64], sum: &mut [i128], count: &mut [i64], st: &mut [u8]) {

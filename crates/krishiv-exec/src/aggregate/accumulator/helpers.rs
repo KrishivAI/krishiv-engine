@@ -59,10 +59,7 @@ pub(super) fn proven<N: DecimalNative>(
 /// OR + 1`, branch-free) over every slot, NULL ones included. When it is
 /// too loose (values near the bound, large values under NULLs) the caller takes the exact sum.
 pub(super) fn quick_abs<N: DecimalNative>(v: &[N], w: Option<&Weights>) -> u128 {
-    let or = v
-        .iter()
-        .fold(0_u128, |m, &x| m | x.ones_magnitude())
-        .saturating_add(1);
+    let or = N::or_magnitudes(v).saturating_add(1);
     let wmax = match w {
         None => 1,
         Some(Weights::Const(c)) => u128::from(c.unsigned_abs()),
