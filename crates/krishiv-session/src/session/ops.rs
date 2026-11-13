@@ -181,6 +181,11 @@ impl Session {
         });
         // The query's profile waits here for the commit below.
         let hold: Arc<crate::profile_history::HistoryHold> = Arc::default();
+        // Dropped with the future (a cancelled write), it records the held entry as cancelled.
+        let hold_guard = crate::profile_history::HoldGuard::new(
+            Arc::clone(&hold),
+            self.state.runtime.profile_history.clone(),
+        );
         let held_env = QueryEnv {
             history_hold: Some(Arc::clone(&hold)),
             ..env.clone()
@@ -308,9 +313,7 @@ impl Session {
             .then(|| crate::access::still_physical(self, &at).err())
             .flatten()
             .filter(|d| d.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS");
-        if let Some(store) = &self.state.runtime.profile_history {
-            hold.settle(denied.as_ref().or(written.as_ref().err()), store);
-        }
+        hold_guard.settle(denied.as_ref().or(written.as_ref().err()));
         match denied {
             Some(denied) => Err(denied),
             None => written,

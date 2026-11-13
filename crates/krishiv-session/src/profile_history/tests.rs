@@ -470,3 +470,44 @@ fn a_file_write_is_recorded_once_after_its_commit() {
     assert_eq!(stored.len(), 1, "the write's profile is lost or doubled");
     assert_eq!(stored[0].state, "finished");
 }
+
+#[test]
+fn a_dropped_file_write_is_recorded_cancelled_or_finished_never_lost_or_doubled() {
+    use futures::FutureExt;
+    let dir = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path(), "64m");
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let mut recorded_writes = 0;
+    for polls in (0..40_u64).step_by(3) {
+        let df = block_on(session.sql("SELECT id FROM range(0, 10)")).unwrap();
+        let target = out.path().join(format!("t{polls}"));
+        let mut write = Box::pin(df.write().parquet(target.to_str().unwrap()));
+        // Poll `polls` times, a millisecond apart, then drop the future wherever it stands.
+
+        for _ in 0..polls {
+            if write.as_mut().now_or_never().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        drop(write);
+        recorded_writes += 1;
+    }
+    // A write dropped before its query ended has nothing to record; every other one leaves one entry.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = read_history(dir.path()).unwrap();
+    assert!(stored.len() <= recorded_writes, "an entry was doubled");
+    assert!(
+        stored.iter().any(|q| q.state == "cancelled"),
+        "a dropped write's held entry was lost: {:?}",
+        stored.iter().map(|q| q.state.clone()).collect::<Vec<_>>()
+    );
+    assert!(
+        stored
+            .iter()
+            .all(|q| ["finished", "cancelled"].contains(&q.state.as_str()))
+    );
+    assert_eq!(rt.profile_history.as_ref().unwrap().failures(), 0);
+}

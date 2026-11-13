@@ -98,6 +98,17 @@ impl HistoryHold {
         }
     }
 
+    /// Records the held entry as `cancelled`, unless the write already settled: the write's future was dropped.
+    fn settle_cancelled(&self, store: &ProfileHistory) {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let held = std::mem::replace(&mut *state, HoldState::Settled);
+        drop(state);
+        if let HoldState::Held(mut entry) = held {
+            entry.state = "cancelled";
+            store.record(*entry);
+        }
+    }
+
     /// Records the held entry with the write's final outcome (`error` set when it failed).
     pub(crate) fn settle(&self, error: Option<&KrishivError>, store: &ProfileHistory) {
         let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
@@ -115,6 +126,34 @@ impl HistoryHold {
                 entry.error_class = class;
             }
             store.record(*entry);
+        }
+    }
+}
+
+/// Settles a [`HistoryHold`] as `cancelled` when dropped unsettled: a write whose future is dropped
+/// never reaches its own settle call, and its held entry would vanish.
+pub(crate) struct HoldGuard {
+    hold: Arc<HistoryHold>,
+    store: Option<Arc<ProfileHistory>>,
+}
+
+impl HoldGuard {
+    pub(crate) fn new(hold: Arc<HistoryHold>, store: Option<Arc<ProfileHistory>>) -> Self {
+        Self { hold, store }
+    }
+
+    /// Records the held entry with the write's final outcome and disarms the guard's drop.
+    pub(crate) fn settle(&self, error: Option<&KrishivError>) {
+        if let Some(store) = &self.store {
+            self.hold.settle(error, store);
+        }
+    }
+}
+
+impl Drop for HoldGuard {
+    fn drop(&mut self) {
+        if let Some(store) = &self.store {
+            self.hold.settle_cancelled(store);
         }
     }
 }
