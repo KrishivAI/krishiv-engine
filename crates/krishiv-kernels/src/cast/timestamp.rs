@@ -372,6 +372,48 @@ mod tests {
         );
         assert_eq!(zone(b"1x"), None);
     }
+
+    #[test]
+    fn only_an_explicit_zone_counts_as_a_zone() {
+        assert!(timestamp_has_zone("2024-01-02 03:04:05+05:30"));
+        assert!(timestamp_has_zone("2024-01-02 03:04:05 Europe/Paris"));
+        assert!(timestamp_has_zone("2024-01-02T03:04:05Z"));
+        assert!(!timestamp_has_zone("2024-01-02 03:04:05"));
+        assert!(!timestamp_has_zone("2024-01-02"));
+        assert!(!timestamp_has_zone("not a timestamp"));
+    }
+
+    #[test]
+    fn a_leading_colon_is_not_a_time_of_day() {
+        for bad in [":10:00", ":10", "::"] {
+            assert!(
+                matches!(parse(bad.as_bytes()), Parsed::Malformed),
+                "{bad:?}"
+            );
+        }
+        assert!(matches!(parse(b"10:00:00"), Parsed::NeedsClock(_)));
+    }
+
+    #[test]
+    fn a_negative_year_is_before_the_epoch_and_before_year_one() {
+        let neg = at("-0001-01-01").unwrap().0;
+        let pos = at("0001-01-01").unwrap().0;
+        assert!(neg < pos && pos < 0 && neg < 0);
+        assert_eq!(at("+0001-01-01").unwrap().0, pos);
+    }
+
+    #[test]
+    fn an_offset_digit_must_be_a_digit() {
+        // `:` to `?` sit just above `9`: read as digits they would be 10 to 15.
+        for bad in ["+<", "+0<", "+01:<", "+<1", "+01:0<", "+0<:00", "-01:<"] {
+            assert_eq!(offset(bad.as_bytes()), None, "{bad:?}");
+        }
+        assert_eq!(offset(b"+5"), Some(5 * 3600));
+        assert_eq!(offset(b"+05"), Some(5 * 3600));
+        assert_eq!(offset(b"-05:30"), Some(-(5 * 3600 + 30 * 60)));
+        assert_eq!(offset(b"+5:3"), Some(5 * 3600 + 3 * 60));
+        assert_eq!(offset(b"+0530"), Some(5 * 3600 + 30 * 60));
+    }
 }
 
 #[cfg(test)]

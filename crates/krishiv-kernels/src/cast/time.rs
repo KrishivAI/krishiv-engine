@@ -528,4 +528,61 @@ mod tests {
         let nulls = to_time(&text, Some(&fmts), false).unwrap();
         assert_eq!(nulls.null_count(), 2);
     }
+    #[test]
+    fn a_meridiem_must_be_am_or_pm_and_every_unit_parses() {
+        assert_eq!(parse_time("10:30 XX"), None);
+        assert_eq!(parse_time("10:30 pm"), Some((22 * 60 + 30) * 60 * S));
+        assert_eq!(parse_time("10:30 am"), Some((10 * 60 + 30) * 60 * S));
+        for (name, unit) in [
+            ("hour", TimeTruncUnit::Hour),
+            ("Minute", TimeTruncUnit::Minute),
+            ("SECOND", TimeTruncUnit::Second),
+            ("millisecond", TimeTruncUnit::Millisecond),
+            ("MicroSecond", TimeTruncUnit::Microsecond),
+        ] {
+            assert_eq!(TimeTruncUnit::parse(name), Some(unit), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_null_end_or_second_gives_a_null_row() {
+        use arrow_array::{Decimal128Array, Int32Array};
+        let units = StringArray::from(vec![Some("HOUR")]);
+        let out = time_diff(&units, &times(&[Some(0)]), &times(&[None])).unwrap();
+        assert!(out.is_null(0));
+        let out = time_diff(&units, &times(&[None]), &times(&[Some(0)])).unwrap();
+        assert!(out.is_null(0));
+
+        let h = Int32Array::from(vec![Some(1)]);
+        let m = Int32Array::from(vec![Some(2)]);
+        let null_sec = Decimal128Array::from(vec![None::<i128>])
+            .with_precision_and_scale(16, 6)
+            .unwrap();
+        assert!(make_time(&h, &m, &null_sec).unwrap().is_null(0));
+    }
+
+    #[test]
+    fn make_time_takes_zero_seconds_and_refuses_negative_ones() {
+        use arrow_array::{Decimal128Array, Int32Array};
+        let h = Int32Array::from(vec![Some(0)]);
+        let m = Int32Array::from(vec![Some(0)]);
+        let sec = |v: i128| {
+            Decimal128Array::from(vec![Some(v)])
+                .with_precision_and_scale(16, 6)
+                .unwrap()
+        };
+        assert_eq!(make_time(&h, &m, &sec(0)).unwrap().value(0), 0);
+        for bad in [-500_000, -1, -1_000_000, 60_000_000] {
+            let err = make_time(&h, &m, &sec(bad)).unwrap_err();
+            assert_eq!(
+                err.error().error_class(),
+                krishiv_common::error::ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion,
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            make_time(&h, &m, &sec(59_999_999)).unwrap().value(0),
+            59_999_999_000
+        );
+    }
 }
