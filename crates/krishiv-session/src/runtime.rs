@@ -428,9 +428,12 @@ impl EngineRuntime {
         let mut ids = self.cancel_queries(reason, pick);
         // Actions still analyzing or planning, and the rows of those that
         // handed over after the walk above (a reservation racing this cancel).
+        // One registry pass for all of them (nested actions repeat rows).
         let actions = self.actions.cancel_where(reason, pick);
-        for (session, row) in actions.rows {
-            ids.extend(self.cancel_queries(reason, &|s, q| s == session && q == &*row));
+        if !actions.rows.is_empty() {
+            let rows: std::collections::HashSet<(u64, &str)> =
+                actions.rows.iter().map(|(s, r)| (*s, &**r)).collect();
+            ids.extend(self.cancel_queries(reason, &|s, q| rows.contains(&(s, q))));
         }
         let mut seen = std::collections::HashSet::new();
         ids.retain(|id| seen.insert(id.as_str().to_owned()));
