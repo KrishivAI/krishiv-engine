@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Fails unless the latest completed scheduled nightly run on main (nightly.yml) is green for the jobs that gate a
+# Fails unless the latest completed scheduled or manually dispatched (v0.2.0-publish, owner 2026-11-13) nightly run on main (nightly.yml) is green for the jobs that gate a
 # release: every job of the `ci` call (the former scheduled ci.yml run) must have succeeded or been skipped, and the
 # run must cover $GITHUB_SHA. The heavy nightly jobs (fuzz, coverage floors, golden ratchet) are reported by their own
 # issues and do not block binaries or a TestPyPI rehearsal. Needs GH_TOKEN and GITHUB_REPOSITORY / GITHUB_SHA.
@@ -8,8 +8,8 @@ set -euo pipefail
 
 : "${GITHUB_REPOSITORY:?}" "${GITHUB_SHA:?}"
 
-run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?event=schedule&branch=main&status=completed&per_page=1" \
-  --jq '.workflow_runs[0] | [.id, .head_sha, .html_url] | @tsv')
+run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?branch=main&status=completed&per_page=20" \
+  --jq '[.workflow_runs[] | select(.event == "schedule" or .event == "workflow_dispatch")][0] | [.id, .head_sha, .html_url] | @tsv')
 if [ -z "$run" ] || [ "$run" = "null	null	null" ]; then
   echo "::error::no completed scheduled nightly run on main; run the nightly and retry"
   exit 1
