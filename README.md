@@ -36,9 +36,16 @@ next releases land.
 
 ## Install
 
+**Python** (3.11+, or free-threaded 3.14t):
+
 ```bash
-pip install "krishiv[pyarrow]"   # Python 3.11+, or free-threaded 3.14t
-cargo add krishiv@0.2.0           # Rust
+pip install "krishiv[pyarrow]"
+```
+
+**Rust:**
+
+```bash
+cargo add krishiv
 ```
 
 Install with the `pyarrow` extra: `collect()`, `show()` and `toArrow()` return Arrow data. Wheels cover Linux x86_64
