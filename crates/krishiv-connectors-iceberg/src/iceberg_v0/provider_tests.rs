@@ -265,6 +265,23 @@ impl Session {
         })
     }
 
+    /// The physical plan of `sql` as `EXPLAIN` prints it.
+    pub(super) fn explain(&self, sql: &str) -> String {
+        let plan =
+            krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
+                .unwrap();
+        let plan = block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))
+            .unwrap()
+            .plan;
+        let plan = krishiv_optimizer::optimize(&plan).unwrap();
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        DefaultPlanner
+            .plan(&plan, &cx)
+            .unwrap()
+            .explain_all()
+            .to_string()
+    }
+
     /// [`Self::run`]'s rows rendered as `a|b|c`.
     pub(super) fn rows(&self, sql: &str) -> Vec<String> {
         render(&self.run(sql).unwrap_or_else(|e| panic!("{sql}: {e}")))

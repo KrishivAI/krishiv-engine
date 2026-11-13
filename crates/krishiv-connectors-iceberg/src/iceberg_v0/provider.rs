@@ -28,7 +28,7 @@
 //!   [`Pruner`] when the scan is built; every filter is still evaluated on the
 //!   rows ([`FilterPushdown::Inexact`]).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
@@ -559,6 +559,48 @@ impl ScanPushdown for IcebergScan {
         let source = scan.build(inner)?;
         let eq = EqProjection::new(&source.schema(), output)?;
         Ok(Arc::new(DeleteSource::new(source, state, Some(eq))))
+    }
+
+    /// `Snapshot: <id>, DataFiles: <read>/<total>, DeleteFiles: [position=..,
+    /// dv=.., equality=..]`: the delete files that apply to the data files
+    /// the scan reads, each counted once.
+    fn explain(&self, pushdowns: &ScanPushdowns) -> Option<String> {
+        let scan = self.pruned(&pushdowns.filters);
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut counts = [0_usize; 3];
+        let assigned: Vec<_> = scan
+            .files()
+            .iter()
+            .filter_map(|f| self.ordinals.get(&file_key(f)))
+            .filter_map(|&i| self.index.for_data_file(&self.entries[i]).ok())
+            .collect();
+        for d in &assigned {
+            let kinds = [
+                d.position_deletes.iter().collect::<Vec<_>>(),
+                d.deletion_vector.iter().collect(),
+                d.equality_deletes.iter().collect(),
+            ];
+            for (n, files) in counts.iter_mut().zip(kinds) {
+                for f in files {
+                    if seen.insert(f.entry.file.path.as_str()) {
+                        *n += 1;
+                    }
+                }
+            }
+        }
+        let snapshot = self
+            .snapshot
+            .snapshot_id
+            .map_or_else(|| "none".to_owned(), |id| id.to_string());
+        Some(format!(
+            "Snapshot: {snapshot}, DataFiles: {}/{}, DeleteFiles: [position={}, dv={}, \
+             equality={}]",
+            scan.files().len(),
+            self.files.len(),
+            counts[0],
+            counts[1],
+            counts[2]
+        ))
     }
 
     fn with_file_splits(

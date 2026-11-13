@@ -828,6 +828,36 @@ fn row_estimate_from_iceberg_metadata() {
     assert_eq!(p.statistics().unwrap().rows, 5);
 }
 
+/// `EXPLAIN` shows the Iceberg scan's snapshot, the data files read after
+/// pruning out of all, and the delete files that apply to them by kind
+/// (PR-25d).
+#[test]
+fn explain_shows_snapshot_files_and_deletes() {
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            data("c.parquet", 0, 1, 10, 3),
+            data("b.parquet", 1, 1, 20, 3),
+            dv("a.puffin", 0, 2, "a.parquet", &[0]),
+            positions("pc.parquet", 0, 2, &[("c.parquet", 1)], None),
+            equality("e.parquet", 0, 2, &[Some(12)]),
+        ],
+        true,
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let s = provider_session(p);
+    let all = s.explain("SELECT id FROM t");
+    assert!(
+        all.contains("Snapshot: 1000, DataFiles: 3/3, DeleteFiles: [position=1, dv=1, equality=1]"),
+        "{all}"
+    );
+    let one = s.explain("SELECT id FROM t WHERE p = 1");
+    assert!(
+        one.contains("Snapshot: 1000, DataFiles: 1/3, DeleteFiles: [position=0, dv=0, equality=0]"),
+        "{one}"
+    );
+}
+
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
 #[derive(Debug, Clone)]
 enum Op {
