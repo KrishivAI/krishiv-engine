@@ -193,8 +193,9 @@ impl LogPool {
             .record(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
         let (done, result) = oneshot::channel();
         let job: Job = Box::new(move || {
-            let _slot = permit;
             let out = std::panic::catch_unwind(AssertUnwindSafe(f));
+            // The slot is free before the caller can see the result.
+            drop(permit);
             // The caller's future may have been dropped; the result is then dropped here.
             let _unread = done.send(out);
         });
