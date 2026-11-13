@@ -95,8 +95,10 @@ impl std::fmt::Debug for PendingReg {
     }
 }
 
-/// A queued `persist` one reader took off the queue. Counted in flight,
-/// dropping it ends that and wakes the readers waiting for it.
+/// A queued `persist` one reader took off the queue. Dropped before it is
+/// registered (the reader's future was dropped), it goes back to the front of
+/// the queue; counted in flight, dropping it ends that and wakes the readers
+/// waiting for it.
 struct TakenReg<'a> {
     cache: &'a RelationCache,
     item: Option<PendingReg>,
@@ -122,7 +124,11 @@ impl Drop for TakenReg<'_> {
             .state
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let wake = self.counted;
+        let back = self.item.take();
+        let wake = back.is_some() || self.counted;
+        if let Some(item) = back {
+            state.pending.push_front(item);
+        }
         if self.counted {
             state.in_flight = state.in_flight.saturating_sub(1);
         }
@@ -1345,5 +1351,46 @@ impl Session {
                 while let Some(Ok(_)) = futures::StreamExt::next(&mut stream).await {}
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{Int32Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use futures::FutureExt as _;
+    use futures::executor::block_on;
+
+    use crate::session::Session;
+
+    fn session() -> Session {
+        let s = Session::new().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        s.register_batches("t", schema, vec![batch]).unwrap();
+        s
+    }
+
+    /// A registry read dropped while it registers a queued `persist` (here: while the frame's
+    /// lazy checkpoint takes its rows) leaves that `persist` queued for the next read (review B3).
+    #[test]
+    fn a_dropped_registry_read_keeps_the_queued_persist() {
+        let s = session();
+        let cp = block_on(s.table("t").local_checkpoint(false, None)).unwrap();
+        let cached = cp.cache();
+        let reader = s.register_pending_caches();
+        let mut reader = Box::pin(reader);
+        assert!(
+            (&mut reader).now_or_never().is_none(),
+            "the read stops in the checkpoint's query"
+        );
+        drop(reader);
+        assert!(block_on(cached.is_cached()).unwrap());
     }
 }
