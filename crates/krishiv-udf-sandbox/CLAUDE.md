@@ -59,7 +59,7 @@ Paths are relative to this crate.
   `fchmodat2`, `setxattrat`, `removexattrat`) are `EPERM`, since Landlock has no right for them and a same-uid
   worker could otherwise `chmod 0` server files it cannot open. The private directory is included (`os.utime`,
   `shutil.copystat` fail there).
-- No truncation outside the private directory on any ABI: a read-only `open`/`openat` with `O_TRUNC` is `EPERM`,
+- No truncation outside the private directory on any ABI: an `open`/`openat` with `O_TRUNC` and access mode `O_RDONLY` or 3 (no write right; Landlock requires none for mode 3) is `EPERM`,
   `openat2` is `ENOSYS` (its flags cannot be inspected), path `truncate` is `EPERM`.
 - The parent-death signal stays armed: `prctl(PR_SET_PDEATHSIG, ...)` is `EPERM` after the trampoline sets it.
 - **The parent-death signal is per thread** and the kernel clears it in every new thread, so an `execve` from a

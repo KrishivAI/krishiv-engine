@@ -343,13 +343,13 @@ fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, 
             })
             .collect::<Result<_, _>>()?,
     );
-    // `open(O_RDONLY | O_TRUNC)` truncates a file the worker may only read (Landlock checks the truncate right
-    // only from ABI 3, and a read-only open needs no write right). Any other truncating open needs the write
+    // `open(O_RDONLY | O_TRUNC)` (or access mode 3, which needs no Landlock right) truncates a file the worker
+    // may only read (Landlock checks the truncate right only from ABI 3, and such an open needs no write right). Any other truncating open needs the write
     // right, which Landlock grants only in the private directory. `openat2` keeps its flags in memory a filter
     // cannot read: `ENOSYS` (second filter), so callers fall back to `openat`.
-    rules.insert(libc::SYS_openat, vec![read_only_truncate(2)?]);
+    rules.insert(libc::SYS_openat, read_only_truncate(2)?);
     #[cfg(target_arch = "x86_64")]
-    rules.insert(libc::SYS_open, vec![read_only_truncate(1)?]);
+    rules.insert(libc::SYS_open, read_only_truncate(1)?);
 
     // Process creation: threads only, unless an administrator allowed fork.
     if !spec.allow_fork {
@@ -430,13 +430,20 @@ fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, 
 }
 
 /// A rule matching a read-only open that truncates: flags (argument `arg`) with no write access and `O_TRUNC`.
-fn read_only_truncate(arg: u8) -> Result<SeccompRule, SandboxError> {
-    rule(vec![condition(
-        arg,
-        SeccompCmpArgLen::Dword,
-        SeccompCmpOp::MaskedEq(O_ACCMODE | O_TRUNC),
-        O_TRUNC,
-    )?])
+/// `O_TRUNC` with an access mode that carries no write right: `O_RDONLY` (0) and the ioctl-only mode 3, for
+/// which Landlock requires no access right at all (neither `FMODE_READ` nor `FMODE_WRITE` is set).
+fn read_only_truncate(arg: u8) -> Result<Vec<SeccompRule>, SandboxError> {
+    [0, O_ACCMODE]
+        .into_iter()
+        .map(|mode| {
+            rule(vec![condition(
+                arg,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::MaskedEq(O_ACCMODE | O_TRUNC),
+                O_TRUNC | mode,
+            )?])
+        })
+        .collect()
 }
 
 fn af(value: i32) -> u64 {

@@ -337,6 +337,7 @@ check("utime", lambda: os.utime({readable:?}, (0, 0)))
 check("setxattr", lambda: os.setxattr({readable:?}, "user.krishiv", b"1"))
 check("removexattr", lambda: os.removexattr({readable:?}, "user.krishiv"))
 check("truncate_read_only", lambda: os.close(os.open({readable:?}, os.O_RDONLY | os.O_TRUNC)))
+check("truncate_mode3", lambda: os.close(os.open({readable:?}, 3 | os.O_TRUNC)))
 check("write_private", lambda: open({private:?}, "w").write("x"))
 check("pdeathsig_clear", lambda: libc_call("prctl", 1, 0, 0, 0, 0))
 check("pair_dgram", lambda: socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM))
@@ -376,6 +377,7 @@ check("isatty", lambda: os.isatty(0))
         "setxattr",
         "removexattr",
         "truncate_read_only",
+        "truncate_mode3",
         "pair_dgram",
         "ioctl_setflags",
         // OSError(1, ...) is a PermissionError.
