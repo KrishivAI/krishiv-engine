@@ -261,6 +261,26 @@ impl DeltaEngine {
     }
 }
 
+/// The assembled engine: the kernel's four handlers over Krishiv's I/O and Arrow compute.
+/// Every kernel call that takes it still goes through [`DeltaEngine::delta_blocking`].
+impl delta_kernel::Engine for DeltaEngine {
+    fn evaluation_handler(&self) -> Arc<dyn delta_kernel::EvaluationHandler> {
+        self.evaluation()
+    }
+
+    fn storage_handler(&self) -> Arc<dyn delta_kernel::StorageHandler> {
+        self.storage()
+    }
+
+    fn json_handler(&self) -> Arc<dyn delta_kernel::JsonHandler> {
+        self.json()
+    }
+
+    fn parquet_handler(&self) -> Arc<dyn delta_kernel::ParquetHandler> {
+        self.parquet()
+    }
+}
+
 /// The query's cancellation, as the kernel sees it.
 struct KernelCancel(Arc<CancellationToken>);
 
