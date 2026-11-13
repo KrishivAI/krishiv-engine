@@ -130,6 +130,9 @@ pub(crate) struct SessionState {
     pub(crate) conf: Arc<ConfStore>,
     pub(crate) catalog: Arc<SessionCatalog>,
     pub(crate) cache: Arc<RelationCache>,
+    /// Analyses the session's queries and keeps the last root's resolution, so a client that grows a plan
+    /// step by step does not pay for the whole prefix again (design P3-T013a).
+    pub(crate) analyzer: krishiv_plan::analyzer::CachingAnalyzer,
     pub(crate) variables: Arc<SessionVariables>,
     pub(crate) profile: SparkProfile,
     /// Fixed for the session's life: caches and fingerprints never mix
@@ -1347,7 +1350,7 @@ impl Session {
         // steps: `analyze_in` runs on the deepest stacks, where the size of
         // its own future counts.
         let (analyzed, body_views) = Box::pin(async {
-            let analyzed = DefaultAnalyzer.analyze(&plan, &env.analysis).await;
+            let analyzed = self.state.analyzer.analyze(&plan, &env.analysis).await;
             (analyzed, self.authorize_body_reads(env).await)
         })
         .await;

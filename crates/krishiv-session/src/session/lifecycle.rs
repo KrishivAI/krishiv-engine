@@ -105,6 +105,7 @@ impl Session {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
                 cache,
+                analyzer: krishiv_plan::analyzer::CachingAnalyzer::new(),
                 variables: Arc::new(seed.variables),
                 profile: parts.profile,
                 principal: parts.principal,
