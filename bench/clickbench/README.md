@@ -56,3 +56,9 @@ applies (`bench/src/krishiv_bench/clickbench_queries.py`, which also checks resu
 The folder has not been run against the full dataset. It is the entry for P3-T091; the first full run, its
 `results/<date>/<machine>.json` and any submission to ClickBench come from that task. The wheel version defaults to the
 0.2.0 release (`KRISHIV_VERSION`).
+
+Checked so far (2026-11-13): `benchmark.sh` end to end, with a wheel built from `main` (`KRISHIV_WHEEL`), on a 5,000-row
+synthetic `hits.parquet` and four of the adapted queries (count, filter, the q29 regular expression, the minute
+grouping): the output has the `Load time`, `Data size` and `[a, b, c],` lines and the regular expression returns the
+expected domains. Not checked: the other 39 queries, the real file, the cold-cache path (it needs `sudo`), and
+ClickBench's own driver (`../lib/benchmark-common.sh`).

@@ -21,7 +21,7 @@ spark = krishiv.session()
 spark.sql("SET spark.sql.parquet.binaryAsString=true")
 with open(os.path.join(here, "create.sql")) as f:
     ddl = "\n".join(ln for ln in f.read().splitlines() if not ln.lstrip().startswith("--"))
-spark.sql(ddl.replace("'hits.parquet'", "'" + os.path.join(here, "hits.parquet") + "'").strip().rstrip(";"))
+spark.sql(ddl.replace("`hits.parquet`", "`" + os.path.join(here, "hits.parquet") + "`").strip().rstrip(";"))
 
 start = time.perf_counter()
 table = spark.sql(query.rstrip(";")).toArrow()
