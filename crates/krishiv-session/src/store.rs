@@ -408,9 +408,18 @@ pub(crate) trait CatalogStore: Send + Sync {
     /// # Errors
     /// `TABLE_OR_VIEW_ALREADY_EXISTS` for `ErrorIfExists`.
     fn create_table(&self, table: CatalogTable, mode: CreateMode) -> Result<bool, KrishivError>;
-    /// Replaces the entry `expected` was read as with `table`; `false` when that entry was dropped or replaced
-    /// since, so a concurrent `DROP` or `ALTER` is never undone by a stale copy.
-    fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool;
+    /// Replaces the entry `expected` was read as with `table` and returns the entry it stored (with its new
+    /// stamp), taken under the same lock; `None` when that entry was dropped or replaced since, so a concurrent
+    /// `DROP` or `ALTER` is never undone by a stale copy.
+    fn replace_table_entry(
+        &self,
+        expected: &Arc<CatalogTable>,
+        table: CatalogTable,
+    ) -> Option<Arc<CatalogTable>>;
+    /// [`replace_table_entry`](Self::replace_table_entry) as a yes or no.
+    fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool {
+        self.replace_table_entry(expected, table).is_some()
+    }
     /// Removes the table, returning it.
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>>;
     /// The stored functions as of now.
@@ -638,12 +647,16 @@ impl CatalogStore for InMemoryCatalogStore {
         Ok(true)
     }
 
-    fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool {
+    fn replace_table_entry(
+        &self,
+        expected: &Arc<CatalogTable>,
+        table: CatalogTable,
+    ) -> Option<Arc<CatalogTable>> {
         let key = (table.namespace.clone(), table.name.clone());
         let mut state = self.lock();
         match state.tables.get(&key) {
             Some(current) if Arc::ptr_eq(current, expected) => {}
-            _ => return false,
+            _ => return None,
         }
         let changed = format!("{}.{}", key.0, key.1);
         // The same table, changed: it keeps its incarnation.
@@ -651,9 +664,10 @@ impl CatalogStore for InMemoryCatalogStore {
         table.incarnation = expected.incarnation;
         table.data_version = table.data_version.max(expected.data_version);
         table.stamp = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
-        state.tables.insert(key, Arc::new(table));
+        let entry = Arc::new(table);
+        state.tables.insert(key, Arc::clone(&entry));
         self.hub.invalidate_table(&changed);
-        true
+        Some(entry)
     }
 
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>> {

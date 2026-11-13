@@ -30,8 +30,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     DataSourceNotFound, InternalError, KrishivError, LocationAlreadyExists, SchemaAlreadyExists,
-    SchemaNotEmpty, SchemaNotFound, TableOrViewNotFound, UnresolvedColumnWithSuggestion,
-    UnsupportedFeatureCatalogOperation,
+    SchemaNotEmpty, SchemaNotFound, TableOrViewAlreadyExists, TableOrViewNotFound,
+    UnresolvedColumnWithSuggestion, UnsupportedFeatureCatalogOperation,
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::TableVersion;
@@ -289,6 +289,10 @@ impl Catalog for StoreCatalog {
         form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         Box::pin(async move {
+            // The path names no schema of this catalog: only temporary relations resolve, and it has none.
+            if form.temporary_only {
+                return Ok(None);
+            }
             let [namespace] = id.namespace.as_slice() else {
                 return Ok(None);
             };
@@ -436,6 +440,16 @@ impl CatalogWrite for StoreCatalog {
                 }
                 .into());
             }
+            // A table that exists settles the call before the definition is looked at.
+            if self.store.table(&namespace, &name).is_some() {
+                return match store_mode {
+                    StoreCreateMode::IfNotExists => Ok(false),
+                    _ => Err(TableOrViewAlreadyExists {
+                        relation_name: info.ident.to_string(),
+                    }
+                    .into()),
+                };
+            }
             let mut properties = info.properties.clone();
             let written = properties.remove("provider");
             let provider = written.clone().unwrap_or_else(|| "parquet".to_owned());
@@ -451,8 +465,7 @@ impl CatalogWrite for StoreCatalog {
                 || managed_location(&self.warehouse, &namespace, &name),
                 |l| PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             );
-            let exists = self.store.table(&namespace, &name).is_some();
-            if managed && !exists && location.exists() {
+            if managed && location.exists() {
                 return Err(LocationAlreadyExists {
                     identifier: info.ident.to_string(),
                     location: location.display().to_string(),
@@ -531,8 +544,8 @@ impl CatalogWrite for StoreCatalog {
                 .collect();
             let table_id = TableIdent {
                 catalog: CATALOG.to_owned(),
-                namespace: vec![namespace.clone()],
-                name: name.clone(),
+                namespace: vec![namespace],
+                name,
             };
             let input = AlterInput {
                 table: &table_id,
@@ -565,18 +578,12 @@ impl CatalogWrite for StoreCatalog {
                     changed.properties.remove(&key);
                 }
             }
-            let fallback = self.to_meta(&changed);
-            if !self.store.replace_table(&current, changed) {
-                return Err(concurrent(id));
-            }
-            // The change is committed: a table dropped since is no failure of this call.
-            Ok(self.store.table(&namespace, &name).map_or_else(
-                || TableMeta {
-                    version: None,
-                    ..fallback
-                },
-                |t| self.to_meta(&t),
-            ))
+            // The entry the compare-and-swap stored, with its stamp: never another thread's later one.
+            let stored = self
+                .store
+                .replace_table_entry(&current, changed)
+                .ok_or_else(|| concurrent(id))?;
+            Ok(self.to_meta(&stored))
         })
     }
 
@@ -1048,6 +1055,79 @@ mod tests {
         );
         assert!(!t.properties.contains_key("provider"));
         assert_eq!(t.comment.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn a_temporary_only_lookup_finds_no_stored_table() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).unwrap();
+        let id = ident("db", "t");
+        assert!(load(c, &id).is_some());
+        let temporary_only = NameForm {
+            temporary_only: true,
+            ..form()
+        };
+        assert!(
+            block_on(c.load_table(&id, None, temporary_only))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_existing_table_settles_a_create_before_its_definition_is_looked_at() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).unwrap();
+        let mut broken = info("db", "t");
+        broken.properties.insert("provider".into(), "nope".into());
+        broken.partition_columns = vec!["nope".into()];
+        broken.location = Some(String::new());
+        // IF NOT EXISTS is a no-op whatever the definition says.
+        assert!(!block_on(c.create_table(broken.clone(), CreateMode::IgnoreIfExists)).unwrap());
+        let e = block_on(c.create_table(broken, CreateMode::ErrorIfExists)).unwrap_err();
+        assert_eq!(class(&e), ErrorClass::TableOrViewAlreadyExists);
+        assert!(e.to_string().contains("`spark_catalog`.`db`.`t`"), "{e}");
+        // A missing table does validate it.
+        let mut fresh = info("db", "u");
+        fresh.properties.insert("provider".into(), "nope".into());
+        let e = block_on(c.create_table(fresh, CreateMode::IgnoreIfExists)).unwrap_err();
+        assert_eq!(class(&e), ErrorClass::DataSourceNotFound);
+    }
+
+    #[test]
+    fn alter_returns_the_entry_it_committed_not_a_later_ones() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).unwrap();
+        let id = ident("db", "t");
+        let v1 = load(c, &id).unwrap().version.unwrap();
+        let after = block_on(c.alter_table(&id, v1, &[add_column("b")])).unwrap();
+        // The returned version is the committed entry's stamp, so it guards the next change.
+        assert_eq!(
+            after.version,
+            Some(c.store.table("db", "t").unwrap().version())
+        );
+        let again =
+            block_on(c.alter_table(&id, after.version.unwrap(), &[add_column("c")])).unwrap();
+        assert_ne!(again.version, after.version);
+        // The store hands back the stored entry with its stamp, under the lock.
+        let current = c.store.table("db", "t").unwrap();
+        let stored = c
+            .store
+            .replace_table_entry(&current, (*current).clone())
+            .unwrap();
+        assert_ne!(stored.stamp, current.stamp);
+        assert!(Arc::ptr_eq(&stored, &c.store.table("db", "t").unwrap()));
+        assert!(
+            c.store
+                .replace_table_entry(&current, (*current).clone())
+                .is_none()
+        );
     }
 
     #[test]
