@@ -56,7 +56,7 @@ an empty cell means there is none yet.
 | [`count_min_sketch`](../reference/sql/functions/count_min_sketch.md) | not yet |  |
 | [`from_avro`](../reference/sql/functions/from_avro.md) | not yet |  |
 | [`from_protobuf`](../reference/sql/functions/from_protobuf.md) | not yet |  |
-| [`histogram_numeric`](../reference/sql/functions/histogram_numeric.md) | not yet |  |
+| [`histogram_numeric`](../reference/sql/functions/histogram_numeric.md) | not yet | width_bucket(expr, min, max, n) with count(*) grouped by the bucket gives an equal-width histogram; histogram_numeric's adaptive bin centres are not reproduced |
 | [`hll_sketch_agg`](../reference/sql/functions/hll_sketch_agg.md) | not yet | approx_count_distinct(expr) returns the estimate directly; serialized HyperLogLog sketches are not available |
 | [`hll_sketch_estimate`](../reference/sql/functions/hll_sketch_estimate.md) | not yet | approx_count_distinct(expr) over the raw column returns the estimate; serialized HyperLogLog sketches are not available |
 | [`hll_union`](../reference/sql/functions/hll_union.md) | not yet |  |
@@ -69,12 +69,12 @@ an empty cell means there is none yet.
 | [`kll_sketch_agg_bigint`](../reference/sql/functions/kll_sketch_agg_bigint.md) | not yet |  |
 | [`kll_sketch_agg_double`](../reference/sql/functions/kll_sketch_agg_double.md) | not yet |  |
 | [`kll_sketch_agg_float`](../reference/sql/functions/kll_sketch_agg_float.md) | not yet |  |
-| [`kll_sketch_get_n_bigint`](../reference/sql/functions/kll_sketch_get_n_bigint.md) | not yet |  |
-| [`kll_sketch_get_n_double`](../reference/sql/functions/kll_sketch_get_n_double.md) | not yet |  |
-| [`kll_sketch_get_n_float`](../reference/sql/functions/kll_sketch_get_n_float.md) | not yet |  |
-| [`kll_sketch_get_quantile_bigint`](../reference/sql/functions/kll_sketch_get_quantile_bigint.md) | not yet |  |
-| [`kll_sketch_get_quantile_double`](../reference/sql/functions/kll_sketch_get_quantile_double.md) | not yet |  |
-| [`kll_sketch_get_quantile_float`](../reference/sql/functions/kll_sketch_get_quantile_float.md) | not yet |  |
+| [`kll_sketch_get_n_bigint`](../reference/sql/functions/kll_sketch_get_n_bigint.md) | not yet | count(expr) over the raw column returns the item count; serialized KLL sketches are not available |
+| [`kll_sketch_get_n_double`](../reference/sql/functions/kll_sketch_get_n_double.md) | not yet | count(expr) over the raw column returns the item count; serialized KLL sketches are not available |
+| [`kll_sketch_get_n_float`](../reference/sql/functions/kll_sketch_get_n_float.md) | not yet | count(expr) over the raw column returns the item count; serialized KLL sketches are not available |
+| [`kll_sketch_get_quantile_bigint`](../reference/sql/functions/kll_sketch_get_quantile_bigint.md) | not yet | percentile_approx(expr, p) over the raw column returns the approximate quantile; serialized KLL sketches are not available |
+| [`kll_sketch_get_quantile_double`](../reference/sql/functions/kll_sketch_get_quantile_double.md) | not yet | percentile_approx(expr, p) over the raw column returns the approximate quantile; serialized KLL sketches are not available |
+| [`kll_sketch_get_quantile_float`](../reference/sql/functions/kll_sketch_get_quantile_float.md) | not yet | percentile_approx(expr, p) over the raw column returns the approximate quantile; serialized KLL sketches are not available |
 | [`kll_sketch_get_rank_bigint`](../reference/sql/functions/kll_sketch_get_rank_bigint.md) | not yet |  |
 | [`kll_sketch_get_rank_double`](../reference/sql/functions/kll_sketch_get_rank_double.md) | not yet |  |
 | [`kll_sketch_get_rank_float`](../reference/sql/functions/kll_sketch_get_rank_float.md) | not yet |  |
@@ -125,7 +125,7 @@ an empty cell means there is none yet.
 | [`tuple_union_integer`](../reference/sql/functions/tuple_union_integer.md) | not yet |  |
 | [`tuple_union_theta_double`](../reference/sql/functions/tuple_union_theta_double.md) | not yet |  |
 | [`tuple_union_theta_integer`](../reference/sql/functions/tuple_union_theta_integer.md) | not yet |  |
-| [`window`](../reference/sql/functions/window.md) | not yet |  |
+| [`window`](../reference/sql/functions/window.md) | not yet | For a fixed-width batch window, group by timestamp_seconds(floor(unix_timestamp(ts) / n) * n) for the window start (n in seconds); there is no start/end struct and no streaming window |
 | [`window_time`](../reference/sql/functions/window_time.md) | not yet |  |
 | [`xpath`](../reference/sql/functions/xpath.md) | not yet |  |
 | [`xpath_boolean`](../reference/sql/functions/xpath_boolean.md) | not yet |  |
@@ -156,6 +156,8 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Correlated subqueries with `spark.sql.optimizer.decorrelateInnerQuery.enabled` off](../concepts/known-differences.md#correlated-subqueries-with-sparksqloptimizerdecorrelateinnerqueryenabled-off) |
 | [SQL scripting](../concepts/known-differences.md#sql-scripting) |
 | [SQL function bodies and the ANSI mode they were created under](../concepts/known-differences.md#sql-function-bodies-and-the-ansi-mode-they-were-created-under) |
+| [The relation cache is per session](../concepts/known-differences.md#the-relation-cache-is-per-session) |
+| [Checkpoint files and where a checkpoint lives](../concepts/known-differences.md#checkpoint-files-and-where-a-checkpoint-lives) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
 
 ## Step 3: check the result
