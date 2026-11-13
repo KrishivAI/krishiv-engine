@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Plan-time distinct-value samples of the file columns a query compares
-//! with values (P2-T164 unit U6): which columns ([`compared_columns`]) and
-//! the call into each opened [`FileTable`](krishiv_exec::planner::FileTable).
+//! with values (P2-T164 unit U6), and of its group keys while
+//! `krishiv.optimizer.groupKeyCode` is on (design P2b D2): which columns
+//! ([`compared_columns`], [`grouped_columns`]) and the call into each opened
+//! [`FileTable`](krishiv_exec::planner::FileTable).
 
 use std::sync::Arc;
 
@@ -46,6 +48,12 @@ impl QueryCatalog {
         let deadline = std::time::Instant::now() + options.timeout;
         let mut compared = std::collections::HashSet::new();
         compared_columns(plan, &mut compared);
+        // `GroupKeyCode` (design P2b D2) codes an aggregate's dimension keys
+        // only on known distinct counts: while it is on, the column group
+        // keys are sampled too.
+        if group_key_code(config) {
+            grouped_columns(plan, &mut compared);
+        }
         if compared.is_empty() {
             return;
         }
@@ -118,6 +126,69 @@ impl QueryCatalog {
             }
         }
         notes
+    }
+}
+
+/// Whether the optimizer may code group keys (`krishiv.optimizer.groupKeyCode`,
+/// or `krishiv.experimental.groupKeyCodeForce`, which also switches it on).
+fn group_key_code(config: &krishiv_common::config::Config) -> bool {
+    use krishiv_common::config::{ConfigValue, GROUP_KEY_CODE};
+    config.get(&GROUP_KEY_CODE).and_then(ConfigValue::as_bool) == Some(true)
+        || krishiv_common::experimental::is_enabled(config, "groupKeyCodeForce")
+}
+
+/// The attribute ids of the plain-column keys (a cast of a column included) of
+/// every `GROUP BY` aggregate of `plan`, subquery plans included: the columns
+/// whose distinct counts `GroupKeyCode`'s statistics test reads.
+fn grouped_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+    // Plans are DAGs, subquery plans included: every node is visited once.
+    let mut seen = std::collections::HashSet::new();
+    let mut stack: Vec<Arc<LogicalPlan>> = Vec::new();
+    let mut visit =
+        |p: &LogicalPlan,
+         stack: &mut Vec<Arc<LogicalPlan>>,
+         out: &mut std::collections::HashSet<krishiv_plan::AttrId>| {
+            if !seen.insert(std::ptr::from_ref(p)) {
+                return;
+            }
+            if let PlanNode::Aggregate {
+                grouping: krishiv_plan::Grouping::GroupBy(keys),
+                ..
+            } = &p.node
+            {
+                out.extend(keys.iter().filter_map(|k| column_of(k)));
+            }
+            p.for_each_expr(&mut |e| subquery_plans(e, stack));
+            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        };
+    visit(plan, &mut stack, out);
+    while let Some(p) = stack.pop() {
+        visit(&p, &mut stack, out);
+    }
+}
+
+/// The column `e` is, under casts.
+fn column_of(e: &Expr) -> Option<krishiv_plan::AttrId> {
+    use krishiv_plan::ResolvedExpr;
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+        ExprNode::Cast { expr, .. } => column_of(expr),
+        _ => None,
+    }
+}
+
+/// The plans of the subqueries inside `e`.
+fn subquery_plans(e: &Arc<Expr>, out: &mut Vec<Arc<LogicalPlan>>) {
+    let mut stack = vec![Arc::clone(e)];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(x) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(&x)) {
+            continue;
+        }
+        if let ExprNode::Subquery { plan, .. } = &x.node {
+            out.push(Arc::clone(plan));
+        }
+        x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
     }
 }
 

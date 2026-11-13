@@ -247,3 +247,26 @@ fn explain_verbose_lists_the_samples_as_a_statistics_step() {
     let first_step = text.lines().find(|l| l.starts_with("== Optimizer: "));
     assert_eq!(first_step, Some(step), "the samples come first");
 }
+
+/// With `krishiv.optimizer.groupKeyCode` on, an aggregate's column group keys
+/// are sampled too: the rule's statistics test needs their distinct counts
+/// (design P2b D2). With it off, a group key alone samples nothing.
+#[test]
+fn group_keys_are_sampled_only_while_group_key_code_is_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    let sql = format!(
+        "SELECT status, count(*) FROM {} GROUP BY status",
+        table(dir.path(), "orders")
+    );
+    s.conf()
+        .set("krishiv.optimizer.groupKeyCode", "false")
+        .unwrap();
+    assert!(sample_lines(&explain(&s, "COST", &sql)).is_empty());
+    s.conf()
+        .set("krishiv.optimizer.groupKeyCode", "true")
+        .unwrap();
+    let lines = sample_lines(&explain(&s, "COST", &sql));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("orders`: status: sampled "), "{lines:?}");
+}

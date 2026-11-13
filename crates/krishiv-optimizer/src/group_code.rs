@@ -39,7 +39,10 @@
 //!    is read twice, and both reads see the same rows.
 //! 5. Statistics say it pays: `NDV(keys) <= rows(I) / 4`, `NDV(keys) <= 10^7`
 //!    (`dict` is numbered in one partition), `rows(I) >= 2 rows(D)`, and the
-//!    dropped keys are wider than 8 bytes; an unknown estimate refuses.
+//!    dropped keys are wider than 8 bytes; an unknown estimate refuses. Plain
+//!    Parquet stores no distinct counts for strings, so while the rule is on the
+//!    session samples the column group keys before optimizing (when
+//!    `krishiv.optimizer.ndvSampling.enabled` is on and its time budget lasts).
 //! 6. Exactly one input of the aggregate qualifies, and no key is already a
 //!    code: a second optimization then finds nothing new.
 //!
@@ -844,21 +847,31 @@ fn is_code(p: &LogicalPlan) -> bool {
     let PlanNode::Join { left, right, .. } = &at.node else {
         return false;
     };
-    let numbered = |side: &LogicalPlan| {
-        let mut s = side;
-        loop {
-            match &s.node {
-                PlanNode::Shift { input, .. }
-                | PlanNode::Project { input, .. }
-                | PlanNode::Filter { input, .. } => s = input,
-                PlanNode::Window { .. } => return true,
-                // `ShareCte` made `dict` a `WITH` definition.
-                PlanNode::CteRef(r) => return r.output.iter().any(|c| c.name == CODE_NAME),
-                _ => return false,
+    is_group_code_dictionary(left) || is_group_code_dictionary(right)
+}
+
+/// Whether `side` is a read of a numbered dictionary `GroupKeyCode` made
+/// (`dict`, design P2b D2): one row per distinct key tuple of a dimension, so
+/// a join of the dimension with it on the keys drops no row of the dimension,
+/// and the physical planner plans no runtime filter for that join.
+pub fn is_group_code_dictionary(side: &LogicalPlan) -> bool {
+    let mut s = side;
+    loop {
+        match &s.node {
+            PlanNode::Shift { input, .. }
+            | PlanNode::Project { input, .. }
+            | PlanNode::Filter { input, .. } => s = input,
+            PlanNode::Window { exprs, .. } => {
+                return exprs.iter().any(|e| {
+                    matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Alias { output, .. })
+                        if output.name == CODE_NAME)
+                });
             }
+            // `ShareCte` made `dict` a `WITH` definition.
+            PlanNode::CteRef(r) => return r.output.iter().any(|c| c.name == CODE_NAME),
+            _ => return false,
         }
-    };
-    numbered(left) || numbered(right)
+    }
 }
 
 /// Whether grouping compares values of `t` as their bytes.

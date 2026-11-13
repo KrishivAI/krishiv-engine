@@ -260,12 +260,7 @@ fn null_dimension_keys_keep_their_groups() {
 /// under the `D_c` fence, `Shift +0`, printed `(ids +0)`) publishes no runtime
 /// filter onto `D`: `dict` holds every key `D` has, so the filter would drop
 /// nothing and cost a probe per row (design section 2.3).
-///
-/// It does today: the physical planner's runtime-filter cost model plans one
-/// per key onto `part` (q16). Excluding that join is a change to
-/// `src/planner/runtime_filter.rs`, outside this change's files.
 #[test]
-#[ignore = "the encoding join publishes runtime filters onto D (design P2b D2 section 2.3); needs a planner/runtime_filter.rs exclusion"]
 fn the_encoding_join_publishes_no_runtime_filter() {
     let rt = runtime();
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf0.01-parquet");
