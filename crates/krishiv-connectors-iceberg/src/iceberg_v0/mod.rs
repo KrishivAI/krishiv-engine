@@ -4,6 +4,11 @@
 
 #[cfg_attr(
     not(test),
+    expect(dead_code, reason = "the commit loop of PR-36a (next commit) calls it")
+)]
+pub(crate) mod append;
+#[cfg_attr(
+    not(test),
     expect(dead_code, reason = "the write path of PR-36a (next commit) calls it")
 )]
 pub(crate) mod data_file;
@@ -23,6 +28,8 @@ pub(crate) mod types;
 )]
 pub(crate) mod write_metrics;
 
+#[cfg(test)]
+mod append_tests;
 #[cfg(test)]
 mod baseline_tests;
 #[cfg(test)]

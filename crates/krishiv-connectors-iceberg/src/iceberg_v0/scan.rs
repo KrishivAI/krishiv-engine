@@ -13,8 +13,8 @@ use futures::{StreamExt, TryStreamExt};
 use iceberg::io::FileIO;
 use iceberg::spec::{
     DataContentType, DataFileFormat, FormatVersion, Literal, Manifest, ManifestContentType,
-    ManifestList, ManifestStatus, NestedField, PrimitiveLiteral, PrimitiveType, Schema,
-    SnapshotReference, SnapshotRetention, TableMetadata, Type,
+    ManifestFile, ManifestList, ManifestStatus, NestedField, PrimitiveLiteral, PrimitiveType,
+    Schema, SnapshotReference, SnapshotRetention, TableMetadata, Type,
 };
 use krishiv_common::error::{
     InternalError, KrishivCatalogLimitExceeded, KrishivError, KrishivUnsupportedFeature,
@@ -147,14 +147,7 @@ pub(crate) fn partition_specs(metadata: &TableMetadata, read: &Schema) -> Partit
 /// `snapshot_for_ref`, which panics on a dangling ref), so they are read from
 /// the metadata's own serialisation.
 fn refs(metadata: &TableMetadata) -> Result<BTreeMap<String, RefInfo>, KrishivError> {
-    let mut json = serde_json::to_value(metadata)
-        .map_err(|e| internal(format!("iceberg-rust: serialising table metadata: {e}")))?;
-    let refs: HashMap<String, SnapshotReference> = match json.get_mut("refs") {
-        Some(refs) => serde_json::from_value(refs.take())
-            .map_err(|e| internal(format!("iceberg-rust: table metadata refs: {e}")))?,
-        None => HashMap::new(),
-    };
-    let mut out: BTreeMap<String, RefInfo> = refs
+    let mut out: BTreeMap<String, RefInfo> = snapshot_refs(metadata)?
         .into_iter()
         .map(|(name, r)| {
             let kind = match r.retention {
@@ -179,6 +172,23 @@ fn refs(metadata: &TableMetadata) -> Result<BTreeMap<String, RefInfo>, KrishivEr
         });
     }
     Ok(out)
+}
+
+/// The refs `metadata` holds, as serialised (none synthesised: a v1 table's
+/// `main` is not in it; see [`refs`]).
+///
+/// # Errors
+/// An internal error when iceberg-rust's serialisation cannot be read back.
+pub(crate) fn snapshot_refs(
+    metadata: &TableMetadata,
+) -> Result<HashMap<String, SnapshotReference>, KrishivError> {
+    let mut json = serde_json::to_value(metadata)
+        .map_err(|e| internal(format!("iceberg-rust: serialising table metadata: {e}")))?;
+    Ok(match json.get_mut("refs") {
+        Some(refs) => serde_json::from_value(refs.take())
+            .map_err(|e| internal(format!("iceberg-rust: table metadata refs: {e}")))?,
+        None => HashMap::new(),
+    })
 }
 
 /// What resolution needs of `metadata` (refs only when `with_refs`).
@@ -359,12 +369,8 @@ pub(crate) async fn read_manifest_list(
     version: u8,
     max_bytes: u64,
 ) -> Result<Vec<ManifestFileEntry>, KrishivError> {
-    let bytes = read_capped(io, "manifest list", location, None, max_bytes).await?;
-    let version = avro_format_version(&bytes).unwrap_or(version);
-    let list =
-        ManifestList::parse_with_version(&bytes, format_version(version)?).map_err(from_iceberg)?;
-    Ok(list
-        .consume_entries()
+    Ok(read_manifest_files(io, location, version, max_bytes)
+        .await?
         .into_iter()
         .map(|m| ManifestFileEntry {
             content: match m.content {
@@ -394,6 +400,26 @@ pub(crate) async fn read_manifest_list(
             first_row_id: m.first_row_id,
         })
         .collect())
+}
+
+/// The manifests of the manifest list at `location`, as iceberg-rust parses
+/// them (see [`read_manifest_list`]); a commit carries a base snapshot's
+/// manifests into its own list unchanged.
+///
+/// # Errors
+/// `KRISHIV_CATALOG_LIMIT_EXCEEDED` for a list over `max_bytes`; iceberg-rust's
+/// read and parse failures.
+pub(crate) async fn read_manifest_files(
+    io: &FileIO,
+    location: &str,
+    version: u8,
+    max_bytes: u64,
+) -> Result<Vec<ManifestFile>, KrishivError> {
+    let bytes = read_capped(io, "manifest list", location, None, max_bytes).await?;
+    let version = avro_format_version(&bytes).unwrap_or(version);
+    let list =
+        ManifestList::parse_with_version(&bytes, format_version(version)?).map_err(from_iceberg)?;
+    Ok(list.consume_entries().into_iter().collect())
 }
 
 /// A partition value in the spec's single-value serialisation.

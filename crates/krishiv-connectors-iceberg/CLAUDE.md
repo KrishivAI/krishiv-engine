@@ -39,7 +39,14 @@ object storage with hash directories; the deprecated path properties honoured, a
 `partition_tuple` (transformed values through `plan::bounds` to iceberg literals), `data_file` (an iceberg `DataFile`
 from size, rows and `FileMetrics`; sort order 0 unless claimed); `write_metrics.rs` `WriteMetricsConfig` (Java's
 `MetricsConfig.from`); tests `data_file_tests.rs` (Java's partition paths and hash directories, a built file through a
-manifest and back) · `deletes.rs` reads each position
+manifest and back) · `append.rs` (PR-36a) an append's metadata, as Java's `SnapshotProducer`/`FastAppend`:
+`write_new_manifests` once per write (one manifest per spec, entries with the write's snapshot id and inherited
+sequence numbers), `prepare_attempt` per commit attempt (the list: new manifests reset to unassigned, then the base's;
+sequence number `last-sequence-number` + 1; v3 `first-row-id`/`added-rows`; summary with `total-*`, `engine-name`,
+`krishiv.write-id`/`krishiv.query-id`; requirements `assert-table-uuid`/`assert-ref-snapshot-id`, updates
+`add-snapshot`/`set-snapshot-ref`); no manifest split or merge yet; tests `append_tests.rs` (committed as a catalog
+applies a request, read back through SQL and iceberg-rust's planning, a stale attempt refused and rebuilt, v3 lineage)
+· `deletes.rs` reads each position
 delete file once per scan (`file_path IN` row-group pruning, rows of other files dropped, order not trusted) and each
 DV by range, into one `RowSelection` per data file (unbounded, so a wrong `record_count` never drops rows; positions
 past the end delete nothing, as Java); positions charged per batch · `eq_deletes.rs` reads each equality
