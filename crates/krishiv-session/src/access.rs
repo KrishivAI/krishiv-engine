@@ -622,9 +622,12 @@ pub(crate) fn still_physical(session: &Session, at: &LocatedPath) -> Result<(), 
 /// links in the part of it that exists, against the roots with their links
 /// resolved. Object-store paths are allowed only under the prefixes of
 /// [`Self::with_object_prefixes`] (none by default). Anything else is
-/// denied: other schemes, paths with credentials, any path containing `%` (percent-encoded text would
-/// not be decoded the way the comparison reads it, so even a literal `%`
-/// in a file name is refused) and relative or unresolved paths. Session
+/// denied: other schemes, paths with credentials, any path containing `%`
+/// (percent-encoded text would not be decoded the way the comparison reads
+/// it, so even a literal `%` in a file name is refused) and relative or
+/// unresolved paths. A glob or directory read is checked as written; the
+/// runtime's local store refuses a listing that follows a link out of
+/// `krishiv.io.local.allowedRoots` (set it on the runtime too). Session
 /// writes go to the resolved directory, which is opened once and then used
 /// by descriptor (no name is resolved through a link while the write runs),
 /// and fail if a link is swapped into it before the write begins or commits.
@@ -693,29 +696,43 @@ impl PathPrefixPolicy {
     }
 
     /// Also allows object-store paths under `prefixes` (`s3://bucket/prefix`, `gs://bucket`,
-    /// `abfss://container@account/prefix`): a path is allowed when it names the same store
-    /// (`s3` and `s3a` are one) and its key starts with the prefix's whole segments, so
-    /// `s3://b/data` allows `s3://b/data/x` but not `s3://b/data2` (ADR 0046 §3a).
+    /// `abfss://container@account.dfs.core.windows.net/prefix`): a path is allowed when it
+    /// names the same store (`s3` and `s3a` are one; for Azure the same container in the same
+    /// account) and its key starts with the prefix's whole segments, so `s3://b/data` allows
+    /// `s3://b/data/x` but not `s3://b/data2` (ADR 0046 §3a). An Azure path without an
+    /// account host is never allowed, since its account would come from the client's settings.
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` for a prefix that is not an object-store URL with a
-    /// bucket, or that holds credentials, `%`, a query or fragment, or a `.`, `..` or empty
-    /// segment.
+    /// bucket, an Azure prefix without an `account.<host>`, or one that holds credentials,
+    /// `%`, a query or fragment, a glob character, or a `.`, `..` or empty segment.
     pub fn with_object_prefixes<S: AsRef<str>>(
         mut self,
         prefixes: impl IntoIterator<Item = S>,
     ) -> Result<Self, KrishivError> {
         for prefix in prefixes {
             let prefix = prefix.as_ref();
-            let parsed = parse_object_prefix(prefix).ok_or_else(|| {
-                KrishivError::from(KrishivInvalidConfigValue {
-                    value: format!("'{prefix}'"),
-                    key: format!("\"{}\"", IO_OBJECT_STORE_ALLOWED_PREFIXES.key),
-                    reason: "expected an object-store prefix such as s3://bucket/prefix, without \
-                             credentials, `%`, a query, or `.`, `..` or empty segments"
-                        .to_owned(),
+            let parsed = parse_object_prefix(prefix)
+                .filter(|_| !prefix.contains(['*', '?', '[', ']', '{', '}']))
+                // An Azure prefix names its account: without one, the store would take the
+                // account from the client's `fs.azure.account.name`.
+                .filter(|_| {
+                    parse_object_url(prefix).is_ok_and(|u| {
+                        u.scheme != krishiv_io::ObjectScheme::Azure || u.account.is_some()
+                    })
                 })
-            })?;
+                .ok_or_else(|| {
+                    KrishivError::from(KrishivInvalidConfigValue {
+                        value: format!("'{prefix}'"),
+                        key: format!("\"{}\"", IO_OBJECT_STORE_ALLOWED_PREFIXES.key),
+                        reason:
+                            "expected an object-store prefix such as s3://bucket/prefix (Azure: \
+                             abfss://container@account.dfs.core.windows.net/prefix), without \
+                             credentials, `%`, a query or fragment, glob characters, or `.`, `..` \
+                             or empty segments"
+                                .to_owned(),
+                    })
+                })?;
             self.prefixes.push(parsed);
         }
         Ok(self)
@@ -727,36 +744,39 @@ impl PathPrefixPolicy {
     /// nothing by path), and nothing else, for every role.
     ///
     /// # Errors
-    /// `PATH_NOT_FOUND` for a root that does not exist; `KRISHIV_INVALID_CONFIG_VALUE` for a
-    /// prefix [`Self::with_object_prefixes`] refuses.
+    /// `KRISHIV_INVALID_CONFIG_VALUE` for a root that is not an absolute path to an existing
+    /// directory, or a prefix [`Self::with_object_prefixes`] refuses.
     pub fn from_config(
         config: &Config,
         inner: Arc<dyn AccessPolicy>,
     ) -> Result<Self, KrishivError> {
-        let list = |entry| match config.get(entry) {
-            Some(ConfigValue::String(raw)) => raw
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .collect(),
-            _ => Vec::new(),
-        };
-        Self::new(list(&IO_LOCAL_ALLOWED_ROOTS), inner)?
-            .with_object_prefixes(list(&IO_OBJECT_STORE_ALLOWED_PREFIXES))
+        Self {
+            roots: allowed_roots(config)?,
+            prefixes: Vec::new(),
+            inner,
+        }
+        .with_object_prefixes(config_list(config, &IO_OBJECT_STORE_ALLOWED_PREFIXES))
     }
 
     /// Whether the qualified path `path` lies under a root or an object-store prefix.
     fn allows(&self, path: &OptionValue) -> bool {
-        let Some(text) = path.as_plain() else {
-            return false;
+        let text = match path {
+            OptionValue::Plain(text) => text.as_str(),
+            // `container@account.host` reads as user info, so an Azure path arrives typed as a
+            // URL with credentials; Azure parsing takes it as container and account and refuses
+            // `user:secret@` forms, so only Azure URLs are compared, and the text never leaves
+            // this check.
+            OptionValue::Url(url) => {
+                let exposed = url.expose_secret();
+                let text = exposed.expose_secret();
+                return parse_object_url(text)
+                    .is_ok_and(|u| u.scheme == krishiv_io::ObjectScheme::Azure)
+                    && self.allows_object(text);
+            }
+            OptionValue::Secret(_) => return false,
         };
         let Some(local) = text.strip_prefix("file:") else {
-            return parse_object_prefix(text).is_some_and(|p| {
-                self.prefixes
-                    .iter()
-                    .any(|a| a.store == p.store && p.segments.starts_with(&a.segments))
-            });
+            return self.allows_object(text);
         };
         let local = Path::new(local);
         let normal = local.is_absolute()
@@ -768,6 +788,58 @@ impl PathPrefixPolicy {
         }
         resolve_links(local).is_some_and(|p| self.roots.iter().any(|r| p.starts_with(r)))
     }
+}
+
+impl PathPrefixPolicy {
+    /// Whether the object-store URL `text` lies under one of the prefixes.
+    fn allows_object(&self, text: &str) -> bool {
+        parse_object_prefix(text).is_some_and(|p| {
+            self.prefixes
+                .iter()
+                .any(|a| a.store == p.store && p.segments.starts_with(&a.segments))
+        })
+    }
+}
+
+/// The comma-separated entries of the string setting `entry` (blank entries dropped).
+fn config_list(config: &Config, entry: &krishiv_common::config::ConfigEntry) -> Vec<String> {
+    match config.get(entry) {
+        Some(ConfigValue::String(raw)) => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `krishiv.io.local.allowedRoots`, canonical (links resolved); empty when unset. The policy
+/// checks paths against them and the runtime's local store refuses listings that follow a
+/// link out of them (ADR 0046 §3a).
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` naming the key for a root that is not an absolute path to
+/// an existing directory.
+pub(crate) fn allowed_roots(config: &Config) -> Result<Vec<PathBuf>, KrishivError> {
+    config_list(config, &IO_LOCAL_ALLOWED_ROOTS)
+        .into_iter()
+        .map(|root| {
+            let path = Path::new(&root);
+            std::fs::canonicalize(path)
+                .ok()
+                .filter(|c| path.is_absolute() && c.is_dir())
+                .ok_or_else(|| {
+                    KrishivError::from(KrishivInvalidConfigValue {
+                        value: format!("'{root}'"),
+                        key: format!("\"{}\"", IO_LOCAL_ALLOWED_ROOTS.key),
+                        reason: "expected absolute paths of existing directories, comma \
+                                 separated"
+                            .to_owned(),
+                    })
+                })
+        })
+        .collect()
 }
 
 /// `text` as an object-store store and key segments, if it is a plain object-store URL: a

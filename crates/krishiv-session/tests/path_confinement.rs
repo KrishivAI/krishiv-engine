@@ -171,6 +171,14 @@ fn a_bad_prefix_or_root_refuses_startup() {
         "file:/tmp",
         "/tmp",
         "ftp://host/x",
+        // Glob characters would match more than whole segments.
+        "s3://lake/da*",
+        "s3://lake/{data,secret}",
+        "s3://lake/data[0]",
+        // An Azure prefix names its account host.
+        "abfss://exports/public",
+        "abfss://exports@lakeacct/public",
+        "az://exports/public",
     ] {
         let e = PathPrefixPolicy::new(Vec::<&str>::new(), Arc::new(AllowAll))
             .unwrap()
@@ -182,9 +190,33 @@ fn a_bad_prefix_or_root_refuses_startup() {
             "{prefix}"
         );
     }
-    let conf = config(&[("krishiv.io.local.allowedRoots", "/no/such/dir/krishiv")]);
-    let e = PathPrefixPolicy::from_config(&conf, Arc::new(AllowAll)).unwrap_err();
-    assert_eq!(e.error_class().name(), "PATH_NOT_FOUND");
+    let file = tempfile::NamedTempFile::new().unwrap();
+    for root in [
+        "/no/such/dir/krishiv",
+        "relative/dir",
+        file.path().to_str().unwrap(),
+    ] {
+        let conf = config(&[("krishiv.io.local.allowedRoots", root)]);
+        let e = PathPrefixPolicy::from_config(&conf, Arc::new(AllowAll)).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INVALID_CONFIG_VALUE",
+            "{root}"
+        );
+        assert!(
+            e.to_string().contains("krishiv.io.local.allowedRoots"),
+            "{e}"
+        );
+        let e = Session::builder()
+            .config("krishiv.io.local.allowedRoots", root)
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INVALID_CONFIG_VALUE",
+            "{root}"
+        );
+    }
     // A whole bucket and a trailing slash are fine.
     let p = PathPrefixPolicy::new(Vec::<&str>::new(), Arc::new(AllowAll))
         .unwrap()
@@ -193,4 +225,94 @@ fn a_bad_prefix_or_root_refuses_startup() {
     assert!(decide(&p, "s3://lake/x", Privilege::Select));
     assert!(decide(&p, "gs://shared/data/x", Privilege::Modify));
     assert!(!decide(&p, "gs://shared/datax", Privilege::Select));
+}
+
+/// B1 of the T002 confinement review: an Azure prefix allows its container in its account only;
+/// a path without an account host (whose account would come from the client's
+/// `fs.azure.account.name`) or in another account is refused.
+#[test]
+fn azure_prefixes_hold_their_account() {
+    let p = PathPrefixPolicy::new(Vec::<&str>::new(), Arc::new(AllowAll))
+        .unwrap()
+        .with_object_prefixes(["abfss://exports@lakeacct.dfs.core.windows.net/public"])
+        .unwrap();
+    assert!(decide(
+        &p,
+        "abfss://exports@lakeacct.dfs.core.windows.net/public/t/x.parquet",
+        Privilege::Select
+    ));
+    for path in [
+        "abfss://exports/public/x.parquet",
+        "az://exports/public/x.parquet",
+        "abfss://exports:key@lakeacct.dfs.core.windows.net/public/x.parquet",
+        "abfss://exports@hracct.dfs.core.windows.net/public/x.parquet",
+        "abfss://other@lakeacct.dfs.core.windows.net/public/x.parquet",
+        "abfss://exports@lakeacct.dfs.core.windows.net/private/x.parquet",
+    ] {
+        assert!(!decide(&p, path, Privilege::Select), "{path}");
+    }
+}
+
+/// More prefix shapes: `s3a` and `s3` are one store either way, the scheme's case does not
+/// matter, a bucket name is whole, blank list entries are dropped.
+#[test]
+fn prefix_matching_edges() {
+    let conf = config(&[(
+        "krishiv.io.objectStore.allowedPrefixes",
+        " , s3a://lake/data ,gs://shared, ",
+    )]);
+    let p = policy(&conf, Role::Admin);
+    assert!(decide(&p, "s3://lake/data/x", Privilege::Select));
+    assert!(decide(&p, "S3://lake/data/x", Privilege::Select));
+    assert!(decide(&p, "s3a://lake/data/x", Privilege::Modify));
+    assert!(decide(&p, "gs://shared/x", Privilege::Create));
+    assert!(!decide(&p, "gs://shared.other/x", Privilege::Select));
+    assert!(!decide(&p, "s3://lake/data2/x", Privilege::Select));
+}
+
+/// B2 of the T002 confinement review: a glob or directory read below a root never follows a
+/// link out of it, whether the link is a directory, a partition directory or a file.
+#[cfg(unix)]
+#[test]
+fn listings_never_follow_a_link_out_of_a_root() {
+    let (_tmp, allowed, secret) = dirs();
+    let root = allowed.to_str().unwrap();
+    let conf = config(&[("krishiv.io.local.allowedRoots", root)]);
+    let s = Session::builder()
+        .config("krishiv.io.local.allowedRoots", root)
+        .principal(Principal::new("admin", PrincipalKind::User))
+        .access_policy(Arc::new(policy(&conf, Role::Admin)))
+        .build()
+        .unwrap();
+    assert!(run(&s, &read(&format!("{root}/a.csv"))).is_ok());
+
+    std::os::unix::fs::symlink(&secret, allowed.join("link")).unwrap();
+    for path in [
+        format!("{root}/link/s.csv"),
+        format!("{root}/*/s.csv"),
+        format!("{root}/{{link,x}}/s.csv"),
+        format!("{root}/l*"),
+    ] {
+        let e = run(&s, &read(&path)).unwrap_err();
+        assert!(
+            e.contains(DENIED) || e.contains("a link out of the allowed roots"),
+            "{path}: {e}"
+        );
+    }
+    std::fs::remove_file(allowed.join("link")).unwrap();
+
+    // A partition-directory link: a plain directory read of the root.
+    std::fs::create_dir(secret.join("k=1")).unwrap();
+    std::fs::write(secret.join("k=1/s.csv"), "4\n").unwrap();
+    let table = allowed.join("t");
+    std::fs::create_dir(&table).unwrap();
+    std::os::unix::fs::symlink(secret.join("k=1"), table.join("k=1")).unwrap();
+    let e = run(&s, &read(table.to_str().unwrap())).unwrap_err();
+    assert!(e.contains("a link out of the allowed roots"), "{e}");
+    std::fs::remove_file(table.join("k=1")).unwrap();
+
+    // A file link out of the root.
+    std::os::unix::fs::symlink(secret.join("s.csv"), table.join("s.csv")).unwrap();
+    let e = run(&s, &read(table.to_str().unwrap())).unwrap_err();
+    assert!(e.contains("a link out of the allowed roots"), "{e}");
 }

@@ -222,11 +222,22 @@ impl EngineRuntime {
         let io =
             IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
         io.attach_memory(&(Arc::<TreePool>::clone(&memory_tree) as Arc<dyn MemoryPool>));
+        // With `krishiv.io.local.allowedRoots` set (server mode), listings never follow a link
+        // out of the roots (ADR 0046 §3a): the policy checks the paths as written, the store
+        // what a glob or directory read finds below them.
         #[cfg(unix)]
-        io.register_whole_listing_store(
-            StoreId::new(crate::session::LOCAL_STORE),
-            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
-        );
+        {
+            let roots = crate::access::allowed_roots(&config)?;
+            let local = if roots.is_empty() {
+                krishiv_io::SettledLocalFileSystem::new()
+            } else {
+                krishiv_io::SettledLocalFileSystem::confined(roots)
+            };
+            io.register_whole_listing_store(
+                StoreId::new(crate::session::LOCAL_STORE),
+                Arc::new(local) as Arc<dyn ObjectStore>,
+            );
+        }
         #[cfg(not(unix))]
         io.register_store(
             StoreId::new(crate::session::LOCAL_STORE),
