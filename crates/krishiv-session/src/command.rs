@@ -19,10 +19,11 @@ use krishiv_common::error::{
     DefaultPlacementInvalid, DuplicateAssignments, DuplicateRoutineParameterNames,
     DuplicateRoutineReturnsColumns, DuplicateVariableNameInsideDeclare, ErrorClass,
     ErrorQueryContext, InvalidDefaultValueSubqueryExpression, InvalidSqlFunctionDataAccess,
-    KrishivError, KrishivUnsupportedFeature, RoutineAlreadyExists, RoutineNotFound,
-    RowSubqueryTooManyRows, SchemaNotFound, TableOrViewNotFound, TempTableOrViewAlreadyExists,
-    UnresolvedVariable, UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetPathWhenDisabled,
-    UnsupportedFeatureSetVariableUsingSet, UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf,
+    KrishivError, KrishivInvalidConfigValue, KrishivUnsupportedFeature, RoutineAlreadyExists,
+    RoutineNotFound, RowSubqueryTooManyRows, SchemaNotFound, TableOrViewNotFound,
+    TempTableOrViewAlreadyExists, UnresolvedVariable, UnsupportedCharOrVarcharAsString,
+    UnsupportedFeatureSetPathWhenDisabled, UnsupportedFeatureSetVariableUsingSet,
+    UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf,
     UserDefinedFunctionsNotAValidDefaultExpression,
     UserDefinedFunctionsNotAValidDefaultParameterPosition,
     UserDefinedFunctionsNotNullOnFunctionParameters,
@@ -40,7 +41,7 @@ use krishiv_sql::ast::{
     Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeSpec, DdlName,
     DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind, FunctionBodyKind,
     FunctionReturnsKind, Ident, ObjectName, Query, Refresh, RefreshKind, Reset, Set, SetExprKind,
-    SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
+    SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TableOption, TimeZone,
 };
 use krishiv_types::DataType;
 
@@ -478,6 +479,7 @@ impl Session {
             } => {
                 // The options are never resolved: a `secret(..)` value would be kept as its text.
                 crate::access::refuse_secret_options(options, original)?;
+                let level = cache_level(options, original, &self.state.conf.snapshot())?;
                 let Some(parts) = ddl_table_parts(name) else {
                     return Err(KrishivUnsupportedFeature {
                         feature: "CACHE TABLE with a dynamic table name".to_owned(),
@@ -509,7 +511,7 @@ impl Session {
                             .collect::<Vec<_>>()
                             .join("."),
                     )
-                    .cache();
+                    .persist(level);
                 let filled = if *lazy {
                     frame.is_cached().await.map(drop)
                 } else {
@@ -1997,3 +1999,32 @@ pub(crate) fn contains_subquery(e: &Expr) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+/// The level `CACHE TABLE ... OPTIONS (storageLevel '...')` asks for (the key is case-insensitive,
+/// the name as `StorageLevel.fromString`), else the session default. An unknown name is refused
+/// before the view `AS query` makes, as Spark's `IllegalArgumentException` stops the command.
+fn cache_level(
+    options: &[TableOption],
+    original: &str,
+    config: &krishiv_common::config::Config,
+) -> Result<crate::StorageLevel, KrishivError> {
+    let Some(option) = options.iter().find(|o| {
+        o.key.parts.len() == 1 && o.key.parts[0].value.eq_ignore_ascii_case("storageLevel")
+    }) else {
+        return Ok(crate::StorageLevel::default_of(config));
+    };
+    let text = option
+        .value
+        .as_ref()
+        .and_then(|v| original.get(v.span.start..v.span.end))
+        .map(|t| t.trim().trim_matches(|c| c == '\'' || c == '"'))
+        .unwrap_or_default();
+    crate::StorageLevel::from_name(text).ok_or_else(|| {
+        KrishivInvalidConfigValue {
+            value: format!("'{text}'"),
+            key: "\"storageLevel\"".to_owned(),
+            reason: "Invalid StorageLevel".to_owned(),
+        }
+        .into()
+    })
+}

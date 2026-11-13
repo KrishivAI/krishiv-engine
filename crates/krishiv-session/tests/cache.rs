@@ -1077,3 +1077,30 @@ fn a_cached_frame_follows_a_replaced_view() {
     );
     assert!(block_on(cached.cache().is_cached()).unwrap());
 }
+
+/// `CACHE TABLE ... OPTIONS (storageLevel ...)`: the key is case-insensitive, the name as
+/// `StorageLevel.fromString`; an unknown name fails before the view `AS query` makes exists.
+#[test]
+fn cache_table_options_set_the_storage_level() {
+    let s = int_session(vec![1, 2]);
+    block_on(s.sql("CACHE LAZY TABLE t OPTIONS ('STORAGELEVEL' 'disk_only')")).unwrap();
+    assert_eq!(
+        block_on(s.table("t").storage_level()).unwrap(),
+        StorageLevel::DISK_ONLY
+    );
+    block_on(s.sql("UNCACHE TABLE t")).unwrap();
+    block_on(s.sql("CACHE LAZY TABLE t")).unwrap();
+    assert_eq!(
+        block_on(s.table("t").storage_level()).unwrap(),
+        StorageLevel::MEMORY_AND_DISK
+    );
+    block_on(s.sql("UNCACHE TABLE t")).unwrap();
+    let e = block_on(s.sql("CACHE TABLE v OPTIONS ('storageLevel' 'BOGUS') AS SELECT 1 AS a"))
+        .map(drop)
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidConfigValue);
+    assert!(
+        block_on(s.sql("SELECT * FROM v")).is_err(),
+        "no view is left behind"
+    );
+}
