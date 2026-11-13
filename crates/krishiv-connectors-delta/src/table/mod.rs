@@ -127,7 +127,7 @@ impl DeltaTable {
         let logical = snapshot.schema();
         let fields = logical
             .fields()
-            .map(engine_field)
+            .map(|f| engine_field(f, &name))
             .collect::<Result<Vec<_>, _>>()?;
         let schema: SchemaRef = Arc::new(Schema::new(fields));
         let partitions = tc
@@ -238,20 +238,29 @@ pub(crate) fn list_units(
         .with_predicate(predicate)
         .with_cancellation_token(engine.kernel_cancellation())
         .build()?;
-    let mut units: Vec<ScanUnit> = Vec::new();
+    let mut files: Vec<delta_kernel::scan::state::ScanFile> = Vec::new();
     for metadata in scan.scan_metadata(engine)? {
-        units = metadata?.visit_scan_files(units, |acc, f| {
-            acc.push(ScanUnit {
+        files = metadata?.visit_scan_files(files, Vec::push)?;
+    }
+    files
+        .into_iter()
+        .map(|f| {
+            let size = u64::try_from(f.size).map_err(|_| {
+                KernelError::generic(format!(
+                    "the Delta log gives the data file {} a negative size ({})",
+                    f.path, f.size
+                ))
+            })?;
+            Ok(ScanUnit {
                 path: f.path,
-                size: u64::try_from(f.size).unwrap_or(0),
+                size,
                 records: f.stats.map(|s| s.num_records),
                 modification_time: f.modification_time,
                 partition_values: f.partition_values,
                 dv: f.dv_info,
-            });
-        })?;
-    }
-    Ok(units)
+            })
+        })
+        .collect()
 }
 
 /// The value of a partition column stored as `raw`, as the kernel's scan parses it: an
@@ -275,9 +284,10 @@ pub(crate) fn partition_scalar(raw: Option<&String>, t: &DataType) -> Result<Sca
 pub(crate) fn partition_array(
     column: &PartitionColumn,
     raw: Option<&String>,
+    table: &str,
 ) -> Result<arrow_array::ArrayRef, KrishivError> {
-    let scalar = partition_scalar(raw, &column.kernel_type).map_err(|e| from_kernel(&e, ""))?;
-    let array = scalar_to_array(&scalar, 1).map_err(|e| from_kernel(&e, ""))?;
+    let scalar = partition_scalar(raw, &column.kernel_type).map_err(|e| from_kernel(&e, table))?;
+    let array = scalar_to_array(&scalar, 1).map_err(|e| from_kernel(&e, table))?;
     arrow_cast::cast(&array, column.field.data_type())
         .map_err(|e| internal(format!("partition value of {}: {e}", column.field.name())))
 }
@@ -285,8 +295,8 @@ pub(crate) fn partition_array(
 /// The engine's Arrow field of the kernel field `field`: the kernel's form (with its metadata
 /// and field ids) in the engine's canonical types (`Utf8View`, `BinaryView`, `Decimal64` up to
 /// precision 18, the engine's Variant and map entries).
-pub(crate) fn engine_field(field: &StructField) -> Result<Field, KrishivError> {
-    let arrow = to_arrow_field(field).map_err(|e| from_kernel(&e, ""))?;
+pub(crate) fn engine_field(field: &StructField, table: &str) -> Result<Field, KrishivError> {
+    let arrow = to_arrow_field(field).map_err(|e| from_kernel(&e, table))?;
     canonical(field.data_type(), &arrow)
 }
 

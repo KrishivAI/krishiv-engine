@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions, UInt32Array};
 use arrow_schema::{FieldRef, Schema, SchemaRef};
 use delta_kernel::expressions::{Predicate, PredicateRef};
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{FailedReadFileNoHint, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::{
     FilterPushdown, GlobalState, LocalState, PushedFilter, ScanPushdown, ScanPushdowns, Source,
     TaskContext,
@@ -42,6 +42,13 @@ use krishiv_types::batch::Batch;
 use super::{Inner, ScanUnit, list_units, partition_array, predicate};
 use crate::engine::columnar::{format, format_options};
 use crate::error::from_kernel;
+
+/// Bytes of one `RowSelection` range.
+const RANGE_BYTES: usize = std::mem::size_of::<std::ops::Range<u64>>();
+
+/// Peak bytes per deleted row while a deletion vector becomes a row selection (see
+/// [`DeltaScanSource::open`]).
+const DV_PEAK_BYTES_PER_ROW: usize = 2 * std::mem::size_of::<u64>() + RANGE_BYTES;
 
 /// The scan of a [`DeltaTable`](super::DeltaTable), before pushdown.
 #[derive(Debug, Clone)]
@@ -60,6 +67,9 @@ impl DeltaScan {
         let schema = self.inner.snapshot.schema();
         let parts: Vec<Predicate> = filters
             .iter()
+            // Stricter than krishiv-io's whole-unit rule (which prunes units by every filter even
+            // after one that may raise): skipping a file by a filter written after a conjunct
+            // that may raise could hide that conjunct's error, so pruning stops there.
             .take_while(|f| matches!(f.rows, RowLevel::Full))
             .filter_map(|f| predicate::to_kernel(f.expr.as_ref()?, &schema))
             .collect();
@@ -75,6 +85,8 @@ impl DeltaScan {
     /// # Errors
     /// As [`ScanPushdown::build`].
     pub fn source(&self, p: &ScanPushdowns) -> Result<DeltaScanSource, KrishivError> {
+        // TODO(08b-2): Delta row-tracking columns, once `MetadataCols` can name them, are refused
+        // with `crate::features::row_tracking_refused` (UNSUPPORTED_FEATURE.TABLE_OPERATION).
         if p.selection.is_some() || p.row_id {
             return Err(unsupported("row selections and row ids over a Delta scan"));
         }
@@ -237,10 +249,14 @@ impl DeltaScanSource {
 
     async fn open(&self, local: &mut Local, unit: &ScanUnit) -> Result<(), KrishivError> {
         let engine = &self.inner.engine;
-        let url = engine
-            .table_root()
-            .join(&unit.path)
-            .map_err(|e| unsupported(&format!("the Delta data file path {}: {e}", unit.path)))?;
+        let url = engine.table_root().join(&unit.path).map_err(|e| {
+            KrishivError::from(FailedReadFileNoHint {
+                path: unit.path.clone(),
+            })
+            .with_cause(internal(format!(
+                "the Delta log names an unresolvable path: {e}"
+            )))
+        })?;
         let path = engine.root().confine(&url)?;
         let file = FileRef {
             store: engine.store().clone(),
@@ -256,9 +272,22 @@ impl DeltaScanSource {
         let mut dv_memory = local.memory.split(0).unguarded();
         let mut request;
         let req = if unit.dv.has_vector() {
+            // Reserved from the descriptor's cardinality before the vector is decoded, at the
+            // peak: the deleted rows (8 B each), `RowSelection::excluding`'s filtered copy of them
+            // (8 B) and its ranges (16 B per range, at most one more than the rows).
+            let name = self.inner.name.clone();
+            let cardinality = unit
+                .dv
+                .cardinality()
+                .map_err(|err| from_kernel(&err, &name))?
+                .unwrap_or(0);
+            let peak = usize::try_from(cardinality)
+                .unwrap_or(usize::MAX)
+                .saturating_add(1)
+                .saturating_mul(DV_PEAK_BYTES_PER_ROW);
+            dv_memory.try_grow(peak)?;
             let dv = unit.dv.clone();
             let root = engine.table_root().clone();
-            let name = self.inner.name.clone();
             let deleted = engine
                 .delta_blocking(move |e| {
                     dv.get_row_indexes(e, &root)
@@ -266,12 +295,6 @@ impl DeltaScanSource {
                 })
                 .await??
                 .unwrap_or_default();
-            // The vector and the selection made of it, while the file is read.
-            let bytes = deleted
-                .len()
-                .saturating_add(1)
-                .saturating_mul(std::mem::size_of::<std::ops::Range<u64>>() + 8);
-            dv_memory.try_grow(bytes)?;
             let meta = engine
                 .io()
                 .read_metadata(fmt.as_ref(), &file, MetadataNeeds::default(), &options)
@@ -285,8 +308,12 @@ impl DeltaScanSource {
                 .ok_or_else(|| {
                     unsupported("a Delta deletion vector on a file of unknown row count")
                 })?;
+            let selection = RowSelection::excluding(rows, deleted);
+            // What stays held while the file is read: the selection's ranges.
+            let kept = selection.ranges().len().saturating_mul(RANGE_BYTES);
+            dv_memory.shrink(dv_memory.size().saturating_sub(kept));
             request = self.request.clone();
-            request.selection = Some(RowSelection::excluding(rows, deleted));
+            request.selection = Some(selection);
             &request
         } else {
             &self.request
@@ -302,7 +329,11 @@ impl DeltaScanSource {
                 let pc = &self.inner.partitions[k];
                 Ok((
                     k,
-                    partition_array(pc, unit.partition_values.get(&pc.physical))?,
+                    partition_array(
+                        pc,
+                        unit.partition_values.get(&pc.physical),
+                        &self.inner.name,
+                    )?,
                 ))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;

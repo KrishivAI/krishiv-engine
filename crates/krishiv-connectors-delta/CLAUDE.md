@@ -20,6 +20,14 @@ Delta Lake connector on `delta_kernel` (no default features) with our own Engine
 
 Fuzz target `fuzz/fuzz_targets/delta_commit_json.rs` (one commit through `parse_json`, `read_json_files`, the `_last_checkpoint`/`.crc` limits and a kernel snapshot + scan; seeds from the oracle tables' logs).
 
+## Not here yet (PR-08b part 2 and later)
+- Registration under `USING delta`, path tables, time travel and `@`, CDF read, the ADR 0037 snapshot cache.
+- `<tableNameOrPath>` is the table root URL (`file:///…/`); delta-spark shows the registered name or the Hadoop path
+  (`file:/…`, no trailing slash). 08b-2 passes the registered name or the Hadoop form (review 2026-11-13, finding 4).
+- Delta row-tracking columns: `features::row_tracking_refused` is wired once `MetadataCols` can name them.
+- The pushed predicate prunes files only (not row groups: no `ScanRequest::predicate`); a filtered scan replays the
+  log a second time until the snapshot cache.
+
 ## Invariants
 - `delta_kernel` with `default-features = false`; never `deltalake`.
 - Kernel calls run only through `DeltaEngine::delta_blocking` (the log pool), never on a runtime worker; lazy kernel iterators are drained inside that call; puts are never raced against cancellation once started (`block_on_to_completion`); every handler call checks the query's cancellation first and confines its URLs to the table root.

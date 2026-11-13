@@ -67,6 +67,11 @@ impl Env {
 
     /// An empty table directory.
     pub(super) fn empty() -> Self {
+        Self::with_memory(&MemoryConfig::default())
+    }
+
+    /// An empty table directory, the query's memory under `memory`.
+    pub(super) fn with_memory(memory: &MemoryConfig) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("t");
         std::fs::create_dir_all(dir.join("_delta_log")).unwrap();
@@ -81,7 +86,7 @@ impl Env {
             id.clone(),
             Arc::new(krishiv_io::SettledLocalFileSystem::new()),
         );
-        let root = TreePool::new(&MemoryConfig::default());
+        let root = TreePool::new(memory);
         let query_pool = root.child("query", None);
         let process: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
         sched.attach_memory(&process);
@@ -108,6 +113,39 @@ impl Env {
     pub(super) fn open(&self) -> Result<DeltaTable, KrishivError> {
         self.rt
             .block_on(DeltaTable::open(self.engine.clone(), None, &Config::new()))
+    }
+
+    /// Every batch `source` returns, or the first error.
+    pub(super) fn try_run(
+        &self,
+        source: Arc<dyn Source>,
+    ) -> Result<Vec<RecordBatch>, KrishivError> {
+        let ct = current_thread();
+        let query_pool = Arc::clone(&self.query_pool);
+        ct.block_on(async move {
+            let runner = QueryRunner::new(TokioExecutor::deterministic(2).unwrap());
+            let query = QueryContext::new(
+                QueryId(1),
+                WorkloadClass::Interactive,
+                ExecConfig::default(),
+                query_pool,
+            );
+            let mut stream = runner
+                .execute(Arc::new(Leaf(source)), Arc::clone(&query))
+                .await?;
+            let mut out = Vec::new();
+            let mut first = None;
+            while let Some(b) = stream.next().await {
+                match b {
+                    Ok(b) => out.push(b.into_parts().0),
+                    Err(e) => {
+                        first.get_or_insert(e);
+                    }
+                }
+            }
+            query.finished().await;
+            first.map_or(Ok(out), Err)
+        })
     }
 
     /// Every batch `source` returns, run by the deterministic executor with two drivers.
@@ -156,6 +194,14 @@ impl Env {
             }))
             .unwrap()
     }
+}
+
+/// A current-thread runtime, for the deterministic executor.
+fn current_thread() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
 }
 
 struct Leaf(Arc<dyn Source>);
@@ -603,4 +649,211 @@ fn edited_protocols_are_refused_with_their_classes() {
         "{}",
         e.message()
     );
+}
+
+#[test]
+fn a_reader_version_above_3_is_an_invalid_protocol() {
+    let env = with_commit(
+        "vacuum-protocol-check",
+        &[json!({ "protocol": {
+            "minReaderVersion": 4,
+            "minWriterVersion": 7,
+            "readerFeatures": ["vacuumProtocolCheck"],
+            "writerFeatures": ["vacuumProtocolCheck"],
+        }})],
+    );
+    let e = env.open().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DeltaInvalidProtocolVersion,
+        "{e}"
+    );
+    // The kernel refuses it in its protocol validation (`InvalidProtocol`); the other path,
+    // its `Unsupported` reader-version text, is pinned in `features::tests`.
+}
+
+/// A catalog-managed protocol without in-commit timestamps is malformed (the protocol requires
+/// them): the kernel's validation refuses it first, as `DELTA_INVALID_PROTOCOL_VERSION`, still
+/// before any data is read. Pinned so a kernel bump that reorders its checks is noticed.
+#[test]
+fn catalog_managed_without_in_commit_timestamps_is_an_invalid_protocol() {
+    let env = with_commit(
+        "vacuum-protocol-check",
+        &[protocol(
+            &["vacuumProtocolCheck", "catalogManaged"],
+            &["vacuumProtocolCheck", "catalogManaged", "inCommitTimestamp"],
+        )],
+    );
+    let e = env.open().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DeltaInvalidProtocolVersion,
+        "{e}"
+    );
+}
+
+/// The deletion-vector table spans row groups: five of up to 8,332 rows (more than one
+/// 8,192-row batch), with deleted rows at both edges of each row group and of each batch.
+#[test]
+fn deletion_vectors_across_row_groups_and_batches() {
+    let e = expected("deletion-vectors");
+    let groups: Vec<u64> = serde_json::from_value(e["row_groups"].clone()).unwrap();
+    assert!(groups.len() > 1, "{groups:?}");
+    assert!(
+        groups.iter().any(|g| *g > 8_192),
+        "a row group of several batches"
+    );
+    let env = Env::fixture("deletion-vectors");
+    let table = env.open().unwrap();
+    assert!(table.units().iter().all(|u| u.dv.has_vector()));
+    let batches = env.run(table.delta_scan().build(ScanPushdowns::default()).unwrap());
+    // Parquet counts a batch's rows after the selection, so the kept rows come one batch per
+    // row group at most: the row-group edges are where krishiv-io slices the file's selection.
+    assert!(batches.len() >= groups.len(), "{} batches", batches.len());
+    let got = rows(&batches, &table.schema());
+    assert_eq!(got, spark_rows("deletion-vectors").unwrap().1);
+    let deleted: Vec<i64> = serde_json::from_value(e["deleted_at_edges"].clone()).unwrap();
+    for id in deleted {
+        assert!(
+            !got.iter().any(|r| r[0].as_i64() == Some(id)),
+            "{id} is deleted"
+        );
+        assert!(
+            got.iter()
+                .any(|r| r[0].as_i64() == Some(id - 2) || r[0].as_i64() == Some(id + 2)),
+            "a kept neighbour of {id}"
+        );
+    }
+}
+
+fn pruned_ids(env: &Env, table: &DeltaTable, expr: PushdownExpr) -> Vec<i64> {
+    let pushdowns = ScanPushdowns {
+        filters: vec![filter(expr)],
+        ..ScanPushdowns::default()
+    };
+    let source = table.delta_scan().source(&pushdowns).unwrap();
+    assert!(source.pushed_predicate().is_some());
+    let mut ids: Vec<i64> = rows(&env.run(Arc::new(source)), &table.schema())
+        .iter()
+        .map(|r| r[0].as_i64().unwrap())
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+/// The kernel prunes what Krishiv's filter would keep a superset of: on a column-mapping table
+/// (logical names translated to physical by the kernel), by a NULL partition, under NOT, and by a
+/// data column's statistics.
+#[test]
+fn kernel_pruning_keeps_every_matching_row() {
+    let cm = Env::fixture("column-mapping-id");
+    let t = cm.open().unwrap();
+    // `a2` was renamed from `a`: the stats are under the physical name.
+    let ids = pruned_ids(
+        &cm,
+        &t,
+        PushdownExpr::eq(ColumnPath::new("a2"), ScalarValue::Utf8("a3".into())),
+    );
+    assert!(ids.contains(&3), "{ids:?}");
+    assert!(!ids.contains(&1), "a file without a3 is pruned: {ids:?}");
+
+    let pt = Env::fixture("partitioned");
+    let t = pt.open().unwrap();
+    assert_eq!(
+        pruned_ids(&pt, &t, PushdownExpr::IsNull(ColumnPath::new("n"))),
+        [2, 6]
+    );
+    let not_a = PushdownExpr::Not(Box::new(PushdownExpr::eq(
+        ColumnPath::new("n"),
+        ScalarValue::Int32(1),
+    )));
+    // NULL partitions fail `NOT (n = 1)` too, but pruning may keep them: a superset.
+    let ids = pruned_ids(&pt, &t, not_a);
+    for id in [3, 4, 5, 7] {
+        assert!(ids.contains(&id), "{ids:?}");
+    }
+    assert!(!ids.contains(&1), "{ids:?}");
+    let ts = PushdownExpr::cmp(
+        ColumnPath::new("ts"),
+        krishiv_io::CmpOp::GtEq,
+        ScalarValue::TimestampMicros(1_704_112_245_123_456),
+    );
+    let ids = pruned_ids(&pt, &t, ts);
+    assert!(
+        ids.contains(&1) && ids.contains(&4),
+        "µs bound keeps its row: {ids:?}"
+    );
+
+    let tw = Env::fixture("type-widening");
+    let t = tw.open().unwrap();
+    // `id` is a data column: files are pruned by their min/max.
+    assert_eq!(
+        pruned_ids(
+            &tw,
+            &t,
+            PushdownExpr::eq(ColumnPath::new("id"), ScalarValue::Int64(3))
+        ),
+        [3]
+    );
+}
+
+#[test]
+fn a_nested_projection_under_column_mapping() {
+    for name in ["column-mapping-name", "column-mapping-id"] {
+        let env = Env::fixture(name);
+        let table = env.open().unwrap();
+        let pushdowns = ScanPushdowns {
+            projection: Some(vec![
+                ColumnPath::new("id"),
+                ColumnPath(vec!["s".into(), "x2".into()]),
+            ]),
+            ..ScanPushdowns::default()
+        };
+        let batches = env.run(table.delta_scan().build(pushdowns).unwrap());
+        let mut got: Vec<(i64, Option<i32>)> = batches
+            .iter()
+            .flat_map(|b| {
+                let id = b.column(0).as_primitive::<Int64Type>().clone();
+                let s = b.column(1).as_struct().clone();
+                (0..b.num_rows()).map(move |r| {
+                    let x = s.column(0).as_primitive::<Int32Type>();
+                    (
+                        id.value(r),
+                        (!s.is_null(r) && !x.is_null(r)).then(|| x.value(r)),
+                    )
+                })
+            })
+            .collect();
+        got.sort_unstable();
+        assert_eq!(got, [(1, Some(100)), (2, None), (3, Some(300))], "{name}");
+    }
+}
+
+/// The deletion vector is reserved from its cardinality before it is decoded: under a limit
+/// below its peak, the read fails with the memory class (and the pool is empty afterwards).
+#[test]
+fn a_deletion_vector_is_reserved_before_it_is_decoded() {
+    let env = Env::with_memory(&MemoryConfig {
+        limit: Some(256 << 10),
+        ..MemoryConfig::default()
+    });
+    copy_dir(&fixtures().join("deletion-vectors"), &env.dir);
+    let table = env.open().unwrap();
+    let cardinality: u64 = table
+        .units()
+        .iter()
+        .map(|u| u.dv.cardinality().unwrap().unwrap())
+        .sum();
+    assert!(cardinality * 32 > 256 << 10, "{cardinality}");
+    let e = env
+        .try_run(table.delta_scan().build(ScanPushdowns::default()).unwrap())
+        .unwrap_err();
+    // The refused request is the DV's peak, from the cardinality, at 32 bytes per row.
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory, "{e}");
+    let peak = (cardinality + 1) * 32;
+    assert!(
+        e.message().contains(&format!("acquire {peak} bytes")),
+        "{e}"
+    );
+    assert_eq!(env.query_pool.reserved(), 0);
 }
