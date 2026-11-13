@@ -196,6 +196,98 @@ fn json(text: &str) -> serde_json::Value {
     serde_json::from_str(text).expect("valid JSON")
 }
 
+const DELTA_JSON: &str = include_str!("../../vendored/delta-error-classes.json");
+
+/// P3-T021: the registry holds exactly the classes of the vendored Delta subset
+/// (delta-spark 4.4.1), each with that file's SQLSTATE and template (a sub-class
+/// joins its parent's text with a space, as for Spark's classes).
+#[test]
+fn delta_classes_equal_the_vendored_subset() {
+    let doc = json(DELTA_JSON);
+    let doc = doc.as_object().expect("object");
+    let mut want = Vec::new();
+    for (name, info) in doc {
+        let lines = |v: &serde_json::Value| -> String {
+            v["message"]
+                .as_array()
+                .expect("message lines")
+                .iter()
+                .map(|l| l.as_str().expect("line"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let main = lines(info);
+        let state = info["sqlState"]
+            .as_str()
+            .expect("Delta classes have a SQLSTATE");
+        match info.get("subClass").and_then(|s| s.as_object()) {
+            None => want.push((name.clone(), state, main)),
+            Some(subs) => {
+                for (sub, sub_info) in subs {
+                    want.push((
+                        format!("{name}.{sub}"),
+                        state,
+                        format!("{main} {}", lines(sub_info)),
+                    ));
+                }
+            }
+        }
+    }
+    let got: Vec<&ErrorClass> = ErrorClass::ALL
+        .iter()
+        .filter(|c| c.name().starts_with("DELTA_"))
+        .collect();
+    assert_eq!(got.len(), want.len());
+    for (name, state, template) in &want {
+        let c = ErrorClass::from_name(name).expect("registered");
+        assert_eq!(c.sql_state(), Some(*state), "{name}");
+        assert_eq!(c.message_template(), template, "{name}");
+    }
+    // The classes the Delta connector names (design note P3-T021 sections 2.2, 3.4, 3.7).
+    for (name, state) in [
+        ("DELTA_INVALID_PROTOCOL_VERSION", "KD004"),
+        ("DELTA_UNSUPPORTED_FEATURES_FOR_READ", "56038"),
+        ("DELTA_VERSION_NOT_FOUND", "22003"),
+        ("DELTA_TIMESTAMP_GREATER_THAN_COMMIT", "42816"),
+        ("DELTA_CONCURRENT_APPEND.WITH_PARTITION_HINT", "2D521"),
+        ("DELTA_MAX_COMMIT_RETRIES_EXCEEDED", "40000"),
+    ] {
+        assert_eq!(
+            ErrorClass::from_name(name).and_then(ErrorClass::sql_state),
+            Some(state),
+            "{name}"
+        );
+    }
+    let e: KrishivError = DeltaVersionNotFound {
+        user_version: "7".to_owned(),
+        earliest: "0".to_owned(),
+        latest: "3".to_owned(),
+    }
+    .into();
+    assert_eq!(
+        e.to_string(),
+        "[DELTA_VERSION_NOT_FOUND] Cannot time travel Delta table to version 7. Available versions: [0, 3]. SQLSTATE: 22003"
+    );
+}
+
+/// P3-T021: the catalog parse-limit class names the limit, its value and the fix.
+#[test]
+fn catalog_limit_exceeded_names_the_limit() {
+    let e: KrishivError = KrishivCatalogLimitExceeded {
+        source: "Delta log file t/_delta_log/0.json".to_owned(),
+        limit: "the size limit".to_owned(),
+        value: "268435456 bytes".to_owned(),
+        config: "krishiv.catalog.maxMetadataBytes".to_owned(),
+    }
+    .into();
+    assert_eq!(e.error_class(), ErrorClass::KrishivCatalogLimitExceeded);
+    assert_eq!(e.error_class().sql_state(), Some("54000"));
+    assert!(
+        e.to_string().contains("krishiv.catalog.maxMetadataBytes"),
+        "{e}"
+    );
+}
+
 /// One release's leaf classes: name -> (SQLSTATE, template), as Spark joins a
 /// main message and its sub-class message.
 fn release_leaves(
@@ -243,7 +335,7 @@ fn registry_is_the_union_of_spark_4_2_1_and_4_3_0() {
     let union: BTreeSet<&String> = v42.keys().chain(v43.keys()).collect();
     let spark: BTreeSet<String> = ErrorClass::ALL
         .iter()
-        .filter(|c| !c.name().starts_with("KRISHIV_"))
+        .filter(|c| !c.name().starts_with("KRISHIV_") && !c.name().starts_with("DELTA_"))
         .map(|c| c.name().to_owned())
         .collect();
     assert_eq!(spark.iter().collect::<BTreeSet<_>>(), union);
@@ -269,7 +361,7 @@ fn per_release_templates_match_the_vendored_registries() {
     let v43 = release_leaves(&json(SPARK_4_3_JSON));
     for c in ErrorClass::ALL
         .iter()
-        .filter(|c| !c.name().starts_with("KRISHIV_"))
+        .filter(|c| !c.name().starts_with("KRISHIV_") && !c.name().starts_with("DELTA_"))
     {
         let name = c.name().to_owned();
         let t42 = v42.get(&name).map(|(_, t)| t.as_str());

@@ -55,7 +55,9 @@ pub(crate) fn recarried(
         .zip(schema.fields())
         .map(|(c, f)| recarried_array(c, f.data_type()))
         .collect::<Result<Vec<_>, _>>()?;
-    RecordBatch::try_new(Arc::clone(schema), columns).map_err(|e| internal(e.to_string()))
+    let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    RecordBatch::try_new_with_options(Arc::clone(schema), columns, &options)
+        .map_err(|e| internal(e.to_string()))
 }
 
 /// `batch` as a caller reads it.

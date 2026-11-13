@@ -90,7 +90,7 @@ impl Session {
     ///
     /// # Errors
     /// `UNABLE_TO_ACQUIRE_MEMORY` when the relation store cannot hold the rows.
-    pub(super) async fn script_result(
+    pub(crate) async fn script_result(
         &self,
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
@@ -105,8 +105,12 @@ impl Session {
         let batches = batches
             .into_iter()
             .map(|b| {
-                RecordBatch::try_new(Arc::clone(&schema), b.columns().to_vec())
-                    .map_err(|e| crate::session::internal(e.to_string()))
+                RecordBatch::try_new_with_options(
+                    Arc::clone(&schema),
+                    b.columns().to_vec(),
+                    &arrow_array::RecordBatchOptions::new().with_row_count(Some(b.num_rows())),
+                )
+                .map_err(|e| crate::session::internal(e.to_string()))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
         let (schema, batches) = if repeated {
@@ -117,8 +121,12 @@ impl Session {
             let batches = batches
                 .into_iter()
                 .map(|b| {
-                    RecordBatch::try_new(Arc::clone(&renamed), b.columns().to_vec())
-                        .map_err(|e| crate::session::internal(e.to_string()))
+                    RecordBatch::try_new_with_options(
+                        Arc::clone(&renamed),
+                        b.columns().to_vec(),
+                        &arrow_array::RecordBatchOptions::new().with_row_count(Some(b.num_rows())),
+                    )
+                    .map_err(|e| crate::session::internal(e.to_string()))
                 })
                 .collect::<Result<Vec<_>, KrishivError>>()?;
             (renamed, batches)

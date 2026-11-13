@@ -116,6 +116,10 @@ fn run_cli() -> Result<(), String> {
         set.pairs.retain(|p| p.name.contains(name.as_str()));
         manifest = ExclusionManifest::default();
     }
+    if tag == DEFAULT_TAG {
+        // The manifest is written against the default tag; an older tag may lack a listed file.
+        manifest.validate(&set).map_err(|e| e.to_string())?;
+    }
     let result = match engine_name.as_str() {
         "sql-parse" => run_with(
             &mut ParseOnlyEngine::default(),
