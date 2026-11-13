@@ -191,12 +191,10 @@ pub(crate) fn conform(array: &ArrayRef, target: &ArrowType) -> KernelResult<Arra
                 .zip(to.iter())
                 .map(|(c, f)| conform(c, f.data_type()))
                 .collect::<KernelResult<Vec<_>>>()?;
-            let out = if columns.is_empty() {
-                StructArray::new_empty_fields(s.len(), s.nulls().cloned())
-            } else {
-                StructArray::try_new(to.clone(), columns, s.nulls().cloned()).map_err(arrow_err)?
-            };
-            Ok(Arc::new(out))
+            // Never empty: two structs of no fields have equal types and returned above.
+            Ok(Arc::new(
+                StructArray::try_new(to.clone(), columns, s.nulls().cloned()).map_err(arrow_err)?,
+            ))
         }
         (ArrowType::List(_), ArrowType::List(to)) => {
             let l = array.as_list::<i32>();

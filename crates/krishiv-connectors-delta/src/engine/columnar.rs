@@ -565,3 +565,128 @@ impl ParquetHandler for KrishivParquetHandler {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use arrow_array::types::Int32Type;
+    use arrow_array::{Int32Array, LargeListArray};
+    use arrow_schema::DataType as ArrowType;
+    use delta_kernel::schema::ArrayType;
+
+    use super::*;
+
+    fn with_id(f: StructField, id: MetadataValue) -> StructField {
+        f.with_metadata([(ColumnMetadataKey::ParquetFieldId.as_ref(), id)])
+    }
+
+    fn ints(v: &[Option<i32>]) -> ArrayRef {
+        Arc::new(Int32Array::from(v.to_vec()))
+    }
+
+    #[test]
+    fn columns_are_found_by_field_id_then_name() {
+        let fields: Fields = vec![
+            Field::new("a", ArrowType::Int32, true),
+            Field::new("renamed", ArrowType::Int32, true)
+                .with_metadata(HashMap::from([(FIELD_ID_KEY.to_owned(), "5".to_owned())])),
+        ]
+        .into();
+        let a = StructField::nullable("a", DataType::INTEGER);
+        // An id as a number or as a string finds the renamed column.
+        for id in [MetadataValue::Number(5), MetadataValue::String("5".into())] {
+            assert_eq!(find(&fields, &with_id(a.clone(), id)), Some(1));
+        }
+        // An id of another kind, or one the file lacks, falls back to the name.
+        assert_eq!(
+            find(&fields, &with_id(a.clone(), MetadataValue::Boolean(true))),
+            Some(0)
+        );
+        assert_eq!(
+            find(&fields, &with_id(a, MetadataValue::Number(9))),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn metadata_columns_by_spec_or_reserved_id() {
+        let row_id = StructField::create_metadata_column("r", MetadataColumnSpec::RowId);
+        let e = metadata_spec(&row_id).unwrap_err();
+        assert!(matches!(e, KernelError::Unsupported(_)), "{e:?}");
+        let file = with_id(
+            StructField::nullable("f", DataType::STRING),
+            MetadataValue::Number(FILE_NAME_FIELD_ID),
+        );
+        assert!(matches!(
+            metadata_spec(&file).unwrap(),
+            Some(MetadataColumnSpec::FilePath)
+        ));
+    }
+
+    #[test]
+    fn reconcile_shapes_nested_columns_and_refuses_mismatches() {
+        let st = |cols: Vec<(&str, ArrayRef)>| -> ArrayRef {
+            let fields: Vec<Field> = cols
+                .iter()
+                .map(|(n, c)| Field::new(*n, c.data_type().clone(), true))
+                .collect();
+            Arc::new(
+                StructArray::try_new(
+                    fields.into(),
+                    cols.into_iter().map(|(_, c)| c).collect(),
+                    None,
+                )
+                .unwrap(),
+            )
+        };
+        let file = st(vec![("a", ints(&[Some(1), Some(2)]))]);
+        let want = |b_nullable: bool| {
+            DataType::Struct(Box::new(
+                StructType::try_new([
+                    StructField::nullable("a", DataType::INTEGER),
+                    StructField::new("b", DataType::LONG, b_nullable),
+                ])
+                .unwrap(),
+            ))
+        };
+        // A missing nullable child is NULL; a missing non-nullable one is an error.
+        let out = reconcile(&file, &want(true), "s").unwrap();
+        assert_eq!(out.as_struct().column(1).null_count(), 2);
+        let e = reconcile(&file, &want(false), "s").unwrap_err();
+        assert!(
+            e.to_string().contains("non-nullable column s.b is missing"),
+            "{e}"
+        );
+        // A struct of no fields keeps the rows.
+        let empty = DataType::Struct(Box::new(StructType::try_new([]).unwrap()));
+        assert_eq!(reconcile(&file, &empty, "s").unwrap().len(), 2);
+        // A list of structs is reconciled element-wise.
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new("item", file.data_type().clone(), true)),
+            arrow_buffer::OffsetBuffer::new(vec![0, 2].into()),
+            Arc::clone(&file),
+            None,
+        ));
+        let of = |t| DataType::Array(Box::new(ArrayType::new(t, true)));
+        let out = reconcile(&list, &of(want(true)), "l").unwrap();
+        let values = out.as_list::<i32>().values();
+        assert_eq!(values.as_struct().num_columns(), 2);
+        // A large list is conformed to a list.
+        let large: ArrayRef = Arc::new(LargeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(vec![Some(1)])],
+        ));
+        let out = reconcile(&large, &of(DataType::INTEGER), "l").unwrap();
+        assert!(matches!(out.data_type(), ArrowType::List(_)));
+        // Shapes that do not match.
+        let e = reconcile(&ints(&[Some(1)]), &want(true), "s").unwrap_err();
+        assert!(e.to_string().contains("s: expected a struct"), "{e}");
+        let map = DataType::Map(Box::new(delta_kernel::schema::MapType::new(
+            DataType::STRING,
+            DataType::STRING,
+            true,
+        )));
+        let e = reconcile(&ints(&[Some(1)]), &map, "m").unwrap_err();
+        assert!(e.to_string().contains("m: expected a map"), "{e}");
+    }
+}
