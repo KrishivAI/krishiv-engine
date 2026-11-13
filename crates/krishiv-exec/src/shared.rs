@@ -623,8 +623,12 @@ impl Source for SharedSource {
                     internal("a shared plan was read before it was built".to_owned())
                 })?;
                 if !state.is::<SinkGlobal>() {
-                    // A `PythonEval` keeps its rows in a shared plan's list.
-                    state = crate::python_eval::store_state(&state)?;
+                    // A `PythonEval` or a Python relation node keeps its
+                    // rows in a shared plan's list.
+                    state = match crate::python_relation::sink::store_state(&state) {
+                        Some(store) => store,
+                        None => crate::python_eval::store_state(&state)?,
+                    };
                 }
                 let sink = global_ref::<SinkGlobal>(&state, "SharedSource")?;
                 sink.done.get().cloned().ok_or_else(|| {
