@@ -24,9 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use krishiv_common::error::{
-    KrishivError, KrishivUnsupportedFeature, SchemaNotFound, TableOrViewAlreadyExists,
-};
+use krishiv_common::error::{KrishivError, SchemaNotFound, TableOrViewAlreadyExists};
 use krishiv_types::DataType;
 use std::sync::Arc;
 
@@ -662,17 +660,9 @@ impl CatalogStore for InMemoryCatalogStore {
         let key = (table.namespace.clone(), table.name.clone());
         let mut state = self.lock();
         // Checked under the lock the insert takes, so a namespace dropped meanwhile cannot be left holding a table.
-        let Some(namespace) = state.namespaces.get(&table.namespace) else {
+        if !state.namespaces.contains_key(&table.namespace) {
             return Err(SchemaNotFound {
                 schema_name: format!("`{}`", table.namespace),
-            }
-            .into());
-        };
-        // A table in a schema with a DEFAULT COLLATION would keep UTF8_BINARY semantics for its string columns
-        // until namespace defaults are applied, so none is created there (the SQL create refuses it too).
-        if namespace.collation.is_some() {
-            return Err(KrishivUnsupportedFeature {
-                feature: "a table or view in a schema with a DEFAULT COLLATION".to_owned(),
             }
             .into());
         }
@@ -894,7 +884,10 @@ mod tests {
     }
 
     #[test]
-    fn a_table_cannot_be_created_in_a_namespace_with_a_default_collation() {
+    fn the_store_takes_a_table_in_a_collated_namespace_so_a_rename_can_always_restore_it() {
+        // `Session::rename_table` drops the source entry and creates the new one, and puts the source
+        // back if that fails: neither create may be refused by the store. The SQL create refuses a *new*
+        // table in a collated schema before it gets here.
         let s = InMemoryCatalogStore::default();
         s.create_namespace(
             "ci",
@@ -903,19 +896,11 @@ mod tests {
                 ..NamespaceMeta::default()
             },
         );
-        let e = s
-            .create_table(table("ci", "t"), CreateMode::ErrorIfExists)
-            .unwrap_err();
-        assert_eq!(
-            e.error_class(),
-            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
-        );
-        assert!(s.table("ci", "t").is_none());
-        s.create_namespace("plain", NamespaceMeta::default());
         assert!(
-            s.create_table(table("plain", "t"), CreateMode::ErrorIfExists)
+            s.create_table(table("ci", "t"), CreateMode::ErrorIfExists)
                 .unwrap()
         );
+        assert!(s.table("ci", "t").is_some());
     }
 
     #[test]
