@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Generates the error-class registry from two JSON files of the same shape:
-//! `spark-error-conditions.json` (Spark 4.2.0's `error-conditions.json`,
-//! vendored verbatim by `tests/scripts/gen_error_classes.py`) and
-//! `krishiv-error-classes.json` (`KRISHIV_`-prefixed classes only). Output is
+//! `spark-error-conditions.json` (Spark 4.3.0's `error-conditions.json`) and
+//! `spark-error-conditions-4.2.1.json` (Spark 4.2.1's), both vendored verbatim
+//! by `tests/scripts/gen_error_classes.py`, and `krishiv-error-classes.json`
+//! (`KRISHIV_`-prefixed classes only). A Spark class is the union of the two
+//! releases: its default text and parameters are the 4.2.1 ones (the default
+//! profile is 4.2) or the 4.3.0 ones for a class only 4.3.0 has, and each
+//! release's own text is kept for `message_template_for`. Output is
 //! deterministic: `serde_json` without `preserve_order` keeps objects sorted
 //! by key, and the merged list is sorted by class name.
 
@@ -34,17 +38,24 @@ struct Leaf {
     params: Vec<String>,
     /// Whether only operators may see this class's details (`for_client`).
     operator_only: bool,
+    /// The class's text and parameters in Spark 4.2.1, when it exists there.
+    in_4_2: Option<(String, Vec<String>)>,
+    /// The class's text and parameters in Spark 4.3.0, when it exists there.
+    in_4_3: Option<(String, Vec<String>)>,
 }
 
 fn main() -> Result<(), BoxError> {
     println!("cargo::rerun-if-changed=vendored/spark-error-conditions.json");
+    println!("cargo::rerun-if-changed=vendored/spark-error-conditions-4.2.1.json");
     println!("cargo::rerun-if-changed=krishiv-error-classes.json");
     println!("cargo::rerun-if-changed=error-audience.json");
     println!("cargo::rerun-if-changed=src/error/template.rs");
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
-    let spark = std::fs::read_to_string(manifest.join("vendored/spark-error-conditions.json"))?;
+    let spark_4_3 = std::fs::read_to_string(manifest.join("vendored/spark-error-conditions.json"))?;
+    let spark_4_2 =
+        std::fs::read_to_string(manifest.join("vendored/spark-error-conditions-4.2.1.json"))?;
     let krishiv = std::fs::read_to_string(manifest.join("krishiv-error-classes.json"))?;
-    let mut leaves = parse(&spark, false)?;
+    let mut leaves = merge_releases(parse(&spark_4_3, false)?, parse(&spark_4_2, false)?)?;
     leaves.extend(parse(&krishiv, true)?);
     leaves.sort_by(|a, b| a.name.cmp(&b.name));
     check_unique(&leaves)?;
@@ -53,6 +64,35 @@ fn main() -> Result<(), BoxError> {
     let out = PathBuf::from(std::env::var("OUT_DIR")?).join("error_classes.rs");
     std::fs::write(out, generate(&leaves)?)?;
     Ok(())
+}
+
+/// The union of Spark 4.3.0's and 4.2.1's classes. A class in both keeps the
+/// 4.2.1 text and parameters as its default (the default profile is 4.2) and
+/// records each release's own; the SQLSTATE must agree, so one accessor
+/// serves both.
+fn merge_releases(v4_3: Vec<Leaf>, v4_2: Vec<Leaf>) -> Result<Vec<Leaf>, BoxError> {
+    let mut by_name: std::collections::BTreeMap<String, Leaf> = std::collections::BTreeMap::new();
+    for mut l in v4_2 {
+        l.in_4_2 = Some((l.template.clone(), l.params.clone()));
+        by_name.insert(l.name.clone(), l);
+    }
+    for mut l in v4_3 {
+        let entry = (l.template.clone(), l.params.clone());
+        if let Some(existing) = by_name.get_mut(&l.name) {
+            if existing.sql_state != l.sql_state {
+                return Err(format!(
+                    "{}: SQLSTATE differs between Spark 4.2.1 ({:?}) and 4.3.0 ({:?})",
+                    l.name, existing.sql_state, l.sql_state
+                )
+                .into());
+            }
+            existing.in_4_3 = Some(entry);
+        } else {
+            l.in_4_3 = Some(entry);
+            by_name.insert(l.name.clone(), l);
+        }
+    }
+    Ok(by_name.into_values().collect())
 }
 
 /// Parses one registry file. Krishiv classes must be `KRISHIV_`-prefixed and
@@ -223,6 +263,8 @@ fn leaf(name: String, sql_state: Option<&str>, template: String) -> Result<Leaf,
         template,
         params,
         operator_only: false,
+        in_4_2: None,
+        in_4_3: None,
     })
 }
 
@@ -263,13 +305,32 @@ fn state_doc(l: &Leaf) -> String {
         .map_or_else(String::new, |s| format!(" (SQLSTATE `{s}`)"))
 }
 
-/// (doc, method name, return type, per-leaf match arm body).
+/// (doc, method name, extra argument, return type, per-leaf match arm body).
 type Accessor = (
+    &'static str,
     &'static str,
     &'static str,
     &'static str,
     fn(&Leaf) -> String,
 );
+
+/// `match release { .. }` over a class's per-release value; `None` for a
+/// release the class is not in. A Krishiv class exists in every release.
+fn per_release(l: &Leaf, value: fn(&(String, Vec<String>)) -> String) -> String {
+    let arm = |r: &Option<(String, Vec<String>)>| {
+        if l.name.starts_with("KRISHIV_") {
+            format!("Some({})", value(&(l.template.clone(), l.params.clone())))
+        } else {
+            r.as_ref()
+                .map_or_else(|| "None".to_owned(), |v| format!("Some({})", value(v)))
+        }
+    };
+    format!(
+        "match release {{ SparkRelease::V4_2 => {}, SparkRelease::V4_3 => {} }}",
+        arm(&l.in_4_2),
+        arm(&l.in_4_3)
+    )
+}
 
 fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
     let mut o = String::new();
@@ -306,34 +367,39 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
         writeln!(o, "        ErrorClass::{},", l.ident)?;
     }
     writeln!(o, "    ];")?;
-    let accessors: [Accessor; 5] = [
+    let accessors: [Accessor; 7] = [
         (
             "Spark error class name, e.g. `UNRESOLVED_COLUMN.WITH_SUGGESTION`.",
             "name",
+            "",
             "&'static str",
             |l| format!("{:?}", l.name),
         ),
         (
             "Five-character SQLSTATE; `None` for Spark classes that have none.",
             "sql_state",
+            "",
             "Option<&'static str>",
             |l| format!("{:?}", l.sql_state),
         ),
         (
             "Message template with `<param>` placeholders.",
             "message_template",
+            "",
             "&'static str",
             |l| format!("{:?}", l.template),
         ),
         (
             "Spark message parameter names, in template order.",
             "parameters",
+            "",
             "&'static [&'static str]",
             |l| format!("&{:?}", l.params),
         ),
         (
             "Who may see this class's details: see [`Audience`].",
             "audience",
+            "",
             "Audience",
             |l| {
                 if l.operator_only {
@@ -343,8 +409,25 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
                 }
             },
         ),
+        (
+            "The message template as `release` words it (the default view, \
+             [`ErrorClass::message_template`], is Spark 4.2); `None` when the \
+             class does not exist in that release.",
+            "message_template_for",
+            ", release: SparkRelease",
+            "Option<&'static str>",
+            |l| per_release(l, |(t, _)| format!("{t:?}")),
+        ),
+        (
+            "The parameter names as `release` has them; `None` when the class \
+             does not exist in that release.",
+            "parameters_for",
+            ", release: SparkRelease",
+            "Option<&'static [&'static str]>",
+            |l| per_release(l, |(_, p)| format!("&{p:?}")),
+        ),
     ];
-    for (doc, fname, ty, body) in accessors {
+    for (doc, fname, args, ty, body) in accessors {
         writeln!(o)?;
         writeln!(o, "    /// {doc}")?;
         // `match_same_arms` fires only when two arms have the same body, so
@@ -356,7 +439,7 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
                 "    #[expect(clippy::match_same_arms, reason = \"generated arms coincide for some classes\")]"
             )?;
         }
-        writeln!(o, "    pub const fn {fname}(self) -> {ty} {{")?;
+        writeln!(o, "    pub const fn {fname}(self{args}) -> {ty} {{")?;
         writeln!(o, "        match self {{")?;
         for l in leaves {
             writeln!(o, "            ErrorClass::{} => {},", l.ident, body(l))?;

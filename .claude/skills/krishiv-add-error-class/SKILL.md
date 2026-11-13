@@ -9,11 +9,12 @@ Errors are `KrishivError` values with a Spark error class and SQLSTATE. The regi
 `crates/krishiv-common/build.rs` from two JSON files of the same shape.
 
 ## First choice: a Spark class
-If Spark raises this error, use its class. Spark's file is vendored verbatim and refreshed by
-`python3 tests/scripts/gen_error_classes.py` (needs Docker; it also regenerates the render fixture
-`tests/fixtures/spark-4.2.0/error-classes/render.json`). Never edit
-`crates/krishiv-common/vendored/spark-error-conditions.json` by hand. Look the class up there and use its parameters
-exactly.
+If Spark raises this error, use its class. Spark's files are vendored verbatim, one per release (`vendored/spark-error-conditions.json` is 4.3.0,
+`spark-error-conditions-4.2.1.json` is 4.2.1), and refreshed by `python3 tests/scripts/gen_error_classes.py` (needs
+Docker; it also regenerates the render fixture `tests/fixtures/spark-4.2.0/error-classes/render.json`). Never edit them
+by hand. The registry is their union: a class's default text and parameters are 4.2's (the default profile), and
+`ErrorClass::message_template_for(SparkRelease)` / `parameters_for` give each release's own (`None` where the class is
+not in that release). Look the class up there and use its parameters exactly.
 
 ## A Krishiv-only class
 1. **Entry** in `crates/krishiv-common/krishiv-error-classes.json`, keyed alphabetically:
