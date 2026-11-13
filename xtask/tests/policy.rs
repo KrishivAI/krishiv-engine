@@ -971,8 +971,8 @@ fn release_publishing_is_manual_and_gated() {
         .filter(|l| !l.is_empty())
         .map(String::from)
         .collect();
-    // 0.2.0 published 20; P3-T014b adds krishiv-udf-sandbox.
-    assert_eq!(listed.len(), 21, "the release publishes 21 crates");
+    // 0.2.0 published 20; P3-T014 adds krishiv-udf-sandbox and krishiv-udf-pool.
+    assert_eq!(listed.len(), 22, "the release publishes 22 crates");
     let mut manifests = vec![root().join("xtask/Cargo.toml")];
     for entry in std::fs::read_dir(root().join("crates")).unwrap() {
         manifests.push(entry.unwrap().path().join("Cargo.toml"));
