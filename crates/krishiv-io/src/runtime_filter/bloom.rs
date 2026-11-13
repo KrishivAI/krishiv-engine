@@ -208,14 +208,7 @@ impl RuntimeBloom {
     pub fn check_batch(&self, hashes: &[u64]) -> arrow_buffer::BooleanBuffer {
         // Block indices are kept as `u32`: a filter of 2^32 blocks or more
         // (128 GiB, never planned) keeps the one-at-a-time loop.
-        // perf-4 step 0 (scratch): `KRISHIV_R4_PREFETCH=0` keeps the one-at-a-time loop.
-        static PREFETCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let prefetch = *PREFETCH
-            .get_or_init(|| std::env::var("KRISHIV_R4_PREFETCH").map_or(true, |v| v != "0"));
-        if !prefetch
-            || self.num_bytes() <= PREFETCH_ABOVE_BYTES
-            || u32::try_from(self.blocks.len()).is_err()
-        {
+        if self.num_bytes() <= PREFETCH_ABOVE_BYTES || u32::try_from(self.blocks.len()).is_err() {
             return super::member::pack(hashes, |h| self.check_hash(h));
         }
         #[expect(

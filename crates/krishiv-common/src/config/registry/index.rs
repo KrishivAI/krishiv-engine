@@ -450,6 +450,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &WINDOW_GROUP_LIMIT_THRESHOLD,
     ),
     (
+        "krishiv.experimental.runtimeFilterBloomAtScale",
+        &EXPERIMENTAL_RUNTIME_FILTER_BLOOM_AT_SCALE,
+    ),
+    (
         "krishiv.runtimeFilter.bloom.minApplicationRows",
         &RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
     ),

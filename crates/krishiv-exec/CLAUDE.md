@@ -52,7 +52,7 @@ partials merge with `KeyFilter::merge` under the publishing join's options (`Val
 partitioned join's Bloom size is planned (`KeyFilterOptions::bloom_bytes`, P2-T177 unit 2) and dropped at
 instantiation when the filter has one producer partition.
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
-(adaptive switch-off; a scan can hand its drivers' stages to the hash probe above it, `RuntimeFilters::hand_to_consumer`); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
+(adaptive switch-off; a scan can hand its drivers' stages to the hash probe above it, `RuntimeFilters::hand_to_consumer`); `planner/runtime_filter.rs` legal targets (sites) and the cost model (`krishiv.experimental.runtimeFilterBloomAtScale`: a scan estimated at least 20x its build plans its Bloom with caps of 20M keys and 32 MiB, ledger §4 item 13). A scan's pipeline
 starts after the pipelines publishing the filters worth the wait (`scan_waits`: not when the build reads the scan's
 own table, unless it is far smaller) unless they run with or after it (`runner.rs`, `with_filter_order`); no driver
 ever waits on a filter's value. A `TopN` offers the first key of its last row the same way (`PhysNode::TopN::bound`, `ValueService::tighten`, design P2-T063): never where a filter below may raise or a nondeterministic plan sits below.

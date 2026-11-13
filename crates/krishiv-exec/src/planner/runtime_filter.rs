@@ -55,10 +55,11 @@ use std::sync::Arc;
 
 use arrow_schema::DataType;
 use krishiv_common::config::{
-    Config, ConfigValue, RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
-    RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, RUNTIME_FILTER_BLOOM_ENABLED, RUNTIME_FILTER_BLOOM_MAX_BYTES,
-    RUNTIME_FILTER_BLOOM_MAX_ITEMS, RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
-    RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
+    Config, ConfigValue, EXPERIMENTAL_RUNTIME_FILTER_BLOOM_AT_SCALE,
+    RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT, RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
+    RUNTIME_FILTER_BLOOM_ENABLED, RUNTIME_FILTER_BLOOM_MAX_BYTES, RUNTIME_FILTER_BLOOM_MAX_ITEMS,
+    RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS, RUNTIME_FILTER_ENABLED,
+    RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
 };
 use krishiv_io::runtime_filter::RuntimeBloom;
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
@@ -95,8 +96,17 @@ pub(crate) struct Settings {
     bloom_max_items: u64,
     bloom_max_bytes: usize,
     min_application_rows: u64,
+    bloom_at_scale: bool,
     row: RowStageSettings,
 }
+
+/// The probe-to-build row ratio from which
+/// `krishiv.experimental.runtimeFilterBloomAtScale` raises the Bloom caps.
+const BLOOM_AT_SCALE_RATIO: f64 = 20.0;
+/// The Bloom key cap `krishiv.experimental.runtimeFilterBloomAtScale` raises to.
+const BLOOM_AT_SCALE_MAX_ITEMS: u64 = 20_000_000;
+/// The Bloom size cap `krishiv.experimental.runtimeFilterBloomAtScale` raises to.
+const BLOOM_AT_SCALE_MAX_BYTES: usize = 32 << 20;
 
 fn int(config: &Config, e: &krishiv_common::config::ConfigEntry) -> Option<i64> {
     config.get(e).and_then(ConfigValue::as_int)
@@ -130,6 +140,10 @@ impl Settings {
                 .and_then(|v| usize::try_from(v).ok())
                 .unwrap_or(8 << 20),
             min_application_rows: count(&RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS, 1_000_000),
+            bloom_at_scale: config
+                .get(&EXPERIMENTAL_RUNTIME_FILTER_BLOOM_AT_SCALE)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(false),
             row: RowStageSettings {
                 min_rows: count(&RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, 65_536).max(1),
                 max_pass_rate,
@@ -213,16 +227,14 @@ impl Planner<'_> {
             // Every scan the key reaches gets its own filter (the branches
             // of a union, both inputs of an inner join below).
             for site in probe.sites.iter().filter(|s| s.attr == source) {
-                // perf-4 step 0 (scratch, ledger §4 item 13): `KRISHIV_BLOOM_SCALE=1`
-                // raises the Bloom caps to 20M keys / 32 MiB only for a probe
-                // estimated at least 20x the build.
-                static SCALE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-                let scale = *SCALE
-                    .get_or_init(|| std::env::var("KRISHIV_BLOOM_SCALE").is_ok_and(|v| v == "1"));
+                // `krishiv.experimental.runtimeFilterBloomAtScale` (ledger
+                // §4 item 13): a scan estimated at least 20x the build
+                // plans its Bloom with the larger caps; with R4's prefetching
+                // probe a Bloom past the caches still pays there.
                 let mut s = s;
-                if scale && site.scan_rows >= 20.0 * build_rows {
-                    s.bloom_max_items = s.bloom_max_items.max(20_000_000);
-                    s.bloom_max_bytes = s.bloom_max_bytes.max(32 << 20);
+                if s.bloom_at_scale && site.scan_rows >= BLOOM_AT_SCALE_RATIO * build_rows {
+                    s.bloom_max_items = s.bloom_max_items.max(BLOOM_AT_SCALE_MAX_ITEMS);
+                    s.bloom_max_bytes = s.bloom_max_bytes.max(BLOOM_AT_SCALE_MAX_BYTES);
                 }
                 // A build whose estimate is a guess over an aggregate's
                 // output (`HAVING`) plans its Bloom filter anyway: the build

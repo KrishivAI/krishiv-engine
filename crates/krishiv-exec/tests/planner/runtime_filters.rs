@@ -1031,3 +1031,60 @@ fn a_partitioned_build_plans_its_bloom_size() {
     }
     assert_eq!(results[0], results[1]);
 }
+
+/// `krishiv.experimental.runtimeFilterBloomAtScale` (gap ledger §4 item 13):
+/// a scan estimated at least 20x the build plans its Bloom filter past a
+/// lower `bloom.maxItems`; a scan below that ratio keeps the cap; results
+/// never change. Caps are scaled down: a 100-key cap, builds of 150 (probe
+/// 4,000 rows: 26x) and 600 rows (6.7x).
+#[test]
+fn bloom_at_scale_raises_the_cap_only_for_a_large_probe() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 31;
+    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 40_000, 0));
+    write(dir.path(), "few.parquet", &table(&mut rng, 150, 40_000, 0));
+    write(dir.path(), "many.parquet", &table(&mut rng, 600, 40_000, 0));
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("few", vec!["few.parquet".to_owned()]),
+        ("many", vec!["many.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let base: &[(&str, &str)] = &[
+        ("krishiv.runtimeFilter.bloom.minApplicationRows", "0"),
+        ("krishiv.runtimeFilter.inList.maxValues", "0"),
+        ("krishiv.runtimeFilter.exactSet.maxValues", "0"),
+        ("krishiv.runtimeFilter.bloom.maxItems", "100"),
+        ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+    ];
+    let on = ("krishiv.experimental.runtimeFilterBloomAtScale", "true");
+    for (build, at_scale) in [("few", true), ("many", false)] {
+        let q = format!("SELECT b.v FROM big b JOIN {build} s ON b.k64 = s.k64");
+        configured(&mut t, MODES[0].1);
+        let want = sorted(&run(&t.plan_sql(&q).unwrap()).0);
+        configured(&mut t, base);
+        let off = t.plan_sql(&q).unwrap();
+        assert!(!off.to_string().contains("(bloom)"), "{off}");
+        let mut mode = base.to_vec();
+        mode.push(on);
+        configured(&mut t, &mode);
+        let plan = t.plan_sql(&q).unwrap();
+        assert_eq!(
+            plan.to_string().contains("(bloom)"),
+            at_scale,
+            "{build}\n{plan}"
+        );
+        let (got, c) = run(&plan);
+        assert_eq!(sorted(&got), want, "{build}");
+        if at_scale {
+            // The Bloom filter holds the build's keys: it drops rows the
+            // range keeps.
+            let (_, c_off) = run(&off);
+            assert!(c.rows_dropped > c_off.rows_dropped, "{c:?} {c_off:?}");
+        }
+    }
+}
