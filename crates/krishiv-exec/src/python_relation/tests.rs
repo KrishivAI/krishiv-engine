@@ -559,3 +559,60 @@ fn a_runtime_without_relation_kinds_refuses_them_as_not_available() {
     assert_eq!(err.error_class(), ErrorClass::KrishivUdfNotAvailable);
     assert!(err.to_string().contains("f@3"), "{err}");
 }
+
+#[tokio::test]
+async fn max_bytes_per_batch_cuts_frames_between_rows() {
+    let limits = RelationLimits {
+        max_rows: 0,
+        max_bytes: 1,
+        window: 64,
+    };
+    let r = rig(RelationShape::Map, Yield::Twice, limits, 64 << 20);
+    assert!(format!("{:?}", r.sink).contains("RelationSink"));
+    drive(&r, vec![rows(&[1, 2, 3], None)]).await.unwrap();
+    // At least one row per frame, however small the byte cap.
+    assert_eq!(r.shared.log(), ["B0:1", "B0:1", "B0:1", "E"]);
+    done(r);
+}
+
+#[tokio::test]
+async fn a_result_of_another_width_fails_the_phase() {
+    // The task yields `n BIGINT` where `k, v` were declared.
+    let shared = Arc::new(Shared::default());
+    let lane = RelationLane {
+        udf: Arc::new(Fake {
+            shared: Arc::clone(&shared),
+            yields: Yield::Count,
+        }),
+        sides: vec![vec![
+            column(0, ArrowType::Int32),
+            column(1, ArrowType::Int64),
+        ]],
+        names: vec![vec!["k".to_owned(), "v".to_owned()]],
+        client: vec![ArrowType::Int32, ArrowType::Int64],
+    };
+    let mut r = rig(
+        RelationShape::Grouped { keys: vec![0] },
+        Yield::Count,
+        limits(0, 8),
+        64 << 20,
+    );
+    r.sink = RelationSink::try_new(
+        input(false),
+        RelationShape::Grouped { keys: vec![0] },
+        vec![lane],
+        Arc::new(Schema::new(vec![
+            Field::new("k", ArrowType::Int32, true),
+            Field::new("v", ArrowType::Int64, true),
+        ])),
+        limits(0, 8),
+        None,
+    )
+    .unwrap();
+    let err = drive(&r, vec![rows(&[1, 2], None)]).await.unwrap_err();
+    assert!(
+        err.to_string().contains("columns where 2 were declared"),
+        "{err}"
+    );
+    done(r);
+}

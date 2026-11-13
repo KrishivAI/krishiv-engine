@@ -292,3 +292,31 @@ fn a_python_udaf_beside_a_builtin_aggregate_is_refused() {
     );
     assert!(check_python_aggregates(&[plus]).is_err());
 }
+
+#[test]
+fn rewrites_reach_the_relation_nodes_children_and_expressions() {
+    let one = Arc::new(Expr::from(crate::Literal::Integer(1)));
+    for plan in nodes() {
+        let plan = Arc::new(plan);
+        let mut children = 0;
+        let rebuilt = Arc::clone(&plan)
+            .map_children(|c| {
+                children += 1;
+                Ok::<_, std::convert::Infallible>(Arc::new((*c).clone()))
+            })
+            .unwrap();
+        assert!(children > 0, "{plan}");
+        assert_eq!(*rebuilt, *plan);
+        let mut exprs = 0;
+        let rewritten = Arc::clone(&plan)
+            .map_expressions(|_| {
+                exprs += 1;
+                Ok::<_, std::convert::Infallible>(Arc::clone(&one))
+            })
+            .unwrap();
+        let mut after = Vec::new();
+        rewritten.for_each_expr(&mut |e| after.push(Arc::clone(e)));
+        assert_eq!(after.len(), exprs, "{plan}");
+        assert!(after.iter().all(|e| *e == one), "{plan}");
+    }
+}

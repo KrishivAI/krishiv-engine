@@ -1721,6 +1721,58 @@ mod tests {
                     })),
                 ),
                 (
+                    "map-partitions",
+                    node(PlanNode::MapPartitions {
+                        input: base(),
+                        udf: py(crate::PythonEvalType::MapArrowIter),
+                        output: vec![bound(2, "x")],
+                        barrier: true,
+                    }),
+                ),
+                (
+                    "group-map",
+                    node(PlanNode::GroupMap {
+                        input: base(),
+                        keys: vec![a()],
+                        udf: py(crate::PythonEvalType::GroupedMapArrow),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
+                    "cogroup-map",
+                    node(PlanNode::CoGroupMap {
+                        left: base(),
+                        right: base(),
+                        left_keys: vec![a()],
+                        right_keys: vec![a()],
+                        udf: py(crate::PythonEvalType::CogroupedMapArrow),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
+                    "python-table-function",
+                    node(PlanNode::PythonTableFunction {
+                        args: vec![lit(1)],
+                        table_arg: Some(crate::TableArg {
+                            input: base(),
+                            partition_by: vec![a()],
+                            order_by: vec![crate::SortOrder::asc(a())],
+                            single_partition: false,
+                        }),
+                        udf: py(crate::PythonEvalType::ArrowUdtf),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
+                    "python-table-function-no-table",
+                    node(PlanNode::PythonTableFunction {
+                        args: vec![lit(1)],
+                        table_arg: None,
+                        udf: py(crate::PythonEvalType::TableUdf),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
                     "read-table-options",
                     node(PlanNode::Read(ReadSource::Table {
                         name: vec!["t".into()],
@@ -1742,6 +1794,16 @@ mod tests {
             if let Some(other) = seen.insert(h, name.clone()) {
                 panic!("{name} hashes like {other}");
             }
+        }
+    }
+
+    /// A Python UDF reference of a relation node.
+    fn py(eval_type: crate::PythonEvalType) -> crate::PythonUdfRef {
+        crate::PythonUdfRef {
+            name: "f".into(),
+            version: 1,
+            eval_type,
+            thread_safe: true,
         }
     }
 
