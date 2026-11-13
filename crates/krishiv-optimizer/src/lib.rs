@@ -409,6 +409,8 @@ fn run(
         } else {
             root = batch(root, "Rewrite", &mut t)?;
         }
+        // Join ordering's settings: the window rule's guard orders with them too.
+        let joins = join_settings(udfs.map(|(_, config)| config), tracing);
         // P3 W1 shape (a): a correlated aggregate subquery over the outer block's own
         // relations becomes a window (`krishiv.optimizer.subqueryAsWindow`, off by default).
         let window = options.subquery_as_window
@@ -419,7 +421,6 @@ fn run(
                     .unwrap_or(false)
             });
         let root = if window {
-            let joins = join_settings(udfs.map(|(_, config)| config), false);
             let mut notes = Vec::new();
             let after = t.once("SubqueryAsWindow", &root, |r| {
                 let (after, n) = win_magic::rewrite(
@@ -453,7 +454,6 @@ fn run(
         let mut root = t.once("Restrict", &root, |r| {
             restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
         })?;
-        let joins = join_settings(udfs.map(|(_, config)| config), tracing);
         if let Some(stats) = stats {
             root = order_and_restrict(root, stats, options.stats_propagation, joins, &mut t)?;
         }

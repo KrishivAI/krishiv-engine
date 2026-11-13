@@ -375,8 +375,10 @@ impl Rule<'_> {
         // The rule runs before join ordering, so `X` is still the block as written: q02's is a
         // cross join of `part` and `supplier` with `partsupp`'s two keys above it, which the
         // estimator prices at the cross join's rows. Join ordering runs after this rule and orders
-        // the window's input the same way, so the window sorts the ordered block's rows: the guard
-        // prices those (the rewritten plan still carries `X` as written).
+        // the window's input too, so the guard prices `X` ordered with the session's settings. It is
+        // an estimate of that order, not the same one: here every column of `X` counts as read, and
+        // ordering later sees the inferred filters and restrictions. The rewritten plan still
+        // carries `X` as written.
         let outs = join.resolved_output()?;
         let (ordered, _) = join_order::reorder(x, self.stats, self.propagate, self.joins);
         let x_est = self.est.plan(&ordered);
