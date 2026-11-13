@@ -13,7 +13,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use krishiv_common::config::CHECKPOINT_DIR;
 use krishiv_common::error::{KrishivError, LegacyErrorTemp3016};
-use krishiv_memory::{Reservation, SpillConfig, SpillFile, SpillManager};
+use krishiv_memory::{ConsumerId, MemoryPool, Reservation, SpillConfig, SpillFile, SpillManager};
 use krishiv_plan::{LogicalPlan, Origin, PlanId};
 use krishiv_types::batch::Batch;
 
@@ -236,6 +236,18 @@ impl DataFrame {
     }
 }
 
+/// Unregisters a memory consumer when dropped.
+struct Unregister {
+    memory: Arc<dyn MemoryPool>,
+    consumer: ConsumerId,
+}
+
+impl Drop for Unregister {
+    fn drop(&mut self) {
+        self.memory.unregister(self.consumer);
+    }
+}
+
 /// Writes `batches` to a spill-format file in a directory of its own under `dir`.
 async fn write_file(
     session: &Session,
@@ -267,9 +279,13 @@ async fn write_file(
         },
     };
     let consumer = state.memory.register("checkpoint", None);
+    // Unregisters on every exit path, a dropped (cancelled) future included.
+    let _registered = Unregister {
+        memory: Arc::clone(&state.memory),
+        consumer,
+    };
     let scratch = Reservation::new(Arc::clone(&state.memory), consumer);
     let file = disk.write(canonical, batches, scratch).await;
-    state.memory.unregister(consumer);
     // Poisoned or not, the manager stays with the file.
     drop(spill.lock().unwrap_or_else(PoisonError::into_inner));
     Ok((file?, spill))
