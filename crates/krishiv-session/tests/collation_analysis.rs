@@ -1569,3 +1569,33 @@ fn case_like_decode_over_a_collated_string_is_refused() {
         "a"
     );
 }
+
+/// Follow-up S4 (Spark 4.2.0 local run, 2026-11-13): a written cast to STRING ends the inherited
+/// collation (the result is plain `string`, compared as bytes, and loses to an explicit one).
+#[test]
+fn a_written_cast_to_string_ends_the_inherited_collation() {
+    for (sql, want) in [
+        (
+            "select typeof(cast('a' collate utf8_lcase as string))",
+            "string",
+        ),
+        (
+            "select typeof(cast('a' collate utf8_lcase as string) || 'b' collate unicode_ci)",
+            "string collate UNICODE_CI",
+        ),
+        (
+            "select typeof(concat(cast('a' collate utf8_lcase as string), 'b' collate unicode_ci))",
+            "string collate UNICODE_CI",
+        ),
+        (
+            "select cast(cast('a' collate utf8_lcase as string) = 'A' as string)",
+            "false",
+        ),
+        (
+            "select typeof(nvl2('a' collate utf8_lcase, 'x', 'y'))",
+            "string",
+        ),
+    ] {
+        assert_eq!(one(sql), want, "{sql}");
+    }
+}
