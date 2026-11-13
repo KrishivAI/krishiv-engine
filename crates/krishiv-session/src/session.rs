@@ -1603,6 +1603,8 @@ impl Session {
             principal: Arc::clone(&self.state.principal),
             tags: self.state.queries.tags_now(),
             class: WorkloadClass::Interactive,
+            source: None,
+            statement_class: None,
             estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);

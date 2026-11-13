@@ -76,6 +76,7 @@ mod profile;
 mod python_udfs;
 mod query_fold;
 mod recursion;
+pub mod resource_groups;
 mod result_cache;
 mod run_site;
 mod runtime;
