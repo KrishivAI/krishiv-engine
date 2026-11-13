@@ -109,11 +109,29 @@ fn sent_ids_and_cancellation() {
     assert!(o.has_sent("r1"));
     assert!(!o.has_sent("r2"));
     assert!(!o.is_cancelled());
-    o.cancel();
-    o.cancel();
+    assert!(o.cancel(), "the first cancel interrupts");
+    assert!(!o.cancel(), "a second interrupts nothing");
     assert!(o.is_cancelled());
     // Resolves at once after a cancel, whether or not anyone waited.
     futures::executor::block_on(o.cancelled());
+}
+
+#[test]
+fn a_finished_operation_is_not_interrupted() {
+    let o = op(A, b"p");
+    o.finish();
+    assert!(!o.cancel());
+    assert!(!o.is_cancelled());
+    let ops = Operations::default();
+    ops.register(&o, 2).unwrap();
+    ops.register(&op(B, b"q"), 2).unwrap();
+    let mut ids: Vec<String> = ops
+        .all()
+        .iter()
+        .map(|o| o.id().as_str().to_owned())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, vec![A.to_owned(), B.to_owned()]);
 }
 
 #[tokio::test]

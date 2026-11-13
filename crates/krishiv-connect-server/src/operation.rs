@@ -165,6 +165,8 @@ pub struct Operation {
     /// only these).
     sent: Mutex<HashSet<String>>,
     cancelled: AtomicBool,
+    /// Set once the operation produced its last response.
+    finished: AtomicBool,
     cancel: Notify,
     /// The memory consumer its buffered responses are reserved from.
     responses: OnceLock<Arc<ConsumerHandle>>,
@@ -186,6 +188,7 @@ impl Operation {
             reattachable,
             sent: Mutex::new(HashSet::new()),
             cancelled: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
             cancel: Notify::new(),
             responses: OnceLock::new(),
         }
@@ -254,12 +257,26 @@ impl Operation {
     }
 
     /// Asks the operation to stop: its stream ends with
-    /// `OPERATION_CANCELED`. Idempotent.
-    pub fn cancel(&self) {
-        if !self.cancelled.swap(true, Ordering::AcqRel) {
+    /// `OPERATION_CANCELED`. Idempotent. Whether this call interrupted it
+    /// (Spark's `ExecuteThreadRunner.interrupt`): `false` when it was
+    /// cancelled before or had already produced its last response.
+    pub fn cancel(&self) -> bool {
+        if self.finished.load(Ordering::Acquire) {
+            return false;
+        }
+        if self.cancelled.swap(true, Ordering::AcqRel) {
+            false
+        } else {
             // `notify_one` keeps a permit when nobody waits yet.
             self.cancel.notify_one();
+            true
         }
+    }
+
+    /// Notes that the operation produced its last response; a later
+    /// [`Self::cancel`] interrupts nothing.
+    pub fn finish(&self) {
+        self.finished.store(true, Ordering::Release);
     }
 
     /// Whether [`Self::cancel`] ran.
@@ -347,6 +364,12 @@ impl Operations {
             op.cancel();
         }
         ops.len()
+    }
+
+    /// Every live operation.
+    #[must_use]
+    pub fn all(&self) -> Vec<Arc<Operation>> {
+        self.lock().values().map(Arc::clone).collect()
     }
 
     /// The number of live operations.

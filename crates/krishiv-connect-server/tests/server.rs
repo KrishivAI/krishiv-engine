@@ -144,10 +144,10 @@ async fn release_session_frees_state() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rpcs_of_later_tasks_are_unimplemented() {
     let run = start(ConnectServerConfig::default(), SessionLimits::default()).await;
-    let e = unary::<_, pb::ConfigResponse>(
+    let e = unary::<_, pb::FetchErrorDetailsResponse>(
         &run.channel,
-        "Config",
-        pb::ConfigRequest {
+        "FetchErrorDetails",
+        pb::FetchErrorDetailsRequest {
             session_id: ID.to_owned(),
             ..Default::default()
         },
@@ -557,27 +557,9 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
         draining.store(drain, Ordering::Release);
         let results: Vec<(&str, tonic::Status)> = vec![
             (
-                "AnalyzePlan",
-                service
-                    .analyze_plan(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
-                "Config",
-                service.config(Request::new(decoded())).await.unwrap_err(),
-            ),
-            (
                 "ArtifactStatus",
                 service
                     .artifact_status(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
-                "Interrupt",
-                service
-                    .interrupt(Request::new(decoded()))
                     .await
                     .unwrap_err(),
             ),
@@ -604,7 +586,20 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
             ),
         ];
         if drain {
-            // The RPCs T011a implements refuse too while draining.
+            // The RPCs T011a and PR-11b implement refuse too while draining.
+            for e in [
+                service
+                    .analyze_plan(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+                service.config(Request::new(decoded())).await.unwrap_err(),
+                service
+                    .interrupt(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+            ] {
+                assert_eq!(e.code(), Code::Unavailable);
+            }
             let e = service
                 .execute_plan(Request::new(decoded()))
                 .await

@@ -149,30 +149,7 @@ pub async fn execute_plan(
     };
     let session = entry.session();
     let conf = session.conf();
-    let translate = TranslateConf {
-        default_data_source: conf
-            .get("spark.sql.sources.default")
-            .unwrap_or_else(|| TranslateConf::default().default_data_source),
-    };
-    // Decompression (up to `maxPlanSize`) runs off the async workers.
-    let decompressed = match &plan.op_type {
-        Some(OpType::CompressedOperation(c)) => {
-            let c = (**c).clone();
-            let max = limits.max_plan_size;
-            Some(
-                tokio::task::spawn_blocking(move || decompress(&c, max))
-                    .await
-                    .map_err(|e| -> KrishivError {
-                        krishiv_common::error::InternalError {
-                            message: format!("decompressing a plan: {e}"),
-                        }
-                        .into()
-                    })??,
-            )
-        }
-        _ => None,
-    };
-    let logical = translate_plan(&plan, decompressed.as_deref(), &translate)?;
+    let logical = request_plan(session, &plan, limits).await?;
     let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
     let schema = df.schema().await?;
     let schema_response = schema::proto_schema(&schema)?;
@@ -206,6 +183,45 @@ pub async fn execute_plan(
         Some((item.response, rx))
     })
     .boxed())
+}
+
+/// The engine plan of a request's `Plan`: a compressed one decompressed
+/// (off the async workers, bounded by `maxPlanSize`), then translated with
+/// the session's `spark.sql.sources.default`. Shared by `ExecutePlan` and
+/// `AnalyzePlan` (Spark's `RequestDecompressionInterceptor` then
+/// `SparkConnectPlanner`).
+///
+/// # Errors
+/// The decompression, decoding and translation errors.
+pub(crate) async fn request_plan(
+    session: &krishiv_session::Session,
+    plan: &pb::Plan,
+    limits: &ExecuteLimits,
+) -> Result<krishiv_plan::Plan, KrishivError> {
+    let translate = TranslateConf {
+        default_data_source: session
+            .conf()
+            .get("spark.sql.sources.default")
+            .unwrap_or_else(|| TranslateConf::default().default_data_source),
+    };
+    let decompressed = match &plan.op_type {
+        Some(OpType::CompressedOperation(c)) => {
+            let c = (**c).clone();
+            let max = limits.max_plan_size;
+            Some(
+                tokio::task::spawn_blocking(move || decompress(&c, max))
+                    .await
+                    .map_err(|e| -> KrishivError {
+                        krishiv_common::error::InternalError {
+                            message: format!("decompressing a plan: {e}"),
+                        }
+                        .into()
+                    })??,
+            )
+        }
+        _ => None,
+    };
+    translate_plan(plan, decompressed.as_deref(), &translate)
 }
 
 /// The plan as the engine's IR: a ROOT relation translated, a compressed
@@ -444,6 +460,9 @@ async fn encode(
         () = sender.tx.closed() => Err(Stop::Gone),
         r = produce(&sender, &df, &schema, schema_response, &settings) => r,
     };
+    if outcome.is_ok() {
+        op.finish();
+    }
     // The query's stream is gone by now (dropped with `produce`).
     drop(df);
     match outcome {

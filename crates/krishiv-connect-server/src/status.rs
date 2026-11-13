@@ -57,6 +57,13 @@ const SPARK_SQL_EXCEPTION: &[&str] = classes!(
     "org.apache.spark.SparkSQLException",
     "java.sql.SQLException"
 );
+/// `SparkNoSuchElementException` (`SQL_CONF_NOT_FOUND`,
+/// `QueryExecutionErrors.sqlConfigNotFoundError`, v4.3.0 line 1985).
+const SPARK_NO_SUCH_ELEMENT_EXCEPTION: &[&str] = classes!(
+    "org.apache.spark.SparkNoSuchElementException",
+    "java.util.NoSuchElementException",
+    "java.lang.RuntimeException",
+);
 /// `SparkException`.
 const SPARK_EXCEPTION: &[&str] = classes!("org.apache.spark.SparkException");
 /// `InvalidPlanInput` (`CONNECT_INVALID_PLAN.*` from the planner;
@@ -139,6 +146,15 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         ),
         ("CONNECT_INVALID_PLAN.CANNOT_PARSE", SPARK_SQL_EXCEPTION),
         ("CONNECT_INVALID_PLAN.", INVALID_PLAN_INPUT),
+        // The Interrupt handler throws `SparkSQLException` (v4.3.0 lines 45-61).
+        (
+            "INVALID_PARAMETER_VALUE.INTERRUPT_TYPE_",
+            SPARK_SQL_EXCEPTION,
+        ),
+        ("UNSUPPORTED_FEATURE.INTERRUPT_TYPE", SPARK_SQL_EXCEPTION),
+        ("SQL_CONF_NOT_FOUND", SPARK_NO_SUCH_ELEMENT_EXCEPTION),
+        // `QueryCompilationErrors.cannotModifyValueOf*ConfigError`.
+        ("CANNOT_MODIFY_", ANALYSIS_EXCEPTION),
         ("KRISHIV_SESSION_LIMIT", SPARK_EXCEPTION),
         ("KRISHIV_OPERATION_LIMIT", SPARK_EXCEPTION),
         ("INTERNAL_ERROR", SPARK_EXCEPTION),

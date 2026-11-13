@@ -7,8 +7,9 @@
 //! shares (the principal, the draining refusal). T011a (PR-11a) adds
 //! `ExecutePlan` (`crate::execute`) and the minimal `ReattachExecute` and
 //! `ReleaseExecute` of design P3-T011a §3.4 (no replay buffer: a live
-//! operation cannot be reattached yet). `AnalyzePlan`, `Config`, `Interrupt`
-//! (PR-11b) and the rest answer `UNIMPLEMENTED`.
+//! operation cannot be reattached yet). PR-11b adds `AnalyzePlan`
+//! (`crate::analyze`), `Config` (`crate::config`) and `Interrupt`
+//! (`crate::interrupt`); the rest answer `UNIMPLEMENTED` until PR-15.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,10 +27,10 @@ use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::codec::WireCodec;
-use crate::execute;
-use crate::manager::SessionManager;
+use crate::manager::{SessionEntry, SessionManager};
 use crate::operation::ExecuteLimits;
 use crate::status::status_of;
+use crate::{analyze, config, execute, interrupt};
 
 /// The generated server side of `spark.connect.SparkConnectService`.
 #[expect(
@@ -100,6 +101,22 @@ impl ConnectService {
         }
     }
 
+    /// The session `session_id` of `principal`, created if needed, its
+    /// server-side id checked against the client's (the get-or-create RPCs
+    /// of design P3-T011a §2.1).
+    fn session(
+        &self,
+        principal: &Principal,
+        session_id: &str,
+        observed: Option<&str>,
+        user: Option<&pb::UserContext>,
+    ) -> Result<Arc<SessionEntry>, Status> {
+        let user = user.map_or("", |u| u.user_id.as_str());
+        self.manager
+            .get_or_create(principal, session_id, observed, user)
+            .map_err(|e| status_of(&e))
+    }
+
     fn unimplemented(&self, rpc: &str) -> Status {
         match self.admit() {
             Err(s) => s,
@@ -122,37 +139,57 @@ impl SparkConnectService for ConnectService {
         self.admit()?;
         let principal = principal_of(&request, &self.local);
         let request = request.into_inner();
-        let user = request
-            .user_context
-            .as_ref()
-            .map_or("", |u| u.user_id.as_str());
-        let entry = self
-            .manager
-            .get_or_create(
-                &principal,
-                &request.session_id,
-                request.client_observed_server_side_session_id.as_deref(),
-                user,
-            )
-            .map_err(|e| status_of(&e))?;
+        let entry = self.session(
+            &principal,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
         let stream = execute::execute_plan(&entry, &request, &self.limits)
             .await
             .map_err(|e| status_of(&e))?;
         Ok(Response::new(stream))
     }
 
+    /// Spark's `SparkConnectAnalyzeHandler`: the session is looked up or
+    /// created, the plan translated and analyzed (`crate::analyze`).
     async fn analyze_plan(
         &self,
-        _request: Request<Decoded<pb::AnalyzePlanRequest>>,
+        request: Request<Decoded<pb::AnalyzePlanRequest>>,
     ) -> Result<Response<pb::AnalyzePlanResponse>, Status> {
-        Err(self.unimplemented("AnalyzePlan"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self.session(
+            &principal,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        analyze::analyze_plan(&entry, &request, &self.limits)
+            .await
+            .map(Response::new)
+            .map_err(|e| status_of(&e))
     }
 
+    /// Spark's `SparkConnectConfigHandler`: the session is looked up or
+    /// created (`crate::config`).
     async fn config(
         &self,
-        _request: Request<Decoded<pb::ConfigRequest>>,
+        request: Request<Decoded<pb::ConfigRequest>>,
     ) -> Result<Response<pb::ConfigResponse>, Status> {
-        Err(self.unimplemented("Config"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self.session(
+            &principal,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        config::config(&entry, &request, &principal, config::role_of(&principal))
+            .map(Response::new)
+            .map_err(|e| status_of(&e))
     }
 
     async fn add_artifacts(
@@ -169,11 +206,24 @@ impl SparkConnectService for ConnectService {
         Err(self.unimplemented("ArtifactStatus"))
     }
 
+    /// Spark's `SparkConnectInterruptHandler`: the session is looked up or
+    /// created (`crate::interrupt`).
     async fn interrupt(
         &self,
-        _request: Request<Decoded<pb::InterruptRequest>>,
+        request: Request<Decoded<pb::InterruptRequest>>,
     ) -> Result<Response<pb::InterruptResponse>, Status> {
-        Err(self.unimplemented("Interrupt"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self.session(
+            &principal,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        interrupt::interrupt(&entry, &request)
+            .map(Response::new)
+            .map_err(|e| status_of(&e))
     }
 
     /// Spark's `SparkConnectReattachExecuteHandler`, minimal (design
