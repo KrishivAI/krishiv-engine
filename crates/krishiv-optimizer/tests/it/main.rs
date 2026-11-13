@@ -15,6 +15,7 @@ mod join_order;
 mod oracle;
 mod plan_stats;
 mod props;
+mod python_relations;
 mod qerror;
 mod rules;
 mod share_subtree;

@@ -154,6 +154,18 @@ impl Graph {
                 child(recursive, None);
             }
             PlanNode::Window { input, .. } => child(input, Some(window_need(p, req))),
+            // A Python UDF relation sees every column of its inputs
+            // (`group_ops.py` L305 at v4.2.0; design P3-T085 §3.1).
+            PlanNode::MapPartitions { input, .. } | PlanNode::GroupMap { input, .. } => {
+                child(input, None);
+            }
+            PlanNode::CoGroupMap { left, right, .. } => {
+                child(left, None);
+                child(right, None);
+            }
+            PlanNode::PythonTableFunction {
+                table_arg: Some(t), ..
+            } => child(&t.input, None),
             _ => {}
         }
         subqueries(p, &mut |kind, s| {
