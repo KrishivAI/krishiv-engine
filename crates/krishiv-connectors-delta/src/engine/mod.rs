@@ -4,13 +4,15 @@
 //! [`DeltaEngine`] holds what every handler needs: the query's `IoContext`, the table's store
 //! and root, the runtime handle the handlers bridge to, the parse limits and the query's
 //! cancellation. Kernel calls are entered only through [`DeltaEngine::delta_blocking`], which
-//! runs them on the process's [`LogPool`]. This part has the storage and JSON handlers; the
-//! evaluator, the Parquet handler and the assembled `Engine` come with PR-08a part 2.
+//! runs them on the process's [`LogPool`]. Handlers: storage ([`storage`]), JSON ([`json`]) and
+//! evaluation ([`eval`]).
 
 pub mod data;
+pub mod eval;
 pub mod json;
 pub mod paths;
 pub mod pool;
+pub mod relabel;
 pub mod schema;
 pub mod storage;
 
@@ -35,6 +37,7 @@ use self::pool::{LogPool, on_log_pool};
 use crate::error::to_kernel;
 
 pub use self::data::KrishivEngineData;
+pub use self::eval::KrishivEvaluationHandler;
 pub use self::json::KrishivJsonHandler;
 pub use self::storage::KrishivStorageHandler;
 
@@ -213,6 +216,12 @@ impl DeltaEngine {
     #[must_use]
     pub fn json(&self) -> Arc<KrishivJsonHandler> {
         Arc::new(KrishivJsonHandler::new(Arc::clone(&self.shared)))
+    }
+
+    /// The evaluation handler.
+    #[must_use]
+    pub fn evaluation(&self) -> Arc<KrishivEvaluationHandler> {
+        Arc::new(KrishivEvaluationHandler::new(self.shared.limits))
     }
 
     /// The query's cancellation as the kernel's token, for `with_cancellation_token`.

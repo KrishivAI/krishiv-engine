@@ -197,6 +197,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-arith"
+version = "60.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca16fdd1daeb1eccefb42df52ec65448ef33eec72488598675d46dfa9ce58923"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "chrono",
+ "num-traits",
+]
+
+[[package]]
 name = "arrow-array"
 version = "60.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2282,14 +2296,18 @@ version = "0.2.0"
 name = "krishiv-connectors-delta"
 version = "0.2.0"
 dependencies = [
+ "arrow-arith",
  "arrow-array",
  "arrow-buffer",
+ "arrow-cast",
  "arrow-data",
  "arrow-json",
+ "arrow-ord",
  "arrow-schema",
  "arrow-select",
  "async-trait",
  "bytes",
+ "chrono",
  "delta_kernel",
  "futures",
  "krishiv-common",
