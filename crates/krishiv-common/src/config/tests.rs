@@ -1484,3 +1484,36 @@ fn connect_reattach_entries_parse_default_and_take_sparks_names() {
         assert_eq!(e.settable_by, SettableBy::Startup, "{}", e.key);
     }
 }
+
+#[test]
+fn connect_artifact_quotas_parse_and_default() {
+    let d = Config::new();
+    let size = |c: &Config, e| c.get(e).and_then(ConfigValue::as_size);
+    // Design P3-T011a §3.9: 1 GiB per session, 256 MiB per artifact.
+    assert_eq!(size(&d, &CONNECT_ARTIFACTS_MAX_BYTES), Some(1 << 30));
+    assert_eq!(
+        size(&d, &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES),
+        Some(256 << 20)
+    );
+    let mut c = Config::new();
+    c.set("krishiv.connect.artifacts.maxBytes", "2m").unwrap();
+    c.set("krishiv.connect.artifacts.maxArtifactBytes", "64k")
+        .unwrap();
+    assert_eq!(size(&c, &CONNECT_ARTIFACTS_MAX_BYTES), Some(2 << 20));
+    assert_eq!(
+        size(&c, &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES),
+        Some(64 << 10)
+    );
+    assert!(c.set("krishiv.connect.artifacts.maxBytes", "-1").is_err());
+    assert!(
+        c.set("krishiv.connect.artifacts.maxArtifactBytes", "lots")
+            .is_err()
+    );
+    for e in [
+        &CONNECT_ARTIFACTS_MAX_BYTES,
+        &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
+    ] {
+        assert_eq!(e.settable_by, SettableBy::Startup, "{}", e.key);
+        assert!(e.spark_alias.is_none(), "{}", e.key);
+    }
+}

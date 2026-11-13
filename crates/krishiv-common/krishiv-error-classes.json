@@ -1,4 +1,10 @@
 {
+  "KRISHIV_ARTIFACT_LIMIT" : {
+    "message" : [
+      "Cannot add the artifact <name>: <limitName> allows at most <limit> bytes. Release the session's artifacts (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
+  },
   "KRISHIV_CATALOG_FAILURE" : {
     "message" : [
       "The catalog <catalog> failed while loading <relationName>."
@@ -43,6 +49,12 @@
       "The Arrow data passed to Krishiv is invalid: <reason>."
     ],
     "sqlState" : "22000"
+  },
+  "KRISHIV_INVALID_ARTIFACT_TRANSFER" : {
+    "message" : [
+      "The transfer of the artifact <name> is invalid: <reason>. The artifact was discarded."
+    ],
+    "sqlState" : "22023"
   },
   "KRISHIV_INVALID_BASE64_INPUT" : {
     "message" : [
