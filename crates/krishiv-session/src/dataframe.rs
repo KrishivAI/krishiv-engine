@@ -1772,7 +1772,10 @@ impl DataFrame {
                 .collect();
         // A view over files keeps listing them: files added or changed
         // later show up in the next query.
-        if let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node {
+        // (Not a lazy checkpoint of one: its rows were taken at the analysis above.)
+        if let (PlanNode::Read(source @ ReadSource::Files { .. }), false) =
+            (&self.plan.node, checkpoint::has_lazy_checkpoint(&self.keep))
+        {
             self.session.state.catalog.put(
                 name,
                 TempTable::Files {

@@ -233,3 +233,27 @@ fn registrations_sharing_a_lazy_checkpoint_do_not_deadlock() {
         within_a_minute(move || (block_on(a.count()).unwrap(), block_on(b.count()).unwrap()));
     assert_eq!(counts, (3, 3));
 }
+
+#[test]
+fn a_temp_view_of_a_lazy_file_checkpoint_keeps_the_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), &[]);
+    let path = dir.path().join("rows.parquet");
+    let path = path.to_str().unwrap().to_owned();
+    block_on(s.table("src").write().mode("overwrite").parquet(&path)).unwrap();
+    let df = s.read().parquet([path.as_str()]);
+    let cp = block_on(df.local_checkpoint(false, None)).unwrap();
+    block_on(cp.create_or_replace_temp_view("snap")).unwrap();
+    block_on(
+        s.table("src")
+            .filter(krishiv_session::functions::col("id").gt(krishiv_session::functions::lit(0)))
+            .write()
+            .mode("append")
+            .parquet(&path),
+    )
+    .unwrap();
+    assert_eq!(
+        ids(&block_on(s.sql("SELECT * FROM snap")).unwrap()),
+        vec![1, 2, 3]
+    );
+}

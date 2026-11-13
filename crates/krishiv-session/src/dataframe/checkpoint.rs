@@ -45,6 +45,13 @@ pub(crate) fn stands_on_materializing_checkpoint(
     })
 }
 
+/// Whether `keep` holds a lazy checkpoint: the plan beside it stands for a snapshot, not for what
+/// its sources show now.
+pub(crate) fn has_lazy_checkpoint(keep: &[Arc<dyn std::any::Any + Send + Sync>]) -> bool {
+    keep.iter()
+        .any(|k| Arc::clone(k).downcast::<LazyCheckpoint>().is_ok())
+}
+
 /// Clears `materializing` when the rows are taken, fail or the future is dropped.
 struct Materializing<'a>(&'a std::sync::atomic::AtomicBool);
 
@@ -129,7 +136,11 @@ impl DataFrame {
             return self.take_snapshot(dir).await;
         }
         // Analyzed now, as Spark's `checkpoint` does: an invalid plan fails here.
-        self.analysis().await?;
+        // On the session's executor: listing files needs its runtime, not the caller's.
+        let df = self.clone();
+        self.session
+            .on_executor(async move { df.analysis().await.map(|_| ()) })
+            .await?;
         let marker = self.session.next_plan_id();
         let plan = LogicalPlan::clone(&self.plan).with_origin(Origin::plan(marker));
         let mut out = Self {
