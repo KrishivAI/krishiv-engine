@@ -16,6 +16,7 @@ arrow-array.workspace = true
 arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common" }
 krishiv-plan = { path = "../krishiv-plan" }
+krishiv-sql = { path = "../krishiv-sql", version = "=0.2.0" }
 krishiv-types = { path = "../krishiv-types" }
 # `no-recursion-limit`: prost's fixed limit of 100 nested messages rejects
 # ordinary plans (a loop of `withColumn` calls); `wire::decode_plan` bounds the

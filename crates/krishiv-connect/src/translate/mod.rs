@@ -97,6 +97,9 @@ type Result<T> = std::result::Result<T, KrishivError>;
 pub struct TranslateConf {
     /// The format of a read that names none: `spark.sql.sources.default`.
     pub default_data_source: String,
+    /// The session settings that change how SQL text parses; an
+    /// `ExpressionString` (`expr()`, `selectExpr`) is parsed with them.
+    pub parser: krishiv_sql::ParserOptions,
 }
 
 impl Default for TranslateConf {
@@ -104,6 +107,7 @@ impl Default for TranslateConf {
     fn default() -> Self {
         Self {
             default_data_source: "parquet".to_owned(),
+            parser: krishiv_sql::ParserOptions::default(),
         }
     }
 }

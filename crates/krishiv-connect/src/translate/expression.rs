@@ -89,6 +89,16 @@ impl Translator<'_> {
                 ));
             }
             ExprType::UnresolvedStar(s) => ExprNode::Star(star(s)?),
+            ExprType::ExpressionString(x) => {
+                // `expr()` and `selectExpr`: the SQL expression parser and lowering the session's
+                // own `select_expr` uses. Spans index no registered source, as for the DataFrame API.
+                return krishiv_sql::parse_and_lower_named_expression(
+                    &x.expression,
+                    &self.conf.parser,
+                    krishiv_plan::SourceId(u32::MAX),
+                )
+                .map_err(|e| e.error);
+            }
             ExprType::Alias(a) => {
                 if a.metadata.as_deref().is_some_and(|m| !m.is_empty()) {
                     return Err(unsupported_field(

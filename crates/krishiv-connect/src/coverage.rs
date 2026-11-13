@@ -164,7 +164,7 @@ oneof! { expression, EXPRESSION_ROWS, expression::ExprType, "Expression.expr_typ
     Literal => ("literal", 1, Partial, "Array, Map, Struct, SpecializedArray, Time", "Literal/TypedLiteral; nested literals after the IR literal supports them; nanosecond timestamps are refused until the types exist", "P3-T012", 1),
     UnresolvedAttribute => ("unresolved_attribute", 2, Partial, "is_metadata_column", "Column; metadata columns (_metadata) → the scan's metadata columns", "P3-T012", 1),
     UnresolvedFunction => ("unresolved_function", 3, Partial, "is_user_defined_function (qualified names) and is_internal", "Function with qualifier; internal functions map to Spark's internal names where Krishiv has them, otherwise 56K00-style refusal naming the function", "P3-T012", 1),
-    ExpressionString => ("expression_string", 4, Missing, "", "the SQL expression parser + analyzer lowering that select_expr/expr() use (krishiv-session)", "P3-T012", 1),
+    ExpressionString => ("expression_string", 4, Done, "", "krishiv_sql::parse_and_lower_named_expression, as Session::select_expr and Session::expr (parser options from TranslateConf)", "P3-T012", 1),
     UnresolvedStar => ("unresolved_star", 5, Done, "", "Star", "P2-T091a", 0),
     Alias => ("alias", 6, Partial, "metadata and several names", "Alias; several names → MultiAlias (exists)", "P3-T012", 1),
     Cast => ("cast", 7, Done, "", "Cast", "P2-T091a", 0),

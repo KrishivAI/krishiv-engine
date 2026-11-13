@@ -74,14 +74,14 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Expression.expr_type
 
-22 arms: 3 done, 5 partial, 13 missing, 1 out of scope.
+22 arms: 4 done, 5 partial, 12 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
 | 1 | literal | partial | Array, Map, Struct, SpecializedArray, Time | Literal/TypedLiteral; nested literals after the IR literal supports them; nanosecond timestamps are refused until the types exist | P3-T012 | 1 |
 | 2 | unresolved_attribute | partial | is_metadata_column | Column; metadata columns (_metadata) → the scan's metadata columns | P3-T012 | 1 |
 | 3 | unresolved_function | partial | is_user_defined_function (qualified names) and is_internal | Function with qualifier; internal functions map to Spark's internal names where Krishiv has them, otherwise 56K00-style refusal naming the function | P3-T012 | 1 |
-| 4 | expression_string | missing |  | the SQL expression parser + analyzer lowering that select_expr/expr() use (krishiv-session) | P3-T012 | 1 |
+| 4 | expression_string | done |  | krishiv_sql::parse_and_lower_named_expression, as Session::select_expr and Session::expr (parser options from TranslateConf) | P3-T012 | 1 |
 | 5 | unresolved_star | done |  | Star | P2-T091a | 0 |
 | 6 | alias | partial | metadata and several names | Alias; several names → MultiAlias (exists) | P3-T012 | 1 |
 | 7 | cast | done |  | Cast | P2-T091a | 0 |

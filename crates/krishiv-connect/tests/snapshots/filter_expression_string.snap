@@ -1,4 +1,8 @@
 ---
 source: crates/krishiv-connect/tests/goldens.rs
 ---
-[CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED] The Spark Connect plan is invalid. This oneOf field message in spark.connect.Expression is not supported: EXPRESSION_STRING(4) SQLSTATE: 56K00
+Filter ((a > 1) and (b < 2))
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Filter plan_id=1
+  Read plan_id=0

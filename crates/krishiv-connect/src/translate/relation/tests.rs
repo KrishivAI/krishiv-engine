@@ -86,6 +86,7 @@ fn file_reads_and_the_default_format() {
     assert_eq!(show(&read_files(None, &["/a"])), "Read parquet [/a]\n");
     let orc = TranslateConf {
         default_data_source: "orc".into(),
+        ..TranslateConf::default()
     };
     let plan = translate_relation(&read_files(None, &["/a"]), &orc).unwrap();
     assert_eq!(plan.to_string(), "Read orc [/a]\n");

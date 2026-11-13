@@ -45,8 +45,8 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
   text, literals, names, options, paths), only their sizes. `Decoded<M>` wipes option values, paths and `Any` payloads
   with zeros before it drops the message (`Scrub`, `scrub.pb.rs`); a proto built in Rust and passed to `translate_*`
   stays the caller's to wipe.
-- SQL expression strings (`selectExpr`, `where("...")`, `expr()`) are unsupported until the analyzer lowers the SQL
-  parser's syntax tree into the IR (P2-T071a); `ToDF`, pivots, user schemas and nested-type literals wait for
+- SQL expression strings (`selectExpr`, `where("...")`, `expr()`) go through `krishiv_sql::parse_and_lower_named_expression`
+  with `TranslateConf::parser` (as `Session::select_expr`); `ToDF`, pivots, user schemas and nested-type literals wait for
   IR nodes or later groups (`src/coverage.rs` lists every arm).
 - A `oneof` arm that is not translated (`Relation`, `Expression`, `Literal`, `DataType`, later `Command` and `Catalog`)
   fails with Spark's `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` (SQLSTATE 56K00; parameters fullName,

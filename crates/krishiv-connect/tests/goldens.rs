@@ -29,18 +29,10 @@ const UNSUPPORTED: &[(&str, ErrorClass)] = &[
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
     ),
     (
-        "filter_expression_string",
-        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
-    ),
-    (
         "literals_array",
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
     ),
     ("read_schema_string", ErrorClass::KrishivUnsupportedFeature),
-    (
-        "select_expr",
-        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
-    ),
     (
         "show_string",
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
