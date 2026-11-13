@@ -279,8 +279,9 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
     })
 }
 
-/// The columns of `table`, `None` for an unknown table.
-fn columns(table: &str) -> Option<Vec<TableColumn>> {
+/// The columns of `table`, `None` for an unknown table (also what `DESCRIBE` and `SHOW COLUMNS`
+/// print, which need `Browse`, not the `Select` that building its rows does).
+pub(crate) fn columns(table: &str) -> Option<Vec<TableColumn>> {
     Some(
         layout(table)?
             .into_iter()

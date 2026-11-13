@@ -183,3 +183,21 @@ the rows in the session's memory whatever it is. With `eager = false` the rows a
 result is first analyzed (its first action, or the first call that needs its schema), not at its
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
+
+## `krishiv server` (Spark Connect)
+
+- **The Connect listener binds `127.0.0.1` by default.** Spark binds every interface when
+  `spark.connect.grpc.binding.address` is unset. A non-loopback address needs authentication, so `krishiv server`
+  refuses to start on one until authentication is configured.
+- **A session belongs to the authenticated principal, not to `UserContext.user_id`.** Spark keys a session by the
+  `user_id` the client sends; Krishiv keys it by who authenticated, and records `user_id` without trusting it. Two
+  clients of one principal with different `$USER` values and the same session id share a session in Krishiv but not
+  in Spark. Clients pick random session ids, so this does not happen in practice. A session id another principal holds
+  answers `INVALID_HANDLE.SESSION_NOT_FOUND`.
+- **An idle session running a query is kept.** Spark releases a session by its last access alone; Krishiv also keeps
+  one whose query is still running.
+- **A request over `spark.connect.grpc.maxInboundMessageSize` is refused with `OUT_OF_RANGE`**, read from the message
+  length before the body; Spark (grpc-java) answers `RESOURCE_EXHAUSTED`.
+- **`krishiv.connect.session.idleTimeout`** replaces `spark.connect.session.manager.defaultSessionTimeout`, whose
+  "never" is `-1`; Krishiv's is `0s`. `krishiv server` refuses Spark's key, and any other `spark.connect.*` key it
+  does not read, rather than ignore it.

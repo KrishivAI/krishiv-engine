@@ -294,6 +294,24 @@ pub fn krishiv_session::auth::FailureThrottle::new(krishiv_session::auth::Thrott
 pub fn krishiv_session::auth::FailureThrottle::record_failure(&self, core::net::ip_addr::IpAddr, std::time::Instant) -> bool
 impl core::fmt::Debug for krishiv_session::auth::FailureThrottle
 pub fn krishiv_session::auth::FailureThrottle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::auth::RolePolicy
+impl krishiv_session::auth::RolePolicy
+pub fn krishiv_session::auth::RolePolicy::allows(&self, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> bool
+pub fn krishiv_session::auth::RolePolicy::new(core::option::Option<krishiv_session::auth::Role>, krishiv_session::auth::Role, krishiv_plan::analyzer::catalog::PolicyVersion) -> Self
+pub fn krishiv_session::auth::RolePolicy::required(&self, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> core::option::Option<krishiv_session::auth::Role>
+pub fn krishiv_session::auth::RolePolicy::role(&self) -> core::option::Option<krishiv_session::auth::Role>
+impl core::clone::Clone for krishiv_session::auth::RolePolicy
+pub fn krishiv_session::auth::RolePolicy::clone(&self) -> krishiv_session::auth::RolePolicy
+impl core::cmp::Eq for krishiv_session::auth::RolePolicy
+impl core::cmp::PartialEq for krishiv_session::auth::RolePolicy
+pub fn krishiv_session::auth::RolePolicy::eq(&self, &krishiv_session::auth::RolePolicy) -> bool
+impl core::fmt::Debug for krishiv_session::auth::RolePolicy
+pub fn krishiv_session::auth::RolePolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::auth::RolePolicy
+impl core::marker::StructuralPartialEq for krishiv_session::auth::RolePolicy
+impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::auth::RolePolicy
+pub fn krishiv_session::auth::RolePolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> futures_core::future::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::auth::RolePolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::auth::ServerAuth
 impl krishiv_session::auth::ServerAuth
 pub fn krishiv_session::auth::ServerAuth::authenticate_at(&self, &krishiv_session::auth::Credentials<'_>, std::time::Instant) -> core::result::Result<krishiv_session::auth::Authenticated, krishiv_session::auth::AuthFailure>
@@ -860,8 +878,11 @@ impl krishiv_session::Session
 pub fn krishiv_session::Session::cancel(&self, &krishiv_session::QueryId) -> bool
 pub fn krishiv_session::Session::clone_session(&self) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::close(&self) -> usize
+pub fn krishiv_session::Session::id(&self) -> &str
 pub fn krishiv_session::Session::interrupt_all(&self) -> alloc::vec::Vec<krishiv_session::QueryId>
+pub fn krishiv_session::Session::is_closed(&self) -> bool
 pub fn krishiv_session::Session::new_session(&self) -> Self
+pub fn krishiv_session::Session::running_queries(&self) -> usize
 pub fn krishiv_session::Session::runtime(&self) -> &alloc::sync::Arc<krishiv_session::EngineRuntime>
 pub async fn krishiv_session::Session::sql_with(&self, &str, krishiv_session::QueryOptions) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 impl krishiv_session::Session
