@@ -5,27 +5,32 @@ expression: tpch.plan(q).to_string()
 TopN 100, [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
 +- Exchange SinglePartition
    +- LocalTopN 100, [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
-      +- Project [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11, sum(l_quantity#21)#4611686018427387946 AS sum(l_quantity)#50]
+      +- Project [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11, sum(l_quantity#21)#4611686018427387952 AS sum(l_quantity)#50]
          +- HashAggregate keys=[c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11], functions=[sum(l_quantity#21)]
             +- Exchange hashpartitioning(c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11)
                +- PartialHashAggregate keys=[c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11], functions=[sum(l_quantity#21)]
-                  +- HashJoin LeftSemi, [o_orderkey#8] = [l_orderkey#33], RuntimeFilter #3: o_orderkey#8 -> spark_catalog.default.orders.o_orderkey
-                     :- Project [l_quantity#21, o_orderkey#8, o_totalprice#11, o_orderdate#12, c_custkey#0, c_name#1]
-                     :  +- HashJoin Inner, [l_orderkey#17] = [o_orderkey#8], RuntimeFilter #2: l_orderkey#17 -> spark_catalog.default.lineitem.l_orderkey, probe filter: isnotnull(l_orderkey#17)
-                     :     :- Scan spark_catalog.default.lineitem [l_orderkey#17, l_quantity#21], PushedFilters: [isnotnull(l_orderkey#17)]
-                     :     +- BroadcastExchange
-                     :        +- Project [o_orderkey#8, o_totalprice#11, o_orderdate#12, c_custkey#0, c_name#1]
-                     :           +- HashJoin Inner, [o_custkey#9] = [c_custkey#0], RuntimeFilter #1: o_custkey#9 -> spark_catalog.default.orders.o_custkey, probe filter: (isnotnull(o_custkey#9) and isnotnull(o_orderkey#8))
-                     :              :- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_totalprice#11, o_orderdate#12], PushedFilters: [(isnotnull(o_custkey#9) and isnotnull(o_orderkey#8))]
-                     :              +- BroadcastExchange
-                     :                 +- Filter isnotnull(c_custkey#0)
-                     :                    +- Scan spark_catalog.default.customer [c_custkey#0, c_name#1], PushedFilters: [isnotnull(c_custkey#0)]
-                     +- BroadcastExchange
-                        +- Project [l_orderkey#33]
-                           +- Filter (sum(l_quantity)#49 > 300.00)
-                              +- Project [l_orderkey#33, sum(l_quantity#37)#4611686018427387943 AS sum(l_quantity)#49]
-                                 +- HashAggregate keys=[l_orderkey#33], functions=[sum(l_quantity#37)]
-                                    +- Exchange hashpartitioning(l_orderkey#33)
-                                       +- PartialHashAggregate keys=[l_orderkey#33], functions=[sum(l_quantity#37)]
-                                          +- Filter isnotnull(l_orderkey#17) (ids +16)
-                                             +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_quantity#21], PushedFilters: [isnotnull(l_orderkey#17)]
+                  +- Project [l_quantity#21, o_orderkey#8, o_totalprice#11, o_orderdate#12, c_custkey#0, c_name#1]
+                     +- HashJoin Inner, [o_custkey#9] = [c_custkey#0], RuntimeFilter #4: o_custkey#9 -> spark_catalog.default.orders.o_custkey
+                        :- HashJoin LeftSemi, [o_orderkey#8] = [l_orderkey#33], RuntimeFilter #3: o_orderkey#8 -> spark_catalog.default.orders.o_orderkey
+                        :  :- Project [l_quantity#21, o_orderkey#8, o_totalprice#11, o_orderdate#12, o_custkey#9]
+                        :  :  +- HashJoin Inner, [l_orderkey#17] = [o_orderkey#8], RuntimeFilter #2: l_orderkey#17 -> spark_catalog.default.lineitem.l_orderkey, probe filter: isnotnull(l_orderkey#17)
+                        :  :     :- Scan spark_catalog.default.lineitem [l_orderkey#17, l_quantity#21], PushedFilters: [isnotnull(l_orderkey#17)]
+                        :  :     +- BroadcastExchange
+                        :  :        +- HashJoin LeftSemi, [o_custkey#9] = [c_custkey#51], RuntimeFilter #1: o_custkey#9 -> spark_catalog.default.orders.o_custkey, probe filter: (isnotnull(o_custkey#9) and isnotnull(o_orderkey#8))
+                        :  :           :- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_totalprice#11, o_orderdate#12], PushedFilters: [(isnotnull(o_custkey#9) and isnotnull(o_orderkey#8))]
+                        :  :           +- BroadcastExchange
+                        :  :              +- Project [c_custkey#0] (ids +51)
+                        :  :                 +- Filter isnotnull(c_custkey#0)
+                        :  :                    +- Scan spark_catalog.default.customer [c_custkey#0, c_name#1], PushedFilters: [isnotnull(c_custkey#0)]
+                        :  +- BroadcastExchange
+                        :     +- Project [l_orderkey#33]
+                        :        +- Filter (sum(l_quantity)#49 > 300.00)
+                        :           +- Project [l_orderkey#33, sum(l_quantity#37)#4611686018427387943 AS sum(l_quantity)#49]
+                        :              +- HashAggregate keys=[l_orderkey#33], functions=[sum(l_quantity#37)]
+                        :                 +- Exchange hashpartitioning(l_orderkey#33)
+                        :                    +- PartialHashAggregate keys=[l_orderkey#33], functions=[sum(l_quantity#37)]
+                        :                       +- Filter isnotnull(l_orderkey#17) (ids +16)
+                        :                          +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_quantity#21], PushedFilters: [isnotnull(l_orderkey#17)]
+                        +- BroadcastExchange
+                           +- Filter isnotnull(c_custkey#0)
+                              +- Scan spark_catalog.default.customer [c_custkey#0, c_name#1], PushedFilters: [isnotnull(c_custkey#0)]

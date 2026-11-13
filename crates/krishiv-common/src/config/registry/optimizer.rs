@@ -33,3 +33,20 @@ pub static SHARE_REPEATED_SUBTREES: ConfigEntry = ConfigEntry {
     version_added: "0.1.0",
     spark_alias: None,
 };
+
+/// A dimension's payload joins above the semi and anti joins that never read it
+/// (`krishiv.optimizer.latePayloadJoin`).
+pub static LATE_PAYLOAD_JOIN: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.latePayloadJoin",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Join a dimension's payload columns (such as a name read only by the aggregate on top) \
+          after the semi, anti and outer joins that never read them, and leave a semi join on the \
+          dimension's keys where the join was, so those joins build and probe narrower rows. Applies \
+          when statistics show the payload is wide and the dimension is the smaller side. Results \
+          are the same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.1.0",
+    spark_alias: None,
+};

@@ -127,6 +127,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.memory.reservationQuantum",
         &MEMORY_RESERVATION_QUANTUM,
     ),
+    ("krishiv.optimizer.latePayloadJoin", &LATE_PAYLOAD_JOIN),
     (
         "krishiv.sql.files.maxPartitionNum",
         &FILES_MAX_PARTITION_NUM,
