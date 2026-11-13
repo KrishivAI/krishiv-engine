@@ -196,6 +196,19 @@ impl IcebergTableProvider {
     }
 }
 
+#[cfg(test)]
+impl IcebergTableProvider {
+    /// The delete state of a scan of every file, loading into `pool`.
+    pub(super) fn delete_state(
+        &self,
+        pool: &Arc<dyn krishiv_memory::MemoryPool>,
+    ) -> Option<Arc<DeleteState>> {
+        let (state, _) = self.scan.deletes_of(&self.scan.base).ok()??;
+        state.set_pool(pool);
+        Some(Arc::new(state))
+    }
+}
+
 impl TableProvider for IcebergTableProvider {
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
         Ok(Arc::clone(&self.scan) as Arc<dyn ScanPushdown>)

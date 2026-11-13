@@ -677,6 +677,64 @@ fn pruned_files_read_no_delete_files() {
     );
 }
 
+/// The delete state is charged to the query's pool (PR-25d; reviews 25b
+/// N2, 25c N7): it holds bytes for its keys while loaded and none once
+/// dropped; a pool too small fails with the memory class; a load dropped
+/// mid-read leaves the pool at zero with no consumer registered.
+#[test]
+fn delete_state_is_charged_to_the_query_pool() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let keys: Vec<Option<i64>> = (0..20_000).map(Some).collect();
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            dv("a.puffin", 0, 2, "a.parquet", &[0]),
+            equality("e.parquet", 0, 2, &keys),
+        ],
+        false,
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let consumers = |pool: &Arc<dyn MemoryPool>| {
+        pool.snapshot()
+            .entries
+            .iter()
+            .filter(|e| e.is_consumer)
+            .count()
+    };
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let state = p.delete_state(&pool).unwrap();
+    t.env.rt.block_on(state.ensure()).unwrap();
+    assert!(pool.reserved() >= 20_000 * 8, "{}", pool.reserved());
+    drop(state);
+    assert_eq!((pool.reserved(), consumers(&pool)), (0, 0));
+
+    let tiny: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+        limit: Some(64 << 10),
+        ..MemoryConfig::default()
+    });
+    let state = p.delete_state(&tiny).unwrap();
+    let Err(e) = t.env.rt.block_on(state.ensure()) else {
+        panic!("a 64 KiB pool holds 20,000 keys")
+    };
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory, "{e}");
+    assert_eq!((tiny.reserved(), consumers(&tiny)), (0, 0));
+
+    // Cancelled: polled until it holds memory, then dropped mid-load.
+    let state = p.delete_state(&pool).unwrap();
+    let held = t.env.rt.block_on(async {
+        let mut load = std::pin::pin!(state.ensure());
+        loop {
+            assert!(futures::poll!(load.as_mut()).is_pending());
+            if pool.reserved() > 0 {
+                break pool.reserved();
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+    assert!(held > 0 && state.loaded().is_none());
+    assert_eq!((pool.reserved(), consumers(&pool)), (0, 0));
+}
+
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
 #[derive(Debug, Clone)]
 enum Op {

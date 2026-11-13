@@ -32,6 +32,7 @@ use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
     FieldMapping, FileRef, FilterId, FormatOptions, IoContext, RowSelection, WithoutFieldIds,
 };
+use krishiv_memory::{ConsumerHandle, Reservation};
 use krishiv_types::batch::Batch;
 
 use super::deletes::{self, DeleteSelections};
@@ -95,6 +96,8 @@ pub(super) struct ScanTask {
 pub(super) struct Loaded {
     pub(super) selections: DeleteSelections,
     pub(super) equality: EqualityDeletes,
+    /// Pays for `selections` (the key sets hold their own).
+    _charges: Vec<Reservation>,
 }
 
 /// The deletes of the files one built scan reads, loaded once, on the
@@ -156,6 +159,13 @@ impl DeleteState {
 
     async fn load(&self) -> Result<Loaded, KrishivError> {
         let env = &self.env;
+        let pool = self.pool.get().ok_or_else(|| {
+            internal("the Iceberg deletes were asked for before the scan's query".to_owned())
+        })?;
+        // A consumer of the query's pool that unregisters when the last
+        // reservation made from it drops: when the load fails or its future
+        // is dropped, the reads' reservations go and nothing stays charged.
+        let mem = ConsumerHandle::register(Arc::clone(pool), "iceberg deletes", None);
         refuse_missing_mixed_identity(env, &self.tasks).await?;
         let locate = &*env.locate;
         let positions: Vec<_> = self
@@ -166,10 +176,10 @@ impl DeleteState {
             })
             .map(|t| (t.entry.as_ref(), &t.file, &t.deletes))
             .collect();
-        let selections = if positions.is_empty() {
-            DeleteSelections::default()
+        let (selections, charges) = if positions.is_empty() {
+            (DeleteSelections::default(), Vec::new())
         } else {
-            deletes::load(&env.io, locate, &positions).await?
+            deletes::load(&env.io, locate, &mem, &positions).await?
         };
         let per_file: Vec<_> = self
             .tasks
@@ -180,11 +190,8 @@ impl DeleteState {
         let equality = eq_deletes::load(
             &env.io,
             locate,
+            &mem,
             &env.table,
-            // Java's delete loader reads delete files without the name
-            // mapping (writers give them ids): a file without ids takes the
-            // positional fallback.
-            &FieldMapping::FieldIdOr(WithoutFieldIds::Position),
             &env.snapshot.fields,
             env.files,
             &per_file,
@@ -193,6 +200,7 @@ impl DeleteState {
         Ok(Loaded {
             selections,
             equality,
+            _charges: charges,
         })
     }
 }

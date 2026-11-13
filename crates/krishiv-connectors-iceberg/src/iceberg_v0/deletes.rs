@@ -16,8 +16,9 @@
 //! - A delete file that is missing or unreadable fails the query with the
 //!   store's error naming it; it is never skipped.
 //!
-//! The positions are held in memory for the scan and not charged to a query
-//! pool yet (PR-25d: planning memory and the per-worker delete cache).
+//! The positions are charged to the query's memory (the scan's consumer,
+//! [`super::lazy`]) while they are read and while the selections live; a
+//! load that does not fit fails with the memory class (PR-25d).
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -35,7 +36,7 @@ use krishiv_io::{
     ByteRange, ColumnPath, FieldMapping, FileFormat as _, FileRef, FormatOptions, IoContext,
     PushdownExpr, RowSelection, ScalarValue, ScanOptions, ScanRequest, ScanStream,
 };
-use krishiv_memory::{MemoryConfig, Reservation, TreePool};
+use krishiv_memory::{ConsumerHandle, Reservation};
 use roaring::RoaringTreemap;
 
 use crate::plan::deletes::invalid;
@@ -43,6 +44,9 @@ use crate::plan::{DataFileEntry, DeleteFileEntry, FileFormatKind, TaskDeletes, d
 
 /// Delete files read at once.
 const DELETE_FILE_CONCURRENCY: usize = 8;
+/// The bytes a deleted position is charged: it is collected as a `u64`
+/// before it becomes a selection.
+const POSITION_BYTES: usize = 8;
 /// At most this many data paths are pushed as the `file_path IN (...)`
 /// row-group filter of one position delete file (pruning only).
 const MAX_PUSHED_PATHS: usize = 256;
@@ -72,18 +76,20 @@ impl FileSelections for DeleteSelections {
 }
 
 /// The selections of `tasks` (each data file with its `FileRef` and the
-/// deletes that apply to it), reading every delete file once.
+/// deletes that apply to it), reading every delete file once, and the
+/// reservations of `mem` that pay for them (held as long as the selections).
 ///
 /// # Errors
 /// The store's error for a delete file that is missing or unreadable;
 /// `KRISHIV_ICEBERG_INVALID_DELETES` for a corrupt DV or a negative or null
 /// position; `KRISHIV_UNSUPPORTED_FEATURE` for an Avro or ORC position
-/// delete file.
+/// delete file; `UNABLE_TO_ACQUIRE_MEMORY` when the positions do not fit.
 pub(super) async fn load(
     io: &IoContext,
     locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
+    mem: &Arc<ConsumerHandle>,
     tasks: &[(&DataFileEntry, &FileRef, &TaskDeletes)],
-) -> Result<DeleteSelections, KrishivError> {
+) -> Result<(DeleteSelections, Vec<Reservation>), KrishivError> {
     // Each position delete file once, with the data files it applies to.
     let mut position: Vec<(Arc<DeleteFileEntry>, BTreeSet<String>)> = Vec::new();
     let mut slot: HashMap<String, usize> = HashMap::new();
@@ -100,17 +106,20 @@ pub(super) async fn load(
             position[i].1.insert(data.file.path.clone());
         }
     }
-    let pool: Arc<dyn krishiv_memory::MemoryPool> = TreePool::new(&MemoryConfig::default());
     // The read futures are built before their streams: a closure that
     // borrows into `stream::iter` makes the future lose `Send` (its lifetime
     // is not provably general enough), and the scan's source must be `Send`.
     let position_reads: Vec<_> = position
         .iter()
-        .map(|(d, paths)| read_position_file(io, locate, &pool, d, paths))
+        .map(|(d, paths)| read_position_file(io, locate, mem, d, paths))
         .collect();
     let dv_reads: Vec<_> = dvs
         .iter()
-        .map(|(data, dv)| async move { read_dv(io, locate, dv).await.map(|p| (data.clone(), p)) })
+        .map(|(data, dv)| async move {
+            read_dv(io, locate, mem, dv)
+                .await
+                .map(|(p, charge)| (data.clone(), p, charge))
+        })
         .collect();
     let read_positions = futures::stream::iter(position_reads)
         .buffered(DELETE_FILE_CONCURRENCY)
@@ -120,13 +129,16 @@ pub(super) async fn load(
         .try_collect::<Vec<_>>();
     let (from_files, from_dvs) = futures::try_join!(read_positions, read_dvs)?;
     let mut deleted: HashMap<String, Vec<u64>> = HashMap::new();
-    for per_file in from_files {
+    let mut charges = Vec::with_capacity(from_files.len() + from_dvs.len());
+    for (per_file, charge) in from_files {
         for (path, mut p) in per_file {
             deleted.entry(path).or_default().append(&mut p);
         }
+        charges.push(charge);
     }
-    for (path, p) in from_dvs {
+    for (path, p, charge) in from_dvs {
         deleted.entry(path).or_default().extend(p);
+        charges.push(charge);
     }
     let mut out = DeleteSelections::default();
     for (data, file, _) in tasks {
@@ -137,18 +149,20 @@ pub(super) async fn load(
                 .insert(key(file), RowSelection::excluding(u64::MAX, p));
         }
     }
-    Ok(out)
+    // The selections hold at most a run per position: the positions' charge
+    // covers them.
+    Ok((out, charges))
 }
 
 /// The positions of a v2 position delete file `d` that name one of `paths`,
-/// by data path.
+/// by data path, and the reservation of `mem` paying for them.
 async fn read_position_file(
     io: &IoContext,
     locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
-    pool: &Arc<dyn krishiv_memory::MemoryPool>,
+    mem: &Arc<ConsumerHandle>,
     d: &DeleteFileEntry,
     paths: &BTreeSet<String>,
-) -> Result<HashMap<String, Vec<u64>>, KrishivError> {
+) -> Result<(HashMap<String, Vec<u64>>, Reservation), KrishivError> {
     let f = &d.entry.file;
     if f.format != FileFormatKind::Parquet {
         return Err(KrishivUnsupportedFeature {
@@ -179,70 +193,72 @@ async fn read_position_file(
             collation: krishiv_io::Collation::default(),
         });
     }
-    let id = pool.register("iceberg position deletes", None);
-    let result = async {
-        let mut stream = ScanStream::open(
-            io,
-            &ParquetFormat,
-            file.clone(),
-            ByteRange::whole(file.size),
-            &req,
-            &FormatOptions::defaults(ParquetFormat.options()),
-            Reservation::new(Arc::clone(pool), id),
-            ScanOptions::default(),
-        )
-        .await?;
-        let mut out: HashMap<String, Vec<u64>> = HashMap::new();
-        while let Some(batch) = stream.next_batch().await? {
-            let bad = |what: &str| {
-                invalid(format!(
-                    "Cannot read position delete file {}: {what}",
-                    f.path
-                ))
-            };
-            let names = batch
-                .column(0)
-                .as_string_opt::<i32>()
-                .ok_or_else(|| bad("file_path is not a string"))?;
-            let pos = batch
-                .column(1)
-                .as_primitive_opt::<Int64Type>()
-                .ok_or_else(|| bad("pos is not a long"))?;
-            for row in 0..batch.num_rows() {
-                if names.is_null(row) {
-                    continue;
-                }
-                let name = names.value(row);
-                if !paths.contains(name) {
-                    continue;
-                }
-                if pos.is_null(row) {
-                    return Err(bad("a null position"));
-                }
-                let p = u64::try_from(pos.value(row))
-                    .map_err(|_| invalid(format!("Invalid position: {}", pos.value(row))))?;
-                // One allocation per data file, not per delete row.
-                match out.get_mut(name) {
-                    Some(v) => v.push(p),
-                    None => {
-                        out.insert(name.to_owned(), vec![p]);
-                    }
+    let mut charge = mem.reservation();
+    let mut stream = ScanStream::open(
+        io,
+        &ParquetFormat,
+        file.clone(),
+        ByteRange::whole(file.size),
+        &req,
+        &FormatOptions::defaults(ParquetFormat.options()),
+        mem.reservation(),
+        ScanOptions::default(),
+    )
+    .await?;
+    let mut out: HashMap<String, Vec<u64>> = HashMap::new();
+    while let Some(batch) = stream.next_batch().await? {
+        let bad = |what: &str| {
+            invalid(format!(
+                "Cannot read position delete file {}: {what}",
+                f.path
+            ))
+        };
+        let names = batch
+            .column(0)
+            .as_string_opt::<i32>()
+            .ok_or_else(|| bad("file_path is not a string"))?;
+        let pos = batch
+            .column(1)
+            .as_primitive_opt::<Int64Type>()
+            .ok_or_else(|| bad("pos is not a long"))?;
+        let mut kept = 0_usize;
+        for row in 0..batch.num_rows() {
+            if names.is_null(row) {
+                continue;
+            }
+            let name = names.value(row);
+            if !paths.contains(name) {
+                continue;
+            }
+            if pos.is_null(row) {
+                return Err(bad("a null position"));
+            }
+            let p = u64::try_from(pos.value(row))
+                .map_err(|_| invalid(format!("Invalid position: {}", pos.value(row))))?;
+            // One allocation per data file, not per delete row.
+            match out.get_mut(name) {
+                Some(v) => v.push(p),
+                None => {
+                    out.insert(name.to_owned(), vec![p]);
                 }
             }
+            kept += 1;
         }
-        Ok(out)
+        // Paid per batch, before the next one is read: a delete file too
+        // large for the query fails with the memory class.
+        charge.grow(kept.saturating_mul(POSITION_BYTES)).await?;
     }
-    .await;
-    pool.unregister(id);
-    result
+    Ok((out, charge))
 }
 
-/// The positions of the deletion vector `dv`.
+/// The positions of the deletion vector `dv`, and the reservation of `mem`
+/// paying for them.
 async fn read_dv(
     io: &IoContext,
     locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
+    mem: &Arc<ConsumerHandle>,
     dv: &DeleteFileEntry,
-) -> Result<RoaringTreemap, KrishivError> {
+) -> Result<(RoaringTreemap, Reservation), KrishivError> {
     let f = &dv.entry.file;
     let (Some(offset), Some(len)) = (f.content_offset, f.content_size_in_bytes) else {
         return Err(invalid(format!(
@@ -258,6 +274,11 @@ async fn read_dv(
     };
     let mut file = locate(&f.path)?;
     file.size = f.size;
+    // The blob while it is decoded; the positions once they are.
+    let mut charge = mem.reservation();
+    charge
+        .grow(usize::try_from(size).unwrap_or(usize::MAX))
+        .await?;
     let bytes = io
         .get_ranges(
             &file,
@@ -268,5 +289,14 @@ async fn read_dv(
         [one] => one.clone(),
         many => bytes::Bytes::from(many.concat()),
     };
-    decode_dv(&blob, len, f.record_count, &f.path)
+    let positions = decode_dv(&blob, len, f.record_count, &f.path)?;
+    drop((blob, bytes));
+    let held = usize::try_from(positions.len())
+        .unwrap_or(usize::MAX)
+        .saturating_mul(POSITION_BYTES);
+    match held.checked_sub(charge.size()) {
+        Some(more) => charge.grow(more).await?,
+        None => charge.shrink(charge.size() - held),
+    }
+    Ok((positions, charge))
 }
