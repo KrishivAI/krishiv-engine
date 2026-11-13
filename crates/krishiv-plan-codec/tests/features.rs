@@ -1884,15 +1884,138 @@ fn collated_strings_need_their_feature_wherever_they_appear() {
         &m,
         "the feature header does not match the plan's constructs",
     );
-    // The indeterminate collation of a mixed expression is the analyzer's,
-    // never a plan's.
+    // The INDETERMINATE collation has a feature of its own.
     let indeterminate = DataType::CollatedString(Collation::INDETERMINATE);
-    let mut plan = inventory::file_scan();
-    plan.scan.output[0].data_type = indeterminate;
-    assert!(matches!(
-        encode(&plan_of(PhysNode::Scan(plan))),
-        Err(CodecError::Unsupported(_))
-    ));
+    assert_eq!(
+        feature_of(Construct::Type(&indeterminate)),
+        Some(Feature::IndeterminateCollation)
+    );
+}
+
+/// The INDETERMINATE collation of a mixed expression's type (`string collate
+/// null`, Spark's result type of `elt` or `rpad` over strings of conflicting
+/// collations) travels by its name `null`, alone or inside a nested type, under
+/// `indeterminate_collation`: a reader without it refuses the plan naming it.
+#[test]
+fn the_indeterminate_collation_needs_its_feature() {
+    use krishiv_exec::physical::ProjectItemPlan;
+    use krishiv_plan::Literal;
+    use krishiv_types::{Collation, DataType, MapType, StructField, StructType};
+    let null = DataType::CollatedString(Collation::INDETERMINATE);
+    assert_eq!(
+        message("collated_indeterminate_scan").features,
+        ["indeterminate_collation"]
+    );
+    assert_eq!(
+        Feature::IndeterminateCollation.kind(),
+        FeatureKind::Semantic
+    );
+    assert_eq!(Feature::IndeterminateCollation.legacy_level(), 6);
+    // Nested: a map of them (`str_to_map`) and a struct field's `__COLLATIONS`.
+    let nested: Vec<DataType> = vec![
+        MapType::new(null.clone(), null.clone(), true).into(),
+        StructType::new(vec![StructField::new("s", null, true)]).into(),
+    ];
+    let mut plans = vec![(
+        "collated_indeterminate_scan".to_owned(),
+        cases()
+            .into_iter()
+            .find(|(n, _)| n == "collated_indeterminate_scan")
+            .unwrap()
+            .1,
+    )];
+    for t in nested {
+        let plan = plan_of(PhysNode::Project {
+            input: Box::new(PhysNode::Scan(inventory::file_scan())),
+            layout: Vec::new(),
+            items: vec![ProjectItemPlan::Expr {
+                name: "m".to_owned(),
+                expr: inventory::lit(Literal::Null(Some(t.clone()))),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        });
+        assert_eq!(
+            to_message(&plan).unwrap().features,
+            ["indeterminate_collation", "nested_types"],
+            "{t}"
+        );
+        plans.push((t.to_string(), plan));
+    }
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::IndeterminateCollation),
+    );
+    for (name, plan) in plans {
+        let bytes = encode(&plan).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), plan, "{name}");
+        assert_eq!(encode(&decode(&bytes).unwrap()).unwrap(), bytes, "{name}");
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["indeterminate_collation".to_owned()]
+            },
+            "{name}"
+        );
+    }
+    // A header that hides it is corrupt.
+    let mut m = message("collated_indeterminate_scan");
+    m.features.clear();
+    m.min_reader_version = 2;
+    corrupt(
+        &m,
+        "the feature header does not match the plan's constructs",
+    );
+}
+
+/// `max` and `min` of a collated string (`MaxByKeyFirst`, `MinByKeyFirst`)
+/// have their own aggregate functions on the wire, under `collated_min_max`.
+#[test]
+fn collated_min_max_needs_its_feature() {
+    use krishiv_exec::aggregate::AggregateFunction;
+    assert_eq!(
+        message("collated_min_max").features,
+        ["collated_min_max", "nested_types"]
+    );
+    for f in [
+        AggregateFunction::MaxByKeyFirst,
+        AggregateFunction::MinByKeyFirst,
+    ] {
+        assert_eq!(
+            feature_of(Construct::AggregateFunction(&f)),
+            Some(Feature::CollatedMinMax)
+        );
+    }
+    assert_eq!(Feature::CollatedMinMax.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::CollatedMinMax.legacy_level(), 6);
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "collated_min_max")
+        .unwrap();
+    let bytes = encode(&plan).unwrap();
+    assert_eq!(decode(&bytes).unwrap(), plan);
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::CollatedMinMax),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["collated_min_max".to_owned()]
+        }
+    );
+    // Like `max_by`, they take no `ignore_nulls`.
+    let mut m = message("collated_min_max");
+    let last = m.nodes.len() - 1;
+    let Some(pb::node::Kind::Aggregate(a)) = m.nodes[last].kind.as_mut() else {
+        panic!("not an aggregate")
+    };
+    a.aggregates[0].ignore_nulls = true;
+    corrupt(&m, "`ignore_nulls` on a function without it");
 }
 
 #[test]
@@ -1921,12 +2044,16 @@ fn a_decoded_collation_is_checked() {
         "SYSTEM.BUILTIN.UTF8_LCASE",
         "UNICODE_CS",
         "UTF8_BINARY",
-        "null",
         "",
         "NOPE",
     ] {
         corrupt(&named(name), "an invalid collation");
     }
+    // `null` is the INDETERMINATE collation, which needs its own feature.
+    corrupt(
+        &named("null"),
+        "the feature header does not match the plan's constructs",
+    );
     let on_string = edit(&|t: &mut pb::DataType| t.kind = Kind::String as i32);
     corrupt(
         &on_string,
