@@ -3,6 +3,8 @@
 //! still being analyzed, before its query exists (P3-T021 follow-up, re-review
 //! ruling R1 of PR-08b part 2). The slow step is an access-policy check, which
 //! analysis awaits for every table it reads, as it awaits a table format's log.
+
+// `cfg(test)` lets clippy's allow-unwrap-in-tests apply to this file, as in the other test files.
 #![cfg(test)]
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -150,4 +152,18 @@ fn another_session_is_not_interrupted() {
         ended.recv_timeout(Duration::from_secs(30)).unwrap(),
         "OPERATION_CANCELED"
     );
+}
+
+#[test]
+fn an_operator_kill_during_analysis_names_the_statement() {
+    let (s, policy, entered) = session();
+    let ended = hung_statement(&s, &policy, &entered);
+    assert!(s.runtime().cancel(
+        &QueryId::parse(OP).unwrap(),
+        krishiv_session::CancelReason::Admin
+    ));
+    let class = ended
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the statement ended");
+    assert_eq!(class, "KRISHIV_QUERY_KILLED");
 }

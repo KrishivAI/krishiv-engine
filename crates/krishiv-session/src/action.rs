@@ -9,20 +9,35 @@
 //! too. So every action ([`crate::Session::on_executor`]) registers here for
 //! as long as it runs:
 //!
-//! - **Before a query is reserved**, a cancellation ends the action at once:
-//!   its future is dropped (every await of the pipeline is drop-safe, as a
-//!   caller that goes away already relies on) and it fails with the reason's
-//!   error (`OPERATION_CANCELED` for `user`).
-//! - **From the first reservation on**, the action hands over: a reason that
-//!   came before is the reservation's pending reason (applied at `attach`), and
-//!   one that comes later cancels the reserved queries through the registry,
-//!   so a running query ends as it always has (its stream, its row).
+//! - **Before it hands over**, a cancellation ends the action at once: its
+//!   future is dropped and it fails with the reason's error
+//!   (`OPERATION_CANCELED` for `user`). Only analysis and planning are cut
+//!   this way; they hold memory and rows, which a drop releases, as it does
+//!   for a caller that goes away.
+//! - **It hands over** at the first reservation of a query under it, or at a
+//!   [`commit_point`], which a statement calls before its first side effect
+//!   (an overwrite that drops a table or deletes the files it replaces). A
+//!   reason that came before is the next reservation's pending reason
+//!   (applied at `attach`); one that comes later cancels the reserved queries
+//!   through the registry, so a running query ends as it always has (its
+//!   stream, its row), and a side effect is not cut half-way by a cancel.
+//! - **Nested actions** (a command that runs a statement of its own, such as
+//!   `ANALYZE TABLE .. FOR COLUMNS` or `EXECUTE IMMEDIATE`) record their
+//!   parent: a reservation or a commit point hands over the whole chain, so a
+//!   cancel of the outer action reaches the inner query through the registry.
+//!
+//! Limit: once an action has handed over, a later statement of it (the next
+//! statement of a SQL script, which reserves its row when it begins) is not
+//! dropped during its own analysis; it ends at its next reservation (the
+//! pending reason) or, for readers that wait on [`cancelled`], at once.
 //!
 //! The hand-over and a cancellation take the action's one lock, so a
-//! cancellation racing a reservation is never lost. The action is current
-//! in a task-local while it runs; planning-time readers that hold their own
-//! cancellation (a table format's log reads) can wait on
-//! [`cancelled`] to end with it.
+//! cancellation racing a reservation is never lost. Lock order:
+//! `EngineRuntime::live` -> `Action::state`, one action's at a time;
+//! `Actions::live` is never held with either. The action is current in a
+//! task-local while it runs; planning-time readers that hold their own
+//! cancellation (a table format's log reads) wait on [`cancelled`] to end
+//! with it.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -40,6 +55,9 @@ tokio::task_local! {
     static CURRENT: Arc<Action>;
 }
 
+/// The `query_id` an error names for an action the caller gave no id.
+const NOT_STARTED: &str = "(not started)";
+
 /// One running action of a session.
 #[derive(Debug)]
 pub(crate) struct Action {
@@ -48,6 +66,10 @@ pub(crate) struct Action {
     /// The caller's operation id, if it gave one (the id `Session::cancel`
     /// names it by).
     operation: Option<Arc<str>>,
+    /// The action this one runs inside, if any (a nested `on_executor`).
+    parent: Option<Arc<Action>>,
+    /// Taken after `EngineRuntime::live` when both are held, never together
+    /// with another action's.
     state: Mutex<State>,
     /// The first reason, published for the action's race and for planning-time readers.
     reason: watch::Sender<Option<CancelReason>>,
@@ -56,23 +78,56 @@ pub(crate) struct Action {
 #[derive(Debug, Default)]
 struct State {
     reason: Option<CancelReason>,
-    /// The `system.queries` rows reserved under the action (the hand-over).
-    rows: Vec<Arc<str>>,
+    /// Whether the action has handed over (a reservation or a commit point,
+    /// its own or a nested action's): a cancel no longer drops it.
+    handed_over: bool,
+    /// The `system.queries` rows reserved under the action or a nested one.
+    rows: Vec<HandedOver>,
 }
 
 impl Action {
-    /// Whether a query has been reserved under the action.
     fn handed_over(&self) -> bool {
-        !self.lock().rows.is_empty()
+        self.lock().handed_over
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// Hands the action and its ancestors over, recording `row` on each; the
+    /// first reason any of them was already cancelled with. Each lock is taken
+    /// alone, innermost first: an ancestor's cancel that comes before its lock
+    /// is returned here, one that comes after finds the row.
+    fn hand_over_chain(self: &Arc<Self>, row: Option<&HandedOver>) -> Option<CancelReason> {
+        let mut first = None;
+        let mut next = Some(self);
+        while let Some(action) = next {
+            let mut state = action.lock();
+            state.handed_over = true;
+            if let Some(row) = row {
+                state.rows.push(row.clone());
+            }
+            first = first.or(state.reason);
+            drop(state);
+            next = action.parent.as_ref();
+        }
+        first
+    }
 }
 
 /// A row reserved under an action: its session number and `system.queries` id.
 pub(crate) type HandedOver = (u64, Arc<str>);
+
+/// What [`Actions::cancel_where`] did.
+#[derive(Debug, Default)]
+pub(crate) struct ActionsCancelled {
+    /// The operation ids of the actions it ended (not handed over, an id given).
+    pub(crate) ids: Vec<Arc<str>>,
+    /// How many actions it ended, with an id or without.
+    pub(crate) ended: usize,
+    /// The rows handed over under every picked action, to cancel through the registry.
+    pub(crate) rows: Vec<HandedOver>,
+}
 
 /// The running actions of one runtime.
 #[derive(Debug, Default)]
@@ -83,12 +138,14 @@ pub(crate) struct Actions {
 
 impl Actions {
     /// Registers an action of session `session`, named `operation` when the
-    /// caller gave an id; it leaves the registry when the guard drops.
+    /// caller gave an id, inside the current action if there is one (so call
+    /// it on the caller's task); it leaves the registry when the guard drops.
     pub(crate) fn begin(self: &Arc<Self>, session: u64, operation: Option<&str>) -> ActionGuard {
         let (reason, _) = watch::channel(None);
         let action = Arc::new(Action {
             session,
             operation: operation.map(Arc::from),
+            parent: CURRENT.try_with(Arc::clone).ok(),
             state: Mutex::new(State::default()),
             reason,
         });
@@ -106,14 +163,13 @@ impl Actions {
 
     /// Cancels, with `reason`, every action `pick` selects (by session number
     /// and operation id; an action without an id is picked by an empty id).
-    /// Returns the operation ids of the actions it cancelled first, and the
-    /// rows handed over by every picked action (to be cancelled through the
-    /// query registry), each as (session, row).
+    /// The first reason wins. An action that has not handed over is ended (its
+    /// race drops it); one that has is left to the registry (its rows).
     pub(crate) fn cancel_where(
         &self,
         reason: CancelReason,
         pick: &impl Fn(u64, &str) -> bool,
-    ) -> (Vec<Arc<str>>, Vec<HandedOver>) {
+    ) -> ActionsCancelled {
         let picked: Vec<Arc<Action>> = self
             .live
             .lock()
@@ -122,20 +178,22 @@ impl Actions {
             .filter(|a| pick(a.session, a.operation.as_deref().unwrap_or("")))
             .cloned()
             .collect();
-        let mut ids = Vec::new();
-        let mut rows = Vec::new();
+        let mut out = ActionsCancelled::default();
         for action in picked {
             let mut state = action.lock();
             if state.reason.is_none() {
                 state.reason = Some(reason);
-                if let Some(id) = &action.operation {
-                    ids.push(Arc::clone(id));
+                if !state.handed_over {
+                    out.ended += 1;
+                    if let Some(id) = &action.operation {
+                        out.ids.push(Arc::clone(id));
+                    }
                 }
                 action.reason.send_replace(Some(reason));
             }
-            rows.extend(state.rows.iter().map(|r| (action.session, Arc::clone(r))));
+            out.rows.extend(state.rows.iter().cloned());
         }
-        (ids, rows)
+        out
     }
 }
 
@@ -149,7 +207,7 @@ pub(crate) struct ActionGuard {
 
 impl ActionGuard {
     /// Runs `work` as this action: current in the task-local, and ended with
-    /// the cancellation's error if one comes before a query is reserved.
+    /// the cancellation's error if one comes before it hands over.
     pub(crate) async fn run<T>(
         self,
         work: impl Future<Output = Result<T, KrishivError>>,
@@ -162,7 +220,8 @@ impl ActionGuard {
             if let Some(r) = *reason.borrow_and_update()
                 && !action.handed_over()
             {
-                return Err(r.error(action.operation.as_deref().unwrap_or(""), None));
+                let id = action.operation.as_deref().unwrap_or(NOT_STARTED);
+                return Err(r.error(id, None));
             }
             let changed = pin!(reason.changed());
             match select(work.as_mut(), changed).await {
@@ -189,21 +248,27 @@ impl Drop for ActionGuard {
     }
 }
 
-/// Hands the current action (if it is of session `session`) over to the
-/// reservation of row `row`: the reason it was already cancelled with, if any,
-/// which the reservation keeps as pending.
+/// Hands the current action (if it is of session `session`) and its ancestors
+/// over to the reservation of row `row`: the reason one of them was already
+/// cancelled with, if any, which the reservation keeps as pending.
 pub(crate) fn hand_over(session: u64, row: &str) -> Option<CancelReason> {
     CURRENT
         .try_with(|action| {
             if action.session != session {
                 return None;
             }
-            let mut state = action.lock();
-            state.rows.push(Arc::from(row));
-            state.reason
+            action.hand_over_chain(Some(&(session, Arc::from(row))))
         })
         .ok()
         .flatten()
+}
+
+/// Called before a statement's first side effect that a drop would leave half
+/// done (an overwrite dropping a table, or deleting the files it replaces):
+/// from here a cancel no longer drops the action; it reaches the statement at
+/// its next reservation (the pending reason) or through its query.
+pub(crate) fn commit_point() {
+    let _ = CURRENT.try_with(|action| action.hand_over_chain(None));
 }
 
 /// Resolves when the current action is cancelled (never, outside an action):
@@ -249,9 +314,10 @@ mod tests {
         let actions = Arc::new(Actions::default());
         let guard = actions.begin(1, Some("op"));
         let action = Arc::clone(&guard.action);
-        let (ids, rows) = actions.cancel_where(CancelReason::User, &all);
-        assert_eq!(ids, vec![Arc::<str>::from("op")]);
-        assert!(rows.is_empty());
+        let out = actions.cancel_where(CancelReason::User, &all);
+        assert_eq!(out.ids, vec![Arc::<str>::from("op")]);
+        assert_eq!(out.ended, 1);
+        assert!(out.rows.is_empty());
         let pending = block(CURRENT.scope(action, async { hand_over(1, "row") }));
         assert_eq!(pending, Some(CancelReason::User));
     }
@@ -259,7 +325,7 @@ mod tests {
     #[test]
     fn a_cancel_after_the_reservation_names_its_rows() {
         let actions = Arc::new(Actions::default());
-        let guard = actions.begin(1, None);
+        let guard = actions.begin(1, Some("op"));
         let action = Arc::clone(&guard.action);
         assert_eq!(
             block(CURRENT.scope(Arc::clone(&action), async { hand_over(1, "row") })),
@@ -270,16 +336,62 @@ mod tests {
             block(CURRENT.scope(action, async { hand_over(2, "x") })),
             None
         );
-        let (ids, rows) = actions.cancel_where(CancelReason::Admin, &all);
-        assert!(
-            ids.is_empty(),
-            "an action without an operation id has none to report"
-        );
-        assert_eq!(rows, vec![(1, Arc::<str>::from("row"))]);
+        let out = actions.cancel_where(CancelReason::Admin, &all);
+        // Handed over: the registry reports the row, not the action.
+        assert!(out.ids.is_empty());
+        assert_eq!(out.ended, 0);
+        assert_eq!(out.rows, vec![(1, Arc::<str>::from("row"))]);
         // The first reason wins; the rows are named again for a later cancel.
-        let (ids, rows) = actions.cancel_where(CancelReason::User, &all);
-        assert!(ids.is_empty());
-        assert_eq!(rows.len(), 1);
+        let out = actions.cancel_where(CancelReason::User, &all);
+        assert!(out.ids.is_empty());
+        assert_eq!(out.rows.len(), 1);
+    }
+
+    #[test]
+    fn an_action_without_an_id_is_ended_but_not_named() {
+        let actions = Arc::new(Actions::default());
+        let _guard = actions.begin(1, None);
+        let out = actions.cancel_where(CancelReason::User, &all);
+        assert!(out.ids.is_empty());
+        assert_eq!(out.ended, 1);
+    }
+
+    #[test]
+    fn a_nested_reservation_hands_over_its_parents() {
+        let actions = Arc::new(Actions::default());
+        let outer = actions.begin(1, Some("outer"));
+        let a = Arc::clone(&actions);
+        let out = block(outer.run(async move {
+            let inner = a.begin(1, None);
+            let reserved = inner.run(async { Ok::<_, KrishivError>(hand_over(1, "row")) });
+            assert_eq!(reserved.await.unwrap(), None);
+            // The outer action is not dropped: the inner row ends through the registry.
+            let out = a.cancel_where(CancelReason::User, &all);
+            tokio::task::yield_now().await;
+            Ok::<_, KrishivError>(out)
+        }));
+        let out = out.unwrap();
+        assert!(out.ids.is_empty());
+        assert_eq!(out.rows, vec![(1, Arc::<str>::from("row"))]);
+    }
+
+    #[test]
+    fn a_commit_point_keeps_the_action_and_its_reason_waits() {
+        let actions = Arc::new(Actions::default());
+        let guard = actions.begin(1, Some("op"));
+        let a = Arc::clone(&actions);
+        let out = block(guard.run(async move {
+            commit_point();
+            let cancelled = a.cancel_where(CancelReason::User, &all);
+            assert!(
+                cancelled.ids.is_empty(),
+                "not ended: it waits for its reservation"
+            );
+            tokio::task::yield_now().await;
+            // The side effect finishes; the next reservation takes the reason.
+            Ok::<_, KrishivError>(hand_over(1, "row"))
+        }));
+        assert_eq!(out.unwrap(), Some(CancelReason::User));
     }
 
     #[test]
@@ -312,17 +424,17 @@ mod tests {
         }));
         // The work is polled first and sees the reason itself.
         assert_eq!(out.unwrap(), CancelReason::Drain);
-        // Work that never ends is ended by the race, with the reason's error.
+        // Work that never ends is ended by the race, with the reason's error,
+        // which names a placeholder for an action without an id.
         let guard = actions.begin(1, None);
         let a = Arc::clone(&actions);
         let out = block(guard.run(async move {
             let _ = a.cancel_where(CancelReason::Drain, &all);
             std::future::pending::<Result<(), KrishivError>>().await
         }));
-        assert_eq!(
-            out.unwrap_err().error_class().name(),
-            "KRISHIV_QUERY_KILLED"
-        );
+        let e = out.unwrap_err();
+        assert_eq!(e.error_class().name(), "KRISHIV_QUERY_KILLED");
+        assert!(e.to_string().contains(NOT_STARTED), "{e}");
         // Outside an action nothing is ever cancelled.
         let mut outside = pin!(cancelled());
         let waker = futures::task::noop_waker();
