@@ -215,10 +215,6 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
     ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
     (
-        "krishiv.delta.snapshotCache.maxBytes",
-        &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
-    ),
-    (
         "krishiv.sql.avro.compression.codec",
         &AVRO_COMPRESSION_CODEC,
     ),
@@ -250,6 +246,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.timeParserPolicy",
         &LEGACY_TIME_PARSER_POLICY,
+    ),
+    (
+        "krishiv.delta.snapshotCache.maxBytes",
+        &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
     ),
     (
         "krishiv.io.parquet.pageIndex.enabled",
