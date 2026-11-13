@@ -83,6 +83,7 @@ impl Session {
                     Arc::clone(&runtime.warehouse),
                 )),
                 cache,
+                analyzer: krishiv_plan::analyzer::CachingAnalyzer::new(),
                 variables: Arc::new(SessionVariables::default()),
                 profile: parts.profile,
                 principal: parts.principal,

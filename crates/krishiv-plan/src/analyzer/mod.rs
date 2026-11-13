@@ -98,6 +98,7 @@ mod intervals;
 pub(crate) mod legacy;
 mod ops;
 mod pivot;
+pub(crate) mod prefix;
 mod recursive;
 mod repartition;
 mod resolve;
@@ -945,60 +946,113 @@ impl Analyzer for DefaultAnalyzer {
         plan: &'a Plan,
         ctx: &'a AnalysisContext,
     ) -> BoxFuture<'a, Result<AnalyzedPlan, AnalysisError>> {
-        Box::pin(async move {
-            let started = std::time::Instant::now();
-            let policy = legacy::CtePolicy {
-                precedence: ctx.conf.cte_precedence,
-                case_sensitive: ctx.conf.case_sensitive,
-            };
-            if policy.precedence == CtePrecedencePolicy::Exception
-                && let Some(conflict) = legacy::nested_conflict(plan.root(), policy)?
-            {
-                return Err(conflict);
-            }
-            let input = plan;
-            let owned;
-            let plan = if policy.precedence == CtePrecedencePolicy::Legacy {
-                let inlined = legacy::eliminate(plan.root(), policy)
-                    .map_err(|e| AnalysisError::new(e, plan.root().origin))?;
-                owned = Plan::try_new(inlined)
-                    .map_err(|e| AnalysisError::new(e, plan.root().origin))?;
-                &owned
-            } else {
-                plan
-            };
-            let bindings = bind::bind(plan, ctx).await?;
-            let metadata = started.elapsed();
-            let resolving = std::time::Instant::now();
-            let (root, output, securables, warnings, output_declared, output_comments) =
-                resolve::resolve(plan, ctx, &bindings)?;
-            unexecutable::check(&root, ctx.conf.time_type)?;
-            let resolved =
-                Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
-            let bind::Bindings {
-                pins,
-                epochs,
-                query_text,
-                reads_files,
-                ..
-            } = bindings;
-            Ok(AnalyzedPlan {
-                plan: resolved,
-                output,
-                output_declared,
-                output_comments,
-                pins,
-                securables,
-                input_key: input.structural_hash(),
-                context: fingerprint(ctx, epochs),
-                query_text,
-                reads_files,
-                timings: AnalysisTimings {
-                    metadata,
-                    resolve: resolving.elapsed(),
-                },
-                warnings,
-            })
-        })
+        Box::pin(analyze_with(plan, ctx, None))
     }
+}
+
+/// An analyzer that keeps the resolution of the last plan it analysed and starts the next analysis from
+/// it when that plan is the old one plus steps above it (design P3-T013a): a client that grows a plan
+/// step by step and asks for its schema after each resends the whole tree every time. One per session;
+/// results equal [`DefaultAnalyzer`]'s exactly, and Bind (metadata, versions, authorization) runs on every
+/// call.
+#[derive(Default)]
+pub struct CachingAnalyzer {
+    last: std::sync::Mutex<Option<Arc<prefix::PrefixEntry>>>,
+}
+
+impl fmt::Debug for CachingAnalyzer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CachingAnalyzer").finish_non_exhaustive()
+    }
+}
+
+impl CachingAnalyzer {
+    /// An analyzer with nothing cached.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Analyzer for CachingAnalyzer {
+    fn analyze<'a>(
+        &'a self,
+        plan: &'a Plan,
+        ctx: &'a AnalysisContext,
+    ) -> BoxFuture<'a, Result<AnalyzedPlan, AnalysisError>> {
+        Box::pin(analyze_with(plan, ctx, Some(&self.last)))
+    }
+}
+
+type PrefixSlot = std::sync::Mutex<Option<Arc<prefix::PrefixEntry>>>;
+
+async fn analyze_with(
+    plan: &Plan,
+    ctx: &AnalysisContext,
+    slot: Option<&PrefixSlot>,
+) -> Result<AnalyzedPlan, AnalysisError> {
+    let started = std::time::Instant::now();
+    let policy = legacy::CtePolicy {
+        precedence: ctx.conf.cte_precedence,
+        case_sensitive: ctx.conf.case_sensitive,
+    };
+    if policy.precedence == CtePrecedencePolicy::Exception
+        && let Some(conflict) = legacy::nested_conflict(plan.root(), policy)?
+    {
+        return Err(conflict);
+    }
+    let input = plan;
+    let owned;
+    let plan = if policy.precedence == CtePrecedencePolicy::Legacy {
+        let inlined = legacy::eliminate(plan.root(), policy)
+            .map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+        owned = Plan::try_new(inlined).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+        &owned
+    } else {
+        plan
+    };
+    let bindings = bind::bind(plan, ctx).await?;
+    let metadata = started.elapsed();
+    let resolving = std::time::Instant::now();
+    let context = fingerprint(ctx, bindings.epochs.clone());
+    let warm = slot
+        .and_then(|s| s.lock().ok().and_then(|g| g.clone()))
+        .filter(|e| e.fingerprint.as_ref() == Some(&context));
+    let (root, output, securables, warnings, output_declared, output_comments, entry) =
+        resolve::resolve(plan, ctx, &bindings, warm.as_deref())?;
+    unexecutable::check(&root, ctx.conf.time_type)?;
+    if let Some(slot) = slot {
+        // Only a finished analysis is kept; any other leaves the slot as it was.
+        if let Ok(mut g) = slot.lock() {
+            *g = entry.map(|mut e| {
+                e.fingerprint = Some(context.clone());
+                Arc::new(e)
+            });
+        }
+    }
+    let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+    let bind::Bindings {
+        pins,
+        epochs: _,
+        query_text,
+        reads_files,
+        ..
+    } = bindings;
+    Ok(AnalyzedPlan {
+        plan: resolved,
+        output,
+        output_declared,
+        output_comments,
+        pins,
+        securables,
+        input_key: input.structural_hash(),
+        context,
+        query_text,
+        reads_files,
+        timings: AnalysisTimings {
+            metadata,
+            resolve: resolving.elapsed(),
+        },
+        warnings,
+    })
 }

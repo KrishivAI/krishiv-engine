@@ -6,7 +6,7 @@
 
 use std::time::Instant;
 
-use crate::analyzer::{Analyzer, DefaultAnalyzer};
+use crate::analyzer::{Analyzer, CachingAnalyzer, DefaultAnalyzer};
 use crate::{ColumnRef, Expr, ExprNode, LogicalPlan, Origin, Plan, PlanId, PlanNode};
 
 use super::dsl::{add, int};
@@ -99,6 +99,58 @@ fn e2_planning_speed() {
     );
     println!(
         "host load after: {}",
+        std::fs::read_to_string("/proc/loadavg")
+            .unwrap_or_default()
+            .trim()
+    );
+}
+
+#[test]
+#[ignore = "timed spike; run with --release --ignored --nocapture"]
+fn e2_loop_with_prefix_cache() {
+    let c = ctx();
+    let cache = CachingAnalyzer::new();
+    let mut per_call = Vec::new();
+    let t = Instant::now();
+    for i in 1..=200 {
+        let p = Plan::try_new(chain(i)).unwrap();
+        let t = Instant::now();
+        let a = block_on(cache.analyze(&p, &c)).unwrap();
+        per_call.push(t.elapsed().as_secs_f64() * 1e3);
+        std::hint::black_box(a);
+    }
+    println!(
+        "cached loop of 200: total {:.1} ms, call p50 {:.3} p99 {:.3} max {:.3} ms",
+        t.elapsed().as_secs_f64() * 1e3,
+        pct(&mut per_call.clone(), 50),
+        pct(&mut per_call.clone(), 99),
+        per_call.iter().cloned().fold(0.0, f64::max)
+    );
+}
+
+#[test]
+#[ignore = "timed spike"]
+fn e2_warm_split_at_depth_200() {
+    let c = ctx();
+    let cache = CachingAnalyzer::new();
+    let first = Plan::try_new(chain(199)).unwrap();
+    let _ = block_on(cache.analyze(&first, &c)).unwrap();
+    let (mut meta, mut res, mut tot) = (Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..100 {
+        // Re-seed the slot with the 199-step root, then analyse the 200-step plan.
+        let _ = block_on(cache.analyze(&first, &c)).unwrap();
+        let p = Plan::try_new(chain(200)).unwrap();
+        let t = Instant::now();
+        let a = block_on(cache.analyze(&p, &c)).unwrap();
+        tot.push(t.elapsed().as_secs_f64() * 1e3);
+        meta.push(a.timings.metadata.as_secs_f64() * 1e3);
+        res.push(a.timings.resolve.as_secs_f64() * 1e3);
+    }
+    println!(
+        "warm depth 200 p50: total {:.3} bind {:.3} resolve+post {:.3} ms (load {})",
+        pct(&mut tot, 50),
+        pct(&mut meta, 50),
+        pct(&mut res, 50),
         std::fs::read_to_string("/proc/loadavg")
             .unwrap_or_default()
             .trim()

@@ -17,6 +17,7 @@ mod inventory;
 mod json_tuple;
 mod nodes;
 mod pivot;
+mod prefix_cache;
 mod props;
 mod rewrite;
 mod secrets;
