@@ -470,8 +470,8 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "ms",
         labels: &[],
         description: "Milliseconds Delta kernel calls have waited for a slot of the process's \
-                      log pool (`krishiv.delta.logThreads`), summed since the process started; \
-                      emitted by builds with the `delta` feature.",
+                      log pool (`krishiv.delta.logThreads`), summed since the process started \
+                      (a running total); emitted by builds with the `delta` feature.",
         since: "0.2.0",
         source: MetricSource::Scrape,
     },
@@ -481,8 +481,8 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "1",
         labels: &[],
         description: "Delta table opens that found the table's snapshot in the engine runtime's \
-                      cache (it is then brought up to date), since the runtime started; emitted \
-                      by builds with the `delta` feature.",
+                      cache (it is then brought up to date), since the runtime started (a \
+                      running total); emitted by builds with the `delta` feature.",
         since: "0.2.0",
         source: MetricSource::Scrape,
     },
@@ -492,8 +492,8 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "1",
         labels: &[],
         description: "Delta table opens that found no cached snapshot and read the log from its \
-                      last checkpoint, since the runtime started; emitted by builds with the \
-                      `delta` feature.",
+                      last checkpoint, since the runtime started (a running total); emitted by \
+                      builds with the `delta` feature.",
         since: "0.2.0",
         source: MetricSource::Scrape,
     },

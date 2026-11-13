@@ -108,11 +108,11 @@ required-features = ["telemetry-logs"]
 [lints]
 workspace = true
 
-# The S3 round trip needs the S3 builder and an emulator (`KRISHIV_TEST_S3_ENDPOINT`).
 [[test]]
 name = "delta_tables"
 required-features = ["delta"]
 
+# The S3 round trip needs the S3 builder and an emulator (`KRISHIV_TEST_S3_ENDPOINT`).
 [[test]]
 name = "s3_tpch"
 required-features = ["cloud"]

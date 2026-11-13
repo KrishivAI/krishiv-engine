@@ -158,17 +158,24 @@ impl DeltaReads {
             return Ok(t);
         }
         let engine = self.engine(store.clone(), root)?;
-        let options = OpenOptions {
-            version: None,
-            name,
-            cache: Some((
+        // A location under a credential scope reads through a store id with a per-registry
+        // nonce (`#scope:`): its entry could never be hit again and would only push reusable
+        // ones out, so such a table is not cached. Other store ids carry the `fs.*` settings
+        // hash and the principal, which with the credential identity keep entries apart.
+        let cache = (!store.key().contains("#scope:")).then(|| {
+            (
                 Arc::clone(&self.cache),
                 CacheKey {
                     root: key.clone(),
                     store,
                     credential: self.credential.clone(),
                 },
-            )),
+            )
+        });
+        let options = OpenOptions {
+            version: None,
+            name,
+            cache,
         };
         let config = Arc::clone(&self.config);
         let table = Arc::new(DeltaTable::open_with(engine, options, &config).await?);

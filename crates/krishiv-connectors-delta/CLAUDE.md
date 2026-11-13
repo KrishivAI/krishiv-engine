@@ -25,6 +25,8 @@ Fuzz target `fuzz/fuzz_targets/delta_commit_json.rs` (one commit through `parse_
 - CDF read (`table_changes`, `readChangeFeed`).
 - Delta row-tracking columns: `features::row_tracking_refused` is wired once `MetadataCols` can name them.
 - The pushed predicate prunes files only (not row groups: no `ScanRequest::predicate`).
+- A catalog table whose log schema changed since it was registered is refused by the session (delta-spark reads
+  the snapshot's schema on every query).
 - Interrupting a query during analysis does not reach its planning-time Delta opens: the session registers the
   query with its cancel registry only after planning. The session's `DeltaReads` cancels its token when dropped (a
   dropped planning future); hooking it into the interrupt registry is a session-wide follow-up.
