@@ -5,6 +5,12 @@
     ],
     "sqlState" : "58030"
   },
+  "KRISHIV_CATALOG_LIMIT_EXCEEDED" : {
+    "message" : [
+      "<source> exceeds <limit> (<value>), so it was not loaded. A legitimate table or catalog this large needs <config> raised."
+    ],
+    "sqlState" : "54000"
+  },
   "KRISHIV_COMMIT_LOG_CORRUPT" : {
     "message" : [
       "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
