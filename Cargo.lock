@@ -2119,11 +2119,13 @@ dependencies = [
 name = "krishiv-cli"
 version = "0.2.0"
 dependencies = [
+ "axum",
  "clap",
  "futures",
  "krishiv",
  "krishiv-alloc",
  "krishiv-common",
+ "krishiv-connect-server",
  "krishiv-functions",
  "krishiv-mcp",
  "krishiv-memory",
@@ -2162,6 +2164,26 @@ dependencies = [
  "prost-reflect",
  "prost-types",
  "serde_json",
+]
+
+[[package]]
+name = "krishiv-connect-server"
+version = "0.2.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "krishiv-common",
+ "krishiv-connect",
+ "krishiv-session",
+ "prost",
+ "prost-types",
+ "rustix",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tracing",
 ]
 
 [[package]]
@@ -2461,6 +2483,7 @@ dependencies = [
  "krishiv-ui-assets",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2497,6 +2520,7 @@ dependencies = [
  "prost",
  "reqwest",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",

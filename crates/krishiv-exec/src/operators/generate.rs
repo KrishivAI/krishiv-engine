@@ -261,6 +261,10 @@ impl Elements {
 }
 
 impl Operator for Generate {
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "Generate"
     }
