@@ -19,6 +19,7 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 use proptest::prelude::*;
 use roaring::RoaringTreemap;
 
+use super::provider::IcebergTableProvider;
 use super::provider_tests::{Env, batch, env, id_field, provider_session, write_parquet};
 use super::table::IcebergTable;
 use crate::plan::{DELETE_FILE_PATH_ID, DELETE_FILE_POS_ID, VersionSpec, encode_dv};
@@ -918,6 +919,66 @@ fn position_selections_are_charged_at_their_size() {
     assert_eq!(pool.reserved(), 0);
 }
 
+/// A data file whose partition tuple cannot be read fails the query only
+/// when a scan reads it (review 25d S3a): pruned by its metrics, the other
+/// files read and keep their equality deletes. iceberg-rust's writers cannot
+/// write such a tuple, so the planned entry is edited (a bucket spec, so the
+/// value is not a constant column).
+#[test]
+fn a_pruned_file_with_an_unreadable_tuple_does_not_fail() {
+    use crate::plan::{PartitionValue, Transform, encode};
+    use krishiv_io::ScalarValue;
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            data("b.parquet", 1, 1, 20, 3),
+            equality("e.parquet", 1, 2, &[Some(21)]),
+        ],
+        true,
+    );
+    let open = || {
+        t.env
+            .rt
+            .block_on(IcebergTableProvider::open_edited(
+                &t.table,
+                |snapshot, plan| {
+                    for spec in snapshot.partition_specs.values_mut() {
+                        for f in &mut spec.fields {
+                            f.transform = Transform::Bucket(16);
+                        }
+                    }
+                    for task in &mut plan.tasks {
+                        let file = &mut Arc::make_mut(&mut task.file).file;
+                        let (lo, hi) = if file.path.ends_with("a.parquet") {
+                            file.partition = vec![PartitionValue::Unreadable];
+                            (0, 2)
+                        } else {
+                            (20, 22)
+                        };
+                        let long = |v| {
+                            encode(&ScalarValue::Int64(v), &crate::plan::IcebergType::Long).unwrap()
+                        };
+                        file.lower_bounds.insert(1, long(lo));
+                        file.upper_bounds.insert(1, long(hi));
+                    }
+                },
+            ))
+            .unwrap()
+    };
+    let s = provider_session(open());
+    let rows = s.rows("SELECT id FROM t WHERE id >= 20 ORDER BY id");
+    assert_eq!(rows, ["20", "22"]);
+    let e = provider_session(open())
+        .run("SELECT id FROM t")
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(e.message().contains("cannot be read"), "{e}");
+}
+
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
 #[derive(Debug, Clone)]
 enum Op {
@@ -996,7 +1057,8 @@ enum ModelDelete {
 /// a data file with a DV loses exactly the DV's positions; otherwise it loses
 /// the rows naming it in every position delete file with `seq >= data seq`
 /// that is scoped to it or to its partition.
-fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeSet<i64>) {
+/// The survivors are by id, with their partition.
+fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeMap<i64, i32>) {
     struct Live {
         name: String,
         p: i32,
@@ -1183,8 +1245,8 @@ fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeSet<i64>) {
                 .collect();
             (0..l.rows)
                 .filter(move |r| !deleted.contains(&u64::try_from(*r).unwrap()))
-                .map(move |r| l.first + r)
-                .filter(move |id| !by_key.contains(id))
+                .map(move |r| (l.first + r, l.p))
+                .filter(move |(id, _)| !by_key.contains(id))
         })
         .collect();
     (files, survivors)
@@ -1199,12 +1261,30 @@ proptest! {
     /// files of other partitions) and DVs (absorbing or replacing older
     /// deletes) over random partitioned tables read the rows a model of the
     /// spec's rules keeps. Equality deletes (some not strictly newer, some
-    /// partition-scoped) remove the rows of their keys besides.
+    /// partition-scoped) remove the rows of their keys besides. Read with
+    /// no filter, a partition filter (files pruned before their deletes are
+    /// assigned, PR-25d) or an id filter.
     #[test]
-    fn delete_application_matches_model(ops in ops(), partitioned in any::<bool>()) {
+    fn delete_application_matches_model(
+        ops in ops(),
+        partitioned in any::<bool>(),
+        filter in (0..3u8, 0..2i32, 0..40i64),
+    ) {
         let (files, survivors) = history(&ops, partitioned);
         let t = build(&files, partitioned);
-        let got = t.ids("SELECT id FROM t").unwrap();
-        prop_assert_eq!(got, survivors.into_iter().collect::<Vec<_>>());
+        let (kind, p, n) = filter;
+        let (sql, want): (String, Vec<i64>) = match kind {
+            0 => ("SELECT id FROM t".to_owned(), survivors.keys().copied().collect()),
+            1 => (
+                format!("SELECT id FROM t WHERE p = {p}"),
+                survivors.iter().filter(|(_, q)| **q == p).map(|(id, _)| *id).collect(),
+            ),
+            _ => (
+                format!("SELECT id FROM t WHERE id < {n}"),
+                survivors.keys().copied().filter(|id| *id < n).collect(),
+            ),
+        };
+        let got = t.ids(&sql).unwrap();
+        prop_assert_eq!(got, want, "{}", sql);
     }
 }

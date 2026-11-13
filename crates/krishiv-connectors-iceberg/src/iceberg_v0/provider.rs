@@ -95,6 +95,18 @@ impl IcebergTableProvider {
     ) -> Result<Self, KrishivError> {
         let snapshot = table.snapshot(version)?;
         let (plan, index) = table.plan_files(&snapshot).await?;
+        Self::from_plan(table, snapshot, plan, index, config, worker_slots)
+    }
+
+    /// The provider of `snapshot`'s planned files.
+    fn from_plan(
+        table: &IcebergTable,
+        snapshot: TableSnapshot,
+        plan: ScanPlan,
+        index: DeleteIndex,
+        config: &Config,
+        worker_slots: u64,
+    ) -> Result<Self, KrishivError> {
         let schema = table
             .table
             .metadata()
@@ -169,6 +181,20 @@ impl IcebergTableProvider {
 
 #[cfg(test)]
 impl IcebergTableProvider {
+    /// [`Self::open`] with the snapshot and its planned files changed by
+    /// `edit` first (states iceberg-rust's writers cannot produce); the
+    /// delete index is built from the edited plan.
+    pub(super) async fn open_edited(
+        table: &IcebergTable,
+        edit: impl FnOnce(&mut TableSnapshot, &mut ScanPlan),
+    ) -> Result<Self, KrishivError> {
+        let mut snapshot = table.snapshot(&VersionSpec::Current)?;
+        let (mut plan, _) = table.plan_files(&snapshot).await?;
+        edit(&mut snapshot, &mut plan);
+        let index = DeleteIndex::new(&plan.delete_files, &snapshot.partition_specs)?;
+        Self::from_plan(table, snapshot, plan, index, &Config::new(), 4)
+    }
+
     /// How many files a scan with the pushed filter `expr` opens.
     pub(super) fn files_read(&self, expr: PushdownExpr) -> usize {
         self.scan.pruned(&[expr]).files().len()
