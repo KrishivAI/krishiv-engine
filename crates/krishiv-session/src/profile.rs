@@ -329,7 +329,7 @@ impl DataFrame {
         keep: bool,
     ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
         let a = self.action_analysis().await?;
-        let (physical, _) = self.physical_cached(&a).await?;
+        let (physical, _) = self.physical_cached(&a, true).await?;
         self.run_profiled_plan(&a, &physical, keep).await
     }
 

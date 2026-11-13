@@ -98,18 +98,19 @@ fn cached_collect_serves_the_snapshot_not_the_source() {
     let df = s.table("t").cache();
     assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
     assert!(block_on(df.is_cached()).unwrap());
-    // Replacing the table drops what was cached from the old one, as
-    // replacing a temporary view does in Spark: a new frame reads the new
-    // rows, and the cached frame refills on its next action.
+    // Replacing the table drops the registration and what was cached from
+    // the old one, as replacing a temporary view uncaches it in Spark: both
+    // frames read the new rows, and nothing is cached any more.
     register(&s, "t", vec![99, 100, 101]);
     assert_eq!(block_on(s.table("t").count()).unwrap(), 3);
     assert!(!block_on(df.is_cached()).unwrap());
     assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![99, 100, 101]);
-    assert!(block_on(df.is_cached()).unwrap());
+    assert!(!block_on(df.is_cached()).unwrap());
+    assert_eq!(s.cache_reserved(), 0);
 }
 
 #[test]
-fn uncached_frames_do_not_fill_and_derived_frames_read_entries() {
+fn uncached_frames_do_not_fill_and_derived_frames_fill_entries() {
     let s = int_session(vec![1, 2]);
     // No `cache()`: no entry, however often the frame runs.
     let df = s.table("t");
@@ -117,22 +118,26 @@ fn uncached_frames_do_not_fill_and_derived_frames_read_entries() {
     assert!(!block_on(df.is_cached()).unwrap());
     assert_eq!(s.cache_reserved(), 0);
     // A frame derived from a cached frame is not itself cached, but its
-    // actions read the matching entry.
+    // first action materializes the registered plan (Spark's "first use
+    // fills"), before the cached frame ever ran.
     let cached = s.table("t").cache();
-    assert_eq!(block_on(cached.count()).unwrap(), 2);
     let filtered = cached.filter(col("id").gt(lit(0)));
     assert!(!block_on(filtered.is_cached()).unwrap());
-    // Both frames read the snapshot until something drops it.
+    assert_eq!(s.cache_reserved(), 0);
     assert_eq!(ids(&block_on(filtered.collect()).unwrap()), vec![1, 2]);
+    assert!(
+        s.cache_reserved() > 0,
+        "the derived frame's action filled t"
+    );
+    // An identical frame built elsewhere sees the registration too.
+    assert!(block_on(df.is_cached()).unwrap());
     assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
-    // Replacing the table drops it: both read the new table, and the cached
-    // frame refills on its next action.
+    // Replacing the table drops the registration: both read the new table.
     register(&s, "t", vec![99]);
     assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![99]);
     assert_eq!(ids(&block_on(filtered.collect()).unwrap()), vec![99]);
     assert!(!block_on(cached.is_cached()).unwrap());
-    assert_eq!(ids(&block_on(cached.collect()).unwrap()), vec![99]);
-    assert!(block_on(cached.is_cached()).unwrap());
+    assert_eq!(s.cache_reserved(), 0);
 }
 
 #[test]
@@ -198,9 +203,11 @@ fn persist_accepts_every_storage_level() {
         StorageLevel::OFF_HEAP,
     ] {
         let df = s.table("t").persist(level);
+        assert_eq!(block_on(df.storage_level()).unwrap(), level);
         assert_eq!(block_on(df.count()).unwrap(), 1);
         assert!(block_on(df.is_cached()).unwrap());
         block_on(df.unpersist()).unwrap();
+        assert_eq!(block_on(df.storage_level()).unwrap(), StorageLevel::NONE);
     }
     assert_eq!(s.cache_reserved(), 0);
 }
@@ -214,9 +221,10 @@ fn the_cap_runs_uncached_not_failed() {
     register(&s, "t", vec![1, 2]);
     let baseline = s.cache_reserved();
     let df = s.table("t").cache();
-    // One byte cannot hold the snapshot: the query still succeeds.
+    // One byte cannot hold the snapshot: the query still succeeds, and the
+    // registration stays (pending).
     assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
-    assert!(!block_on(df.is_cached()).unwrap());
+    assert!(block_on(df.is_cached()).unwrap());
     assert_eq!(s.cache_reserved(), baseline);
 }
 
@@ -240,7 +248,6 @@ fn a_running_fill_is_charged_to_the_pool_and_released_on_cancel() {
     // Dropped before the end: nothing stored, the bytes given back.
     drop(stream);
     assert_eq!(s.cache_reserved(), baseline);
-    assert!(!block_on(df.is_cached()).unwrap());
     // Run to the end, the same bytes become the stored snapshot.
     assert_eq!(block_on(df.count()).unwrap(), 4096);
     assert!(block_on(df.is_cached()).unwrap());
@@ -260,7 +267,7 @@ fn a_refused_reservation_runs_uncached_not_failed() {
     register(&s, "t", (0..4096).collect());
     let df = s.table("t").cache();
     assert_eq!(block_on(df.count()).unwrap(), 4096);
-    assert!(!block_on(df.is_cached()).unwrap());
+    assert!(block_on(df.is_cached()).unwrap(), "registered, not filled");
     assert_eq!(s.cache_reserved(), 0);
 }
 
@@ -272,16 +279,22 @@ fn refresh_table_drops_only_that_tables_entries() {
     let u = s.table("u").cache();
     assert_eq!(block_on(t.count()).unwrap(), 1);
     assert_eq!(block_on(u.count()).unwrap(), 1);
-    // Replacing `t` drops its entries and keeps `u`'s.
+    // Replacing `t` drops its registration and keeps `u`'s.
     register(&s, "t", vec![2, 3]);
     assert!(!block_on(t.is_cached()).unwrap());
     assert!(block_on(u.is_cached()).unwrap());
     assert_eq!(ids(&block_on(t.collect()).unwrap()), vec![2, 3]);
-    // REFRESH TABLE drops only that table's entries.
+    // REFRESH TABLE drops only that table's data and keeps its registration.
+    let t = s.table("t").cache();
+    assert_eq!(block_on(t.count()).unwrap(), 2);
+    assert_eq!(relation_entries(&s), 2);
     block_on(s.sql("REFRESH TABLE t")).unwrap();
-    assert!(!block_on(t.is_cached()).unwrap());
+    assert!(block_on(t.is_cached()).unwrap());
     assert!(block_on(u.is_cached()).unwrap());
+    assert_eq!(relation_entries(&s), 1, "only u's data stays");
     assert_eq!(ids(&block_on(u.collect()).unwrap()), vec![7]);
+    assert_eq!(ids(&block_on(t.collect()).unwrap()), vec![2, 3]);
+    assert_eq!(relation_entries(&s), 2, "the next action refilled t");
     // A missing table fails as in Spark, quoting the whole name.
     for sql in [
         "REFRESH TABLE nosuch",
@@ -303,7 +316,11 @@ fn clear_cache_and_uncache_table() {
     block_on(s.sql("CLEAR CACHE")).unwrap();
     assert!(!block_on(df.is_cached()).unwrap());
     assert_eq!(s.cache_reserved(), 0);
+    // CLEAR CACHE dropped the registration: running the frame caches nothing.
     assert_eq!(block_on(df.count()).unwrap(), 1);
+    assert!(!block_on(df.is_cached()).unwrap());
+    assert_eq!(s.cache_reserved(), 0);
+    let df = df.cache();
     assert!(block_on(df.is_cached()).unwrap());
     block_on(s.sql("UNCACHE TABLE t")).unwrap();
     assert!(!block_on(df.is_cached()).unwrap());
@@ -390,7 +407,8 @@ fn results_with_duplicate_column_names_run_uncached() {
         assert_eq!(left.concat(), right.concat());
         assert_eq!(left.concat().len(), 2);
     }
-    assert!(!block_on(df.is_cached()).unwrap());
+    // Registered, never filled.
+    assert!(block_on(df.is_cached()).unwrap());
     assert_eq!(s.cache_reserved(), 0);
 }
 
@@ -402,10 +420,18 @@ fn cache_table_sql_reads_the_relation_into_the_cache() {
     assert!(s.cache_reserved() > 0);
     block_on(s.sql("UNCACHE TABLE t")).unwrap();
     assert_eq!(s.cache_reserved(), 0);
-    // `LAZY` and `AS query` cache too; the query makes the temporary view first.
+    // `LAZY` only registers; the first read fills it.
     block_on(s.sql("CACHE LAZY TABLE t")).unwrap();
+    assert!(block_on(s.table("t").is_cached()).unwrap());
+    assert_eq!(s.cache_reserved(), 0);
+    assert_eq!(block_on(s.table("t").count()).unwrap(), 2);
+    let lazy = s.cache_reserved();
+    assert!(lazy > 0);
+    // `AS query` makes the temporary view first, then caches it eagerly.
+    assert_eq!(relation_entries(&s), 1);
     block_on(s.sql("CACHE TABLE doubled AS SELECT id * 2 AS d FROM t")).unwrap();
-    assert!(s.cache_reserved() > 0);
+    assert!(block_on(s.table("doubled").is_cached()).unwrap());
+    assert_eq!(relation_entries(&s), 2, "the eager count filled doubled");
     block_on(s.sql("CLEAR CACHE")).unwrap();
     assert_eq!(s.cache_reserved(), 0);
     // Refreshing a function is a no-op; refreshing a path drops file entries.
@@ -516,8 +542,11 @@ fn refresh_path_drops_file_entries() {
     let df = s.read().parquet([data.clone()]).cache();
     assert_eq!(block_on(df.count()).unwrap(), 1);
     assert!(block_on(df.is_cached()).unwrap());
+    assert!(s.cache_reserved() > 0);
     block_on(s.sql(&format!("REFRESH '{data}'"))).unwrap();
-    assert!(!block_on(df.is_cached()).unwrap());
+    // The data goes, the registration stays.
+    assert!(block_on(df.is_cached()).unwrap());
+    assert_eq!(s.cache_reserved(), 0);
 }
 
 #[test]
@@ -549,9 +578,13 @@ fn a_zero_cap_disables_caching_even_for_an_empty_result() {
     assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
     let empty = s.table("t").filter(col("id").gt(lit(100))).cache();
     assert_eq!(block_on(empty.count()).unwrap(), 0);
-    assert!(!block_on(df.is_cached()).unwrap());
-    assert!(!block_on(empty.is_cached()).unwrap());
     assert_eq!(s.cache_reserved(), 0);
+    assert!(
+        block_on(df.is_cached()).unwrap(),
+        "registered, never filled"
+    );
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
+    assert_eq!(s.cache_reserved(), 0, "nothing filled under a zero cap");
 }
 
 #[test]
@@ -563,8 +596,11 @@ fn a_fill_that_started_before_an_invalidation_is_not_stored() {
     block_on(s.sql("REFRESH TABLE t")).unwrap();
     while block_on(futures::StreamExt::next(&mut stream)).is_some() {}
     drop(stream);
-    assert!(!block_on(df.is_cached()).unwrap());
     assert_eq!(s.cache_reserved(), 0);
+    // The registration is pending again: the next action fills it.
+    assert!(block_on(df.is_cached()).unwrap());
+    assert_eq!(block_on(df.count()).unwrap(), 2);
+    assert!(s.cache_reserved() > 0);
 }
 
 #[test]
@@ -578,19 +614,276 @@ fn a_cached_frame_can_be_written_from_its_snapshot() {
     assert!(path.exists());
 }
 
-/// The same logical plan under another resolution configuration (ANSI mode)
-/// is another cache entry: the first run's snapshot is not served to it.
+/// A snapshot computed under one resolution configuration (ANSI mode) is
+/// never served under another: the registration stays (Spark's `isCached`
+/// answers for the plan), and the next action refills it. A query-clock
+/// column shows which rows were served.
 #[test]
 fn a_configuration_change_does_not_serve_the_old_snapshot() {
     let s = int_session(vec![1, 2]);
+    block_on(s.sql("SET spark.sql.session.timeZone = UTC")).unwrap();
     block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
-    let df = block_on(s.sql("SELECT id FROM t")).unwrap().cache();
-    assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
-    assert!(block_on(df.is_cached()).unwrap());
+    let df = block_on(s.sql("SELECT id, current_timestamp() AS ts FROM t"))
+        .unwrap()
+        .cache();
+    let first = rendered(&block_on(df.collect()).unwrap());
+    assert_eq!(rendered(&block_on(df.collect()).unwrap()), first);
     block_on(s.sql("SET spark.sql.ansi.enabled = true")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let second = rendered(&block_on(df.collect()).unwrap());
+    assert_ne!(
+        second, first,
+        "the snapshot of the other configuration was served"
+    );
+    assert!(block_on(df.is_cached()).unwrap());
+    assert_eq!(rendered(&block_on(df.collect()).unwrap()), second);
+}
+
+/// `persist` registers at once (Spark's `cacheQuery`): `is_cached` and
+/// `storage_level` answer from the call on, before any action, and nothing
+/// is materialized until one runs.
+#[test]
+fn registration_is_eager_and_materialization_lazy() {
+    let s = int_session(vec![1, 2]);
+    let uncached = s.table("t");
+    assert_eq!(
+        block_on(uncached.storage_level()).unwrap(),
+        StorageLevel::NONE
+    );
+    let df = s.table("t").cache();
+    assert!(block_on(df.is_cached()).unwrap());
+    assert_eq!(
+        block_on(df.storage_level()).unwrap(),
+        StorageLevel::MEMORY_AND_DISK
+    );
+    // The registry answers for the plan, not the frame.
+    assert!(block_on(uncached.is_cached()).unwrap());
+    assert_eq!(s.cache_reserved(), 0, "nothing ran yet");
+    assert_eq!(block_on(df.count()).unwrap(), 2);
+    assert!(s.cache_reserved() > 0);
+}
+
+/// A second `persist` of a cached plan keeps the first level (Spark logs
+/// "Asked to cache already cached data."); `NONE` is a no-op.
+#[test]
+fn a_second_persist_keeps_the_first_level() {
+    let s = int_session(vec![1]);
+    let df = s.table("t").persist(StorageLevel::DISK_ONLY);
+    let again = s.table("t").persist(StorageLevel::MEMORY_ONLY);
+    assert_eq!(
+        block_on(again.storage_level()).unwrap(),
+        StorageLevel::DISK_ONLY
+    );
+    assert_eq!(
+        block_on(df.storage_level()).unwrap(),
+        StorageLevel::DISK_ONLY
+    );
+    let none = s
+        .table("t")
+        .filter(col("id").gt(lit(0)))
+        .persist(StorageLevel::NONE);
+    assert!(!block_on(none.is_cached()).unwrap());
+    assert_eq!(block_on(none.storage_level()).unwrap(), StorageLevel::NONE);
+}
+
+#[test]
+fn unpersisting_an_uncached_frame_is_a_no_op() {
+    let s = int_session(vec![1]);
+    let df = s.table("t");
+    let df = block_on(df.unpersist()).unwrap();
     assert!(!block_on(df.is_cached()).unwrap());
-    assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
+    assert_eq!(s.cache_reserved(), 0);
+    // Unpersist drops the registration, filled or not.
+    let cached = s.table("t").cache();
+    block_on(cached.unpersist()).unwrap();
+    assert!(!block_on(cached.is_cached()).unwrap());
+    assert_eq!(block_on(cached.count()).unwrap(), 1);
+    assert_eq!(s.cache_reserved(), 0);
+}
+
+/// `cache()`, and `CACHE TABLE` without a level, use
+/// `spark.sql.defaultCacheStorageLevel`; `CACHE TABLE ... OPTIONS` names a
+/// level in any letter case.
+#[test]
+fn the_default_level_and_the_cache_table_option() {
+    let s = int_session(vec![1]);
+    register(&s, "u", vec![2]);
+    register(&s, "w", vec![3]);
+    block_on(s.sql("SET spark.sql.defaultCacheStorageLevel = DISK_ONLY")).unwrap();
+    let df = s.table("t").cache();
+    assert_eq!(
+        block_on(df.storage_level()).unwrap(),
+        StorageLevel::DISK_ONLY
+    );
+    block_on(s.sql("CACHE LAZY TABLE u")).unwrap();
+    assert_eq!(
+        block_on(s.table("u").storage_level()).unwrap(),
+        StorageLevel::DISK_ONLY
+    );
+    block_on(s.sql("CACHE LAZY TABLE w OPTIONS ('storageLevel' = 'memory_only_2')")).unwrap();
+    assert_eq!(
+        block_on(s.table("w").storage_level()).unwrap(),
+        StorageLevel::MEMORY_ONLY_2
+    );
+    assert_eq!(s.cache_reserved(), 0, "LAZY reads nothing");
+}
+
+/// A failed eager `CACHE TABLE v AS query` unregisters and drops the view it
+/// made, then raises the query's error (Spark's `CacheTableAsSelectExec`).
+#[test]
+fn a_failed_eager_cache_table_drops_its_view() {
+    let s = int_session(vec![1]);
+    block_on(s.sql("SET spark.sql.ansi.enabled = true")).unwrap();
+    let e = block_on(s.sql("CACHE TABLE v AS SELECT id / 0 AS q FROM t")).unwrap_err();
+    assert_eq!(e.error_class().name(), "DIVIDE_BY_ZERO", "{e}");
+    let e = block_on(s.table("v").count()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+    assert_eq!(s.cache_reserved(), 0);
+}
+
+/// A frame of a command is not cached (Spark logs "Asked to cache a plan
+/// that is inapplicable for caching").
+#[test]
+fn command_frames_are_not_registered() {
+    let s = int_session(vec![1]);
+    let df = block_on(s.sql("SET krishiv.cache.maxBytes = 1g"))
+        .unwrap()
+        .cache();
+    assert!(!block_on(df.is_cached()).unwrap());
+}
+
+/// Only one action fills a key: a second action while the first fills runs
+/// the plan itself and stores nothing.
+#[test]
+fn one_fill_per_key_while_another_action_fills() {
+    use futures::StreamExt as _;
+    let s = int_session((0..4096).collect());
+    let df = s.table("t").cache();
+    let mut first = block_on(df.execute_stream()).unwrap();
+    assert!(block_on(first.next()).unwrap().unwrap().num_rows() > 0);
+    let holding = s.cache_reserved();
+    assert!(holding > 0);
+    // The second action does not wait and does not fill.
+    assert_eq!(block_on(df.count()).unwrap(), 4096);
+    assert_eq!(s.cache_reserved(), holding, "the second action filled too");
+    // Dropping the first fill leaves the registration pending.
+    drop(first);
+    assert_eq!(s.cache_reserved(), 0);
     assert!(block_on(df.is_cached()).unwrap());
-    block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
+    assert_eq!(block_on(df.count()).unwrap(), 4096);
+    assert_eq!(s.cache_reserved(), holding.max(s.cache_reserved()));
+    assert!(s.cache_reserved() > 0);
+}
+
+/// Many concurrent actions over one registered plan store one snapshot.
+#[test]
+fn concurrent_actions_store_one_snapshot() {
+    let one = int_session((0..2048).collect());
+    let df = one.table("t").cache();
+    assert_eq!(block_on(df.count()).unwrap(), 2048);
+    let single = one.cache_reserved();
+    let s = int_session((0..2048).collect());
+    let df = s.table("t").filter(col("id").gt_eq(lit(0))).cache();
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let df = df.clone();
+            std::thread::spawn(move || block_on(df.count()).unwrap())
+        })
+        .collect();
+    for h in handles {
+        assert_eq!(h.join().unwrap(), 2048);
+    }
     assert!(block_on(df.is_cached()).unwrap());
+    assert_eq!(block_on(df.count()).unwrap(), 2048);
+    assert!(s.cache_reserved() > 0);
+    assert!(
+        s.cache_reserved() <= single * 2,
+        "more than one snapshot: {} vs {single}",
+        s.cache_reserved()
+    );
+}
+
+/// The most rows one source produced (a scan, or the output side of a
+/// breaker): a read of the 4096-row source shows 4096.
+fn source_rows(metrics: &krishiv_exec::QueryMetrics) -> u64 {
+    metrics
+        .operators
+        .values()
+        .filter(|o| format!("{:?}", o.role) == "Source")
+        .map(|o| o.metrics.rows_out)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Design P3-T083 3.6: re-use avoids recomputation, shown by operator
+/// counters. Once filled, an action over the cached plan and an action over
+/// a derived plan read only the snapshot's row, never the source's 4096.
+#[test]
+fn reuse_reads_the_snapshot_not_the_source() {
+    let s = int_session((0..4096).collect());
+    let cached = s
+        .table("t")
+        .select([lit(1).alias("one")])
+        .distinct()
+        .cache();
+    let derived = cached.select([(col("one") + lit(1)).alias("two")]);
+    // The derived frame's first action fills the cached plan (its own query
+    // reads the source), then reads the snapshot.
+    let (rows, metrics) = block_on(derived.collect_with_metrics()).unwrap();
+    assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    assert_eq!(source_rows(&metrics), 1);
+    let (_, metrics) = block_on(cached.collect_with_metrics()).unwrap();
+    assert_eq!(
+        source_rows(&metrics),
+        1,
+        "the cached plan reread the source"
+    );
+    let (_, metrics) = block_on(derived.collect_with_metrics()).unwrap();
+    assert_eq!(
+        source_rows(&metrics),
+        1,
+        "the derived plan reread the source"
+    );
+    // Unpersisted, the derived plan reads the source again.
+    block_on(cached.unpersist()).unwrap();
+    let (_, metrics) = block_on(derived.collect_with_metrics()).unwrap();
+    assert_eq!(source_rows(&metrics), 4096);
+}
+
+/// An engine write to a cached permanent table drops the data and keeps the
+/// registration (Spark's recache): `is_cached` stays true and the next
+/// action refills with the new rows.
+#[test]
+fn invalidation_keeps_the_registration() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    block_on(s.sql("CREATE TABLE p (id INT) USING parquet")).unwrap();
+    block_on(s.sql("INSERT INTO p VALUES (1)")).unwrap();
+    let df = s.table("p").cache();
+    assert_eq!(block_on(df.count()).unwrap(), 1);
+    let filled = s.cache_reserved();
+    assert!(filled > 0);
+    block_on(s.sql("INSERT INTO p VALUES (2)")).unwrap();
+    assert!(block_on(df.is_cached()).unwrap());
+    assert_eq!(s.cache_reserved(), 0);
+    assert_eq!(block_on(df.count()).unwrap(), 2);
+    assert!(s.cache_reserved() > 0, "the next action refilled it");
+    assert_eq!(relation_entries(&s), 1);
+}
+
+/// The relation cache's filled entries, from `system.caches`.
+fn relation_entries(s: &Session) -> i64 {
+    let rows = block_on(
+        block_on(s.sql("SELECT entries FROM system.caches WHERE cache = 'relation'"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    rows[0]
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>()
+        .value(0)
 }

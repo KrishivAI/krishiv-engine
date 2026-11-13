@@ -7,14 +7,18 @@ use std::task::{Context, Poll};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
+use std::collections::BTreeMap;
+
 use krishiv_common::error::KrishivError;
-use krishiv_plan::cache::CacheKey;
+use krishiv_plan::TableVersion;
+use krishiv_plan::analyzer::{ResolutionConf, TableIdent};
 
 use crate::cache::RelationCache;
 use crate::session::RecordBatchStream;
 
 /// A result stream that keeps its batches for the relation cache. When the
-/// inner stream ends, the batches are stored under the fill's key; a cap
+/// inner stream ends, the batches are stored for the registration the fill
+/// claimed; a cap
 /// overrun stores nothing, so the query stays uncached instead of failing.
 /// An error, a cancellation (dropping before the end) or a mid-stream schema
 /// change stores nothing either: a cached relation is one complete snapshot,
@@ -25,7 +29,13 @@ use crate::session::RecordBatchStream;
 pub(super) struct FillStream {
     pub(super) inner: RecordBatchStream,
     pub(super) cache: Arc<RelationCache>,
-    pub(super) key: CacheKey,
+    /// The fill's hold on its registration: dropped with the stream (an
+    /// error, a cancellation, an abandoned fill), the registration is
+    /// pending again.
+    pub(super) claim: Option<crate::cache::FillClaim>,
+    /// The table versions and resolution configuration of the rows.
+    pub(super) pins: BTreeMap<TableIdent, TableVersion>,
+    pub(super) conf: ResolutionConf,
     /// The first batch's schema: what the snapshot is stored as. Operators
     /// may widen the analysis types (large string views, ...), so the cached
     /// table carries the executed schema, as the scan of a created
@@ -33,8 +43,6 @@ pub(super) struct FillStream {
     /// the fallback for an empty result.
     pub(super) schema: Option<SchemaRef>,
     pub(super) fallback: SchemaRef,
-    pub(super) reads_files: bool,
-    pub(super) tables: Vec<String>,
     pub(super) batches: Vec<RecordBatch>,
     /// Bytes of `batches`.
     pub(super) bytes: usize,
@@ -67,6 +75,7 @@ impl futures::Stream for FillStream {
                     // A stream that changes shape mid-way is not one snapshot.
                     self.batches.clear();
                     self.reservation = None;
+                    self.claim = None;
                     self.schema = None;
                     self.filled = true;
                     return Poll::Ready(Some(Ok(batch)));
@@ -80,6 +89,7 @@ impl futures::Stream for FillStream {
                 if !reserved {
                     self.batches = Vec::new();
                     self.reservation = None;
+                    self.claim = None;
                     self.schema = None;
                     self.filled = true;
                     return Poll::Ready(Some(Ok(batch)));
@@ -99,19 +109,21 @@ impl futures::Stream for FillStream {
                         .take()
                         .unwrap_or_else(|| Arc::clone(&this.fallback));
                     let cache = Arc::clone(&this.cache);
-                    let Some(reservation) = this.reservation.take() else {
+                    let (Some(reservation), Some(claim)) =
+                        (this.reservation.take(), this.claim.take())
+                    else {
                         return Poll::Ready(None);
                     };
                     cache.insert(
-                        this.key.clone(),
                         schema,
                         batches,
-                        this.reads_files,
-                        std::mem::take(&mut this.tables),
+                        std::mem::take(&mut this.pins),
+                        this.conf,
                         crate::cache::FillLimits {
                             generation: this.generation,
                             cap: this.cap,
                             reservation,
+                            claim,
                         },
                     );
                 }
@@ -120,6 +132,7 @@ impl futures::Stream for FillStream {
             Poll::Ready(Some(Err(e))) => {
                 self.batches.clear();
                 self.reservation = None;
+                self.claim = None;
                 self.filled = true;
                 Poll::Ready(Some(Err(e)))
             }

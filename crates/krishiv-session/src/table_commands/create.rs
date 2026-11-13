@@ -559,7 +559,7 @@ impl Session {
         if self.temp_entry_of(name, env) {
             // A temporary view shadows a table of the same bare name, and `DROP TABLE` drops it, as in Spark.
             self.state.catalog.drop_table(&name.name);
-            self.state.cache.invalidate_table(&name.name);
+            self.state.cache.uncache_table(&name.name);
         } else if let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name) {
             if table.view.is_some() {
                 return Err(WrongCommandForObjectType {

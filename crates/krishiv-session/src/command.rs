@@ -371,7 +371,7 @@ impl Session {
                     .map(str::to_owned),
             },
         );
-        self.state.cache.invalidate_table(&v.name.value);
+        self.state.cache.uncache_table(&v.name.value);
         self.empty_frame().await
     }
 
@@ -389,7 +389,7 @@ impl Session {
                 .exists(&v.name.value, env.analysis.conf.case_sensitive)
         {
             self.state.catalog.drop_table(&v.name.value);
-            self.state.cache.invalidate_table(&v.name.value);
+            self.state.cache.uncache_table(&v.name.value);
         } else {
             self.drop_bare_stored_view(&v.name.value, v.if_exists, env)?;
         }
@@ -434,89 +434,6 @@ impl Session {
                 .map(|_| format!("{}.{}", fold(namespace), fold(name))),
             _ => None,
         }
-    }
-
-    /// Runs `CACHE [LAZY] TABLE name [AS query]`, `CLEAR CACHE` and `UNCACHE TABLE [IF EXISTS] name`,
-    /// all returning an empty frame as in Spark. `CACHE TABLE` reads the relation once into the
-    /// cache (`LAZY` and `OPTIONS` change nothing observable here); with `AS query` it first creates
-    /// the temporary view `name`.
-    ///
-    /// # Errors
-    /// `TABLE_OR_VIEW_NOT_FOUND` for `UNCACHE TABLE` of a missing table
-    /// without `IF EXISTS`; `KRISHIV_UNSUPPORTED_FEATURE` for `CACHE TABLE`.
-    pub(crate) async fn exec_cache(
-        &self,
-        c: &Cache,
-        original: &str,
-        ids: &[Span],
-    ) -> Result<DataFrame, KrishivError> {
-        match &c.kind {
-            CacheKind::Clear => {
-                self.clear_cache();
-            }
-            CacheKind::Uncache {
-                if_exists, name, ..
-            } => {
-                let Some(parts) = ddl_table_parts(name) else {
-                    return Err(KrishivUnsupportedFeature {
-                        feature: "UNCACHE TABLE with a dynamic table name".to_owned(),
-                    }
-                    .into());
-                };
-                if let Some(key) = self.cache_key(&parts) {
-                    self.uncache_table(&key);
-                } else if !if_exists {
-                    return Err(table_not_found(&parts));
-                }
-            }
-            CacheKind::Cache {
-                name,
-                query,
-                options,
-                ..
-            } => {
-                // The options are never resolved: a `secret(..)` value would be kept as its text.
-                crate::access::refuse_secret_options(options, original)?;
-                let Some(parts) = ddl_table_parts(name) else {
-                    return Err(KrishivUnsupportedFeature {
-                        feature: "CACHE TABLE with a dynamic table name".to_owned(),
-                    }
-                    .into());
-                };
-                // `CACHE TABLE t AS query` first makes the temporary view `t`.
-                if let Some(q) = query {
-                    let [view] = parts.as_slice() else {
-                        return Err(table_not_found(&parts));
-                    };
-                    let body = original.get(q.span.start..q.span.end).unwrap_or_default();
-                    let prefix = format!("CREATE TEMPORARY VIEW `{}` AS ", view.replace('`', "``"));
-                    // The body's substituted `IDENTIFIER(..)` names, at their place in `create`.
-                    let spans = crate::identifier_clause::spans_within(ids, q.span)
-                        .into_iter()
-                        .map(|s| Span::new(s.start + prefix.len(), s.end + prefix.len()))
-                        .collect();
-                    let create = format!("{prefix}{body}");
-                    Box::pin(self.sql_here_spanned(&create, spans)).await?;
-                }
-                // The relation is cached by reading it once: `LAZY` is the same here, since a
-                // snapshot is taken the first time anything reads it either way.
-                let frame = self
-                    .table(
-                        &parts
-                            .iter()
-                            .map(|p| format!("`{}`", p.replace('`', "``")))
-                            .collect::<Vec<_>>()
-                            .join("."),
-                    )
-                    .cache();
-                // Counting reads every batch into the cache without keeping the rows.
-                frame.count().await?;
-            }
-            _ => {
-                return Err(crate::session::internal("unknown CACHE form".to_owned()));
-            }
-        }
-        self.empty_frame().await
     }
 
     /// Runs `REFRESH TABLE name`, `REFRESH FUNCTION name` and `REFRESH
@@ -1983,5 +1900,6 @@ pub(crate) fn contains_subquery(e: &Expr) -> bool {
     })
 }
 
+mod cache;
 #[cfg(test)]
 mod tests;

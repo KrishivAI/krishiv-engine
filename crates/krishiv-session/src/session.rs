@@ -582,7 +582,13 @@ impl Session {
         let class = krishiv_sql::classify(&statement);
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
-        let df = self.run_statement(statement, env, query, &redacted).await?;
+        // The frame of a command is not cached by `persist` (Spark's `cacheQuery`).
+        let command = !matches!(
+            statement,
+            Statement::Query(_) | Statement::ExecuteImmediate(_)
+        );
+        let mut df = self.run_statement(statement, env, query, &redacted).await?;
+        df.command = command;
         // Whatever frame the statement returns (a command's result too) shows the statement's
         // text and class when it runs.
         df.with_statement(&redacted, class.name());
@@ -881,9 +887,9 @@ impl Session {
                 table: Arc::new(table),
             },
         );
-        // Replacing a table drops what was cached from the old one, as
-        // replacing a temporary view does in Spark.
-        self.state.cache.invalidate_table(name);
+        // Replacing a table uncaches what was registered over the old one,
+        // as replacing a temporary view does in Spark.
+        self.state.cache.uncache_table(name);
         Ok(())
     }
 
@@ -979,13 +985,13 @@ impl Session {
             return false;
         }
         let dropped = self.state.catalog.drop_table(name);
-        self.state.cache.invalidate_table(name);
+        self.state.cache.uncache_table(name);
         dropped
     }
 
-    /// Drops every cached relation (Spark's `CLEAR CACHE` and
-    /// `spark.catalog.clearCache`): later actions run uncached, and the
-    /// `relation_cache` pool returns to baseline.
+    /// Removes every cached relation, registration and data (Spark's `CLEAR
+    /// CACHE` and `spark.catalog.clearCache`): later actions run uncached,
+    /// and the `relation_cache` pool returns to baseline.
     ///
     /// ```
     /// # let session = krishiv_session::Session::new()?;
@@ -996,8 +1002,9 @@ impl Session {
         self.state.cache.clear();
     }
 
-    /// Drops the cached relations reading the table `name` (Spark's
-    /// `UNCACHE TABLE`): later actions over it run uncached.
+    /// Removes the cached relations reading the table `name`, registration
+    /// and data (Spark's `UNCACHE TABLE`, `cascade = true`): later actions
+    /// over it run uncached.
     ///
     /// ```
     /// # let session = krishiv_session::Session::new()?;
@@ -1005,12 +1012,13 @@ impl Session {
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     pub fn uncache_table(&self, name: &str) {
-        self.state.cache.invalidate_table(name);
+        self.state.cache.uncache_table(name);
     }
 
-    /// Drops the cached relations reading the table `name` (Spark's
-    /// `REFRESH TABLE`): the next action reads the table again. Unlike
-    /// `CLEAR CACHE`, other tables' entries survive.
+    /// Drops the data of the cached relations reading the table `name`
+    /// (Spark's `REFRESH TABLE`): they stay registered, and the next action
+    /// reads the table again and refills them. Unlike `CLEAR CACHE`, other
+    /// tables' entries survive.
     ///
     /// ```
     /// # let session = krishiv_session::Session::new()?;

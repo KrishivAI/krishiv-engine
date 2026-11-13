@@ -17,7 +17,6 @@ use futures::StreamExt;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{AnalyzedPlan, TableColumn};
-use krishiv_plan::cache::CacheKey;
 use krishiv_plan::{
     Expr, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode,
     ReadSource, SetOperation,
@@ -30,71 +29,12 @@ use crate::{cache::RelationCache, run_site::DF_SOURCE};
 
 mod fill_stream;
 mod geo_gate;
+mod persist;
+mod storage_level;
 mod traced;
 
 use fill_stream::FillStream;
-
-/// A storage level for [`DataFrame::persist`], as PySpark's
-/// `StorageLevel`. Every level maps to memory: the relation cache holds
-/// Arrow batches under the `relation_cache` pool, so a level asking for
-/// disk behaves like its memory-only counterpart for now (disk levels
-/// spill there later).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StorageLevel {
-    /// Keep entries on disk (accepted; stored in memory for now).
-    pub use_disk: bool,
-    /// Keep entries in memory.
-    pub use_memory: bool,
-    /// Keep entries off-heap (accepted; stored in memory for now).
-    pub use_off_heap: bool,
-    /// Keep entries deserialized.
-    pub deserialized: bool,
-    /// How many copies to keep (accepted; one copy is kept for now).
-    pub replication: i32,
-}
-
-impl StorageLevel {
-    /// `MEMORY_ONLY`: one in-memory copy.
-    pub const MEMORY_ONLY: Self = Self {
-        use_disk: false,
-        use_memory: true,
-        use_off_heap: false,
-        deserialized: true,
-        replication: 1,
-    };
-    /// `MEMORY_ONLY_2`: accepted as `MEMORY_ONLY`.
-    pub const MEMORY_ONLY_2: Self = Self {
-        replication: 2,
-        ..Self::MEMORY_ONLY
-    };
-    /// `MEMORY_AND_DISK`: one in-memory copy (`cache`'s level).
-    pub const MEMORY_AND_DISK: Self = Self {
-        use_disk: true,
-        ..Self::MEMORY_ONLY
-    };
-    /// `MEMORY_AND_DISK_2`: accepted as `MEMORY_AND_DISK`.
-    pub const MEMORY_AND_DISK_2: Self = Self {
-        use_disk: true,
-        ..Self::MEMORY_ONLY_2
-    };
-    /// `DISK_ONLY`: accepted as `MEMORY_ONLY`.
-    pub const DISK_ONLY: Self = Self {
-        use_disk: true,
-        use_memory: false,
-        deserialized: false,
-        ..Self::MEMORY_ONLY
-    };
-    /// `DISK_ONLY_2`: accepted as `MEMORY_ONLY`.
-    pub const DISK_ONLY_2: Self = Self {
-        replication: 2,
-        ..Self::DISK_ONLY
-    };
-    /// `OFF_HEAP`: accepted as `MEMORY_ONLY`.
-    pub const OFF_HEAP: Self = Self {
-        use_off_heap: true,
-        ..Self::MEMORY_ONLY
-    };
-}
+pub use storage_level::StorageLevel;
 
 /// How [`DataFrame::join`] combines rows (Spark's `how`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,48 +92,78 @@ pub(crate) struct Analysis {
 
 /// What an action stores into the relation cache when its stream completes.
 pub(crate) enum CacheFill {
-    /// This frame asked for no cache, or the whole plan already hit.
+    /// The plan is not registered, its snapshot served it, or another
+    /// action fills it.
     No,
-    /// Materialize the stream's batches under `key` when it completes.
-    Fill {
-        key: CacheKey,
-        fallback: SchemaRef,
-        reads_files: bool,
-        tables: Vec<String>,
-        /// The cache's invalidation generation before the query was analyzed.
-        generation: u64,
-        /// The query's own `krishiv.cache.maxBytes`.
-        cap: usize,
-    },
+    /// Materialize the stream's batches for the registration `claim` holds
+    /// when it completes.
+    Fill(Box<Fill>),
+}
+
+/// A fill of one registration from a result stream.
+pub(crate) struct Fill {
+    claim: crate::cache::FillClaim,
+    fallback: SchemaRef,
+    /// The cache's invalidation generation before the query was analyzed.
+    generation: u64,
+    /// The query's own `krishiv.cache.maxBytes`.
+    cap: usize,
+    /// The table versions and resolution configuration the rows are
+    /// computed under.
+    pins: BTreeMap<krishiv_plan::analyzer::TableIdent, krishiv_plan::TableVersion>,
+    conf: krishiv_plan::analyzer::ResolutionConf,
 }
 
 impl CacheFill {
+    /// A fill of `claim` by the query `a` whose output is `output`.
+    fn of(
+        claim: crate::cache::FillClaim,
+        a: &Analysis,
+        output: &[krishiv_plan::BoundColumn],
+    ) -> Self {
+        let fields: Vec<_> = output
+            .iter()
+            .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
+            .collect();
+        Self::Fill(Box::new(Fill {
+            claim,
+            fallback: Arc::new(Schema::new(fields)),
+            generation: a.env.cache_generation,
+            cap: a.env.cache_cap,
+            pins: a.analyzed.pins.clone(),
+            conf: a.analyzed.context.conf,
+        }))
+    }
+
     /// `stream`, filling `cache` when it ends cleanly (see [`FillStream`]).
     fn fill(self, stream: RecordBatchStream, cache: &Arc<RelationCache>) -> RecordBatchStream {
         match self {
             Self::No => stream,
-            Self::Fill {
-                key,
-                fallback,
-                reads_files,
-                tables,
-                generation,
-                cap,
-            } => Box::pin(FillStream {
-                inner: stream,
-                cache: Arc::clone(cache),
-                key,
-                schema: None,
-                fallback,
-                reads_files,
-                tables,
-                batches: Vec::new(),
-                bytes: 0,
-                cap,
-                generation,
-                reservation: Some(cache.reserve_fill()),
-                filled: false,
-            }),
+            Self::Fill(fill) => {
+                let Fill {
+                    claim,
+                    fallback,
+                    generation,
+                    cap,
+                    pins,
+                    conf,
+                } = *fill;
+                Box::pin(FillStream {
+                    inner: stream,
+                    cache: Arc::clone(cache),
+                    claim: Some(claim),
+                    pins,
+                    conf,
+                    schema: None,
+                    fallback,
+                    batches: Vec::new(),
+                    bytes: 0,
+                    cap,
+                    generation,
+                    reservation: Some(cache.reserve_fill()),
+                    filled: false,
+                })
+            }
         }
     }
 }
@@ -225,10 +195,10 @@ pub struct DataFrame {
     /// An error found while building the frame (an invalid table name),
     /// raised by its first action, as Spark Connect raises it.
     invalid: Option<KrishivError>,
-    /// The storage level a `cache` or `persist` asked for: the next action
-    /// materializes this plan into the relation cache. Derived frames do
-    /// not inherit it, but their actions still read matching entries.
-    cache_request: Option<StorageLevel>,
+    /// Whether this is the frame of a command statement (`SET`, DDL, ...):
+    /// `persist` of it registers nothing, as Spark's `cacheQuery` refuses a
+    /// command plan.
+    pub(crate) command: bool,
     /// What the frame's actions say on their `krishiv.query` span: set for
     /// a frame `Session::sql` returned, absent for one a transformation
     /// built.
@@ -261,7 +231,7 @@ impl DataFrame {
             plan,
             analysis: Arc::default(),
             invalid: None,
-            cache_request: None,
+            command: false,
             trace: None,
             keep: Vec::new(),
         }
@@ -289,7 +259,7 @@ impl DataFrame {
             plan: Arc::new(plan),
             analysis: Arc::default(),
             invalid: self.invalid.clone(),
-            cache_request: None,
+            command: false,
             trace: None,
             keep: self.keep.clone(),
         }
@@ -1195,7 +1165,17 @@ impl DataFrame {
         &self,
         a: &Arc<Analysis>,
     ) -> Result<Option<AnalyzedPlan>, KrishivError> {
-        let Some(sub) = self.session.state.cache.substitute(&a.analyzed) else {
+        let substituted = self.session.state.cache.substitute(&a.analyzed);
+        self.cache_planned(a, substituted)
+    }
+
+    /// `a`'s plan as `substituted`, with its snapshots pinned for the query.
+    fn cache_planned(
+        &self,
+        a: &Arc<Analysis>,
+        substituted: Option<crate::cache::Substituted>,
+    ) -> Result<Option<AnalyzedPlan>, KrishivError> {
+        let Some(sub) = substituted else {
             return Ok(None);
         };
         // The query keeps its snapshots: clearing the cache before it is
@@ -1210,16 +1190,27 @@ impl DataFrame {
     }
 
     /// The physical plan with every cached (sub)plan substituted, and what
-    /// to fill into the cache when the stream completes: the key and the
-    /// snapshot shape, or `None` when this frame asked for no cache or the
-    /// whole plan already hit.
+    /// to fill into the cache when the stream completes. With `fills`, the
+    /// registered proper subtrees whose data is missing are filled first,
+    /// each as its own query, and a registered whole plan whose data is
+    /// missing is filled from the result ([`CacheFill::Fill`]); without, the
+    /// plan only reads what is filled (a write that holds its admission
+    /// permit, a dry check).
     pub(crate) async fn physical_cached(
         &self,
         a: &Arc<Analysis>,
+        fills: bool,
     ) -> Result<(krishiv_exec::planner::PhysicalPlan, CacheFill), KrishivError> {
-        let key = CacheKey::of(&a.analyzed);
-        let hit = self.session.state.cache.lookup(&key).is_some();
-        let planned = match self.cache_substituted(a) {
+        self.session.register_pending().await;
+        if fills {
+            self.fill_subtrees(a).await;
+        }
+        let (substituted, claim) =
+            self.session
+                .state
+                .cache
+                .substitute_claiming(&a.analyzed, true, fills);
+        let planned = match self.cache_planned(a, substituted) {
             Ok(owned) => {
                 let analyzed = owned.as_ref().unwrap_or(&a.analyzed);
                 self.session.physical(analyzed, &a.env).await
@@ -1240,29 +1231,9 @@ impl DataFrame {
                 return Err(error);
             }
         };
-        let fill = if hit || self.cache_request.is_none() {
-            CacheFill::No
-        } else {
-            let fields: Vec<_> = a
-                .analyzed
-                .output
-                .iter()
-                .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
-                .collect();
-            CacheFill::Fill {
-                key,
-                fallback: Arc::new(Schema::new(fields)),
-                reads_files: a.analyzed.reads_files,
-                generation: a.env.cache_generation,
-                cap: a.env.cache_cap,
-                tables: {
-                    let mut tables = crate::cache::read_tables(a.analyzed.plan.root());
-                    tables.extend(crate::cache::unresolved_tables(&self.plan));
-                    tables.sort();
-                    tables.dedup();
-                    tables
-                },
-            }
+        let fill = match claim {
+            Some(claim) => CacheFill::of(claim, a, &a.analyzed.output),
+            None => CacheFill::No,
         };
         Ok((physical, fill))
     }
@@ -1311,94 +1282,6 @@ impl DataFrame {
             rows += batch?.num_rows() as u64;
         }
         Ok(rows)
-    }
-
-    /// Caches this frame's rows in memory (PySpark's `cache`, Spark's
-    /// `MEMORY_AND_DISK` default): the next action materializes the plan
-    /// into the session's relation cache, and later actions of this or any
-    /// frame with the same result read the snapshot instead of recomputing
-    /// it. Materialization is lazy and all-or-nothing; when the snapshot
-    /// would exceed `krishiv.cache.maxBytes` the query runs uncached.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
-    /// # s.register_batches("t", schema, vec![])?;
-    /// let df = s.table("t").cache();
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn cache(&self) -> Self {
-        self.persist(StorageLevel::MEMORY_AND_DISK)
-    }
-
-    /// Caches this frame's rows at `level` (PySpark's `persist`): every
-    /// level maps to memory for now (see [`StorageLevel`]).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
-    /// # s.register_batches("t", schema, vec![])?;
-    /// let df = s.table("t").persist(krishiv_session::StorageLevel::DISK_ONLY);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn persist(&self, level: StorageLevel) -> Self {
-        Self {
-            cache_request: Some(level),
-            ..self.clone()
-        }
-    }
-
-    /// Drops this frame's cached snapshot, if any (PySpark's `unpersist`),
-    /// returning the pool memory to baseline. Frames derived from this one
-    /// are unaffected: they read the cache only while an entry matches.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
-    /// # s.register_batches("t", schema, vec![])?;
-    /// let df = futures::executor::block_on(s.table("t").cache().unpersist())?;
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    ///
-    /// # Errors
-    /// Spark's analysis errors.
-    pub async fn unpersist(&self) -> Result<Self, KrishivError> {
-        let df = self.clone();
-        self.session
-            .on_executor(async move {
-                let a = df.analysis().await?;
-                df.session.state.cache.remove(&CacheKey::of(&a.analyzed));
-                Ok(Self {
-                    cache_request: None,
-                    ..df
-                })
-            })
-            .await
-    }
-
-    /// Whether this frame's plan is cached now: an entry matches it, under
-    /// this principal and policy version.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
-    /// # s.register_batches("t", schema, vec![])?;
-    /// assert!(!futures::executor::block_on(s.table("t").is_cached())?);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    ///
-    /// # Errors
-    /// Spark's analysis errors.
-    pub async fn is_cached(&self) -> Result<bool, KrishivError> {
-        let df = self.clone();
-        self.session
-            .on_executor(async move {
-                let a = df.analysis().await?;
-                Ok(df.session.state.cache.contains(&CacheKey::of(&a.analyzed)))
-            })
-            .await
     }
 
     /// The warnings analysing and planning the query raise: hints Spark
@@ -1755,7 +1638,7 @@ impl DataFrame {
                     partitions: Some(Default::default()),
                 },
             );
-            self.session.state.cache.invalidate_table(name);
+            self.session.state.cache.uncache_table(name);
             return Ok(());
         }
         // Any other view snapshots its input: the analyzed plan is stored,
@@ -1772,7 +1655,7 @@ impl DataFrame {
             .state
             .catalog
             .put_view(name, expanded, columns, pins, new_pins);
-        self.session.state.cache.invalidate_table(name);
+        self.session.state.cache.uncache_table(name);
         Ok(())
     }
 }

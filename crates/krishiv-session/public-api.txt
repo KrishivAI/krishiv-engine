@@ -344,6 +344,7 @@ pub async fn krishiv_session::DataFrame::schema(&self) -> core::result::Result<a
 pub fn krishiv_session::DataFrame::select(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
 pub fn krishiv_session::DataFrame::select_expr(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::sort(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub async fn krishiv_session::DataFrame::storage_level(&self) -> core::result::Result<krishiv_session::StorageLevel, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::subtract(&self, &Self) -> Self
 pub fn krishiv_session::DataFrame::to_df(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> Self
 pub fn krishiv_session::DataFrame::union(&self, &Self) -> Self
@@ -706,10 +707,12 @@ pub krishiv_session::StorageLevel::use_off_heap: bool
 impl krishiv_session::StorageLevel
 pub const krishiv_session::StorageLevel::DISK_ONLY: Self
 pub const krishiv_session::StorageLevel::DISK_ONLY_2: Self
+pub const krishiv_session::StorageLevel::DISK_ONLY_3: Self
 pub const krishiv_session::StorageLevel::MEMORY_AND_DISK: Self
 pub const krishiv_session::StorageLevel::MEMORY_AND_DISK_2: Self
 pub const krishiv_session::StorageLevel::MEMORY_ONLY: Self
 pub const krishiv_session::StorageLevel::MEMORY_ONLY_2: Self
+pub const krishiv_session::StorageLevel::NONE: Self
 pub const krishiv_session::StorageLevel::OFF_HEAP: Self
 impl core::clone::Clone for krishiv_session::StorageLevel
 pub fn krishiv_session::StorageLevel::clone(&self) -> krishiv_session::StorageLevel

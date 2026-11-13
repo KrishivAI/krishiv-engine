@@ -842,7 +842,7 @@ impl Session {
             },
         );
         // A replaced view must not keep serving the rows of the old one.
-        self.state.cache.invalidate_table(name);
+        self.state.cache.uncache_table(name);
         self.empty_frame().await
     }
 
@@ -862,7 +862,7 @@ impl Session {
         let cs = self.query_env().analysis.conf.case_sensitive;
         if self.state.catalog.exists(&key, cs) {
             self.state.catalog.drop_table(&key);
-            self.state.cache.invalidate_table(name);
+            self.state.cache.uncache_table(name);
             return Some(Ok(()));
         }
         Some(if if_exists {
@@ -1755,7 +1755,7 @@ fn overflow_in_table_insert(
 
 /// `OPTIONS (...)` / `TBLPROPERTIES (...)` as text pairs, keys lower-cased
 /// for options as Spark does not (kept as written).
-fn options_of(options: &[TableOption], original: &str) -> BTreeMap<String, String> {
+pub(crate) fn options_of(options: &[TableOption], original: &str) -> BTreeMap<String, String> {
     options
         .iter()
         .map(|o| {

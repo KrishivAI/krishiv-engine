@@ -9,7 +9,6 @@ use std::sync::{Arc, PoisonError};
 use arrow_array::RecordBatch;
 use futures::StreamExt;
 use krishiv_common::error::KrishivError;
-use krishiv_plan::cache::CacheKey;
 
 use super::DataFrame;
 use crate::session::RecordBatchStream;
@@ -25,6 +24,8 @@ impl DataFrame {
         async {
             // A closed session answers nothing, not even from the result cache.
             self.session.check_open()?;
+            // `persist` calls made before this action are registered first.
+            self.session.register_pending().await;
             // Before the query is analyzed, so an invalidation that runs while it executes keeps
             // its rows out of the result cache.
             let generation = self.session.state.runtime.results.generation();
@@ -34,22 +35,13 @@ impl DataFrame {
                 .await?;
             // The reads were authorized by the analysis: a hit serves only what this principal's
             // own run of the query would return.
-            // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
-            // snapshot is filled from the run, whatever the shared store holds.
+            // A plan that uses a registered relation (`cache()`, `persist()`) runs the query: its
+            // snapshot is read or filled from the run, whatever the shared store holds, and the
+            // rows then depend on this session's state: neither served from nor stored into the
+            // shared cache.
             let result = crate::result_cache::settings(&a.env)
-                .filter(|_| self.cache_request.is_none())
                 .and_then(|settings| self.session.result_key(&a).map(|key| (settings, key)))
-                // A cached relation substituted into the plan makes the rows depend on this
-                // session's state: neither served from nor stored into the shared cache.
-                .filter(|_| {
-                    !self.session.state.cache.would_substitute(&a.analyzed)
-                        && self
-                            .session
-                            .state
-                            .cache
-                            .lookup(&CacheKey::of(&a.analyzed))
-                            .is_none()
-                });
+                .filter(|_| !self.session.state.cache.uses_registered(&a.analyzed));
             if let Some((settings, key)) = &result
                 && let Some((batches, _age)) =
                     self.session.state.runtime.results.lookup(key, settings.ttl)
@@ -71,7 +63,7 @@ impl DataFrame {
                 });
             }
             let (physical, fill) = self
-                .physical_cached(&a)
+                .physical_cached(&a, true)
                 .instrument(tracing::info_span!("krishiv.plan"))
                 .await?;
             // The execution span stays open while the rows are produced and read: it closes when
@@ -148,7 +140,7 @@ impl DataFrame {
             .on_executor(
                 async move {
                     let a = df.action_analysis().await?;
-                    let (physical, fill) = df.physical_cached(&a).await?;
+                    let (physical, fill) = df.physical_cached(&a, true).await?;
                     let (stream, query) = df.session.run_with_query(&physical, &a.env).await?;
                     let mut stream = fill.fill(stream, &df.session.state.cache);
                     let mut out = Vec::new();

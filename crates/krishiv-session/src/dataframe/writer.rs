@@ -169,8 +169,11 @@ impl DataFrameWriter {
                 let written = async {
                     let a = df.action_analysis().await?;
                     geo_gate::check(&a.analyzed.output, &target.format)?;
-                    // A write reads the cache like any other action.
-                    let (physical, _) = df.physical_cached(&a).await?;
+                    // A write reads the cache like any other action, and fills the registered
+                    // subplans it uses unless it holds its admission permit already (a fill is a
+                    // query of its own, admitted on its own) or only checks.
+                    let fills = !dry && admitted.is_none();
+                    let (physical, _) = df.physical_cached(&a, fills).await?;
                     let types: Vec<_> = a
                         .analyzed
                         .output
