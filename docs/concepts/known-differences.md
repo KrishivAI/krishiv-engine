@@ -238,3 +238,16 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
   expose server internals. A client that asks for the server stack trace gets the root error's class line only. The
   causes of an error are sent with the parameters of server-internal error classes redacted, as their own status would
   be. Errors of a Connect `Sql` relation carry no SQL query context yet.
+- **CloneSession.** The clone gets copies of the configuration, temporary views, temporary functions, variables,
+  current catalog and namespace, and the session's artifacts (charged to the clone's
+  `krishiv.connect.artifacts.maxBytes` and to `maxTotalBytes`; a copy that does not fit fails with
+  `KRISHIV_ARTIFACT_LIMIT` and creates no session). Differences from Spark: Rust UDFs (`register_udf`) are shared
+  with the clone rather than copied; global temporary views are per session in Krishiv, so the clone gets a copy and
+  the two diverge (Spark shares them); cached relations are not copied (Spark's cache is shared by both sessions); a
+  clone counts against `krishiv.connect.maxSessions` and `maxSessionsPerPrincipal` (`KRISHIV_SESSION_LIMIT`), which
+  Spark does not check; a target id another principal holds answers `INVALID_HANDLE.SESSION_NOT_FOUND`; and a
+  target created by a racing request while the clone is made fails with
+  `INVALID_CLONE_SESSION_REQUEST.TARGET_SESSION_ID_ALREADY_EXISTS` where Spark returns the racing session.
+- **GetStatus** ignores request and operation extensions (Spark hands them to
+  `spark.connect.extensions.getStatus.classes` plugins; Krishiv has none). A session remembers the final state of at
+  most 1,000 ended operations, each for 30 minutes after its last lookup; Spark keeps every one for the 30 minutes.
