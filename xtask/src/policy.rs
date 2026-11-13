@@ -63,6 +63,16 @@ impl DiffArgs {
         Ok(out.lines().map(str::to_owned).collect())
     }
 
+    /// Paths the range modifies, for the changelog-fragment check.
+    ///
+    /// # Errors
+    /// Returns the git failure message.
+    pub fn git_modified_files(&self) -> Result<Vec<String>, String> {
+        let range = format!("{}...{}", self.base, self.head);
+        let out = self.git(&["diff", "--name-only", "--diff-filter=M", &range])?;
+        Ok(out.lines().map(str::to_owned).collect())
+    }
+
     /// The text of `path` at the head of the range.
     ///
     /// # Errors

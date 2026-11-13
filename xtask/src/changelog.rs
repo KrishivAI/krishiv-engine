@@ -92,6 +92,26 @@ pub fn check(
     ))
 }
 
+/// The fragments a pull request edits: each must still hold text at the head.
+///
+/// # Errors
+/// Returns the first edited fragment that is empty or unreadable.
+pub fn check_modified(
+    modified: &[&str],
+    read: impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    match modified
+        .iter()
+        .filter(|p| is_fragment_path(p))
+        .find(|p| read(p).is_none_or(|t| t.trim().is_empty()))
+    {
+        Some(empty) => Err(format!(
+            "{empty} is empty after this change: write one or two lines a user can read, or delete the fragment"
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Renders fragments as the sections of a release, in the fixed order; empty sections are left out.
 #[must_use]
 pub fn render_sections(fragments: &[Fragment]) -> String {
@@ -179,6 +199,10 @@ pub fn insert_release(changelog: &str, section: &str) -> Result<String, String> 
 pub fn run_check(args: &DiffArgs, labels: &[&str]) -> Result<(), String> {
     let added = args.git_added_files()?;
     let added: Vec<&str> = added.iter().map(String::as_str).collect();
+    // An edited fragment must stay readable too: `assemble` rejects an empty one whatever the label says.
+    let modified = args.git_modified_files()?;
+    let modified: Vec<&str> = modified.iter().map(String::as_str).collect();
+    check_modified(&modified, |p| args.git_show_head(p).ok())?;
     check(&added, labels, |p| args.git_show_head(p).ok())?;
     println!("changelog: OK");
     Ok(())
@@ -397,6 +421,16 @@ mod tests {
     }
 
     #[test]
+    fn an_edited_fragment_may_not_be_emptied() {
+        let text = |_: &str| Some("A line.".to_owned());
+        let blank = |_: &str| Some("\n".to_owned());
+        assert!(check_modified(&["changelog.d/1.fixed.md"], text).is_ok());
+        assert!(check_modified(&["changelog.d/1.fixed.md"], blank).is_err());
+        assert!(check_modified(&["changelog.d/1.fixed.md"], |_| None).is_err());
+        assert!(check_modified(&["src/a.rs", "changelog.d/README.md"], blank).is_ok());
+    }
+
+    #[test]
     fn check_reads_the_range_from_git() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -425,6 +459,10 @@ mod tests {
         git(&["add", "."]);
         git(&["commit", "-q", "-m", "fragment"]);
         run_check(&args, &[]).unwrap();
+        write(root, "changelog.d/7.added.md", " \n");
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "emptied"]);
+        assert!(run_check(&args, &[EXEMPT_LABEL]).is_err());
     }
 
     #[test]
