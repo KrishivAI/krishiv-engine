@@ -19,8 +19,9 @@
 //! - **Deletes** (design note §3.2–3.3, PR-25b): position delete files and
 //!   deletion vectors are read when the provider opens and become each data
 //!   file's row selection ([`super::deletes`]), so deleted rows are never
-//!   decoded. A data file that an equality delete applies to is refused until
-//!   PR-25c, never read without it.
+//!   decoded. Equality delete files (PR-25c) are read into key sets when the
+//!   provider opens, and the scan's source drops the rows whose key is in a
+//!   set of their data file ([`super::eq_deletes`]).
 //! - **Filters** prune data files by partition values and metrics through
 //!   [`Pruner`] when the scan is built; every filter is still evaluated on the
 //!   rows ([`FilterPushdown::Inexact`]).
@@ -37,16 +38,17 @@ use krishiv_exec::{FileScan, FilterPushdown, PushedFilter, ScanPushdown, ScanPus
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::split::{FilePartition, SplitConfig};
 use krishiv_io::{
-    FieldMapping, FileConstants, FileFormat, FileRef, FormatOptions, IoContext, PushdownExpr,
-    ScalarValue, ScanOptions, VersionToken, WithoutFieldIds,
+    ColumnPath, FieldMapping, FileConstants, FileFormat, FileRef, FormatOptions, IoContext,
+    PushdownExpr, ScalarValue, ScanOptions, VersionToken, WithoutFieldIds,
 };
 
 use super::deletes::DeleteSelections;
+use super::eq_deletes::{self, EqDeleteSource, EqualityDeletes, FILE_ORDINAL};
 use super::table::IcebergTable;
 use super::types::arrow_schema;
 use crate::plan::{
-    DataFileEntry, FileFormatKind, ManifestFilter, PartitionValue, PruneOptions, Pruner, ScanPlan,
-    TableSnapshot, TaskDeletes, Transform, VersionSpec, WriterMetrics, decode,
+    DataFileEntry, DeleteFileEntry, FileFormatKind, ManifestFilter, PartitionValue, PruneOptions,
+    Pruner, ScanPlan, TableSnapshot, TaskDeletes, Transform, VersionSpec, WriterMetrics, decode,
 };
 
 /// The table property naming a name mapping for files without field ids.
@@ -77,8 +79,8 @@ impl IcebergTableProvider {
     /// The time-travel errors of [`IcebergTable::snapshot`]; the planning
     /// errors of [`IcebergTable::plan`] (`KRISHIV_ICEBERG_INVALID_DELETES` for
     /// deletes that cannot be assigned); the errors of reading the delete
-    /// files (`deletes::load`); `KRISHIV_UNSUPPORTED_FEATURE` for a
-    /// data file with an equality delete (naming both), a data file that is not
+    /// files (`deletes::load`, `eq_deletes::load`); `KRISHIV_UNSUPPORTED_FEATURE` for
+    /// an equality delete that cannot be applied, a data file that is not
     /// Parquet, or a file that lacks a column its spec partitions by identity
     /// when other files' specs do not (see `refuse_missing_mixed_identity`);
     /// `INTERNAL_ERROR` for a partition value that does not decode.
@@ -152,6 +154,22 @@ impl IcebergTableProvider {
                 scan.selections = Some(Arc::new(selections));
             }
         }
+        if scan.parts.ordinal.is_some() {
+            let per_file: Vec<&[Arc<DeleteFileEntry>]> = scan
+                .deletes
+                .iter()
+                .map(|d| d.equality_deletes.as_slice())
+                .collect();
+            let eq = eq_deletes::load(
+                &reg.io,
+                &locate,
+                &scan.parts.table,
+                &scan.snapshot.fields,
+                &per_file,
+            )
+            .await?;
+            scan.equality = Some(Arc::new(eq));
+        }
         Ok(Self {
             scan: Arc::new(scan),
         })
@@ -215,6 +233,8 @@ struct IcebergScan {
     deletes: Arc<[Arc<TaskDeletes>]>,
     /// The rows of each data file with deletes (`None`: no file has any).
     selections: Option<Arc<DeleteSelections>>,
+    /// The equality deletes, by file index (`None`: no file has any).
+    equality: Option<Arc<EqualityDeletes>>,
     mapping: FieldMapping,
     /// The writers' metrics modes, for pruning by file metrics.
     metrics: Arc<WriterMetrics>,
@@ -250,16 +270,10 @@ impl IcebergScan {
         worker_slots: u64,
         metrics: WriterMetrics,
     ) -> Result<Self, KrishivError> {
-        for t in &plan.tasks {
-            if let Some(d) = t.deletes.equality_deletes.first() {
-                return Err(unsupported(format!(
-                    "reading Iceberg equality deletes (snapshot {}: {} applies to {})",
-                    plan.snapshot_id.unwrap_or_default(),
-                    d.entry.file.path,
-                    t.file.file.path
-                )));
-            }
-        }
+        let any_equality = plan
+            .tasks
+            .iter()
+            .any(|t| !t.deletes.equality_deletes.is_empty());
         let (entries, deletes): (Vec<Arc<DataFileEntry>>, Vec<Arc<TaskDeletes>>) =
             plan.tasks.into_iter().map(|t| (t.file, t.deletes)).unzip();
         let mut files = Vec::with_capacity(entries.len());
@@ -274,7 +288,26 @@ impl IcebergScan {
             f.size = e.file.size;
             files.push(f);
         }
-        let (constant_columns, constants) = constants(&snapshot, &table, &entries, &files)?;
+        let (constant_columns, mut constants) = constants(&snapshot, &table, &entries, &files)?;
+        // With equality deletes every file also carries its index in the
+        // scan, the key the deletes' source finds its sets by.
+        let ordinal = if any_equality {
+            let mut with_ordinal = FileConstants::new();
+            for (i, f) in files.iter().enumerate() {
+                let i = i32::try_from(i)
+                    .map_err(|_| unsupported("more than 2^31 data files in a scan".to_owned()))?;
+                let mut values = constants
+                    .get(&f.path)
+                    .map(<[_]>::to_vec)
+                    .unwrap_or_default();
+                values.push(ScalarValue::Int32(i));
+                with_ordinal.insert(f.path.clone(), values);
+            }
+            constants = with_ordinal;
+            Some(eq_deletes::with_ordinal(&table))
+        } else {
+            None
+        };
         let mapping = FieldMapping::FieldIdOr(if name_mapping {
             WithoutFieldIds::Refuse
         } else {
@@ -284,6 +317,7 @@ impl IcebergScan {
             table,
             constant_columns,
             constants: Arc::new(constants),
+            ordinal,
             io,
             format_options: FormatOptions::defaults(ParquetFormat.options()),
             scan_options: ScanOptions::from_config(config),
@@ -296,6 +330,7 @@ impl IcebergScan {
             entries: entries.into(),
             deletes: deletes.into(),
             selections: None,
+            equality: None,
             mapping,
             metrics: Arc::new(metrics),
             parts,
@@ -309,7 +344,12 @@ impl IcebergScan {
 struct ScanParts {
     table: SchemaRef,
     constant_columns: Vec<FieldRef>,
+    /// The values of `constant_columns` and, with `ordinal`, the file
+    /// ordinal last.
     constants: Arc<FileConstants>,
+    /// With equality deletes: the table with [`FILE_ORDINAL`] appended, the
+    /// schema the file scan reads.
+    ordinal: Option<SchemaRef>,
     io: IoContext,
     format_options: FormatOptions,
     scan_options: ScanOptions,
@@ -322,16 +362,20 @@ impl ScanParts {
         let scan = FileScan::new(
             Arc::new(ParquetFormat) as Arc<dyn FileFormat>,
             self.io.clone(),
-            Arc::clone(&self.table),
+            Arc::clone(self.ordinal.as_ref().unwrap_or(&self.table)),
             files,
             self.format_options.clone(),
             self.scan_options,
             self.splits,
         );
-        if self.constant_columns.is_empty() {
+        let mut columns = self.constant_columns.clone();
+        if self.ordinal.is_some() {
+            columns.push(Arc::new(eq_deletes::ordinal_field()));
+        }
+        if columns.is_empty() {
             scan
         } else {
-            scan.with_file_constants(self.constant_columns.clone(), Arc::clone(&self.constants))
+            scan.with_file_constants(columns, Arc::clone(&self.constants))
         }
     }
 }
@@ -344,6 +388,35 @@ impl IcebergScan {
             p.selection = Some(Arc::clone(s) as Arc<dyn krishiv_exec::FileSelections>);
         }
         p
+    }
+
+    /// The pushdowns of the inner scan of an [`EqDeleteSource`] for `p`: the
+    /// equality columns and [`FILE_ORDINAL`] are read too, and no limit is
+    /// pushed (deleted rows would count towards it). Also the paths of the
+    /// output in the inner batches: `p`'s columns, then `_metadata`.
+    fn with_equality_columns(
+        &self,
+        mut p: ScanPushdowns,
+        eq: &EqualityDeletes,
+    ) -> (ScanPushdowns, Vec<ColumnPath>) {
+        let wanted: Vec<ColumnPath> = p.projection.take().unwrap_or_else(|| {
+            self.parts
+                .table
+                .fields()
+                .iter()
+                .map(|f| ColumnPath::new(f.name()))
+                .collect()
+        });
+        let mut read = wanted.clone();
+        read.extend(eq.columns().iter().cloned());
+        read.push(ColumnPath::new(FILE_ORDINAL));
+        let mut output = wanted;
+        if eq_deletes::any_metadata(&p.metadata) {
+            output.push(ColumnPath::new(krishiv_exec::METADATA_COLUMN));
+        }
+        p.projection = Some(read);
+        p.limit = None;
+        (p, output)
     }
 
     /// The file scan of the files that may hold rows passing `filters`.
@@ -397,7 +470,19 @@ impl ScanPushdown for IcebergScan {
 
     fn build(&self, pushdowns: ScanPushdowns) -> krishiv_exec::Result<Arc<dyn Source>> {
         let p = self.mapped(pushdowns);
-        self.pruned(&p.filters).build(p)
+        let scan = self.pruned(&p.filters);
+        match &self.equality {
+            None => scan.build(p),
+            Some(eq) => {
+                let (inner, output) = self.with_equality_columns(p, eq);
+                let source = scan.build(inner)?;
+                Ok(Arc::new(EqDeleteSource::new(
+                    source,
+                    Arc::clone(eq),
+                    output,
+                )?))
+            }
+        }
     }
 
     fn with_file_splits(
@@ -412,7 +497,15 @@ impl ScanPushdown for IcebergScan {
     }
 
     fn output_schema(&self, pushdowns: &ScanPushdowns) -> krishiv_exec::Result<SchemaRef> {
-        self.base.output_schema(&self.mapped(pushdowns.clone()))
+        let p = self.mapped(pushdowns.clone());
+        match &self.equality {
+            None => self.base.output_schema(&p),
+            Some(eq) => {
+                let (inner, output) = self.with_equality_columns(p, eq);
+                let schema = self.base.output_schema(&inner)?;
+                krishiv_io::project_schema(&schema, &output)
+            }
+        }
     }
 }
 

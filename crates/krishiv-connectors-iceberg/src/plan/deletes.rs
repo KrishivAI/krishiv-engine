@@ -20,7 +20,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use krishiv_common::error::{KrishivError, KrishivIcebergInvalidDeletes};
+use krishiv_common::error::{
+    KrishivError, KrishivIcebergInvalidDeletes, KrishivUnsupportedFeature,
+};
 
 use super::entry::{DataFileEntry, DeleteFileEntry, DeleteKind, PartitionValue};
 use super::types::PartitionSpecs;
@@ -42,7 +44,7 @@ pub struct TaskDeletes {
     pub deletion_vector: Option<Arc<DeleteFileEntry>>,
     /// Position delete files, in manifest order.
     pub position_deletes: Vec<Arc<DeleteFileEntry>>,
-    /// Equality delete files, in manifest order (applied by PR-25c).
+    /// Equality delete files, in manifest order.
     pub equality_deletes: Vec<Arc<DeleteFileEntry>>,
 }
 
@@ -216,7 +218,9 @@ impl DeleteIndex {
     /// `KRISHIV_ICEBERG_INVALID_DELETES` (Java's texts) for a DV whose
     /// sequence number is below the data file's, a file-scoped delete or DV
     /// whose spec or partition differs from the data file's, or a data file
-    /// without a data sequence number in a snapshot with deletes.
+    /// without a data sequence number in a snapshot with deletes;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for an equality delete of the data
+    /// file's spec when either partition tuple holds an unreadable value.
     pub fn for_data_file(&self, data: &DataFileEntry) -> Result<TaskDeletes, KrishivError> {
         if self.empty {
             return Ok(TaskDeletes::default());
@@ -238,6 +242,20 @@ impl DeleteIndex {
         if let Some(p) = self.equality_by_partition.get(&file.spec_id) {
             for (s, d) in p.candidates(&file.partition) {
                 if *s > seq && same_partition(d, data) {
+                    // A tuple that could not be read may equal any other:
+                    // offering such a delete widens position deletes only
+                    // by files they never name, but an equality delete
+                    // would remove rows of another partition (review N4).
+                    if !readable(&d.entry.file.partition) || !readable(&file.partition) {
+                        return Err(KrishivUnsupportedFeature {
+                            feature: format!(
+                                "applying the Iceberg equality delete file {} to the data file \
+                                 {}: a partition value of one of them cannot be read",
+                                d.entry.file.path, file.path
+                            ),
+                        }
+                        .into());
+                    }
                     out.equality_deletes.push(Arc::clone(d));
                 }
             }

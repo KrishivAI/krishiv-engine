@@ -47,8 +47,8 @@ enum Content {
     },
     /// A deletion vector of `data` (a Puffin blob at offset 4).
     Dv { data: String, positions: Vec<u64> },
-    /// An equality delete file on `id` (never read: refused).
-    Equality,
+    /// An equality delete file on `id` (field 1) holding these keys.
+    Equality { ids: Vec<Option<i64>> },
 }
 
 /// One file: its name, partition value (for a partitioned table), data
@@ -170,12 +170,17 @@ fn build(files: &[File], partitioned: bool) -> Table {
                     .content_size_in_bytes(Some(i64::try_from(blob.len()).unwrap()));
                 delete_files.push((d.build().unwrap(), f.seq));
             }
-            Content::Equality => {
+            Content::Equality { ids } => {
+                let b = batch(
+                    vec![id_field("id", A::Int64, 1)],
+                    vec![Arc::new(Int64Array::from(ids.clone()))],
+                );
+                let size = write_parquet(&path, &b);
                 let mut d = builder(
                     DataContentType::EqualityDeletes,
                     DataFileFormat::Parquet,
-                    10,
-                    1,
+                    size,
+                    u64::try_from(ids.len()).unwrap(),
                 );
                 d.equality_ids(Some(vec![1]));
                 delete_files.push((d.build().unwrap(), f.seq));
@@ -478,29 +483,107 @@ fn a_dv_older_than_its_data_file_fails() {
     );
 }
 
+fn equality(name: &str, p: i32, seq: i64, ids: &[Option<i64>]) -> File {
+    File {
+        name: name.to_owned(),
+        p,
+        seq,
+        content: Content::Equality { ids: ids.to_vec() },
+    }
+}
+
+/// Design note §3.2–3.3: an equality delete removes the rows of strictly
+/// older data files whose key it holds, in its partition or (unpartitioned
+/// spec) everywhere; with position deletes and DVs the removed rows are a
+/// union.
 #[test]
-fn equality_deletes_are_refused_only_where_they_apply() {
-    let eq = File {
-        name: "eq.parquet".to_owned(),
-        p: 0,
-        seq: 2,
-        content: Content::Equality,
+fn equality_deletes_remove_rows_of_older_files() {
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 5),
+            data("b.parquet", 0, 2, 10, 5),
+            // Newer than a, not than b (strictly): 1, 3 and 11 go from a only.
+            equality("e1.parquet", 0, 2, &[Some(1), Some(3), Some(11)]),
+            // Newer than both.
+            equality("e2.parquet", 0, 3, &[Some(12), Some(4), Some(99)]),
+            positions("d1.parquet", 0, 3, &[("a.parquet", 0)], None),
+            dv("b.puffin", 0, 3, "b.parquet", &[4]),
+        ],
+        false,
+    );
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [2, 10, 11, 13]);
+    assert_eq!(t.ids("SELECT count(*) FROM t").unwrap(), [4]);
+    assert_eq!(t.ids("SELECT id FROM t WHERE id > 10").unwrap(), [11, 13]);
+    assert_eq!(t.ids("SELECT id FROM t LIMIT 10").unwrap(), [2, 10, 11, 13]);
+    // A column the query does not read is still the key.
+    assert_eq!(t.ids("SELECT p FROM t").unwrap(), [0, 0, 0, 0]);
+    // The query's columns and `_metadata` are what leaves the scan; the
+    // equality columns and the file ordinal read for the deletes are not.
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let scan = krishiv_exec::planner::TableProvider::scan(&p).unwrap();
+    let pushdowns = krishiv_exec::ScanPushdowns {
+        projection: Some(vec![krishiv_io::ColumnPath::new("p")]),
+        metadata: krishiv_io::MetadataCols {
+            file_name: true,
+            ..krishiv_io::MetadataCols::default()
+        },
+        ..krishiv_exec::ScanPushdowns::default()
     };
-    // Newer than the data: refused, naming both files.
-    let t = build(&[data("a.parquet", 0, 1, 0, 3), eq.clone()], false);
-    let e = t.open_err();
+    let schema = scan.output_schema(&pushdowns).unwrap();
+    let names: Vec<_> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["p", "_metadata"]);
     assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{e}"
+        format!("{:?}", schema.field(1).data_type()),
+        format!(
+            "{:?}",
+            A::Struct(vec![arrow_schema::Field::new("file_name", A::Utf8View, false)].into())
+        )
     );
-    assert!(
-        e.message().contains("eq.parquet") && e.message().contains("a.parquet"),
-        "{e}"
+    assert_eq!(scan.build(pushdowns).unwrap().schema(), schema);
+    assert_eq!(scan.table_schema().fields().len(), 2);
+}
+
+/// An equality delete of a partitioned spec stays in its partition.
+#[test]
+fn partitioned_equality_deletes_stay_in_their_partition() {
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            data("b.parquet", 1, 1, 10, 3),
+            equality("e.parquet", 1, 2, &[Some(1), Some(11)]),
+        ],
+        true,
     );
-    // Not newer (strictly): it applies to nothing, so the table reads.
-    let t = build(&[data("a.parquet", 0, 2, 0, 3), eq], false);
-    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 1, 2]);
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 1, 2, 10, 12]);
+}
+
+/// Iceberg deletes compare `null` equal to `null` (not SQL's rule).
+#[test]
+fn a_null_equality_key_deletes_null_rows() {
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            equality("e.parquet", 0, 2, &[None, Some(2)]),
+        ],
+        false,
+    );
+    // No row has a null id: only 2 goes.
+    assert_eq!(t.ids("SELECT id FROM t").unwrap(), [0, 1]);
+}
+
+/// A missing equality delete file fails the query; it is never skipped.
+#[test]
+fn a_missing_equality_delete_file_fails() {
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 3),
+            equality("e.parquet", 0, 2, &[Some(1)]),
+        ],
+        false,
+    );
+    std::fs::remove_file(t.env.at("e.parquet").strip_prefix("file://").unwrap()).unwrap();
+    let e = t.open_err();
+    assert!(e.message().contains("e.parquet"), "{e}");
 }
 
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
@@ -529,6 +612,11 @@ enum Op {
         stale: bool,
         picks: Vec<(usize, u64)>,
     },
+    /// An equality delete of the ids `keys` (reduced modulo the ids written
+    /// so far, plus one past them), in partition `p`, with a data sequence
+    /// number `back` below the commit's (so some are not newer than files
+    /// they would otherwise apply to: equality deletes need strictly newer).
+    Equality { p: i32, keys: Vec<i64>, back: i64 },
 }
 
 fn ops() -> impl Strategy<Value = Vec<Op>> {
@@ -547,6 +635,8 @@ fn ops() -> impl Strategy<Value = Vec<Op>> {
             prop::collection::vec((0..8usize, 0..8u64), 1..5)
         )
             .prop_map(|(kind, stale, picks)| Op::Delete { kind, stale, picks }),
+        (0..2i32, prop::collection::vec(0..64i64, 1..5), 0..3i64)
+            .prop_map(|(p, keys, back)| Op::Equality { p, keys, back }),
     ];
     prop::collection::vec(op, 1..12)
 }
@@ -560,6 +650,12 @@ enum ModelDelete {
         p: i32,
         scoped: Option<String>,
         rows: Vec<(String, u64)>,
+    },
+    /// Equality delete keys (ids) of partition `p` (`None`: global).
+    Equality {
+        seq: i64,
+        p: Option<i32>,
+        keys: BTreeSet<i64>,
     },
 }
 
@@ -620,6 +716,19 @@ fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeSet<i64>) {
                     dv: None,
                 });
                 next_id += rows;
+            }
+            Op::Equality { p, keys, back } => {
+                let seq = (commit - back).max(1);
+                let keys: BTreeSet<i64> = keys.iter().map(|k| k % (next_id + 1)).collect();
+                let ids: Vec<Option<i64>> = keys.iter().copied().map(Some).collect();
+                let p = partitioned.then_some(*p);
+                files.push(equality(
+                    &format!("eq{n}.parquet"),
+                    p.unwrap_or(0),
+                    seq,
+                    &ids,
+                ));
+                model.push(ModelDelete::Equality { seq, p, keys });
             }
             Op::Delete { kind, stale, picks } => {
                 if live.is_empty() {
@@ -702,28 +811,48 @@ fn history(ops: &[Op], partitioned: bool) -> (Vec<File>, BTreeSet<i64>) {
                 Some((_, ps)) => ps.clone(),
                 None => model
                     .iter()
-                    .flat_map(
-                        |ModelDelete::Positions {
-                             seq,
-                             p,
-                             scoped,
-                             rows,
-                         }| {
-                            let applies = *seq >= l.seq
-                                && match scoped {
-                                    Some(s) => *s == l.name,
-                                    None => *p == l.p,
-                                };
-                            rows.iter()
-                                .filter(move |(f, _)| applies && *f == l.name)
-                                .map(|(_, x)| *x)
-                        },
-                    )
+                    .flat_map(|m| -> Vec<u64> {
+                        match m {
+                            ModelDelete::Positions {
+                                seq,
+                                p,
+                                scoped,
+                                rows,
+                            } => {
+                                let applies = *seq >= l.seq
+                                    && match scoped {
+                                        Some(s) => *s == l.name,
+                                        None => *p == l.p,
+                                    };
+                                rows.iter()
+                                    .filter(|(f, _)| applies && *f == l.name)
+                                    .map(|(_, x)| *x)
+                                    .collect()
+                            }
+                            ModelDelete::Equality { .. } => Vec::new(),
+                        }
+                    })
                     .collect(),
             };
+            // Equality deletes: strictly newer, same partition or global;
+            // their rows are a union with the position deletes and the DV.
+            let by_key: BTreeSet<i64> = model
+                .iter()
+                .filter_map(|m| match m {
+                    ModelDelete::Equality { seq, p, keys }
+                        if *seq > l.seq && p.is_none_or(|p| p == l.p) =>
+                    {
+                        Some(keys)
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .copied()
+                .collect();
             (0..l.rows)
                 .filter(move |r| !deleted.contains(&u64::try_from(*r).unwrap()))
                 .map(move |r| l.first + r)
+                .filter(move |id| !by_key.contains(id))
         })
         .collect();
     (files, survivors)
@@ -737,7 +866,8 @@ proptest! {
     /// file-scoped position deletes (some older than the data, some naming
     /// files of other partitions) and DVs (absorbing or replacing older
     /// deletes) over random partitioned tables read the rows a model of the
-    /// spec's rules keeps.
+    /// spec's rules keeps. Equality deletes (some not strictly newer, some
+    /// partition-scoped) remove the rows of their keys besides.
     #[test]
     fn delete_application_matches_model(ops in ops(), partitioned in any::<bool>()) {
         let (files, survivors) = history(&ops, partitioned);

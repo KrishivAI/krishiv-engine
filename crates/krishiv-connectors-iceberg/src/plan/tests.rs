@@ -1108,3 +1108,65 @@ fn uuid_bounds_are_not_used() {
     );
     assert!(keeps(&fields, &unpartitioned(), &f, &e));
 }
+
+/// Review N4: an equality delete is never offered to a data file whose
+/// partition tuple it cannot be compared with; one of an equal tuple applies,
+/// one of another tuple does not.
+#[test]
+fn equality_deletes_with_unreadable_partitions_are_refused() {
+    use std::sync::Arc;
+
+    use super::deletes::DeleteIndex;
+    use super::entry::{DataFileEntry, DeleteFileEntry};
+    use krishiv_common::error::ErrorClass;
+
+    let specs = spec(vec![pfield(1000, 1, Transform::Identity, IcebergType::Int)]);
+    let entry = |path: &str, p: PartitionValue, seq: i64| {
+        let mut f = partitioned(vec![p]);
+        f.path = path.to_owned();
+        DataFileEntry {
+            file: f,
+            status: EntryStatus::Added,
+            snapshot_id: 1,
+            data_sequence_number: Some(seq),
+            file_sequence_number: Some(seq),
+        }
+    };
+    let one = value(&ScalarValue::Int32(1), &IcebergType::Int);
+    let two = value(&ScalarValue::Int32(2), &IcebergType::Int);
+    let eq = |p: PartitionValue| {
+        let mut e = entry("eq.parquet", p, 2);
+        e.file.content = ContentKind::EqualityDeletes;
+        e.file.equality_ids = Some(vec![1]);
+        Arc::new(DeleteFileEntry {
+            entry: e,
+            kind: DeleteKind::EqualityDelete,
+        })
+    };
+    let index = DeleteIndex::new(&[eq(one.clone())], &specs).unwrap();
+    let same = index.for_data_file(&entry("a", one.clone(), 1)).unwrap();
+    assert_eq!(same.equality_deletes.len(), 1);
+    let other = index.for_data_file(&entry("b", two, 1)).unwrap();
+    assert!(other.equality_deletes.is_empty());
+    let e = index
+        .for_data_file(&entry("c", PartitionValue::Unreadable, 1))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    let index = DeleteIndex::new(&[eq(PartitionValue::Unreadable)], &specs).unwrap();
+    let e = index
+        .for_data_file(&entry("a", one.clone(), 1))
+        .unwrap_err();
+    assert!(e.message().contains("eq.parquet"), "{e}");
+    // Not newer than the data: never compared, so no error.
+    assert!(
+        index
+            .for_data_file(&entry("a", one, 2))
+            .unwrap()
+            .equality_deletes
+            .is_empty()
+    );
+}

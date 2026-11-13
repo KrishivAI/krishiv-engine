@@ -4,7 +4,7 @@
 **Real code since:** P3-T022a (PR-06): iceberg-rust 0.11's file access over Krishiv's I/O, metadata loading, the
 Spark type mapping and the bridged `inspect` tables. Scan planning since P3-T026 (PR-25a). Catalog clients are PR-17
 (T022b); the `TableProvider` over append-only tables since PR-25a step 2; position deletes and deletion
-vectors since PR-25b; equality deletes, type promotion and caches are PR-25c–d; commits T027.
+vectors since PR-25b; equality deletes since PR-25c; caches and stats PR-25d; commits T027.
 
 ## Purpose
 Iceberg table connector. The only crate that depends on `iceberg` (iceberg-rust, Arrow 58).
@@ -21,11 +21,17 @@ of `krishiv-exec`'s `FileScan` (Parquet, Spark split planning), columns by field
 for files without ids (`FieldMapping::FieldIdOr`; refused under a name mapping until 25c), identity-partition
 columns constant in every file's spec read from the manifest (`FileConstants`, FC S4), a mixed-spec identity
 column that a file of an identity spec lacks refused (footers of those files read at open), position deletes and DVs
-applied as each file's row selection (`FileSelections`), a data file with an equality delete refused (25c), pushed filters pruning files through `Pruner` when the scan is built (still applied above);
+applied as each file's row selection (`FileSelections`), equality deletes applied by wrapping the file scan's source (`EqDeleteSource`), pushed filters pruning files through `Pruner` when the scan is built (still applied above);
 `types.rs` also builds the Arrow table schema carrying every Iceberg id · `deletes.rs` reads each position
 delete file once per scan (`file_path IN` row-group pruning, rows of other files dropped, order not trusted) and each
 DV by range, into one `RowSelection` per data file (unbounded, so a wrong `record_count` never drops rows; positions
-past the end delete nothing, as Java); not charged to memory until 25d · `scan.rs` metadata → `TableSnapshot` (refs read from the metadata's serialisation: iceberg-rust has no
+past the end delete nothing, as Java); not charged to memory until 25d · `eq_deletes.rs` reads each equality
+delete file once per scan (its `equality_ids` by field id through the read schema, so promoted keys compare at the
+table's type) into a key set in Arrow's row format (null equals null; NaN equals NaN and -0.0 differs from 0.0, as
+Java's `Comparators`; a field of a null struct is null); `EqDeleteSource` wraps the file scan's source and drops the
+rows whose key is in a set of their data file, found by the per-file constant column `_krishiv_iceberg_file` (the
+file's index in the scan, through `FileConstants`); the equality columns, that column and any `_metadata` the query
+did not ask for are projected away, and no limit is pushed below it · `scan.rs` metadata → `TableSnapshot` (refs read from the metadata's serialisation: iceberg-rust has no
 accessor and its `snapshot_for_ref` panics on a dangling ref), manifest list and manifests fetched through the
 `FileIO` and parsed with iceberg-rust's public parsers into `plan` values, up to 8 manifests at once, each
 metadata file, manifest list and manifest capped by `krishiv.catalog.maxMetadataBytes` before parsing
@@ -39,7 +45,7 @@ Iceberg equal to the same Parquet files), `table_tests.rs` (`catalog_parse_limit
 upgrade, the table's metrics modes in a scan, the mixed-spec refusal), `baseline_tests.rs` (ignored: the §2.3 planning baseline, 1,000
 manifests × 100 entries, timed as fetch/parse/map/prune), `delete_tests.rs` (snapshots with chosen sequence
 numbers: deletes through SQL, `delete_application_matches_model`, DV corruption, missing delete file, Java's
-assignment errors, equality deletes refused where they apply).
+assignment errors, equality deletes by sequence number and partition, null keys, a missing equality delete file).
 `src/plan/` (public, Krishiv-owned types only; design note `P3-T026-T027-iceberg-scan-and-commit.md` §2): `types.rs`
 `IcebergType`, `SchemaField` (primitive columns reachable through structs), `PartitionSpecInfo`/`Transform` ·
 `snapshot.rs` `VersionSpec` (connector-local until PR-07's `TableVersionSpec`), resolution with Iceberg's error texts
@@ -71,8 +77,9 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   not decode is dropped (never the file), unknown transforms and columns keep. Time-travel errors carry Iceberg's
   `IllegalArgumentException` texts (class `KRISHIV_TIME_TRAVEL_NOT_FOUND`, SQLSTATE 42K0E).
 - Deletes are never skipped: a missing or unreadable delete file fails the query; deletes that cannot be assigned or
-  a corrupt DV fail with Java's texts (class `KRISHIV_ICEBERG_INVALID_DELETES`, SQLSTATE KD001). Deletes that cannot
-  be applied yet (equality, 25c) refuse the read of the files they apply to.
+  a corrupt DV fail with Java's texts (class `KRISHIV_ICEBERG_INVALID_DELETES`, SQLSTATE KD001). An equality delete
+  whose partition tuple, or its data file's, cannot be read is refused (`KRISHIV_UNSUPPORTED_FEATURE`), never
+  offered to every file of the spec (review N4).
 - `#![forbid(unsafe_code)]`. No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE
   (iceberg-rust's own failures map to `INTERNAL_ERROR` naming its message until PR-17's catalog classes).
 

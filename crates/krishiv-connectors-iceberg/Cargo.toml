@@ -13,7 +13,10 @@ workspace = true
 
 [dependencies]
 arrow-array = { workspace = true }
+# Equality delete keys (row format) and dropping deleted rows.
+arrow-row = { workspace = true }
 arrow-schema = { workspace = true }
+arrow-select = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
@@ -32,7 +35,7 @@ tokio = { workspace = true, features = ["rt"] }
 typetag = { workspace = true }
 
 [dev-dependencies]
-arrow-select = { workspace = true }
+arrow-buffer = { workspace = true }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }

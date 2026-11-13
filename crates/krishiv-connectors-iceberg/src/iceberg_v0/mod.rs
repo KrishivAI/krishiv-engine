@@ -3,6 +3,7 @@
 //! is private: what leaves it is Krishiv types only.
 
 pub(crate) mod deletes;
+pub(crate) mod eq_deletes;
 pub(crate) mod provider;
 pub(crate) mod scan;
 pub(crate) mod storage;

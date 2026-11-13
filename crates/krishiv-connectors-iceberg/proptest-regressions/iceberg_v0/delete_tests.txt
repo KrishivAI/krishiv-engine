@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a2997cedee1c3462f937331b4f5e43c90c7c9197e5f6ea043d9ccdef10c52f74 # shrinks to ops = [Append { p: 0, rows: 3, back: 0, same: None }, Equality { p: 0, keys: [0], back: 1 }, Append { p: 0, rows: 1, back: 0, same: None }, Append { p: 0, rows: 1, back: 0, same: None }, Append { p: 0, rows: 1, back: 0, same: None }], partitioned = false
+cc 099dadcc9c5e3e0d653f5a9933715b9970e43e19b845dbc227363b175b2ffd40 # shrinks to ops = [Append { p: 0, rows: 1, back: 0, same: None }, Equality { p: 0, keys: [8], back: 1 }, Append { p: 0, rows: 1, back: 0, same: None }], partitioned = true
