@@ -187,14 +187,24 @@ pub async fn execute_plan(
     let conf = session.conf();
     let empty = pb::Plan::default();
     let plan = request.plan.as_ref().unwrap_or(&empty);
-    let (df, schema) = until_cancelled(&op, async {
+    let prepared = until_cancelled(&op, async {
         // Decompression (up to `maxPlanSize`) runs off the async workers.
         let logical = request_plan(session, plan, limits).await?;
         let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
         let schema = df.schema().await?;
         Ok((df, schema))
     })
-    .await?;
+    .await;
+    // A preparation error settles like a query error: an interrupt that
+    // reported this operation first turns it into `OPERATION_CANCELED`.
+    let (df, schema) = match prepared {
+        Ok(ready) => ready,
+        Err(e) => {
+            return Err(
+                settle(&op, Err(Stop::Failed(e))).unwrap_or_else(|| OperationCanceled {}.into())
+            );
+        }
+    };
     let schema_response = schema::proto_schema(&schema)?;
     let settings = encode_settings(&conf, limits, opts.chunking);
 
