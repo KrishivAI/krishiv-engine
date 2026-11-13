@@ -191,3 +191,16 @@ fn oversized_numbers_wrap_to_an_int() {
     assert_eq!(read("9223372036854775807-01-01"), None);
     assert_eq!(read("99999999999999999999-01-01"), None);
 }
+
+#[test]
+fn a_broken_fast_pattern_reports_its_build_error_and_a_good_one_none() {
+    let good = LegacyPattern::new_fast("yyyy-MM-dd").unwrap();
+    assert!(good.build_error().is_none());
+    // An unterminated quote Spark cannot build: the lazy pattern keeps the
+    // compile error for the first format call.
+    let broken = LegacyPattern::new_fast_broken("yyyy-MM-dd'");
+    assert!(broken.build_error().is_some());
+    // A pattern that compiles but was marked broken still reports an error.
+    let marked = LegacyPattern::new_fast_broken("yyyy-MM-dd");
+    assert!(marked.build_error().is_some());
+}
