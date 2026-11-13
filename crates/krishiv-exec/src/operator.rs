@@ -133,8 +133,10 @@ pub enum OperatorOutput {
     NeedMoreInput(Option<Batch>),
     /// One output batch; call `execute` again with the same input.
     HaveMoreOutput(Batch),
-    /// `try_grow` failed and the state is unchanged: the driver reserves
-    /// `bytes` and calls `execute` again with the same input.
+    /// `try_grow` failed and the state is unchanged, or the operator
+    /// records that it has taken the input already (the window's refused
+    /// flush): the driver reserves `bytes` and calls `execute` again with
+    /// the same input. A batch is still never half-applied.
     NeedMemory {
         /// Bytes the operator could not reserve.
         bytes: usize,

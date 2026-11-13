@@ -78,6 +78,8 @@ mod stream;
 #[cfg(all(test, not(loom)))]
 mod tests;
 mod udaf;
+#[cfg(all(test, not(loom)))]
+mod udaf_retry_tests;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -524,6 +526,13 @@ struct Local {
     signal: Arc<SpillSignal>,
     /// The operator has a spill scope.
     spillable: bool,
+    /// The input passed last is appended and only its flush is left: the
+    /// flush's UDF state was refused and the driver was asked for memory
+    /// (`execute` does not append the same batch again).
+    flush_due: bool,
+    /// The bytes of the last `NeedMemory` a refused flush asked for; a
+    /// second refusal of no more than that is the memory error.
+    asked: Option<usize>,
 }
 
 impl Local {
@@ -535,6 +544,29 @@ impl Local {
     /// The bytes the buffered rows hold, which a spill frees.
     fn pending_bytes(&self) -> usize {
         self.pending.iter().map(|p| p.reserved).sum()
+    }
+
+    /// A flush refused a UDF state of `bytes`: the bytes to ask the driver
+    /// for, or the memory error when the last request of at least that much
+    /// did not make room (the driver found none to give, so asking again
+    /// would repeat forever).
+    fn refused(&mut self, bytes: usize) -> Result<usize> {
+        if self.asked.is_some_and(|asked| bytes <= asked) {
+            self.asked = None;
+            return Err(krishiv_memory::MemoryError::Exhausted {
+                requested: bytes,
+                available: 0,
+            }
+            .into());
+        }
+        self.asked = Some(bytes);
+        Ok(bytes)
+    }
+
+    /// A flush succeeded: nothing is due or asked for.
+    const fn flushed(&mut self) {
+        self.flush_due = false;
+        self.asked = None;
     }
 
     /// Publishes what a spill would free (nothing in the flush phase).
@@ -797,10 +829,12 @@ impl Window {
     }
 
     /// Evaluates the complete rows and queues their output batches.
-    fn flush_complete(&self, l: &mut Local) -> Result<()> {
+    /// `Ok(Err(bytes))`: an aggregate UDF's state of `bytes` was refused, and
+    /// nothing changed.
+    fn flush_complete(&self, l: &mut Local) -> Result<Result<(), usize>> {
         let rows = Self::complete_rows(l);
         if rows == 0 {
-            return Ok(());
+            return Ok(Ok(()));
         }
         // The slices of pending batches the unit covers.
         let mut slices = Vec::new();
@@ -833,6 +867,10 @@ impl Window {
                 self.env.udafs.as_ref(),
                 Some(&mut l.reservation),
             )?
+        };
+        let columns = match columns {
+            Ok(columns) => columns,
+            Err(bytes) => return Ok(Err(bytes)),
         };
         // One output batch per slice: its input columns, then the slice of
         // each window column.
@@ -874,7 +912,42 @@ impl Window {
         if let Some((bi, row)) = l.last_start {
             l.last_start = bi.checked_sub(dropped).map(|bi| (bi, row));
         }
-        Ok(())
+        Ok(Ok(()))
+    }
+
+    /// Whether `plan` has an aggregate UDF among its window functions: its
+    /// state is charged as it folds and may be refused, so the end of input
+    /// is evaluated in `flush`, where the driver can be asked for memory.
+    fn has_udaf(&self) -> bool {
+        self.env
+            .plan
+            .functions
+            .iter()
+            .any(|f| matches!(&f.function, WindowFunction::Aggregate(a) if udaf::is_udf(a)))
+    }
+
+    /// The end of input without a spill (a plan with an aggregate UDF): one
+    /// step evaluating the rows left, asking for memory when the UDF's state
+    /// is refused.
+    fn flush_end(&self, l: &mut Local) -> Result<FlushOutput> {
+        if let Some(b) = Self::emit(l) {
+            return Ok(FlushOutput::Batch(b));
+        }
+        l.finished = true;
+        if Self::complete_rows(l) == 0 {
+            l.publish();
+            return Ok(FlushOutput::Done);
+        }
+        match self.flush_complete(l)? {
+            Ok(()) => {
+                l.flushed();
+                l.publish();
+                Ok(FlushOutput::Continue)
+            }
+            Err(bytes) => Ok(FlushOutput::NeedMemory {
+                bytes: l.refused(bytes)?,
+            }),
+        }
     }
 }
 
@@ -905,6 +978,8 @@ impl Operator for Window {
             failed: None,
             signal: Arc::clone(ctx.consumer().signal()),
             spillable: self.spill.is_some(),
+            flush_due: false,
+            asked: None,
             pending: VecDeque::new(),
             last_start: None,
             open_len: 0,
@@ -936,14 +1011,26 @@ impl Operator for Window {
         if input.data().schema().fields().len() != self.env.input.fields().len() {
             return Err(internal("window input of the wrong width".to_owned()));
         }
-        if let Err(bytes) = self.append(l, input.data().clone(), true)? {
+        // After a refused flush the driver passes the same batch again: it
+        // is appended already.
+        if !l.flush_due
+            && let Err(bytes) = self.append(l, input.data().clone(), true)?
+        {
             return Ok(OperatorOutput::NeedMemory { bytes });
         }
         // After a spill, rows wait for the flush phase: the spilled ones
-        // come first.
-        if l.spilled.is_none() && Self::complete_rows(l) >= l.batch_rows {
-            self.flush_complete(l)?;
+        // come first (a spill between a refused flush and its retry leaves
+        // the flush to that phase).
+        if l.spilled.is_none()
+            && Self::complete_rows(l) >= l.batch_rows
+            && let Err(bytes) = self.flush_complete(l)?
+        {
+            let bytes = l.refused(bytes)?;
+            l.flush_due = true;
+            l.publish();
+            return Ok(OperatorOutput::NeedMemory { bytes });
         }
+        l.flushed();
         l.publish();
         Ok(OperatorOutput::NeedMoreInput(Self::emit(l)))
     }
@@ -964,19 +1051,24 @@ impl Operator for Window {
         if let Some(b) = Self::emit(l) {
             return Ok(Some(b));
         }
-        if l.spilled.is_some() {
-            // The rest is evaluated in the flush phase.
+        if l.spilled.is_some() || self.has_udaf() {
+            // The rest is evaluated in the flush phase (an aggregate UDF's
+            // state may be refused, and only `flush` can ask for memory).
             return Ok(None);
         }
-        if !std::mem::replace(&mut l.finished, true) {
-            self.flush_complete(l)?;
+        if !std::mem::replace(&mut l.finished, true)
+            && let Err(bytes) = self.flush_complete(l)?
+        {
+            return Err(internal(format!(
+                "a window without aggregate UDFs refused {bytes} bytes"
+            )));
         }
         l.publish();
         Ok(Self::emit(l))
     }
 
     fn needs_flush(&self) -> bool {
-        self.spill.is_some()
+        self.spill.is_some() || self.has_udaf()
     }
 
     fn end_input<'a>(

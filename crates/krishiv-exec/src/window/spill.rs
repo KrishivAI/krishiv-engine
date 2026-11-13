@@ -349,7 +349,16 @@ impl Window {
     pub(super) async fn replay(&self, l: &mut Local, ctx: &TaskContext) -> Result<FlushOutput> {
         l.check()?;
         let Some(mut r) = l.replay.take() else {
-            return Ok(FlushOutput::Done);
+            if l.spilled.is_none() {
+                // No spill: a window with an aggregate UDF evaluates the end
+                // of its input here (see `finish`).
+                return self.flush_end(l);
+            }
+            // Spilled while the end of input waited for memory for a UDF's
+            // state: its rows are on disk now and are evaluated from there.
+            l.flushed();
+            self.start_replay(l, ctx).await?;
+            return Ok(FlushOutput::Continue);
         };
         // Until the step gives the state back (see the module docs).
         l.failed = Some(cancelled());
@@ -401,6 +410,12 @@ impl Window {
             r.headroom.shrink(extra);
             return Ok(FlushOutput::Continue);
         }
+        // A flush whose UDF state was refused repeats first, with the
+        // memory the driver was asked for; the rows it covers are still
+        // pending, so `finished` set before it loses none.
+        if l.flush_due {
+            return self.replay_flush(l);
+        }
         if l.finished {
             return Ok(FlushOutput::Done);
         }
@@ -437,8 +452,7 @@ impl Window {
                 };
                 let Some(b) = next else {
                     l.finished = true;
-                    self.flush_complete(l)?;
-                    return Ok(FlushOutput::Continue);
+                    return self.replay_flush(l);
                 };
                 b
             }
@@ -450,7 +464,7 @@ impl Window {
             Ok(()) => {
                 r.asked = false;
                 if Self::complete_rows(l) >= l.batch_rows {
-                    self.flush_complete(l)?;
+                    return self.replay_flush(l);
                 }
                 Ok(FlushOutput::Continue)
             }
@@ -458,8 +472,7 @@ impl Window {
                 r.carry = Some(batch);
                 if Self::complete_rows(l) > 0 {
                     // Emitting complete partitions frees their memory.
-                    self.flush_complete(l)?;
-                    Ok(FlushOutput::Continue)
+                    self.replay_flush(l)
                 } else if !l.out.is_empty() {
                     Ok(FlushOutput::Continue)
                 } else if !r.asked {
@@ -470,6 +483,23 @@ impl Window {
                     self.external(l, r, ctx).await?;
                     Ok(FlushOutput::Continue)
                 }
+            }
+        }
+    }
+
+    /// Evaluates the complete rows in the flush phase: on a refused UDF
+    /// state the flush is due again and the driver is asked for its bytes
+    /// (or the step fails when the last request did not make room).
+    fn replay_flush(&self, l: &mut Local) -> Result<FlushOutput> {
+        match self.flush_complete(l)? {
+            Ok(()) => {
+                l.flushed();
+                Ok(FlushOutput::Continue)
+            }
+            Err(bytes) => {
+                let bytes = l.refused(bytes)?;
+                l.flush_due = true;
+                Ok(FlushOutput::NeedMemory { bytes })
             }
         }
     }
