@@ -30,7 +30,7 @@ hands over to ClickBench's own driver; run on its own it uses the loop in the sc
 ## Licence of the queries
 ClickBench's `queries.sql` is CC BY-NC-SA 4.0 upstream text, and this repository (Apache-2.0) does not carry or
 redistribute it. `make-queries.py` downloads `duckdb-parquet/queries.sql` from a pinned upstream commit
-(`0e10b8434eef`), checks its SHA-256, applies the adaptations below and prints the 43 queries; `load` runs it when
+(`0e10b8434eef`), checks its SHA-256, applies the adaptations below and prints the 43 queries; `install` runs it when
 `queries.sql` is missing, and `.gitignore` keeps the generated file out of the repository. To submit this entry to the
 ClickBench repository, run `./make-queries.py > queries.sql` and add that file in the submission.
 

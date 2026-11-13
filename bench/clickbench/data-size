@@ -1,4 +1,5 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 cd "$(dirname "$0")"
-du -bcs hits*.parquet | awk '/total$/ { print $1 }'
+# -L: benchmark.sh links hits.parquet when HITS_PARQUET is set; count the file, not the link.
+du -bcsL hits*.parquet | awk '/total$/ { print $1 }'
