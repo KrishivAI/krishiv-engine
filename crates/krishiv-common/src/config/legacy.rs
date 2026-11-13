@@ -149,6 +149,8 @@ mod tests {
                     && !p.ends_with("config/legacy_table.rs")
                     && !p.ends_with("config/legacy.rs")
                     && !p.ends_with("tests.rs")
+                    // Spark Connect's deprecation-warning table names keys to warn about, not to handle.
+                    && !p.ends_with("krishiv-connect-server/src/config.rs")
                     && !p.components().any(|c| c.as_os_str() == "krishiv-testkit")
                 {
                     let text = std::fs::read_to_string(&p).unwrap_or_default();
