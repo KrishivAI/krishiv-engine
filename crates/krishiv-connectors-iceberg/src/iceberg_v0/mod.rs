@@ -2,6 +2,11 @@
 //! Everything that names an `iceberg` (iceberg-rust 0.11, Arrow 58) item. The module
 //! is private: what leaves it is Krishiv types only.
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the write path of PR-36a (next commit) calls it")
+)]
+pub(crate) mod data_file;
 pub(crate) mod deletes;
 pub(crate) mod eq_deletes;
 pub(crate) mod lazy;
@@ -20,6 +25,8 @@ pub(crate) mod write_metrics;
 
 #[cfg(test)]
 mod baseline_tests;
+#[cfg(test)]
+mod data_file_tests;
 #[cfg(test)]
 mod delete_tests;
 #[cfg(test)]

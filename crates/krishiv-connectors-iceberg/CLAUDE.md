@@ -33,7 +33,13 @@ refused reservation is `UNABLE_TO_ACQUIRE_MEMORY` and a dropped load unregisters
 less applying position deletes and DVs, each once; equality deletes not subtracted), null counts and min/max from
 bounds (no NaN-able float, no possibly truncated string), estimates only · `manifest_cache.rs` decoded manifests as
 `Arc<[LiveEntry]>` keyed by path, length and the inherited list fields, LRU under `krishiv.iceberg.manifestCache.bytes`
-(0 disables), one per storage registration (`Registered`), in memory only · `deletes.rs` reads each position
+(0 disables), one per storage registration (`Registered`), in memory only · `data_file.rs` (PR-36a) a written
+file's manifest entry: `DataLocations` (Java's `LocationProviders` through iceberg-rust's generators: `write.data.path`,
+object storage with hash directories; the deprecated path properties honoured, a divergence), `file_name`,
+`partition_tuple` (transformed values through `plan::bounds` to iceberg literals), `data_file` (an iceberg `DataFile`
+from size, rows and `FileMetrics`; sort order 0 unless claimed); `write_metrics.rs` `WriteMetricsConfig` (Java's
+`MetricsConfig.from`); tests `data_file_tests.rs` (Java's partition paths and hash directories, a built file through a
+manifest and back) · `deletes.rs` reads each position
 delete file once per scan (`file_path IN` row-group pruning, rows of other files dropped, order not trusted) and each
 DV by range, into one `RowSelection` per data file (unbounded, so a wrong `record_count` never drops rows; positions
 past the end delete nothing, as Java); positions charged per batch · `eq_deletes.rs` reads each equality
