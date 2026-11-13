@@ -880,6 +880,12 @@ fn time_travel_resolution() {
     let err = |spec: VersionSpec| resolve(&v, &spec).unwrap_err();
     let e = err(VersionSpec::Id(7));
     assert_eq!(e.message(), "Cannot find snapshot with ID 7");
+    // A user-facing class carrying Iceberg's text, not INTERNAL_ERROR.
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivTimeTravelNotFound
+    );
+    assert_eq!(e.sql_state(), Some("42K0E"));
     let e = err(VersionSpec::Ref("nope".to_owned()));
     assert_eq!(
         e.message(),

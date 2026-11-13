@@ -162,6 +162,12 @@
     "sqlState" : "58030",
     "audience" : "operator"
   },
+  "KRISHIV_TIME_TRAVEL_NOT_FOUND" : {
+    "message" : [
+      "<message>"
+    ],
+    "sqlState" : "42K0E"
+  },
   "KRISHIV_UNKNOWN_CONFIG" : {
     "message" : [
       "The config <key> is not a known Krishiv config. Verify the spelling, or see the configuration reference."

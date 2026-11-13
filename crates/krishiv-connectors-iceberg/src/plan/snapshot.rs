@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{KrishivError, KrishivTimeTravelNotFound};
 use krishiv_io::ColumnPath;
 use krishiv_types::StructType;
 
@@ -154,12 +154,12 @@ pub(crate) fn resolve(
 }
 
 /// The error of a time-travel lookup Iceberg refuses with an
-/// `IllegalArgumentException`, which carries no Spark error class. Until a
-/// Krishiv class exists for it, it is `INTERNAL_ERROR` with Iceberg's exact
-/// message (see the PR-25a report's open question).
+/// `IllegalArgumentException`, which carries no Spark error class:
+/// `KRISHIV_TIME_TRAVEL_NOT_FOUND` (SQLSTATE `42K0E`, Spark's time-travel
+/// state) with Iceberg's exact message.
 #[must_use]
 pub(crate) fn time_travel_error(message: String) -> KrishivError {
-    InternalError { message }.into()
+    KrishivTimeTravelNotFound { message }.into()
 }
 
 /// Iceberg's `DateTimeUtil.formatTimestampMillis`: `Instant.toString()` with `Z`
