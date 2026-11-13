@@ -156,6 +156,80 @@ pub static CONNECT_EXECUTE_AHEAD_BYTES: ConfigEntry = startup(
     None,
 );
 
+/// Sent responses a reattachable operation keeps for a client that
+/// reattaches.
+pub static CONNECT_EXECUTE_RETRY_BUFFER_SIZE: ConfigEntry = startup(
+    "krishiv.connect.execute.retryBufferSize",
+    ValueType::Size,
+    ConfigValue::Size(10 * MIB),
+    "Bytes of already-sent `ExecutePlan` responses a reattachable operation keeps, newest first, so \
+     a client that lost its stream can reattach and resume; older ones are dropped. `0` keeps \
+     none. The bytes count against the memory pool.",
+    Some("spark.connect.execute.reattachable.observerRetryBufferSize"),
+);
+
+/// Longest life of one reattachable response stream.
+pub static CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION: ConfigEntry = startup(
+    "krishiv.connect.execute.senderMaxStreamDuration",
+    ValueType::Millis,
+    ConfigValue::Duration(Duration::from_secs(120)),
+    "After this long a reattachable `ExecutePlan` or `ReattachExecute` stream ends without \
+     `ResultComplete` and the client reattaches to continue. `0` never ends it.",
+    Some("spark.connect.execute.reattachable.senderMaxStreamDuration"),
+);
+
+/// Most bytes one reattachable response stream sends.
+pub static CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE: ConfigEntry = startup(
+    "krishiv.connect.execute.senderMaxStreamSize",
+    ValueType::Size,
+    ConfigValue::Size(1024 * MIB),
+    "After sending this many bytes (the response that crosses it is still sent) a reattachable \
+     stream ends without `ResultComplete` and the client reattaches to continue. `0` never ends \
+     it.",
+    Some("spark.connect.execute.reattachable.senderMaxStreamSize"),
+);
+
+/// How long an operation may have no stream attached.
+pub static CONNECT_EXECUTE_DETACHED_TIMEOUT: ConfigEntry = startup(
+    "krishiv.connect.execute.detachedTimeout",
+    ValueType::Millis,
+    ConfigValue::Duration(Duration::from_secs(300)),
+    "A reattachable operation with no stream attached for this long is cancelled, removed and \
+     remembered as abandoned (reattaching then answers `INVALID_HANDLE.OPERATION_ABANDONED`).",
+    Some("spark.connect.execute.manager.detachedTimeout"),
+);
+
+/// How often detached operations are looked for.
+pub static CONNECT_EXECUTE_MAINTENANCE_INTERVAL: ConfigEntry = startup(
+    "krishiv.connect.execute.maintenanceInterval",
+    ValueType::Millis,
+    ConfigValue::Duration(Duration::from_secs(30)),
+    "How often the server looks for operations detached past \
+     `krishiv.connect.execute.detachedTimeout`.",
+    Some("spark.connect.execute.manager.maintenanceInterval"),
+);
+
+/// Abandoned operation ids remembered.
+pub static CONNECT_EXECUTE_ABANDONED_TOMBSTONES: ConfigEntry = startup(
+    "krishiv.connect.execute.abandonedTombstones",
+    ValueType::Int,
+    ConfigValue::Int(10_000),
+    "How many abandoned operation ids are remembered, so reattaching to one answers \
+     `INVALID_HANDLE.OPERATION_ABANDONED`; the least recently used is forgotten first.",
+    Some("spark.connect.execute.manager.abandonedTombstonesSize"),
+);
+
+/// Response bytes all operations of the server hold.
+pub static CONNECT_MAX_RESPONSE_BYTES: ConfigEntry = startup(
+    "krishiv.connect.maxResponseBytes",
+    ValueType::Size,
+    ConfigValue::Size(1024 * MIB),
+    "Most bytes of encoded `ExecutePlan` responses all operations of the server hold at once \
+     (waiting for their clients or kept for reattach); past it every operation pauses until \
+     clients read or release responses.",
+    None,
+);
+
 /// Open Connect connections.
 pub static CONNECT_MAX_CONNECTIONS: ConfigEntry = startup(
     "krishiv.connect.maxConnections",

@@ -1397,3 +1397,90 @@ fn server_entries_parse_default_and_take_sparks_names() {
     );
     assert_eq!(CONNECT_PORT.settable_by, SettableBy::Startup);
 }
+
+#[test]
+fn connect_reattach_entries_parse_default_and_take_sparks_names() {
+    let d = Config::new();
+    let size = |c: &Config, e| c.get(e).and_then(ConfigValue::as_size);
+    let millis = |c: &Config, e| c.get(e).and_then(ConfigValue::as_duration);
+    // Spark 4.3.0 `Connect.scala` lines 161-227 (static, internal).
+    assert_eq!(size(&d, &CONNECT_EXECUTE_RETRY_BUFFER_SIZE), Some(10 << 20));
+    assert_eq!(
+        millis(&d, &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION),
+        Some(Duration::from_secs(120))
+    );
+    assert_eq!(
+        size(&d, &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE),
+        Some(1 << 30)
+    );
+    assert_eq!(
+        millis(&d, &CONNECT_EXECUTE_DETACHED_TIMEOUT),
+        Some(Duration::from_secs(300))
+    );
+    assert_eq!(
+        millis(&d, &CONNECT_EXECUTE_MAINTENANCE_INTERVAL),
+        Some(Duration::from_secs(30))
+    );
+    assert_eq!(
+        d.get(&CONNECT_EXECUTE_ABANDONED_TOMBSTONES)
+            .and_then(ConfigValue::as_int),
+        Some(10_000)
+    );
+    assert_eq!(size(&d, &CONNECT_MAX_RESPONSE_BYTES), Some(1 << 30));
+
+    let mut c = Config::new();
+    c.set(
+        "spark.connect.execute.reattachable.observerRetryBufferSize",
+        "1m",
+    )
+    .unwrap();
+    c.set(
+        "spark.connect.execute.reattachable.senderMaxStreamDuration",
+        "1500",
+    )
+    .unwrap();
+    c.set(
+        "spark.connect.execute.reattachable.senderMaxStreamSize",
+        "0",
+    )
+    .unwrap();
+    c.set("spark.connect.execute.manager.detachedTimeout", "1s")
+        .unwrap();
+    c.set("spark.connect.execute.manager.maintenanceInterval", "100")
+        .unwrap();
+    c.set("spark.connect.execute.manager.abandonedTombstonesSize", "5")
+        .unwrap();
+    c.set("krishiv.connect.maxResponseBytes", "2m").unwrap();
+    assert_eq!(size(&c, &CONNECT_EXECUTE_RETRY_BUFFER_SIZE), Some(1 << 20));
+    assert_eq!(
+        millis(&c, &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION),
+        Some(Duration::from_millis(1500))
+    );
+    assert_eq!(size(&c, &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE), Some(0));
+    assert_eq!(
+        millis(&c, &CONNECT_EXECUTE_DETACHED_TIMEOUT),
+        Some(Duration::from_secs(1))
+    );
+    assert_eq!(
+        millis(&c, &CONNECT_EXECUTE_MAINTENANCE_INTERVAL),
+        Some(Duration::from_millis(100))
+    );
+    assert_eq!(
+        c.get(&CONNECT_EXECUTE_ABANDONED_TOMBSTONES)
+            .and_then(ConfigValue::as_int),
+        Some(5)
+    );
+    assert_eq!(size(&c, &CONNECT_MAX_RESPONSE_BYTES), Some(2 << 20));
+    assert!(c.set("krishiv.connect.maxResponseBytes", "-1").is_err());
+    for e in [
+        &CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+        &CONNECT_EXECUTE_DETACHED_TIMEOUT,
+        &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
+        &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
+        &CONNECT_MAX_RESPONSE_BYTES,
+    ] {
+        assert_eq!(e.settable_by, SettableBy::Startup, "{}", e.key);
+    }
+}

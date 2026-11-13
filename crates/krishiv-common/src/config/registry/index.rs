@@ -104,6 +104,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_HANDSHAKE_TIMEOUT,
     ),
     (
+        "krishiv.connect.maxResponseBytes",
+        &CONNECT_MAX_RESPONSE_BYTES,
+    ),
+    (
         "krishiv.exec.debug.planRoundTrip",
         &EXEC_DEBUG_PLAN_ROUND_TRIP,
     ),
@@ -318,6 +322,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &BUCKETING_MAX_BUCKETS,
     ),
     (
+        "krishiv.connect.execute.detachedTimeout",
+        &CONNECT_EXECUTE_DETACHED_TIMEOUT,
+    ),
+    (
+        "krishiv.connect.execute.retryBufferSize",
+        &CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+    ),
+    (
         "krishiv.connect.maxOperationsPerSession",
         &CONNECT_MAX_OPERATIONS_PER_SESSION,
     ),
@@ -402,6 +414,18 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PARTITION_OVERWRITE_MODE,
     ),
     (
+        "krishiv.connect.execute.abandonedTombstones",
+        &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
+    ),
+    (
+        "krishiv.connect.execute.maintenanceInterval",
+        &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
+    ),
+    (
+        "krishiv.connect.execute.senderMaxStreamSize",
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    ),
+    (
         "krishiv.connect.session.maintenanceInterval",
         &CONNECT_SESSION_MAINTENANCE_INTERVAL,
     ),
@@ -430,6 +454,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PYTHON_UDF_ARROW_ENABLED,
     ),
     (
+        "spark.connect.execute.manager.detachedTimeout",
+        &CONNECT_EXECUTE_DETACHED_TIMEOUT,
+    ),
+    (
         "spark.sql.optimizer.windowGroupLimitThreshold",
         &WINDOW_GROUP_LIMIT_THRESHOLD,
     ),
@@ -440,6 +468,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.execution.arrow.maxRecordsPerBatch",
         &ARROW_MAX_RECORDS_PER_BATCH,
+    ),
+    (
+        "krishiv.connect.execute.senderMaxStreamDuration",
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
     ),
     (
         "krishiv.sql.optimizer.windowGroupLimitThreshold",
@@ -454,6 +486,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &RUNTIME_FILTER_BLOOM_ENABLED,
     ),
     (
+        "spark.connect.execute.manager.maintenanceInterval",
+        &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
+    ),
+    (
         "spark.connect.session.manager.maintenanceInterval",
         &CONNECT_SESSION_MAINTENANCE_INTERVAL,
     ),
@@ -464,6 +500,22 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.skipTypeValidationOnAlterPartition",
         &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    ),
+    (
+        "spark.connect.execute.manager.abandonedTombstonesSize",
+        &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
+    ),
+    (
+        "spark.connect.execute.reattachable.senderMaxStreamSize",
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    ),
+    (
+        "spark.connect.execute.reattachable.observerRetryBufferSize",
+        &CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+    ),
+    (
+        "spark.connect.execute.reattachable.senderMaxStreamDuration",
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
     ),
     (
         "spark.connect.session.manager.closedSessionsTombstonesSize",
