@@ -438,6 +438,72 @@ fn bytes_scanned_across_a_window_boundary_are_charged() {
     );
 }
 
+#[test]
+fn a_grant_to_a_future_dropped_before_it_polls_frees_the_slot() {
+    let rg = ResourceGroups::from_json(CAPS, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let req = request("u");
+    let mut a: Pending<'_> = rg.admit(&req);
+    let mut b: Pending<'_> = rg.admit(&req);
+    let held = [poll(&mut a), poll(&mut b)];
+    let mut waiting: Pending<'_> = rg.admit(&req);
+    assert!(poll(&mut waiting).is_none());
+    drop(held);
+    // the freed slot went to `waiting`; dropping it unpolled must give the slot back
+    drop(waiting);
+    assert_eq!(rg.counts("root.q"), Some((0, 0)));
+    let mut next: Pending<'_> = rg.admit(&req);
+    assert!(poll(&mut next).is_some_and(|r| r.is_ok()), "no slot leaked");
+}
+
+#[test]
+fn a_spent_quota_refuses_a_query_that_was_already_queued() {
+    let json = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 1, "maxQueued": 2,
+        "scanQuota": 1000, "scanQuotaPeriod": "1h"}], "defaultGroup": "root"}"#;
+    let rg = ResourceGroups::from_json(json, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let req = request("u");
+    let mut a: Pending<'_> = rg.admit(&req);
+    let first = poll(&mut a)
+        .and_then(Result::ok)
+        .unwrap_or_else(|| panic!("admitted"));
+    let mut b: Pending<'_> = rg.admit(&req);
+    assert!(poll(&mut b).is_none(), "queued behind the first");
+    first
+        .slot::<GroupSlot>()
+        .unwrap_or_else(|| panic!("a group slot"))
+        .add_bytes_read(1000);
+    drop(first);
+    let err = poll(&mut b).map(Result::unwrap_err);
+    assert_eq!(
+        err.map(|e| e.error_class()),
+        Some(ErrorClass::KrishivResourceGroupQuotaExhausted),
+        "checked again when dispatched"
+    );
+}
+
+#[test]
+fn an_ancestors_hard_limit_and_queue_cap_apply_to_its_leaves() {
+    let json = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 1, "maxQueued": 1,
+        "subGroups": [{"name": "a", "hardConcurrencyLimit": 5, "maxQueued": 5},
+                      {"name": "b", "hardConcurrencyLimit": 5, "maxQueued": 5}]}],
+        "selectors": [{"user": "ua", "group": "root.a"}, {"user": "ub", "group": "root.b"}],
+        "defaultGroup": "root.a"}"#;
+    let rg = ResourceGroups::from_json(json, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let (ra, rb) = (request("ua"), request("ub"));
+    let mut f1: Pending<'_> = rg.admit(&ra);
+    let held = poll(&mut f1);
+    assert!(held.as_ref().is_some_and(Result::is_ok));
+    // root allows one running query, so a leaf with room still queues
+    let mut f2: Pending<'_> = rg.admit(&rb);
+    assert!(poll(&mut f2).is_none(), "root's hard limit holds b back");
+    // root's queue holds one, so the next is refused although b has room
+    let mut f3: Pending<'_> = rg.admit(&rb);
+    let err = poll(&mut f3).map(Result::unwrap_err);
+    assert_eq!(
+        err.map(|e| e.error_class()),
+        Some(ErrorClass::KrishivResourceGroupQueueFull)
+    );
+}
+
 fn refused(json: &str) -> String {
     let e = ResourceGroups::from_json(json, MEM).unwrap_err();
     assert_eq!(
@@ -468,6 +534,7 @@ fn the_file_is_checked() {
         .contains("maxQueued")
     );
     assert!(refused(r#"{"rootGroups":[{"name":"root","hardConcurrencyLimit":1,"maxQueued":1}],"selectors":[{"group":"nope"}],"defaultGroup":"root"}"#).contains("nope"));
+    assert!(refused(&g(r#","scanQuota":0"#)).contains("scanQuota"));
     // Trino-only knobs are ignored
     assert!(
         ResourceGroups::from_json(&g(r#","jmxExport":true,"softConcurrencyLimit":1"#), MEM).is_ok()

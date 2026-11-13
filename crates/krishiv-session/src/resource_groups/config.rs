@@ -282,6 +282,12 @@ fn group(v: &Value, at: &str, total_memory: usize) -> Result<GroupCfg, KrishivEr
         (None, None) => None,
         (Some(_), _) => {
             let bytes = uint(obj, "scanQuota", at)?.unwrap_or(0);
+            if bytes == 0 {
+                return Err(invalid(
+                    &format!("{at}.scanQuota"),
+                    "must be at least 1 byte (a zero quota would refuse every query)",
+                ));
+            }
             let period_ms = match obj.get("scanQuotaPeriod") {
                 None => 3_600_000,
                 Some(p) => duration_ms(p, &format!("{at}.scanQuotaPeriod"))?,
