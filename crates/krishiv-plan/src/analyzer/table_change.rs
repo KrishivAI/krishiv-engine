@@ -368,7 +368,18 @@ impl Alter<'_> {
     fn insertion_point(&self, position: Option<&ColumnPosition>) -> Result<usize, KrishivError> {
         match position {
             Some(ColumnPosition::First) => Ok(0),
-            Some(ColumnPosition::After(name)) => Ok(self.find(name)? + 1),
+            Some(ColumnPosition::After(name)) => {
+                let at = self.find(name)?;
+                // Partition columns stay last: nothing goes between or after them.
+                if self.is_partition(&self.state.columns[at].name) {
+                    return Err(CannotAlterPartitionColumn {
+                        table_name: self.input.table.to_string(),
+                        column_name: quoted(name),
+                    }
+                    .into());
+                }
+                Ok(at + 1)
+            }
             None => Ok(self
                 .state
                 .columns
@@ -984,6 +995,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(names(&t), ["b", "p"]);
+    }
+
+    #[test]
+    fn nothing_is_placed_after_a_partition_column() {
+        let (class, _) = fails(&[add("c", Some(ColumnPosition::After("p".into())))], full());
+        assert_eq!(class, ErrorClass::CannotAlterPartitionColumn);
+        let (class, _) = fails(
+            &[TableChange::UpdateColumnPosition {
+                path: path("a"),
+                position: ColumnPosition::After("P".into()),
+            }],
+            full(),
+        );
+        assert_eq!(class, ErrorClass::CannotAlterPartitionColumn);
+        // After the last data column is the edge that is allowed.
+        let t = run(&[add("c", Some(ColumnPosition::After("b".into())))], full()).unwrap();
+        assert_eq!(names(&t), ["a", "b", "c", "p"]);
+        let t = run(
+            &[TableChange::UpdateColumnPosition {
+                path: path("a"),
+                position: ColumnPosition::After("b".into()),
+            }],
+            full(),
+        )
+        .unwrap();
+        assert_eq!(names(&t), ["b", "a", "p"]);
     }
 
     #[test]
