@@ -232,6 +232,6 @@ fn a_copy_into_a_closed_session_leaves_nothing_behind() {
     // The directory goes once its last holder drops it.
     drop(target);
     assert!(!dir.exists());
-    // A late install into the closed session is refused, not recorded.
+    // The source session keeps its own artifacts.
     assert!(source.artifacts().snapshot().is_some());
 }
