@@ -23,11 +23,11 @@
   <a href="https://github.com/KrishivAI"><img src="https://img.shields.io/github/followers/KrishivAI?style=social" alt="Follow KrishivAI"></a>
 </p>
 
-<h3 align="center">Your Spark code. No JVM. One engine for batch, streaming and always-fresh views.</h3>
+<h3 align="center">Spark in Rust, no JVM. Your PySpark and Spark SQL, 10× faster on one machine.</h3>
 
-**Krishiv** is a Rust-native, Apache Spark™-compatible compute engine. Keep the PySpark and Spark SQL you already
-write and run it on a vectorized, Arrow-native engine, in your own process today, and on a server or a cluster as the
-next releases land.
+**Krishiv** is an Apache Spark™ alternative written in Rust: run the PySpark and Spark SQL you already write without
+the JVM, on a vectorized, Arrow-native engine. It runs in your own process today, and on a server or a cluster as the
+next releases land, with one engine for batch, streaming and always-fresh views.
 
 > [!NOTE]
 > **Krishiv 0.2 is out** ([release notes](https://github.com/KrishivAI/krishiv-engine/releases/tag/v0.2.0)): the
