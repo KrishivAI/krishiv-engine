@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The gRPC listener (design P3-T001 §3.3, §3.4): HTTP/2 limits set before
 //! any request is read, a connection cap on the accept loop, the idle
-//! sweeper, and graceful shutdown.
+//! sweeper, the abandoned-operation maintenance, and graceful shutdown.
 //!
 //! Shutdown: once the shutdown future resolves the server is draining (new
 //! RPCs get `UNAVAILABLE`, no new connection is accepted), running queries
@@ -236,6 +236,11 @@ impl ConnectServer {
             Arc::clone(&manager),
             config.maintenance_interval,
         )));
+        let _abandoner = AbortOnDrop(tokio::spawn(abandon_loop(
+            Arc::clone(&manager),
+            config.execute.maintenance_interval,
+            config.execute.detached_timeout,
+        )));
         let incoming = capped(listener, config.max_connections, config.handshake_timeout);
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
         let server = router.serve_with_incoming_shutdown(incoming, async {
@@ -320,6 +325,18 @@ async fn sweep_loop(manager: Arc<SessionManager>, every: Duration) {
     loop {
         tick.tick().await;
         manager.sweep();
+    }
+}
+
+/// Spark's execution maintenance (`SparkConnectExecutionManager`, v4.3.0
+/// lines 315-362): every `every`, operations detached for `timeout` are
+/// abandoned.
+async fn abandon_loop(manager: Arc<SessionManager>, every: Duration, timeout: Duration) {
+    let mut tick = tokio::time::interval(every.max(Duration::from_millis(10)));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        manager.abandon_detached(timeout);
     }
 }
 

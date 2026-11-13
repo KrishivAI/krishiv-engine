@@ -5,19 +5,18 @@
 //!
 //! T001 implements the session RPCs (`ReleaseSession`) and what every RPC
 //! shares (the principal, the draining refusal). T011a (PR-11a) adds
-//! `ExecutePlan` (`crate::execute`) and the minimal `ReattachExecute` and
-//! `ReleaseExecute` of design P3-T011a §3.4 (no replay buffer: a live
-//! operation cannot be reattached yet). PR-11b adds `AnalyzePlan`
-//! (`crate::analyze`), `Config` (`crate::config`) and `Interrupt`
-//! (`crate::interrupt`); the rest answer `UNIMPLEMENTED` until PR-15.
+//! `ExecutePlan` (`crate::execute`), `ReattachExecute` and `ReleaseExecute`
+//! (with the replay buffer, sender caps and detach of PR-15a, design
+//! P3-T011a §3.8). PR-11b adds `AnalyzePlan` (`crate::analyze`), `Config`
+//! (`crate::config`) and `Interrupt` (`crate::interrupt`); the rest answer
+//! `UNIMPLEMENTED` until PR-15.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use krishiv_common::error::{
-    ConnectInvalidPlanInvalidOneOfFieldNotSet, InvalidCursorDisconnected,
-    InvalidCursorNotReattachable, InvalidCursorPositionNotFound, InvalidHandleOperationNotFound,
-    KrishivError,
+    ConnectInvalidPlanInvalidOneOfFieldNotSet, InvalidCursorNotReattachable,
+    InvalidHandleOperationAbandoned, InvalidHandleOperationNotFound, KrishivError,
 };
 use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
@@ -27,8 +26,10 @@ use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::codec::WireCodec;
+use crate::execute::ResponseBudget;
 use crate::manager::{SessionEntry, SessionManager};
 use crate::operation::ExecuteLimits;
+use crate::sender::{self, SenderCaps};
 use crate::status::status_of;
 use crate::{analyze, config, execute, interrupt};
 
@@ -62,6 +63,7 @@ pub struct ConnectService {
     draining: Arc<AtomicBool>,
     local: Principal,
     limits: ExecuteLimits,
+    budget: ResponseBudget,
 }
 
 impl ConnectService {
@@ -73,15 +75,24 @@ impl ConnectService {
             manager,
             draining,
             local: Principal::local_user(),
+            budget: ResponseBudget::new(ExecuteLimits::default().max_response_bytes),
             limits: ExecuteLimits::default(),
         }
     }
 
-    /// This service with the `ExecutePlan` limits `limits`.
+    /// This service with the `ExecutePlan` limits `limits` (and a response
+    /// budget of `limits.max_response_bytes`).
     #[must_use]
     pub fn with_limits(mut self, limits: ExecuteLimits) -> Self {
+        self.budget = ResponseBudget::new(limits.max_response_bytes);
         self.limits = limits;
         self
+    }
+
+    /// The server's response budget (`krishiv.connect.maxResponseBytes`).
+    #[must_use]
+    pub fn response_budget(&self) -> &ResponseBudget {
+        &self.budget
     }
 
     /// The session manager.
@@ -145,7 +156,19 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        let stream = execute::execute_plan(&entry, &request, &self.limits)
+        // An abandoned id is refused (Spark's `createExecuteHolder`, v4.3.0
+        // lines 105-120); a live one is attached to by `execute_plan`.
+        if let Some(id) = &request.operation_id
+            && entry.operations().get(id).is_none()
+            && self
+                .manager
+                .is_abandoned(&principal, &request.session_id, id)
+        {
+            return Err(status_of(
+                &InvalidHandleOperationAbandoned { handle: id.clone() }.into(),
+            ));
+        }
+        let stream = execute::execute_plan(&entry, &request, &self.limits, &self.budget)
             .await
             .map_err(|e| status_of(&e))?;
         Ok(Response::new(stream))
@@ -226,13 +249,15 @@ impl SparkConnectService for ConnectService {
             .map_err(|e| status_of(&e))
     }
 
-    /// Spark's `SparkConnectReattachExecuteHandler`, minimal (design
-    /// P3-T011a §3.4): a finished, cancelled or dropped operation has been
-    /// removed (`INVALID_HANDLE.OPERATION_NOT_FOUND`); a live one that is not
-    /// reattachable is `INVALID_CURSOR.NOT_REATTACHABLE`; a live reattachable
-    /// one still streams to its first RPC, and the new stream gets
-    /// `INVALID_CURSOR.DISCONNECTED` (Spark ends the old stream with it
-    /// instead; a recorded PR-11 difference until the replay buffer).
+    /// Spark's `SparkConnectReattachExecuteHandler` (v4.3.0 lines 30-66)
+    /// and `SparkConnectExecutionManager.reattachExecuteHolder` (lines
+    /// 227-252): the session is looked up (its server-side id checked); an
+    /// unknown operation is `INVALID_HANDLE.OPERATION_ABANDONED` when it was
+    /// abandoned, else `OPERATION_NOT_FOUND`; one that is not reattachable
+    /// is `INVALID_CURSOR.NOT_REATTACHABLE`; `last_response_id` must name a
+    /// response it produced (`INVALID_CURSOR.POSITION_NOT_FOUND`). A new
+    /// sender then resumes after it, and the sender attached before ends
+    /// with `INVALID_CURSOR.DISCONNECTED`.
     async fn reattach_execute(
         &self,
         request: Request<Decoded<pb::ReattachExecuteRequest>>,
@@ -248,23 +273,43 @@ impl SparkConnectService for ConnectService {
                 request.client_observed_server_side_session_id.as_deref(),
             )
             .map_err(|e| status_of(&e))?;
-        let error: KrishivError = match entry.operations().get(&request.operation_id) {
-            None => InvalidHandleOperationNotFound {
-                handle: request.operation_id.clone(),
-            }
-            .into(),
-            Some(op) if !op.reattachable() => InvalidCursorNotReattachable {}.into(),
-            Some(_) => InvalidCursorDisconnected {}.into(),
+        let Some(op) = entry.operations().get(&request.operation_id) else {
+            let handle = request.operation_id.clone();
+            let error: KrishivError =
+                if self
+                    .manager
+                    .is_abandoned(&principal, &request.session_id, &request.operation_id)
+                {
+                    InvalidHandleOperationAbandoned { handle }.into()
+                } else {
+                    InvalidHandleOperationNotFound { handle }.into()
+                };
+            return Err(status_of(&error));
         };
-        Err(status_of(&error))
+        if !op.reattachable() {
+            return Err(status_of(&InvalidCursorNotReattachable {}.into()));
+        }
+        // Looked up before attaching: an unknown id leaves the attached
+        // sender alone (`ExecuteHolder.runGrpcResponseSender`, lines 192-198).
+        let after = match &request.last_response_id {
+            Some(id) => op.replay().index_of(id).map_err(|e| status_of(&e))?,
+            None => 0,
+        };
+        let caps = SenderCaps::of(&op, &self.limits);
+        Ok(Response::new(sender::attach(
+            op,
+            Arc::clone(entry.operations()),
+            after,
+            caps,
+        )))
     }
 
-    /// Spark's `SparkConnectReleaseExecuteHandler`: the session is looked up
-    /// without the server-side id check; an unknown operation is a success
-    /// without `operation_id`. `release_all` cancels and removes the
-    /// operation; `release_until` succeeds for a response id the operation
-    /// sent (there is no buffer to trim yet) and is
-    /// `INVALID_CURSOR.POSITION_NOT_FOUND` for any other.
+    /// Spark's `SparkConnectReleaseExecuteHandler` (v4.3.0 lines 31-69): the
+    /// session is looked up without the server-side id check; an unknown
+    /// operation is a success without `operation_id`. `release_all` removes
+    /// and closes the operation (no tombstone); `release_until` drops its
+    /// buffered responses up to the id, `INVALID_CURSOR.POSITION_NOT_FOUND`
+    /// for an id it never produced.
     async fn release_execute(
         &self,
         request: Request<Decoded<pb::ReleaseExecuteRequest>>,
@@ -288,18 +333,13 @@ impl SparkConnectService for ConnectService {
             response.operation_id = Some(op.id().as_str().to_owned());
             match &request.release {
                 Some(Release::ReleaseAll(_)) => {
-                    op.cancel();
                     entry.operations().remove(&op);
+                    op.close();
                 }
                 Some(Release::ReleaseUntil(until)) => {
-                    if !op.has_sent(&until.response_id) {
-                        return Err(status_of(
-                            &InvalidCursorPositionNotFound {
-                                response_id: until.response_id.clone(),
-                            }
-                            .into(),
-                        ));
-                    }
+                    op.replay()
+                        .release_until(&until.response_id)
+                        .map_err(|e| status_of(&e))?;
                 }
                 // Spark throws a classless UnsupportedOperationException.
                 None => {

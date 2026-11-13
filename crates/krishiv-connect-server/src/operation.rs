@@ -13,21 +13,28 @@
 //! The map's lock guards lookups, inserts and removals only; nothing awaits
 //! under it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use krishiv_common::config::{
-    CONNECT_EXECUTE_AHEAD_BYTES, CONNECT_MAX_OPERATIONS_PER_SESSION, Config, ConfigValue,
+    CONNECT_EXECUTE_AHEAD_BYTES, CONNECT_EXECUTE_DETACHED_TIMEOUT,
+    CONNECT_EXECUTE_MAINTENANCE_INTERVAL, CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+    CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION, CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    CONNECT_MAX_OPERATIONS_PER_SESSION, CONNECT_MAX_RESPONSE_BYTES, Config, ConfigValue,
 };
 use krishiv_common::error::{
-    InternalError, InvalidCursorDisconnected, InvalidHandleOperationAlreadyExists, KrishivError,
-    KrishivInvalidOperationTag, KrishivOperationLimit,
+    InternalError, InvalidHandleOperationAlreadyExists, KrishivError, KrishivInvalidOperationTag,
+    KrishivOperationLimit,
 };
-use krishiv_memory::ConsumerHandle;
 use krishiv_session::QueryId;
 use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
+
+pub use self::replay::Replay;
+
+pub mod replay;
 
 /// The limits of `ExecutePlan` (design P3-T011a §3.1, §3.2).
 #[derive(Debug, Clone)]
@@ -44,6 +51,27 @@ pub struct ExecuteLimits {
     /// The largest Arrow batch before the 0.7 factor
     /// (`spark.connect.grpc.arrow.maxBatchSize`, static, 128 MiB).
     pub max_batch_size: usize,
+    /// Bytes of sent responses a reattachable operation keeps for a
+    /// reattach (`spark.connect.execute.reattachable.observerRetryBufferSize`,
+    /// 10 MiB).
+    pub retry_buffer_size: usize,
+    /// A reattachable stream ends (OK, no `ResultComplete`) after this long;
+    /// zero never (`spark.connect.execute.reattachable.senderMaxStreamDuration`,
+    /// 2 min).
+    pub sender_max_stream_duration: Duration,
+    /// A reattachable stream ends once it sent more than this many bytes;
+    /// zero never (`spark.connect.execute.reattachable.senderMaxStreamSize`,
+    /// 1 GiB).
+    pub sender_max_stream_size: usize,
+    /// A reattachable operation with no stream attached this long is
+    /// abandoned (`spark.connect.execute.manager.detachedTimeout`, 5 min).
+    pub detached_timeout: Duration,
+    /// How often detached operations are looked for
+    /// (`spark.connect.execute.manager.maintenanceInterval`, 30 s).
+    pub maintenance_interval: Duration,
+    /// Response bytes all operations of the server hold at once
+    /// (`krishiv.connect.maxResponseBytes`, 1 GiB).
+    pub max_response_bytes: usize,
 }
 
 impl Default for ExecuteLimits {
@@ -53,6 +81,12 @@ impl Default for ExecuteLimits {
             ahead_bytes: 64 * 1024 * 1024,
             max_plan_size: 512 * 1024 * 1024,
             max_batch_size: 128 * 1024 * 1024,
+            retry_buffer_size: 10 * 1024 * 1024,
+            sender_max_stream_duration: Duration::from_secs(120),
+            sender_max_stream_size: 1024 * 1024 * 1024,
+            detached_timeout: Duration::from_secs(300),
+            maintenance_interval: Duration::from_secs(30),
+            max_response_bytes: 1024 * 1024 * 1024,
         }
     }
 }
@@ -62,17 +96,31 @@ impl ExecuteLimits {
     #[must_use]
     pub fn from_config(config: &Config) -> Self {
         let d = Self::default();
+        let size = |e| {
+            config
+                .get(e)
+                .and_then(ConfigValue::as_size)
+                .and_then(|v| usize::try_from(v).ok())
+        };
+        let duration = |e| config.get(e).and_then(ConfigValue::as_duration);
         Self {
             max_operations_per_session: config
                 .get(&CONNECT_MAX_OPERATIONS_PER_SESSION)
                 .and_then(ConfigValue::as_int)
                 .and_then(|v| usize::try_from(v).ok())
                 .unwrap_or(d.max_operations_per_session),
-            ahead_bytes: config
-                .get(&CONNECT_EXECUTE_AHEAD_BYTES)
-                .and_then(ConfigValue::as_size)
-                .and_then(|v| usize::try_from(v).ok())
-                .unwrap_or(d.ahead_bytes),
+            ahead_bytes: size(&CONNECT_EXECUTE_AHEAD_BYTES).unwrap_or(d.ahead_bytes),
+            retry_buffer_size: size(&CONNECT_EXECUTE_RETRY_BUFFER_SIZE)
+                .unwrap_or(d.retry_buffer_size),
+            sender_max_stream_duration: duration(&CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION)
+                .unwrap_or(d.sender_max_stream_duration),
+            sender_max_stream_size: size(&CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE)
+                .unwrap_or(d.sender_max_stream_size),
+            detached_timeout: duration(&CONNECT_EXECUTE_DETACHED_TIMEOUT)
+                .unwrap_or(d.detached_timeout),
+            maintenance_interval: duration(&CONNECT_EXECUTE_MAINTENANCE_INTERVAL)
+                .unwrap_or(d.maintenance_interval),
+            max_response_bytes: size(&CONNECT_MAX_RESPONSE_BYTES).unwrap_or(d.max_response_bytes),
             ..d
         }
     }
@@ -126,24 +174,25 @@ pub fn validate_tags(tags: &[String]) -> Result<Arc<[Arc<str>]>, KrishivError> {
 /// # Errors
 /// `INTERNAL_ERROR` when the system has no random source.
 pub fn new_operation_id() -> Result<QueryId, KrishivError> {
+    QueryId::parse(&replay::uuid_text(random_uuid()?))
+}
+
+/// The bits of a fresh random version 4 UUID (Spark's `UUID.randomUUID`):
+/// operation and response ids.
+///
+/// # Errors
+/// `INTERNAL_ERROR` when the system has no random source.
+pub fn random_uuid() -> Result<u128, KrishivError> {
     let mut b = [0_u8; 16];
     getrandom::fill(&mut b).map_err(|e| -> KrishivError {
         InternalError {
-            message: format!("no random source for an operation id: {e}"),
+            message: format!("no random source for an id: {e}"),
         }
         .into()
     })?;
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
-    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    QueryId::parse(&format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    ))
+    Ok(u128::from_be_bytes(b))
 }
 
 /// The SHA-256 of a request's `Plan` bytes: "the same plan" for an
@@ -166,19 +215,21 @@ pub struct Operation {
     plan_digest: [u8; 32],
     tags: Arc<[Arc<str>]>,
     reattachable: bool,
-    /// The response ids sent so far (`ReleaseExecute.release_until` accepts
-    /// only these).
-    sent: Mutex<HashSet<String>>,
+    /// Its responses and attached senders (Spark's
+    /// `ExecuteResponseObserver`).
+    replay: Replay,
     /// [`RUNNING`], then [`FINISHED`] or [`CANCELLED`], each set once by a
     /// compare-and-swap (Spark's `ExecuteThreadRunner` state).
     state: AtomicU8,
     cancel: Notify,
-    /// The memory consumer its buffered responses are reserved from.
-    responses: OnceLock<Arc<ConsumerHandle>>,
+    /// Set by [`Self::close`]; wakes the encoder.
+    closed: Notify,
 }
 
 impl Operation {
-    /// A new operation.
+    /// A new operation. A reattachable one keeps 10 MiB of sent responses
+    /// for a reattach ([`Self::with_retry_buffer`]); another keeps none
+    /// (Spark's `ExecuteResponseObserver`, v4.3.0 lines 106-110).
     #[must_use]
     pub fn new(
         id: QueryId,
@@ -186,16 +237,31 @@ impl Operation {
         tags: Arc<[Arc<str>]>,
         reattachable: bool,
     ) -> Self {
+        let retry = if reattachable {
+            ExecuteLimits::default().retry_buffer_size
+        } else {
+            0
+        };
         Self {
             id,
             plan_digest,
             tags,
             reattachable,
-            sent: Mutex::new(HashSet::new()),
+            replay: Replay::new(retry, reattachable),
             state: AtomicU8::new(RUNNING),
             cancel: Notify::new(),
-            responses: OnceLock::new(),
+            closed: Notify::new(),
         }
+    }
+
+    /// This operation keeping `bytes` of sent responses for a reattach
+    /// (a reattachable one only).
+    #[must_use]
+    pub fn with_retry_buffer(mut self, bytes: usize) -> Self {
+        if self.reattachable {
+            self.replay = Replay::new(bytes, true);
+        }
+        self
     }
 
     /// The operation id (the engine query id of its queries).
@@ -222,42 +288,23 @@ impl Operation {
         self.reattachable
     }
 
-    /// Notes that the response `response_id` was produced.
-    pub fn record_sent(&self, response_id: &str) {
-        self.sent
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(response_id.to_owned());
-    }
-
-    /// Whether this operation produced the response `response_id`.
+    /// Its responses and attached senders.
     #[must_use]
-    pub fn has_sent(&self, response_id: &str) -> bool {
-        self.sent
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains(response_id)
+    pub fn replay(&self) -> &Replay {
+        &self.replay
     }
 
-    /// Sets the memory consumer of the operation's buffered responses (once).
-    pub fn set_responses_consumer(&self, consumer: &Arc<ConsumerHandle>) {
-        let _ = self.responses.set(Arc::clone(consumer));
-    }
-
-    /// The most bytes of responses the operation held at once, waiting for
-    /// its client (`connect_responses`); 0 before it produced any.
+    /// The most bytes of responses the operation held at once (waiting for
+    /// its client or kept for a reattach); 0 before it produced any.
     #[must_use]
     pub fn buffered_peak(&self) -> usize {
-        self.responses.get().map_or(0, |c| c.peak())
+        self.replay.peak()
     }
 
     /// How many responses this operation produced so far.
     #[must_use]
     pub fn sent_count(&self) -> usize {
-        self.sent
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len()
+        usize::try_from(self.replay.produced()).unwrap_or(usize::MAX)
     }
 
     /// Asks the operation to stop: its stream ends with
@@ -304,6 +351,36 @@ impl Operation {
         }
         self.cancel.notified().await;
     }
+
+    /// Closes the operation (Spark's `ExecuteHolder.close`, v4.3.0 lines
+    /// 283-299; ReleaseExecute `release_all`, abandonment, a released
+    /// session): interrupts it if it still runs, ends every attached stream
+    /// with `INVALID_CURSOR.DISCONNECTED` and drops its buffered responses
+    /// (their memory and budgets return). Idempotent.
+    pub fn close(&self) {
+        self.cancel();
+        self.replay.close();
+        self.closed.notify_one();
+    }
+
+    /// Resolves once [`Self::close`] ran (one waiter: the encoder).
+    pub async fn closed(&self) {
+        if self.replay.is_closed() {
+            return;
+        }
+        self.closed.notified().await;
+    }
+}
+
+/// What [`Operations::register`] did.
+#[derive(Debug)]
+pub enum Admitted {
+    /// The operation was registered.
+    New,
+    /// A live operation holds the id with the same plan: the request
+    /// attaches to it from the start (Spark's
+    /// `SparkConnectExecutePlanHandler`, v4.3.0 lines 52-55).
+    Existing(Arc<Operation>),
 }
 
 /// The live operations of one session.
@@ -317,25 +394,24 @@ impl Operations {
         self.live.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Registers `op`.
+    /// Registers `op`, or finds the live operation of its id running the
+    /// same plan ([`Admitted::Existing`]).
     ///
     /// # Errors
-    /// For an id a live operation holds: `INVALID_CURSOR.DISCONNECTED` when
-    /// it runs the same plan (Spark would reattach the new stream to it from
-    /// the start; PR-11 has no replay buffer, a recorded difference) and
-    /// `INVALID_HANDLE.OPERATION_ALREADY_EXISTS` for another plan;
-    /// `KRISHIV_OPERATION_LIMIT` past `max` live operations.
-    pub fn register(&self, op: &Arc<Operation>, max: usize) -> Result<(), KrishivError> {
+    /// `INVALID_HANDLE.OPERATION_ALREADY_EXISTS` for an id a live operation
+    /// holds with another plan; `KRISHIV_OPERATION_LIMIT` past `max` live
+    /// operations.
+    pub fn register(&self, op: &Arc<Operation>, max: usize) -> Result<Admitted, KrishivError> {
         let mut live = self.lock();
         if let Some(existing) = live.get(op.id()) {
-            return Err(if existing.plan_digest() == op.plan_digest() {
-                InvalidCursorDisconnected {}.into()
+            return if existing.plan_digest() == op.plan_digest() {
+                Ok(Admitted::Existing(Arc::clone(existing)))
             } else {
-                InvalidHandleOperationAlreadyExists {
+                Err(InvalidHandleOperationAlreadyExists {
                     handle: op.id().as_str().to_owned(),
                 }
-                .into()
-            });
+                .into())
+            };
         }
         if live.len() >= max {
             return Err(KrishivOperationLimit {
@@ -345,7 +421,7 @@ impl Operations {
             .into());
         }
         live.insert(op.id().clone(), Arc::clone(op));
-        Ok(())
+        Ok(Admitted::New)
     }
 
     /// The live operation `id` (any text; an id that is not a UUID is simply
@@ -367,14 +443,14 @@ impl Operations {
         }
     }
 
-    /// Cancels and removes every live operation (the session is released).
-    /// Returns how many.
-    pub fn cancel_all(&self) -> usize {
+    /// Removes and closes every live operation (the session is released;
+    /// Spark's `removeAllExecutionsForSession`). Returns them.
+    pub fn close_all(&self) -> Vec<Arc<Operation>> {
         let ops: Vec<Arc<Operation>> = self.lock().drain().map(|(_, op)| op).collect();
         for op in &ops {
-            op.cancel();
+            op.close();
         }
-        ops.len()
+        ops
     }
 
     /// Every live operation.

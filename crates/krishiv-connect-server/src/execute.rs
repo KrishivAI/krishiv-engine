@@ -12,16 +12,19 @@
 //!
 //! Every response carries the session ids, the operation id and a fresh
 //! response id (Spark's `ExecuteResponseObserver`). The encoder pushes into
-//! a channel bounded in bytes (`krishiv.connect.execute.aheadBytes`, the
-//! bytes reserved from the memory pool as consumer `connect_responses`);
-//! tonic's response stream drains it, so the gRPC window is the
-//! backpressure and the result is never held in full.
+//! the operation's replay buffer (`crate::operation::replay`), each response
+//! holding its bytes of the operation's ahead budget until a sender takes it
+//! (`krishiv.connect.execute.aheadBytes`) and of the server's response budget
+//! (`krishiv.connect.maxResponseBytes`) and the memory pool (consumer
+//! `connect_responses`) until it leaves the buffer. So the engine pauses
+//! once `aheadBytes` are unread, attached or not (design P3-T011a §3.8), and
+//! the result is never held in full. Senders (`crate::sender`) stream the
+//! buffer to the client; the gRPC window is their backpressure.
 //!
-//! Errors end the stream with the gRPC status of [`crate::status`]. A
-//! cancelled operation (ReleaseExecute `release_all`, ReleaseSession) ends
-//! with `OPERATION_CANCELED`. A client that drops the stream cancels the
-//! query; in PR-11 the operation is then removed without a tombstone.
-//! Commands answer `CONNECT_INVALID_PLAN` (56K00) until P3-T012.
+//! Errors end the stream with the gRPC status of [`crate::status`] after the
+//! responses before them. An interrupted operation ends with
+//! `OPERATION_CANCELED`. Commands answer `CONNECT_INVALID_PLAN` (56K00)
+//! until P3-T012.
 //!
 //! The core is protocol-neutral where it is cheap: the plan is decoded into
 //! a `krishiv_plan::Plan`, run as a `DataFrame` and encoded as Arrow IPC;
@@ -37,7 +40,8 @@ use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use krishiv_common::error::{
     ConnectInvalidPlanInvalidEnum, ConnectInvalidPlanInvalidOneOfFieldNotSet,
-    ConnectInvalidPlanPlanSizeLargerThanMax, KrishivError, OperationCanceled,
+    ConnectInvalidPlanPlanSizeLargerThanMax, InvalidCursorNotReattachable, KrishivError,
+    OperationCanceled,
 };
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_request::request_option::RequestOption;
@@ -48,25 +52,25 @@ use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::plan::compressed_operation::OpType as CompressedOpType;
 use krishiv_connect::translate::{TranslateConf, command_not_supported, translate_relation};
 use krishiv_connect::wire;
-use krishiv_memory::{ConsumerHandle, Reservation};
+use krishiv_memory::ConsumerHandle;
 use krishiv_session::{DataFrame, QueryOptions, RecordBatchStream};
 use prost::Message;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+use tokio::sync::Semaphore;
 use tonic::Status;
 
 use self::arrow::EncodeSettings;
 use crate::manager::SessionEntry;
+use crate::operation::replay::{Held, uuid_text};
 use crate::operation::{
-    ExecuteLimits, Operation, Operations, new_operation_id, plan_digest, validate_tags,
+    Admitted, ExecuteLimits, Operation, Operations, new_operation_id, plan_digest, random_uuid,
+    validate_tags,
 };
+use crate::sender::{self, SenderCaps};
 use crate::status::status_of;
 
 /// The default of `spark.connect.session.resultChunking.maxChunkSize`
 /// (`(0.9 × 128 MiB).toInt`, Spark 4.1+).
 const DEFAULT_MAX_CHUNK_SIZE: i64 = 120_795_955;
-
-/// How long a failed operation waits for room to send its error.
-const FAIL_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The smallest preferred chunk size Spark honours.
 const MIN_PREFERRED_CHUNK: i64 = 1024;
@@ -101,31 +105,76 @@ fn options(request: &pb::ExecutePlanRequest) -> Options {
     out
 }
 
-/// Removes its operation from the session when dropped.
+/// The server's budget of response bytes held by all operations
+/// (`krishiv.connect.maxResponseBytes`, design P3-T011a §3.8): a response
+/// takes its bytes before it is buffered and returns them when it leaves the
+/// buffer, so past the cap every encoder waits (a new operation at its first
+/// response) until clients read or release.
+#[derive(Debug, Clone)]
+pub struct ResponseBudget {
+    permits: Arc<Semaphore>,
+    cap: usize,
+}
+
+impl ResponseBudget {
+    /// A budget of `bytes` (at least 1).
+    #[must_use]
+    pub fn new(bytes: usize) -> Self {
+        let cap = bytes.clamp(1, Semaphore::MAX_PERMITS);
+        Self {
+            permits: Arc::new(Semaphore::new(cap)),
+            cap,
+        }
+    }
+
+    /// Bytes no response holds now.
+    #[must_use]
+    pub fn available(&self) -> usize {
+        self.permits.available_permits()
+    }
+}
+
+/// Removes its operation from the session when dropped, unless kept: the
+/// operation failed before its stream started.
 struct Registered {
     operations: Arc<Operations>,
-    op: Arc<Operation>,
+    op: Option<Arc<Operation>>,
+}
+
+impl Registered {
+    /// The operation runs: it leaves the session when released, abandoned
+    /// or (not reattachable) when its stream ends.
+    fn keep(mut self) {
+        self.op = None;
+    }
 }
 
 impl Drop for Registered {
     fn drop(&mut self) {
-        self.operations.remove(&self.op);
+        if let Some(op) = self.op.take() {
+            op.close();
+            self.operations.remove(&op);
+        }
     }
 }
 
-/// Starts `request` on the session `entry`.
+/// Starts `request` on the session `entry`; with the id of a live
+/// operation running the same plan, attaches to it from the start instead
+/// (Spark's `SparkConnectExecutePlanHandler`, v4.3.0 lines 47-60).
 ///
 /// # Errors
 /// Before the first response: `INVALID_HANDLE.FORMAT` for an operation id
 /// that is not a UUID, `KRISHIV_INVALID_OPERATION_TAG`, the refusals of
-/// [`Operations::register`] and of the engine's operation table
-/// (`INVALID_HANDLE.OPERATION_ABANDONED` for an id used in the last 30
-/// minutes), the plan's decoding and translation errors, and analysis
-/// errors.
+/// [`Operations::register`], `INVALID_CURSOR.NOT_REATTACHABLE` for the live
+/// id of a non-reattachable operation, the refusals of the engine's
+/// operation table (`INVALID_HANDLE.OPERATION_ABANDONED` for an id used in
+/// the last 30 minutes), the plan's decoding and translation errors, and
+/// analysis errors.
 pub async fn execute_plan(
     entry: &Arc<SessionEntry>,
     request: &pb::ExecutePlanRequest,
     limits: &ExecuteLimits,
+    budget: &ResponseBudget,
 ) -> Result<ResponseStream, KrishivError> {
     let id = match &request.operation_id {
         Some(text) => krishiv_session::QueryId::parse(text)?,
@@ -134,18 +183,27 @@ pub async fn execute_plan(
     let tags = validate_tags(&request.tags)?;
     let opts = options(request);
     let plan = request.plan.clone().unwrap_or_default();
-    let op = Arc::new(Operation::new(
-        id.clone(),
-        plan_digest(&plan.encode_to_vec()),
-        tags,
-        opts.reattachable,
-    ));
-    entry
-        .operations()
-        .register(&op, limits.max_operations_per_session)?;
+    let op = Arc::new(
+        Operation::new(
+            id.clone(),
+            plan_digest(&plan.encode_to_vec()),
+            tags,
+            opts.reattachable,
+        )
+        .with_retry_buffer(limits.retry_buffer_size),
+    );
+    let operations = Arc::clone(entry.operations());
+    if let Admitted::Existing(live) = operations.register(&op, limits.max_operations_per_session)? {
+        // Spark's `reattachExecuteHolder(holder, observer, None)`.
+        if !live.reattachable() {
+            return Err(InvalidCursorNotReattachable {}.into());
+        }
+        let caps = SenderCaps::of(&live, limits);
+        return Ok(sender::attach(live, operations, 0, caps));
+    }
     let registered = Registered {
-        operations: Arc::clone(entry.operations()),
-        op: Arc::clone(&op),
+        operations: Arc::clone(&operations),
+        op: Some(Arc::clone(&op)),
     };
     let session = entry.session();
     let conf = session.conf();
@@ -155,34 +213,23 @@ pub async fn execute_plan(
     let schema_response = schema::proto_schema(&schema)?;
     let settings = encode_settings(&conf, limits, opts.chunking);
 
-    let permits = Arc::new(Semaphore::new(
-        limits.ahead_bytes.clamp(1, Semaphore::MAX_PERMITS),
-    ));
-    let consumer = ConsumerHandle::register(session.runtime().memory(), "connect_responses", None);
-    op.set_responses_consumer(&consumer);
-    let (tx, rx) = mpsc::channel::<Item>(1024);
     let sender = Sender {
-        tx,
-        permits,
-        cap: limits.ahead_bytes.max(1),
-        consumer,
+        ahead: Arc::new(Semaphore::new(
+            limits.ahead_bytes.clamp(1, Semaphore::MAX_PERMITS),
+        )),
+        ahead_cap: limits.ahead_bytes.clamp(1, Semaphore::MAX_PERMITS),
+        budget: budget.clone(),
+        consumer: ConsumerHandle::register(session.runtime().memory(), "connect_responses", None),
         op: Arc::clone(&op),
         session_id: request.session_id.clone(),
         server_side_session_id: entry.server_side_id().to_owned(),
     };
-    tokio::spawn(encode(
-        sender,
-        df,
-        schema,
-        schema_response,
-        settings,
-        registered,
-    ));
-    Ok(futures::stream::unfold(rx, |mut rx| async move {
-        let item = rx.recv().await?;
-        Some((item.response, rx))
-    })
-    .boxed())
+    // Attached before the encoder starts: the operation is never detached
+    // before its first stream.
+    let stream = sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
+    registered.keep();
+    tokio::spawn(encode(sender, df, schema, schema_response, settings));
+    Ok(stream)
 }
 
 /// The engine plan of a request's `Plan`: a compressed one decompressed
@@ -360,17 +407,10 @@ fn encode_settings(
     }
 }
 
-/// One response in the channel, with the bytes it holds of the ahead budget
-/// and of the memory pool; both return when tonic takes it.
-struct Item {
-    response: Result<pb::ExecutePlanResponse, Status>,
-    _permit: Option<OwnedSemaphorePermit>,
-    _reservation: Option<Reservation>,
-}
-
 /// Why the encoder stopped early.
 enum Stop {
-    /// The client dropped the stream.
+    /// The operation was closed (released, abandoned, its session closed,
+    /// or a non-reattachable operation's client went away).
     Gone,
     /// The operation failed.
     Failed(KrishivError),
@@ -384,9 +424,10 @@ impl From<KrishivError> for Stop {
 
 /// The producing side of an operation's responses.
 struct Sender {
-    tx: mpsc::Sender<Item>,
-    permits: Arc<Semaphore>,
-    cap: usize,
+    /// The operation's ahead budget (`aheadBytes`).
+    ahead: Arc<Semaphore>,
+    ahead_cap: usize,
+    budget: ResponseBudget,
     consumer: Arc<ConsumerHandle>,
     op: Arc<Operation>,
     session_id: String,
@@ -404,16 +445,20 @@ impl Sender {
         }
     }
 
-    /// Sends `response` once the budget has room for it (a response larger
-    /// than the whole budget waits for all of it).
+    /// Buffers `response` once the ahead budget and the server's budget
+    /// have room for it (a response larger than a whole budget waits for
+    /// all of it) and the memory pool grants its bytes.
     async fn send(&self, mut response: pb::ExecutePlanResponse) -> Result<(), Stop> {
-        let response_id = new_operation_id()?.as_str().to_owned();
-        self.op.record_sent(&response_id);
-        response.response_id = response_id;
+        let id = random_uuid()?;
+        response.response_id = uuid_text(id);
         let size = response.encoded_len();
-        let wanted = u32::try_from(size.clamp(1, self.cap)).unwrap_or(u32::MAX);
-        let permit = Arc::clone(&self.permits)
-            .acquire_many_owned(wanted)
+        let want = |cap: usize| u32::try_from(size.clamp(1, cap)).unwrap_or(u32::MAX);
+        let ahead = Arc::clone(&self.ahead)
+            .acquire_many_owned(want(self.ahead_cap))
+            .await
+            .map_err(|_| Stop::Gone)?;
+        let global = Arc::clone(&self.budget.permits)
+            .acquire_many_owned(want(self.budget.cap))
             .await
             .map_err(|_| Stop::Gone)?;
         let mut reservation = self.consumer.reservation();
@@ -421,25 +466,16 @@ impl Sender {
             .grow_without_abort(size)
             .await
             .map_err(|e| Stop::Failed(e.into()))?;
-        self.tx
-            .send(Item {
-                response: Ok(response),
-                _permit: Some(permit),
-                _reservation: Some(reservation),
-            })
-            .await
-            .map_err(|_| Stop::Gone)
-    }
-
-    /// Ends the stream with `error`, waiting at most [`FAIL_WAIT`] for room
-    /// in the channel: a client that reads nothing must not keep the task.
-    async fn fail(&self, error: &KrishivError) {
-        let send = self.tx.send(Item {
-            response: Err(status_of(error)),
-            _permit: None,
-            _reservation: None,
-        });
-        let _ = tokio::time::timeout(FAIL_WAIT, send).await;
+        let held = Held {
+            ahead: Some(ahead),
+            global: Some(global),
+            reservation: Some(reservation),
+        };
+        if self.op.replay().push(response, id, size, held) {
+            Ok(())
+        } else {
+            Err(Stop::Gone)
+        }
     }
 }
 
@@ -449,45 +485,41 @@ async fn encode(
     schema: SchemaRef,
     schema_response: pb::DataType,
     settings: EncodeSettings,
-    registered: Registered,
 ) {
     let op = Arc::clone(&sender.op);
-    // The client going away is seen at once, also while the encoder waits
-    // for the query's first batch or for memory rather than sending.
+    // A close or an interrupt is seen at once, also while the encoder
+    // waits for the query's first batch, for a budget or for memory.
     let outcome = tokio::select! {
         biased;
+        () = op.closed() => Err(Stop::Gone),
         () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
-        () = sender.tx.closed() => Err(Stop::Gone),
         r = produce(&sender, &df, &schema, schema_response, &settings) => r,
     };
     // The query's stream is gone by now (dropped with `produce`).
     drop(df);
-    if let Some(e) = settle(&op, outcome) {
-        sender.fail(&e).await;
-    }
-    drop(registered);
+    settle(&op, outcome);
 }
 
-/// Ends `op` after its encoder stopped with `outcome` and returns the error
-/// its stream ends with. The operation is finished (an interrupt from now
-/// on interrupts nothing) before the error waits for room in the channel;
-/// an interrupt that came first wins, and the stream ends with
-/// `OPERATION_CANCELED` instead of the error (Spark's
+/// Ends `op`'s stream after its encoder stopped with `outcome`. The
+/// operation is finished (an interrupt from now on interrupts nothing)
+/// before its error is recorded; an interrupt that came first wins, and the
+/// stream ends with `OPERATION_CANCELED` instead of the error (Spark's
 /// `ExecuteThreadRunner.execute`, v4.3.0 lines 149-180).
-fn settle(op: &Operation, outcome: Result<(), Stop>) -> Option<KrishivError> {
+fn settle(op: &Operation, outcome: Result<(), Stop>) {
     match outcome {
-        // `produce` finished the operation before its last response.
-        Ok(()) => None,
+        // `produce` finished the stream after its last response.
+        Ok(()) => {}
         Err(Stop::Gone) => {
             op.finish();
-            None
+            op.replay().finish(None);
         }
         Err(Stop::Failed(e)) => {
-            if op.finish() {
-                Some(e)
+            let error = if op.finish() {
+                e
             } else {
-                Some(OperationCanceled {}.into())
-            }
+                OperationCanceled {}.into()
+            };
+            op.replay().finish(Some(status_of(&error)));
         }
     }
 }
@@ -535,6 +567,7 @@ async fn produce(
             .send(sender.response(Some(ResponseType::ResultComplete(ResultComplete {}))))
             .await?;
     }
+    sender.op.replay().finish(None);
     Ok(())
 }
 

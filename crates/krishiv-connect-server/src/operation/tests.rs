@@ -63,8 +63,11 @@ fn register_refuses_a_live_id_and_the_cap() {
     let ops = Operations::default();
     let first = op(A, b"plan");
     ops.register(&first, 2).unwrap();
-    let e = ops.register(&op(A, b"plan"), 2).unwrap_err();
-    assert_eq!(e.error_class().name(), "INVALID_CURSOR.DISCONNECTED");
+    // The same plan under a live id attaches to it (Spark reattaches).
+    match ops.register(&op(A, b"plan"), 2).unwrap() {
+        Admitted::Existing(live) => assert!(Arc::ptr_eq(&live, &first)),
+        Admitted::New => panic!("registered twice"),
+    }
     let e = ops.register(&op(A, b"other"), 2).unwrap_err();
     assert_eq!(
         e.error_class().name(),
@@ -81,7 +84,7 @@ fn register_refuses_a_live_id_and_the_cap() {
 }
 
 #[test]
-fn lookup_remove_and_cancel_all() {
+fn lookup_remove_and_close_all() {
     let ops = Operations::default();
     let first = op(A, b"plan");
     ops.register(&first, 10).unwrap();
@@ -95,25 +98,53 @@ fn lookup_remove_and_cancel_all() {
     assert!(!ops.remove(&first));
     let second = op(B, b"plan");
     ops.register(&second, 10).unwrap();
-    assert_eq!(ops.cancel_all(), 1);
+    assert_eq!(ops.close_all().len(), 1);
     assert!(second.is_cancelled());
+    assert!(second.replay().is_closed());
     assert!(ops.is_empty());
 }
 
 #[test]
-fn sent_ids_and_cancellation() {
+fn cancellation_and_close() {
     let o = op(A, b"p");
     assert!(o.reattachable());
     assert!(o.tags().is_empty());
-    o.record_sent("r1");
-    assert!(o.has_sent("r1"));
-    assert!(!o.has_sent("r2"));
+    assert_eq!(o.sent_count(), 0);
+    assert_eq!(o.buffered_peak(), 0);
     assert!(!o.is_cancelled());
     assert!(o.cancel(), "the first cancel interrupts");
     assert!(!o.cancel(), "a second interrupts nothing");
     assert!(o.is_cancelled());
     // Resolves at once after a cancel, whether or not anyone waited.
     futures::executor::block_on(o.cancelled());
+    o.close();
+    o.close();
+    futures::executor::block_on(o.closed());
+    // A closed finished operation was not interrupted.
+    let f = op(B, b"q");
+    assert!(f.finish());
+    f.close();
+    assert!(!f.is_cancelled());
+    futures::executor::block_on(f.closed());
+}
+
+#[test]
+fn the_retry_buffer_is_for_reattachable_operations() {
+    let plain = Operation::new(
+        QueryId::parse(A).unwrap(),
+        plan_digest(b"p"),
+        Arc::from(Vec::new()),
+        false,
+    )
+    .with_retry_buffer(1 << 20);
+    assert!(!plain.reattachable());
+    let id = random_uuid().unwrap();
+    assert_eq!(id >> 76 & 0xf, 4, "version 4");
+    assert_eq!(
+        replay::uuid_bits(&replay::uuid_text(id)),
+        Some(id),
+        "canonical text"
+    );
 }
 
 #[test]

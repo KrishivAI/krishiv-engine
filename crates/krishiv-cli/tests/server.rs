@@ -122,6 +122,11 @@ impl Drop for Running {
 }
 
 fn start(spill: &std::path::Path) -> Running {
+    start_with(spill, &[])
+}
+
+/// [`start`] with extra `--conf key=value` settings.
+fn start_with(spill: &std::path::Path, confs: &[&str]) -> Running {
     let mut child = krishiv()
         // `--allow-root`: CI containers may run as root.
         .args([
@@ -134,6 +139,7 @@ fn start(spill: &std::path::Path) -> Running {
         ])
         .args(["--conf", "krishiv.metrics.enabled=true", "--conf"])
         .arg(format!("krishiv.spill.dir={}", spill.display()))
+        .args(confs.iter().flat_map(|c| ["--conf", c]))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -234,6 +240,11 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
 /// `pyspark-client` 4.3.0 takes the run for its own doctests and looks for a
 /// `SPARK_HOME` (`pyspark/sql/connect/utils.py`, `check_dependencies`).
 fn pyspark(script: &str) {
+    pyspark_with(&[], script);
+}
+
+/// [`pyspark`] against a server started with `confs`.
+fn pyspark_with(confs: &[&str], script: &str) {
     let spill = tempfile::tempdir().expect("tempdir");
     // The spill root must be private (`krishiv-memory`, `check_root_is_private`);
     // a temporary directory follows the umask.
@@ -248,7 +259,7 @@ fn pyspark(script: &str) {
     std::fs::write(&file, script).expect("script");
     let python =
         std::env::var("KRISHIV_TEST_PYSPARK_PYTHON").unwrap_or_else(|_| "python3".to_owned());
-    let run = start(spill.path());
+    let run = start_with(spill.path(), confs);
     let out = Command::new(python)
         .arg(&file)
         .env("SPARK_REMOTE", format!("sc://{}", run.connect))
@@ -286,6 +297,30 @@ fn pyspark_minimal_reattach() {
          logging.getLogger('pyspark').addHandler(logging.StreamHandler(log))\n\
          s = SparkSession.builder.getOrCreate()\n\
          assert [r.id for r in s.range(10).collect()] == list(range(10))\n\
+         s.stop()\n\
+         assert 'ERROR' not in log.getvalue() and 'Traceback' not in log.getvalue(), log.getvalue()\n",
+    );
+}
+
+/// Design P3-T011a §3.8 `stream_cap_reattach` with the stock client: a
+/// 4 KiB `senderMaxStreamSize` ends each stream without `ResultComplete`;
+/// the client reattaches after its last response until it has every row,
+/// releasing as it goes, and logs no error.
+#[test]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
+fn pyspark_stream_cap_reattach() {
+    pyspark_with(
+        &[
+            "spark.connect.execute.reattachable.senderMaxStreamSize=4096",
+            "spark.connect.execute.reattachable.observerRetryBufferSize=8192",
+        ],
+        "import io, logging\n\
+         from pyspark.sql import SparkSession\n\
+         log = io.StringIO()\n\
+         logging.getLogger('pyspark').addHandler(logging.StreamHandler(log))\n\
+         s = SparkSession.builder.getOrCreate()\n\
+         s.conf.set('spark.sql.execution.arrow.maxRecordsPerBatch', '100')\n\
+         assert [r.id for r in s.range(20000).collect()] == list(range(20000))\n\
          s.stop()\n\
          assert 'ERROR' not in log.getvalue() and 'Traceback' not in log.getvalue(), log.getvalue()\n",
     );

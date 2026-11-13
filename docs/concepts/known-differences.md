@@ -185,9 +185,10 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
 - **Geometry, geography and variant columns** get Spark's Arrow shape at the top level of a result only, not inside a
   struct, array or map.
 - **The `metrics` response of ExecutePlan is empty** until the operator tree is wired through.
-- **Reattaching to an operation that is still sending** answers `INVALID_CURSOR.DISCONNECTED` to the new stream, and
-  ExecutePlan re-sent with a live operation id answers the same; Spark ends the old stream and replays from the start.
-  The stock client reattaches only after a dropped connection, when Krishiv has already cancelled the operation.
+- **A reattachable operation's query pauses** once `krishiv.connect.execute.aheadBytes` (64 MiB) of its responses are
+  unread, whether or not a client is attached; Spark keeps producing and buffers every unread response. Across the
+  server, responses waiting or kept for a reattach hold at most `krishiv.connect.maxResponseBytes` (1 GiB); past it
+  every operation, a new one at its first response, waits until clients read or release. Spark has no such cap.
 - **ReleaseExecute without a release type** fails with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark throws
   an `UnsupportedOperationException` without an error class.
 - **AnalyzePlan.** An `UNSPECIFIED` explain mode fails with `CONNECT_INVALID_PLAN.INVALID_ENUM`, and `json_to_ddl` of a
