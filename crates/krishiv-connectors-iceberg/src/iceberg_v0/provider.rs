@@ -191,7 +191,8 @@ impl IcebergTableProvider {
         let mut snapshot = table.snapshot(&VersionSpec::Current)?;
         let (mut plan, _) = table.plan_files(&snapshot).await?;
         edit(&mut snapshot, &mut plan);
-        let index = DeleteIndex::new(&plan.delete_files, &snapshot.partition_specs)?;
+        let index = DeleteIndex::new(&plan.delete_files, &snapshot.partition_specs)?
+            .with_fields(&snapshot.fields);
         Self::from_plan(table, snapshot, plan, index, &Config::new(), 4)
     }
 

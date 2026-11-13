@@ -20,6 +20,8 @@ pub(crate) mod transform;
 pub(crate) mod types;
 
 #[cfg(test)]
+mod eq_narrow_tests;
+#[cfg(test)]
 mod prop_tests;
 #[cfg(test)]
 pub(crate) mod tests;

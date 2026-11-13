@@ -14,6 +14,19 @@
 //! replaces them (FC S1). Two DVs for one data file are an error. Equality
 //! deletes are assigned here and applied by PR-25c.
 //!
+//! An equality delete is also skipped when its column metrics and the data
+//! file's show that no key can match a row (Java's
+//! `canContainEqDeletesForFile`, ported in PR-25d; [`DeleteIndex::with_fields`]
+//! turns it on): the data file is all null on a key column the deletes hold
+//! no null for, or the deletes are all null where the data has none, or a
+//! key column's bounds do not overlap. Bounds are compared only for types
+//! whose bounds are exact (integers, decimals, dates, timestamps, booleans);
+//! a float (bounds leave out NaN), string or binary (an upper bound may be
+//! truncated without rounding up) or uuid column is assumed to match, as is
+//! a field the snapshot's schema does not have. The schema's `required` is
+//! not known here, so every field is treated as optional: Java's answers
+//! differ only where it skips a delete file that holds no rows.
+//!
 //! Errors carry Java's `ValidationException` texts (class
 //! `KRISHIV_ICEBERG_INVALID_DELETES`).
 
@@ -24,8 +37,9 @@ use krishiv_common::error::{
     KrishivError, KrishivIcebergInvalidDeletes, KrishivUnsupportedFeature,
 };
 
-use super::entry::{DataFileEntry, DeleteFileEntry, DeleteKind, PartitionValue};
-use super::types::PartitionSpecs;
+use super::bounds::{compare, decode};
+use super::entry::{ContentFile, DataFileEntry, DeleteFileEntry, DeleteKind, PartitionValue};
+use super::types::{IcebergType, PartitionSpecs, SchemaField};
 
 /// The field id of a position delete file's `file_path` column (reserved).
 pub const DELETE_FILE_PATH_ID: i32 = i32::MAX - 101;
@@ -105,6 +119,9 @@ pub struct DeleteIndex {
     equality_global: Vec<Seqd>,
     equality_by_partition: HashMap<i32, ByPartition>,
     empty: bool,
+    /// The schema's primitive fields by id, for the equality-delete metrics
+    /// check (empty: every equality delete may match).
+    types: HashMap<i32, IcebergType>,
 }
 
 /// Java's `ContentFileUtil.dvDesc`.
@@ -206,6 +223,15 @@ impl DeleteIndex {
         Ok(index)
     }
 
+    /// Skips equality deletes whose column metrics rule out every row of a
+    /// data file (see the module docs), reading bounds at the types of
+    /// `fields` (the snapshot schema's).
+    #[must_use]
+    pub fn with_fields(mut self, fields: &[SchemaField]) -> Self {
+        self.types = fields.iter().map(|f| (f.id, f.ty.clone())).collect();
+        self
+    }
+
     /// Whether the snapshot has no live delete file.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -254,7 +280,7 @@ impl DeleteIndex {
         let mut out = TaskDeletes::default();
         // Equality deletes: strictly newer than the data.
         for (s, d) in &self.equality_global {
-            if *s > seq {
+            if *s > seq && can_contain_eq_deletes(&self.types, file, &d.entry.file) {
                 out.equality_deletes.push(Arc::clone(d));
             }
         }
@@ -275,7 +301,9 @@ impl DeleteIndex {
                         }
                         .into());
                     }
-                    out.equality_deletes.push(Arc::clone(d));
+                    if can_contain_eq_deletes(&self.types, file, &d.entry.file) {
+                        out.equality_deletes.push(Arc::clone(d));
+                    }
                 }
             }
         }
@@ -335,4 +363,65 @@ fn validate_partition_match(d: &DeleteFileEntry, data: &DataFileEntry) -> Result
         )));
     }
     Ok(())
+}
+
+/// Java's `DeleteFileIndex.canContainEqDeletesForFile` (apache-iceberg
+/// 1.12.0) over the fields in `types`; see the module docs for where it is
+/// more cautious. `false` only when no key of `delete` can equal a row of
+/// `data` (null equals null).
+pub(crate) fn can_contain_eq_deletes(
+    types: &HashMap<i32, IcebergType>,
+    data: &ContentFile,
+    delete: &ContentFile,
+) -> bool {
+    let Some(ids) = &delete.equality_ids else {
+        return true;
+    };
+    // Java's `containsNull`, `allNull` and `allNonNull` of an optional field.
+    let contains_null = |f: &ContentFile, id| f.null_counts.get(&id).is_none_or(|n| *n > 0);
+    let all_null = |f: &ContentFile, id| matches!((f.null_counts.get(&id), f.value_counts.get(&id)), (Some(n), Some(v)) if n == v);
+    let all_non_null = |f: &ContentFile, id| f.null_counts.get(&id) == Some(&0);
+    for id in ids {
+        let id = *id;
+        let Some(ty) = types.get(&id) else {
+            continue;
+        };
+        if contains_null(data, id) && contains_null(delete, id) {
+            continue;
+        }
+        if all_null(data, id) && all_non_null(delete, id) {
+            return false;
+        }
+        if all_null(delete, id) && all_non_null(data, id) {
+            return false;
+        }
+        if !exact_bounds(ty) {
+            continue;
+        }
+        let bound =
+            |m: &std::collections::BTreeMap<i32, Vec<u8>>| m.get(&id).and_then(|b| decode(b, ty));
+        let (Some(data_lower), Some(data_upper), Some(delete_lower), Some(delete_upper)) = (
+            bound(&data.lower_bounds),
+            bound(&data.upper_bounds),
+            bound(&delete.lower_bounds),
+            bound(&delete.upper_bounds),
+        ) else {
+            continue;
+        };
+        if compare(&data_lower, &delete_upper) == Some(std::cmp::Ordering::Greater)
+            || compare(&delete_lower, &data_upper) == Some(std::cmp::Ordering::Greater)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether bounds of `ty` are exact and ordered as equality compares keys.
+fn exact_bounds(ty: &IcebergType) -> bool {
+    use IcebergType as T;
+    matches!(
+        ty,
+        T::Boolean | T::Int | T::Long | T::Decimal { .. } | T::Date | T::Timestamp | T::Timestamptz
+    )
 }

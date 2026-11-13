@@ -634,6 +634,7 @@ pub(crate) async fn plan_files(
             CachedEntry::Delete(d) => out.delete_files.push(d),
         }
     }
-    let index = DeleteIndex::new(&out.delete_files, &snapshot.partition_specs)?;
+    let index = DeleteIndex::new(&out.delete_files, &snapshot.partition_specs)?
+        .with_fields(&snapshot.fields);
     Ok((out, index))
 }

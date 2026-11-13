@@ -70,7 +70,7 @@ manifest, plus float → double with NaN and decimal(9,2) → decimal(18,2); `ic
 snapshot ids, v3 `first_row_id`), `DataFileEntry`/`DeleteFileEntry`, `FileScanTask`, `ScanPlan`, `ManifestFilter` ·
 `deletes.rs` `DeleteIndex`/`TaskDeletes`, Java's `DeleteFileIndex` rules (a DV replaces position deletes, FC S1;
 position deletes by path or by spec and partition, never table-wide, M1; equality deletes strictly newer, global for an
-unpartitioned spec) · `dv.rs` the `deletion-vector-v1` blob codec on `roaring` (Java's checks, order and texts, FC S2)
+unpartitioned spec); an equality delete is skipped for a data file when their column metrics rule out every key (Java's `canContainEqDeletesForFile`, PR-25d step 2, on through `DeleteIndex::with_fields`: null counts for every field of the schema, bounds only for exact types, not floats, strings, binaries or uuids; `eq_narrow_tests.rs`) · `dv.rs` the `deletion-vector-v1` blob codec on `roaring` (Java's checks, order and texts, FC S2)
 · `bounds.rs` single-value serialisation decoded by stored width (review-1 S10) · `metrics.rs` `WriterMetrics`, the
 `write.metadata.metrics.*` modes (`none`/`counts`: bounds untrusted, `truncate(n)`, `full`; default `truncate(16)`) · `transform.rs` partition transforms
 of literals (Murmur3 bucket, truncate, year/month/day/hour) · `prune.rs` `Pruner`, the might-match evaluator over
@@ -101,10 +101,6 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   (iceberg-rust's own failures map to `INTERNAL_ERROR` naming its message until PR-17's catalog classes).
 
 ## Known limits (PR-25d review)
-- **Equality-delete narrowing not ported:** Java's `DeleteFileIndex.canContainEqDeletesForFile` (skip an equality
-  delete whose key bounds cannot overlap the data file's) is not applied; every strictly newer equality delete of the
-  partition (or global) is assigned. Correct (more deletes read, none dropped); deferred to PR-25d step 2, which needs
-  the Java source at `apache-iceberg-1.12.0` (it could not be fetched in step 1; not ported from memory).
 - **Delete files re-read per built scan:** each `build` loads its own `DeleteState`, so a self-join or CTE reading a
   table twice reads and charges its shared delete files twice, and every distributed task re-reads the global
   (unpartitioned-spec) equality deletes. Design §3.3's "read once per scan" holds per built source. Follow-up: a
