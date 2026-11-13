@@ -982,19 +982,23 @@ pub fn is_store_option(key: &str) -> bool {
 
 /// Whether `key` is a store option that only a principal with `Manage` on the cluster may set
 /// in server mode, per read, on a table or in a session (P3-T067b). That is every `fs.*` key
-/// except the inline credentials (access keys, secrets, session tokens, the inline GCS key, Azure
-/// keys and SAS tokens, the Hugging Face token), which only authenticate. The others choose where
-/// a store connects (endpoints, regions, accounts, proxies) or which local file it opens (key
-/// files), and a store built from them could send the server's own credentials elsewhere.
+/// except the inline credentials that only authenticate (access keys, secrets, session tokens,
+/// Azure keys and SAS tokens, the Hugging Face token). The others choose where a store connects
+/// (endpoints, regions, accounts, proxies; the inline GCS service-account JSON too, whose
+/// `gcs_base_url` object_store follows) or which local file it opens (key files), and a store
+/// built from them could send the server's own credentials, or its requests, elsewhere.
 /// Matched ASCII case-insensitively, as the stores look keys up.
 #[must_use]
 pub fn is_server_scoped_option(key: &str) -> bool {
     is_store_option(key) && !is_inline_credential_key(key)
 }
 
-/// A credential given inline: it authenticates, it does not choose a host or a file.
+/// A credential given inline that only authenticates: it chooses no host and no file. (A GCS
+/// key file names a file; the inline GCS JSON can name a host.)
 fn is_inline_credential_key(key: &str) -> bool {
-    (is_credential_key(key) && !key.eq_ignore_ascii_case(GCS_KEYFILE))
+    (is_credential_key(key)
+        && !key.eq_ignore_ascii_case(GCS_KEYFILE)
+        && !key.eq_ignore_ascii_case(GCS_KEY))
         || key.eq_ignore_ascii_case(HF_TOKEN)
 }
 

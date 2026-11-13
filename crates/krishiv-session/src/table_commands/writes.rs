@@ -502,7 +502,8 @@ impl Session {
                     managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
                 let at =
                     self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
-                self.authorize_write_path(&at, &spec.options).await?;
+                self.authorize_write_path(&at, &spec.options, &BTreeMap::new())
+                    .await?;
                 // A managed table's own directory goes with it; any other one in the way stays.
                 let own = self
                     .state

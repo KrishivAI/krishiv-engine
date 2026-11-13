@@ -1115,9 +1115,11 @@ pub static IO_OBJECT_STORE_ALLOWED_PREFIXES: ConfigEntry = ConfigEntry {
           `s3://b/data2`) and holds no glob character; `s3` and `s3a` name the same store; a \
           path holding `%`, `?` or `#` is never allowed, so `?` globs are refused. It is the one \
           opt-in for the server's own (ambient) credentials and for `http(s)://` locations, which \
-          are refused unless listed. Any `fs.*` store option but an inline credential (endpoints, \
-          regions, accounts, key files), per read, on a table or set in a session, needs admin \
-          (P3-T067b). Unset or empty: no object-store path \
+          are refused unless listed. Any `fs.*` store option but an inline access key, secret, \
+          token or SAS (so endpoints, regions, accounts, key files, the GCS key JSON and tuning \
+          keys alike), per read, on a table or set in a session, needs admin (P3-T067b); a \
+          table's options stored by an admin are not asked about again when others read or \
+          insert. Unset or empty: no object-store path \
           is allowed. Embedded use and a server without authentication do not read it.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,

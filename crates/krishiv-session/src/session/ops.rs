@@ -34,6 +34,7 @@ impl Session {
         &self,
         at: &krishiv_exec::files::LocatedPath,
         options: &BTreeMap<String, OptionValue>,
+        table_options: &BTreeMap<String, OptionValue>,
     ) -> Result<(), KrishivError> {
         // The encoder resolves secret options (`encryptionKey`) for this principal: USAGE first.
         let r = krishiv_plan::analyzer::authorize_secret_refs(
@@ -46,7 +47,11 @@ impl Session {
         self.authorize_store_options(
             StatementClass::Write,
             &self.state.conf.snapshot(),
-            options.keys().map(String::as_str),
+            // A table's own stored option was authorized when it was stored.
+            options
+                .iter()
+                .filter(|(k, v)| table_options.get(*k) != Some(*v))
+                .map(|(k, _)| k.as_str()),
         )
         .await?;
         let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
@@ -160,6 +165,7 @@ impl Session {
             mode,
             path,
             options,
+            table_options,
             partition_by,
         } = target;
         let mode = SaveMode::parse(&mode)?;
@@ -196,7 +202,8 @@ impl Session {
         let at = self.locate_write_path(text, &options, env)?;
         // The query's own context: its counters are the write's bytes.
         let io = env.io.clone();
-        self.authorize_write_path(&at, &options).await?;
+        self.authorize_write_path(&at, &options, &table_options)
+            .await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.

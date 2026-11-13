@@ -124,7 +124,7 @@ fn ambient_credentials_reach_only_allowed_prefixes() {
 
 /// The store keys that redirect a store (endpoints, regions, accounts, key files, any `fs.*` key
 /// but an inline credential).
-const SERVER_SCOPED: [(&str, &str); 9] = [
+const SERVER_SCOPED: [(&str, &str); 10] = [
     ("fs.s3a.endpoint", ENDPOINT),
     ("fs.gs.storage.root.url", ENDPOINT),
     ("fs.gs.endpoint", ENDPOINT),
@@ -134,6 +134,11 @@ const SERVER_SCOPED: [(&str, &str); 9] = [
     ("fs.s3a.endpoint.region", "eu-west-1"),
     ("fs.gs.auth.service.account.json.keyfile", "/etc/hostname"),
     ("fs.azure.account.name", "otheracct"),
+    // object_store follows the JSON's `gcs_base_url`.
+    (
+        "fs.gs.auth.service.account.json",
+        r#"{"gcs_base_url": "https://10.0.0.1"}"#,
+    ),
 ];
 
 /// A server-scoped store key in the read options is `Manage` on the cluster: 42501 for viewer
@@ -378,4 +383,39 @@ fn embedded_sessions_are_unchanged() {
     let s = Session::new().unwrap();
     s.conf().set("fs.gs.endpoint", ENDPOINT).unwrap();
     assert_eq!(rows(&s, "SELECT 1"), Ok(1));
+}
+
+/// A table an admin stored with a server-scoped option (a MinIO region, say) is read and
+/// written by others without `Manage`: the option was checked when it was stored. Overriding it
+/// with another value is checked again.
+#[test]
+fn an_admins_stored_options_serve_other_writers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_str().unwrap();
+    let admin = Session::builder()
+        .access_policy(Arc::new(AllowAll))
+        .config("spark.sql.warehouse.dir", dir)
+        .build()
+        .unwrap();
+    rows(
+        &admin,
+        "CREATE TABLE m (a INT) USING csv OPTIONS ('fs.s3a.region' = 'eu-west-1')",
+    )
+    .unwrap();
+    let writer = Session::builder()
+        .runtime(Arc::clone(admin.runtime()))
+        .principal(Principal::new("w", PrincipalKind::User))
+        .access_policy(Arc::new(WriterWithoutManage))
+        .config("spark.sql.warehouse.dir", dir)
+        .build()
+        .unwrap();
+    assert_eq!(rows(&writer, "INSERT INTO m VALUES (1)"), Ok(0));
+    assert_eq!(rows(&writer, "SELECT * FROM m"), Ok(1));
+    assert_eq!(
+        rows(
+            &writer,
+            "SELECT * FROM m WITH ('fs.s3a.region' = 'us-east-2')"
+        ),
+        Err(DENIED.to_owned())
+    );
 }

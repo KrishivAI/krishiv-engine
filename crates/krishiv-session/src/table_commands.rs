@@ -1361,7 +1361,8 @@ fn table_writer(
     for (k, v) in &table.options {
         writer = writer.option(k, v);
     }
-    Ok(writer)
+    // Stored when an admin (or a `Manage` holder) created or altered the table: not asked again.
+    Ok(writer.options_are_the_tables())
 }
 
 /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` for `operation` on the table `name`.
