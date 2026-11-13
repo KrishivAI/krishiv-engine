@@ -44,6 +44,7 @@ mod runtime_filter;
 pub(crate) mod subquery;
 mod table;
 mod window;
+mod write;
 
 use std::fmt;
 use std::sync::Arc;
@@ -60,6 +61,7 @@ pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, TableProvider, TableProviderResolver,
 };
+pub use write::{TableCapabilities, WriteMode};
 
 use crate::error::Result;
 pub use crate::physical::PhysicalPlan;
