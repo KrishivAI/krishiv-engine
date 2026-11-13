@@ -44,6 +44,7 @@
 mod access;
 mod admission;
 mod arrow_values;
+pub mod auth;
 mod cache;
 mod cancel;
 mod carrier;

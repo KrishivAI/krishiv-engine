@@ -156,6 +156,10 @@ fn downcast(l: &mut LocalState) -> Result<&mut Local> {
 }
 
 impl Operator for PartialAggregate {
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "PartialAggregate"
     }

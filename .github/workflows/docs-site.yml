@@ -9,8 +9,13 @@ on:
       - "docs/**"
       - "xtask/src/docs_*.rs"
       - "tests/scripts/gen_python_docs.py"
+      - "tests/scripts/gen_compat_matrix.py"
+      - "crates/krishiv-cli/src/check_compat/functions.json"
       - "crates/krishiv-functions/**"
       - "crates/krishiv-common/**"
+      - "crates/krishiv-connect/**"
+      - "xtask/src/connect_coverage.rs"
+      - "tests/connect/**"
       - "crates/krishiv-testkit/src/bin/doc-examples.rs"
       - "python/**"
       - ".vale.ini"
@@ -85,6 +90,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo xtask docs-sql --check
+          cargo xtask connect-coverage --check
+          python3 tests/scripts/gen_compat_matrix.py --check
           cargo xtask docs-examples --check
           cargo xtask docs-python --check
           cargo xtask docs-config "$RUNNER_TEMP/configuration.md"

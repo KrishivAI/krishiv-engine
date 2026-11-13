@@ -531,6 +531,8 @@ pub struct TaskContext {
     /// stream whichever driver read it; this id is the fallback for untagged
     /// batches. The first driver of a group reads partition 0.
     partition: u32,
+    /// `(lane, lanes)` of a logical-partition driver (T094 G1), else `None`.
+    lane: Option<(usize, usize)>,
     /// The first partition id of the driver's pipeline-group member (the
     /// offset of a `UNION ALL` child).
     partition_base: u32,
@@ -564,8 +566,23 @@ impl TaskContext {
             dependency: None,
             second_dependency: None,
             partition: 0,
+            lane: None,
             partition_base: 0,
         }
+    }
+
+    /// The same context for the driver of lane `lane` out of `lanes`.
+    #[must_use]
+    pub(crate) fn with_lane(mut self, lane: Option<(usize, usize)>) -> Self {
+        self.lane = lane;
+        self
+    }
+
+    /// `(lane, lanes)` when this driver is one of the logical partitions of
+    /// `krishiv.deterministicOrder` (T094 G1): a source then claims only the
+    /// morsels dealt to its lane ([`MorselCursor::claim_strided`](crate::MorselCursor::claim_strided)).
+    pub fn lane(&self) -> Option<(usize, usize)> {
+        self.lane
     }
 
     /// The same context for the driver `partition` (its scheduler-assigned
@@ -626,6 +643,18 @@ impl TaskContext {
     /// The executor.
     pub fn executor(&self) -> &Arc<dyn Executor> {
         &self.executor
+    }
+
+    /// The driver count a source cuts its morsels for. Under `krishiv.deterministicOrder` it is
+    /// a constant (the logical partitions), never the executor's thread count: which rows a
+    /// morsel holds decides the result's bytes, and must not follow the machine (T094 G1).
+    #[must_use]
+    pub fn layout_parallelism(&self) -> usize {
+        if self.query.config().deterministic_order {
+            crate::runner::DETERMINISTIC_LOGICAL_PARTITIONS
+        } else {
+            self.executor.parallelism()
+        }
     }
 
     /// Runs non-yielding work over ~1 ms on the bounded blocking pool and
