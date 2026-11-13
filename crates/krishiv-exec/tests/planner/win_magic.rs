@@ -75,11 +75,12 @@ impl krishiv_optimizer::Statistics for Counts {
 
 fn rows_under(env: &Env, sql: &str, on: bool) -> (Vec<String>, bool) {
     let mut config = Config::new();
-    if on {
-        config
-            .set("krishiv.optimizer.subqueryAsWindow", "true")
-            .unwrap();
-    }
+    config
+        .set(
+            "krishiv.optimizer.subqueryAsWindow",
+            if on { "true" } else { "false" },
+        )
+        .unwrap();
     let analyzed = env.analyze(sql);
     let plan = krishiv_optimizer::optimize_with_udfs(
         &analyzed,

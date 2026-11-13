@@ -33,6 +33,11 @@ pub struct QueryRequest {
     pub tags: Vec<(String, String)>,
     /// The workload class (every session path runs `Interactive` today).
     pub class: WorkloadClass,
+    /// Who the client says it is (Connect `client_type`, a Flight SQL `user-agent`, or
+    /// `SessionBuilder::source`); `None` when unknown. Client-asserted: a routing hint only.
+    pub source: Option<String>,
+    /// The statement's class, when the caller has classified it (`None` otherwise).
+    pub statement_class: Option<krishiv_sql::StatementClass>,
     /// What the query is expected to cost (ADR 0041), from the optimized plan the query runs.
     /// Computed only when the installed controller's [`AdmissionController::uses_estimate`] is
     /// `true` (the default controller does not), and `None` means unknown: no estimate was
@@ -48,7 +53,7 @@ pub struct QueryRequest {
 #[must_use]
 pub struct Permit {
     memory_budget: Option<usize>,
-    slot: Option<Box<dyn Send + Sync>>,
+    slot: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl Permit {
@@ -74,6 +79,13 @@ impl Permit {
     pub fn with_memory_budget(mut self, bytes: usize) -> Self {
         self.memory_budget = Some(bytes);
         self
+    }
+
+    /// The slot guard this permit holds, if it is a `T` (how a session reaches its controller's
+    /// guard to report scanned bytes or reserved memory).
+    #[must_use]
+    pub fn slot<T: 'static>(&self) -> Option<&T> {
+        self.slot.as_deref().and_then(|s| s.downcast_ref::<T>())
     }
 
     /// The per-query memory limit, if the controller set one.

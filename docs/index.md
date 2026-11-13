@@ -12,7 +12,7 @@ write.
 The pages follow four kinds of need.
 
 - **[Get started](get-started/quickstart.md)** teach by doing: [install and run your first query](get-started/quickstart.md).
-- **[Guides](guides/deploy.md)** solve one task: [deploy](guides/deploy.md) and [find a stalled task with tokio-console](guides/tokio-console.md).
+- **[Guides](guides/deploy.md)** solve one task: [migrate a PySpark job](guides/pyspark-migration.md), [deploy](guides/deploy.md) and [find a stalled task with tokio-console](guides/tokio-console.md).
 - **[Reference](reference/index.md)** lists facts: the [SQL language](reference/sql/index.md) and
   [function reference](reference/sql/functions/index.md), the [Python package](reference/python-package.md) and
   [API](reference/python/index.md), every [setting](reference/config/index.md), metrics and query profiles.

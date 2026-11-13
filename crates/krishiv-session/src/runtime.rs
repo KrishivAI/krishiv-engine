@@ -85,6 +85,8 @@ pub struct EngineRuntime {
     deadlines: OnceLock<Deadlines>,
     /// The queries running now, and the closed sessions.
     live: Mutex<LiveSet>,
+    /// The sessions, live and recently ended (`system.sessions`).
+    pub(crate) sessions: Arc<crate::sessions::SessionRegistry>,
     /// The I/O scheduler: pacing, the file-metadata and block caches and
     /// the local store, one for every session (design P2-E1 R3). Stores built
     /// from a session's `fs.*` settings carry a fingerprint of them in their
@@ -262,6 +264,7 @@ impl EngineRuntime {
             results,
             deadlines: OnceLock::new(),
             live: Mutex::new(LiveSet::default()),
+            sessions: Arc::default(),
             io,
             private,
         };
@@ -452,17 +455,93 @@ impl EngineRuntime {
             .is_empty()
     }
 
-    /// Closes session `session`: cancels its running queries (reason
-    /// `ClientGone`) and refuses any it attaches later; the number
-    /// cancelled.
-    pub(crate) fn cancel_session(&self, session: u64) -> usize {
+    /// Closes session `session`: cancels its running queries with `reason`
+    /// and refuses any it attaches later; the number cancelled.
+    pub(crate) fn cancel_session(&self, session: u64, reason: CancelReason) -> usize {
         self.live
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .closed
             .insert(session);
-        self.cancel_where(CancelReason::ClientGone, |s, _| s == session)
-            .len()
+        self.cancel_where(reason, |s, _| s == session).len()
+    }
+
+    /// The queries each session is running now, counted in one pass.
+    pub(crate) fn running_counts(&self) -> HashMap<u64, i64> {
+        let live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut counts = HashMap::new();
+        for l in live.queries.values().filter(|l| {
+            l.query
+                .as_ref()
+                .is_none_or(|q| q.upgrade().is_some_and(|q| !q.is_finished()))
+        }) {
+            *counts.entry(l.session).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// The registry as `system.sessions` reads it.
+    pub(crate) fn session_view(self: &Arc<Self>) -> Arc<crate::sessions::SessionView> {
+        let runtime = Arc::clone(self);
+        Arc::new(crate::sessions::SessionView {
+            registry: Arc::clone(&self.sessions),
+            running: Box::new(move || runtime.running_counts()),
+        })
+    }
+
+    /// Ends the live session `session_id` for `end`: its running queries are
+    /// cancelled with `reason`, it takes no new statement
+    /// (`INVALID_HANDLE.SESSION_CLOSED`) and it moves to the ended ring.
+    /// `None` for an id that is not live.
+    fn end_session(
+        &self,
+        session_id: &str,
+        reason: CancelReason,
+        end: crate::sessions::End,
+    ) -> Option<usize> {
+        let (number, state) = self.sessions.find(session_id)?;
+        // One caller ends it: a second kill, expire or `close` finds the flag set.
+        if state.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return None;
+        }
+        let n = self.cancel_session(number, reason);
+        self.sessions.retire(number, || {
+            crate::sessions::SessionRow::of(&state, Some(end), 0)
+        });
+        Some(n)
+    }
+
+    /// Ends session `session_id` as an administrator would (T066 `KillSession`,
+    /// a drain deadline): with `reason` `Admin` or `Drain` its queries end
+    /// `KRISHIV_QUERY_KILLED`, and the session's next call is
+    /// `INVALID_HANDLE.SESSION_CLOSED`. The number of queries cancelled, or
+    /// `None` for an unknown (or already ended) id. The privilege check and the
+    /// audit line belong in front of it, as for [`Self::cancel`].
+    pub fn kill_session(&self, session_id: &str, reason: CancelReason) -> Option<usize> {
+        let end = match reason {
+            CancelReason::Drain => crate::sessions::End::Killed("drain"),
+            // A caller ending its own session (T066 `KillSession` of its own): recorded as a release.
+            CancelReason::ClientGone => crate::sessions::End::Closed("release_session"),
+            _ => crate::sessions::End::Killed("admin_kill"),
+        };
+        self.end_session(session_id, reason, end)
+    }
+
+    /// Ends session `session_id` as idle (the server's sweep): its queries
+    /// are cancelled as for a vanished client. As [`Self::kill_session`]
+    /// otherwise.
+    pub fn expire_session(&self, session_id: &str) -> Option<usize> {
+        self.end_session(
+            session_id,
+            CancelReason::ClientGone,
+            crate::sessions::End::Expired,
+        )
+    }
+
+    /// Whether `session_id` ended and is still remembered (a server answers
+    /// `INVALID_HANDLE.SESSION_CLOSED` for it, `SESSION_NOT_FOUND` otherwise).
+    pub fn session_ended(&self, session_id: &str) -> bool {
+        self.sessions.ended(session_id)
     }
 
     /// The number of running queries of session `session`: reserved, or
@@ -606,7 +685,7 @@ mod tests {
         // Closing cancels the attached query and refuses a later attach.
         let k = rt.reserve(7, "s7", "c");
         // `a`, and `c` (reserved: its reason waits); `b` already ended.
-        assert_eq!(rt.cancel_session(7), 2);
+        assert_eq!(rt.cancel_session(7, CancelReason::ClientGone), 2);
         assert!(a.is_cancelled());
         assert_eq!(
             a.check_cancelled().unwrap_err().error_class().name(),

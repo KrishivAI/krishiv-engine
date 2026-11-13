@@ -2290,20 +2290,29 @@ dependencies = [
 name = "krishiv-connect-server"
 version = "0.2.0"
 dependencies = [
+ "arrow-array",
+ "arrow-ipc",
+ "arrow-schema",
  "bytes",
  "futures",
+ "getrandom 0.4.3",
  "krishiv-common",
  "krishiv-connect",
+ "krishiv-memory",
+ "krishiv-plan",
  "krishiv-session",
+ "krishiv-types",
  "prost",
  "prost-types",
  "rustix",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tonic",
  "tonic-prost",
  "tracing",
+ "zstd",
 ]
 
 [[package]]
@@ -2663,6 +2672,7 @@ dependencies = [
  "opentelemetry_sdk",
  "parquet",
  "prost",
+ "regex-lite",
  "reqwest",
  "serde_json",
  "sha2",

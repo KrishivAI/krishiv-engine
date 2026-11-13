@@ -27,7 +27,8 @@ use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
 use super::exprs::{
-    Bound, Cx, WindowUse, names, pretty, semantic_key, synth_call, synth_call_of, unresolved,
+    Bound, Cx, WindowUse, arg_type, names, pretty, semantic_key, synth_call, synth_call_of,
+    unresolved,
 };
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, FileMetadata, TableKind};
@@ -612,7 +613,26 @@ impl Resolver<'_> {
         let mut items = Vec::new();
         let mut lateral: Vec<Attr> = Vec::new();
         let lca = self.ctx.conf.lateral_column_alias;
-        for e in exprs {
+        for (position, e) in exprs.iter().enumerate() {
+            // An item that is the input's own column at the same position (what `withColumn` passes
+            // through) is already resolved: bound without the expression machinery, as `bind` and
+            // `named` would leave it. Linear in the width, not quadratic over a chain of steps.
+            if let ExprNode::Resolved(ResolvedExpr::Column(col)) = &e.node
+                && extra.is_none()
+                && c.out.get(position).is_some_and(|a| a.col == *col)
+            {
+                items.push(Bound {
+                    expr: Arc::clone(e),
+                    // As `bind` types a column: an untyped NULL is `None`.
+                    ty: arg_type(col.data_type.clone(), col.nullable),
+                    agg: None,
+                    win: None,
+                    outer: None,
+                    lateral: Vec::new(),
+                    shown: None,
+                });
+                continue;
+            }
             if let ExprNode::Star(s) = &e.node {
                 let cx = Self::cx(&c.out, &rels, env, op);
                 // `* EXCEPT (s.f)` and `s.* EXCEPT (...)` rebuild the structs.
@@ -846,7 +866,11 @@ impl Resolver<'_> {
         pass: &[Attr],
     ) -> Rel {
         if pass.is_empty() && items.iter().all(|b| b.lateral.is_empty()) {
-            let out = items.iter().map(|b| out_attr(b, &base.out)).collect();
+            let out = items
+                .iter()
+                .enumerate()
+                .map(|(i, b)| out_attr_at(b, &base.out, i))
+                .collect();
             let exprs = items.iter().map(|b| Arc::clone(&b.expr)).collect();
             return self.projection(origin, base, exprs, out);
         }
