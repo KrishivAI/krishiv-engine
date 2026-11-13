@@ -191,20 +191,64 @@ def drop_hadoop_crc(out: str) -> None:
                 os.remove(os.path.join(d, f))
 
 
+#: Rows the deletion-vector table holds, and the Parquet row-group size it is written with: a few
+#: row groups, each of more rows than one decoded batch (8,192).
+DV_ROWS = 40_000
+DV_BLOCK_BYTES = 100_000
+#: Krishiv's Parquet batch (`krishiv.exec.batchSize`'s default), for deletes at batch edges.
+BATCH_ROWS = 8_192
+
+
+def row_groups(spark: SparkSession, path: str) -> list[int]:
+    """The row counts of the row groups of the one data file under ``path`` (its footer, read by
+    parquet-mr in the oracle's JVM)."""
+    files = [f for f in os.listdir(path) if f.endswith(".parquet")]
+    assert len(files) == 1, files
+    jvm = spark._jvm
+    footer = jvm.org.apache.parquet.hadoop.ParquetFileReader.readFooter(
+        spark._jsc.hadoopConfiguration(), jvm.org.apache.hadoop.fs.Path(os.path.join(path, files[0]))
+    )
+    return [b.getRowCount() for b in footer.getBlocks()]
+
+
+def deletion_vectors(spark: SparkSession, dv: str) -> None:
+    """One file of ``DV_ROWS`` rows in several row groups (ids in file order), then two DELETE
+    statements: the first keeps every 100th row and the rows within three of each row-group
+    and batch edge; the second (rewriting the DV) deletes the rows right at those edges."""
+    spark.sql(
+        f"CREATE TABLE delta.`{dv}` (id BIGINT, v INT) USING delta "
+        "TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')"
+    )
+    conf = spark._jsc.hadoopConfiguration()
+    conf.setInt("parquet.block.size", DV_BLOCK_BYTES)
+    spark.range(DV_ROWS).selectExpr("id", "CAST(id % 7 AS INT) AS v").coalesce(1).write.format("delta").mode(
+        "append"
+    ).save(dv)
+    conf.unset("parquet.block.size")
+    groups = row_groups(spark, dv)
+    edges: list[int] = []
+    start = 0
+    for rows in groups:
+        edges.extend(range(start, start + rows, BATCH_ROWS))
+        start += rows
+    edges.append(start)
+    near = sorted({e + d for e in edges for d in range(-3, 4) if 0 <= e + d < DV_ROWS})
+    exact = sorted({e + d for e in edges for d in (-1, 0) if 0 <= e + d < DV_ROWS})
+    keep = ", ".join(map(str, near))
+    spark.sql(f"DELETE FROM delta.`{dv}` WHERE NOT (id % 100 = 0 OR id IN ({keep}))")
+    spark.sql(f"DELETE FROM delta.`{dv}` WHERE id IN ({', '.join(map(str, exact))})")
+    write_scan_expected(
+        spark,
+        dv,
+        {"feature": "deletionVectors", "row_groups": groups, "edges": edges, "deleted_at_edges": exact},
+    )
+
+
 def scan_tables(spark: SparkSession, out: str) -> None:
     def t(name: str) -> str:
         return os.path.join(out, name)
 
-    # Deletion vectors: one file of ten rows, then two DELETE statements (the second rewrites the DV).
-    dv = t("deletion-vectors")
-    spark.sql(
-        f"CREATE TABLE delta.`{dv}` (id BIGINT, v STRING) USING delta "
-        "TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')"
-    )
-    spark.range(10).selectExpr("id", "concat('v', id) AS v").coalesce(1).write.format("delta").mode("append").save(dv)
-    spark.sql(f"DELETE FROM delta.`{dv}` WHERE id % 3 = 0")
-    spark.sql(f"DELETE FROM delta.`{dv}` WHERE id = 4")
-    write_scan_expected(spark, dv, {"feature": "deletionVectors"})
+    deletion_vectors(spark, t("deletion-vectors"))
 
     for mode in ("name", "id"):
         cm = t(f"column-mapping-{mode}")
@@ -355,6 +399,14 @@ def refused_tables(spark: SparkSession, out: str) -> None:
 
 
 def probe_unknown_reader_feature(spark: SparkSession, out: str) -> None:
+    for name, features in (
+        ("PROBE-unknown-reader-feature.json", ["krishivProbeFeature"]),
+        ("PROBE-two-unknown-reader-features.json", ["krishivProbeZeta", "krishivProbeAlpha"]),
+    ):
+        probe_unknown_reader_features(spark, out, name, features)
+
+
+def probe_unknown_reader_features(spark: SparkSession, out: str, record_name: str, features: list[str]) -> None:
     """Delta's own refusal of a reader feature it does not know, for the shape of
     ``DELTA_UNSUPPORTED_FEATURES_FOR_READ``'s parameters: a table whose last commit adds an
     unknown name to ``readerFeatures``, read by delta-spark. Only the error is kept."""
@@ -364,8 +416,8 @@ def probe_unknown_reader_feature(spark: SparkSession, out: str) -> None:
     )
     spark.sql(f"INSERT INTO delta.`{path}` VALUES (1)")
     proto = protocol(path)
-    proto["readerFeatures"] = [*proto["readerFeatures"], "krishivProbeFeature"]
-    proto["writerFeatures"] = [*proto["writerFeatures"], "krishivProbeFeature"]
+    proto["readerFeatures"] = [*proto["readerFeatures"], *features]
+    proto["writerFeatures"] = [*proto["writerFeatures"], *features]
     with open(os.path.join(path, "_delta_log", f"{2:020}.json"), "w") as f:
         f.write(json.dumps({"protocol": proto}) + "\n")
     record: dict = {"protocol": proto}
@@ -375,13 +427,19 @@ def probe_unknown_reader_feature(spark: SparkSession, out: str) -> None:
     except Exception as e:
         record.update(oracle_error(e, path))
     shutil.rmtree(path, ignore_errors=True)
-    with open(os.path.join(out, "PROBE-unknown-reader-feature.json"), "w") as f:
+    with open(os.path.join(out, record_name), "w") as f:
         json.dump(record, f, indent=1, sort_keys=True)
         f.write("\n")
 
 
 def main(out: str, which: str = "checkpoint") -> None:
     spark = session()
+    if which == "review":
+        deletion_vectors(spark, os.path.join(out, "deletion-vectors"))
+        probe_unknown_reader_feature(spark, out)
+        drop_hadoop_crc(out)
+        spark.stop()
+        return
     if which == "probe":
         refused_tables(spark, out)
         probe_unknown_reader_feature(spark, out)
