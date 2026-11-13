@@ -41,7 +41,7 @@ workspace = true
 
 [features]
 # The binary links mimalloc by default (P2-T012); libraries never do.
-default = ["mimalloc"]
+default = ["mimalloc", "collations-icu"]
 # Strictly additive (ADR 0027); each forwards to the facade crate.
 kafka = ["krishiv/kafka"]
 iceberg = ["krishiv/iceberg"]
