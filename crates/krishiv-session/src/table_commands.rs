@@ -431,6 +431,11 @@ impl Session {
                 }
                 .into());
             }
+            Err(DropNamespaceError::Changed) => {
+                return Err(internal(format!(
+                    "`{name}` was changed by another statement while this one ran; retry"
+                )));
+            }
         }
         self.empty_frame().await
     }
@@ -1804,7 +1809,7 @@ mod tests;
 
 /// Why an [`OwnedDirectory`] could not be made.
 #[derive(Debug)]
-enum OwnedDirectoryError {
+pub(crate) enum OwnedDirectoryError {
     /// Something is already at the path (not ours to touch).
     Exists,
     Io(String),
@@ -1814,14 +1819,14 @@ enum OwnedDirectoryError {
 /// failed, or its future was dropped), it removes what is in it, provided the path still names the
 /// directory that was created (same device and inode): a path swapped for another directory in the
 /// meantime is left alone.
-struct OwnedDirectory {
+pub(crate) struct OwnedDirectory {
     path: PathBuf,
     identity: Option<(u64, u64)>,
     kept: bool,
 }
 
 impl OwnedDirectory {
-    fn create(path: PathBuf) -> Result<Self, OwnedDirectoryError> {
+    pub(crate) fn create(path: PathBuf) -> Result<Self, OwnedDirectoryError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 OwnedDirectoryError::Io(format!("cannot create {}: {e}", parent.display()))
@@ -1862,7 +1867,7 @@ impl OwnedDirectory {
     }
 
     /// The statement succeeded: the directory stays.
-    fn keep(mut self) {
+    pub(crate) fn keep(mut self) {
         self.kept = true;
     }
 }

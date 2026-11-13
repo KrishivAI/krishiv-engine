@@ -47,7 +47,9 @@ use crate::store::{
     CatalogStore, CatalogTable, DropNamespaceError, NamespaceMeta, StoreColumn, TableLayout,
     managed_location,
 };
-use crate::table_commands::{PROVIDERS, TableName, check_new_name};
+use crate::table_commands::{
+    OwnedDirectory, OwnedDirectoryError, PROVIDERS, TableName, check_new_name,
+};
 
 fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
@@ -320,6 +322,13 @@ impl CatalogWrite for StoreCatalog {
         Box::pin(async move {
             let name = self.namespace(namespace)?;
             check_new_name(&name)?;
+            // `global_temp` is the reserved home of global temporary views: it always exists.
+            if name.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE) {
+                return Err(SchemaAlreadyExists {
+                    schema_name: format!("`{name}`"),
+                }
+                .into());
+            }
             let meta = NamespaceMeta {
                 collation: None,
                 comment: info.comment,
@@ -387,29 +396,42 @@ impl CatalogWrite for StoreCatalog {
     ) -> BoxFuture<'a, Result<(), KrishivError>> {
         Box::pin(async move {
             let name = self.namespace(namespace)?;
-            if cascade {
-                for table in self.store.tables_in(&name) {
-                    deletable_dir(&table)?;
+            let checked = if cascade {
+                let held = self.store.tables_in(&name);
+                for table in &held {
+                    deletable_dir(table)?;
                 }
-            }
-            let tables = match self.store.drop_namespace(&name, cascade) {
-                Ok(tables) => tables,
-                Err(DropNamespaceError::Missing) => {
-                    return Err(SchemaNotFound {
-                        schema_name: format!("`{name}`"),
-                    }
-                    .into());
-                }
-                Err(DropNamespaceError::NotEmpty) => {
-                    return Err(SchemaNotEmpty {
-                        schema_name: format!("`{name}`"),
-                    }
-                    .into());
-                }
-                Err(DropNamespaceError::Default) => {
-                    return Err(self.unsupported("dropping the default namespace"));
-                }
+                Some(held)
+            } else {
+                None
             };
+            let tables =
+                match self
+                    .store
+                    .drop_namespace_matching(&name, cascade, checked.as_deref())
+                {
+                    Ok(tables) => tables,
+                    Err(DropNamespaceError::Missing) => {
+                        return Err(SchemaNotFound {
+                            schema_name: format!("`{name}`"),
+                        }
+                        .into());
+                    }
+                    Err(DropNamespaceError::NotEmpty) => {
+                        return Err(SchemaNotEmpty {
+                            schema_name: format!("`{name}`"),
+                        }
+                        .into());
+                    }
+                    Err(DropNamespaceError::Default) => {
+                        return Err(self.unsupported("dropping the default namespace"));
+                    }
+                    Err(DropNamespaceError::Changed) => {
+                        return Err(internal(format!(
+                            "`{name}` was changed by another statement while this one ran; retry"
+                        )));
+                    }
+                };
             let mut first = None;
             for table in &tables {
                 let removed =
@@ -467,13 +489,6 @@ impl CatalogWrite for StoreCatalog {
                 || managed_location(&self.warehouse, &namespace, &name),
                 |l| PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             );
-            if managed && location.exists() {
-                return Err(LocationAlreadyExists {
-                    identifier: info.ident.to_string(),
-                    location: location.display().to_string(),
-                }
-                .into());
-            }
             let table = CatalogTable {
                 namespace,
                 name,
@@ -494,25 +509,22 @@ impl CatalogWrite for StoreCatalog {
                 data_version: 0,
                 stamp: 0,
             };
-            // The directory first, as `Session::add_table` does: a drop that sees the entry finds its
-            // files, and a failed registration removes only the directory this call made.
-            let made = managed
-                .then(|| std::fs::create_dir_all(&location))
-                .transpose();
-            let made = made
-                .map(|made| made.is_some())
-                .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
-            let created = match self.store.create_table(table, store_mode) {
-                Ok(created) => created,
-                Err(e) => {
-                    if made {
-                        let _ = std::fs::remove_dir_all(&location);
-                    }
-                    return Err(e);
-                }
-            };
-            if !created && made {
-                let _ = std::fs::remove_dir_all(&location);
+            // The directory first, made exclusively (a directory that is there is not ours to take), as the
+            // SQL create does: a drop that sees the entry finds its files, and a refused registration removes
+            // the directory this call made and nothing else.
+            let owned = managed
+                .then(|| OwnedDirectory::create(location.clone()))
+                .transpose()
+                .map_err(|e| match e {
+                    OwnedDirectoryError::Exists => KrishivError::from(LocationAlreadyExists {
+                        identifier: info.ident.to_string(),
+                        location: location.display().to_string(),
+                    }),
+                    OwnedDirectoryError::Io(message) => internal(message),
+                })?;
+            let created = self.store.create_table(table, store_mode)?;
+            if created && let Some(owned) = owned {
+                owned.keep();
             }
             Ok(created)
         })
@@ -560,6 +572,17 @@ impl CatalogWrite for StoreCatalog {
                 partition_columns: &current.layout.partition_columns,
             };
             let altered = apply_changes(&input, changes, AlterRules::new(self.case_sensitive))?;
+            // The provider must be able to write the columns that result, as at create.
+            krishiv_io::check_declared_schema(
+                &current.provider,
+                &arrow_schema::Schema::new(
+                    altered
+                        .columns
+                        .iter()
+                        .map(|c| c.data_type.to_arrow_field(&c.name, true))
+                        .collect::<Vec<_>>(),
+                ),
+            )?;
             let mut changed = (*current).clone();
             changed.columns = altered
                 .columns
@@ -610,8 +633,13 @@ impl CatalogWrite for StoreCatalog {
                 return Err(self.unsupported("dropping a view as a table"));
             }
             let dir = deletable_dir(&current)?;
-            if self.store.drop_table(&namespace, &name).is_none() {
-                return Ok(false);
+            // Only the entry that passed the checks: a table dropped and created again meanwhile is not ours.
+            if self.store.drop_table_entry(&current).is_none() {
+                return if self.store.table(&namespace, &name).is_some() {
+                    Err(concurrent(id))
+                } else {
+                    Ok(false)
+                };
             }
             if let Some(dir) = dir {
                 remove_dir(&dir)?;
@@ -1236,6 +1264,84 @@ mod tests {
         assert!(block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).is_err());
         assert!(!block_on(c.create_table(info("db", "t"), CreateMode::IgnoreIfExists)).unwrap());
         assert!(dir.join("keep").exists());
+    }
+
+    #[test]
+    fn global_temp_is_not_a_permanent_namespace() {
+        let f = fixture();
+        let e = block_on(
+            f.catalog
+                .create_namespace(&ns("Global_Temp"), NamespaceInfo::default()),
+        )
+        .unwrap_err();
+        assert_eq!(class(&e), ErrorClass::SchemaAlreadyExists);
+        assert!(!f.catalog.store.has_namespace("global_temp"));
+    }
+
+    #[test]
+    fn an_added_column_the_provider_cannot_write_is_refused_before_the_table_changes() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).unwrap();
+        let id = ident("db", "t");
+        let before = load(c, &id).unwrap();
+        let interval = TableChange::AddColumn {
+            path: ns("iv"),
+            data_type: DataType::CalendarInterval,
+            declared: None,
+            nullable: true,
+            comment: None,
+            position: None,
+            default: None,
+        };
+        let altered =
+            block_on(c.alter_table(&id, before.version.unwrap(), &[interval])).unwrap_err();
+        // The same refusal create gives for the same column.
+        let created = block_on(c.create_table(
+            TableInfo::new(
+                ident("db", "iv"),
+                vec![TableColumn::new("iv", DataType::CalendarInterval, true)],
+            ),
+            CreateMode::ErrorIfExists,
+        ))
+        .unwrap_err();
+        assert_eq!(class(&altered), class(&created));
+        assert_eq!(load(c, &id).unwrap(), before, "the table did not change");
+    }
+
+    #[test]
+    fn a_drop_never_removes_a_table_created_after_the_one_it_checked() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).unwrap();
+        let id = ident("db", "t");
+        let old = c.store.table("db", "t").unwrap();
+        // The table is dropped and created again between the checks and the removal.
+        assert!(block_on(c.drop_table(&id, true)).unwrap());
+        block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).unwrap();
+        assert!(c.store.drop_table_entry(&old).is_none());
+        assert!(load(c, &id).is_some(), "the new table stays");
+        let dir = managed_location(f.warehouse.path(), "db", "t");
+        assert!(dir.is_dir(), "and so do its files");
+    }
+
+    #[test]
+    fn a_managed_directory_that_is_there_is_not_taken_over() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        let taken = managed_location(f.warehouse.path(), "db", "t");
+        std::fs::create_dir_all(&taken).unwrap();
+        std::fs::write(taken.join("other"), b"x").unwrap();
+        let e = block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).unwrap_err();
+        assert_eq!(class(&e), ErrorClass::LocationAlreadyExists);
+        assert!(
+            taken.join("other").exists(),
+            "another statement's files are left alone"
+        );
+        assert!(c.store.table("db", "t").is_none());
     }
 
     #[test]
