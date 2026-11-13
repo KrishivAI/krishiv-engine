@@ -102,6 +102,19 @@ fn a_lazy_checkpoint_takes_its_rows_at_the_first_action() {
 }
 
 #[test]
+fn the_krishiv_key_sets_the_checkpoint_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let cp_dir = dir.path().join("checkpoints");
+    let s = session(
+        dir.path(),
+        &[("krishiv.checkpoint.dir", cp_dir.to_str().unwrap())],
+    );
+    let cp = block_on(s.table("src").checkpoint(true)).unwrap();
+    assert_eq!(files(&cp_dir), 1);
+    assert_eq!(ids(&cp), vec![1, 2, 3]);
+}
+
+#[test]
 fn a_reliable_checkpoint_writes_under_the_directory_and_deletes_with_the_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let cp_dir = dir.path().join("checkpoints");

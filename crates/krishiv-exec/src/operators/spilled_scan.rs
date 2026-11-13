@@ -29,7 +29,7 @@ use crate::error::{Result, internal};
 use crate::executor::{Executor, run_blocking};
 use crate::operator::{GlobalState, LocalState, Source};
 
-/// Scans the batches of one spill file (see the [module docs](self)).
+/// Scans the batches of one spill file (see the module docs).
 #[derive(Debug)]
 pub struct SpilledScan {
     table: SchemaRef,

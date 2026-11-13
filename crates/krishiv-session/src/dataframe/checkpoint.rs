@@ -125,6 +125,25 @@ impl DataFrame {
     async fn take_snapshot(&self, dir: Option<PathBuf>) -> Result<DataFrame, KrishivError> {
         let schema = self.schema().await?;
         let batches: Vec<RecordBatch> = self.collect().await?;
+        // The analysed schema can name a type (`Utf8View`) the result batches carry as another
+        // (`Utf8`, a table registered by a client); the snapshot's table takes the batches' types.
+        let schema = match batches.first() {
+            Some(first) => {
+                let fields: Vec<_> = schema
+                    .fields()
+                    .iter()
+                    .zip(first.schema().fields())
+                    .map(|(f, b)| {
+                        Arc::new(f.as_ref().clone().with_data_type(b.data_type().clone()))
+                    })
+                    .collect();
+                Arc::new(arrow_schema::Schema::new_with_metadata(
+                    fields,
+                    schema.metadata().clone(),
+                ))
+            }
+            None => schema,
+        };
         let state = &self.session.state;
         let memory_bytes: usize = batches.iter().map(batch_bytes).sum();
         let file = match dir {

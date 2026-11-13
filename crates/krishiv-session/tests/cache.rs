@@ -913,6 +913,19 @@ fn closing_the_session_removes_its_spill_files() {
     assert_eq!(s.cache_reserved(), 0);
 }
 
+/// `krishiv.cache.defaultStorageLevel` is the native name of the same setting.
+#[test]
+fn the_krishiv_key_sets_the_default_storage_level() {
+    let s = int_session(vec![1, 2, 3]);
+    s.conf()
+        .set("krishiv.cache.defaultStorageLevel", "DISK_ONLY")
+        .unwrap();
+    assert_eq!(
+        block_on(s.table("t").cache().storage_level()).unwrap(),
+        StorageLevel::DISK_ONLY
+    );
+}
+
 /// `spark.sql.defaultCacheStorageLevel` is the level of `cache()` and `CACHE TABLE`.
 #[test]
 fn the_default_storage_level_follows_the_config() {
@@ -1015,4 +1028,52 @@ fn a_derived_frame_reading_another_versioned_table_uses_the_cache() {
         ids(&block_on(derived.collect()).unwrap()),
         vec![1, 2, 3, 10]
     );
+}
+
+/// A string column registered as `Utf8` (what Python hands over) caches, checkpoints and
+/// reads back; a refresh keeps the registration, the next action refills it.
+#[test]
+fn a_string_column_registered_as_utf8_caches_and_checkpoints() {
+    use arrow_array::StringArray;
+    let session = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("age", ArrowType::Int32, false),
+        Field::new("name", ArrowType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![2, 5])),
+            Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+        ],
+    )
+    .unwrap();
+    session.register_batches("t", schema, vec![batch]).unwrap();
+    let cp = block_on(session.table("t").local_checkpoint(true, None)).unwrap();
+    assert_eq!(block_on(cp.count()).unwrap(), 2);
+    let cached = session.table("t").cache();
+    assert_eq!(block_on(cached.count()).unwrap(), 2);
+    block_on(session.sql("REFRESH TABLE t")).unwrap();
+    assert_eq!(block_on(cached.count()).unwrap(), 2);
+    assert!(block_on(cached.is_cached()).unwrap());
+}
+
+/// Replacing the view a cached frame reads re-analyzes it to the new definition; the registration of the old
+/// plan does not carry over.
+#[test]
+fn a_cached_frame_follows_a_replaced_view() {
+    let session = Session::new().unwrap();
+    register(&session, "t", vec![1]);
+    let cached = session.table("t").cache();
+    assert_eq!(ids(&block_on(cached.collect()).unwrap()), vec![1]);
+    register(&session, "t", vec![2]);
+    assert_eq!(ids(&block_on(cached.collect()).unwrap()), vec![2]);
+    block_on(session.sql("REFRESH TABLE t")).unwrap();
+    assert!(!block_on(cached.is_cached()).unwrap());
+    assert_eq!(ids(&block_on(cached.collect()).unwrap()), vec![2]);
+    assert!(
+        !block_on(cached.is_cached()).unwrap(),
+        "the old plan's registration is gone"
+    );
+    assert!(block_on(cached.cache().is_cached()).unwrap());
 }

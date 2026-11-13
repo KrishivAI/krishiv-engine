@@ -84,7 +84,9 @@ def test_cached_frame_reads_the_snapshot(spark: SparkSession) -> None:
     spark.catalog.refreshTable("t")
     assert not cached.is_cached
     assert rows(cached) == [(2, "b")]
-    assert cached.is_cached
+    # The registration belonged to the old plan; the replaced view is read uncached until cached again.
+    assert not cached.is_cached
+    assert cached.cache().is_cached
     spark.catalog.clearCache()
     assert not cached.is_cached
 
