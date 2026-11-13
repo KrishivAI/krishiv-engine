@@ -47,7 +47,12 @@ struct Shared {
     dropped: std::sync::atomic::AtomicUsize,
     /// Result batches the operator read from the tasks.
     taken: std::sync::atomic::AtomicUsize,
+    /// Polls of `next`: past [`SPUN`] the task fails, so a busy loop ends.
+    polls: std::sync::atomic::AtomicUsize,
 }
+
+/// Polls of a task's `next` that only a busy loop reaches.
+const SPUN: usize = 100_000;
 
 impl Shared {
     fn open_gate(&self) {
@@ -182,6 +187,12 @@ impl UdfTask for Task {
 
     fn next(&self) -> BoxFuture<'_, crate::error::Result<Option<RecordBatch>>> {
         Box::pin(poll_fn(|cx| {
+            if self.shared.polls.fetch_add(1, Ordering::SeqCst) > SPUN {
+                return Poll::Ready(Err(InternalError {
+                    message: "the operator spun".to_owned(),
+                }
+                .into()));
+            }
             self.ready.register(cx.waker());
             let mut s = self.state.lock().unwrap();
             match s.out.pop_front() {
@@ -239,6 +250,17 @@ struct Rig {
 }
 
 fn rig(shape: RelationShape, yields: Yield, limits: RelationLimits, limit: usize) -> Rig {
+    rig_in(shape, yields, limits, limit, None)
+}
+
+/// As [`rig`], its finished rows spilling to `scope`.
+fn rig_in(
+    shape: RelationShape,
+    yields: Yield,
+    limits: RelationLimits,
+    limit: usize,
+    scope: Option<krishiv_memory::SpillScope>,
+) -> Rig {
     let shared = Arc::new(Shared::default());
     let cogroup = matches!(shape, RelationShape::CoGrouped { .. });
     let schema = input(cogroup);
@@ -280,7 +302,7 @@ fn rig(shape: RelationShape, yields: Yield, limits: RelationLimits, limit: usize
         vec![lane],
         Arc::new(Schema::new(output)),
         limits,
-        None,
+        scope,
     )
     .unwrap();
     let root = pool(limit);
@@ -777,5 +799,103 @@ async fn a_weighted_batch_is_refused() {
     assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
     assert!(err.to_string().contains("weighted"), "{err}");
     drop((l, g));
+    done(r);
+}
+
+#[tokio::test]
+async fn an_aggregate_waits_for_its_slowest_lane_without_spinning() {
+    let mut r = rig(
+        RelationShape::Aggregate { keys: vec![0] },
+        Yield::Count,
+        limits(0, 16),
+        64 << 20,
+    );
+    let slow = Arc::new(Shared::default());
+    slow.closed.store(true, Ordering::SeqCst);
+    let lane = |shared: &Arc<Shared>, name: &str| RelationLane {
+        name: name.to_owned(),
+        udf: Arc::new(Fake {
+            shared: Arc::clone(shared),
+            yields: Yield::Count,
+        }),
+        sides: vec![vec![
+            column(0, ArrowType::Int32),
+            column(1, ArrowType::Int64),
+        ]],
+        names: vec![vec!["k".to_owned(), "v".to_owned()]],
+        client: vec![ArrowType::Int64],
+    };
+    r.sink = RelationSink::try_new(
+        input(false),
+        RelationShape::Aggregate { keys: vec![0] },
+        vec![lane(&r.shared, "f"), lane(&slow, "g")],
+        Arc::new(Schema::new(vec![
+            Field::new("k", ArrowType::Int32, true),
+            Field::new("n", ArrowType::Int64, true),
+            Field::new("m", ArrowType::Int64, true),
+        ])),
+        limits(0, 16),
+        None,
+    )
+    .unwrap();
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let status = r.sink.sink(rows(&[5, 5, 7], None), &mut l, &g).unwrap();
+    assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
+    r.sink.combine(l, &g).unwrap();
+    let mut finalize = r.sink.finalize(&g, &r.ctx);
+    // The fast lane's values wait for the slow lane's: pending, no busy loop.
+    let first = poll_fn(|cx| Poll::Ready(finalize.as_mut().poll(cx))).await;
+    assert!(first.is_pending(), "{first:?}");
+    assert_eq!(r.shared.log(), ["B0:2", "G", "B0:1", "G", "E"]);
+    assert!(slow.log().is_empty());
+    slow.open_gate();
+    tokio::time::timeout(Duration::from_secs(5), finalize)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        r.shared.polls.load(Ordering::SeqCst) < 100,
+        "polled in a loop"
+    );
+    drop(g);
+    done(r);
+}
+
+#[tokio::test]
+async fn a_result_refused_in_finalize_spills_instead_of_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    let scope = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
+        dir: dir.path().join("spill"),
+        ..krishiv_memory::SpillConfig::default()
+    })
+    .unwrap()
+    .scope()
+    .unwrap();
+    let r = rig_in(
+        RelationShape::Map,
+        Yield::Burst(64),
+        limits(0, 8),
+        256 << 10,
+        Some(scope),
+    );
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let keys: Vec<i32> = (0..1000).collect();
+    let status = r.sink.sink(rows(&keys, None), &mut l, &g).unwrap();
+    assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
+    assert!(
+        r.shared.taken.load(Ordering::SeqCst) < 64,
+        "a result refused"
+    );
+    r.sink.combine(l, &g).unwrap();
+    // Faster than the pool's spill wait: the refused results are written
+    // out, not waited for.
+    tokio::time::timeout(Duration::from_secs(4), r.sink.finalize(&g, &r.ctx))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), 64);
+    drop(g);
     done(r);
 }

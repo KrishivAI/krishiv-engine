@@ -9,9 +9,11 @@
 //! the last task that takes it) and of the copies made for its client form.
 //! Every result batch is reserved in the driver's consumer as the pump
 //! receives it; when the pool refuses, the batch waits in [`LaneIo::refused`]
-//! and the pump reads no more results until the driver has reserved it
-//! (`sink` returns `NeedMemory`, `finalize` awaits the memory): back
-//! pressure into the task, never unaccounted results.
+//! and the pump reads no more results until the driver has taken it
+//! (`sink` returns `NeedMemory`; `finalize` stores a map or grouped result
+//! as the others, written out when the pool is full, and waits for an
+//! aggregate value's memory while the other lanes move): back pressure into
+//! the task, never unaccounted results.
 
 use std::collections::VecDeque;
 use std::future::poll_fn;
@@ -149,22 +151,29 @@ impl Lane {
         None
     }
 
-    /// Reserves the refused result, if any, waiting for the memory, and
-    /// moves it to the outputs.
-    pub(super) async fn take_refused(&self) -> Result<()> {
+    /// The refused result, if any, taken without a reservation (its
+    /// caller stores it at once, writing it out when the pool is full).
+    pub(super) fn take_refused_unreserved(&self) -> Option<RecordBatch> {
+        lock(&self.io).refused.take()
+    }
+
+    /// The future that reserves the refused result, if any, waiting for
+    /// the memory, and moves it to the outputs. Cancel-safe.
+    pub(super) fn reserve_refused(&self) -> Option<BoxFuture<'static, Result<()>>> {
         let (bytes, mut r) = {
             let mut q = lock(&self.io);
-            let Some(batch) = &q.refused else {
-                return Ok(());
-            };
-            (batch.get_array_memory_size(), q.memory.split(0))
+            let bytes = q.refused.as_ref()?.get_array_memory_size();
+            (bytes, q.memory.split(0))
         };
-        r.grow(bytes).await.map_err(KrishivError::from)?;
-        let mut q = lock(&self.io);
-        if let Some(batch) = q.refused.take() {
-            q.outputs.push_back((batch, r));
-        }
-        Ok(())
+        let io = Arc::clone(&self.io);
+        Some(Box::pin(async move {
+            r.grow(bytes).await.map_err(KrishivError::from)?;
+            let mut q = lock(&io);
+            if let Some(batch) = q.refused.take() {
+                q.outputs.push_back((batch, r));
+            }
+            Ok(())
+        }))
     }
 }
 

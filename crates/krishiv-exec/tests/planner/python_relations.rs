@@ -518,9 +518,13 @@ fn a_computed_grouping_key_leads_every_frame() {
 
 /// A grouped-aggregate Python UDF call over `arg`.
 fn udaf(arg: &BoundColumn) -> Arc<Expr> {
+    udaf_named("count", arg)
+}
+
+fn udaf_named(name: &str, arg: &BoundColumn) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
         ResolvedFunction {
-            id: udf("count", PythonEvalType::GroupedAggArrow).function_id(),
+            id: udf(name, PythonEvalType::GroupedAggArrow).function_id(),
             kind: FunctionKind::Aggregate,
             args: vec![col(arg)],
             distinct: false,
@@ -554,6 +558,31 @@ fn a_python_aggregate_yields_one_row_per_group() {
     assert_eq!(rows.len(), 9, "{rows:?}");
     assert!(rows.contains(&"NULL|2".to_owned()), "{rows:?}");
     assert!(rows.contains(&"5|1".to_owned()), "{rows:?}");
+}
+
+/// Two Python aggregates, one slow: each key's values pair up.
+#[test]
+fn two_python_aggregates_pair_their_values_per_key() {
+    let env = env();
+    let (input, cols) = input(&env, "SELECT a, b FROM t");
+    let node = LogicalPlan::new(PlanNode::Aggregate {
+        input,
+        grouping: Grouping::GroupBy(vec![col(&cols[0])]),
+        aggregates: vec![
+            col(&cols[0]),
+            alias(udaf(&cols[1]), 950, "n"),
+            alias(udaf_named("slow_count", &cols[0]), 951, "m"),
+        ],
+    });
+    let out = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap();
+    let rows = lines(&out);
+    assert_eq!(rows.len(), 9, "{rows:?}");
+    for row in &rows {
+        let cells: Vec<&str> = row.split('|').collect();
+        assert_eq!(cells[1], cells[2], "{rows:?}");
+    }
+    assert!(rows.contains(&"NULL|2|2".to_owned()), "{rows:?}");
+    assert!(rows.contains(&"5|1|1".to_owned()), "{rows:?}");
 }
 
 #[test]

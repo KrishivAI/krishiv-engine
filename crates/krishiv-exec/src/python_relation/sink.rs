@@ -38,7 +38,11 @@
 //! yielded until they are stored (`lane.rs`: a refused result stops the
 //! task's reads until reserved), and an aggregate's pending group keys
 //! (`pair.rs`). A refusal in `sink` returns `NeedMemory` before the input
-//! is taken, so the retry is exact; `finalize` waits for the memory.
+//! is taken, so the retry is exact. In `finalize` a refused map or grouped
+//! result is stored as the others, written to a spill file when the pool
+//! is full; an aggregate's refused value waits for its memory while the
+//! other lanes move. A stored result's bytes pass to the store's
+//! reservation through the consumer's credit, never counted twice.
 //!
 //! **Errors and cancellation.** The first failure of a task fails the
 //! query. Dropping the state (query end, cancel, error) drops every task,
@@ -56,7 +60,7 @@ use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use futures::future::BoxFuture;
 use futures::task::noop_waker_ref;
 use krishiv_common::error::{KrishivError, KrishivPythonUdfResultMismatch};
-use krishiv_memory::{Reservation, SpillScope};
+use krishiv_memory::{ConsumerHandle, Reservation, SpillScope};
 use krishiv_types::batch::Batch;
 
 use super::lane::{FrameMem, Lane};
@@ -305,6 +309,8 @@ enum Flushed {
 struct RelLocal {
     store: LocalState,
     driver: Driver,
+    /// The driver's consumer, whose credit hands results to the store.
+    consumer: Arc<ConsumerHandle>,
 }
 
 /// The global state: the store's, and what drivers left.
@@ -622,8 +628,9 @@ impl RelationSink {
         Ok(None)
     }
 
-    /// Stores `batch` in the list, or keeps it for the retry after the
-    /// memory the store asked for.
+    /// Stores `batch` in the list, its results' bytes (`memory`) handed to
+    /// the store's reservation; or keeps it, reserved again, for the retry
+    /// after the memory the store asked for.
     fn store(
         &self,
         l: &mut RelLocal,
@@ -631,10 +638,16 @@ impl RelationSink {
         memory: Vec<Reservation>,
         g: &RelGlobal,
     ) -> Result<Option<SinkStatus>> {
+        // As the store keeps it, so the bytes lent are the bytes it takes.
+        let batch = crate::operators::owned_rows(batch)?;
+        let lent = lend(memory, &l.consumer, batch.data().get_array_memory_size());
         match self.store.sink(batch.clone(), &mut l.store, &g.store)? {
             SinkStatus::NeedMemory { bytes } => {
-                l.driver.ready = Some((batch, memory));
-                Ok(Some(SinkStatus::NeedMemory { bytes }))
+                let back = l.consumer.reservation_from_credit(lent);
+                l.driver.ready = Some((batch, vec![back]));
+                Ok(Some(SinkStatus::NeedMemory {
+                    bytes: bytes.saturating_sub(lent).max(1),
+                }))
             }
             _ => Ok(None),
         }
@@ -741,6 +754,25 @@ pub(super) fn recarried(
     crate::carrier::recarried_array(c, canonical)
 }
 
+/// Lends the bytes `parts` hold (results being stored) to `handle`'s grant
+/// credit, up to `bytes`, so the reservation that stores the same rows takes
+/// them without asking the pool again; the rest is freed. The bytes lent:
+/// what to take back with `reservation_from_credit` if that reservation is
+/// refused.
+fn lend(parts: Vec<Reservation>, handle: &Arc<ConsumerHandle>, bytes: usize) -> usize {
+    let mut lent = 0;
+    for mut part in parts {
+        if part.consumer() != handle.id() && part.transfer_to(handle).is_err() {
+            // Freed as it drops.
+            continue;
+        }
+        let take = part.size().min(bytes - lent);
+        part.shrink_to_credit(take);
+        lent += take;
+    }
+    lent
+}
+
 /// The future of a `Blocked` driver: ready once every lane's window has
 /// room, a lane ended (its failure is the next call's), or a result waits
 /// for memory (the next call asks for it).
@@ -773,6 +805,7 @@ impl Sink for RelationSink {
         let g = global_ref::<RelGlobal>(global, "PythonRelation")?;
         let consumer = ctx.consumer().consumer();
         Ok(Box::new(RelLocal {
+            consumer: Arc::clone(consumer),
             store: self.store.local_state(ctx, &g.store)?,
             driver: Driver {
                 lanes: self
@@ -835,7 +868,9 @@ impl Sink for RelationSink {
         let l = local
             .downcast::<RelLocal>()
             .map_err(|_| internal("wrong local state for PythonRelation".to_owned()))?;
-        let RelLocal { store, mut driver } = *l;
+        let RelLocal {
+            store, mut driver, ..
+        } = *l;
         // The input ended: the open group ends, then the partition. What the
         // windows do not take now, `finalize` frames.
         if driver.group_open {
@@ -898,9 +933,11 @@ impl Sink for RelationSink {
 impl RelationSink {
     /// One step of a finished driver in `finalize`: the backlog framed as
     /// far as the windows allow (waiting for the copies' memory), the
-    /// results stored (written to a spill file when the pool has no room),
-    /// then refused results reserved. Whether the driver
-    /// is done: no backlog, every task ended, every result stored.
+    /// results stored, a refused map or grouped result with them (written
+    /// to a spill file when the pool has no room), then an aggregate's
+    /// refused values reserved if the pool has room now. Whether the driver
+    /// is done: no backlog, every task ended, every result stored (an
+    /// aggregate's values left over are `check_complete`'s error).
     async fn finish_step(&self, d: &mut Driver, g: &RelGlobal, ctx: &TaskContext) -> Result<bool> {
         while let Flushed::Memory(bytes) = self.flush(d)? {
             d.spare.grow(bytes).await.map_err(KrishivError::from)?;
@@ -915,6 +952,15 @@ impl RelationSink {
             batches.push(batch);
             held.extend(memory);
         }
+        let aggregate = matches!(self.shape, RelationShape::Aggregate { .. });
+        if !aggregate {
+            // After the lane's reserved results, in its order.
+            for (lane, state) in self.lanes.iter().zip(&d.lanes) {
+                if let Some(batch) = state.take_refused_unreserved() {
+                    batches.push(self.output(lane, &batch)?);
+                }
+            }
+        }
         if !batches.is_empty() {
             let bytes = batches
                 .iter()
@@ -922,48 +968,73 @@ impl RelationSink {
                 .sum();
             // Kept in memory if the pool has room, else written out: the
             // list can spill only once the store finalized.
+            let handle = ctx.consumer().consumer();
+            let lent = lend(std::mem::take(&mut held), handle, bytes);
             let mut reservation = ctx.consumer().reservation();
             if reservation.try_grow(bytes).is_ok() {
                 self.store.add_part(&g.store, batches, reservation)?;
             } else {
-                drop(reservation);
+                drop((reservation, handle.reservation_from_credit(lent)));
                 self.store.add_spilled_part(&g.store, batches, ctx).await?;
             }
         }
-        drop(held);
-        // The results' memory is free again: a refused result next.
-        for lane in &d.lanes {
-            lane.take_refused().await?;
+        if aggregate {
+            // The stored results' memory is free again; a value still
+            // refused waits in `wait` while the other lanes move.
+            for lane in &d.lanes {
+                let _missing = lane.try_take_refused();
+            }
         }
         Ok(d.backlog.is_empty()
             && d.ready.is_none()
             && d.lanes
                 .iter()
-                .all(|l| l.finished() && !lock(&l.io).has_results()))
+                .all(|l| l.finished() && (aggregate || !lock(&l.io).has_results())))
     }
 
-    /// Waits until a driver can move: a lane yielded, failed, ended or
-    /// freed room in its window for a backlog; or the query was cancelled.
+    /// Waits until a driver can move: a lane yielded (for an aggregate:
+    /// every lane, as `pair::joined` needs, or a refused value got its
+    /// memory), failed, ended or freed room in its window for a backlog; or
+    /// the query was cancelled.
     async fn wait(&self, drivers: &[Driver], ctx: &TaskContext) -> Result<()> {
+        let aggregate = matches!(self.shape, RelationShape::Aggregate { .. });
+        let mut reserving: Vec<BoxFuture<'static, Result<()>>> = if aggregate {
+            drivers
+                .iter()
+                .flat_map(|d| d.lanes.iter().filter_map(Lane::reserve_refused))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut cancelled = std::pin::pin!(ctx.query().cancelled());
         poll_fn(|cx| {
             if cancelled.as_mut().poll(cx).is_ready() {
                 return Poll::Ready(Err(ctx.query().cancellation()));
             }
+            for f in &mut reserving {
+                if let Poll::Ready(r) = f.as_mut().poll(cx) {
+                    return Poll::Ready(r);
+                }
+            }
             let mut ready = false;
             let mut all_done = true;
             for d in drivers {
                 let mut room = true;
+                let mut joinable = aggregate;
                 for lane in &d.lanes {
                     if let Some(Err(e)) = lane.poll(cx) {
                         return Poll::Ready(Err(e));
                     }
                     all_done &= lane.finished();
                     let q = lock(&lane.io);
-                    ready |= q.has_results();
+                    if aggregate {
+                        joinable &= !q.outputs.is_empty();
+                    } else {
+                        ready |= q.has_results();
+                    }
                     room &= q.in_flight() < self.window;
                 }
-                ready |= room && !d.backlog.is_empty();
+                ready |= joinable || (room && !d.backlog.is_empty());
                 all_done &= d.backlog.is_empty() && d.ready.is_none();
             }
             if ready || all_done {
