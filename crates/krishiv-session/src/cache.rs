@@ -155,7 +155,9 @@ impl Drop for TakenReg<'_> {
             .unwrap_or_else(PoisonError::into_inner);
         let back = self.item.take();
         let wake = back.is_some() || self.counted;
-        if let Some(item) = back.filter(|item| item.clears == state.clears) {
+        let kept =
+            back.filter(|item| !state.is_forgotten(item.clears, &unresolved_tables(&item.plan)));
+        if let Some(item) = kept {
             state.pending.push_front(item);
         }
         if self.counted {
@@ -300,6 +302,16 @@ pub(crate) fn key_of(node: &Arc<LogicalPlan>, analyzed: &AnalyzedPlan) -> CacheK
     }
 }
 
+impl CacheState {
+    /// Whether a `persist` queued at sequence `clears` that reads `tables` was forgotten since.
+    fn is_forgotten(&self, clears: u64, tables: &[String]) -> bool {
+        clears < self.cleared_at
+            || self.forgotten.iter().any(|(seq, name, short)| {
+                *seq > clears && tables.iter().any(|t| t == name || t == short)
+            })
+    }
+}
+
 /// The relations a session has cached, by key and by hidden scan name.
 #[derive(Debug, Default)]
 struct CacheState {
@@ -308,9 +320,13 @@ struct CacheState {
     registrations: HashMap<CacheKey, Registration>,
     /// `persist` calls not yet analyzed and registered, in order.
     pending: VecDeque<PendingReg>,
-    /// How many times the cache was cleared or closed: a queued or taken `persist` from before
-    /// the last one is forgotten, as `CLEAR CACHE` forgets the registrations.
+    /// A sequence number: it moves at every clear, close and table forgotten. A queued or taken
+    /// `persist` from before a clear (`cleared_at`), or one reading a table forgotten since
+    /// (`forgotten`), is forgotten too, as the registrations are.
     clears: u64,
+    cleared_at: u64,
+    /// `(sequence, lowered name, last part)` of the tables forgotten recently; the oldest go first.
+    forgotten: VecDeque<(u64, String, String)>,
     /// Queued `persist`s a reader took off `pending` and is analyzing now
     /// (their lazy checkpoints taken): another reader waits for them.
     in_flight: usize,
@@ -657,8 +673,8 @@ impl RelationCache {
         let key = unpinned(key);
         reg.epoch = self.epochs.fetch_add(1, Ordering::Relaxed);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.clears != clears {
-            // Cleared or closed while it was analyzed: forgotten, not "already cached".
+        if state.is_forgotten(clears, &reg.tables) {
+            // Cleared, closed or its table forgotten while it was analyzed: not "already cached".
             return true;
         }
         if state.registrations.contains_key(&key) {
@@ -1006,6 +1022,8 @@ impl RelationCache {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
         state.clears += 1;
+        state.cleared_at = state.clears;
+        state.forgotten.clear();
         let dropped = (
             std::mem::take(&mut state.entries),
             std::mem::take(&mut state.registrations),
@@ -1071,6 +1089,17 @@ impl RelationCache {
         let lowered = name.to_lowercase();
         let short = lowered.rsplit('.').next().unwrap_or(&lowered);
         let matches = |table: &str| table == lowered || table == short;
+        state.clears += 1;
+        let seq = state.clears;
+        state
+            .forgotten
+            .push_back((seq, lowered.clone(), short.to_owned()));
+        if state.forgotten.len() > 1024 {
+            // Past the log's size every older request is forgotten, a safe over-approximation.
+            if let Some((oldest, ..)) = state.forgotten.pop_front() {
+                state.cleared_at = state.cleared_at.max(oldest);
+            }
+        }
         let stale: Vec<CacheKey> = state
             .registrations
             .iter()
@@ -1616,6 +1645,7 @@ mod tests {
     /// its analysis ends, and is not put back when its reader is dropped (review, Codex P2).
     #[test]
     fn a_persist_taken_before_a_clear_is_forgotten() {
+        let queued = |c: &RelationCache| c.state.lock().unwrap().pending.len();
         let s = session();
         let cache = &s.state.cache;
         let reg = || Registration {
@@ -1631,7 +1661,7 @@ mod tests {
             cache.register(&pinned(1), reg(), 0),
             "a stale request is dropped"
         );
-        assert_eq!(cache.stats().entries_pending, 0);
+        assert_eq!(queued(cache), 0);
         assert!(cache.level_of(&pinned(1)).is_none());
         // A taken item from before the clear is not requeued by its reader's drop.
         let df = s.table("t");
@@ -1643,7 +1673,22 @@ mod tests {
             item: Some(item),
             counted: false,
         });
-        assert_eq!(cache.stats().entries_pending, 0);
+        assert_eq!(queued(cache), 0);
+        // The same for a taken item whose table was forgotten (`UNCACHE TABLE t`).
+        cache.request(Arc::clone(&df.plan), Vec::new(), StorageLevel::MEMORY_ONLY);
+        cache.request(
+            Arc::clone(&s.table("other").plan),
+            Vec::new(),
+            StorageLevel::MEMORY_ONLY,
+        );
+        let taken = cache.state.lock().unwrap().pending.pop_front().unwrap();
+        cache.forget_local("t");
+        drop(super::TakenReg {
+            cache,
+            item: Some(taken),
+            counted: false,
+        });
+        assert_eq!(queued(cache), 1, "only the unrelated request is left");
     }
 
     /// A fill claim of a registration that was dropped and made again does not free the slot of
