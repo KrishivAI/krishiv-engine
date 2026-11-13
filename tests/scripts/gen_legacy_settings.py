@@ -94,8 +94,8 @@ def main() -> None:
         + ". Do not edit.",
         "",
         "/// Every `spark.sql.legacy.*` setting any supported Spark release registers: the key, the defaults it has",
-        "/// across the releases (as Spark prints them, `<undefined>` for none), the first release that has it, and its default in",
-        "/// the default profile's release (empty when that release does not register it).",
+        "/// across the releases (as Spark prints them, `<undefined>` for none), the first release that has it,",
+        "/// and its default in the default profile's release (empty when that release does not register it).",
         "pub(super) const SPARK_LEGACY_SETTINGS: &[(&str, &[&str], &str, &str)] = &[",
     ]
     for key, defaults, first, current in rows:
