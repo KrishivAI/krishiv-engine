@@ -31,6 +31,8 @@ use krishiv_common::error::{
 use krishiv_common::principal::Principal;
 use krishiv_session::{QueryId, Session};
 
+use crate::operation::Operations;
+
 /// Builds the session a principal gets for a new session id.
 pub type SessionFactory = dyn Fn(&Principal) -> Result<Session, KrishivError> + Send + Sync;
 
@@ -99,6 +101,7 @@ impl SessionLimits {
 pub struct SessionEntry {
     session: Session,
     client_user_id: String,
+    operations: Arc<Operations>,
     /// Milliseconds since the manager's epoch at the last lookup.
     last_access: AtomicU64,
 }
@@ -123,6 +126,19 @@ impl SessionEntry {
     #[must_use]
     pub fn client_user_id(&self) -> &str {
         &self.client_user_id
+    }
+
+    /// The session's live operations (`ExecutePlan` calls).
+    #[must_use]
+    pub fn operations(&self) -> &Arc<Operations> {
+        &self.operations
+    }
+
+    /// Cancels the session's operations, then closes the session (its
+    /// queries cancelled).
+    fn close(&self) {
+        self.operations.cancel_all();
+        self.session.close();
     }
 }
 
@@ -285,6 +301,7 @@ impl SessionManager {
         let entry = Arc::new(SessionEntry {
             session,
             client_user_id: client_user_id.to_owned(),
+            operations: Arc::default(),
             last_access: AtomicU64::new(self.now_ms()),
         });
         let raced = {
@@ -376,8 +393,8 @@ impl SessionManager {
     }
 
     /// Releases session `session_id` of `principal` (`ReleaseSession`): it
-    /// leaves the map, its id is tombstoned unless `allow_reconnect`, and it
-    /// is closed (its queries cancelled). An unknown id is a no-op. Returns
+    /// leaves the map, its id is tombstoned unless `allow_reconnect`, its
+    /// operations are cancelled and it is closed (its queries cancelled). An unknown id is a no-op. Returns
     /// the released session's server-side id.
     pub fn release(
         &self,
@@ -395,13 +412,13 @@ impl SessionManager {
             entry
         };
         let id = entry.server_side_id().to_owned();
-        entry.session.close();
+        entry.close();
         Some(id)
     }
 
-    /// Releases every session idle past the timeout and running no query
-    /// (Spark's periodic maintenance; Krishiv also keeps a session whose
-    /// query is still running). Returns how many it released.
+    /// Releases every session idle past the timeout, running no query and
+    /// holding no live operation (Spark's periodic maintenance; Krishiv also
+    /// keeps a session whose query or response stream is still live). Returns how many it released.
     pub fn sweep(&self) -> usize {
         let Some(timeout) = self.limits.idle_timeout else {
             return 0;
@@ -419,6 +436,7 @@ impl SessionManager {
                         .saturating_add(timeout)
                         <= now
                         && e.session.running_queries() == 0
+                        && e.operations.is_empty()
                 })
                 .map(|(k, _)| k.clone())
                 .collect();
@@ -437,13 +455,13 @@ impl SessionManager {
                 session = entry.server_side_id(),
                 "released an idle Connect session"
             );
-            entry.session.close();
+            entry.close();
         }
         expired.len()
     }
 
-    /// Closes every live session (shutdown): each one's queries are
-    /// cancelled, and no session is created afterwards (a create answers
+    /// Closes every live session (shutdown): each one's operations and
+    /// queries are cancelled, and no session is created afterwards (a create answers
     /// `INVALID_HANDLE.SESSION_CLOSED`). Returns how many.
     pub fn close_all(&self) -> usize {
         let entries: Vec<Arc<SessionEntry>> = {
@@ -454,9 +472,20 @@ impl SessionManager {
             inner.live.drain().map(|(_, e)| e).collect()
         };
         for entry in &entries {
-            entry.session.close();
+            entry.close();
         }
         entries.len()
+    }
+
+    /// The running queries plus the live operations of all live sessions:
+    /// zero once nothing is left to finish (shutdown waits for it).
+    #[must_use]
+    pub fn busy(&self) -> usize {
+        let entries: Vec<Arc<SessionEntry>> = self.lock().live.values().map(Arc::clone).collect();
+        entries
+            .iter()
+            .map(|e| e.session.running_queries() + e.operations.len())
+            .sum()
     }
 
     /// The running queries of all live sessions.
