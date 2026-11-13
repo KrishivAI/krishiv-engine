@@ -112,20 +112,34 @@ pub(crate) fn restrict(spec: &SandboxSpec) -> Result<(), SandboxError> {
 /// interpreter has none.
 pub(crate) fn elf_loader(executable: &Path) -> Option<PathBuf> {
     use std::io::Read;
-    // The ELF header, the program headers and the `PT_INTERP` string sit at the start of the file (offset
-    // 0x318 on today's toolchains); the first 64 KiB holds them without reading a whole interpreter.
+    use std::os::unix::fs::FileExt;
+    // The ELF header and the program headers sit at the start of the file; the first 64 KiB holds them
+    // without reading a whole interpreter. The `PT_INTERP` string usually follows them (0x318 on today's
+    // toolchains) but need not: python-build-standalone's interpreters (what `uv` installs) place it past
+    // 100 KiB, so it is read at its own offset.
+    let file = std::fs::File::open(executable).ok()?;
     let mut head = Vec::new();
-    std::fs::File::open(executable)
-        .ok()?
-        .take(HEAD_BYTES)
-        .read_to_end(&mut head)
+    (&file).take(HEAD_BYTES).read_to_end(&mut head).ok()?;
+    let (offset, size) = pt_interp_range(&head)?;
+    if let Some(raw) = head.get(offset..offset.checked_add(size)?) {
+        return interp_name(raw);
+    }
+    if size > MAX_INTERP_BYTES {
+        return None;
+    }
+    let mut raw = vec![0_u8; size];
+    file.read_exact_at(&mut raw, u64::try_from(offset).ok()?)
         .ok()?;
-    pt_interp(&head)
+    interp_name(&raw)
 }
 
 const HEAD_BYTES: u64 = 64 * 1024;
 
-fn pt_interp(elf: &[u8]) -> Option<PathBuf> {
+/// The longest `PT_INTERP` read from past the head: a path (Linux's `PATH_MAX`).
+const MAX_INTERP_BYTES: usize = 4096;
+
+/// The file offset and size of the `PT_INTERP` segment, from the ELF header and program headers in `elf`.
+fn pt_interp_range(elf: &[u8]) -> Option<(usize, usize)> {
     // e_ident: magic, ELFCLASS64 (2), ELFDATA2LSB (1).
     if elf.get(..6)? != b"\x7fELF\x02\x01" {
         return None;
@@ -146,13 +160,21 @@ fn pt_interp(elf: &[u8]) -> Option<PathBuf> {
         if u32_at(ph)? != PT_INTERP {
             return None;
         }
-        let offset = u64_at(ph.checked_add(8)?)?;
-        let size = u64_at(ph.checked_add(32)?)?;
-        let raw = bytes(offset, size)?;
-        let name = raw.split(|&b| b == 0).next()?;
-        let name = std::str::from_utf8(name).ok()?;
-        (!name.is_empty()).then(|| PathBuf::from(name))
+        Some((u64_at(ph.checked_add(8)?)?, u64_at(ph.checked_add(32)?)?))
     })
+}
+
+/// The `PT_INTERP` string of a whole ELF file held in `elf` (tests).
+#[cfg(test)]
+fn pt_interp(elf: &[u8]) -> Option<PathBuf> {
+    let (offset, size) = pt_interp_range(elf)?;
+    interp_name(elf.get(offset..offset.checked_add(size)?)?)
+}
+
+fn interp_name(raw: &[u8]) -> Option<PathBuf> {
+    let name = raw.split(|&b| b == 0).next()?;
+    let name = std::str::from_utf8(name).ok()?;
+    (!name.is_empty()).then(|| PathBuf::from(name))
 }
 
 #[cfg(test)]
@@ -167,6 +189,50 @@ mod tests {
         };
         let loader = elf_loader(&exe);
         assert!(loader.as_deref().is_some_and(Path::exists), "{loader:?}");
+    }
+
+    /// A minimal ELF64 header with one `PT_INTERP` program header naming `name` at file offset `at`.
+    fn elf_with_interp_at(at: usize, name: &[u8]) -> Vec<u8> {
+        let mut elf = vec![0_u8; at + name.len()];
+        elf[..6].copy_from_slice(b"\x7fELF\x02\x01");
+        elf[0x20..0x28].copy_from_slice(&64_u64.to_le_bytes()); // e_phoff
+        elf[0x36..0x38].copy_from_slice(&56_u16.to_le_bytes()); // e_phentsize
+        elf[0x38..0x3a].copy_from_slice(&1_u16.to_le_bytes()); // e_phnum
+        elf[64..68].copy_from_slice(&3_u32.to_le_bytes()); // p_type = PT_INTERP
+        elf[72..80].copy_from_slice(&(at as u64).to_le_bytes()); // p_offset
+        elf[96..104].copy_from_slice(&(name.len() as u64).to_le_bytes()); // p_filesz
+        elf[at..].copy_from_slice(name);
+        elf
+    }
+
+    #[test]
+    fn a_loader_named_past_the_head_is_found() {
+        // python-build-standalone places PT_INTERP at about 118 KiB.
+        let dir = tempfile::tempdir().expect("tempdir");
+        for at in [0x318, 0x1d880] {
+            let path = dir.path().join(format!("exe-{at}"));
+            std::fs::write(
+                &path,
+                elf_with_interp_at(at, b"/lib64/ld-linux-x86-64.so.2\0"),
+            )
+            .expect("write");
+            assert_eq!(
+                elf_loader(&path).as_deref(),
+                Some(Path::new("/lib64/ld-linux-x86-64.so.2")),
+                "PT_INTERP at {at:#x}"
+            );
+        }
+        let path = dir.path().join("huge");
+        std::fs::write(
+            &path,
+            elf_with_interp_at(0x20000, &[b'a'; MAX_INTERP_BYTES + 1]),
+        )
+        .expect("write");
+        assert_eq!(
+            elf_loader(&path),
+            None,
+            "a name longer than a path is refused"
+        );
     }
 
     #[test]
