@@ -278,7 +278,8 @@ impl Session {
     /// `OPERATION_CANCELED`, and it takes no new statement
     /// (`INVALID_HANDLE.SESSION_CLOSED`). Dropping a session's handles does
     /// not cancel anything: an open result stream keeps its session alive.
-    /// Returns the number of queries cancelled; closing again is a no-op.
+    /// Statements it is still analyzing or planning end too. Returns the
+    /// number of queries and statements it ended; closing again is a no-op.
     ///
     /// ```
     /// let s = krishiv_session::Session::new()?;
@@ -477,9 +478,11 @@ impl Session {
     /// too): its stream ends with
     /// `OPERATION_CANCELED` at its next batch boundary (a query whose
     /// execution has not begun fails as it begins), and
-    /// `system.queries.cancel_reason` shows `user`. Whether a running query
-    /// was cancelled: `false` for an unknown id, a query that ended or one
-    /// of another session.
+    /// `system.queries.cancel_reason` shows `user`. A statement named `id`
+    /// that is still being analyzed or planned ends with `OPERATION_CANCELED`
+    /// before its query exists. Whether a running query or statement was
+    /// cancelled: `false` for an unknown id, one that ended or one of another
+    /// session.
     ///
     /// ```
     /// let s = krishiv_session::Session::new()?;
@@ -499,7 +502,10 @@ impl Session {
     }
 
     /// Cancels every running query of this session (Spark Connect's
-    /// `Interrupt` of type `ALL`) and returns their ids.
+    /// `Interrupt` of type `ALL`) and returns their ids. Every action of the
+    /// session still being analyzed or planned ends too, including ones that
+    /// run no query (`schema`, `explain`, `estimate`); those the caller gave
+    /// no operation id are ended but not listed.
     pub fn interrupt_all(&self) -> Vec<crate::QueryId> {
         let number = self.state.number;
         self.state

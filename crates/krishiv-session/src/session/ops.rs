@@ -196,6 +196,9 @@ impl Session {
             // opened here, never through a link (P2-T199). The registration
             // lives until the write is over.
             let (store, _registration) = self.anchor_local_write(&at, &job)?;
+            // An overwrite deletes what it replaces here: from now on a cancel
+            // reaches the write through its query, not by dropping it (`action.rs`).
+            crate::action::commit_point();
             let Some(write) = DirectoryWrite::begin(
                 &io,
                 store.clone(),
