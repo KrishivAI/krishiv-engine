@@ -74,6 +74,7 @@ mod analytics;
 mod bind;
 mod builtins;
 mod catalog;
+mod catalog_write;
 mod char_varchar;
 mod coerce;
 mod exprs;
@@ -143,6 +144,7 @@ pub use catalog::{
     TableFunctionKind, TableFunctionLookup, TableFunctionRegistry, TableIdent, TableKind,
     TableMeta,
 };
+pub use catalog_write::{CatalogWrite, CreateMode, NamespaceInfo, TableInfo};
 pub use char_varchar::DeclaredType;
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use table_change::{

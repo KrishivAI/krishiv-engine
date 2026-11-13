@@ -23,6 +23,7 @@ Paths are relative to this crate.
 - `src/analyzer/suggest.rs` the edit-distance ranking of `UNRESOLVED_COLUMN` proposals (only classes whose Spark message proposes names use it)
 - `src/analyzer/access.rs` `authorize` (the one privilege check: fail closed, filtered readers never change a securable), `table_ident` / `namespace_parts`
 - `src/analyzer/table_change.rs` (P3-T020a) `CatalogCapabilities`, `TableChange` / `NamespaceChange` (Spark's `TableChange` factories) and `apply_column_changes`, the one all-or-none application of a change list to a column list (widening only: `int`->`long`, `float`->`double`, decimal precision at one scale; nested paths, constraints and `CLUSTER BY` are `UNSUPPORTED_FEATURE.CATALOG_OPERATION`)
+- `src/analyzer/catalog_write.rs` (P3-T020a) `CatalogWrite` (namespace and table changes, `alter_table` with the pinned version, `rename_table`), `TableInfo`, `NamespaceInfo`, `CreateMode`; `Catalog::capabilities` / `as_write` default to read-only, so a catalog without a write half has no write method
 - `src/analyzer/resolve.rs` Resolve stage (sync); `src/analyzer/builtins.rs` `BuiltinFunctions`; `src/analyzer/coerce.rs` implicit coercion
 - `src/tests/inventory.rs` node inventory checked by the tests
 
