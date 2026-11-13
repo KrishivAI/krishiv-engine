@@ -310,6 +310,17 @@ pub(crate) struct StoredFunctions {
     entries: BTreeMap<(String, String), StoredFunction>,
 }
 
+impl StoredFunctions {
+    /// The names of the functions stored in `namespace`, sorted.
+    pub(crate) fn in_namespace(&self, namespace: &str) -> Vec<String> {
+        self.entries
+            .keys()
+            .filter(|(ns, _)| ns == namespace)
+            .map(|(_, n)| n.clone())
+            .collect()
+    }
+}
+
 impl std::fmt::Debug for StoredFunctions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StoredFunctions")

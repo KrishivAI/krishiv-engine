@@ -426,6 +426,96 @@ pub fn krishiv_session::resource_groups::ResourceGroups::fmt(&self, &mut core::f
 impl krishiv_session::AdmissionController for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::resource_groups::ResourceGroups::uses_estimate(&self) -> bool
+pub mod krishiv_session::spark_catalog
+pub struct krishiv_session::spark_catalog::Catalog<'a>
+impl krishiv_session::spark_catalog::Catalog<'_>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::cache_table(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::spark_catalog::Catalog<'_>::clear_cache(&self)
+pub fn krishiv_session::spark_catalog::Catalog<'_>::current_catalog(&self) -> alloc::string::String
+pub fn krishiv_session::spark_catalog::Catalog<'_>::current_database(&self) -> alloc::string::String
+pub fn krishiv_session::spark_catalog::Catalog<'_>::database_exists(&self, &str) -> bool
+pub fn krishiv_session::spark_catalog::Catalog<'_>::drop_global_temp_view(&self, &str) -> bool
+pub fn krishiv_session::spark_catalog::Catalog<'_>::drop_temp_view(&self, &str) -> bool
+pub fn krishiv_session::spark_catalog::Catalog<'_>::function_exists(&self, &str) -> bool
+pub fn krishiv_session::spark_catalog::Catalog<'_>::get_database(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Database, krishiv_common::error::KrishivError>
+pub fn krishiv_session::spark_catalog::Catalog<'_>::get_function(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Function, krishiv_common::error::KrishivError>
+pub fn krishiv_session::spark_catalog::Catalog<'_>::get_table(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Table, krishiv_common::error::KrishivError>
+pub fn krishiv_session::spark_catalog::Catalog<'_>::list_catalogs(&self) -> alloc::vec::Vec<alloc::string::String>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_columns(&self, &str) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Column>, krishiv_common::error::KrishivError>
+pub fn krishiv_session::spark_catalog::Catalog<'_>::list_databases(&self, core::option::Option<&str>) -> alloc::vec::Vec<krishiv_session::spark_catalog::Database>
+pub fn krishiv_session::spark_catalog::Catalog<'_>::list_functions(&self, core::option::Option<&str>) -> alloc::vec::Vec<krishiv_session::spark_catalog::Function>
+pub fn krishiv_session::spark_catalog::Catalog<'_>::list_tables(&self, core::option::Option<&str>, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Table>, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::recover_partitions(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::refresh_by_path(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::refresh_table(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::set_current_catalog(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::set_current_database(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::spark_catalog::Catalog<'_>::table_exists(&self, &str) -> bool
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::uncache_table(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+impl<'a> core::clone::Clone for krishiv_session::spark_catalog::Catalog<'a>
+pub fn krishiv_session::spark_catalog::Catalog<'a>::clone(&self) -> krishiv_session::spark_catalog::Catalog<'a>
+impl<'a> core::fmt::Debug for krishiv_session::spark_catalog::Catalog<'a>
+pub fn krishiv_session::spark_catalog::Catalog<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for krishiv_session::spark_catalog::Catalog<'a>
+pub struct krishiv_session::spark_catalog::Column
+pub krishiv_session::spark_catalog::Column::data_type: alloc::string::String
+pub krishiv_session::spark_catalog::Column::description: core::option::Option<alloc::string::String>
+pub krishiv_session::spark_catalog::Column::is_bucket: bool
+pub krishiv_session::spark_catalog::Column::is_cluster: bool
+pub krishiv_session::spark_catalog::Column::is_partition: bool
+pub krishiv_session::spark_catalog::Column::name: alloc::string::String
+pub krishiv_session::spark_catalog::Column::nullable: bool
+impl core::clone::Clone for krishiv_session::spark_catalog::Column
+pub fn krishiv_session::spark_catalog::Column::clone(&self) -> krishiv_session::spark_catalog::Column
+impl core::cmp::Eq for krishiv_session::spark_catalog::Column
+impl core::cmp::PartialEq for krishiv_session::spark_catalog::Column
+pub fn krishiv_session::spark_catalog::Column::eq(&self, &krishiv_session::spark_catalog::Column) -> bool
+impl core::fmt::Debug for krishiv_session::spark_catalog::Column
+pub fn krishiv_session::spark_catalog::Column::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::spark_catalog::Column
+pub struct krishiv_session::spark_catalog::Database
+pub krishiv_session::spark_catalog::Database::catalog: alloc::string::String
+pub krishiv_session::spark_catalog::Database::description: core::option::Option<alloc::string::String>
+pub krishiv_session::spark_catalog::Database::location_uri: alloc::string::String
+pub krishiv_session::spark_catalog::Database::name: alloc::string::String
+impl core::clone::Clone for krishiv_session::spark_catalog::Database
+pub fn krishiv_session::spark_catalog::Database::clone(&self) -> krishiv_session::spark_catalog::Database
+impl core::cmp::Eq for krishiv_session::spark_catalog::Database
+impl core::cmp::PartialEq for krishiv_session::spark_catalog::Database
+pub fn krishiv_session::spark_catalog::Database::eq(&self, &krishiv_session::spark_catalog::Database) -> bool
+impl core::fmt::Debug for krishiv_session::spark_catalog::Database
+pub fn krishiv_session::spark_catalog::Database::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::spark_catalog::Database
+pub struct krishiv_session::spark_catalog::Function
+pub krishiv_session::spark_catalog::Function::catalog: core::option::Option<alloc::string::String>
+pub krishiv_session::spark_catalog::Function::class_name: alloc::string::String
+pub krishiv_session::spark_catalog::Function::description: core::option::Option<alloc::string::String>
+pub krishiv_session::spark_catalog::Function::is_temporary: bool
+pub krishiv_session::spark_catalog::Function::name: alloc::string::String
+pub krishiv_session::spark_catalog::Function::namespace: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+impl core::clone::Clone for krishiv_session::spark_catalog::Function
+pub fn krishiv_session::spark_catalog::Function::clone(&self) -> krishiv_session::spark_catalog::Function
+impl core::cmp::Eq for krishiv_session::spark_catalog::Function
+impl core::cmp::PartialEq for krishiv_session::spark_catalog::Function
+pub fn krishiv_session::spark_catalog::Function::eq(&self, &krishiv_session::spark_catalog::Function) -> bool
+impl core::fmt::Debug for krishiv_session::spark_catalog::Function
+pub fn krishiv_session::spark_catalog::Function::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::spark_catalog::Function
+pub struct krishiv_session::spark_catalog::Table
+pub krishiv_session::spark_catalog::Table::catalog: core::option::Option<alloc::string::String>
+pub krishiv_session::spark_catalog::Table::description: core::option::Option<alloc::string::String>
+pub krishiv_session::spark_catalog::Table::is_temporary: bool
+pub krishiv_session::spark_catalog::Table::name: alloc::string::String
+pub krishiv_session::spark_catalog::Table::namespace: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub krishiv_session::spark_catalog::Table::table_type: alloc::string::String
+impl core::clone::Clone for krishiv_session::spark_catalog::Table
+pub fn krishiv_session::spark_catalog::Table::clone(&self) -> krishiv_session::spark_catalog::Table
+impl core::cmp::Eq for krishiv_session::spark_catalog::Table
+impl core::cmp::PartialEq for krishiv_session::spark_catalog::Table
+pub fn krishiv_session::spark_catalog::Table::eq(&self, &krishiv_session::spark_catalog::Table) -> bool
+impl core::fmt::Debug for krishiv_session::spark_catalog::Table
+pub fn krishiv_session::spark_catalog::Table::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::spark_catalog::Table
 #[non_exhaustive] pub enum krishiv_session::CancelReason
 pub krishiv_session::CancelReason::Admin
 pub krishiv_session::CancelReason::ClientGone
@@ -939,6 +1029,15 @@ pub fn krishiv_session::Session::runtime(&self) -> &alloc::sync::Arc<krishiv_ses
 pub fn krishiv_session::Session::set_client_info(&self, krishiv_session::Transport, core::option::Option<&str>, core::option::Option<&str>, core::option::Option<&str>)
 pub fn krishiv_session::Session::set_idle_timeout_ms(&self, core::option::Option<i64>)
 pub async fn krishiv_session::Session::sql_with(&self, &str, krishiv_session::QueryOptions) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
+impl krishiv_session::Session
+pub const fn krishiv_session::Session::catalog(&self) -> krishiv_session::spark_catalog::Catalog<'_>
+impl krishiv_session::Session
+pub fn krishiv_session::Session::clear_trace_context(&self)
+pub fn krishiv_session::Session::remove_tag(&self, &str)
+pub fn krishiv_session::Session::set_tag(&self, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::Session::set_trace_context(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::Session::tags(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub fn krishiv_session::Session::trace_id(&self) -> core::option::Option<alloc::string::String>
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::estimate_sql(&self, &str) -> core::result::Result<core::option::Option<krishiv_session::Estimate>, krishiv_common::error::KrishivError>
 impl krishiv_session::Session

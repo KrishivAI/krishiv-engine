@@ -36,7 +36,7 @@ fn unsupported(feature: &str) -> KrishivError {
 }
 
 /// Spark's `SHOW ... LIKE` pattern: `*` matches anything, `|` separates alternatives, the match ignores case.
-fn matches(pattern: &str, name: &str) -> bool {
+pub(crate) fn matches(pattern: &str, name: &str) -> bool {
     // `reach[j]`: the pattern so far matches the first `j` characters of the name. O(pattern x name), so a
     // pattern like `*a*a*a*` cannot blow up.
     fn glob(p: &[char], n: &[char]) -> bool {
