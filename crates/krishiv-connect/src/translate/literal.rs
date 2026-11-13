@@ -127,7 +127,6 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
         | LiteralType::TimestampNtzNanos(_)
         | LiteralType::TimestampLtzNanos(_) => {
             return Err(unsupported_variant(
-                "literal",
                 "spark.connect.Expression.Literal",
                 value.variant(),
             ));

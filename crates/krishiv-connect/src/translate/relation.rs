@@ -14,7 +14,7 @@ use std::sync::Arc;
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
     Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId,
-    PlanNode, ReadSource, SqlArgs,
+    PlanNode, ReadSource, SetOperation, SqlArgs,
 };
 
 use super::errors::{
@@ -42,20 +42,14 @@ impl Translator<'_> {
         let node = match kind {
             RelType::Read(r) => self.read(r)?,
             RelType::Sql(s) => self.sql(s)?,
-            RelType::Project(p) => {
-                let Some(input) = &p.input else {
-                    // Spark reads a missing input as `OneRowRelation`.
-                    return Err(unsupported_field(
-                        "Project",
-                        "input",
-                        "projections without an input relation",
-                    ));
-                };
-                PlanNode::Project {
-                    input: self.relation(input)?,
-                    exprs: self.expressions(&p.expressions)?,
-                }
-            }
+            RelType::Project(p) => PlanNode::Project {
+                // Spark reads a missing input as `OneRowRelation`.
+                input: match &p.input {
+                    Some(input) => self.relation(input)?,
+                    None => Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+                },
+                exprs: self.expressions(&p.expressions)?,
+            },
             RelType::Filter(f) => PlanNode::Filter {
                 input: self.input("Filter", f.input.as_deref())?,
                 predicate: self.required_expression(f.condition.as_ref())?,
@@ -100,20 +94,88 @@ impl Translator<'_> {
             }
             RelType::WithColumns(w) => self.with_columns(w)?,
             RelType::Range(r) => self.range(r)?,
+            RelType::SetOp(s) => self.set_op(s, origin_of(rel))?,
             other => {
                 return Err(unsupported_variant(
-                    "relation",
                     "spark.connect.Relation",
                     other.variant(),
                 ));
             }
         };
-        let origin = rel
-            .common
-            .as_ref()
-            .and_then(|c| c.plan_id)
-            .map_or(Origin::UNKNOWN, |id| Origin::plan(PlanId(id)));
-        Ok(Arc::new(LogicalPlan::new(node).with_origin(origin)))
+        Ok(Arc::new(LogicalPlan::new(node).with_origin(origin_of(rel))))
+    }
+
+    /// `SetOperation`, as Spark's `transformSetOperation` (v4.2.0): `is_all` defaults to false,
+    /// `by_name` is for `UNION` only, `allow_missing_columns` needs `by_name`, and a `UNION` that
+    /// is not `ALL` is a `Distinct` over the `Union`.
+    fn set_op(&mut self, s: &pb::SetOperation, origin: Origin) -> Result<PlanNode> {
+        let (Some(left), Some(right)) = (&s.left_input, &s.right_input) else {
+            return Err(
+                krishiv_common::error::ConnectInvalidPlanSetOperationMustHaveTwoInputs {}.into(),
+            );
+        };
+        let left = self.relation(left)?;
+        let right = self.relation(right)?;
+        let all = s.is_all.unwrap_or(false);
+        let by_name = s.by_name.unwrap_or(false);
+        let allow_missing_columns = s.allow_missing_columns.unwrap_or(false);
+        Ok(
+            match pb::set_operation::SetOpType::try_from(s.set_op_type) {
+                Ok(pb::set_operation::SetOpType::Except) => {
+                    if by_name {
+                        return Err(krishiv_common::error::ConnectInvalidPlanExceptDoesNotSupportUnionByName {}.into());
+                    }
+                    PlanNode::SetOp {
+                        left,
+                        right,
+                        op: SetOperation::Except,
+                        all,
+                    }
+                }
+                Ok(pb::set_operation::SetOpType::Intersect) => {
+                    if by_name {
+                        return Err(krishiv_common::error::ConnectInvalidPlanIntersectDoesNotSupportUnionByName {}.into());
+                    }
+                    PlanNode::SetOp {
+                        left,
+                        right,
+                        op: SetOperation::Intersect,
+                        all,
+                    }
+                }
+                Ok(pb::set_operation::SetOpType::Union) => {
+                    if !by_name && allow_missing_columns {
+                        return Err(krishiv_common::error::ConnectInvalidPlanUnionByNameAllowMissingColRequiresByName {}.into());
+                    }
+                    let union = PlanNode::Union {
+                        inputs: vec![left, right],
+                        by_name,
+                        allow_missing_columns,
+                    };
+                    if all {
+                        union
+                    } else {
+                        PlanNode::Distinct {
+                            input: Arc::new(LogicalPlan::new(union).with_origin(origin)),
+                        }
+                    }
+                }
+                Ok(pb::set_operation::SetOpType::Unspecified) => {
+                    return Err(invalid_enum(
+                        "spark.connect.SetOperation.SetOpType",
+                        "SET_OP_TYPE_UNSPECIFIED",
+                        s.set_op_type,
+                    ));
+                }
+                Err(_) => {
+                    return Err(invalid_enum(
+                        "spark.connect.SetOperation.SetOpType",
+                        "UNRECOGNIZED",
+                        s.set_op_type,
+                    ));
+                }
+            },
+        )
     }
 
     /// The input relation of `message`, which must be set.
@@ -403,3 +465,11 @@ impl Translator<'_> {
 
 #[cfg(test)]
 mod tests;
+
+/// The origin of a relation: its `plan_id`, when the client sent one.
+fn origin_of(rel: &Relation) -> Origin {
+    rel.common
+        .as_ref()
+        .and_then(|c| c.plan_id)
+        .map_or(Origin::UNKNOWN, |id| Origin::plan(PlanId(id)))
+}
